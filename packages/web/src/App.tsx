@@ -751,13 +751,14 @@ export function SessionPane({
                   <MessageAction
                     title="Rewind"
                     label="Rewind to before this message"
-                    disabled={view.state === "running"}
+                    disabled={turnRunning}
                     onClick={() => setRewinding(rewinding === item.part.id ? undefined : item.part.id)}
                   >
                     <RotateCcwIcon />
                   </MessageAction>
                 </MessageActions>
-                {rewinding === item.part.id && (
+                {/* Closed while a turn runs: the daemon rejects a rewind until the session is idle. */}
+                {rewinding === item.part.id && !turnRunning && (
                   <RewindPanel
                     cwd={session.cwd}
                     preview={() => onRewindPreview(item.part.id)}

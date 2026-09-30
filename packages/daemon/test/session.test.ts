@@ -501,4 +501,16 @@ describe("Session rewind", () => {
     s.prompt("third");
     await expect(s.rewind("u2", "code")).rejects.toThrow(/running/);
   });
+
+  it("rejects a rewind and its preview while a turn waits for a permission answer", async () => {
+    const s = new Session("/tmp", { query: interruptQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("ask first");
+    await until(events, (e) => e.part.type === "permission_request");
+    expect(s.info().state).toBe("needs_input");
+    const prompt = events.find((e) => e.part.type === "user_text")!.part.id;
+    await expect(s.rewind(prompt, "code")).rejects.toThrow(/running/);
+    await expect(s.previewRewind(prompt)).rejects.toThrow(/running/);
+  });
 });

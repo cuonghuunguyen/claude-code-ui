@@ -219,7 +219,7 @@ export class Session {
   private control(userMessageId: string): Query {
     if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
     if (this.rewinding) throw new Error("session is rewinding");
-    if (this.state === "running") throw new Error("session is running: interrupt the turn first");
+    if (this.state !== "idle") throw new Error("session is running: interrupt the turn first");
     if (!this.checkpoints.has(userMessageId)) throw new Error(`unknown user message ${userMessageId}`);
     return this.query ?? this.start({ resume: this.id });
   }
