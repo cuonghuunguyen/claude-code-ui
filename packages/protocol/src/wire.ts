@@ -21,7 +21,12 @@ export type ClientMessage = { reqId: string } & (
   | { type: "session.list" }
   /** Without `path`: the allowlisted roots. */
   | { type: "fs.list"; path?: string }
+  | { type: "session.rewindPreview"; sessionId: string; userMessageId: string }
+  | { type: "session.rewind"; sessionId: string; userMessageId: string; mode: RewindMode }
 );
+
+/** Claude Code `/rewind` modes: `both` restores code, then conversation. */
+export type RewindMode = "code" | "conversation" | "both";
 
 export type Event = { type: "event"; sessionId: string; seq: number; part: Part };
 
@@ -45,3 +50,5 @@ export const TOKEN_PROTOCOL_PREFIX = "token.";
 
 export type ListResult = { sessions: SessionListItem[] };
 export type FsListResult = { entries: FsEntry[] };
+/** Dry run of a code rewind: files it would restore (empty = no code options); `conversation` false for the first prompt. */
+export type RewindPreview = { filesChanged: string[]; insertions: number; deletions: number; conversation: boolean };

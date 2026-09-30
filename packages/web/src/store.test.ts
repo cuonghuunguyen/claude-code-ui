@@ -6,6 +6,18 @@ const ev = (seq: number, part: Part): Event => ({ type: "event", sessionId: "s",
 const text = (id: string, t: string, streaming = true): Part => ({ type: "assistant_text", id, text: t, streaming });
 
 describe("applyEvent", () => {
+  it("a rewind part drops the rewound user message and every part after it, and is not rendered", () => {
+    let s = emptySession();
+    s = applyEvent(s, ev(1, { type: "user_text", id: "u1", text: "one", images: [] }));
+    s = applyEvent(s, ev(2, text("a", "x", false)));
+    s = applyEvent(s, ev(3, { type: "user_text", id: "u2", text: "two", images: [] }));
+    s = applyEvent(s, ev(4, text("b", "y", false)));
+    s = applyEvent(s, ev(5, { type: "rewind", id: "r", userMessageId: "u2" }));
+    expect(s.order).toEqual(["u1", "a"]);
+    expect([...s.parts.keys()]).toEqual(["u1", "a"]);
+    expect(s.lastSeq).toBe(5);
+  });
+
   it("replaces a part with the same id instead of appending", () => {
     let s = emptySession();
     s = applyEvent(s, ev(1, text("a", "Hel")));

@@ -28,4 +28,6 @@ export type Part =
   | { type: "session_model"; id: string; model: string }
   | { type: "commands"; id: "commands"; commands: SlashCommand[] }
   | { type: "turn_result"; id: string; durationMs: number; costUsd: number; usage: TokenUsage; isError: boolean }
-  | { type: "raw"; id: string; message: unknown };
+  | { type: "raw"; id: string; message: unknown }
+  /** Conversation rewind: the client drops `userMessageId` and every part after it. */
+  | { type: "rewind"; id: string; userMessageId: string };

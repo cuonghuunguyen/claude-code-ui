@@ -20,6 +20,10 @@ export const models: ModelInfo[] = [
   { value: "haiku", displayName: "Haiku 4.5", description: "" },
 ];
 export const inputs: SDKUserMessage[] = [];
+/** rewindFiles() calls, and the files each dry run reports (set per test). */
+export const rewinds: { id: string; dryRun?: boolean }[] = [];
+export const checkpointFiles: { files: string[] } = { files: ["/repo/a.ts"] };
+export let closed = 0;
 
 export const fakeCommands = [{ name: "review", description: "Review a PR", argumentHint: "<pr>" }];
 
@@ -36,7 +40,11 @@ export function fakeQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMe
     setModel: async (m?: string) => void setModelCalls.push(m),
     supportedModels: async () => models,
     supportedCommands: async () => fakeCommands,
-    close: () => void q.return(undefined),
+    async rewindFiles(id: string, o?: { dryRun?: boolean }) {
+      rewinds.push({ id, ...o });
+      return { canRewind: true, filesChanged: checkpointFiles.files, insertions: 1, deletions: 1 };
+    },
+    close: () => void (closed++, q.return(undefined)),
   });
 }
 
@@ -47,3 +55,6 @@ export const history = [
   { type: "user", uuid: "u2", session_id: "x", message: { role: "user", content: "second" }, parent_tool_use_id: null, parent_agent_id: null },
   ...turns[1]!.filter((m) => m.type === "assistant"),
 ] as never[];
+
+/** SDK uuid of the last assistant message of the fixture's first turn: the fork point before the second prompt. */
+export const firstTurnLastAssistant = turns[0]!.filter((m) => m.type === "assistant").at(-1)!.uuid;

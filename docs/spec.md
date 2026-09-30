@@ -68,6 +68,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | client → daemon | `session.interrupt {sessionId}` | Stop the running turn |
 | client → daemon | `session.setModel {sessionId, model}` | Switch model (`setModel()`) |
 | client → daemon | `session.rewind {sessionId, userMessageId, mode}` | `mode`: `code`, `conversation`, `both` |
+| client → daemon | `session.rewindPreview {sessionId, userMessageId}` | `rewindFiles` dry run: `filesChanged[]`, `insertions`, `deletions`, `conversation` |
 | client → daemon | `permission.respond {requestId, decision, ruleIndex?, updatedInput?, message?}` | Answer a permission request |
 | client → daemon | `question.respond {requestId, answers}` | Answer a question |
 | client → daemon | `session.list` / `session.close` / `models.list` | Lists and management |
@@ -106,7 +107,8 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 
 - `enableFileCheckpointing: true` and `extraArgs: {'replay-user-messages': null}`; each user message UUID is a checkpoint.
 - Code: `rewindFiles(userMessageId)` (Edit/Write/NotebookEdit only, not Bash; a `dryRun` preview shows changed files).
-- Conversation: resume with `resumeSessionAt` (+ `resumeDropsTurn`); the original prompt is put back in the prompt box.
+- Conversation: the next prompt resumes with `resumeSessionAt` = UUID of the last main-thread assistant message before the rewound prompt; the original prompt is put back in the prompt box. The first prompt has no such message, so it has no conversation rewind. `resumeDropsTurn` is not passed: it refuses any discarded range longer than one turn. The fork point is in daemon memory only: a daemon restart before the next prompt restores the untruncated transcript (ADR 0001).
+- A prompt or another rewind during `rewindFiles()` is rejected (`session is rewinding`).
 - Both: code, then conversation. Code options appear only when the checkpoint has tracked file changes.
 
 ### Push notifications (rules copied from Orca)
@@ -139,6 +141,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | `turn_result` | `durationMs`, `costUsd`, `usage`, `isError` | Turn footer (live turns only) |
 | `turn_interrupted` | — | Status line |
 | `raw` | original message | Generic JSON |
+| `rewind` | `userMessageId` | Not rendered; the client drops that user message and every part after it |
 
 **Adapter rules**
 
@@ -236,4 +239,4 @@ Work is split into GitHub issues along a dependency graph, so independent pieces
 - [ ] Remote access and HTTPS without external hosting (ADR 0003).
 - [x] Verify: SDK uses `claude login` credentials when no API key is set. Verified 2026-10-01 with SDK 0.3.285: with `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset, `system/init` reports `apiKeySource: "none"` (claude.ai OAuth login) and turns succeed.
 - [ ] Verify: mid-turn `streamInput` steers like Claude Code.
-- [ ] Verify: which UUID `resumeSessionAt` needs for a conversation rewind.
+- [x] Verify: which UUID `resumeSessionAt` needs for a conversation rewind. Verified 2026-10-01 with SDK 0.3.285: the UUID of the last main-thread assistant message before the rewound prompt (the prompt's own UUID keeps it; a non-chain UUID fails with `No message found`). Resume without `forkSession` keeps the session ID; `getSessionMessages()` then returns the truncated branch. `rewindFiles()` takes the prompt's own UUID (the one sent in `SDKUserMessage.uuid`, echoed with `isReplay`); an assistant UUID has no checkpoint.

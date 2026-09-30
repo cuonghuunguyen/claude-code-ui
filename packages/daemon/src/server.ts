@@ -4,10 +4,11 @@ import { createServer, type IncomingMessage } from "node:http";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { imageBlock, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
+import { imageBlock, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
 import { getSessionInfo, getSessionMessages, listSessions, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { listModels, Session } from "./session.ts";
 
+const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MIME: Record<string, string> = {
@@ -211,6 +212,17 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
             return reply({ entries: entries.sort((a, b) => a.name.localeCompare(b.name)) });
           } catch (err) {
             return fail("fs_error", String(err));
+          }
+        }
+        case "session.rewindPreview":
+        case "session.rewind": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (msg.type === "session.rewind" && !REWIND_MODES.includes(msg.mode)) return fail("bad_mode", `unknown rewind mode ${msg.mode}`);
+          try {
+            return reply(msg.type === "session.rewind" ? (await s.rewind(msg.userMessageId, msg.mode), {}) : await s.previewRewind(msg.userMessageId));
+          } catch (err) {
+            return fail("rewind_failed", (err as Error).message);
           }
         }
         default:

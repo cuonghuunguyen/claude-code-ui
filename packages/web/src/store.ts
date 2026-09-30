@@ -25,6 +25,13 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   if (part.type === "session_state") return { ...s, lastSeq: e.seq, state: part.state };
   if (part.type === "session_model") return { ...s, lastSeq: e.seq, model: part.model };
   if (part.type === "commands") return { ...s, lastSeq: e.seq, commands: part.commands };
+  if (part.type === "rewind") {
+    const at = s.order.indexOf(part.userMessageId);
+    if (at < 0) return { ...s, lastSeq: e.seq };
+    const parts = new Map(s.parts);
+    for (const id of s.order.slice(at)) parts.delete(id);
+    return { ...s, lastSeq: e.seq, order: s.order.slice(0, at), parts };
+  }
   const parts = new Map(s.parts).set(part.id, part);
   const order = s.parts.has(part.id) ? s.order : [...s.order, part.id];
   return { ...s, lastSeq: e.seq, order, parts };

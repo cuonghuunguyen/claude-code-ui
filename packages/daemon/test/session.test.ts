@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
-import { calls, fakeQuery, fakeCommands, setModelCalls, history, inputs } from "./fake-query.ts";
+import { calls, checkpointFiles, closed, fakeCommands, fakeQuery, firstTurnLastAssistant, history, inputs, rewinds, setModelCalls } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -143,5 +143,110 @@ describe("Session", () => {
     s.subscribe(0, (e) => events.push(e));
     await until(events, (e) => e.part.type === "commands");
     expect(events.find((e) => e.part.type === "commands")!.part).toEqual({ type: "commands", id: "commands", commands: fakeCommands });
+  });
+});
+
+describe("Session rewind", () => {
+  const id = "0b5f1d5e-8a8e-4c9b-9f5e-3c1f2a4b5c6d";
+  const restored = () => {
+    const s = Session.restore(id, "/tmp", history, { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    return { s, events };
+  };
+
+  it("runs the SDK with file checkpointing and replayed user message UUIDs", () => {
+    new Session("/tmp", { query: fakeQuery as never });
+    expect(calls.at(-1)).toMatchObject({ enableFileCheckpointing: true, extraArgs: { "replay-user-messages": null } });
+  });
+
+  it("previews a code rewind with a dry run and says whether the conversation can rewind", async () => {
+    const { s } = restored();
+    rewinds.length = 0;
+    expect(await s.previewRewind("u2")).toEqual({ filesChanged: ["/repo/a.ts"], insertions: 1, deletions: 1, conversation: true });
+    expect(rewinds).toEqual([{ id: "u2", dryRun: true }]);
+    expect(calls.at(-1)).toMatchObject({ resume: id, enableFileCheckpointing: true });
+    // First prompt: nothing before it to resume at.
+    expect((await s.previewRewind("u1")).conversation).toBe(false);
+  });
+
+  it("reports no files when the SDK has no checkpoint for the message", async () => {
+    const { s } = restored();
+    checkpointFiles.files = [];
+    expect((await s.previewRewind("u2")).filesChanged).toEqual([]);
+    checkpointFiles.files = ["/repo/a.ts"];
+  });
+
+  it("code mode calls rewindFiles and keeps the conversation", async () => {
+    const { s, events } = restored();
+    rewinds.length = 0;
+    await s.rewind("u2", "code");
+    expect(rewinds).toEqual([{ id: "u2" }]);
+    expect(events.some((e) => e.part.type === "rewind")).toBe(false);
+  });
+
+  it("conversation mode logs a rewind part and resumes at the last assistant message before the prompt", async () => {
+    const { s, events } = restored();
+    rewinds.length = 0;
+    await s.rewind("u2", "conversation");
+    expect(rewinds).toEqual([]);
+    expect(events.find((e) => e.part.type === "rewind")!.part).toMatchObject({ type: "rewind", userMessageId: "u2" });
+    s.prompt("second, reworded");
+    expect(calls.at(-1)).toMatchObject({ resume: id, resumeSessionAt: firstTurnLastAssistant });
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(s.info().state).toBe("idle");
+    // The rewound prompt is gone; a later prompt no longer truncates.
+    await expect(s.rewind("u2", "conversation")).rejects.toThrow(/unknown user message/);
+  });
+
+  it("both mode restores code, then conversation, on a live session and closes the old query", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("first");
+    await until(events, (e) => e.part.type === "turn_result");
+    s.prompt("second");
+    const second = events.filter((e) => e.part.type === "user_text").at(-1)!.part.id;
+    await until(events, (e) => e.part.type === "turn_result" && events.filter((x) => x.part.type === "turn_result").length === 2);
+    await until(events, () => s.info().state === "idle");
+    rewinds.length = 0;
+    const closedBefore = closed;
+    await s.rewind(second, "both");
+    expect(rewinds).toEqual([{ id: second }]);
+    expect(closed).toBe(closedBefore + 1);
+    expect(events.find((e) => e.part.type === "rewind")!.part).toMatchObject({ type: "rewind", userMessageId: second });
+    expect(s.info().state).toBe("idle");
+    s.prompt("again");
+    expect(calls.at(-1)).toMatchObject({ resume: s.id, resumeSessionAt: firstTurnLastAssistant });
+  });
+
+  it("rejects a conversation rewind to the first prompt, before touching files", async () => {
+    const { s } = restored();
+    rewinds.length = 0;
+    await expect(s.rewind("u1", "both")).rejects.toThrow(/first prompt/);
+    expect(rewinds).toEqual([]);
+  });
+
+  it("rejects a prompt or a second rewind while a rewind awaits rewindFiles()", async () => {
+    let release!: () => void;
+    const slowRewind = (a: never) =>
+      Object.assign(fakeQuery(a), {
+        rewindFiles: () => new Promise((r) => (release = () => r({ canRewind: true, filesChanged: [] }))),
+      });
+    const s = Session.restore(id, "/tmp", history, { query: slowRewind as never });
+    const p = s.rewind("u2", "both");
+    expect(() => s.prompt("from another tab")).toThrow(/rewinding/);
+    await expect(s.rewind("u2", "code")).rejects.toThrow(/rewinding/);
+    release();
+    await p;
+    expect(s.info().state).toBe("idle");
+    s.prompt("after the rewind");
+    expect(s.info().state).toBe("running");
+  });
+
+  it("rejects a rewind while a turn runs", async () => {
+    const { s } = restored();
+    s.prompt("third");
+    await expect(s.rewind("u2", "code")).rejects.toThrow(/running/);
   });
 });
