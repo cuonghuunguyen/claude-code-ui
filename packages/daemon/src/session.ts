@@ -1,7 +1,7 @@
 // A live session: one long-lived streaming-input query() whose SDK messages become logged events.
 import { randomUUID } from "node:crypto";
 import { query as sdkQuery, type ModelInfo, type Query, type SDKMessage, type SDKUserMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { createAdapter, type Event, type Part, type SessionInfo, type SessionState } from "@claude-ui/protocol";
+import { createAdapter, imageBlock, type Event, type Part, type SessionInfo, type SessionState } from "@claude-ui/protocol";
 
 type Listener = (e: Event) => void;
 
@@ -73,13 +73,17 @@ export class Session {
     return this.state !== "error" && this.state !== "closed";
   }
 
-  prompt(text: string) {
+  /** `images`: data URLs already checked with imageBlock(). */
+  prompt(text: string, images: string[] = []) {
     if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
     const uuid = randomUUID();
-    this.emit({ type: "user_text", id: uuid, text, images: [] });
+    this.emit({ type: "user_text", id: uuid, text, images });
     this.setState("running");
     if (!this.query) this.start({ resume: this.id });
-    this.input.push({ type: "user", uuid, message: { role: "user", content: text }, parent_tool_use_id: null });
+    const content = images.length
+      ? [...(text ? [{ type: "text" as const, text }] : []), ...images.map((i) => imageBlock(i)!)]
+      : text;
+    this.input.push({ type: "user", uuid, message: { role: "user", content }, parent_tool_use_id: null });
   }
 
   /** Switches the live query's model; "default" resets to the SDK default. A restored session not yet resumed resumes with it. */

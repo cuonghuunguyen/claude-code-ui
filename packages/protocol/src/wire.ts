@@ -11,7 +11,8 @@ export type SessionInfo = { id: string; cwd: string; state: SessionState; model:
 export type ClientMessage = { reqId: string } & (
   | { type: "session.create"; cwd: string; model?: string }
   | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string }
-  | { type: "session.prompt"; sessionId: string; text: string }
+  // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
+  | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   | { type: "session.setModel"; sessionId: string; model: string }
   | { type: "models.list" }
 );

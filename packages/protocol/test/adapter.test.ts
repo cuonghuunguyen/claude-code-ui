@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { createAdapter, type Part } from "../src/index.ts";
+import { createAdapter, imageBlock, type Part } from "../src/index.ts";
 
 const fixture = (name: string) =>
   readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8").trim().split("\n").map((l) => JSON.parse(l));
@@ -56,6 +56,31 @@ describe("adapter on user messages", () => {
   it("converts a user text message to user_text keyed by uuid", () => {
     const parts = run([{ type: "user", uuid: "u1", message: { role: "user", content: "hi" }, parent_tool_use_id: null }]);
     expect(parts).toEqual([{ type: "user_text", id: "u1", text: "hi", images: [] }]);
+  });
+
+  it("converts a user message with image blocks to user_text with data URL images", () => {
+    const content = [
+      { type: "text", text: "what is this?" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
+    ];
+    const parts = run([{ type: "user", uuid: "u2", message: { role: "user", content }, parent_tool_use_id: null }]);
+    expect(parts).toEqual([
+      { type: "user_text", id: "u2", text: "what is this?", images: ["data:image/png;base64,iVBORw0KGgo="] },
+    ]);
+  });
+});
+
+describe("imageBlock", () => {
+  it("turns an image data URL into a base64 image content block", () => {
+    expect(imageBlock("data:image/jpeg;base64,/9j/4A==")).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: "/9j/4A==" },
+    });
+  });
+
+  it("rejects non-image, unsupported or non-base64 data URLs", () => {
+    for (const bad of ["data:text/plain;base64,aGk=", "data:image/svg+xml;base64,PHN2Zz4=", "data:image/png,raw", "http://x/a.png", 42])
+      expect(imageBlock(bad)).toBeUndefined();
   });
 });
 

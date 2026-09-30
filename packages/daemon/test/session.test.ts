@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
-import { calls, fakeQuery, setModelCalls, history } from "./fake-query.ts";
+import { calls, fakeQuery, setModelCalls, history, inputs } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -113,5 +113,19 @@ describe("Session", () => {
     expect(setModelCalls.length).toBe(before);
     s.prompt("hi");
     expect(calls.at(-1)).toMatchObject({ resume: s.id, model: "haiku" });
+  });
+
+  it("sends attached images as image content blocks and shows them in user_text", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    const png = "data:image/png;base64,iVBORw0KGgo=";
+    s.prompt("what is this?", [png]);
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(events[0]!.part).toMatchObject({ type: "user_text", text: "what is this?", images: [png] });
+    expect(inputs.at(-1)!.message.content).toEqual([
+      { type: "text", text: "what is this?" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
+    ]);
   });
 });

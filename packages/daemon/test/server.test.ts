@@ -154,4 +154,15 @@ describe("daemon", () => {
     const id = (created as { result: { session: { id: string } } }).result.session.id;
     expect(await c.request({ type: "session.setModel", sessionId: id, model: "" })).toMatchObject({ code: "bad_model" });
   });
+
+  it("accepts an image-only prompt and rejects invalid images", async () => {
+    const c = await client();
+    const created = await c.request({ type: "session.create", cwd: webRoot });
+    const sessionId = (created as { result: { session: { id: string } } }).result.session.id;
+    const prompt = (images: unknown) => c.request({ type: "session.prompt", sessionId, text: "", images });
+    for (const bad of ["data:image/png;base64,x", ["data:text/html;base64,PGI+"], [42]])
+      expect(await prompt(bad)).toMatchObject({ type: "error", code: "bad_images" });
+    expect(await prompt([])).toMatchObject({ type: "error", code: "bad_prompt" });
+    expect(await prompt(["data:image/png;base64,iVBORw0KGgo="])).toMatchObject({ type: "reply" });
+  });
 });
