@@ -27,7 +27,7 @@ import { ContextGroup, Thinking, ToolCard } from "./tool-card.tsx";
 type Client = ReturnType<typeof connect>;
 
 // The open session lives in the URL hash, so a reloaded tab reopens it.
-const hashId = () => decodeURIComponent(location.hash.slice(1)) || undefined;
+const hashId = () => /^#[0-9a-f-]{36}$/i.exec(location.hash)?.[0].slice(1);
 
 export function App() {
   const [list, setList] = useState<SessionListItem[]>([]);
