@@ -1,23 +1,65 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import type { CreateResult, Event, Part, SessionInfo } from "@claude-ui/protocol";
+import type { CreateResult, Event, Part, SessionInfo, SubscribeResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
-import { connect } from "./client.ts";
+import { connect, type ConnectionStatus } from "./client.ts";
 import { useSmoothText } from "./smooth.ts";
-import { applyEvent, emptySession, type SessionView } from "./store.ts";
+import { applyEvent, emptySession, withEpoch, type SessionView } from "./store.ts";
+
+// ponytail: session IDs this browser opened, so a reopened tab resubscribes; the session list issue replaces this with session.list.
+const STORAGE_KEY = "claude-ui.sessions";
+const loadIds = (): string[] => {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+};
+const saveIds = (ids: string[]) => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+  } catch {}
+};
 
 export function App() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [views, setViews] = useState<Record<string, SessionView>>({});
   const [activeId, setActiveId] = useState<string>();
   const [error, setError] = useState<string>();
+  const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
   const client = useRef<ReturnType<typeof connect>>(undefined);
+  const viewsRef = useRef(views);
+  viewsRef.current = views;
+
+  // Replays events after the view's last seq, or everything when the daemon restarted (new logEpoch).
+  async function subscribe(sessionId: string) {
+    const view = viewsRef.current[sessionId];
+    try {
+      const r = await client.current!.request<SubscribeResult>({
+        type: "session.subscribe",
+        sessionId,
+        sinceSeq: view?.lastSeq ?? 0,
+        logEpoch: view?.logEpoch,
+      });
+      // Runs before the replayed events: the reply precedes them on the socket and this continuation is a microtask.
+      setViews((v) => ({ ...v, [sessionId]: withEpoch(v[sessionId] ?? emptySession(), r.logEpoch) }));
+      setSessions((s) => (s.some((x) => x.id === sessionId) ? s : [...s, r.session]));
+      setActiveId((a) => a ?? sessionId);
+    } catch (e) {
+      if ((e as Error).message === "disconnected") return; // resubscribed on reconnect
+      saveIds(loadIds().filter((id) => id !== sessionId));
+      setError((e as Error).message);
+    }
+  }
 
   useEffect(() => {
-    const c = connect((e: Event) =>
-      setViews((v) => ({ ...v, [e.sessionId]: applyEvent(v[e.sessionId] ?? emptySession(), e) })),
-    );
+    const c = connect({
+      onEvent: (e: Event) =>
+        setViews((v) => ({ ...v, [e.sessionId]: applyEvent(v[e.sessionId] ?? emptySession(), e) })),
+      onOpen: () => loadIds().forEach((id) => void subscribe(id)),
+      onStatus: setStatus,
+    });
     client.current = c;
     return c.close;
   }, []);
@@ -26,8 +68,8 @@ export function App() {
     setError(undefined);
     try {
       const { session } = await client.current!.request<CreateResult>({ type: "session.create", cwd });
-      await client.current!.request({ type: "session.subscribe", sessionId: session.id, sinceSeq: 0 });
-      setSessions((s) => [...s, session]);
+      saveIds([...loadIds(), session.id]);
+      await subscribe(session.id);
       setActiveId(session.id);
     } catch (e) {
       setError((e as Error).message);
@@ -40,6 +82,7 @@ export function App() {
   return (
     <div className="flex h-dvh bg-background text-foreground">
       <aside className="flex w-72 shrink-0 flex-col gap-3 border-r p-3">
+        <ConnectionBadge status={status} />
         <NewSessionForm onCreate={createSession} />
         {error && <p className="text-destructive text-sm">{error}</p>}
         <ul className="flex flex-col gap-1 overflow-y-auto">
@@ -68,6 +111,21 @@ export function App() {
           <div className="m-auto text-muted-foreground text-sm">Create a session to start.</div>
         )}
       </main>
+    </div>
+  );
+}
+
+const STATUS_STYLE: Record<ConnectionStatus, string> = {
+  connected: "bg-green-500",
+  reconnecting: "bg-amber-500 animate-pulse",
+  offline: "bg-destructive",
+};
+
+function ConnectionBadge({ status }: { status: ConnectionStatus }) {
+  return (
+    <div className="flex items-center gap-2 text-muted-foreground text-xs" data-testid="connection-status" role="status">
+      <span className={`size-2 rounded-full ${STATUS_STYLE[status]}`} aria-hidden />
+      {status}
     </div>
   );
 }

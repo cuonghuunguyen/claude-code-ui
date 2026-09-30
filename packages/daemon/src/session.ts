@@ -1,28 +1,50 @@
 // A live session: one long-lived streaming-input query() whose SDK messages become logged events.
 import { randomUUID } from "node:crypto";
-import { query as sdkQuery, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query as sdkQuery, type SDKMessage, type SDKUserMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createAdapter, type Event, type Part, type SessionInfo, type SessionState } from "@claude-ui/protocol";
 
 type Listener = (e: Event) => void;
 
+type SessionOpts = { model?: string; query?: typeof sdkQuery };
+
 export class Session {
-  readonly id = randomUUID();
+  readonly id: string;
   private state: SessionState = "idle";
   // ponytail: in-memory log grows for the session lifetime; trim when memory matters.
   private readonly log: Event[] = [];
   private readonly listeners = new Set<Listener>();
   private readonly input = new InputQueue();
+  private started = false;
 
   constructor(
     readonly cwd: string,
-    opts: { model?: string; query?: typeof sdkQuery } = {},
+    private readonly opts: SessionOpts = {},
+    restored?: { id: string; history: SessionMessage[] },
   ) {
-    const q = (opts.query ?? sdkQuery)({
+    this.id = restored?.id ?? randomUUID();
+    if (!restored) {
+      this.start({ sessionId: this.id });
+      return;
+    }
+    // ADR 0001: after a daemon restart the SDK transcript is the history; the query resumes on the first prompt.
+    const adapter = createAdapter();
+    for (const m of restored.history) for (const part of adapter.convert(m as SDKMessage)) this.emit(part);
+    this.setState("idle");
+  }
+
+  /** Rebuilds a session from its SDK transcript (`getSessionMessages()`); a prompt resumes it with the same ID. */
+  static restore(id: string, cwd: string, history: SessionMessage[], opts: SessionOpts = {}) {
+    return new Session(cwd, opts, { id, history });
+  }
+
+  private start(ids: { sessionId: string } | { resume: string }) {
+    this.started = true;
+    const q = (this.opts.query ?? sdkQuery)({
       prompt: this.input,
       options: {
-        sessionId: this.id,
-        cwd,
-        model: opts.model,
+        ...ids,
+        cwd: this.cwd,
+        model: this.opts.model,
         includePartialMessages: true,
         settingSources: ["user", "project"],
         // ADR 0002: subscription login only. An inherited API key would take precedence and bill per token.
@@ -53,6 +75,7 @@ export class Session {
     const uuid = randomUUID();
     this.emit({ type: "user_text", id: uuid, text, images: [] });
     this.setState("running");
+    if (!this.started) this.start({ resume: this.id });
     this.input.push({ type: "user", uuid, message: { role: "user", content: text }, parent_tool_use_id: null });
   }
 

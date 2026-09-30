@@ -1,29 +1,76 @@
-// One WebSocket per tab. Requests resolve on the reply with the same reqId; events go to onEvent.
+// One WebSocket per tab, reconnected with backoff. Requests resolve on the reply with the same reqId; events go to onEvent.
+// onOpen runs after every (re)connect, so the caller resubscribes there with its last seq and logEpoch.
 import type { ClientMessage, Event, ServerMessage } from "@claude-ui/protocol";
 
 type Request = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M, "reqId"> : never) : never;
 
-export function connect(onEvent: (e: Event) => void) {
-  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+export type ConnectionStatus = "connected" | "reconnecting" | "offline";
+
+/** Failed attempts in a row after which the header shows offline; retries continue at the capped delay. */
+const OFFLINE_AFTER = 5;
+
+export const backoffMs = (attempt: number) => Math.min(10_000, 500 * 2 ** attempt);
+
+export function connect(opts: {
+  url?: string;
+  onEvent: (e: Event) => void;
+  onOpen?: () => void;
+  onStatus?: (s: ConnectionStatus) => void;
+}) {
+  const url = opts.url ?? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
   const pending = new Map<string, { resolve: (r: unknown) => void; reject: (e: Error) => void }>();
-  const open = new Promise<void>((r) => ws.addEventListener("open", () => r(), { once: true }));
+  let ws: WebSocket;
+  let isOpen = false;
+  let closed = false;
+  let failures = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let markOpen!: () => void;
+  let ready = new Promise<void>((r) => (markOpen = r));
 
-  ws.addEventListener("message", (ev) => {
-    const m: ServerMessage = JSON.parse(ev.data);
-    if (m.type === "event") return onEvent(m);
-    const p = m.reqId ? pending.get(m.reqId) : undefined;
-    if (!p) return console.error("daemon error", m);
-    pending.delete(m.reqId!);
-    m.type === "reply" ? p.resolve(m.result) : p.reject(new Error(m.message));
-  });
+  function dial() {
+    ws = new WebSocket(url);
+    ws.addEventListener("open", () => {
+      isOpen = true;
+      failures = 0;
+      markOpen();
+      opts.onStatus?.("connected");
+      opts.onOpen?.();
+    });
+    ws.addEventListener("message", (ev) => {
+      const m: ServerMessage = JSON.parse(ev.data);
+      if (m.type === "event") return opts.onEvent(m);
+      const p = m.reqId ? pending.get(m.reqId) : undefined;
+      if (!p) return console.error("daemon error", m);
+      pending.delete(m.reqId!);
+      m.type === "reply" ? p.resolve(m.result) : p.reject(new Error(m.message));
+    });
+    ws.addEventListener("close", () => {
+      if (isOpen) ready = new Promise<void>((r) => (markOpen = r));
+      isOpen = false;
+      for (const p of pending.values()) p.reject(new Error("disconnected"));
+      pending.clear();
+      if (closed) return;
+      opts.onStatus?.(failures >= OFFLINE_AFTER ? "offline" : "reconnecting");
+      timer = setTimeout(dial, backoffMs(failures++));
+    });
+  }
+  dial();
 
-  // ponytail: no reconnect yet; the reconnect/replay issue adds backoff and resubscribe.
+  /** Waits for a connection; rejects if it drops before the reply. */
   async function request<T>(msg: Request): Promise<T> {
-    await open;
+    await ready;
+    if (ws.readyState !== WebSocket.OPEN) throw new Error("disconnected");
     const reqId = crypto.randomUUID();
     ws.send(JSON.stringify({ ...msg, reqId }));
     return new Promise<T>((resolve, reject) => pending.set(reqId, { resolve: resolve as (r: unknown) => void, reject }));
   }
 
-  return { request, close: () => ws.close() };
+  return {
+    request,
+    close() {
+      closed = true;
+      clearTimeout(timer);
+      ws.close();
+    },
+  };
 }

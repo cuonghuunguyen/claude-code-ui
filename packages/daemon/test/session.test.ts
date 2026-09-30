@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
-import { calls, fakeQuery } from "./fake-query.ts";
+import { calls, fakeQuery, history } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -63,5 +63,25 @@ describe("Session", () => {
     expect(events.some((e) => e.part.type === "raw" && JSON.stringify(e.part.message).includes("login expired"))).toBe(true);
     expect(() => s.prompt("hello")).toThrow(/not live/);
     expect(s.info().state).toBe("error");
+  });
+
+  it("rebuilds history from the transcript and resumes with the same ID on the first prompt", async () => {
+    const id = "0b5f1d5e-8a8e-4c9b-9f5e-3c1f2a4b5c6d";
+    const before = calls.length;
+    const s = Session.restore(id, "/tmp", history, { query: fakeQuery as never });
+    expect(calls.length).toBe(before); // no query until a prompt
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    const parts = events.map((e) => e.part);
+    expect(parts.filter((p) => p.type === "user_text").map((p) => p.type === "user_text" && p.text)).toEqual(["first", "second"]);
+    expect(parts.filter((p) => p.type === "assistant_text").length).toBe(2);
+    expect(parts.at(-1)).toMatchObject({ type: "session_state", state: "idle" });
+    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
+
+    s.prompt("third");
+    expect(s.id).toBe(id);
+    expect(calls.at(-1)).toMatchObject({ resume: id, cwd: "/tmp" });
+    expect(calls.at(-1)).not.toHaveProperty("sessionId");
+    await until(events, (e) => e.part.type === "turn_result");
   });
 });

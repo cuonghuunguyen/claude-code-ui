@@ -18,4 +18,5 @@ export type ServerMessage =
   | { type: "error"; reqId?: string; code: string; message: string };
 
 export type CreateResult = { session: SessionInfo };
-export type SubscribeResult = { logEpoch: string };
+/** `logEpoch` differs from the one the client sent: its store belongs to an earlier daemon run and the events are a full replay. */
+export type SubscribeResult = { logEpoch: string; session: SessionInfo };
