@@ -31,8 +31,8 @@ function client() {
     ws.send(JSON.stringify({ ...msg, reqId }));
     return waitFor((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId);
   };
-  return new Promise<{ request: typeof request; waitFor: typeof waitFor; inbox: ServerMessage[] }>((r) =>
-    ws.on("open", () => r({ request, waitFor, inbox })),
+  return new Promise<{ ws: WebSocket; request: typeof request; waitFor: typeof waitFor; inbox: ServerMessage[] }>((r) =>
+    ws.on("open", () => r({ ws, request, waitFor, inbox })),
   );
 }
 
@@ -59,5 +59,17 @@ describe("daemon", () => {
   it("rejects a cwd that is not a directory", async () => {
     const c = await client();
     expect(await c.request({ type: "session.create", cwd: "/nonexistent" })).toMatchObject({ type: "error", code: "bad_cwd" });
+  });
+
+  it("answers a malformed URL path with 400 and keeps running", async () => {
+    expect((await fetch(`http://127.0.0.1:${port}/100%`)).status).toBe(400);
+    expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(200);
+  });
+
+  it("answers a non-object WebSocket frame with a protocol error and keeps running", async () => {
+    const c = await client();
+    for (const frame of ["null", "42", '"x"', "[]"]) c.ws.send(frame);
+    await c.waitFor(() => c.inbox.filter((m) => m.type === "error" && m.code === "bad_message").length === 4);
+    expect(await c.request({ type: "session.create", cwd: "/nonexistent" })).toMatchObject({ code: "bad_cwd" });
   });
 });

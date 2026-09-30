@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
 import { calls, fakeQuery } from "./fake-query.ts";
@@ -41,5 +41,27 @@ describe("Session", () => {
     s.subscribe(3, (e) => late.push(e));
     expect(late[0]!.seq).toBe(4);
     expect(late.length).toBe(all.length - 3);
+  });
+
+  it("strips API key env vars from the SDK env (ADR 0002)", () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
+    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "tok");
+    new Session("/tmp", { query: fakeQuery as never });
+    vi.unstubAllEnvs();
+    const env = calls.at(-1)!.env!;
+    expect(env.PATH).toBe(process.env.PATH);
+    expect(env).not.toHaveProperty("ANTHROPIC_API_KEY");
+    expect(env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+  });
+
+  it("rejects a prompt once the query failed, and logs the failure reason", async () => {
+    const failing = () => (async function* () { throw new Error("login expired"); })();
+    const s = new Session("/tmp", { query: failing as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await until(events, (e) => e.part.type === "session_state" && e.part.state === "error");
+    expect(events.some((e) => e.part.type === "raw" && JSON.stringify(e.part.message).includes("login expired"))).toBe(true);
+    expect(() => s.prompt("hello")).toThrow(/not live/);
+    expect(s.info().state).toBe("error");
   });
 });

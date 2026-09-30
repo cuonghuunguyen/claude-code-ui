@@ -25,7 +25,12 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery })
   const root = resolve(opts.webRoot);
 
   const http = createServer((req, res) => {
-    const path = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
+    let path: string;
+    try {
+      path = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
+    } catch {
+      return void res.writeHead(400).end("malformed URL");
+    }
     let file = resolve(join(root, path));
     if (!file.startsWith(root + sep) && file !== root) return void res.writeHead(403).end();
     // SPA fallback: unknown paths serve index.html.
@@ -46,6 +51,8 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery })
       } catch {
         return send(ws, { type: "error", code: "bad_json", message: "invalid JSON" });
       }
+      if (typeof msg !== "object" || msg === null || Array.isArray(msg))
+        return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
       const reply = (result: unknown) => send(ws, { type: "reply", reqId: msg.reqId, result });
       const fail = (code: string, message: string) => send(ws, { type: "error", reqId: msg.reqId, code, message });
       const find = (id: string) => sessions.get(id) ?? void fail("unknown_session", `no session ${id}`);
@@ -72,6 +79,7 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery })
           const s = find(msg.sessionId);
           if (!s) return;
           if (typeof msg.text !== "string" || !msg.text.trim()) return fail("bad_prompt", "empty prompt");
+          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
           s.prompt(msg.text);
           return reply({});
         }

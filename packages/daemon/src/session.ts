@@ -25,6 +25,8 @@ export class Session {
         model: opts.model,
         includePartialMessages: true,
         settingSources: ["user", "project"],
+        // ADR 0002: subscription login only. An inherited API key would take precedence and bill per token.
+        env: withoutApiKeys(process.env),
       },
     });
     void this.drive(q);
@@ -41,7 +43,13 @@ export class Session {
     return () => this.listeners.delete(listener);
   }
 
+  /** False once the query ended or failed: nothing reads the input queue any more. */
+  isLive() {
+    return this.state !== "error" && this.state !== "closed";
+  }
+
   prompt(text: string) {
+    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
     const uuid = randomUUID();
     this.emit({ type: "user_text", id: uuid, text, images: [] });
     this.setState("running");
@@ -58,6 +66,7 @@ export class Session {
       this.setState("closed");
     } catch (err) {
       console.error(`session ${this.id} failed:`, err);
+      this.emit({ type: "raw", id: randomUUID(), message: { error: String(err) } });
       this.setState("error");
     }
   }
@@ -72,6 +81,11 @@ export class Session {
     this.log.push(e);
     for (const l of this.listeners) l(e);
   }
+}
+
+function withoutApiKeys(env: NodeJS.ProcessEnv) {
+  const { ANTHROPIC_API_KEY: _key, ANTHROPIC_AUTH_TOKEN: _token, ...rest } = env;
+  return rest;
 }
 
 /** Async iterable fed by prompt(); stays open for the session lifetime (streaming input mode). */
