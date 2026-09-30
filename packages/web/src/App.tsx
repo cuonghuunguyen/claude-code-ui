@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { RotateCcwIcon } from "lucide-react";
 import type {
   CreateResult,
   Event,
   FsEntry,
   FsListResult,
+  FsSearchResult,
   ListResult,
   ModelInfo,
   ModelsResult,
@@ -23,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus } from "./client.ts";
 import { ImageStrip, readImages } from "./images.tsx";
 import { choose, matchCommands } from "./commands.ts";
+import { activeMention, insertMention } from "./mentions.ts";
 import { groupByCwd, timeAgo } from "./sessions.ts";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
@@ -186,6 +188,9 @@ export function App() {
             }
             onRewind={(userMessageId, mode) => client.current!.request({ type: "session.rewind", sessionId: active.id, userMessageId, mode })}
             onRespond={respond}
+            onSearch={(query) =>
+              client.current!.request<FsSearchResult>({ type: "fs.search", cwd: active.cwd, query }).then((r) => r.paths)
+            }
           />
         ) : (
           <>
@@ -381,6 +386,7 @@ function SessionPane({
   models,
   onModel,
   onPrompt,
+  onSearch,
   onMenu,
   onRewindPreview,
   onRewind,
@@ -391,6 +397,7 @@ function SessionPane({
   models: ModelInfo[];
   onModel: (model: string) => void;
   onPrompt: (text: string, images: string[]) => void;
+  onSearch: (query: string) => Promise<string[]>;
   onMenu: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
@@ -402,10 +409,28 @@ function SessionPane({
   const [rewinding, setRewinding] = useState<string>();
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [caret, setCaret] = useState(0);
+  const [found, setFound] = useState<{ query: string; paths: string[] }>();
+  const input = useRef<HTMLTextAreaElement>(null);
   const matches = dismissed ? undefined : matchCommands(view.commands, text);
-  const pickerOpen = !!matches?.length;
-  const edit = (t: string) => {
+  const mention = dismissed || matches ? undefined : activeMention(text, caret);
+  // Only results for the query being typed, so Enter never picks a stale path.
+  const paths = mention && found?.query === mention.query ? found.paths : [];
+  const pickerOpen = !!matches?.length || paths.length > 0;
+  const rows = matches?.length ? matches.length : paths.length;
+  useEffect(() => {
+    if (mention === undefined) return;
+    let current = true;
+    onSearch(mention.query)
+      .then((p) => current && setFound({ query: mention.query, paths: p }))
+      .catch(() => current && setFound({ query: mention.query, paths: [] }));
+    return () => void (current = false);
+  }, [mention?.query]);
+  // Keeps the caret after an inserted mention (a controlled textarea moves it to the end).
+  useLayoutEffect(() => void input.current?.setSelectionRange(caret, caret), [text]);
+  const edit = (t: string, c = t.length) => {
     setText(t);
+    setCaret(c);
     setSelected(0);
     setDismissed(false);
   };
@@ -416,7 +441,11 @@ function SessionPane({
     setImages([]);
   };
   const pick = (i: number) => {
-    const r = choose(matches![i]!);
+    if (!matches?.length) {
+      const r = insertMention(text, mention!, paths[i]!);
+      return edit(r.text, r.caret);
+    }
+    const r = choose(matches[i]!);
     "send" in r ? send(r.send) : edit(r.text);
   };
   const attach = async (files: FileList) => {
@@ -434,12 +463,12 @@ function SessionPane({
   };
   const onKeyDown = (e: KeyboardEvent) => {
     if (pickerOpen) {
-      const n = matches.length;
+      const n = rows;
       const keys: Record<string, () => void> = {
         ArrowDown: () => setSelected((i) => (i + 1) % n),
         ArrowUp: () => setSelected((i) => (i - 1 + n) % n),
         Enter: () => pick(selected),
-        Tab: () => edit(`/${matches[selected]!.name} `),
+        Tab: () => (matches?.length ? edit(`/${matches[selected]!.name} `) : pick(selected)),
         Escape: () => setDismissed(true),
       };
       // Shift+Enter still inserts a newline.
@@ -523,7 +552,32 @@ function SessionPane({
         ) : (
           <>
             <ImageStrip images={images} onRemove={(i) => setImages((all) => all.filter((_, j) => j !== i))} />
-            {pickerOpen && (
+            {pickerOpen && !matches?.length && (
+              <ul
+                id="command-picker"
+                role="listbox"
+                aria-label="Files"
+                data-testid="mention-picker"
+                className="absolute inset-x-4 bottom-full max-h-72 overflow-y-auto rounded-lg border bg-popover p-1 font-mono text-sm shadow-md"
+              >
+                {paths.map((p, i) => (
+                  <li
+                    key={p}
+                    id={`command-${i}`}
+                    role="option"
+                    aria-selected={i === selected}
+                    ref={(el) => void (i === selected && el?.scrollIntoView({ block: "nearest" }))}
+                    className={`cursor-pointer truncate rounded-md px-2 py-1.5 ${i === selected ? "bg-muted" : ""}`}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setSelected(i)}
+                    onClick={() => pick(i)}
+                  >
+                    @{p}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {!!matches?.length && (
               <ul
                 id="command-picker"
                 role="listbox"
@@ -560,7 +614,9 @@ function SessionPane({
               rows={3}
               placeholder="Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"
               value={text}
-              onChange={(e) => edit(e.target.value)}
+              ref={input}
+              onChange={(e) => edit(e.target.value, e.target.selectionStart)}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
               onKeyDown={onKeyDown}
               onPaste={onPaste}
             />

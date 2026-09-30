@@ -234,6 +234,15 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.list", path: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
   });
 
+  it("searches files under a cwd inside the allowlisted roots for @-mentions", async () => {
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    writeFileSync(join(webRoot, "proj", "notes.md"), "");
+    const c = await client();
+    expect(await c.request({ type: "fs.search", cwd: webRoot, query: "prnot" })).toMatchObject({ result: { paths: ["proj/notes.md"] } });
+    expect(await c.request({ type: "fs.search", cwd: join(webRoot, ".."), query: "" })).toMatchObject({ code: "cwd_not_allowed" });
+    expect(await c.request({ type: "fs.search", cwd: webRoot, query: 42 })).toMatchObject({ code: "bad_query" });
+  });
+
   it("lists transcripts inside the roots merged with live sessions; opening one resumes it with the same ID", async () => {
     const inside = "1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
     const outside = "2b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
