@@ -1,11 +1,11 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
-import { extname, join, resolve, sep } from "node:path";
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { imageBlock, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type ServerMessage } from "@claude-ui/protocol";
-import { getSessionInfo, getSessionMessages, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
+import { imageBlock, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
+import { getSessionInfo, getSessionMessages, listSessions, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { listModels, Session } from "./session.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -21,19 +21,54 @@ const MIME: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
-type History = { getSessionInfo: typeof getSessionInfo; getSessionMessages: typeof getSessionMessages };
+type History = { listSessions: typeof listSessions; getSessionInfo: typeof getSessionInfo; getSessionMessages: typeof getSessionMessages };
 
 // ponytail: loopback only; add the remote-access hostname here once that is decided (ADR 0003).
 const LOCAL_HOSTNAMES = new Set(["127.0.0.1", "localhost"]);
 
-export function createDaemon(opts: { webRoot: string; token: string; query?: typeof sdkQuery; history?: History }) {
+/** Canonical path (symlinks resolved), or undefined when it does not exist. */
+function real(path: string) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+/** `roots`: allowlisted directories for session cwds, the session list and the directory picker (docs/spec.md "Security"). */
+export function createDaemon(opts: { webRoot: string; token: string; roots: string[]; query?: typeof sdkQuery; history?: History }) {
   const logEpoch = randomUUID();
   const sessions = new Map<string, Session>();
   const restoring = new Map<string, Promise<Session | undefined>>();
-  const history = opts.history ?? { getSessionInfo, getSessionMessages };
+  const history = opts.history ?? { listSessions, getSessionInfo, getSessionMessages };
   const root = resolve(opts.webRoot);
   // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
   let models: ReturnType<typeof listModels> | undefined;
+  const roots = opts.roots.map(real).filter((r) => r !== undefined);
+  const inRoots = (path: string) =>
+    roots.some((r) => {
+      const rel = relative(r, path);
+      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    });
+  /** The canonical path when it is an existing path inside a root. */
+  const allowed = (path: unknown) => {
+    const p = typeof path === "string" && isAbsolute(path) ? real(path) : undefined;
+    return p && inRoots(p) ? p : undefined;
+  };
+
+  async function list(): Promise<SessionListItem[]> {
+    const items = new Map<string, SessionListItem>();
+    for (const t of await history.listSessions()) {
+      if (!t.cwd || !allowed(t.cwd)) continue;
+      const live = sessions.get(t.sessionId)?.info();
+      const state = live?.state ?? "closed";
+      items.set(t.sessionId, { id: t.sessionId, cwd: t.cwd, state, model: live?.model ?? "default", title: t.summary, lastActivity: t.lastModified });
+    }
+    // Sessions of this run that have no transcript yet (no prompt sent).
+    for (const s of sessions.values())
+      if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt });
+    return [...items.values()].sort((a, b) => b.lastActivity - a.lastActivity);
+  }
 
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
   function findSession(id: string): Promise<Session | undefined> {
@@ -45,7 +80,7 @@ export function createDaemon(opts: { webRoot: string; token: string; query?: typ
     if (!p) {
       p = (async () => {
         const info = await history.getSessionInfo(id);
-        if (!info?.cwd) return undefined;
+        if (!info?.cwd || !allowed(info.cwd)) return undefined;
         const s = Session.restore(id, info.cwd, await history.getSessionMessages(id, { dir: info.cwd }), { query: opts.query });
         sessions.set(id, s);
         return s;
@@ -114,7 +149,9 @@ export function createDaemon(opts: { webRoot: string; token: string; query?: typ
           if (typeof msg.cwd !== "string" || !existsSync(msg.cwd) || !statSync(msg.cwd).isDirectory())
             return fail("bad_cwd", `not a directory: ${msg.cwd}`);
           if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
-          const s = new Session(msg.cwd, { model: msg.model, query: opts.query });
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          const s = new Session(cwd, { model: msg.model, query: opts.query });
           sessions.set(s.id, s);
           return reply({ session: s.info() });
         }
@@ -158,6 +195,22 @@ export function createDaemon(opts: { webRoot: string; token: string; query?: typ
           } catch (e) {
             models = undefined;
             return fail("models_failed", (e as Error).message);
+          }
+        }
+        case "session.list":
+          return reply({ sessions: await list() });
+        case "fs.list": {
+          if (msg.path === undefined)
+            return reply({ entries: roots.map((r): FsEntry => ({ name: r, path: r, isDir: true })) });
+          const dir = allowed(msg.path);
+          if (!dir) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
+          try {
+            const entries = readdirSync(dir, { withFileTypes: true }).map(
+              (e): FsEntry => ({ name: e.name, path: join(dir, e.name), isDir: e.isDirectory() }),
+            );
+            return reply({ entries: entries.sort((a, b) => a.name.localeCompare(b.name)) });
+          } catch (err) {
+            return fail("fs_error", String(err));
           }
         }
         default:
