@@ -181,6 +181,18 @@ describe("adapter turn cost", () => {
 });
 
 describe("adapter on known SDK noise", () => {
+  it("drops hook, task lifecycle and tool progress messages instead of emitting raw parts", () => {
+    const noise = [
+      { type: "system", subtype: "hook_started", uuid: "h1", hook_id: "k", hook_name: "SessionStart:startup", hook_event: "SessionStart" },
+      { type: "system", subtype: "hook_progress", uuid: "h2", hook_id: "k", hook_name: "SessionStart:startup", hook_event: "SessionStart", stdout: "", stderr: "", output: "" },
+      { type: "system", subtype: "hook_response", uuid: "h3", hook_id: "k", hook_name: "SessionStart:startup", hook_event: "SessionStart", output: "hook stdout", stdout: "hook stdout", stderr: "", outcome: "success" },
+      { type: "system", subtype: "task_started", uuid: "t1", task_id: "b1", description: "sleep 1" },
+      { type: "system", subtype: "task_notification", uuid: "t2", task_id: "b1", status: "completed", output_file: "", summary: "" },
+      { type: "tool_progress", uuid: "p1", tool_use_id: "x", tool_name: "Bash", parent_tool_use_id: null, elapsed_time_seconds: 3 },
+    ];
+    expect(run(noise)).toEqual([]);
+  });
+
   it("drops the CLI's echo of a model switch; the session_model part shows it", () => {
     const echo = { type: "user", uuid: "e1", message: { role: "user", content: "<local-command-stdout>Set model to `sonnet (claude-sonnet-5-5)`</local-command-stdout>" }, parent_tool_use_id: null };
     expect(run([echo])).toEqual([]);

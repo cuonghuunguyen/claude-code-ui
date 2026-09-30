@@ -22,15 +22,19 @@ const IGNORED = new Set([
   "system:thinking_tokens",
   "system:task_progress",
   "system:task_updated",
+  "system:hook_started",
+  "system:hook_progress",
+  "system:hook_response",
+  "tool_progress",
 ]);
 // After an interrupt the CLI sends this user text, then a result with an aborted terminal_reason (SDK 0.3.285).
 const INTERRUPTED = /^\[Request interrupted by user( for tool use)?\]$/;
+// The CLI's echo of setModel() (SDK 0.3.285); the session_model part already shows the switch.
+const MODEL_SWITCHED = /^<local-command-stdout>Set model to .*<\/local-command-stdout>$/s;
 const ABORTED = new Set(["aborted_streaming", "aborted_tools"]);
 
 // Text/thinking part id = `<API message id>:<content block index>`. Streamed blocks know their index from the
 // stream event. Complete assistant messages arrive split, one SDK message per content block with the
-// The CLI's echo of setModel() (SDK 0.3.285); the session_model part already shows the switch.
-const MODEL_SWITCHED = /^<local-command-stdout>Set model to .*<\/local-command-stdout>$/s;
 // same API message id (see test/fixtures), so their index is the count of blocks seen for that id.
 // `resumed`: the session's query resumes a transcript, whose saved total the first result already includes.
 export function createAdapter(opts: { resumed?: boolean } = {}) {

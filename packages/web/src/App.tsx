@@ -986,13 +986,21 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
       );
     case "raw":
       return (
-        <pre className="overflow-x-auto rounded bg-muted p-2 text-xs" data-testid="raw-part">
-          {JSON.stringify(part.message, null, 2)}
-        </pre>
+        // Collapsed: an SDK message the adapter does not know yet, useful only when debugging.
+        <details className="rounded bg-muted p-2 text-xs" data-testid="raw-part">
+          <summary className="cursor-pointer text-muted-foreground">{rawLabel(part.message)}</summary>
+          <pre className="overflow-x-auto">{JSON.stringify(part.message, null, 2)}</pre>
+        </details>
       );
     default:
       return null;
   }
+}
+
+/** "type/subtype" of an SDK message, e.g. "system/compact_boundary". */
+function rawLabel(m: unknown) {
+  const { type, subtype } = (m ?? {}) as { type?: unknown; subtype?: unknown };
+  return [type, subtype].filter((v) => typeof v === "string").join("/") || "SDK message";
 }
 
 function AssistantText({ text, streaming }: { text: string; streaming: boolean }) {
