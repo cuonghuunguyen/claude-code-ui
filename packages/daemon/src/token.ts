@@ -1,6 +1,6 @@
 // Pairing token: generated on first run, kept owner-only in the config dir, presented on every WebSocket.
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -10,7 +10,11 @@ export function loadToken(dir = configDir()): string {
   const file = join(dir, "token");
   try {
     const token = readFileSync(file, "utf8").trim();
-    if (token) return token;
+    // mode on writeFileSync applies only on creation; a copied file may be world-readable.
+    if (token) {
+      chmodSync(file, 0o600);
+      return token;
+    }
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }

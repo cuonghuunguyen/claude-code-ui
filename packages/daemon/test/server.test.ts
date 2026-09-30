@@ -1,5 +1,5 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
-import type { AddressInfo } from "node:net";
+import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -19,6 +19,22 @@ afterAll(() => void http.close());
 
 const origin = () => `http://127.0.0.1:${port}`;
 const protocols = (t = token) => [WS_PROTOCOL, `${TOKEN_PROTOCOL_PREFIX}${t}`];
+
+/** Sends raw request bytes (any request target, even one no WebSocket client can send); resolves with the response head. */
+function raw(requestLine: string, headers: Record<string, string> = {}) {
+  const head = Object.entries({ host: `127.0.0.1:${port}`, upgrade: "websocket", connection: "Upgrade", ...headers })
+    .map(([k, v]) => `${k}: ${v}\r\n`)
+    .join("");
+  return new Promise<string>((resolve, reject) => {
+    const s = connect(port, "127.0.0.1", () => s.write(`${requestLine}\r\n${head}\r\n`));
+    let out = "";
+    s.on("data", (d) => {
+      out += d;
+      if (out.includes("\r\n\r\n")) (resolve(out.split("\r\n\r\n")[0]), s.destroy());
+    });
+    s.on("error", reject);
+  });
+}
 
 /** Resolves with the HTTP status of a rejected upgrade and its body, or "open". */
 function attempt(opts: { protocols?: string[]; headers?: Record<string, string> }) {
@@ -221,5 +237,23 @@ describe("WebSocket auth and origin check", () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/other`, protocols(), { origin: origin() });
     const status = await new Promise((r) => (ws.on("unexpected-response", (_q, res) => r(res.statusCode)), ws.on("error", () => {})));
     expect(status).toBe(404);
+  });
+
+  it("answers a malformed upgrade request target with 4xx and keeps serving", async () => {
+    for (const target of ["http://[", "http://[::1", "//[/ws"]) {
+      expect(await raw(`GET ${target} HTTP/1.1`, { origin: origin(), "sec-websocket-protocol": protocols().join(", ") })).toMatch(/^HTTP\/1\.1 4\d\d /);
+    }
+    expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(200);
+  });
+
+  it("selects the claude-ui subprotocol only when the client offered it", async () => {
+    const res = await raw("GET /ws HTTP/1.1", {
+      origin: origin(),
+      "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+      "sec-websocket-version": "13",
+      "sec-websocket-protocol": `${TOKEN_PROTOCOL_PREFIX}${token}`,
+    });
+    expect(res).toMatch(/^HTTP\/1\.1 101 /);
+    expect(res.toLowerCase()).not.toContain("sec-websocket-protocol");
   });
 });

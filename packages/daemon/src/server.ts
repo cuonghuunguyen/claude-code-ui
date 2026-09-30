@@ -73,7 +73,7 @@ export function createDaemon(opts: { webRoot: string; token: string; query?: typ
     createReadStream(file).pipe(res);
   });
 
-  const wss = new WebSocketServer({ noServer: true, handleProtocols: () => WS_PROTOCOL });
+  const wss = new WebSocketServer({ noServer: true, handleProtocols: (offered) => (offered.has(WS_PROTOCOL) ? WS_PROTOCOL : false) });
   const digest = (t: string) => createHash("sha256").update(t).digest();
   const expected = digest(opts.token);
   const hasToken = (req: IncomingMessage) =>
@@ -86,7 +86,8 @@ export function createDaemon(opts: { webRoot: string; token: string; query?: typ
     // Never put request headers in these responses: they carry the token.
     const reject = (status: string) => void socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
     socket.on("error", () => socket.destroy());
-    if (new URL(req.url ?? "/", "http://x").pathname !== "/ws") return reject("404 Not Found");
+    // String compare, not new URL: a malformed request target must not throw here (uncaught in an upgrade listener).
+    if (req.url?.split("?")[0] !== "/ws") return reject("404 Not Found");
     if (!isOwnOrigin(req)) return reject("403 Forbidden");
     if (!hasToken(req)) return reject("401 Unauthorized");
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));

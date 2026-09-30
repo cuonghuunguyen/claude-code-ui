@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,6 +12,14 @@ describe("token", () => {
     expect(readFileSync(join(dir, "token"), "utf8").trim()).toBe(first);
     expect(statSync(join(dir, "token")).mode & 0o777).toBe(0o600);
     expect(loadToken(dir)).toBe(first);
+  });
+
+  it("restores owner-only permissions on an existing token file", () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "cfg-")), "claude-ui");
+    const token = loadToken(dir);
+    chmodSync(join(dir, "token"), 0o644);
+    expect(loadToken(dir)).toBe(token);
+    expect(statSync(join(dir, "token")).mode & 0o777).toBe(0o600);
   });
 
   it("puts the token in the URL fragment so it is never sent in an HTTP request", () => {
