@@ -11,6 +11,14 @@ export type ToolStatus = "pending" | "running" | "done" | "error" | "denied";
 /** "allow" = Yes, "allow_always" = Yes and don't ask again, "deny" = No; "cancelled" = the SDK withdrew the request. */
 export type PermissionDecision = "allow" | "allow_always" | "deny" | "cancelled";
 
+/** One `AskUserQuestion` question as the SDK sends it; "Other" is not among `options`, the UI adds it. */
+export type Question = {
+  question: string;
+  header: string;
+  options: { label: string; description: string; preview?: string }[];
+  multiSelect: boolean;
+};
+
 export type TokenUsage = {
   inputTokens: number;
   outputTokens: number;
@@ -51,6 +59,11 @@ export type Part = { parentId?: string } & (
       /** Feedback sent to Claude with a "deny" decision. */
       message?: string;
     }
+  /**
+   * `AskUserQuestion` waiting for an answer. `id` = `requestId`; re-emitted once settled.
+   * `answers`: question text -> answer (several choices joined with ", "); absent when settled = cancelled.
+   */
+  | { type: "question"; id: string; requestId: string; toolUseId: string; questions: Question[]; settled: boolean; answers?: Record<string, string> }
   | { type: "session_state"; id: string; state: SessionState }
   /** Model switched with session.setModel. `model` is a `ModelInfo.value`; "default" = the SDK default. */
   | { type: "session_model"; id: string; model: string }

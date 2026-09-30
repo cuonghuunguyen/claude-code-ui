@@ -4,6 +4,7 @@ import { CONTEXT_TOOLS } from "./tools.ts";
 
 export type ToolCall = Extract<Part, { type: "tool_call" }>;
 export type PermissionRequest = Extract<Part, { type: "permission_request" }>;
+export type QuestionRequest = Extract<Part, { type: "question" }>;
 export type TimelineItem = { kind: "part"; part: Part } | { kind: "context"; id: string; calls: ToolCall[] };
 
 export type SessionView = {
@@ -70,5 +71,13 @@ export function pendingPermission(s: SessionView): PermissionRequest | undefined
   for (const id of s.order) {
     const p = s.parts.get(id)!;
     if (p.type === "permission_request" && !p.settled) return p;
+  }
+}
+
+/** The oldest unsettled question; while one exists (and no permission request) the question panel replaces the prompt box. */
+export function pendingQuestion(s: SessionView): QuestionRequest | undefined {
+  for (const id of s.order) {
+    const p = s.parts.get(id)!;
+    if (p.type === "question" && !p.settled) return p;
   }
 }

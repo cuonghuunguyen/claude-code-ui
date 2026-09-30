@@ -199,6 +199,13 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
           const settled = [...sessions.values()].some((s) => s.respond(msg.requestId, msg));
           return reply({ settled });
         }
+        case "question.respond": {
+          const { answers } = msg;
+          if (typeof msg.requestId !== "string" || typeof answers !== "object" || !answers || Object.values(answers).some((v) => typeof v !== "string"))
+            return fail("bad_request", "requestId and answers (question text -> string) required");
+          const settled = [...sessions.values()].some((s) => s.answer(msg.requestId, answers));
+          return reply({ settled });
+        }
         case "models.list": {
           models ??= listModels(opts.query);
           try {

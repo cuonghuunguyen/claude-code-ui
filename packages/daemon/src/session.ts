@@ -16,6 +16,7 @@ import {
   type Event,
   type Part,
   type PermissionDecision,
+  type Question,
   type RewindMode,
   type RewindPreview,
   type SessionInfo,
@@ -26,6 +27,7 @@ type Listener = (e: Event) => void;
 // Claude Code's wording, so Claude reads the feedback as the user's instruction rather than as tool output.
 const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
 type PermissionPart = Extract<Part, { type: "permission_request" }>;
+type QuestionPart = Extract<Part, { type: "question" }>;
 type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string };
 
 type SessionOpts = { model?: string; query?: typeof sdkQuery };
@@ -53,8 +55,8 @@ export class Session {
   private resumeAt?: string;
   /** True while rewind() awaits rewindFiles(): a prompt then would run on the query the rewind closes. */
   private rewinding = false;
-  /** Pending permission requests by requestId (docs/spec.md "Permission bridge"). */
-  private readonly pending = new Map<string, { part: PermissionPart; resolve: (r: PermissionResult) => void }>();
+  /** Pending permission requests and questions by requestId (docs/spec.md "Permission bridge", "Questions"). */
+  private readonly pending = new Map<string, { part: PermissionPart | QuestionPart; resolve: (r: PermissionResult) => void }>();
 
   constructor(
     readonly cwd: string,
@@ -208,47 +210,68 @@ export class Session {
   private readonly canUseTool: CanUseTool = (tool, input, { signal, suggestions = [], toolUseID, title }) =>
     new Promise((resolve) => {
       const requestId = randomUUID();
-      const part: PermissionPart = {
-        type: "permission_request",
-        id: requestId,
-        requestId,
-        toolUseId: toolUseID,
-        tool,
-        input,
-        ...(title ? { title } : {}),
-        suggestions,
-        settled: false,
-      };
+      const part: PermissionPart | QuestionPart =
+        tool === "AskUserQuestion"
+          ? { type: "question", id: requestId, requestId, toolUseId: toolUseID, questions: (input as { questions: Question[] }).questions, settled: false }
+          : {
+              type: "permission_request",
+              id: requestId,
+              requestId,
+              toolUseId: toolUseID,
+              tool,
+              input,
+              ...(title ? { title } : {}),
+              suggestions,
+              settled: false,
+            };
       this.pending.set(requestId, { part, resolve });
       this.emit(part);
       this.setState("needs_input");
-      signal.addEventListener("abort", () => this.settle(requestId, "cancelled", { behavior: "deny", message: "Request cancelled" }), { once: true });
+      signal.addEventListener("abort", () => this.cancel(requestId, "Request cancelled"), { once: true });
     });
 
   /** Answers a pending permission request. False when it is already settled or unknown: the first answer wins. */
   respond(requestId: string, { decision, ruleIndex, message }: Answer): boolean {
     const req = this.pending.get(requestId);
-    if (!req) return false;
+    if (req?.part.type !== "permission_request") return false;
     const { input, suggestions, toolUseId } = req.part;
     const text = message?.trim();
     if (decision === "deny") {
       for (const part of this.adapter.deny(toolUseId)) this.emit(part);
       // Like Claude Code: "No" with feedback lets Claude continue with it; a bare "No" stops the turn.
-      return this.settle(requestId, "deny", text ? { behavior: "deny", message: `${REJECTED} To tell you how to proceed, the user said:\n${text}` } : { behavior: "deny", message: REJECTED, interrupt: true }, text);
+      return this.settle(
+        requestId,
+        { decision: "deny", ...(text ? { message: text } : {}) },
+        text ? { behavior: "deny", message: `${REJECTED} To tell you how to proceed, the user said:\n${text}` } : { behavior: "deny", message: REJECTED, interrupt: true },
+      );
     }
     const updatedPermissions = ruleIndex === undefined ? suggestions : suggestions.slice(ruleIndex, ruleIndex + 1);
-    return this.settle(requestId, decision, {
-      behavior: "allow",
-      updatedInput: input as Record<string, unknown>,
-      ...(decision === "allow_always" ? { updatedPermissions } : {}),
-    });
+    return this.settle(
+      requestId,
+      { decision },
+      { behavior: "allow", updatedInput: input as Record<string, unknown>, ...(decision === "allow_always" ? { updatedPermissions } : {}) },
+    );
   }
 
-  private settle(requestId: string, decision: PermissionDecision, result: PermissionResult, message?: string) {
+  /** Answers a pending question (answers: question text -> answer). False when already settled or unknown: the first answer wins. */
+  answer(requestId: string, answers: Record<string, string>): boolean {
+    const req = this.pending.get(requestId);
+    if (req?.part.type !== "question") return false;
+    // The SDK docs: updatedInput must carry the original questions next to the answers.
+    return this.settle(requestId, { answers }, { behavior: "allow", updatedInput: { questions: req.part.questions, answers } });
+  }
+
+  /** A cancelled permission request gets decision "cancelled"; a cancelled question settles without answers. */
+  private cancel(requestId: string, message: string) {
+    const done = this.pending.get(requestId)?.part.type === "permission_request" ? { decision: "cancelled" as PermissionDecision } : {};
+    this.settle(requestId, done, { behavior: "deny", message });
+  }
+
+  private settle(requestId: string, done: Partial<PermissionPart> | Partial<QuestionPart>, result: PermissionResult) {
     const req = this.pending.get(requestId);
     if (!req) return false;
     this.pending.delete(requestId);
-    this.emit({ ...req.part, settled: true, decision, ...(message ? { message } : {}) });
+    this.emit({ ...req.part, ...done, settled: true } as Part);
     if (!this.pending.size && this.state === "needs_input") this.setState("running");
     req.resolve(result);
     return true;
@@ -273,7 +296,7 @@ export class Session {
       this.setState("error");
     } finally {
       // Nothing waits for these answers any more.
-      for (const id of [...this.pending.keys()]) this.settle(id, "cancelled", { behavior: "deny", message: "Session ended" });
+      for (const id of [...this.pending.keys()]) this.cancel(id, "Session ended");
     }
   }
 

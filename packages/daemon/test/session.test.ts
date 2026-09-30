@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
-import { aborts, bashSuggestion, calls, checkpointFiles, closed, fakeCommands, fakeQuery, firstTurnLastAssistant, history, inputs, permissionQuery, permissionResults, rewinds, setModelCalls } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, fakeCommands, fakeQuery, firstTurnLastAssistant, history, inputs, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -237,6 +237,54 @@ describe("Session", () => {
       expect(lastPart(events, req.id)).toMatchObject({ settled: true, decision: "cancelled" });
       expect(s.respond(req.requestId, { decision: "allow" })).toBe(false);
     });
+  });
+});
+
+describe("Session questions", () => {
+  const ask = async () => {
+    const s = new Session("/tmp", { query: questionQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("set up the project");
+    await until(events, (e) => e.part.type === "question");
+    const q = events.find((e) => e.part.type === "question")!.part as Extract<Event["part"], { type: "question" }>;
+    const results = permissionResults.length;
+    const answered = () => until(events, () => permissionResults.length > results).then(() => permissionResults.at(-1)!);
+    return { s, events, q, answered };
+  };
+
+  it("AskUserQuestion through canUseTool logs a question part and sets needs_input", async () => {
+    const { s, events, q } = await ask();
+    expect(q).toMatchObject({ requestId: q.id, questions: askInput.questions, settled: false });
+    expect(q.toolUseId).toBe((events.find((e) => e.part.type === "tool_call")!.part as { toolUseId: string }).toolUseId);
+    expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
+    expect(s.info().state).toBe("needs_input");
+  });
+
+  it("answer() returns the questions and answers via updatedInput and logs the settlement once", async () => {
+    const { s, events, q, answered } = await ask();
+    const answers = { "Which package manager?": "pnpm" };
+    expect(s.answer(q.requestId, answers)).toBe(true);
+    expect(s.answer(q.requestId, { "Which package manager?": "npm" })).toBe(false);
+    expect(await answered()).toEqual({ behavior: "allow", updatedInput: { ...askInput, answers } });
+    expect(lastPart(events, q.id)).toMatchObject({ settled: true, answers });
+    expect(events.filter((e) => e.part.id === q.id)).toHaveLength(2);
+    expect(s.info().state).not.toBe("needs_input");
+  });
+
+  it("a question is not answered by respond() and a permission request not by answer()", async () => {
+    const { s, q } = await ask();
+    expect(s.respond(q.requestId, { decision: "allow" })).toBe(false);
+    expect(s.answer("unknown", {})).toBe(false);
+    expect(s.info().state).toBe("needs_input");
+  });
+
+  it("settles without answers when the SDK aborts the question", async () => {
+    const { s, events, q, answered } = await ask();
+    aborts.at(-1)!.abort();
+    expect(await answered()).toMatchObject({ behavior: "deny" });
+    expect(lastPart(events, q.id)).toEqual({ ...q, settled: true });
+    expect(s.answer(q.requestId, {})).toBe(false);
   });
 });
 

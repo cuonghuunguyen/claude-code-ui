@@ -7,7 +7,7 @@ import WebSocket from "ws";
 import type { ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
-import { calls, fakeQuery, history, models, permissionQuery, setModelCalls } from "./fake-query.ts";
+import { calls, fakeQuery, history, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
@@ -328,6 +328,31 @@ describe("daemon", () => {
       const settled = (m: ServerMessage) => isRequest(m) && m.type === "event" && (m.part as { settled: boolean }).settled;
       for (const c of [a, b]) expect(((await c.waitFor(settled)) as { part: object }).part).toMatchObject({ decision: "allow" });
       expect(await a.request({ type: "permission.respond", requestId, decision: "maybe" })).toMatchObject({ type: "error", code: "bad_request" });
+    } finally {
+      d.close();
+    }
+  });
+  it("question.respond: the first answer from any tab settles the question for all tabs", async () => {
+    const d = createDaemon({ webRoot, roots: [webRoot], query: questionQuery as never, token });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const p = (d.address() as AddressInfo).port;
+    try {
+      const [a, b] = await Promise.all([client(p), client(p)]);
+      const { result } = (await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+      const sessionId = result.session.id;
+      await a.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+      await b.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+      await a.request({ type: "session.prompt", sessionId, text: "set up" });
+      const isQuestion = (m: ServerMessage) => m.type === "event" && m.part.type === "question";
+      const requestId = ((await b.waitFor(isQuestion)) as { part: { requestId: string } }).part.requestId;
+
+      expect(await a.request({ type: "question.respond", requestId, answers: { q: 1 } })).toMatchObject({ type: "error", code: "bad_request" });
+      expect(await a.request({ type: "question.respond", requestId })).toMatchObject({ type: "error", code: "bad_request" });
+      const answers = { "Which package manager?": "pnpm" };
+      expect(await b.request({ type: "question.respond", requestId, answers })).toMatchObject({ result: { settled: true } });
+      expect(await a.request({ type: "question.respond", requestId, answers: {} })).toMatchObject({ result: { settled: false } });
+      const settled = (m: ServerMessage) => isQuestion(m) && (m as { part: { settled: boolean } }).part.settled;
+      for (const c of [a, b]) expect(((await c.waitFor(settled)) as { part: object }).part).toMatchObject({ answers });
     } finally {
       d.close();
     }

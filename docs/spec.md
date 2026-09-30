@@ -133,7 +133,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | `tool_call` | `toolUseId`, `tool`, `input`, `status` (pending / running / done / error / denied) | Tool card, by tool type |
 | `tool_result` | `toolUseId`, `output`, `isError` | Merged into its tool card |
 | `permission_request` | `requestId`, `toolUseId`, `tool`, `input`, `suggestions[]`, `settled`, `decision?` | Permission panel |
-| `question` | `requestId`, `questions[]`, `settled`, `answers?` | Question panel |
+| `question` | `requestId`, `toolUseId`, `questions[]`, `settled`, `answers?` (absent = cancelled) | Question panel |
 | `todo_update` | `items[]` (content, status, activeForm) | Pinned todo list |
 | `subagent` | `id`, `description`, `status`; child parts carry `parentId` = `id` | Nested, collapsible group |
 | `session_state` | `state` | Header badge, list badge |
