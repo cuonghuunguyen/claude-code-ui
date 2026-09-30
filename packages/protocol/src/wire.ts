@@ -29,3 +29,10 @@ export type CreateResult = { session: SessionInfo };
 export type SubscribeResult = { logEpoch: string; session: SessionInfo };
 export type SetModelResult = { session: SessionInfo };
 export type ModelsResult = { models: ModelInfo[] };
+
+/**
+ * WebSocket subprotocols (browsers cannot set headers on a WebSocket): the client offers
+ * `[WS_PROTOCOL, TOKEN_PROTOCOL_PREFIX + token]`; the daemon answers with `WS_PROTOCOL`.
+ */
+export const WS_PROTOCOL = "claude-ui";
+export const TOKEN_PROTOCOL_PREFIX = "token.";

@@ -1,6 +1,7 @@
 // One WebSocket per tab, reconnected with backoff. Requests resolve on the reply with the same reqId; events go to onEvent.
 // onOpen runs after every (re)connect, so the caller resubscribes there with its last seq and logEpoch.
-import type { ClientMessage, Event, ServerMessage } from "@claude-ui/protocol";
+import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type Event, type ServerMessage } from "@claude-ui/protocol";
+import { takeToken } from "./pairing.ts";
 
 type Request = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M, "reqId"> : never) : never;
 
@@ -13,6 +14,8 @@ export const backoffMs = (attempt: number) => Math.min(10_000, 500 * 2 ** attemp
 
 export function connect(opts: {
   url?: string;
+  /** Pairing token; defaults to the one this browser stored (pairing.ts). */
+  token?: string;
   onEvent: (e: Event) => void;
   onOpen?: () => void;
   onStatus?: (s: ConnectionStatus) => void;
@@ -27,8 +30,12 @@ export function connect(opts: {
   let markOpen!: () => void;
   let ready = new Promise<void>((r) => (markOpen = r));
 
+  const token = "token" in opts ? opts.token : takeToken();
+  const protocols = token ? [WS_PROTOCOL, TOKEN_PROTOCOL_PREFIX + token] : [WS_PROTOCOL];
+
   function dial() {
-    ws = new WebSocket(url);
+    // A rejected upgrade (bad token or origin) closes before open like a down daemon; the browser hides the HTTP status.
+    ws = new WebSocket(url, protocols);
     ws.addEventListener("open", () => {
       isOpen = true;
       failures = 0;

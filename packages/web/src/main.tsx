@@ -3,6 +3,9 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import "./index.css";
 
+// Pasting the pairing URL into an already open tab only changes the fragment; reload to reconnect with the token.
+addEventListener("hashchange", () => location.hash.includes("token=") && location.reload());
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />
