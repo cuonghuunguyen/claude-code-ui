@@ -6,6 +6,9 @@ export type { ModelInfo };
 
 /** `model` is a `ModelInfo.value` from models.list; "default" = the SDK default model. */
 export type SessionInfo = { id: string; cwd: string; state: SessionState; model: string };
+/** A `session.list` entry: a transcript from `listSessions()` (terminal CLI sessions too) or a session of this daemon run. */
+export type SessionListItem = SessionInfo & { title: string; lastActivity: number };
+export type FsEntry = { name: string; path: string; isDir: boolean };
 
 /** Every client message carries a `reqId`; the daemon answers with a `reply` or an `error` with the same `reqId`. */
 export type ClientMessage = { reqId: string } & (
@@ -15,6 +18,9 @@ export type ClientMessage = { reqId: string } & (
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   | { type: "session.setModel"; sessionId: string; model: string }
   | { type: "models.list" }
+  | { type: "session.list" }
+  /** Without `path`: the allowlisted roots. */
+  | { type: "fs.list"; path?: string }
 );
 
 export type Event = { type: "event"; sessionId: string; seq: number; part: Part };
@@ -36,3 +42,6 @@ export type ModelsResult = { models: ModelInfo[] };
  */
 export const WS_PROTOCOL = "claude-ui";
 export const TOKEN_PROTOCOL_PREFIX = "token.";
+
+export type ListResult = { sessions: SessionListItem[] };
+export type FsListResult = { entries: FsEntry[] };

@@ -9,6 +9,7 @@ type SessionOpts = { model?: string; query?: typeof sdkQuery };
 
 export class Session {
   readonly id: string;
+  readonly createdAt = Date.now();
   private state: SessionState = "idle";
   // ponytail: in-memory log grows for the session lifetime; trim when memory matters.
   private readonly log: Event[] = [];

@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +12,7 @@ import { calls, fakeQuery, history, models, setModelCalls } from "./fake-query.t
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
-const http = createDaemon({ webRoot, query: fakeQuery as never, token });
+const http = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token });
 await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
 const { address, port } = http.address() as AddressInfo;
 afterAll(() => void http.close());
@@ -134,8 +134,10 @@ describe("daemon", () => {
     const restarted = createDaemon({
       webRoot,
       token,
+      roots: [webRoot],
       query: fakeQuery as never,
       history: {
+        listSessions: (async () => []) as never,
         getSessionInfo: (async (sid: string) => (sid === id ? { sessionId: id, cwd: webRoot } : undefined)) as never,
         getSessionMessages: (async () => (reads++, history)) as never,
       },
@@ -200,6 +202,79 @@ describe("daemon", () => {
       expect(await prompt(bad)).toMatchObject({ type: "error", code: "bad_images" });
     expect(await prompt([])).toMatchObject({ type: "error", code: "bad_prompt" });
     expect(await prompt(["data:image/png;base64,iVBORw0KGgo="])).toMatchObject({ type: "reply" });
+  });
+
+  it("rejects a cwd outside the allowlisted roots", async () => {
+    const c = await client();
+    expect(await c.request({ type: "session.create", cwd: tmpdir() })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+    expect(await c.request({ type: "session.create", cwd: join(webRoot, "..", "..") })).toMatchObject({ code: "cwd_not_allowed" });
+  });
+
+  it("runs several sessions at the same time, each with its own event log", async () => {
+    const c = await client();
+    const ids = await Promise.all(
+      [0, 1].map(async () => ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id),
+    );
+    await Promise.all(ids.map((sessionId) => c.request({ type: "session.subscribe", sessionId, sinceSeq: 0 })));
+    await Promise.all(ids.map((sessionId) => c.request({ type: "session.prompt", sessionId, text: "hi" })));
+    for (const id of ids) {
+      await c.waitFor((m) => m.type === "event" && m.sessionId === id && m.part.type === "turn_result");
+      const seqs = c.inbox.filter((m) => m.type === "event" && m.sessionId === id).map((m) => (m as { seq: number }).seq);
+      expect(seqs).toEqual(seqs.map((_, i) => i + 1));
+    }
+  });
+
+  it("lists allowlisted directories for the directory picker", async () => {
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    const c = await client();
+    expect(await c.request({ type: "fs.list" })).toMatchObject({ result: { entries: [{ path: webRoot, isDir: true }] } });
+    const sub = (await c.request({ type: "fs.list", path: webRoot })) as { result: { entries: { name: string; isDir: boolean }[] } };
+    expect(sub.result.entries).toContainEqual({ name: "proj", path: join(webRoot, "proj"), isDir: true });
+    expect(sub.result.entries).toContainEqual({ name: "index.html", path: join(webRoot, "index.html"), isDir: false });
+    expect(await c.request({ type: "fs.list", path: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+  });
+
+  it("lists transcripts inside the roots merged with live sessions; opening one resumes it with the same ID", async () => {
+    const inside = "1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const outside = "2b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const cwd = join(webRoot, "proj");
+    mkdirSync(cwd, { recursive: true });
+    const transcripts = [
+      { sessionId: inside, summary: "fix the bug", lastModified: 1000, cwd },
+      { sessionId: outside, summary: "elsewhere", lastModified: 2000, cwd: "/etc" },
+      { sessionId: "3b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", summary: "no cwd", lastModified: 3000 },
+    ];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => transcripts) as never,
+        getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,
+        getSessionMessages: (async () => history) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+      const list = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string }[] } };
+      expect(list.result.sessions).toEqual([
+        { id: created.result.session.id, cwd: webRoot, state: "idle", model: "default", title: "New session", lastActivity: expect.any(Number) },
+        { id: inside, cwd, state: "closed", model: "default", title: "fix the bug", lastActivity: 1000 },
+      ]);
+
+      expect(await c.request({ type: "session.subscribe", sessionId: outside, sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
+      await c.request({ type: "session.subscribe", sessionId: inside, sinceSeq: 0 });
+      await c.request({ type: "session.prompt", sessionId: inside, text: "go on" });
+      expect(calls.filter((o) => o.resume === inside)).toHaveLength(1);
+      const again = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; state: string }[] } };
+      // State now comes from the live session, not "closed".
+      expect(["running", "idle"]).toContain(again.result.sessions.find((s) => s.id === inside)?.state);
+    } finally {
+      d.close();
+    }
   });
 });
 

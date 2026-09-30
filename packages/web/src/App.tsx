@@ -1,42 +1,59 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
-import type { CreateResult, Event, ModelInfo, ModelsResult, Part, SessionInfo, SetModelResult, SubscribeResult } from "@claude-ui/protocol";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import type {
+  CreateResult,
+  Event,
+  FsEntry,
+  FsListResult,
+  ListResult,
+  ModelInfo,
+  ModelsResult,
+  Part,
+  SessionInfo,
+  SessionListItem,
+  SetModelResult,
+  SubscribeResult,
+} from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus } from "./client.ts";
 import { ImageStrip, readImages } from "./images.tsx";
 import { choose, matchCommands } from "./commands.ts";
+import { groupByCwd, timeAgo } from "./sessions.ts";
 import { useSmoothText } from "./smooth.ts";
 import { applyEvent, emptySession, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, Thinking, ToolCard } from "./tool-card.tsx";
 
-// ponytail: session IDs this browser opened, so a reopened tab resubscribes; the session list issue replaces this with session.list.
-const STORAGE_KEY = "claude-ui.sessions";
-const loadIds = (): string[] => {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
-  } catch {
-    return [];
-  }
-};
-const saveIds = (ids: string[]) => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
-  } catch {}
-};
+type Client = ReturnType<typeof connect>;
+
+// The open session lives in the URL hash, so a reloaded tab reopens it.
+const hashId = () => /^#[0-9a-f-]{36}$/i.exec(location.hash)?.[0].slice(1);
 
 export function App() {
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [list, setList] = useState<SessionListItem[]>([]);
   const [views, setViews] = useState<Record<string, SessionView>>({});
-  const [activeId, setActiveId] = useState<string>();
+  const [activeId, setActiveId] = useState(hashId);
   const [error, setError] = useState<string>();
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
+  const [drawer, setDrawer] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const client = useRef<ReturnType<typeof connect>>(undefined);
+  // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
+  const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
+  const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
 
+  async function refreshList() {
+    try {
+      setList((await client.current!.request<ListResult>({ type: "session.list" })).sessions);
+    } catch (e) {
+      if ((e as Error).message !== "disconnected") setError((e as Error).message);
+    }
+  }
+
   // Replays events after the view's last seq, or everything when the daemon restarted (new logEpoch).
+  // A session that is not live in the daemon is rebuilt from its transcript and resumes with the same ID on the next prompt.
   async function subscribe(sessionId: string) {
     const view = viewsRef.current[sessionId];
     try {
@@ -48,21 +65,33 @@ export function App() {
       });
       // Runs before the replayed events: the reply precedes them on the socket and this continuation is a microtask.
       setViews((v) => ({ ...v, [sessionId]: withEpoch(v[sessionId] ?? emptySession(), r.logEpoch) }));
-      setSessions((s) => (s.some((x) => x.id === sessionId) ? s.map((x) => (x.id === sessionId ? r.session : x)) : [...s, r.session]));
-      setActiveId((a) => a ?? sessionId);
+      setInfos((i) => ({ ...i, [sessionId]: r.session }));
     } catch (e) {
-      if ((e as Error).message === "disconnected") return; // resubscribed on reconnect
-      saveIds(loadIds().filter((id) => id !== sessionId));
-      setError((e as Error).message);
+      if ((e as Error).message !== "disconnected") setError((e as Error).message); // else resubscribed on reconnect
     }
+  }
+
+  function open(id: string) {
+    setError(undefined);
+    setActiveId(id);
+    setDrawer(false);
+    history.replaceState(null, "", `#${encodeURIComponent(id)}`);
+    if (!viewsRef.current[id]) void subscribe(id);
   }
 
   useEffect(() => {
     const c = connect({
-      onEvent: (e: Event) =>
-        setViews((v) => ({ ...v, [e.sessionId]: applyEvent(v[e.sessionId] ?? emptySession(), e) })),
+      onEvent: (e: Event) => {
+        setViews((v) => ({ ...v, [e.sessionId]: applyEvent(v[e.sessionId] ?? emptySession(), e) }));
+        // New titles and last activity come from the transcript; refresh when a session changes state.
+        if (e.part.type === "session_state") void refreshList();
+      },
       onOpen: () => {
-        loadIds().forEach((id) => void subscribe(id));
+        void refreshList();
+        const ids = new Set(Object.keys(viewsRef.current));
+        const h = hashId();
+        if (h) ids.add(h);
+        ids.forEach((id) => void subscribe(id));
         c.request<ModelsResult>({ type: "models.list" }).then(
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
@@ -71,16 +100,23 @@ export function App() {
       onStatus: setStatus,
     });
     client.current = c;
-    return c.close;
+    // Picks up sessions started in the terminal CLI meanwhile.
+    const onFocus = () => void refreshList();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      c.close();
+    };
   }, []);
 
   async function createSession(cwd: string, model: string) {
     setError(undefined);
     try {
       const { session } = await client.current!.request<CreateResult>({ type: "session.create", cwd, model });
-      saveIds([...loadIds(), session.id]);
-      await subscribe(session.id);
-      setActiveId(session.id);
+      setInfos((i) => ({ ...i, [session.id]: session }));
+      setPicking(false);
+      open(session.id);
+      await refreshList();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -90,47 +126,53 @@ export function App() {
     setError(undefined);
     try {
       const { session } = await client.current!.request<SetModelResult>({ type: "session.setModel", sessionId, model });
-      setSessions((all) => all.map((s) => (s.id === session.id ? session : s)));
+      setInfos((i) => ({ ...i, [session.id]: session }));
     } catch (e) {
       setError((e as Error).message);
     }
   }
 
-  const active = sessions.find((s) => s.id === activeId);
-  const view = activeId ? (views[activeId] ?? emptySession()) : undefined;
+  const active = activeId ? (infos[activeId] ?? list.find((s) => s.id === activeId)) : undefined;
+  const view = activeId ? views[activeId] : undefined;
 
   return (
     <div className="flex h-dvh bg-background text-foreground">
-      <aside className="flex w-72 shrink-0 flex-col gap-3 border-r p-3">
+      {drawer && <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={() => setDrawer(false)} aria-hidden />}
+      <aside
+        data-testid="sidebar"
+        className={`fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col gap-3 border-r bg-background p-3 transition-transform md:static md:translate-x-0 ${drawer ? "translate-x-0" : "-translate-x-full"}`}
+      >
         <ConnectionBadge status={status} />
-        <NewSessionForm models={models} onCreate={createSession} />
+        {picking ? (
+          <DirPicker client={client.current!} models={models} onPick={createSession} onCancel={() => setPicking(false)} />
+        ) : (
+          <Button onClick={() => (setError(undefined), setPicking(true))}>New session</Button>
+        )}
         {error && <p className="text-destructive text-sm">{error}</p>}
-        <ul className="flex flex-col gap-1 overflow-y-auto">
-          {sessions.map((s) => (
-            <li key={s.id}>
-              <button
-                className={`w-full truncate rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted ${s.id === activeId ? "bg-muted" : ""}`}
-                onClick={() => setActiveId(s.id)}
-                title={s.cwd}
-              >
-                {s.cwd.split("/").at(-1) || s.cwd}
-                <span className="ml-2 text-muted-foreground text-xs">{views[s.id]?.state ?? s.state}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <SessionList list={list} views={views} activeId={activeId} onOpen={open} />
       </aside>
       <main className="flex min-w-0 flex-1 flex-col">
         {active && view ? (
           <SessionPane
+            key={active.id}
             session={active}
             view={view}
             models={models}
+            onMenu={() => setDrawer(true)}
             onModel={(model) => setModel(active.id, model)}
-            onPrompt={(text, images) => client.current!.request({ type: "session.prompt", sessionId: active.id, text, images })}
+            onPrompt={(text, images) =>
+              client
+                .current!.request({ type: "session.prompt", sessionId: active.id, text, images })
+                .catch((e) => setError((e as Error).message))
+            }
           />
         ) : (
-          <div className="m-auto text-muted-foreground text-sm">Create a session to start.</div>
+          <>
+            <header className="flex items-center border-b px-4 py-2 md:hidden">
+              <MenuButton onClick={() => setDrawer(true)} />
+            </header>
+            <div className="m-auto text-muted-foreground text-sm">Open or create a session to start.</div>
+          </>
         )}
       </main>
     </div>
@@ -152,31 +194,139 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   );
 }
 
-function NewSessionForm({ models, onCreate }: { models: ModelInfo[]; onCreate: (cwd: string, model: string) => void }) {
-  const [cwd, setCwd] = useState("");
-  const [model, setModel] = useState("default");
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (cwd.trim()) onCreate(cwd.trim(), model);
-  };
+function MenuButton({ onClick }: { onClick: () => void }) {
   return (
-    <form onSubmit={submit} className="flex flex-col gap-2">
-      <label className="font-medium text-sm" htmlFor="cwd">
-        Working directory
-      </label>
-      <input
-        id="cwd"
-        className="rounded-md border bg-transparent px-2 py-1.5 font-mono text-sm"
-        placeholder="/path/to/project"
-        value={cwd}
-        onChange={(e) => setCwd(e.target.value)}
-      />
-      <label className="font-medium text-sm" htmlFor="new-model">
+    <Button variant="ghost" size="sm" className="md:hidden" onClick={onClick} aria-label="Sessions" data-testid="open-drawer">
+      ☰
+    </Button>
+  );
+}
+
+function SessionList({
+  list,
+  views,
+  activeId,
+  onOpen,
+}: {
+  list: SessionListItem[];
+  views: Record<string, SessionView>;
+  activeId?: string;
+  onOpen: (id: string) => void;
+}) {
+  if (!list.length) return <p className="text-muted-foreground text-sm">No sessions in the allowlisted roots.</p>;
+  return (
+    <nav className="-mx-1 flex min-h-0 flex-col gap-3 overflow-y-auto" data-testid="session-list">
+      {groupByCwd(list).map((g) => (
+        <section key={g.cwd}>
+          <h2 className="px-1 text-xs" title={g.cwd}>
+            <div className="truncate font-medium">{g.cwd.split("/").at(-1) || g.cwd}</div>
+            <div className="truncate font-mono text-muted-foreground">{g.cwd}</div>
+          </h2>
+          <ul className="mt-1 flex flex-col gap-0.5">
+            {g.sessions.map((s) => (
+              <li key={s.id}>
+                <button
+                  data-testid="session-item"
+                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted ${s.id === activeId ? "bg-muted" : ""}`}
+                  onClick={() => onOpen(s.id)}
+                  title={`${s.title}\n${s.cwd}`}
+                >
+                  <span className="min-w-0 flex-1 truncate">{s.title}</span>
+                  <StateBadge state={views[s.id]?.state ?? s.state} />
+                  <span className="text-muted-foreground text-xs">{timeAgo(s.lastActivity)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </nav>
+  );
+}
+
+const STATE_STYLE: Record<SessionInfo["state"], string> = {
+  idle: "bg-muted text-muted-foreground",
+  running: "bg-blue-500/15 text-blue-600",
+  needs_input: "bg-amber-500/15 text-amber-600",
+  error: "bg-destructive/15 text-destructive",
+  closed: "text-muted-foreground",
+};
+
+function StateBadge({ state }: { state: SessionInfo["state"] }) {
+  return (
+    <span className={`rounded px-1.5 py-0.5 text-[10px] ${STATE_STYLE[state]}`} data-testid="state-badge">
+      {state.replace("_", " ")}
+    </span>
+  );
+}
+
+/** Browses directories inside the allowlisted roots; the daemon refuses anything outside them. */
+function DirPicker({
+  client,
+  models,
+  onPick,
+  onCancel,
+}: {
+  client: Client;
+  models: ModelInfo[];
+  onPick: (cwd: string, model: string) => void;
+  onCancel: () => void;
+}) {
+  const [model, setModel] = useState("default");
+  // Visited directories; empty = the roots.
+  const [trail, setTrail] = useState<string[]>([]);
+  const [entries, setEntries] = useState<FsEntry[]>([]);
+  const [error, setError] = useState<string>();
+  const path = trail.at(-1);
+
+  useEffect(() => {
+    let stale = false;
+    setError(undefined);
+    client
+      .request<FsListResult>(path ? { type: "fs.list", path } : { type: "fs.list" })
+      .then((r) => !stale && setEntries(r.entries.filter((e) => e.isDir && (!path || !e.name.startsWith(".")))))
+      .catch((e) => !stale && setError((e as Error).message));
+    return () => void (stale = true);
+  }, [path]);
+
+  return (
+    <div className="flex shrink-0 flex-col gap-2 rounded-md border p-2" data-testid="dir-picker">
+      <div className="truncate font-mono text-xs" title={path}>
+        {path ?? "Allowlisted roots"}
+      </div>
+      <ul className="flex max-h-60 flex-col overflow-y-auto text-sm">
+        {path && (
+          <li>
+            <button className="w-full rounded px-2 py-1 text-left hover:bg-muted" onClick={() => setTrail((t) => t.slice(0, -1))}>
+              ..
+            </button>
+          </li>
+        )}
+        {entries.map((e) => (
+          <li key={e.path}>
+            <button
+              className="w-full truncate rounded px-2 py-1 text-left font-mono hover:bg-muted"
+              onClick={() => setTrail((t) => [...t, e.path])}
+            >
+              {path ? e.name : e.path}/
+            </button>
+          </li>
+        ))}
+      </ul>
+      {error && <p className="text-destructive text-xs">{error}</p>}
+      <label className="font-medium text-xs" htmlFor="new-model">
         Model
       </label>
-      <ModelSelect id="new-model" models={models} value={model} onChange={setModel} className="py-1.5 text-sm" />
-      <Button type="submit">New session</Button>
-    </form>
+      <ModelSelect id="new-model" models={models} value={model} onChange={setModel} className="py-1 text-sm" />
+      <div className="flex gap-2">
+        <Button size="sm" className="flex-1" disabled={!path} onClick={() => path && onPick(path, model)}>
+          Start here
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -210,12 +360,14 @@ function SessionPane({
   models,
   onModel,
   onPrompt,
+  onMenu,
 }: {
   session: SessionInfo;
   view: SessionView;
   models: ModelInfo[];
   onModel: (model: string) => void;
   onPrompt: (text: string, images: string[]) => void;
+  onMenu: () => void;
 }) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
@@ -276,6 +428,7 @@ function SessionPane({
   return (
     <>
       <header className="flex items-center gap-3 border-b px-4 py-2 text-sm">
+        <MenuButton onClick={onMenu} />
         <span className="truncate font-mono">{session.cwd}</span>
         <ModelSelect
           aria-label="Model"
