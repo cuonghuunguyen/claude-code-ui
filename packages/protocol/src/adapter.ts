@@ -1,12 +1,12 @@
 // Adapter: converts raw SDK messages into parts (CONTEXT.md "Adapter").
 // One adapter instance per session; it holds the accumulated text of streaming blocks and the known tool calls.
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { SDKMessage, SlashCommand as SDKSlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import type { Part, ToolStatus } from "./parts.ts";
 
 type ToolCall = Extract<Part, { type: "tool_call" }>;
 
 // Known SDK messages the UI does not show. Anything else unhandled becomes a `raw` part.
-const IGNORED = new Set(["rate_limit_event", "command_lifecycle", "system:init", "system:status", "system:thinking_tokens", "system:commands_changed"]);
+const IGNORED = new Set(["rate_limit_event", "command_lifecycle", "system:status", "system:thinking_tokens"]);
 
 // Text/thinking part id = `<API message id>:<content block index>`. Streamed blocks know their index from the
 // stream event. Complete assistant messages arrive split, one SDK message per content block with the
@@ -29,6 +29,24 @@ export function createAdapter() {
   function deny(toolUseId: string): Part[] {
     denied.add(toolUseId);
     return setStatus(toolUseId, "denied");
+  }
+
+  let knownCommands: SDKSlashCommand[] | undefined;
+  // Terminal-only names arrive only with system/init, i.e. after the first prompt; until then use the
+  // set seen from SDK 0.3.285. ponytail: hardcoded fallback goes stale on SDK upgrades; cache the last
+  // init set daemon-wide if that happens.
+  let terminalOnly = new Set(["doctor", "color", "focus", "reload-plugins"]);
+
+  /** The full command list (supportedCommands() or a commands_changed push), minus terminal-only commands. */
+  function commands(list: SDKSlashCommand[]): Part[] {
+    knownCommands = list;
+    // Rows can share a name; /name runs the builtin one.
+    const byName = new Map<string, SDKSlashCommand>();
+    for (const c of list) if (!terminalOnly.has(c.name) && (!byName.has(c.name) || c.builtin)) byName.set(c.name, c);
+    const commands = [...byName.values()].map(({ name, description, argumentHint, aliases }) =>
+      aliases?.length ? { name, description, argumentHint, aliases } : { name, description, argumentHint },
+    );
+    return [{ type: "commands", id: "commands", commands }];
   }
 
   function convert(m: SDKMessage): Part[] {
@@ -131,11 +149,16 @@ export function createAdapter() {
           },
         ];
       default:
+        if (m.type === "system" && m.subtype === "commands_changed") return commands(m.commands);
+        if (m.type === "system" && m.subtype === "init") {
+          terminalOnly = new Set(m.terminal_slash_commands);
+          return knownCommands ? commands(knownCommands) : [];
+        }
         if (m.type === "system" && m.subtype === "permission_denied") return deny(m.tool_use_id);
         if (IGNORED.has(m.type) || IGNORED.has(`${m.type}:${"subtype" in m ? m.subtype : ""}`)) return [];
         return [{ type: "raw", id: ("uuid" in m && m.uuid) || crypto.randomUUID(), message: m }];
     }
   }
 
-  return { convert };
+  return { convert, commands };
 }

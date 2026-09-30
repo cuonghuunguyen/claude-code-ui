@@ -12,6 +12,9 @@ export type TokenUsage = {
   cacheCreationTokens: number;
 };
 
+/** A slash command or skill; invoked by sending `/name args` as prompt text. */
+export type SlashCommand = { name: string; description: string; argumentHint: string; aliases?: string[] };
+
 export type Part =
   | { type: "user_text"; id: string; text: string; images: string[] }
   | { type: "assistant_text"; id: string; text: string; streaming: boolean }
@@ -23,5 +26,6 @@ export type Part =
   | { type: "session_state"; id: string; state: SessionState }
   /** Model switched with session.setModel. `model` is a `ModelInfo.value`; "default" = the SDK default. */
   | { type: "session_model"; id: string; model: string }
+  | { type: "commands"; id: "commands"; commands: SlashCommand[] }
   | { type: "turn_result"; id: string; durationMs: number; costUsd: number; usage: TokenUsage; isError: boolean }
   | { type: "raw"; id: string; message: unknown };

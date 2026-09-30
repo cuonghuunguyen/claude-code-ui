@@ -147,3 +147,43 @@ describe("adapter on unknown messages", () => {
     expect(parts.filter((p) => p.type === "tool_call").map((p) => p.status)).toEqual(["running", "denied"]);
   });
 });
+
+describe("adapter commands", () => {
+  const cmd = (name: string, argumentHint = "") => ({ name, description: `${name} desc`, argumentHint });
+  const init = (terminal?: string[]) => ({ type: "system", subtype: "init", terminal_slash_commands: terminal }) as never;
+  const changed = (names: string[]) => ({ type: "system", subtype: "commands_changed", commands: names.map((n) => cmd(n)) }) as never;
+  const names = (parts: Part[]) => parts.flatMap((p) => (p.type === "commands" ? [p.commands.map((c) => c.name)] : []));
+
+  it("turns the supportedCommands() list into a commands part with name, description, argument hint, aliases", () => {
+    const parts = createAdapter().commands([{ ...cmd("review", "<pr>"), builtin: true, aliases: ["r"] }]);
+    expect(parts).toEqual([{ type: "commands", id: "commands", commands: [{ ...cmd("review", "<pr>"), aliases: ["r"] }] }]);
+  });
+
+  it("keeps one row per name, the builtin one, when rows share a name", () => {
+    const parts = createAdapter().commands([cmd("init"), { ...cmd("init", "<builtin>"), builtin: true }, cmd("x")]);
+    expect(parts[0]!.type === "commands" && parts[0]!.commands).toEqual([cmd("init", "<builtin>"), cmd("x")]);
+  });
+
+  it("replaces the list on system/commands_changed", () => {
+    const a = createAdapter();
+    a.commands([cmd("a")]);
+    expect(names(a.convert(changed(["b", "c"])))).toEqual([["b", "c"]]);
+  });
+
+  it("hides known terminal-only commands before system/init arrives (it comes only after the first prompt)", () => {
+    const a = createAdapter();
+    const list = ["doctor", "color", "focus", "reload-plugins", "review"].map((n) => cmd(n));
+    expect(names(a.commands(list))).toEqual([["review"]]);
+  });
+
+  it("system/init replaces the fallback terminal-only set, re-emitting the known list", () => {
+    const a = createAdapter();
+    expect(names(a.commands([cmd("doctor"), cmd("review"), cmd("x-term")]))).toEqual([["review", "x-term"]]);
+    expect(names(a.convert(init(["x-term", "focus"])))).toEqual([["doctor", "review"]]);
+    expect(names(a.convert(changed(["focus", "skill-x"])))).toEqual([["skill-x"]]);
+  });
+
+  it("emits nothing on system/init before any list is known", () => {
+    expect(createAdapter().convert(init(["doctor"]))).toEqual([]);
+  });
+});

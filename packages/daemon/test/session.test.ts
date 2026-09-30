@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
-import { calls, fakeQuery, setModelCalls, history, inputs } from "./fake-query.ts";
+import { calls, fakeQuery, fakeCommands, setModelCalls, history, inputs } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -56,7 +56,10 @@ describe("Session", () => {
   });
 
   it("rejects a prompt once the query failed, and logs the failure reason", async () => {
-    const failing = () => (async function* () { throw new Error("login expired"); })();
+    const failing = () =>
+      Object.assign((async function* () { throw new Error("login expired"); })(), {
+        supportedCommands: () => Promise.reject(new Error("login expired")),
+      });
     const s = new Session("/tmp", { query: failing as never });
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
@@ -127,5 +130,18 @@ describe("Session", () => {
       { type: "text", text: "what is this?" },
       { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
     ]);
+  });
+
+  it("loads user and project commands and skills (settingSources)", () => {
+    new Session("/tmp", { query: fakeQuery as never });
+    expect(calls.at(-1)).toMatchObject({ settingSources: ["user", "project"] });
+  });
+
+  it("logs the supportedCommands() list as a commands part before the first prompt", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await until(events, (e) => e.part.type === "commands");
+    expect(events.find((e) => e.part.type === "commands")!.part).toEqual({ type: "commands", id: "commands", commands: fakeCommands });
   });
 });

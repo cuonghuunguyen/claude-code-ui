@@ -70,7 +70,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | client → daemon | `session.rewind {sessionId, userMessageId, mode}` | `mode`: `code`, `conversation`, `both` |
 | client → daemon | `permission.respond {requestId, decision, ruleIndex?, updatedInput?, message?}` | Answer a permission request |
 | client → daemon | `question.respond {requestId, answers}` | Answer a question |
-| client → daemon | `session.list` / `session.close` / `commands.list` / `models.list` | Lists and management |
+| client → daemon | `session.list` / `session.close` / `models.list` | Lists and management |
 | client → daemon | `fs.list` / `fs.read` / `fs.write` / `fs.search` | File tree, editor, @-mention autocomplete |
 | client → daemon | `push.subscribe {subscription}` | Register a Web Push subscription |
 | daemon → client | `event {sessionId, seq, part}` | One normalized part |
@@ -97,7 +97,8 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 
 ### Commands, skills, models
 
-- Commands and skills come from `supportedCommands()` and are refreshed on `system/commands_changed`. Terminal-only commands (`terminal_slash_commands`) are hidden.
+- Commands and skills come from `supportedCommands()` and are refreshed on `system/commands_changed`. The daemon logs them as a `commands` part (fixed id, replaced on each change), so every tab gets the push and replay restores it; there is no `commands.list` request. Terminal-only commands (`terminal_slash_commands`) are hidden. That list arrives only with `system/init`, after the first prompt; until then a built-in fallback set is hidden. Rows sharing a name collapse to the builtin one.
+- A restored session has no query before its first prompt, so its picker is empty until then.
 - Invoked by sending `/name args` as prompt text.
 - Models from `supportedModels()`; switch with `setModel()` mid-session.
 
@@ -134,6 +135,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | `todo_update` | `items[]` (content, status) | Pinned todo list |
 | `subagent` | `id`, `description`, `status`, child parts | Nested, collapsible group |
 | `session_state` | `state` | Header badge, list badge |
+| `commands` | `commands[]` (name, description, argumentHint, aliases?) | Slash command picker; not in the timeline |
 | `turn_result` | `durationMs`, `costUsd`, `usage`, `isError` | Turn footer (live turns only) |
 | `turn_interrupted` | — | Status line |
 | `raw` | original message | Generic JSON |
