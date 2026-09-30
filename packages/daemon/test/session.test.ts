@@ -190,7 +190,7 @@ describe("Session rewind", () => {
     rewinds.length = 0;
     await s.rewind("u2", "conversation");
     expect(rewinds).toEqual([]);
-    expect(events.at(-1)!.part).toMatchObject({ type: "rewind", userMessageId: "u2" });
+    expect(events.find((e) => e.part.type === "rewind")!.part).toMatchObject({ type: "rewind", userMessageId: "u2" });
     s.prompt("second, reworded");
     expect(calls.at(-1)).toMatchObject({ resume: id, resumeSessionAt: firstTurnLastAssistant });
     await until(events, (e) => e.part.type === "turn_result");
@@ -214,7 +214,7 @@ describe("Session rewind", () => {
     await s.rewind(second, "both");
     expect(rewinds).toEqual([{ id: second }]);
     expect(closed).toBe(closedBefore + 1);
-    expect(events.at(-1)!.part).toMatchObject({ type: "rewind", userMessageId: second });
+    expect(events.find((e) => e.part.type === "rewind")!.part).toMatchObject({ type: "rewind", userMessageId: second });
     expect(s.info().state).toBe("idle");
     s.prompt("again");
     expect(calls.at(-1)).toMatchObject({ resume: s.id, resumeSessionAt: firstTurnLastAssistant });
@@ -225,6 +225,23 @@ describe("Session rewind", () => {
     rewinds.length = 0;
     await expect(s.rewind("u1", "both")).rejects.toThrow(/first prompt/);
     expect(rewinds).toEqual([]);
+  });
+
+  it("rejects a prompt or a second rewind while a rewind awaits rewindFiles()", async () => {
+    let release!: () => void;
+    const slowRewind = (a: never) =>
+      Object.assign(fakeQuery(a), {
+        rewindFiles: () => new Promise((r) => (release = () => r({ canRewind: true, filesChanged: [] }))),
+      });
+    const s = Session.restore(id, "/tmp", history, { query: slowRewind as never });
+    const p = s.rewind("u2", "both");
+    expect(() => s.prompt("from another tab")).toThrow(/rewinding/);
+    await expect(s.rewind("u2", "code")).rejects.toThrow(/rewinding/);
+    release();
+    await p;
+    expect(s.info().state).toBe("idle");
+    s.prompt("after the rewind");
+    expect(s.info().state).toBe("running");
   });
 
   it("rejects a rewind while a turn runs", async () => {

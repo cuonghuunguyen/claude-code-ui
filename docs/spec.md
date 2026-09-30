@@ -107,7 +107,8 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 
 - `enableFileCheckpointing: true` and `extraArgs: {'replay-user-messages': null}`; each user message UUID is a checkpoint.
 - Code: `rewindFiles(userMessageId)` (Edit/Write/NotebookEdit only, not Bash; a `dryRun` preview shows changed files).
-- Conversation: the next prompt resumes with `resumeSessionAt` = UUID of the last main-thread assistant message before the rewound prompt; the original prompt is put back in the prompt box. The first prompt has no such message, so it has no conversation rewind. `resumeDropsTurn` is not passed: it refuses any discarded range longer than one turn.
+- Conversation: the next prompt resumes with `resumeSessionAt` = UUID of the last main-thread assistant message before the rewound prompt; the original prompt is put back in the prompt box. The first prompt has no such message, so it has no conversation rewind. `resumeDropsTurn` is not passed: it refuses any discarded range longer than one turn. The fork point is in daemon memory only: a daemon restart before the next prompt restores the untruncated transcript (ADR 0001).
+- A prompt or another rewind during `rewindFiles()` is rejected (`session is rewinding`).
 - Both: code, then conversation. Code options appear only when the checkpoint has tracked file changes.
 
 ### Push notifications (rules copied from Orca)

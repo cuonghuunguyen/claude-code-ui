@@ -37,6 +37,8 @@ export class Session {
   private lastAssistant?: string;
   /** Fork point for the next start() after a conversation rewind. */
   private resumeAt?: string;
+  /** True while rewind() awaits rewindFiles(): a prompt then would run on the query the rewind closes. */
+  private rewinding = false;
 
   constructor(
     readonly cwd: string,
@@ -113,6 +115,7 @@ export class Session {
   /** `images`: data URLs already checked with imageBlock(). */
   prompt(text: string, images: string[] = []) {
     if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
+    if (this.rewinding) throw new Error("session is rewinding");
     const uuid = randomUUID();
     this.checkpoints.set(uuid, this.lastAssistant);
     this.emit({ type: "user_text", id: uuid, text, images });
@@ -151,8 +154,13 @@ export class Session {
     const forkAt = this.checkpoints.get(userMessageId);
     if (mode !== "code" && forkAt === undefined) throw new Error("cannot rewind the conversation to before the first prompt");
     if (mode !== "conversation") {
-      const r = await q.rewindFiles(userMessageId);
-      if (!r.canRewind) throw new Error(r.error ?? "cannot rewind files");
+      this.rewinding = true;
+      try {
+        const r = await q.rewindFiles(userMessageId);
+        if (!r.canRewind) throw new Error(r.error ?? "cannot rewind files");
+      } finally {
+        this.rewinding = false;
+      }
     }
     if (mode === "code") return;
     // The running CLI holds the full conversation: drop it; the next prompt resumes the transcript truncated at forkAt.
@@ -170,6 +178,7 @@ export class Session {
   /** The query to send control requests to, started (resumed) without a prompt if none runs. */
   private control(userMessageId: string): Query {
     if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
+    if (this.rewinding) throw new Error("session is rewinding");
     if (this.state === "running") throw new Error("session is running: interrupt the turn first");
     if (!this.checkpoints.has(userMessageId)) throw new Error(`unknown user message ${userMessageId}`);
     return this.query ?? this.start({ resume: this.id });
