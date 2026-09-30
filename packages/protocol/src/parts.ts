@@ -1,9 +1,15 @@
 // Normalized message model (docs/spec.md "Message model"). The UI renders only parts.
 // Every part has an `id`; the client store is keyed by it and replaces a part on update.
+import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
+
+export type { PermissionUpdate };
 
 export type SessionState = "idle" | "running" | "needs_input" | "error" | "closed";
 
 export type ToolStatus = "pending" | "running" | "done" | "error" | "denied";
+
+/** "allow" = Yes, "allow_always" = Yes and don't ask again, "deny" = No; "cancelled" = the SDK withdrew the request. */
+export type PermissionDecision = "allow" | "allow_always" | "deny" | "cancelled";
 
 export type TokenUsage = {
   inputTokens: number;
@@ -23,6 +29,24 @@ export type Part =
   | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus }
   /** `id` = `<toolUseId>:result`. */
   | { type: "tool_result"; id: string; toolUseId: string; output: unknown; isError: boolean }
+  /**
+   * `id` = `requestId`; re-emitted once settled. `suggestions` are the SDK's rules for "don't ask again";
+   * `title` is the SDK's prompt sentence when it sends one.
+   */
+  | {
+      type: "permission_request";
+      id: string;
+      requestId: string;
+      toolUseId: string;
+      tool: string;
+      input: unknown;
+      title?: string;
+      suggestions: PermissionUpdate[];
+      settled: boolean;
+      decision?: PermissionDecision;
+      /** Feedback sent to Claude with a "deny" decision. */
+      message?: string;
+    }
   | { type: "session_state"; id: string; state: SessionState }
   /** Model switched with session.setModel. `model` is a `ModelInfo.value`; "default" = the SDK default. */
   | { type: "session_model"; id: string; model: string }

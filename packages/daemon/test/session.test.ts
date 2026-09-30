@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
-import { calls, checkpointFiles, closed, fakeCommands, fakeQuery, firstTurnLastAssistant, history, inputs, rewinds, setModelCalls } from "./fake-query.ts";
+import { aborts, bashSuggestion, calls, checkpointFiles, closed, fakeCommands, fakeQuery, firstTurnLastAssistant, history, inputs, permissionQuery, permissionResults, rewinds, setModelCalls } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
     const t = setInterval(() => events.some(pred) && (clearInterval(t), resolve()), 5);
   });
+
+const lastPart = (events: Event[], id: string) => events.filter((e) => e.part.id === id).at(-1)!.part;
 
 describe("Session", () => {
   it("has a UUID before the first prompt and passes it to the SDK as sessionId", () => {
@@ -143,6 +145,89 @@ describe("Session", () => {
     s.subscribe(0, (e) => events.push(e));
     await until(events, (e) => e.part.type === "commands");
     expect(events.find((e) => e.part.type === "commands")!.part).toEqual({ type: "commands", id: "commands", commands: fakeCommands });
+  });
+
+  describe("permission requests", () => {
+    const ask = async () => {
+      const s = new Session("/tmp", { query: permissionQuery as never });
+      const events: Event[] = [];
+      s.subscribe(0, (e) => events.push(e));
+      s.prompt("run the tests");
+      await until(events, (e) => e.part.type === "permission_request");
+      const req = events.find((e) => e.part.type === "permission_request")!.part as Extract<Event["part"], { type: "permission_request" }>;
+      const results = permissionResults.length;
+      const answered = () => until(events, () => permissionResults.length > results).then(() => permissionResults.at(-1)!);
+      return { s, events, req, answered };
+    };
+
+    it("logs a permission_request with the SDK suggestions and sets needs_input", async () => {
+      const { s, events, req } = await ask();
+      expect(req).toMatchObject({
+        tool: "Bash",
+        input: { command: "npm test" },
+        suggestions: [bashSuggestion],
+        title: "Claude wants to run npm test",
+        settled: false,
+      });
+      expect(req.id).toBe(req.requestId);
+      expect(events.at(-1)!.part).toMatchObject({ type: "session_state", state: "needs_input" });
+      expect(s.info().state).toBe("needs_input");
+    });
+
+    it("Yes allows once without saving a rule", async () => {
+      const { s, events, req, answered } = await ask();
+      expect(s.respond(req.requestId, { decision: "allow" })).toBe(true);
+      expect(await answered()).toEqual({ behavior: "allow", updatedInput: { command: "npm test" } });
+      expect(events.some((e) => e.part.type === "session_state" && e.part.state === "running" && e.seq > events.find((x) => x.part.id === req.id)!.seq)).toBe(true);
+    });
+
+    it("don't ask again returns the chosen SDK suggestion as updatedPermissions", async () => {
+      const { s, events, req, answered } = await ask();
+      s.respond(req.requestId, { decision: "allow_always", ruleIndex: 0 });
+      expect(await answered()).toEqual({ behavior: "allow", updatedInput: { command: "npm test" }, updatedPermissions: [bashSuggestion] });
+      expect(lastPart(events, req.id)).toMatchObject({ settled: true, decision: "allow_always" });
+    });
+
+    it("No with text sends the text to Claude and marks the tool call denied", async () => {
+      const { s, events, req, answered } = await ask();
+      s.respond(req.requestId, { decision: "deny", message: "use pnpm instead" });
+      expect(await answered()).toMatchObject({ behavior: "deny", message: expect.stringMatching(/the user said:\nuse pnpm instead$/) });
+      expect(permissionResults.at(-1)).not.toHaveProperty("interrupt");
+      expect(lastPart(events, req.id)).toMatchObject({ settled: true, decision: "deny", message: "use pnpm instead" });
+      expect(lastPart(events, req.toolUseId)).toMatchObject({ type: "tool_call", status: "denied" });
+    });
+
+    it("No without text denies and interrupts the turn, like Claude Code", async () => {
+      const { s, req, answered } = await ask();
+      s.respond(req.requestId, { decision: "deny" });
+      expect(await answered()).toMatchObject({ behavior: "deny", interrupt: true });
+    });
+
+    it("the first answer wins; later answers are ignored", async () => {
+      const { s, events, req, answered } = await ask();
+      expect(s.respond(req.requestId, { decision: "deny", message: "no" })).toBe(true);
+      expect(s.respond(req.requestId, { decision: "allow" })).toBe(false);
+      await answered();
+      expect(events.filter((e) => e.part.id === req.id && e.part.type === "permission_request" && e.part.settled)).toHaveLength(1);
+      expect(s.respond("unknown", { decision: "allow" })).toBe(false);
+    });
+
+    it("waits without timeout and replays the pending request to a late subscriber", async () => {
+      const { s, req } = await ask();
+      await new Promise((r) => setTimeout(r, 50));
+      const late: Event[] = [];
+      s.subscribe(0, (e) => late.push(e));
+      expect(lastPart(late, req.id)).toMatchObject({ settled: false });
+      expect(s.info().state).toBe("needs_input");
+    });
+
+    it("settles as cancelled when the SDK aborts the request", async () => {
+      const { s, events, req, answered } = await ask();
+      aborts.at(-1)!.abort();
+      expect(await answered()).toMatchObject({ behavior: "deny" });
+      expect(lastPart(events, req.id)).toMatchObject({ settled: true, decision: "cancelled" });
+      expect(s.respond(req.requestId, { decision: "allow" })).toBe(false);
+    });
   });
 });
 

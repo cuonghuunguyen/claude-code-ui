@@ -3,6 +3,7 @@ import type { Event, Part, SessionState, SlashCommand } from "@claude-ui/protoco
 import { CONTEXT_TOOLS } from "./tools.ts";
 
 export type ToolCall = Extract<Part, { type: "tool_call" }>;
+export type PermissionRequest = Extract<Part, { type: "permission_request" }>;
 export type TimelineItem = { kind: "part"; part: Part } | { kind: "context"; id: string; calls: ToolCall[] };
 
 export type SessionView = {
@@ -56,4 +57,12 @@ export function timeline(s: SessionView): TimelineItem[] {
     else items.push({ kind: "part", part });
   }
   return items;
+}
+
+/** The oldest unsettled permission request; while one exists the permission panel replaces the prompt box. */
+export function pendingPermission(s: SessionView): PermissionRequest | undefined {
+  for (const id of s.order) {
+    const p = s.parts.get(id)!;
+    if (p.type === "permission_request" && !p.settled) return p;
+  }
 }

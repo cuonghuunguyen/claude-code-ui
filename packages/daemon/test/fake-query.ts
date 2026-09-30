@@ -1,6 +1,7 @@
 // Fake SDK query(): answers each input message with the next turn of a recorded fixture.
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { ModelInfo, Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { ModelInfo, Options, PermissionResult, PermissionUpdate, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 const lines: SDKMessage[] = readFileSync(
   new URL("../../protocol/test/fixtures/two-turn-text.jsonl", import.meta.url),
@@ -58,3 +59,42 @@ export const history = [
 
 /** SDK uuid of the last assistant message of the fixture's first turn: the fork point before the second prompt. */
 export const firstTurnLastAssistant = turns[0]!.filter((m) => m.type === "assistant").at(-1)!.uuid;
+
+/** SDK suggestion for a Bash prompt, as the CLI sends it (destination localSettings = `.claude/settings.local.json`). */
+export const bashSuggestion: PermissionUpdate = {
+  type: "addRules",
+  rules: [{ toolName: "Bash", ruleContent: "npm test:*" }],
+  behavior: "allow",
+  destination: "localSettings",
+};
+export const permissionResults: PermissionResult[] = [];
+export const aborts: AbortController[] = [];
+
+/** Fake query(): each prompt starts a Bash tool call, asks canUseTool, records the answer, then ends the turn. */
+export function permissionQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
+  calls.push(options ?? {});
+  const q = (async function* () {
+    for await (const _ of prompt) {
+      const toolUseID = randomUUID();
+      yield {
+        type: "assistant",
+        uuid: randomUUID(),
+        session_id: "x",
+        parent_tool_use_id: null,
+        message: { id: `msg_${toolUseID}`, content: [{ type: "tool_use", id: toolUseID, name: "Bash", input: { command: "npm test" } }] },
+      } as never as SDKMessage;
+      const abort = new AbortController();
+      aborts.push(abort);
+      const r = await options!.canUseTool!("Bash", { command: "npm test" }, {
+        signal: abort.signal,
+        suggestions: [bashSuggestion],
+        toolUseID,
+        requestId: randomUUID(),
+        title: "Claude wants to run npm test",
+      });
+      permissionResults.push(r!);
+      yield turns[0]!.at(-1)!;
+    }
+  })();
+  return Object.assign(q, { supportedCommands: async () => [], close: () => void q.return(undefined) });
+}

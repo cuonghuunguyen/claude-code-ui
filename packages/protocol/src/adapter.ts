@@ -160,5 +160,6 @@ export function createAdapter() {
     }
   }
 
-  return { convert, commands };
+  /** deny: marks a tool call denied now; its later tool_result keeps status denied. */
+  return { convert, commands, deny };
 }

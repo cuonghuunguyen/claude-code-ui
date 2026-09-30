@@ -7,7 +7,7 @@ import WebSocket from "ws";
 import type { ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
-import { calls, fakeQuery, history, models, setModelCalls } from "./fake-query.ts";
+import { calls, fakeQuery, history, models, permissionQuery, setModelCalls } from "./fake-query.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
@@ -297,6 +297,31 @@ describe("daemon", () => {
     });
     expect(await c.request({ type: "session.rewind", sessionId, userMessageId, mode: "all" })).toMatchObject({ code: "bad_mode" });
     expect(await c.request({ type: "session.rewindPreview", sessionId, userMessageId: "nope" })).toMatchObject({ code: "rewind_failed" });
+  });
+
+  it("permission.respond: the first answer from any tab settles the request for all tabs; later ones are ignored", async () => {
+    const d = createDaemon({ webRoot, roots: [webRoot], query: permissionQuery as never, token });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const p = (d.address() as AddressInfo).port;
+    try {
+      const [a, b] = await Promise.all([client(p), client(p)]);
+      const { result } = (await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+      const sessionId = result.session.id;
+      await a.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+      await b.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+      await a.request({ type: "session.prompt", sessionId, text: "run tests" });
+      const isRequest = (m: ServerMessage) => m.type === "event" && m.part.type === "permission_request";
+      const req = (await b.waitFor(isRequest)) as Extract<ServerMessage, { type: "event" }>;
+      const requestId = (req.part as { requestId: string }).requestId;
+
+      expect(await b.request({ type: "permission.respond", requestId, decision: "allow" })).toMatchObject({ result: { settled: true } });
+      expect(await a.request({ type: "permission.respond", requestId, decision: "deny" })).toMatchObject({ result: { settled: false } });
+      const settled = (m: ServerMessage) => isRequest(m) && m.type === "event" && (m.part as { settled: boolean }).settled;
+      for (const c of [a, b]) expect(((await c.waitFor(settled)) as { part: object }).part).toMatchObject({ decision: "allow" });
+      expect(await a.request({ type: "permission.respond", requestId, decision: "maybe" })).toMatchObject({ type: "error", code: "bad_request" });
+    } finally {
+      d.close();
+    }
   });
 });
 

@@ -17,6 +17,11 @@ export type ClientMessage = { reqId: string } & (
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   | { type: "session.setModel"; sessionId: string; model: string }
+  /**
+   * First answer wins; a later one gets `{ settled: false }`. "allow_always" applies `suggestions[ruleIndex]`
+   * (all suggestions when ruleIndex is omitted). `message`: feedback for Claude with "deny".
+   */
+  | { type: "permission.respond"; requestId: string; decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string }
   | { type: "models.list" }
   | { type: "session.list" }
   /** Without `path`: the allowlisted roots. */
@@ -39,6 +44,8 @@ export type CreateResult = { session: SessionInfo };
 /** `logEpoch` differs from the one the client sent: its store belongs to an earlier daemon run and the events are a full replay. */
 export type SubscribeResult = { logEpoch: string; session: SessionInfo };
 export type SetModelResult = { session: SessionInfo };
+/** `settled`: false when the request was already settled (or unknown) and this answer was ignored. */
+export type RespondResult = { settled: boolean };
 export type ModelsResult = { models: ModelInfo[] };
 
 /**

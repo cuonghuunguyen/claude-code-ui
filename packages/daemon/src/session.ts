@@ -1,11 +1,21 @@
 // A live session: one long-lived streaming-input query() whose SDK messages become logged events.
 import { randomUUID } from "node:crypto";
-import { query as sdkQuery, type ModelInfo, type Query, type SDKMessage, type SDKUserMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  query as sdkQuery,
+  type CanUseTool,
+  type ModelInfo,
+  type PermissionResult,
+  type Query,
+  type SDKMessage,
+  type SDKUserMessage,
+  type SessionMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import {
   createAdapter,
   imageBlock,
   type Event,
   type Part,
+  type PermissionDecision,
   type RewindMode,
   type RewindPreview,
   type SessionInfo,
@@ -13,6 +23,10 @@ import {
 } from "@claude-ui/protocol";
 
 type Listener = (e: Event) => void;
+// Claude Code's wording, so Claude reads the feedback as the user's instruction rather than as tool output.
+const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
+type PermissionPart = Extract<Part, { type: "permission_request" }>;
+type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string };
 
 type SessionOpts = { model?: string; query?: typeof sdkQuery };
 
@@ -39,6 +53,8 @@ export class Session {
   private resumeAt?: string;
   /** True while rewind() awaits rewindFiles(): a prompt then would run on the query the rewind closes. */
   private rewinding = false;
+  /** Pending permission requests by requestId (docs/spec.md "Permission bridge"). */
+  private readonly pending = new Map<string, { part: PermissionPart; resolve: (r: PermissionResult) => void }>();
 
   constructor(
     readonly cwd: string,
@@ -84,6 +100,7 @@ export class Session {
         extraArgs: { "thinking-display": "summarized", "replay-user-messages": null },
         // ADR 0002: subscription login only. An inherited API key would take precedence and bill per token.
         env: withoutApiKeys(process.env),
+        canUseTool: this.canUseTool,
       },
     }));
     this.resumeAt = undefined;
@@ -119,7 +136,7 @@ export class Session {
     const uuid = randomUUID();
     this.checkpoints.set(uuid, this.lastAssistant);
     this.emit({ type: "user_text", id: uuid, text, images });
-    this.setState("running");
+    this.setState(this.pending.size ? "needs_input" : "running");
     if (!this.query) this.start({ resume: this.id });
     const content = images.length
       ? [...(text ? [{ type: "text" as const, text }] : []), ...images.map((i) => imageBlock(i)!)]
@@ -184,6 +201,56 @@ export class Session {
     return this.query ?? this.start({ resume: this.id });
   }
 
+  /** Rules already saved never reach this callback. No timeout: the promise waits for respond() or the SDK's abort. */
+  private readonly canUseTool: CanUseTool = (tool, input, { signal, suggestions = [], toolUseID, title }) =>
+    new Promise((resolve) => {
+      const requestId = randomUUID();
+      const part: PermissionPart = {
+        type: "permission_request",
+        id: requestId,
+        requestId,
+        toolUseId: toolUseID,
+        tool,
+        input,
+        ...(title ? { title } : {}),
+        suggestions,
+        settled: false,
+      };
+      this.pending.set(requestId, { part, resolve });
+      this.emit(part);
+      this.setState("needs_input");
+      signal.addEventListener("abort", () => this.settle(requestId, "cancelled", { behavior: "deny", message: "Request cancelled" }), { once: true });
+    });
+
+  /** Answers a pending permission request. False when it is already settled or unknown: the first answer wins. */
+  respond(requestId: string, { decision, ruleIndex, message }: Answer): boolean {
+    const req = this.pending.get(requestId);
+    if (!req) return false;
+    const { input, suggestions, toolUseId } = req.part;
+    const text = message?.trim();
+    if (decision === "deny") {
+      for (const part of this.adapter.deny(toolUseId)) this.emit(part);
+      // Like Claude Code: "No" with feedback lets Claude continue with it; a bare "No" stops the turn.
+      return this.settle(requestId, "deny", text ? { behavior: "deny", message: `${REJECTED} To tell you how to proceed, the user said:\n${text}` } : { behavior: "deny", message: REJECTED, interrupt: true }, text);
+    }
+    const updatedPermissions = ruleIndex === undefined ? suggestions : suggestions.slice(ruleIndex, ruleIndex + 1);
+    return this.settle(requestId, decision, {
+      behavior: "allow",
+      updatedInput: input as Record<string, unknown>,
+      ...(decision === "allow_always" ? { updatedPermissions } : {}),
+    });
+  }
+
+  private settle(requestId: string, decision: PermissionDecision, result: PermissionResult, message?: string) {
+    const req = this.pending.get(requestId);
+    if (!req) return false;
+    this.pending.delete(requestId);
+    this.emit({ ...req.part, settled: true, decision, ...(message ? { message } : {}) });
+    if (!this.pending.size && this.state === "needs_input") this.setState("running");
+    req.resolve(result);
+    return true;
+  }
+
   private async drive(q: AsyncIterable<SDKMessage>) {
     const generation = this.generation;
     try {
@@ -201,6 +268,9 @@ export class Session {
       console.error(`session ${this.id} failed:`, err);
       this.emit({ type: "raw", id: randomUUID(), message: { error: String(err) } });
       this.setState("error");
+    } finally {
+      // Nothing waits for these answers any more.
+      for (const id of [...this.pending.keys()]) this.settle(id, "cancelled", { behavior: "deny", message: "Session ended" });
     }
   }
 
