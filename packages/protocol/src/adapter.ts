@@ -29,8 +29,8 @@ const IGNORED = new Set([
 ]);
 // After an interrupt the CLI sends this user text, then a result with an aborted terminal_reason (SDK 0.3.285).
 const INTERRUPTED = /^\[Request interrupted by user( for tool use)?\]$/;
-// The CLI's echo of setModel() (SDK 0.3.285); the session_model part already shows the switch.
-const MODEL_SWITCHED = /^<local-command-stdout>Set model to .*<\/local-command-stdout>$/s;
+// The CLI's echo of setModel() and, in a transcript, its /model command record (SDK 0.3.285); the session_model part already shows the switch.
+const MODEL_SWITCHED = /^(<local-command-stdout>Set model to .*<\/local-command-stdout>|<command-name>\/model<\/command-name>.*)$/s;
 const ABORTED = new Set(["aborted_streaming", "aborted_tools"]);
 
 // Text/thinking part id = `<API message id>:<content block index>`. Streamed blocks know their index from the

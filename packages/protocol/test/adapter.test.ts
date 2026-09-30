@@ -195,7 +195,9 @@ describe("adapter on known SDK noise", () => {
 
   it("drops the CLI's echo of a model switch; the session_model part shows it", () => {
     const echo = { type: "user", uuid: "e1", message: { role: "user", content: "<local-command-stdout>Set model to `sonnet (claude-sonnet-5-5)`</local-command-stdout>" }, parent_tool_use_id: null };
-    expect(run([echo])).toEqual([]);
+    // In a transcript the switch is also recorded as the /model command.
+    const command = { ...echo, uuid: "e2", message: { role: "user", content: "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>haiku</command-args>" } };
+    expect(run([echo, command])).toEqual([]);
   });
 });
 
