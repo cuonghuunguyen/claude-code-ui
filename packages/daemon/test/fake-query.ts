@@ -134,3 +134,62 @@ export function questionQuery({ prompt, options }: { prompt: AsyncIterable<SDKUs
   })();
   return Object.assign(q, { supportedCommands: async () => [], close: () => void q.return(undefined) });
 }
+
+export const interrupts: number[] = [];
+
+/**
+ * Fake query() for steering and interrupt: echoes every input message at once (replay), also mid-turn (steering).
+ * Each turn starts a Bash call that runs until interrupt(); a prompt starting with "ask" (permission) or "question" (AskUserQuestion) waits in canUseTool instead,
+ * "hi" runs a complete fixture turn; "late" sent mid-turn is taken only after the turn ended. interrupt() ends the turn like the CLI (recorded in development-docs/GH-5/probe2.log).
+ */
+export function interruptQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
+  calls.push(options ?? {});
+  const out: SDKMessage[] = [];
+  let wake = () => {};
+  const emit = (m: unknown) => (out.push(m as SDKMessage), wake());
+  let stop: (() => void) | undefined;
+  const turn = async (text: string) => {
+    if (text === "hi") return turns[0]!.forEach(emit);
+    const toolUseID = randomUUID();
+    emit({ type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { id: `msg_${toolUseID}`, content: [{ type: "tool_use", id: toolUseID, name: "Bash", input: { command: "sleep 30" } }] } });
+    const abort = new AbortController();
+    aborts.push(abort);
+    const stopped = new Promise<void>((r) => (stop = () => (abort.abort(), r())));
+    if (text.startsWith("ask") || text.startsWith("question")) {
+      const [tool, input] = text.startsWith("ask") ? ["Bash", { command: "sleep 30" }] : ["AskUserQuestion", askInput];
+      void options!.canUseTool!(tool, input, { signal: abort.signal, suggestions: [], toolUseID, requestId: randomUUID() }).then((r) => permissionResults.push(r!));
+    }
+    await stopped;
+    emit({ type: "user", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] } });
+    emit({ type: "result", subtype: "error_during_execution", terminal_reason: "aborted_tools", uuid: randomUUID(), session_id: "x", is_error: true, duration_ms: 1, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 }, permission_denials: [] });
+  };
+  void (async () => {
+    let busy = false;
+    const take = (m: SDKUserMessage) => {
+      emit({ ...m, session_id: "x", isReplay: true });
+      if (busy) return;
+      busy = true;
+      void turn(m.message.content as string).then(() => {
+        busy = false;
+        if (late) take(late), (late = undefined);
+      });
+    };
+    let late: SDKUserMessage | undefined;
+    for await (const m of prompt) {
+      inputs.push(m);
+      if (busy && m.message.content === "late") late = m;
+      else take(m);
+    }
+  })();
+  const q = (async function* () {
+    for (;;) {
+      while (out.length) yield out.shift()!;
+      await new Promise<void>((r) => (wake = r));
+    }
+  })();
+  return Object.assign(q, {
+    supportedCommands: async () => [],
+    interrupt: async () => (interrupts.push(1), stop?.(), { still_queued: [] }),
+    close: () => void q.return(undefined as never),
+  });
+}

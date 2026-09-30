@@ -73,6 +73,8 @@ export type Part = { parentId?: string } & (
   | { type: "todo_update"; id: string; items: TodoItem[] }
   /** An Agent/Task call; `id` = `toolUseId`, its `tool_result` is `<toolUseId>:result`, child parts have `parentId` = `id`. */
   | { type: "subagent"; id: string; toolUseId: string; description: string; status: ToolStatus }
+  /** The turn was stopped (session.interrupt, or No without feedback); replaces its turn_result. */
+  | { type: "turn_interrupted"; id: string }
   | { type: "raw"; id: string; message: unknown }
   /** Conversation rewind: the client drops `userMessageId` and every part after it. */
   | { type: "rewind"; id: string; userMessageId: string }

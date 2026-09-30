@@ -190,6 +190,16 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
           }
           return reply({ session: s.info() });
         }
+        case "session.interrupt": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          try {
+            await s.interrupt();
+          } catch (e) {
+            return fail("interrupt_failed", (e as Error).message);
+          }
+          return reply({});
+        }
         case "permission.respond": {
           if (typeof msg.requestId !== "string" || !["allow", "allow_always", "deny"].includes(msg.decision))
             return fail("bad_request", "requestId and decision (allow, allow_always, deny) required");

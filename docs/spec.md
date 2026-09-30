@@ -93,8 +93,8 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 
 ### Steering and interrupt
 
-- A message sent while a turn runs is pushed into the query immediately (steering); Claude Code injects it after the current tool calls. To verify at build time: SDK mid-turn `streamInput` behaves the same.
-- `session.interrupt` calls `interrupt()`, denies pending requests, logs `turn_interrupted`; the session returns to `idle` and stays live.
+- A message sent while a turn runs is pushed into the query immediately (steering); Claude Code injects it after the current tool calls. The SDK does the same (verified, see "Open items"). Its `isReplay` echo marks when the CLI took it; a message taken after the turn ended runs as its own turn, so the echo sets `running` again.
+- `session.interrupt` denies pending requests (like No without feedback), then calls `interrupt()`; a no-op while `idle`. Stop button and Esc in the web app. The CLI then sends the user text `[Request interrupted by user]` (or `... for tool use]`), logged as `turn_interrupted`, and a `result` with `terminal_reason` `aborted_streaming` / `aborted_tools`, which logs no `turn_result` and returns the session to `idle`. The query stays live.
 
 ### Commands, skills, models
 
@@ -139,7 +139,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | `session_state` | `state` | Header badge, list badge |
 | `commands` | `commands[]` (name, description, argumentHint, aliases?) | Slash command picker; not in the timeline |
 | `turn_result` | `durationMs`, `costUsd`, `usage`, `isError` | Turn footer (live turns only) |
-| `turn_interrupted` | — | Status line |
+| `turn_interrupted` | — | Status line; replaces the turn footer |
 | `raw` | original message | Generic JSON |
 | `rewind` | `userMessageId` | Not rendered; the client drops that user message and every part after it |
 
@@ -240,5 +240,5 @@ Work is split into GitHub issues along a dependency graph, so independent pieces
 
 - [ ] Remote access and HTTPS without external hosting (ADR 0003).
 - [x] Verify: SDK uses `claude login` credentials when no API key is set. Verified 2026-10-01 with SDK 0.3.285: with `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset, `system/init` reports `apiKeySource: "none"` (claude.ai OAuth login) and turns succeed.
-- [ ] Verify: mid-turn `streamInput` steers like Claude Code.
+- [x] Verify: mid-turn `streamInput` steers like Claude Code. Verified 2026-10-01 with SDK 0.3.285: a message pushed during a Bash call is echoed (`isReplay`) right after that call's `tool_result` and the same turn continues with it (one `result`). `interrupt()` while streaming text, while a tool runs, or while `canUseTool` waits (its signal aborts) ends the turn as described in "Steering and interrupt"; the next prompt runs normally on the same query.
 - [x] Verify: which UUID `resumeSessionAt` needs for a conversation rewind. Verified 2026-10-01 with SDK 0.3.285: the UUID of the last main-thread assistant message before the rewound prompt (the prompt's own UUID keeps it; a non-chain UUID fails with `No message found`). Resume without `forkSession` keeps the session ID; `getSessionMessages()` then returns the truncated branch. `rewindFiles()` takes the prompt's own UUID (the one sent in `SDKUserMessage.uuid`, echoed with `isReplay`); an assistant UUID has no checkpoint.

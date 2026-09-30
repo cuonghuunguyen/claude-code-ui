@@ -23,6 +23,9 @@ const IGNORED = new Set([
   "system:task_progress",
   "system:task_updated",
 ]);
+// After an interrupt the CLI sends this user text, then a result with an aborted terminal_reason (SDK 0.3.285).
+const INTERRUPTED = /^\[Request interrupted by user( for tool use)?\]$/;
+const ABORTED = new Set(["aborted_streaming", "aborted_tools"]);
 
 // Text/thinking part id = `<API message id>:<content block index>`. Streamed blocks know their index from the
 // stream event. Complete assistant messages arrive split, one SDK message per content block with the
@@ -148,6 +151,7 @@ export function createAdapter() {
           return false;
         });
         if (rest.length === 0) return parts;
+        if (rest.length === 1 && rest[0]!.type === "text" && INTERRUPTED.test(rest[0]!.text)) return [...parts, { type: "turn_interrupted", id }];
         if (rest.every((b) => b.type === "text" || (b.type === "image" && b.source.type === "base64"))) {
           const text = rest.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
           const images = rest.flatMap((b) =>
@@ -160,7 +164,8 @@ export function createAdapter() {
       case "result":
         return [
           ...(m.permission_denials ?? []).flatMap((d) => deny(d.tool_use_id)),
-          {
+          // An aborted turn has its turn_interrupted instead.
+          ...(ABORTED.has(m.terminal_reason ?? "") ? [] : [{
             type: "turn_result",
             id: m.uuid,
             durationMs: m.duration_ms,
@@ -172,7 +177,7 @@ export function createAdapter() {
               cacheCreationTokens: m.usage.cache_creation_input_tokens ?? 0,
             },
             isError: m.is_error,
-          },
+          } satisfies Part]),
         ];
       default:
         if (m.type === "system" && m.subtype === "commands_changed") return commands(m.commands);

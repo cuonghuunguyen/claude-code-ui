@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
-import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, fakeCommands, fakeQuery, firstTurnLastAssistant, history, inputs, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, fakeCommands, fakeQuery, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -285,6 +285,95 @@ describe("Session questions", () => {
     expect(await answered()).toMatchObject({ behavior: "deny" });
     expect(lastPart(events, q.id)).toEqual({ ...q, settled: true });
     expect(s.answer(q.requestId, {})).toBe(false);
+  });
+});
+
+describe("Session steering and interrupt", () => {
+  const running = async (text = "run it") => {
+    const s = new Session("/tmp", { query: interruptQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt(text);
+    await until(events, (e) => e.part.type === "tool_call");
+    return { s, events };
+  };
+  const idle = (events: Event[], after: number) => until(events, (e) => e.seq > after && e.part.type === "session_state" && e.part.state === "idle");
+
+  it("a prompt while running is logged and pushed into the live query at once (steering)", async () => {
+    const { s, events } = await running();
+    const before = inputs.length;
+    s.prompt("also say BANANA");
+    expect(events.at(-2)!.part).toMatchObject({ type: "user_text", text: "also say BANANA" });
+    await until(events, () => inputs.length > before);
+    expect(inputs.at(-1)).toMatchObject({ uuid: events.at(-2)!.part.id, message: { content: "also say BANANA" } });
+    expect(s.info().state).toBe("running");
+  });
+
+  it("interrupt() calls the SDK interrupt, logs turn_interrupted and returns to idle", async () => {
+    const { s, events } = await running();
+    const n = interrupts.length;
+    const seq = events.length;
+    await s.interrupt();
+    await idle(events, seq);
+    expect(interrupts.length).toBe(n + 1);
+    const after = events.filter((e) => e.seq > seq).map((e) => e.part.type);
+    expect(after).toContain("turn_interrupted");
+    expect(after).not.toContain("turn_result");
+    expect(s.info().state).toBe("idle");
+    expect(s.isLive()).toBe(true);
+  });
+
+  it("interrupt() denies a pending permission request and marks its tool call denied", async () => {
+    const { s, events } = await running("ask first");
+    await until(events, (e) => e.part.type === "permission_request");
+    const req = events.find((e) => e.part.type === "permission_request")!.part as Extract<Event["part"], { type: "permission_request" }>;
+    const seq = events.length;
+    await s.interrupt();
+    await idle(events, seq);
+    expect(lastPart(events, req.id)).toMatchObject({ settled: true, decision: "deny" });
+    expect(lastPart(events, req.toolUseId)).toMatchObject({ status: "denied" });
+    expect(permissionResults.at(-1)).toMatchObject({ behavior: "deny", interrupt: true });
+  });
+
+  it("interrupt() cancels a pending question: settled without answers", async () => {
+    const { s, events } = await running("question first");
+    await until(events, (e) => e.part.type === "question");
+    const q = events.find((e) => e.part.type === "question")!.part as Extract<Event["part"], { type: "question" }>;
+    const seq = events.length;
+    await s.interrupt();
+    await idle(events, seq);
+    expect(lastPart(events, q.id)).toEqual({ ...q, settled: true });
+    expect(permissionResults.at(-1)).toMatchObject({ behavior: "deny" });
+    expect(s.answer(q.requestId, {})).toBe(false);
+  });
+
+  it("after an interrupt the same session runs the next prompt", async () => {
+    const { s, events } = await running();
+    await s.interrupt();
+    await idle(events, 0);
+    const seq = events.length;
+    s.prompt("hi");
+    await idle(events, seq);
+    expect(events.filter((e) => e.seq > seq).map((e) => e.part.type)).toContain("turn_result");
+    expect(calls.filter((c) => c.sessionId === s.id)).toHaveLength(1);
+  });
+
+  it("interrupt() while idle does nothing", async () => {
+    const s = new Session("/tmp", { query: interruptQuery as never });
+    const n = interrupts.length;
+    await s.interrupt();
+    expect(interrupts.length).toBe(n);
+  });
+
+  it("a steering message the CLI takes only after the turn ended runs its own turn: running again", async () => {
+    const { s, events } = await running();
+    s.prompt("late");
+    await s.interrupt();
+    // The replay echo tells when the CLI took the message; the interrupted turn's result set idle before it.
+    await until(events, (e) => e.part.type === "tool_call" && events.filter((x) => x.part.type === "tool_call").length === 2);
+    const states = events.filter((e) => e.part.type === "session_state").map((e) => (e.part as { state: string }).state);
+    expect(states.slice(-2)).toEqual(["idle", "running"]);
+    expect(s.info().state).toBe("running");
   });
 });
 

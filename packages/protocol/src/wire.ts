@@ -17,6 +17,8 @@ export type ClientMessage = { reqId: string } & (
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   | { type: "session.setModel"; sessionId: string; model: string }
+  /** Stops the running turn; a no-op while idle. */
+  | { type: "session.interrupt"; sessionId: string }
   /**
    * First answer wins; a later one gets `{ settled: false }`. "allow_always" applies `suggestions[ruleIndex]`
    * (all suggestions when ruleIndex is omitted). `message`: feedback for Claude with "deny".

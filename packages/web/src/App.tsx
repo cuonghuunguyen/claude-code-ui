@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
-import { RotateCcwIcon } from "lucide-react";
+import { RotateCcwIcon, SquareIcon } from "lucide-react";
 import type {
   CreateResult,
   Event,
@@ -192,6 +192,9 @@ export function App() {
               client
                 .current!.request({ type: "session.prompt", sessionId: active.id, text, images })
                 .catch((e) => setError((e as Error).message))
+            }
+            onInterrupt={() =>
+              client.current!.request({ type: "session.interrupt", sessionId: active.id }).catch((e) => setError((e as Error).message))
             }
             onRewindPreview={(userMessageId) =>
               client.current!.request<RewindPreview>({ type: "session.rewindPreview", sessionId: active.id, userMessageId })
@@ -399,6 +402,7 @@ function SessionPane({
   onPrompt,
   onSearch,
   onMenu,
+  onInterrupt,
   onRewindPreview,
   onRewind,
   onRespond,
@@ -411,6 +415,7 @@ function SessionPane({
   onPrompt: (text: string, images: string[]) => void;
   onSearch: (query: string) => Promise<string[]>;
   onMenu: () => void;
+  onInterrupt: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
@@ -418,6 +423,15 @@ function SessionPane({
 }) {
   const permission = pendingPermission(view);
   const question = pendingQuestion(view);
+  // Waiting for a permission answer is part of the running turn.
+  const turnRunning = view.state === "running" || view.state === "needs_input";
+  // Esc stops the turn, like Claude Code; the command picker handles its own Esc first (preventDefault).
+  useEffect(() => {
+    if (!turnRunning) return;
+    const onEsc = (e: globalThis.KeyboardEvent) => e.key === "Escape" && !e.defaultPrevented && onInterrupt();
+    window.addEventListener("keydown", onEsc);
+    return () => window.removeEventListener("keydown", onEsc);
+  }, [turnRunning, onInterrupt]);
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
   const [rewinding, setRewinding] = useState<string>();
@@ -513,6 +527,12 @@ function SessionPane({
         <span className="rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
           {view.state}
         </span>
+        {turnRunning && (
+          <Button size="sm" variant="outline" className="h-6 px-2 text-xs" title="Stop (Esc)" data-testid="stop" onClick={onInterrupt}>
+            <SquareIcon className="size-3 fill-current" />
+            Stop
+          </Button>
+        )}
       </header>
       <Conversation className="flex-1">
         <ConversationContent className="mx-auto w-full max-w-3xl">
@@ -628,7 +648,11 @@ function SessionPane({
               aria-activedescendant={pickerOpen ? `command-${selected}` : undefined}
               className="w-full resize-none rounded-lg border bg-transparent p-3 text-sm"
               rows={3}
-              placeholder="Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"
+              placeholder={
+                turnRunning
+                  ? "Claude is working… (Enter to steer, Esc to stop)"
+                  : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"
+              }
               value={text}
               ref={input}
               onChange={(e) => edit(e.target.value, e.target.selectionStart)}
@@ -744,6 +768,12 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
       return <QuestionMarker part={part} />;
     case "turn_result":
       return <TurnFooter part={part} />;
+    case "turn_interrupted":
+      return (
+        <div className="text-muted-foreground text-xs" data-testid="turn-interrupted">
+          Interrupted by user
+        </div>
+      );
     case "raw":
       return (
         <pre className="overflow-x-auto rounded bg-muted p-2 text-xs" data-testid="raw-part">
