@@ -1,10 +1,10 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { basename, join } from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import type { ServerMessage } from "@claude-ui/protocol";
+import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
 import { calls, fakeQuery, history, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
@@ -353,6 +353,61 @@ describe("daemon", () => {
       expect(await a.request({ type: "question.respond", requestId, answers: {} })).toMatchObject({ result: { settled: false } });
       const settled = (m: ServerMessage) => isQuestion(m) && (m as { part: { settled: boolean } }).part.settled;
       for (const c of [a, b]) expect(((await c.waitFor(settled)) as { part: object }).part).toMatchObject({ answers });
+    } finally {
+      d.close();
+    }
+  });
+});
+
+describe("push", () => {
+  const fakePush = () => {
+    const sent: PushPayload[] = [];
+    const subs: unknown[] = [];
+    return { sent, subs, push: { publicKey: "BPUBLIC", subscribe: (s: unknown) => (subs.push(s), s !== null), send: async (p: PushPayload) => void sent.push(p) } };
+  };
+  async function daemon(push?: ReturnType<typeof fakePush>["push"]) {
+    const d = createDaemon({ webRoot, roots: [webRoot], query: permissionQuery as never, token, push, history: { ...history, getSessionInfo: async () => undefined } as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    return { d, c: await client((d.address() as AddressInfo).port) };
+  }
+
+  it("push.key and push.subscribe hand the VAPID key out and store the subscription", async () => {
+    const f = fakePush();
+    const { d, c } = await daemon(f.push);
+    try {
+      expect(await c.request({ type: "push.key" })).toMatchObject({ result: { publicKey: "BPUBLIC" } });
+      const sub = { endpoint: "https://push.example/x", keys: { p256dh: "p", auth: "a" } };
+      expect(await c.request({ type: "push.subscribe", subscription: sub })).toMatchObject({ type: "reply" });
+      expect(f.subs).toEqual([sub]);
+      expect(await c.request({ type: "push.subscribe", subscription: null })).toMatchObject({ code: "bad_subscription" });
+      expect(await c.request({ type: "push.focus", sessionId: 42 })).toMatchObject({ code: "bad_request" });
+    } finally {
+      d.close();
+    }
+    const none = await daemon();
+    expect(await none.c.request({ type: "push.key" })).toMatchObject({ code: "push_unavailable" });
+    none.d.close();
+  });
+
+  it("pushes needs input with the session title fallback and tool command; suppressed while a focused tab shows the session", async () => {
+    const f = fakePush();
+    const { d, c } = await daemon(f.push);
+    try {
+      const { result } = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+      const sessionId = result.session.id;
+      await c.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+      await c.request({ type: "push.focus", sessionId });
+      await c.request({ type: "session.prompt", sessionId, text: "run tests" });
+      const req = (await c.waitFor((m) => m.type === "event" && m.part.type === "permission_request")) as { part: { requestId: string } };
+      await new Promise((r) => setTimeout(r, 50));
+      expect(f.sent).toEqual([]);
+
+      await c.request({ type: "push.focus" });
+      await c.request({ type: "permission.respond", requestId: req.part.requestId, decision: "allow" });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "session_state" && m.part.state === "idle");
+      await c.request({ type: "session.prompt", sessionId, text: "again" });
+      await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+      expect(f.sent[0]).toEqual({ sessionId, title: basename(webRoot), body: "Needs input · Bash: npm test" });
     } finally {
       d.close();
     }

@@ -1,12 +1,13 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { createReadStream, existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
-import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { imageBlock, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
 import { getSessionInfo, getSessionMessages, listSessions, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
+import { createNotifier, type Push } from "./push.ts";
 import { listModels, Session } from "./session.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
@@ -20,6 +21,7 @@ const MIME: Record<string, string> = {
   ".png": "image/png",
   ".ico": "image/x-icon",
   ".json": "application/json",
+  ".webmanifest": "application/manifest+json",
   ".woff2": "font/woff2",
 };
 
@@ -37,8 +39,11 @@ function real(path: string) {
   }
 }
 
-/** `roots`: allowlisted directories for session cwds, the session list and the directory picker (docs/spec.md "Security"). */
-export function createDaemon(opts: { webRoot: string; token: string; roots: string[]; query?: typeof sdkQuery; history?: History }) {
+/**
+ * `roots`: allowlisted directories for session cwds, the session list and the directory picker (docs/spec.md "Security").
+ * `push`: Web Push sender; without it push.* requests fail.
+ */
+export function createDaemon(opts: { webRoot: string; token: string; roots: string[]; query?: typeof sdkQuery; history?: History; push?: Push }) {
   const logEpoch = randomUUID();
   const sessions = new Map<string, Session>();
   const restoring = new Map<string, Promise<Session | undefined>>();
@@ -57,6 +62,23 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
     const p = typeof path === "string" && isAbsolute(path) ? real(path) : undefined;
     return p && inRoots(p) ? p : undefined;
   };
+
+  /** Session a connection shows while its tab is focused and visible. */
+  const focused = new Map<WebSocket, string>();
+  const notifier = createNotifier({
+    suppressed: (id) => [...focused.values()].includes(id),
+    push: async (sessionId, body) => {
+      const info = await history.getSessionInfo(sessionId).catch(() => undefined);
+      const title = info?.summary || basename(sessions.get(sessionId)?.cwd ?? "") || "Claude";
+      await opts.push?.send({ sessionId, title, body });
+    },
+  });
+  /** Adds a session and follows its live events (not its history) for pushes. */
+  function track(s: Session) {
+    sessions.set(s.id, s);
+    s.subscribe(Infinity, notifier.observe);
+    return s;
+  }
 
   async function list(): Promise<SessionListItem[]> {
     const items = new Map<string, SessionListItem>();
@@ -83,9 +105,7 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
       p = (async () => {
         const info = await history.getSessionInfo(id);
         if (!info?.cwd || !allowed(info.cwd)) return undefined;
-        const s = Session.restore(id, info.cwd, await history.getSessionMessages(id, { dir: info.cwd }), { query: opts.query });
-        sessions.set(id, s);
-        return s;
+        return track(Session.restore(id, info.cwd, await history.getSessionMessages(id, { dir: info.cwd }), { query: opts.query }));
       })()
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
         .finally(() => restoring.delete(id));
@@ -132,7 +152,7 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
 
   wss.on("connection", (ws) => {
     const unsubscribes = new Map<string, () => void>();
-    ws.on("close", () => unsubscribes.forEach((u) => u()));
+    ws.on("close", () => (unsubscribes.forEach((u) => u()), focused.delete(ws)));
     ws.on("message", async (data) => {
       let msg: ClientMessage;
       try {
@@ -153,8 +173,7 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
           if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          const s = new Session(cwd, { model: msg.model, query: opts.query });
-          sessions.set(s.id, s);
+          const s = track(new Session(cwd, { model: msg.model, query: opts.query }));
           return reply({ session: s.info() });
         }
         case "session.subscribe": {
@@ -248,6 +267,16 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
           if (typeof msg.query !== "string") return fail("bad_query", "query must be a string");
           return reply({ paths: searchFiles(cwd, msg.query) });
         }
+        case "push.key":
+          return opts.push ? reply({ publicKey: opts.push.publicKey }) : fail("push_unavailable", "push is not configured");
+        case "push.subscribe":
+          if (!opts.push) return fail("push_unavailable", "push is not configured");
+          return opts.push.subscribe(msg.subscription) ? reply({}) : fail("bad_subscription", "subscription needs an https endpoint and keys");
+        case "push.focus":
+          if (msg.sessionId === undefined) focused.delete(ws);
+          else if (typeof msg.sessionId === "string") focused.set(ws, msg.sessionId);
+          else return fail("bad_request", "sessionId must be a string");
+          return reply({});
         default:
           return fail("unknown_type", `unknown message type ${(msg as { type?: string }).type}`);
       }

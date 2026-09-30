@@ -32,7 +32,18 @@ export type ClientMessage = { reqId: string } & (
   | { type: "session.rewind"; sessionId: string; userMessageId: string; mode: RewindMode }
   /** @-mention autocomplete: fuzzy matches under `cwd` (a session's cwd, inside the roots). */
   | { type: "fs.search"; cwd: string; query: string }
+  /** The daemon's VAPID public key, for `PushManager.subscribe()`. */
+  | { type: "push.key" }
+  | { type: "push.subscribe"; subscription: WebPushSubscription }
+  /** The session this tab shows while focused and visible (none otherwise); pushes for it are suppressed. */
+  | { type: "push.focus"; sessionId?: string }
 );
+
+/** `PushSubscription.toJSON()`. */
+export type WebPushSubscription = { endpoint: string; keys: { p256dh: string; auth: string } };
+export type PushKeyResult = { publicKey: string };
+/** Decrypted Web Push payload the service worker shows as a notification. */
+export type PushPayload = { sessionId: string; title: string; body: string };
 
 /** Claude Code `/rewind` modes: `both` restores code, then conversation. */
 export type RewindMode = "code" | "conversation" | "both";
