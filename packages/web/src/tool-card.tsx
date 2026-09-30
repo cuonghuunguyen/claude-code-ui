@@ -148,16 +148,9 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
 
 /** Unified diff built from the Edit/Write input; the JSON parameters until the input has streamed in. */
 function EditDiff({ call, result }: { call: ToolCall; result?: ToolResult }) {
-  const files = useMemo(() => editFiles(call.tool, call.input), [call.tool, call.input]);
   return (
     <>
-      {files ? (
-        <div className="overflow-hidden rounded-md border text-xs" data-testid="edit-diff">
-          <MultiFileDiff oldFile={files.oldFile} newFile={files.newFile} options={DIFF_OPTIONS} />
-        </div>
-      ) : (
-        <ToolInput input={call.input} />
-      )}
+      <InputDiff tool={call.tool} input={call.input} fallback={<ToolInput input={call.input} />} />
       {result && (
         <ToolOutput
           output={result.isError ? undefined : result.output}
@@ -165,6 +158,17 @@ function EditDiff({ call, result }: { call: ToolCall; result?: ToolResult }) {
         />
       )}
     </>
+  );
+}
+
+/** The Edit/Write diff of a tool input; `fallback` while the input is incomplete. Also used by the permission panel. */
+export function InputDiff({ tool, input, fallback }: { tool: string; input: unknown; fallback?: ReactNode }) {
+  const files = useMemo(() => editFiles(tool, input), [tool, input]);
+  if (!files) return fallback;
+  return (
+    <div className="overflow-hidden rounded-md border text-xs" data-testid="edit-diff">
+      <MultiFileDiff oldFile={files.oldFile} newFile={files.newFile} options={DIFF_OPTIONS} />
+    </div>
   );
 }
 

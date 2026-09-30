@@ -205,6 +205,12 @@ describe("Session", () => {
       expect(events.some((e) => e.part.type === "session_state" && e.part.state === "running" && e.seq > events.find((x) => x.part.id === req.id)!.seq)).toBe(true);
     });
 
+    it("Yes with edited input sends it as updatedInput (full input object)", async () => {
+      const { s, req, answered } = await ask();
+      s.respond(req.requestId, { decision: "allow", updatedInput: { command: "npm test -- --run" } });
+      expect(await answered()).toEqual({ behavior: "allow", updatedInput: { command: "npm test -- --run" } });
+    });
+
     it("don't ask again returns the chosen SDK suggestion as updatedPermissions", async () => {
       const { s, events, req, answered } = await ask();
       s.respond(req.requestId, { decision: "allow_always", ruleIndex: 0 });

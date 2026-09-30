@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Event, Part, PermissionUpdate } from "@claude-ui/protocol";
-import { PermissionMarker, PermissionPanel, ruleLabel } from "./permission.tsx";
+import { editedInput, PermissionMarker, PermissionPanel, ruleLabel } from "./permission.tsx";
 import { applyEvent, emptySession, pendingPermission, type PermissionRequest } from "./store.ts";
 
 const bash: PermissionUpdate = { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "npm test:*" }], behavior: "allow", destination: "localSettings" };
@@ -41,6 +41,30 @@ describe("PermissionPanel", () => {
 
   it("offers no don't-ask-again option without suggestions", () => {
     expect(renderToStaticMarkup(<PermissionPanel part={request({ suggestions: [] })} onRespond={() => {}} />)).not.toContain("ask again");
+  });
+});
+
+describe("edit before accept", () => {
+  const edit = request({ tool: "Edit", input: { file_path: "/w/a.ts", old_string: "a", new_string: "b", replace_all: false }, suggestions: [] });
+  const write = request({ tool: "Write", input: { file_path: "/w/b.ts", content: "x\n" }, suggestions: [] });
+
+  it("shows the diff and the proposed new content in an editable field for Edit and Write", () => {
+    for (const [part, content] of [[edit, "b"], [write, "x\n"]] as const) {
+      const html = renderToStaticMarkup(<PermissionPanel part={part} onRespond={() => {}} />);
+      expect(html).toContain('data-testid="edit-diff"');
+      expect(html).toMatch(new RegExp(`<textarea[^>]*aria-label="Proposed new content"[^>]*>${content}</textarea>`));
+    }
+  });
+
+  it("has no editable field for other tools", () => {
+    expect(renderToStaticMarkup(<PermissionPanel part={request()} onRespond={() => {}} />)).not.toContain("<textarea");
+  });
+
+  it("edited content becomes the full updatedInput; unchanged content sends none, like a normal Yes", () => {
+    expect(editedInput(edit, "c")).toEqual({ file_path: "/w/a.ts", old_string: "a", new_string: "c", replace_all: false });
+    expect(editedInput(write, "y\n")).toEqual({ file_path: "/w/b.ts", content: "y\n" });
+    expect(editedInput(edit, "b")).toBeUndefined();
+    expect(editedInput(request(), "anything")).toBeUndefined();
   });
 });
 

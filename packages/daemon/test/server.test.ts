@@ -418,6 +418,8 @@ describe("daemon", () => {
       const settled = (m: ServerMessage) => isRequest(m) && m.type === "event" && (m.part as { settled: boolean }).settled;
       for (const c of [a, b]) expect(((await c.waitFor(settled)) as { part: object }).part).toMatchObject({ decision: "allow" });
       expect(await a.request({ type: "permission.respond", requestId, decision: "maybe" })).toMatchObject({ type: "error", code: "bad_request" });
+      for (const updatedInput of [null, [], "x"])
+        expect(await a.request({ type: "permission.respond", requestId, decision: "allow", updatedInput } as never)).toMatchObject({ type: "error", code: "bad_request" });
     } finally {
       d.close();
     }
