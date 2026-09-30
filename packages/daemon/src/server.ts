@@ -120,6 +120,15 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
     return p;
   }
 
+  const digest = (t: string) => createHash("sha256").update(t).digest();
+  const expected = digest(opts.token);
+  const isToken = (t: string | undefined) => t !== undefined && timingSafeEqual(digest(t), expected);
+  const hasToken = (req: IncomingMessage) =>
+    (req.headers["sec-websocket-protocol"] ?? "")
+      .split(",")
+      .map((p) => p.trim())
+      .some((p) => p.startsWith(TOKEN_PROTOCOL_PREFIX) && isToken(p.slice(TOKEN_PROTOCOL_PREFIX.length)));
+
   const http = createServer((req, res) => {
     let path: string;
     try {
@@ -127,6 +136,8 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
     } catch {
       return void res.writeHead(400).end("malformed URL");
     }
+    // Pairing probe: a browser cannot read the 401 of a rejected WebSocket upgrade, so it asks here (client.ts).
+    if (path === "/auth") return void res.writeHead(isToken(/^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1]) ? 204 : 401).end();
     let file = resolve(join(root, path));
     if (!file.startsWith(root + sep) && file !== root) return void res.writeHead(403).end();
     // SPA fallback: unknown paths serve index.html.
@@ -137,14 +148,6 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
   });
 
   const wss = new WebSocketServer({ noServer: true, handleProtocols: (offered) => (offered.has(WS_PROTOCOL) ? WS_PROTOCOL : false) });
-  const digest = (t: string) => createHash("sha256").update(t).digest();
-  const expected = digest(opts.token);
-  const hasToken = (req: IncomingMessage) =>
-    (req.headers["sec-websocket-protocol"] ?? "")
-      .split(",")
-      .map((p) => p.trim())
-      .some((p) => p.startsWith(TOKEN_PROTOCOL_PREFIX) && timingSafeEqual(digest(p.slice(TOKEN_PROTOCOL_PREFIX.length)), expected));
-
   http.on("upgrade", (req, socket, head) => {
     // Never put request headers in these responses: they carry the token.
     const reject = (status: string) => void socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);

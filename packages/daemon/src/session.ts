@@ -42,7 +42,7 @@ export class Session {
   private input = new InputQueue();
   private query?: Query;
   private model: string;
-  private readonly adapter = createAdapter();
+  private readonly adapter: ReturnType<typeof createAdapter>;
   /** Bumped when a conversation rewind drops the query; the old drive loop then stops logging. */
   private generation = 0;
   /**
@@ -65,6 +65,7 @@ export class Session {
   ) {
     this.id = restored?.id ?? randomUUID();
     this.model = opts.model ?? "default";
+    this.adapter = createAdapter({ resumed: !!restored });
     if (!restored) {
       this.start({ sessionId: this.id });
       return;

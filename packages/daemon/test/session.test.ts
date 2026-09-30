@@ -98,6 +98,21 @@ describe("Session", () => {
     expect(calls.at(-1)).toMatchObject({ resume: id, cwd: "/tmp" });
     expect(calls.at(-1)).not.toHaveProperty("sessionId");
     await until(events, (e) => e.part.type === "turn_result");
+    // The resumed query's first total includes turns of the earlier daemon run: no per-turn cost for it.
+    expect(events.find((e) => e.part.type === "turn_result")!.part).not.toHaveProperty("costUsd", expect.anything());
+  });
+
+  it("gives a turn_result the turn's cost, not the query's cumulative total", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("one");
+    await until(events, (e) => e.part.type === "turn_result");
+    s.prompt("two");
+    await until(events, (e) => events.filter((e) => e.part.type === "turn_result").length === 2);
+    const costs = events.flatMap((e) => (e.part.type === "turn_result" ? [e.part.costUsd] : []));
+    expect(costs[0]).toBeCloseTo(0.121987);
+    expect(costs[1]).toBeCloseTo(0.1482896 - 0.121987);
   });
 
   it("passes the chosen model to the SDK; 'default' means no model option", () => {

@@ -45,6 +45,11 @@ describe("adapter on recorded two-turn session", () => {
     expect(results[0]!.type === "turn_result" && results[0]!.usage.outputTokens).toBe(301);
   });
 
+  it("gives each turn its own cost: the SDK's total_cost_usd is cumulative per query", () => {
+    const costs = parts.flatMap((p) => (p.type === "turn_result" ? [p.costUsd] : []));
+    expect(costs[1]).toBeCloseTo(0.1482896 - 0.121987);
+  });
+
   it("gives the same final parts when replayed without stream events (history)", () => {
     const history = run(messages.filter((m) => m.type !== "stream_event")).filter((p) => p.type === "assistant_text");
     const live = [...new Map(texts.map((p) => [p.id, p])).values()];
@@ -153,6 +158,25 @@ describe("adapter on interrupts", () => {
     ]);
     expect(parts.map((p) => p.type)).toEqual(["tool_call", "tool_call"]);
     expect(parts.at(-1)).toMatchObject({ status: "denied" });
+  });
+});
+
+describe("adapter turn cost", () => {
+  const result = (uuid: string, total: number, terminal_reason = "completed") =>
+    ({ type: "result", uuid, terminal_reason, duration_ms: 1, total_cost_usd: total, usage: {}, is_error: false, permission_denials: [] });
+  const costs = (parts: Part[]) => parts.flatMap((p) => (p.type === "turn_result" ? [p.costUsd] : []));
+
+  it("counts an aborted turn's spend in the base, not in the next turn", () => {
+    expect(costs(run([result("r1", 0.1), result("r2", 0.15, "aborted_streaming"), result("r3", 0.2)]))).toEqual([0.1, expect.closeTo(0.05)]);
+  });
+
+  it("takes a lower total as a reset (a query resumed without a saved total, /clear)", () => {
+    expect(costs(run([result("r1", 0.3), result("r2", 0.02)]))).toEqual([0.3, 0.02]);
+  });
+
+  it("has no cost for the first turn of a resumed session: its total includes turns of an earlier query", () => {
+    const adapter = createAdapter({ resumed: true });
+    expect(costs([result("r1", 0.5), result("r2", 0.6)].flatMap((m) => adapter.convert(m as never)))).toEqual([undefined, expect.closeTo(0.1)]);
   });
 });
 

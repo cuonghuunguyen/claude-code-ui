@@ -106,20 +106,15 @@ export const Reasoning = memo(
 
     // Auto-close when streaming ends (once only, and only if it ever streamed)
     useEffect(() => {
-      if (
-        hasEverStreamedRef.current &&
-        !isStreaming &&
-        isOpen &&
-        !hasAutoClosed
-      ) {
-        const timer = setTimeout(() => {
-          setIsOpen(false);
-          setHasAutoClosed(true);
-        }, AUTO_CLOSE_DELAY);
-
-        return () => clearTimeout(timer);
-      }
-    }, [isStreaming, isOpen, setIsOpen, hasAutoClosed]);
+      // claude-ui: only a block that auto-opened auto-closes; one the user opened stays open (also after it ended closed).
+      if (isExplicitlyClosed || !hasEverStreamedRef.current || isStreaming || hasAutoClosed) return;
+      if (!isOpen) return void setHasAutoClosed(true);
+      const timer = setTimeout(() => {
+        setIsOpen(false);
+        setHasAutoClosed(true);
+      }, AUTO_CLOSE_DELAY);
+      return () => clearTimeout(timer);
+    }, [isStreaming, isOpen, setIsOpen, hasAutoClosed, isExplicitlyClosed]);
 
     const handleOpenChange = useCallback(
       (newOpen: boolean) => {

@@ -7,7 +7,11 @@ type Request = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M
 
 type FsChanged = Extract<ServerMessage, { type: "fs.changed" }>;
 
-export type ConnectionStatus = "connected" | "reconnecting" | "offline";
+/** "unauthorized": the daemon rejected this browser's token (or it has none); no redial until it is paired. */
+/** A daemon `error` reply; `code` as the daemon sent it (e.g. unknown_session). */
+export type RequestError = Error & { code?: string };
+
+export type ConnectionStatus = "connected" | "reconnecting" | "offline" | "unauthorized";
 
 /** Failed attempts in a row after which the header shows offline; retries continue at the capped delay. */
 const OFFLINE_AFTER = 5;
@@ -36,8 +40,15 @@ export function connect(opts: {
   const token = "token" in opts ? opts.token : takeToken();
   const protocols = token ? [WS_PROTOCOL, TOKEN_PROTOCOL_PREFIX + token] : [WS_PROTOCOL];
 
+  // A rejected upgrade closes before open like a down daemon (the browser hides the HTTP status), so ask the daemon over HTTP.
+  // Unreachable daemon = not an auth failure.
+  const rejectsToken = () =>
+    fetch(new URL("/auth", url.replace(/^ws/, "http")), { headers: token ? { authorization: `Bearer ${token}` } : {} }).then(
+      (r) => r.status === 401,
+      () => false,
+    );
+
   function dial() {
-    // A rejected upgrade (bad token or origin) closes before open like a down daemon; the browser hides the HTTP status.
     ws = new WebSocket(url, protocols);
     ws.addEventListener("open", () => {
       isOpen = true;
@@ -53,17 +64,26 @@ export function connect(opts: {
       const p = m.reqId ? pending.get(m.reqId) : undefined;
       if (!p) return console.error("daemon error", m);
       pending.delete(m.reqId!);
-      m.type === "reply" ? p.resolve(m.result) : p.reject(new Error(m.message));
+      m.type === "reply" ? p.resolve(m.result) : p.reject(Object.assign(new Error(m.message), { code: m.code }));
     });
-    ws.addEventListener("close", () => {
+    // Node's WebSocket fires only error on a rejected upgrade, a browser error then close: handle the first, once.
+    let down = false;
+    const onDown = async () => {
+      if (down) return;
+      down = true;
+      const wasOpen = isOpen;
       if (isOpen) ready = new Promise<void>((r) => (markOpen = r));
       isOpen = false;
       for (const p of pending.values()) p.reject(new Error("disconnected"));
       pending.clear();
       if (closed) return;
+      if (!wasOpen && (await rejectsToken())) return opts.onStatus?.("unauthorized");
+      if (closed) return;
       opts.onStatus?.(failures >= OFFLINE_AFTER ? "offline" : "reconnecting");
       timer = setTimeout(dial, backoffMs(failures++));
-    });
+    };
+    ws.addEventListener("error", onDown);
+    ws.addEventListener("close", onDown);
   }
   dial();
 

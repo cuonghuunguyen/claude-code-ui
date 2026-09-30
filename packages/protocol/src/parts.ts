@@ -68,7 +68,8 @@ export type Part = { parentId?: string } & (
   /** Model switched with session.setModel. `model` is a `ModelInfo.value`; "default" = the SDK default. */
   | { type: "session_model"; id: string; model: string }
   | { type: "commands"; id: "commands"; commands: SlashCommand[] }
-  | { type: "turn_result"; id: string; durationMs: number; costUsd: number; usage: TokenUsage; isError: boolean }
+  /** `costUsd`: this turn's cost; absent when unknown (first turn after a daemon restart). */
+  | { type: "turn_result"; id: string; durationMs: number; costUsd?: number; usage: TokenUsage; isError: boolean }
   /** Latest TodoWrite list of the main agent; `id` = `<toolUseId>:todos`. */
   | { type: "todo_update"; id: string; items: TodoItem[] }
   /** An Agent/Task call; `id` = `toolUseId`, its `tool_result` is `<toolUseId>:result`, child parts have `parentId` = `id`. */

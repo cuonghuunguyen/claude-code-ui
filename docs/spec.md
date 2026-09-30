@@ -144,7 +144,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | `subagent` | `id`, `description`, `status`; child parts carry `parentId` = `id` | Nested, collapsible group |
 | `session_state` | `state` | Header badge, list badge |
 | `commands` | `commands[]` (name, description, argumentHint, aliases?) | Slash command picker; not in the timeline |
-| `turn_result` | `durationMs`, `costUsd`, `usage`, `isError` | Turn footer (live turns only) |
+| `turn_result` | `durationMs`, `costUsd` (this turn; the SDK total is cumulative, absent for the first turn after a daemon restart), `usage`, `isError` | Turn footer (live turns only) |
 | `turn_interrupted` | — | Status line; replaces the turn footer |
 | `raw` | original message | Generic JSON |
 | `rewind` | `userMessageId` | Not rendered; the client drops that user message and every part after it |
@@ -223,7 +223,7 @@ The daemon can run arbitrary shell commands; treat it as a remote shell.
 
 - Bind to 127.0.0.1 only.
 - Remote access and HTTPS: to be decided; no external hosting services (ADR 0003).
-- Token auth on every WebSocket connection; pairing by a printed URL or QR code containing the token.
+- Token auth on every WebSocket connection; pairing by a printed URL or QR code containing the token. A browser cannot read the status of a rejected upgrade, so after a failed dial the web app asks `GET /auth` (`Authorization: Bearer <token>`, 204 or 401); on 401 it stops redialing and tells the user to open the pairing URL.
 - Origin check on WebSocket upgrade.
 - Working directory allowlist for sessions, file tree, editor writes and session list.
 - Default permission mode asks; bypass modes off unless enabled in daemon config.
