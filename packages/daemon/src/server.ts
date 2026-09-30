@@ -243,6 +243,8 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
             return fail("bad_request", "requestId and decision (allow, allow_always, deny) required");
           if (msg.ruleIndex !== undefined && !Number.isInteger(msg.ruleIndex)) return fail("bad_request", "ruleIndex must be an integer");
           if (msg.message !== undefined && typeof msg.message !== "string") return fail("bad_request", "message must be a string");
+          const u = msg.updatedInput as unknown;
+          if (u !== undefined && (typeof u !== "object" || u === null || Array.isArray(u))) return fail("bad_request", "updatedInput must be an object");
           // requestIds are UUIDs unique across sessions; the first answer from any tab wins.
           const settled = [...sessions.values()].some((s) => s.respond(msg.requestId, msg));
           return reply({ settled });

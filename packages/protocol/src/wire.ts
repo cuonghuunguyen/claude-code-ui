@@ -22,8 +22,16 @@ export type ClientMessage = { reqId: string } & (
   /**
    * First answer wins; a later one gets `{ settled: false }`. "allow_always" applies `suggestions[ruleIndex]`
    * (all suggestions when ruleIndex is omitted). `message`: feedback for Claude with "deny".
+   * `updatedInput`: the full tool input to run instead (edit before accept), with "allow"/"allow_always".
    */
-  | { type: "permission.respond"; requestId: string; decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string }
+  | {
+      type: "permission.respond";
+      requestId: string;
+      decision: "allow" | "allow_always" | "deny";
+      ruleIndex?: number;
+      message?: string;
+      updatedInput?: Record<string, unknown>;
+    }
   /** `answers`: question text -> answer. First answer wins, like permission.respond. */
   | { type: "question.respond"; requestId: string; answers: Record<string, string> }
   | { type: "models.list" }

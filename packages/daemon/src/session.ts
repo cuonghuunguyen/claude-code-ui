@@ -28,7 +28,7 @@ type Listener = (e: Event) => void;
 const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
 type PermissionPart = Extract<Part, { type: "permission_request" }>;
 type QuestionPart = Extract<Part, { type: "question" }>;
-type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string };
+type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string; updatedInput?: Record<string, unknown> };
 
 type SessionOpts = { model?: string; query?: typeof sdkQuery };
 
@@ -249,7 +249,7 @@ export class Session {
     });
 
   /** Answers a pending permission request. False when it is already settled or unknown: the first answer wins. */
-  respond(requestId: string, { decision, ruleIndex, message }: Answer): boolean {
+  respond(requestId: string, { decision, ruleIndex, message, updatedInput }: Answer): boolean {
     const req = this.pending.get(requestId);
     if (req?.part.type !== "permission_request") return false;
     const { input, suggestions, toolUseId } = req.part;
@@ -267,7 +267,7 @@ export class Session {
     return this.settle(
       requestId,
       { decision },
-      { behavior: "allow", updatedInput: input as Record<string, unknown>, ...(decision === "allow_always" ? { updatedPermissions } : {}) },
+      { behavior: "allow", updatedInput: updatedInput ?? (input as Record<string, unknown>), ...(decision === "allow_always" ? { updatedPermissions } : {}) },
     );
   }
 
