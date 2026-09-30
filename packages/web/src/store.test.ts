@@ -69,3 +69,13 @@ describe("withEpoch", () => {
     expect(s.order).toEqual(["h"]);
   });
 });
+
+describe("applyEvent commands", () => {
+  it("keeps the latest commands list outside the timeline", () => {
+    const cmd = { name: "review", description: "d", argumentHint: "" };
+    let s = applyEvent(emptySession(), ev(1, { type: "commands", id: "commands", commands: [cmd] }));
+    s = applyEvent(s, ev(2, { type: "commands", id: "commands", commands: [] }));
+    expect(s.commands).toEqual([]);
+    expect(s.order).toEqual([]);
+  });
+});

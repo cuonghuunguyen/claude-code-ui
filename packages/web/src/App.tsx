@@ -5,6 +5,7 @@ import { Message, MessageContent, MessageResponse } from "@/components/ai-elemen
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus } from "./client.ts";
 import { ImageStrip, readImages } from "./images.tsx";
+import { choose, matchCommands } from "./commands.ts";
 import { useSmoothText } from "./smooth.ts";
 import { applyEvent, emptySession, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, Thinking, ToolCard } from "./tool-card.tsx";
@@ -218,11 +219,24 @@ function SessionPane({
 }) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
-  const send = () => {
-    if (!text.trim() && !images.length) return;
-    onPrompt(text, images);
-    setText("");
+  const [selected, setSelected] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+  const matches = dismissed ? undefined : matchCommands(view.commands, text);
+  const pickerOpen = !!matches?.length;
+  const edit = (t: string) => {
+    setText(t);
+    setSelected(0);
+    setDismissed(false);
+  };
+  const send = (t = text) => {
+    if (!t.trim() && !images.length) return;
+    onPrompt(t, images);
+    edit("");
     setImages([]);
+  };
+  const pick = (i: number) => {
+    const r = choose(matches![i]!);
+    "send" in r ? send(r.send) : edit(r.text);
   };
   const attach = async (files: FileList) => {
     const added = await readImages(files);
@@ -238,6 +252,21 @@ function SessionPane({
     void attach(e.dataTransfer.files);
   };
   const onKeyDown = (e: KeyboardEvent) => {
+    if (pickerOpen) {
+      const n = matches.length;
+      const keys: Record<string, () => void> = {
+        ArrowDown: () => setSelected((i) => (i + 1) % n),
+        ArrowUp: () => setSelected((i) => (i - 1 + n) % n),
+        Enter: () => pick(selected),
+        Tab: () => edit(`/${matches[selected]!.name} `),
+        Escape: () => setDismissed(true),
+      };
+      // Shift+Enter still inserts a newline.
+      if (keys[e.key] && !(e.key === "Enter" && e.shiftKey)) {
+        e.preventDefault();
+        return keys[e.key]!();
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -273,17 +302,49 @@ function SessionPane({
         <ConversationScrollButton />
       </Conversation>
       <div
-        className="mx-auto flex w-full max-w-3xl flex-col gap-2 p-4"
+        className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4"
         onDragOver={(e) => e.preventDefault()}
         onDrop={onDrop}
       >
         <ImageStrip images={images} onRemove={(i) => setImages((all) => all.filter((_, j) => j !== i))} />
+        {pickerOpen && (
+          <ul
+            id="command-picker"
+            role="listbox"
+            aria-label="Commands and skills"
+            className="absolute inset-x-4 bottom-full max-h-72 overflow-y-auto rounded-lg border bg-popover p-1 text-sm shadow-md"
+          >
+            {matches.map((c, i) => (
+              <li
+                key={c.name}
+                id={`command-${i}`}
+                role="option"
+                aria-selected={i === selected}
+                ref={(el) => void (i === selected && el?.scrollIntoView({ block: "nearest" }))}
+                className={`flex cursor-pointer gap-2 rounded-md px-2 py-1.5 ${i === selected ? "bg-muted" : ""}`}
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setSelected(i)}
+                onClick={() => pick(i)}
+              >
+                <span className="shrink-0 font-mono">
+                  /{c.name}
+                  {c.argumentHint && <span className="ml-1 text-muted-foreground">{c.argumentHint}</span>}
+                </span>
+                <span className="truncate text-muted-foreground">{c.description}</span>
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
+          role="combobox"
+          aria-expanded={pickerOpen}
+          aria-controls="command-picker"
+          aria-activedescendant={pickerOpen ? `command-${selected}` : undefined}
           className="w-full resize-none rounded-lg border bg-transparent p-3 text-sm"
           rows={3}
           placeholder="Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => edit(e.target.value)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />

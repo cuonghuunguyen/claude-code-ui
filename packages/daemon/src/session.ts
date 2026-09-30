@@ -16,6 +16,7 @@ export class Session {
   private readonly input = new InputQueue();
   private query?: Query;
   private model: string;
+  private readonly adapter = createAdapter();
 
   constructor(
     readonly cwd: string,
@@ -55,6 +56,11 @@ export class Session {
       },
     }));
     void this.drive(q);
+    // Later changes arrive as system/commands_changed through drive().
+    q.supportedCommands().then(
+      (list) => this.adapter.commands(list).forEach((p) => this.emit(p)),
+      (err) => console.error(`session ${this.id}: supportedCommands failed:`, err),
+    );
   }
 
   info(): SessionInfo {
@@ -95,10 +101,9 @@ export class Session {
   }
 
   private async drive(q: AsyncIterable<SDKMessage>) {
-    const adapter = createAdapter();
     try {
       for await (const m of q) {
-        for (const part of adapter.convert(m)) this.emit(part);
+        for (const part of this.adapter.convert(m)) this.emit(part);
         if (m.type === "result") this.setState("idle");
       }
       this.setState("closed");

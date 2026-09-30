@@ -21,6 +21,8 @@ export const models: ModelInfo[] = [
 ];
 export const inputs: SDKUserMessage[] = [];
 
+export const fakeCommands = [{ name: "review", description: "Review a PR", argumentHint: "<pr>" }];
+
 export function fakeQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
   calls.push(options ?? {});
   const q = (async function* () {
@@ -33,6 +35,7 @@ export function fakeQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMe
   return Object.assign(q, {
     setModel: async (m?: string) => void setModelCalls.push(m),
     supportedModels: async () => models,
+    supportedCommands: async () => fakeCommands,
     close: () => void q.return(undefined),
   });
 }

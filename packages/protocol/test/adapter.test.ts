@@ -147,3 +147,32 @@ describe("adapter on unknown messages", () => {
     expect(parts.filter((p) => p.type === "tool_call").map((p) => p.status)).toEqual(["running", "denied"]);
   });
 });
+
+describe("adapter commands", () => {
+  const cmd = (name: string, argumentHint = "") => ({ name, description: `${name} desc`, argumentHint });
+  const init = (terminal?: string[]) => ({ type: "system", subtype: "init", terminal_slash_commands: terminal }) as never;
+  const changed = (names: string[]) => ({ type: "system", subtype: "commands_changed", commands: names.map((n) => cmd(n)) }) as never;
+  const names = (parts: Part[]) => parts.flatMap((p) => (p.type === "commands" ? [p.commands.map((c) => c.name)] : []));
+
+  it("turns the supportedCommands() list into a commands part with name, description, argument hint", () => {
+    const parts = createAdapter().commands([{ ...cmd("review", "<pr>"), builtin: true, aliases: ["r"] }]);
+    expect(parts).toEqual([{ type: "commands", id: "commands", commands: [cmd("review", "<pr>")] }]);
+  });
+
+  it("replaces the list on system/commands_changed", () => {
+    const a = createAdapter();
+    a.commands([cmd("a")]);
+    expect(names(a.convert(changed(["b", "c"])))).toEqual([["b", "c"]]);
+  });
+
+  it("hides terminal-only commands once system/init names them, re-emitting the known list", () => {
+    const a = createAdapter();
+    expect(names(a.commands([cmd("doctor"), cmd("review")]))).toEqual([["doctor", "review"]]);
+    expect(names(a.convert(init(["doctor", "focus"])))).toEqual([["review"]]);
+    expect(names(a.convert(changed(["focus", "skill-x"])))).toEqual([["skill-x"]]);
+  });
+
+  it("emits nothing on system/init before any list is known", () => {
+    expect(createAdapter().convert(init(["doctor"]))).toEqual([]);
+  });
+});
