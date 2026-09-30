@@ -144,7 +144,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | `subagent` | `id`, `description`, `status`; child parts carry `parentId` = `id` | Nested, collapsible group |
 | `session_state` | `state` | Header badge, list badge |
 | `commands` | `commands[]` (name, description, argumentHint, aliases?) | Slash command picker; not in the timeline |
-| `turn_result` | `durationMs`, `costUsd`, `usage`, `isError` | Turn footer (live turns only) |
+| `turn_result` | `durationMs`, `costUsd` (this turn; the SDK total is cumulative, absent for the first turn after a daemon restart), `usage`, `isError` | Turn footer (live turns only) |
 | `turn_interrupted` | — | Status line; replaces the turn footer |
 | `raw` | original message | Generic JSON |
 | `rewind` | `userMessageId` | Not rendered; the client drops that user message and every part after it |

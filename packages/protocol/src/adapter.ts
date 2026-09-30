@@ -30,7 +30,8 @@ const ABORTED = new Set(["aborted_streaming", "aborted_tools"]);
 // Text/thinking part id = `<API message id>:<content block index>`. Streamed blocks know their index from the
 // stream event. Complete assistant messages arrive split, one SDK message per content block with the
 // same API message id (see test/fixtures), so their index is the count of blocks seen for that id.
-export function createAdapter() {
+// `resumed`: the session's query resumes a transcript, whose saved total the first result already includes.
+export function createAdapter(opts: { resumed?: boolean } = {}) {
   let streamingMessageId = "";
   const streamedText = new Map<string, string>();
   const blocksSeen = new Map<string, number>();
@@ -38,6 +39,9 @@ export function createAdapter() {
   const denied = new Set<string>();
   // Subagents running in the background: their tool_result is a placeholder, task_notification ends them.
   const background = new Set<string>();
+  // total_cost_usd is cumulative per query; a turn's cost is the difference to the previous result. Undefined = unknown.
+  // ponytail: the first turn after a daemon restart shows no cost; the CLI saves the resumed total only in the transcript's cost-state.
+  let costTotal: number | undefined = opts.resumed ? undefined : 0;
 
   function setStatus(toolUseId: string, status: ToolStatus): Part[] {
     const call = calls.get(toolUseId);
@@ -161,7 +165,11 @@ export function createAdapter() {
         }
         return [...parts, { type: "raw", id, message: m }];
       }
-      case "result":
+      case "result": {
+        const total = m.total_cost_usd;
+        // A lower total: the CLI started over (a resume without a saved total, /clear).
+        const costUsd = costTotal === undefined ? undefined : total >= costTotal ? total - costTotal : total;
+        costTotal = total;
         return [
           ...(m.permission_denials ?? []).flatMap((d) => deny(d.tool_use_id)),
           // An aborted turn has its turn_interrupted instead.
@@ -169,7 +177,7 @@ export function createAdapter() {
             type: "turn_result",
             id: m.uuid,
             durationMs: m.duration_ms,
-            costUsd: m.total_cost_usd,
+            costUsd,
             usage: {
               inputTokens: m.usage.input_tokens,
               outputTokens: m.usage.output_tokens,
@@ -179,6 +187,7 @@ export function createAdapter() {
             isError: m.is_error,
           } satisfies Part]),
         ];
+      }
       default:
         if (m.type === "system" && m.subtype === "commands_changed") return commands(m.commands);
         if (m.type === "system" && m.subtype === "init") {

@@ -978,8 +978,8 @@ function TurnFooter({ part }: { part: Extract<Part, { type: "turn_result" }> }) 
   return (
     <div className="text-muted-foreground text-xs" data-testid="turn-result">
       {part.isError && <span className="mr-2 text-destructive">error</span>}
-      {(part.durationMs / 1000).toFixed(1)}s · {fmt(input)} in / {fmt(usage.outputTokens)} out tokens · $
-      {part.costUsd.toFixed(4)}
+      {(part.durationMs / 1000).toFixed(1)}s · {fmt(input)} in / {fmt(usage.outputTokens)} out tokens
+      {part.costUsd !== undefined && ` · $${part.costUsd.toFixed(4)}`}
     </div>
   );
 }
