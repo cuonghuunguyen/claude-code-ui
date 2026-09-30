@@ -276,7 +276,12 @@ export function App() {
         {status !== "unauthorized" && <SessionList list={list} views={views} unread={unread} activeId={activeId} onOpen={open} />}
       </aside>
       <main className="flex min-w-0 flex-1 flex-col lg:flex-row">
-        {active && view ? (
+        {status === "unauthorized" ? (
+          // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
+          <div className="m-auto max-w-sm p-4 text-center text-sm" role="alert" data-testid="pairing-needed">
+            The daemon rejected this browser: it is not paired. Open the pairing URL the daemon printed (…/#token=…).
+          </div>
+        ) : active && view ? (
           <>
             <div className="flex items-center gap-1 border-b px-2 py-1 lg:hidden">
               {pane !== "session" && <MenuButton onClick={() => setDrawer(true)} />}
@@ -297,7 +302,7 @@ export function App() {
                   // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
                   status === "connected"
                     ? client.current!.request({ type: "session.prompt", sessionId: active.id, text, images })
-                    : Promise.reject(new Error(`the daemon is ${status === "unauthorized" ? "not paired" : status}`))
+                    : Promise.reject(new Error(`the daemon is ${status}`))
                 }
                 onInterrupt={() =>
                   client.current!.request({ type: "session.interrupt", sessionId: active.id }).catch((e) => setError((e as Error).message))
@@ -340,13 +345,7 @@ export function App() {
             <header className="flex items-center border-b px-4 py-2 md:hidden">
               <MenuButton onClick={() => setDrawer(true)} />
             </header>
-            {status === "unauthorized" ? (
-              <div className="m-auto max-w-sm p-4 text-center text-sm" role="alert" data-testid="pairing-needed">
-                The daemon rejected this browser: it is not paired. Open the pairing URL the daemon printed (…/#token=…).
-              </div>
-            ) : (
-              <div className="m-auto text-muted-foreground text-sm">Open or create a session to start.</div>
-            )}
+            <div className="m-auto text-muted-foreground text-sm">Open or create a session to start.</div>
           </>
         )}
       </main>
