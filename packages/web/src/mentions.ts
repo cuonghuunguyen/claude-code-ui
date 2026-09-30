@@ -10,7 +10,17 @@ export function activeMention(text: string, caret: number): Mention | undefined 
 
 /** Replaces the typed mention with `@path ` (quoted when the path has spaces); the SDK reads the file, not the client. */
 export function insertMention(text: string, m: Mention, path: string) {
-  const token = `@${/\s/.test(path) ? `"${path}"` : path} `;
+  const token = `${mentionPath(path)} `;
   const end = m.start + 1 + m.query.length;
   return { text: text.slice(0, m.start) + token + text.slice(end), caret: m.start + token.length };
+}
+
+/** `@path`, quoted when the path has spaces. */
+export const mentionPath = (path: string) => `@${/\s/.test(path) ? `"${path}"` : path}`;
+
+/** Inserts `token` at the caret, with a space on each side where it would touch a word. */
+export function insertAtCaret(text: string, caret: number, token: string) {
+  const before = text.slice(0, caret);
+  const insert = `${before && !/\s$/.test(before) ? " " : ""}${token}${/^\s/.test(text.slice(caret)) ? "" : " "}`;
+  return { text: before + insert + text.slice(caret), caret: caret + insert.length };
 }

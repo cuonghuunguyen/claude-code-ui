@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeMention, insertMention } from "./mentions.ts";
+import { activeMention, insertAtCaret, insertMention } from "./mentions.ts";
 
 describe("activeMention", () => {
   it("is the @word that ends at the caret, at the start or after whitespace", () => {
@@ -23,5 +23,15 @@ describe("insertMention", () => {
 
   it("quotes a path with spaces", () => {
     expect(insertMention("@my", { start: 0, query: "my" }, "my file.md").text).toBe('@"my file.md" ');
+  });
+});
+
+describe("insertAtCaret", () => {
+  it("inserts the token at the caret with a space on each side where needed", () => {
+    expect(insertAtCaret("", 0, "@a.ts#2")).toEqual({ text: "@a.ts#2 ", caret: 8 });
+    expect(insertAtCaret("fix this", 3, "@a.ts#2")).toEqual({ text: "fix @a.ts#2 this", caret: 11 });
+    expect(insertAtCaret("fix ", 4, "@a.ts")).toEqual({ text: "fix @a.ts ", caret: 10 });
+    expect(insertAtCaret("line\n", 5, "@a.ts")).toEqual({ text: "line\n@a.ts ", caret: 11 });
+    expect(insertAtCaret("fix\nthis", 3, "@a.ts")).toEqual({ text: "fix @a.ts\nthis", caret: 9 });
   });
 });

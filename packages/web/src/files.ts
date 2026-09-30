@@ -1,6 +1,7 @@
 // Editor tab state (docs/spec.md "Editor"): the disk version the tab is based on, the user's draft, and a pending conflict.
 import { Compartment, EditorState, Text, type TransactionSpec } from "@codemirror/state";
 import type { FsReadResult } from "@claude-ui/protocol";
+import { mentionPath } from "./mentions.ts";
 
 export type Tab = {
   path: string;
@@ -60,3 +61,18 @@ export function replaceDoc(state: EditorState, text: string): TransactionSpec {
 
 /** The document joined with its own line breaks (`doc.toString()` always joins with "\n"). */
 export const docText = (state: EditorState) => state.sliceDoc();
+
+/**
+ * "Send selection to Claude": `@path#Lstart-end` of the main selection, path relative to `cwd`; the file alone when nothing is selected.
+ * The SDK attaches only the range for `#L…` (`#start-end` attaches the whole file), and a quoted path needs the range inside the quotes.
+ */
+export function selectionMention(state: EditorState, path: string, cwd: string) {
+  const rel = inDir(path, cwd) && path !== cwd ? path.slice(cwd.replace(/\/$/, "").length + 1) : path;
+  const { from, to, empty } = state.selection.main;
+  if (empty) return mentionPath(rel);
+  const start = state.doc.lineAt(from);
+  const end = state.doc.lineAt(to);
+  // A selection that ends at the start of a line (whole lines selected) does not include that line.
+  const last = end.number > start.number && to === end.from ? end.number - 1 : end.number;
+  return mentionPath(`${rel}#L${start.number}${last > start.number ? `-${last}` : ""}`);
+}
