@@ -211,6 +211,17 @@ describe("Session", () => {
       expect(await answered()).toEqual({ behavior: "allow", updatedInput: { command: "npm test -- --run" } });
     });
 
+    it("an edited accept shows the applied input, marked as the user's edit, on the tool call and the settled request", async () => {
+      const { s, events, req } = await ask();
+      const applied = { command: "npm test -- --run" };
+      s.respond(req.requestId, { decision: "allow", updatedInput: applied });
+      expect(lastPart(events, req.toolUseId)).toMatchObject({ type: "tool_call", input: applied, editedByUser: true });
+      expect(lastPart(events, req.id)).toMatchObject({ settled: true, decision: "allow", input: applied, editedByUser: true });
+      await until(events, (e) => e.part.type === "turn_result");
+      // Later status updates keep the applied input.
+      expect(lastPart(events, req.toolUseId)).toMatchObject({ input: applied, editedByUser: true });
+    });
+
     it("don't ask again returns the chosen SDK suggestion as updatedPermissions", async () => {
       const { s, events, req, answered } = await ask();
       s.respond(req.requestId, { decision: "allow_always", ruleIndex: 0 });

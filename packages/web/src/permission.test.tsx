@@ -75,6 +75,7 @@ describe("PermissionMarker", () => {
     [request({ settled: true, decision: "allow_always" }), "Always allowed"],
     [request({ settled: true, decision: "deny", message: "use pnpm" }), "use pnpm"],
     [request({ settled: true, decision: "cancelled" }), "Cancelled"],
+    [request({ settled: true, decision: "allow", editedByUser: true }), "Allowed · edited by you"],
   ])("shows the request state in the timeline", (part, label) => {
     expect(renderToStaticMarkup(<PermissionMarker part={part} />)).toContain(label);
   });

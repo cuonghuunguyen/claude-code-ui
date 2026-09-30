@@ -117,6 +117,7 @@ export function PermissionMarker({ part }: { part: PermissionRequest }) {
       <d.Icon className={`size-4 shrink-0 ${d.className}`} />
       <span className="truncate">
         {part.tool} · {d.label}
+        {part.editedByUser ? " · edited by you" : ""}
         {rule}
         {part.message ? ` · “${part.message}”` : ""}
       </span>

@@ -268,9 +268,11 @@ export class Session {
       );
     }
     const updatedPermissions = ruleIndex === undefined ? suggestions : suggestions.slice(ruleIndex, ruleIndex + 1);
+    // Edit before accept: the timeline shows what runs, not Claude's proposal.
+    if (updatedInput) for (const part of this.adapter.edit(toolUseId, updatedInput)) this.emit(part);
     return this.settle(
       requestId,
-      { decision },
+      { decision, ...(updatedInput ? { input: updatedInput, editedByUser: true } : {}) },
       { behavior: "allow", updatedInput: updatedInput ?? (input as Record<string, unknown>), ...(decision === "allow_always" ? { updatedPermissions } : {}) },
     );
   }

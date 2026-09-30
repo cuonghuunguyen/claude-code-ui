@@ -212,6 +212,15 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     }
   }
 
+  /** The user edited the call's input before accepting it (permission panel); later updates keep the applied input. */
+  function edit(toolUseId: string, input: unknown): Part[] {
+    const call = calls.get(toolUseId);
+    if (call?.type !== "tool_call") return [];
+    const next = { ...call, input, editedByUser: true };
+    calls.set(toolUseId, next);
+    return [next];
+  }
+
   /** deny: marks a tool call denied now; its later tool_result keeps status denied. */
-  return { convert, commands, deny };
+  return { convert, commands, deny, edit };
 }

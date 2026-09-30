@@ -22,6 +22,11 @@ describe("ToolCard", () => {
     expect(html).not.toContain("Parameters");
   });
 
+  it("header says when the input is the user's edit from the permission panel", () => {
+    expect(renderToStaticMarkup(<ToolCard call={call("running")} />)).not.toContain("edited by you");
+    expect(renderToStaticMarkup(<ToolCard call={{ ...call("running"), editedByUser: true }} />)).toContain("edited by you");
+  });
+
   it.each([
     ["pending", "Pending"],
     ["done", "Completed"],
