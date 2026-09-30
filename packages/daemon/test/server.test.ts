@@ -7,7 +7,7 @@ import WebSocket from "ws";
 import type { ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
-import { calls, fakeQuery, history, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
+import { calls, fakeQuery, history, interruptQuery, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
@@ -353,6 +353,27 @@ describe("daemon", () => {
       expect(await a.request({ type: "question.respond", requestId, answers: {} })).toMatchObject({ result: { settled: false } });
       const settled = (m: ServerMessage) => isQuestion(m) && (m as { part: { settled: boolean } }).part.settled;
       for (const c of [a, b]) expect(((await c.waitFor(settled)) as { part: object }).part).toMatchObject({ answers });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.prompt steers a running turn; session.interrupt stops it and the session takes the next prompt", async () => {
+    const d = createDaemon({ webRoot, roots: [webRoot], query: interruptQuery as never, token });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const { result } = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+      const sessionId = result.session.id;
+      await c.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+      await c.request({ type: "session.prompt", sessionId, text: "run" });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "tool_call");
+      expect(await c.request({ type: "session.prompt", sessionId, text: "steer" })).toMatchObject({ type: "reply" });
+      expect(await c.request({ type: "session.interrupt", sessionId })).toMatchObject({ type: "reply" });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "turn_interrupted");
+      await c.request({ type: "session.prompt", sessionId, text: "hi" });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+      expect(await c.request({ type: "session.interrupt", sessionId: "nope" })).toMatchObject({ type: "error", code: "unknown_session" });
     } finally {
       d.close();
     }

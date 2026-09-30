@@ -157,6 +157,23 @@ export class Session {
     this.emit({ type: "session_model", id: "session_model", model });
   }
 
+  /**
+   * Claude Code's Esc: denies pending permission requests and cancels pending questions, then `interrupt()`. The CLI
+   * ends the turn with a turn_interrupted marker and an aborted result, which returns the session to idle; the query stays live.
+   */
+  async interrupt() {
+    if (!this.query || (this.state !== "running" && this.state !== "needs_input")) return;
+    for (const [id, { part }] of [...this.pending]) {
+      if (part.type === "question") {
+        this.cancel(id, REJECTED);
+        continue;
+      }
+      for (const p of this.adapter.deny(part.toolUseId)) this.emit(p);
+      this.settle(id, { decision: "deny" }, { behavior: "deny", message: REJECTED, interrupt: true });
+    }
+    await this.query.interrupt();
+  }
+
   /** Dry run of a code rewind to before this prompt. */
   async previewRewind(userMessageId: string): Promise<RewindPreview> {
     const r = await this.control(userMessageId).rewindFiles(userMessageId, { dryRun: true });
@@ -282,8 +299,12 @@ export class Session {
     try {
       for await (const m of q) {
         if (generation !== this.generation) return;
-        // Echo of a prompt() message (replay-user-messages); its user_text is already logged.
-        if (m.type === "user" && "isReplay" in m && m.isReplay) continue;
+        // Echo of a prompt() message (replay-user-messages); its user_text is already logged. The CLI took it now:
+        // a steering message pushed as the turn ended starts a turn of its own.
+        if (m.type === "user" && "isReplay" in m && m.isReplay) {
+          if (this.state === "idle") this.setState("running");
+          continue;
+        }
         if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
         for (const part of this.adapter.convert(m)) this.emit(part);
         if (m.type === "result") this.setState("idle");

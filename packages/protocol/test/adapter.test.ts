@@ -133,6 +133,29 @@ describe("adapter on recorded tool session", () => {
   });
 });
 
+describe("adapter on interrupts", () => {
+  // Recorded with SDK 0.3.285 (development-docs/GH-5/probe2.log): after interrupt() the CLI sends this user text, then an aborted result.
+  const marker = (uuid: string, text: string) => ({ type: "user", uuid, message: { role: "user", content: [{ type: "text", text }] }, parent_tool_use_id: null });
+  const aborted = { type: "result", uuid: "r1", subtype: "error_during_execution", terminal_reason: "aborted_tools", duration_ms: 1, total_cost_usd: 0, usage: {}, is_error: true, permission_denials: [] };
+
+  it("turns the CLI's interrupt marker into turn_interrupted, with or without 'for tool use'", () => {
+    expect(run([marker("u1", "[Request interrupted by user]"), marker("u2", "[Request interrupted by user for tool use]")])).toEqual([
+      { type: "turn_interrupted", id: "u1" },
+      { type: "turn_interrupted", id: "u2" },
+    ]);
+  });
+
+  it("logs no turn_result for an aborted turn, but still marks denied calls", () => {
+    const parts = run([
+      { type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] } },
+      { ...aborted, permission_denials: [{ tool_use_id: "t1" }] },
+      { ...aborted, terminal_reason: "aborted_streaming" },
+    ]);
+    expect(parts.map((p) => p.type)).toEqual(["tool_call", "tool_call"]);
+    expect(parts.at(-1)).toMatchObject({ status: "denied" });
+  });
+});
+
 describe("adapter on unknown messages", () => {
   it("wraps an unknown SDK message in a raw part keyed by uuid", () => {
     const m = { type: "system", subtype: "compact_boundary", uuid: "c1", compact_metadata: { trigger: "auto" } };
