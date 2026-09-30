@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saved } from "./files.ts";
+import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saved, selectionMention } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -69,5 +69,33 @@ describe("editor document", () => {
       expect(docText(insert(s, 0, ""))).toBe(doc);
       expect(docText(s.update(replaceDoc(s, doc)).state)).toBe(doc);
     }
+  });
+});
+
+describe("selectionMention", () => {
+  const at = (doc: string, anchor: number, head = anchor) => EditorState.create({ doc, selection: { anchor, head } });
+  const doc = "one\ntwo\nthree\nfour\n";
+
+  it("is @path#start-end relative to cwd, for a selection across lines", () => {
+    expect(selectionMention(at(doc, 5, 10), "/p/src/a.ts", "/p")).toBe("@src/a.ts#2-3");
+    expect(selectionMention(at(doc, 10, 5), "/p/src/a.ts", "/p")).toBe("@src/a.ts#2-3");
+  });
+
+  it("is one line number for a selection inside a line", () => {
+    expect(selectionMention(at(doc, 4, 6), "/p/a.ts", "/p")).toBe("@a.ts#2");
+  });
+
+  it("leaves out the line where the selection ends at column 0", () => {
+    expect(selectionMention(at(doc, 4, 8), "/p/a.ts", "/p")).toBe("@a.ts#2");
+    expect(selectionMention(at(doc, 0, 14), "/p/a.ts", "/p")).toBe("@a.ts#1-3");
+  });
+
+  it("is the file only without a selection", () => {
+    expect(selectionMention(at(doc, 5), "/p/a.ts", "/p")).toBe("@a.ts");
+  });
+
+  it("keeps a path outside cwd absolute and quotes a path with spaces", () => {
+    expect(selectionMention(at(doc, 0, 2), "/q/a.ts", "/p")).toBe("@/q/a.ts#1");
+    expect(selectionMention(at(doc, 0, 2), "/p/my file.md", "/p")).toBe('@"my file.md"#1');
   });
 });

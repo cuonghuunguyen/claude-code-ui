@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus } from "./client.ts";
 import { ImageStrip, readImages } from "./images.tsx";
 import { choose, matchCommands } from "./commands.ts";
-import { activeMention, insertMention } from "./mentions.ts";
+import { activeMention, insertAtCaret, insertMention } from "./mentions.ts";
 import { groupByCwd, timeAgo } from "./sessions.ts";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
@@ -74,6 +74,8 @@ export function App() {
   // Narrow screens show one pane; wide screens show the session plus a side panel with changes or files.
   const [pane, setPane] = useState<Pane>("session");
   const [panelWidth, setPanelWidth] = useState(480);
+  // A mention from "Send selection to Claude", waiting for the prompt box to take it.
+  const [insert, setInsert] = useState<string>();
   const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
@@ -269,6 +271,8 @@ export function App() {
               <SessionPane
                 key={active.id}
                 scrollKey={scrollKey}
+                insert={insert}
+                onInserted={() => setInsert(undefined)}
                 session={active}
                 view={view}
                 models={models}
@@ -305,7 +309,12 @@ export function App() {
                 <PaneTabs panes={["changes", "files"]} value={pane === "changes" ? "changes" : "files"} onChange={setPane} />
               </div>
               <div className={`min-h-0 flex-1 flex-col ${pane === "changes" ? "hidden" : "flex"}`}>
-                <FilesPanel client={client.current!} status={status} cwd={active.cwd} />
+                <FilesPanel
+                  client={client.current!}
+                  status={status}
+                  cwd={active.cwd}
+                  onSend={(mention) => (setInsert(mention), setPane("session"))}
+                />
               </div>
               {pane === "changes" && <p className="m-auto p-4 text-muted-foreground text-sm">No changes view yet.</p>}
             </section>
@@ -546,6 +555,8 @@ function ModelSelect({
 
 function SessionPane({
   scrollKey,
+  insert,
+  onInserted,
   session,
   view,
   models,
@@ -560,6 +571,8 @@ function SessionPane({
   onAnswer,
 }: {
   scrollKey: number;
+  insert?: string;
+  onInserted: () => void;
   session: SessionInfo;
   view: SessionView;
   models: ModelInfo[];
@@ -614,6 +627,13 @@ function SessionPane({
     setSelected(0);
     setDismissed(false);
   };
+  useEffect(() => {
+    if (!insert) return;
+    const r = insertAtCaret(text, caret, insert);
+    edit(r.text, r.caret);
+    onInserted();
+    input.current?.focus();
+  }, [insert]);
   const send = (t = text) => {
     if (!t.trim() && !images.length) return;
     onPrompt(t, images);

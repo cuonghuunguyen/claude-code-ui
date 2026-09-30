@@ -1,26 +1,37 @@
 // File tree and CodeMirror editor tabs (docs/spec.md "Layout", "Editor"). Files are read and saved through the daemon.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { basicSetup, EditorView } from "codemirror";
-import { Compartment } from "@codemirror/state";
+import { Compartment, type EditorState } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import type { FsEntry, FsListResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
 import type { connect, ConnectionStatus } from "./client.ts";
-import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saved, type Tab } from "./files.ts";
+import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saved, selectionMention, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
 
 const baseName = (path: string) => path.split("/").at(-1) ?? path;
 
-/** Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. */
-export function FilesPanel({ client, status, cwd }: { client: Client; status: ConnectionStatus; cwd: string }) {
+/** Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. `onSend` gets an `@path#lines` mention. */
+export function FilesPanel({
+  client,
+  status,
+  cwd,
+  onSend,
+}: {
+  client: Client;
+  status: ConnectionStatus;
+  cwd: string;
+  onSend: (mention: string) => void;
+}) {
   const [tabs, setTabs] = useState<Record<string, Tab>>({});
   const [activePath, setActivePath] = useState<string>();
   const [showTree, setShowTree] = useState(true);
   const [treeKey, setTreeKey] = useState(0);
   const [error, setError] = useState<string>();
+  const editor = useRef<EditorView>(undefined);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const update = (path: string, f: (t: Tab) => Tab) => setTabs((ts) => (ts[path] ? { ...ts, [path]: f(ts[path]) } : ts));
@@ -169,6 +180,17 @@ export function FilesPanel({ client, status, cwd }: { client: Client; status: Co
             <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground" title={active.path}>
               {active.path.slice(cwd.length + 1) || active.path}
             </span>
+            {/* preventDefault keeps the editor focused, so a desktop selection stays visible; the selection lives in the editor state either way. */}
+            <Button
+              size="xs"
+              variant="outline"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => editor.current && onSend(selectionMention(editor.current.state, active.path, cwd))}
+              title="Insert the file and selected lines into the prompt box (Alt+K)"
+              data-testid="send-selection"
+            >
+              Send selection to Claude
+            </Button>
             <Button size="xs" disabled={!isDirty(active)} onClick={() => void save(active.path)} data-testid="editor-save">
               Save
             </Button>
@@ -177,6 +199,8 @@ export function FilesPanel({ client, status, cwd }: { client: Client; status: Co
             key={active.path}
             path={active.path}
             doc={active.draft}
+            viewRef={editor}
+            onSend={(state) => onSend(selectionMention(state, active.path, cwd))}
             onChange={(draft) => update(active.path, (t) => ({ ...t, draft }))}
             onSave={() => void save(active.path)}
           />
@@ -253,19 +277,23 @@ function TreeDir({
 function CodeEditor({
   path,
   doc,
+  viewRef,
   onChange,
   onSave,
+  onSend,
 }: {
   path: string;
   doc: string;
+  viewRef: RefObject<EditorView | undefined>;
   onChange: (doc: string) => void;
   onSave: () => void;
+  onSend: (state: EditorState) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>(undefined);
   const reported = useRef(doc);
-  const cb = useRef({ onChange, onSave });
-  cb.current = { onChange, onSave };
+  const cb = useRef({ onChange, onSave, onSend });
+  cb.current = { onChange, onSave, onSend };
 
   useEffect(() => {
     const language = new Compartment();
@@ -275,7 +303,11 @@ function CodeEditor({
       extensions: [
         basicSetup,
         lineBreaks(doc),
-        keymap.of([{ key: "Mod-s", preventDefault: true, run: () => (cb.current.onSave(), true) }]),
+        keymap.of([
+          { key: "Mod-s", preventDefault: true, run: () => (cb.current.onSave(), true) },
+          // Claude Code's shortcut for inserting an @-mention of the selection.
+          { key: "Alt-k", preventDefault: true, run: (v) => (cb.current.onSend(v.state), true) },
+        ]),
         language.of([]),
         EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { fontFamily: "var(--font-mono, monospace)" } }),
         EditorView.updateListener.of((u) => {
@@ -285,7 +317,7 @@ function CodeEditor({
         }),
       ],
     });
-    view.current = v;
+    view.current = viewRef.current = v;
     let live = true;
     LanguageDescription.matchFilename(languages, baseName(path))
       ?.load()
