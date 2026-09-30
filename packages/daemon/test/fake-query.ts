@@ -17,8 +17,8 @@ for (const m of lines) {
 export const calls: Options[] = [];
 export const setModelCalls: (string | undefined)[] = [];
 export const models: ModelInfo[] = [
-  { value: "default", displayName: "Default (recommended)", description: "" },
-  { value: "haiku", displayName: "Haiku 4.5", description: "" },
+  { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "" },
+  { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", description: "" },
 ];
 export const inputs: SDKUserMessage[] = [];
 /** rewindFiles() calls, and the files each dry run reports (set per test). */

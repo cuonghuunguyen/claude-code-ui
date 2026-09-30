@@ -338,6 +338,21 @@ export class Session {
   }
 }
 
+// The CLI's echo of a model switch, with the resolved model ID in parentheses.
+const SET_MODEL = /^<local-command-stdout>Set model to `.*\(([^()\s]+)\)`<\/local-command-stdout>$/s;
+
+/** Model ID a transcript last ran on (main-thread reply) or switched to (model switch echo); undefined when it has none. */
+export function transcriptModel(history: SessionMessage[]): string | undefined {
+  let model: string | undefined;
+  for (const m of history) {
+    const { model: used, content } = m.message as { model?: unknown; content?: unknown };
+    // "<synthetic>": a CLI-made reply (API error), no model ran.
+    if (m.type === "assistant" && !m.parent_tool_use_id && typeof used === "string" && !used.startsWith("<")) model = used;
+    if (m.type === "user" && typeof content === "string") model = SET_MODEL.exec(content)?.[1] ?? model;
+  }
+  return model;
+}
+
 /** supportedModels() needs a query; this one gets no prompt and is closed right after the answer. */
 export async function listModels(query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> {
   const q = query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env) } });

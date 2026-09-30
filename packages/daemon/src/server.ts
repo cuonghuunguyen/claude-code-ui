@@ -8,7 +8,7 @@ import { imageBlock, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, typ
 import { getSessionInfo, getSessionMessages, listSessions, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { createNotifier, type Push } from "./push.ts";
-import { listModels, Session } from "./session.ts";
+import { listModels, Session, transcriptModel } from "./session.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
@@ -57,6 +57,11 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
   const root = resolve(opts.webRoot);
   // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
   let models: ReturnType<typeof listModels> | undefined;
+  const modelList = () =>
+    (models ??= listModels(opts.query)).catch((e) => {
+      models = undefined;
+      throw e;
+    });
   const roots = opts.roots.map(real).filter((r) => r !== undefined);
   const inRoots = (path: string) =>
     roots.some((r) => {
@@ -111,7 +116,11 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
       p = (async () => {
         const info = await history.getSessionInfo(id);
         if (!info?.cwd || !allowed(info.cwd)) return undefined;
-        return track(Session.restore(id, info.cwd, await history.getSessionMessages(id, { dir: info.cwd }), { query: opts.query }));
+        const messages = await history.getSessionMessages(id, { dir: info.cwd });
+        // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
+        const used = transcriptModel(messages);
+        const model = used && ((await modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
+        return track(Session.restore(id, info.cwd, messages, { model, query: opts.query }));
       })()
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
         .finally(() => restoring.delete(id));
@@ -257,11 +266,9 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
           return reply({ settled });
         }
         case "models.list": {
-          models ??= listModels(opts.query);
           try {
-            return reply({ models: await models });
+            return reply({ models: await modelList() });
           } catch (e) {
-            models = undefined;
             return fail("models_failed", (e as Error).message);
           }
         }
