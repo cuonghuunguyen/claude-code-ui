@@ -32,20 +32,21 @@ export function createAdapter() {
   }
 
   let knownCommands: SDKSlashCommand[] | undefined;
-  // Terminal-only names arrive only with system/init, i.e. after the first prompt.
-  let terminalOnly = new Set<string>();
+  // Terminal-only names arrive only with system/init, i.e. after the first prompt; until then use the
+  // set seen from SDK 0.3.285. ponytail: hardcoded fallback goes stale on SDK upgrades; cache the last
+  // init set daemon-wide if that happens.
+  let terminalOnly = new Set(["doctor", "color", "focus", "reload-plugins"]);
 
   /** The full command list (supportedCommands() or a commands_changed push), minus terminal-only commands. */
   function commands(list: SDKSlashCommand[]): Part[] {
     knownCommands = list;
-    const visible = list.filter((c) => !terminalOnly.has(c.name));
-    return [
-      {
-        type: "commands",
-        id: "commands",
-        commands: visible.map(({ name, description, argumentHint }) => ({ name, description, argumentHint })),
-      },
-    ];
+    // Rows can share a name; /name runs the builtin one.
+    const byName = new Map<string, SDKSlashCommand>();
+    for (const c of list) if (!terminalOnly.has(c.name) && (!byName.has(c.name) || c.builtin)) byName.set(c.name, c);
+    const commands = [...byName.values()].map(({ name, description, argumentHint, aliases }) =>
+      aliases?.length ? { name, description, argumentHint, aliases } : { name, description, argumentHint },
+    );
+    return [{ type: "commands", id: "commands", commands }];
   }
 
   function convert(m: SDKMessage): Part[] {

@@ -6,8 +6,9 @@ export function matchCommands(commands: SlashCommand[], text: string): SlashComm
   const m = /^\/(\S*)$/.exec(text);
   if (!m) return undefined;
   const q = m[1]!.toLowerCase();
-  const prefix = commands.filter((c) => c.name.toLowerCase().startsWith(q));
-  const inner = commands.filter((c) => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q));
+  const isPrefix = (c: SlashCommand) => [c.name, ...(c.aliases ?? [])].some((n) => n.toLowerCase().startsWith(q));
+  const prefix = commands.filter(isPrefix);
+  const inner = commands.filter((c) => !isPrefix(c) && c.name.toLowerCase().includes(q));
   return [...prefix, ...inner];
 }
 

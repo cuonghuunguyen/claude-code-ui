@@ -18,6 +18,11 @@ describe("matchCommands", () => {
   it("puts prefix matches before substring matches, case-insensitive", () => {
     expect(matchCommands(all, "/RE")!.map((c) => c.name)).toEqual(["review", "code-review"]);
   });
+
+  it("matches aliases by prefix", () => {
+    const usage = { ...cmd("usage"), aliases: ["cost", "stats"] };
+    expect(matchCommands([...all, usage], "/cos")!.map((c) => c.name)).toEqual(["usage"]);
+  });
 });
 
 describe("choose", () => {

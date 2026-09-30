@@ -13,7 +13,7 @@ export type TokenUsage = {
 };
 
 /** A slash command or skill; invoked by sending `/name args` as prompt text. */
-export type SlashCommand = { name: string; description: string; argumentHint: string };
+export type SlashCommand = { name: string; description: string; argumentHint: string; aliases?: string[] };
 
 export type Part =
   | { type: "user_text"; id: string; text: string; images: string[] }

@@ -132,6 +132,11 @@ describe("Session", () => {
     ]);
   });
 
+  it("loads user and project commands and skills (settingSources)", () => {
+    new Session("/tmp", { query: fakeQuery as never });
+    expect(calls.at(-1)).toMatchObject({ settingSources: ["user", "project"] });
+  });
+
   it("logs the supportedCommands() list as a commands part before the first prompt", async () => {
     const s = new Session("/tmp", { query: fakeQuery as never });
     const events: Event[] = [];
