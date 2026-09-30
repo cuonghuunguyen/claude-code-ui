@@ -258,7 +258,7 @@ export function App() {
           <Button onClick={() => (setError(undefined), setPicking(true))}>New session</Button>
         )}
         {error && <p className="text-destructive text-sm">{error}</p>}
-        <SessionList list={list} views={views} unread={unread} activeId={activeId} onOpen={open} />
+        {status !== "unauthorized" && <SessionList list={list} views={views} unread={unread} activeId={activeId} onOpen={open} />}
       </aside>
       <main className="flex min-w-0 flex-1 flex-col lg:flex-row">
         {active && view ? (
@@ -324,7 +324,13 @@ export function App() {
             <header className="flex items-center border-b px-4 py-2 md:hidden">
               <MenuButton onClick={() => setDrawer(true)} />
             </header>
-            <div className="m-auto text-muted-foreground text-sm">Open or create a session to start.</div>
+            {status === "unauthorized" ? (
+              <div className="m-auto max-w-sm p-4 text-center text-sm" role="alert" data-testid="pairing-needed">
+                The daemon rejected this browser: it is not paired. Open the pairing URL the daemon printed (…/#token=…).
+              </div>
+            ) : (
+              <div className="m-auto text-muted-foreground text-sm">Open or create a session to start.</div>
+            )}
           </>
         )}
       </main>
@@ -379,13 +385,14 @@ const STATUS_STYLE: Record<ConnectionStatus, string> = {
   connected: "bg-green-500",
   reconnecting: "bg-amber-500 animate-pulse",
   offline: "bg-destructive",
+  unauthorized: "bg-destructive",
 };
 
 function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   return (
     <div className="flex items-center gap-2 text-muted-foreground text-xs" data-testid="connection-status" role="status">
       <span className={`size-2 rounded-full ${STATUS_STYLE[status]}`} aria-hidden />
-      {status}
+      {status === "unauthorized" ? "not paired" : status}
     </div>
   );
 }

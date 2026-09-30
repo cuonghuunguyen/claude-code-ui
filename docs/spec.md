@@ -223,7 +223,7 @@ The daemon can run arbitrary shell commands; treat it as a remote shell.
 
 - Bind to 127.0.0.1 only.
 - Remote access and HTTPS: to be decided; no external hosting services (ADR 0003).
-- Token auth on every WebSocket connection; pairing by a printed URL or QR code containing the token.
+- Token auth on every WebSocket connection; pairing by a printed URL or QR code containing the token. A browser cannot read the status of a rejected upgrade, so after a failed dial the web app asks `GET /auth` (`Authorization: Bearer <token>`, 204 or 401); on 401 it stops redialing and tells the user to open the pairing URL.
 - Origin check on WebSocket upgrade.
 - Working directory allowlist for sessions, file tree, editor writes and session list.
 - Default permission mode asks; bypass modes off unless enabled in daemon config.

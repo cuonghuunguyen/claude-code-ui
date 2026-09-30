@@ -540,6 +540,13 @@ describe("WebSocket auth and origin check", () => {
     expect(wrong.body).not.toContain("wrong-token");
   });
 
+  it("answers the /auth probe 204 for the paired token and 401 otherwise: the browser cannot see a rejected upgrade's status", async () => {
+    const probe = (headers: Record<string, string> = {}) => fetch(`${origin()}/auth`, { headers }).then((r) => r.status);
+    expect(await probe({ authorization: `Bearer ${token}` })).toBe(204);
+    expect(await probe({ authorization: "Bearer wrong-token" })).toBe(401);
+    expect(await probe()).toBe(401);
+  });
+
   it("rejects a cross-site, missing or DNS-rebinding Origin (403), even with the valid token", async () => {
     const bad: Record<string, string>[] = [
       { origin: "http://evil.example" },
