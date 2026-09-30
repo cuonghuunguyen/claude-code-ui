@@ -29,8 +29,28 @@ const IGNORED = new Set([
 ]);
 // After an interrupt the CLI sends this user text, then a result with an aborted terminal_reason (SDK 0.3.285).
 const INTERRUPTED = /^\[Request interrupted by user( for tool use)?\]$/;
-// The CLI's echo of setModel() and, in a transcript, its /model command record (SDK 0.3.285); the session_model part already shows the switch.
-const MODEL_SWITCHED = /^(<local-command-stdout>Set model to .*<\/local-command-stdout>|<command-name>\/model<\/command-name>.*)$/s;
+// CLI text that is no prompt (SDK 0.3.285): a local command's output (live an assistant message; the setModel() echo is
+// shown by the session_model part), a background task's notification (live a system/task_notification).
+// ponytail: output of a command run in the terminal CLI is dropped too; show it if terminal sessions need it.
+const CLI_OUTPUT = /^<(local-command-stdout|local-command-stderr|task-notification)>.*<\/\1>$/s;
+// A transcript records a slash command as these tags; live the prompt's own user_text shows it.
+const COMMAND_TAG = /<(command-name|command-message|command-args)>(.*?)<\/\1>/gs;
+
+/** The prompt `/name args` of a slash command record; undefined for other text. */
+function commandPrompt(text: string): string | undefined {
+  if (text.replace(COMMAND_TAG, "").trim()) return undefined;
+  const tags = new Map([...text.matchAll(COMMAND_TAG)].map((t) => [t[1], t[2]!.trim()]));
+  const name = tags.get("command-name");
+  return name ? [name, tags.get("command-args")].filter(Boolean).join(" ") : undefined;
+}
+
+/** A user message's string content as parts; the /model record is dropped like its echo. */
+function userString(id: string, content: string): Part[] {
+  if (CLI_OUTPUT.test(content)) return [];
+  const command = commandPrompt(content);
+  if (command?.split(" ")[0] === "/model") return [];
+  return [{ type: "user_text", id, text: command ?? content, images: [] }];
+}
 const ABORTED = new Set(["aborted_streaming", "aborted_tools"]);
 
 // Text/thinking part id = `<API message id>:<content block index>`. Streamed blocks know their index from the
@@ -146,7 +166,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
       case "user": {
         const content = m.message.content;
         const id = m.uuid ?? crypto.randomUUID();
-        if (typeof content === "string") return MODEL_SWITCHED.test(content) ? [] : [{ type: "user_text", id, text: content, images: [] }];
+        if (typeof content === "string") return userString(id, content);
         const parts: Part[] = [];
         const rest = content.filter((b) => {
           if (b.type !== "tool_result") return true;
