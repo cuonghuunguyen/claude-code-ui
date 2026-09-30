@@ -232,6 +232,6 @@ Work is split into GitHub issues along a dependency graph, so independent pieces
 ### Open questions
 
 - [ ] Remote access and HTTPS without external hosting (ADR 0003).
-- [ ] Verify: SDK uses `claude login` credentials when no API key is set.
+- [x] Verify: SDK uses `claude login` credentials when no API key is set. Verified 2026-10-01 with SDK 0.3.285: with `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset, `system/init` reports `apiKeySource: "none"` (claude.ai OAuth login) and turns succeed.
 - [ ] Verify: mid-turn `streamInput` steers like Claude Code.
 - [ ] Verify: which UUID `resumeSessionAt` needs for a conversation rewind.
