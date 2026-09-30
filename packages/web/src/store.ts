@@ -2,6 +2,8 @@
 import type { Event, Part, SessionState } from "@claude-ui/protocol";
 
 export type SessionView = {
+  /** Daemon run the seqs belong to (docs/spec.md "Event log and sequence numbers"). */
+  logEpoch?: string;
   lastSeq: number;
   state: SessionState;
   order: string[];
@@ -18,3 +20,7 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   const order = s.parts.has(part.id) ? s.order : [...s.order, part.id];
   return { ...s, lastSeq: e.seq, order, parts };
 }
+
+/** Call with the `session.subscribe` reply before its events: a different logEpoch empties the view for the full replay. */
+export const withEpoch = (s: SessionView, logEpoch: string): SessionView =>
+  s.logEpoch === logEpoch ? s : { ...emptySession(), logEpoch };

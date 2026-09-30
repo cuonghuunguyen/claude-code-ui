@@ -5,8 +5,10 @@ import { extname, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMessage, ServerMessage } from "@claude-ui/protocol";
-import type { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
+import { getSessionInfo, getSessionMessages, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { Session } from "./session.ts";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -19,10 +21,36 @@ const MIME: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
-export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery }) {
+type History = { getSessionInfo: typeof getSessionInfo; getSessionMessages: typeof getSessionMessages };
+
+export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery; history?: History }) {
   const logEpoch = randomUUID();
   const sessions = new Map<string, Session>();
+  const restoring = new Map<string, Promise<Session | undefined>>();
+  const history = opts.history ?? { getSessionInfo, getSessionMessages };
   const root = resolve(opts.webRoot);
+
+  /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
+  function findSession(id: string): Promise<Session | undefined> {
+    const live = sessions.get(id);
+    if (live) return Promise.resolve(live);
+    // The ID becomes a transcript file name; only a UUID may reach the SDK.
+    if (typeof id !== "string" || !UUID.test(id)) return Promise.resolve(undefined);
+    let p = restoring.get(id);
+    if (!p) {
+      p = (async () => {
+        const info = await history.getSessionInfo(id);
+        if (!info?.cwd) return undefined;
+        const s = Session.restore(id, info.cwd, await history.getSessionMessages(id, { dir: info.cwd }), { query: opts.query });
+        sessions.set(id, s);
+        return s;
+      })()
+        .catch((err) => void console.error(`restoring session ${id} failed:`, err))
+        .finally(() => restoring.delete(id));
+      restoring.set(id, p);
+    }
+    return p;
+  }
 
   const http = createServer((req, res) => {
     let path: string;
@@ -44,7 +72,7 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery })
   wss.on("connection", (ws) => {
     const unsubscribes = new Map<string, () => void>();
     ws.on("close", () => unsubscribes.forEach((u) => u()));
-    ws.on("message", (data) => {
+    ws.on("message", async (data) => {
       let msg: ClientMessage;
       try {
         msg = JSON.parse(String(data));
@@ -55,7 +83,7 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery })
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
       const reply = (result: unknown) => send(ws, { type: "reply", reqId: msg.reqId, result });
       const fail = (code: string, message: string) => send(ws, { type: "error", reqId: msg.reqId, code, message });
-      const find = (id: string) => sessions.get(id) ?? void fail("unknown_session", `no session ${id}`);
+      const find = async (id: string) => (await findSession(id)) ?? void fail("unknown_session", `no session ${id}`);
 
       switch (msg.type) {
         case "session.create": {
@@ -66,17 +94,17 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery })
           return reply({ session: s.info() });
         }
         case "session.subscribe": {
-          const s = find(msg.sessionId);
-          if (!s) return;
+          const s = await find(msg.sessionId);
+          if (!s || ws.readyState !== ws.OPEN) return;
           unsubscribes.get(s.id)?.();
           // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
           const since = msg.logEpoch === logEpoch ? msg.sinceSeq : 0;
-          reply({ logEpoch });
+          reply({ logEpoch, session: s.info() });
           unsubscribes.set(s.id, s.subscribe(since, (e) => send(ws, e)));
           return;
         }
         case "session.prompt": {
-          const s = find(msg.sessionId);
+          const s = await find(msg.sessionId);
           if (!s) return;
           if (typeof msg.text !== "string" || !msg.text.trim()) return fail("bad_prompt", "empty prompt");
           if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
