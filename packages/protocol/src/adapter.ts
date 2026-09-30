@@ -104,8 +104,13 @@ export function createAdapter() {
           return false;
         });
         if (rest.length === 0) return parts;
-        if (rest.every((b) => b.type === "text"))
-          return [...parts, { type: "user_text", id, text: rest.map((b) => b.text).join("\n"), images: [] }];
+        if (rest.every((b) => b.type === "text" || (b.type === "image" && b.source.type === "base64"))) {
+          const text = rest.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
+          const images = rest.flatMap((b) =>
+            b.type === "image" && b.source.type === "base64" ? [`data:${b.source.media_type};base64,${b.source.data}`] : [],
+          );
+          return [...parts, { type: "user_text", id, text, images }];
+        }
         return [...parts, { type: "raw", id, message: m }];
       }
       case "result":

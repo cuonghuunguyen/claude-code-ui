@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 import type { CreateResult, Event, ModelInfo, ModelsResult, Part, SessionInfo, SetModelResult, SubscribeResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus } from "./client.ts";
+import { ImageStrip, readImages } from "./images.tsx";
 import { useSmoothText } from "./smooth.ts";
 import { applyEvent, emptySession, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, Thinking, ToolCard } from "./tool-card.tsx";
@@ -125,7 +126,7 @@ export function App() {
             view={view}
             models={models}
             onModel={(model) => setModel(active.id, model)}
-            onPrompt={(text) => client.current!.request({ type: "session.prompt", sessionId: active.id, text })}
+            onPrompt={(text, images) => client.current!.request({ type: "session.prompt", sessionId: active.id, text, images })}
           />
         ) : (
           <div className="m-auto text-muted-foreground text-sm">Create a session to start.</div>
@@ -213,13 +214,28 @@ function SessionPane({
   view: SessionView;
   models: ModelInfo[];
   onModel: (model: string) => void;
-  onPrompt: (text: string) => void;
+  onPrompt: (text: string, images: string[]) => void;
 }) {
   const [text, setText] = useState("");
+  const [images, setImages] = useState<string[]>([]);
   const send = () => {
-    if (!text.trim()) return;
-    onPrompt(text);
+    if (!text.trim() && !images.length) return;
+    onPrompt(text, images);
     setText("");
+    setImages([]);
+  };
+  const attach = async (files: FileList) => {
+    const added = await readImages(files);
+    setImages((i) => [...i, ...added]);
+  };
+  const onPaste = (e: ClipboardEvent) => {
+    if (![...e.clipboardData.files].some((f) => f.type.startsWith("image/"))) return;
+    e.preventDefault();
+    void attach(e.clipboardData.files);
+  };
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault();
+    void attach(e.dataTransfer.files);
   };
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -256,14 +272,20 @@ function SessionPane({
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
-      <div className="mx-auto w-full max-w-3xl p-4">
+      <div
+        className="mx-auto flex w-full max-w-3xl flex-col gap-2 p-4"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={onDrop}
+      >
+        <ImageStrip images={images} onRemove={(i) => setImages((all) => all.filter((_, j) => j !== i))} />
         <textarea
           className="w-full resize-none rounded-lg border bg-transparent p-3 text-sm"
           rows={3}
-          placeholder="Ask Claude… (Enter to send, Shift+Enter for newline)"
+          placeholder="Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
         />
       </div>
     </>
@@ -280,7 +302,10 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
     case "user_text":
       return (
         <Message from="user">
-          <MessageContent>{part.text}</MessageContent>
+          <MessageContent>
+            <ImageStrip images={part.images} />
+            {part.text}
+          </MessageContent>
         </Message>
       );
     case "assistant_text":

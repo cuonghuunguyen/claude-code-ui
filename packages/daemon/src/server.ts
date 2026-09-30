@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { ClientMessage, ServerMessage } from "@claude-ui/protocol";
+import { imageBlock, type ClientMessage, type ServerMessage } from "@claude-ui/protocol";
 import { getSessionInfo, getSessionMessages, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { listModels, Session } from "./session.ts";
 
@@ -109,9 +109,12 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery; h
         case "session.prompt": {
           const s = await find(msg.sessionId);
           if (!s) return;
-          if (typeof msg.text !== "string" || !msg.text.trim()) return fail("bad_prompt", "empty prompt");
+          const images = msg.images ?? [];
+          if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
+            return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
+          if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return fail("bad_prompt", "empty prompt");
           if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
-          s.prompt(msg.text);
+          s.prompt(msg.text, images);
           return reply({});
         }
         case "session.setModel": {

@@ -19,12 +19,16 @@ export const models: ModelInfo[] = [
   { value: "default", displayName: "Default (recommended)", description: "" },
   { value: "haiku", displayName: "Haiku 4.5", description: "" },
 ];
+export const inputs: SDKUserMessage[] = [];
 
 export function fakeQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
   calls.push(options ?? {});
   const q = (async function* () {
     let turn = 0;
-    for await (const _ of prompt) yield* turns[turn++ % 2]!;
+    for await (const m of prompt) {
+      inputs.push(m);
+      yield* turns[turn++ % 2]!;
+    }
   })();
   return Object.assign(q, {
     setModel: async (m?: string) => void setModelCalls.push(m),
