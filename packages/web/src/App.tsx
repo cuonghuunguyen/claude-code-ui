@@ -29,7 +29,8 @@ import { groupByCwd, timeAgo } from "./sessions.ts";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { PermissionMarker, PermissionPanel, type PermissionAnswer } from "./permission.tsx";
-import { applyEvent, emptySession, pendingPermission, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
+import { QuestionMarker, QuestionPanel } from "./question.tsx";
+import { applyEvent, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, SubagentGroup, Thinking, TodoList, ToolCard } from "./tool-card.tsx";
 
 type Client = ReturnType<typeof connect>;
@@ -150,6 +151,15 @@ export function App() {
     }
   }
 
+  async function answer(requestId: string, answers: Record<string, string>) {
+    setError(undefined);
+    try {
+      await client.current!.request<RespondResult>({ type: "question.respond", requestId, answers });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   const active = activeId ? (infos[activeId] ?? list.find((s) => s.id === activeId)) : undefined;
   const view = activeId ? views[activeId] : undefined;
 
@@ -191,6 +201,7 @@ export function App() {
             onSearch={(query) =>
               client.current!.request<FsSearchResult>({ type: "fs.search", cwd: active.cwd, query }).then((r) => r.paths)
             }
+            onAnswer={answer}
           />
         ) : (
           <>
@@ -391,6 +402,7 @@ function SessionPane({
   onRewindPreview,
   onRewind,
   onRespond,
+  onAnswer,
 }: {
   session: SessionInfo;
   view: SessionView;
@@ -402,8 +414,10 @@ function SessionPane({
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
+  onAnswer: (requestId: string, answers: Record<string, string>) => void;
 }) {
   const permission = pendingPermission(view);
+  const question = pendingQuestion(view);
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
   const [rewinding, setRewinding] = useState<string>();
@@ -549,6 +563,8 @@ function SessionPane({
         {(view.state === "running" || view.state === "needs_input") && view.todos.length > 0 && <TodoList items={view.todos} />}
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} />
+        ) : question ? (
+          <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} />
         ) : (
           <>
             <ImageStrip images={images} onRemove={(i) => setImages((all) => all.filter((_, j) => j !== i))} />
@@ -724,6 +740,8 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
           <Timeline view={view} parentId={part.id} />
         </SubagentGroup>
       );
+    case "question":
+      return <QuestionMarker part={part} />;
     case "turn_result":
       return <TurnFooter part={part} />;
     case "raw":

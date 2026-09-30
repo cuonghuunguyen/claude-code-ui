@@ -98,3 +98,39 @@ export function permissionQuery({ prompt, options }: { prompt: AsyncIterable<SDK
   })();
   return Object.assign(q, { supportedCommands: async () => [], close: () => void q.return(undefined) });
 }
+
+export const askInput = {
+  questions: [
+    {
+      question: "Which package manager?",
+      header: "Manager",
+      options: [
+        { label: "npm", description: "Default" },
+        { label: "pnpm", description: "Faster" },
+      ],
+      multiSelect: false,
+    },
+  ],
+};
+
+/** Fake query(): each prompt starts an AskUserQuestion tool call, asks canUseTool, records the answer, then ends the turn. */
+export function questionQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
+  calls.push(options ?? {});
+  const q = (async function* () {
+    for await (const _ of prompt) {
+      const toolUseID = randomUUID();
+      yield {
+        type: "assistant",
+        uuid: randomUUID(),
+        session_id: "x",
+        parent_tool_use_id: null,
+        message: { id: `msg_${toolUseID}`, content: [{ type: "tool_use", id: toolUseID, name: "AskUserQuestion", input: askInput }] },
+      } as never as SDKMessage;
+      const abort = new AbortController();
+      aborts.push(abort);
+      permissionResults.push((await options!.canUseTool!("AskUserQuestion", askInput, { signal: abort.signal, suggestions: [], toolUseID, requestId: randomUUID() }))!);
+      yield turns[0]!.at(-1)!;
+    }
+  })();
+  return Object.assign(q, { supportedCommands: async () => [], close: () => void q.return(undefined) });
+}
