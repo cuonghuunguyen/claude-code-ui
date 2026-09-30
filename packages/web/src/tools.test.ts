@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Part } from "@claude-ui/protocol";
 import { applyEvent, emptySession, timeline } from "./store.ts";
-import { toolSummary } from "./tools.ts";
+import { editFiles, toolSummary } from "./tools.ts";
 
 const call = (id: string, tool: string, input: unknown = {}): Part => ({
   type: "tool_call",
@@ -40,6 +40,46 @@ describe("timeline", () => {
   it("uses the tool_call replaced by a later status update", () => {
     const [item] = timeline(view([call("a", "Read"), call("b", "Read"), { ...(call("a", "Read") as object), status: "error" } as Part]));
     expect(item!.kind === "context" && item!.calls[0]!.status).toBe("error");
+  });
+});
+
+describe("timeline with subagents", () => {
+  const sub: Part = { type: "subagent", id: "s", toolUseId: "s", description: "Scan", status: "running" };
+  const child = (p: Part): Part => ({ ...p, parentId: "s" });
+  const parts = [sub, child(call("a", "Read")), child(call("b", "Read")), text("t"), child(text("u"))];
+
+  it("top level leaves out child parts; a subagent's timeline has only its children, grouped the same way", () => {
+    expect(shape(parts)).toEqual(["s", "t"]);
+    expect(timeline(view(parts), "s").map((it) => (it.kind === "context" ? `context(${it.calls.length})` : it.part.id))).toEqual([
+      "context(2)",
+      "u",
+    ]);
+  });
+});
+
+describe("editFiles", () => {
+  it("Edit: old_string -> new_string as whole lines, named by file path", () => {
+    expect(editFiles("Edit", { file_path: "/p/a.ts", old_string: "b = 2", new_string: "b = 3" })).toEqual({
+      oldFile: { name: "/p/a.ts", contents: "b = 2\n" },
+      newFile: { name: "/p/a.ts", contents: "b = 3\n" },
+    });
+  });
+
+  it("Edit deleting text keeps the new side empty", () => {
+    expect(editFiles("Edit", { file_path: "/p/a.ts", old_string: "x", new_string: "" })?.newFile.contents).toBe("");
+  });
+
+  it("Write: empty -> content", () => {
+    expect(editFiles("Write", { file_path: "/p/n.txt", content: "hi\n" })).toEqual({
+      oldFile: { name: "/p/n.txt", contents: "" },
+      newFile: { name: "/p/n.txt", contents: "hi\n" },
+    });
+  });
+
+  it("undefined for other tools and for incomplete input (still streaming)", () => {
+    expect(editFiles("Bash", { command: "ls" })).toBeUndefined();
+    expect(editFiles("Edit", {})).toBeUndefined();
+    expect(editFiles("Write", { file_path: "/p" })).toBeUndefined();
   });
 });
 

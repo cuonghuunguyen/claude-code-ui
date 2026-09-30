@@ -28,7 +28,7 @@ import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { PermissionMarker, PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { applyEvent, emptySession, pendingPermission, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
-import { ContextGroup, Thinking, ToolCard } from "./tool-card.tsx";
+import { ContextGroup, SubagentGroup, Thinking, TodoList, ToolCard } from "./tool-card.tsx";
 
 type Client = ReturnType<typeof connect>;
 
@@ -517,6 +517,7 @@ function SessionPane({
         onDragOver={(e) => e.preventDefault()}
         onDrop={onDrop}
       >
+        {(view.state === "running" || view.state === "needs_input") && view.todos.length > 0 && <TodoList items={view.todos} />}
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} />
         ) : (
@@ -570,7 +571,18 @@ function SessionPane({
   );
 }
 
-const resultOf = (view: SessionView, call: ToolCall) => {
+/** Top-level parts, or with `parentId` the child parts of that subagent. */
+function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) {
+  return timeline(view, parentId).map((item) =>
+    item.kind === "context" ? (
+      <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} />
+    ) : (
+      <PartView key={item.part.id} part={item.part} view={view} />
+    ),
+  );
+}
+
+const resultOf = (view: SessionView, call: { toolUseId: string }) => {
   const p = view.parts.get(`${call.toolUseId}:result`);
   return p?.type === "tool_result" ? p : undefined;
 };
@@ -650,6 +662,12 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
       return <ToolCard call={part} result={resultOf(view, part)} />;
     case "permission_request":
       return <PermissionMarker part={part} />;
+    case "subagent":
+      return (
+        <SubagentGroup part={part} result={resultOf(view, part)}>
+          <Timeline view={view} parentId={part.id} />
+        </SubagentGroup>
+      );
     case "turn_result":
       return <TurnFooter part={part} />;
     case "raw":

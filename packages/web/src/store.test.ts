@@ -91,3 +91,13 @@ describe("applyEvent commands", () => {
     expect(s.order).toEqual([]);
   });
 });
+
+describe("applyEvent todo_update", () => {
+  it("keeps the latest todo list outside the timeline", () => {
+    const todo = (id: string, status: "pending" | "completed"): Event =>
+      ev(Number(id), { type: "todo_update", id: `${id}:todos`, items: [{ content: "Fix", status }] });
+    const s = [todo("1", "pending"), todo("2", "completed")].reduce(applyEvent, emptySession());
+    expect(s.todos).toEqual([{ content: "Fix", status: "completed" }]);
+    expect(s.order).toEqual([]);
+  });
+});

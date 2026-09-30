@@ -24,3 +24,17 @@ export function readRange(input: unknown, output?: unknown): string {
   if (typeof limit === "number") return `lines ${start}–${start + limit - 1}`;
   return typeof offset === "number" ? `from line ${start}` : "";
 }
+
+type FileContents = { name: string; contents: string };
+
+/** Old and new file for an Edit/Write diff, built from the tool input alone; undefined until the input is complete. */
+export function editFiles(tool: string, input: unknown): { oldFile: FileContents; newFile: FileContents } | undefined {
+  const i = (input ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+  const name = str(i.file_path);
+  // Edit strings are fragments, not whole files: end them with a newline, else the diff marks "No newline at end of file".
+  const line = (v: unknown) => (typeof v === "string" && v && !v.endsWith("\n") ? `${v}\n` : str(v));
+  const [before, after] = tool === "Edit" ? [line(i.old_string), line(i.new_string)] : tool === "Write" ? ["", str(i.content)] : [];
+  if (name === undefined || before === undefined || after === undefined) return undefined;
+  return { oldFile: { name, contents: before }, newFile: { name, contents: after } };
+}

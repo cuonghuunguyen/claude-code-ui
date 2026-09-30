@@ -98,8 +98,11 @@ export class Session {
         settingSources: ["user", "project"],
         // Thinking text is omitted by default; summaries feed the thinking parts.
         extraArgs: { "thinking-display": "summarized", "replay-user-messages": null },
+        // Subagent text and thinking too, not only its tool calls: the UI shows the nested transcript.
+        forwardSubagentText: true,
         // ADR 0002: subscription login only. An inherited API key would take precedence and bill per token.
-        env: withoutApiKeys(process.env),
+        // Todo tools are off by default on current models; TodoWrite (not the Task* tools) sends the whole list.
+        env: { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1", CLAUDE_CODE_ENABLE_TASKS: "0", ...withoutApiKeys(process.env) },
         canUseTool: this.canUseTool,
       },
     }));

@@ -187,3 +187,64 @@ describe("adapter commands", () => {
     expect(createAdapter().convert(init(["doctor"]))).toEqual([]);
   });
 });
+
+// Recorded with forwardSubagentText and TodoWrite enabled: TodoWrite, a foreground Agent that Reads a file, Edit, Write.
+describe("adapter on recorded edit/todo/subagent session", () => {
+  const messages = fixture("edit-todo-subagent.jsonl");
+  const parts = run(messages);
+  const agentId = messages.find((m) => m.type === "system" && m.subtype === "task_started").tool_use_id as string;
+
+  it("turns each top-level TodoWrite into a todo_update with the full item list", () => {
+    const todos = parts.filter((p) => p.type === "todo_update");
+    expect(todos.map((p) => p.items.map((i) => i.status))).toEqual([
+      ["in_progress", "pending"],
+      ["completed", "in_progress"],
+      ["completed", "completed"],
+    ]);
+    expect(todos[0]!.items[0]).toEqual({ content: "Inspect value.ts", status: "in_progress", activeForm: "Inspecting value.ts" });
+  });
+
+  it("turns the Agent call into a subagent part (no tool_call) that ends done", () => {
+    const subs = parts.filter((p) => p.type === "subagent");
+    expect(parts.some((p) => p.type === "tool_call" && p.id === agentId)).toBe(false);
+    expect(subs.map((p) => p.status)).toEqual(["pending", "running", "done"]);
+    expect(subs.at(-1)).toMatchObject({ id: agentId, toolUseId: agentId, description: "Inspect value.ts" });
+  });
+
+  it("tags the subagent's own messages with parentId, and nothing else", () => {
+    const children = parts.filter((p) => p.parentId === agentId);
+    expect(new Set(children.map((p) => p.type))).toEqual(
+      new Set(["user_text", "tool_call", "tool_result", "thinking", "assistant_text"]),
+    );
+    expect(children.filter((p) => p.type === "tool_call").at(-1)).toMatchObject({ tool: "Read", status: "done" });
+    expect(parts.filter((p) => p.parentId && p.parentId !== agentId)).toEqual([]);
+    expect(parts.find((p) => p.type === "tool_result" && p.toolUseId === agentId)?.parentId).toBeUndefined();
+  });
+
+  it("keeps Edit and Write inputs on their tool_call for the diff", () => {
+    const calls = new Map(parts.flatMap((p) => (p.type === "tool_call" ? [[p.tool, p] as const] : [])));
+    expect(calls.get("Edit")!.input).toMatchObject({ old_string: "const b = 2;", new_string: "const b = 3;" });
+    expect(calls.get("Write")!.input).toMatchObject({ content: "hello\nworld\n" });
+  });
+
+  it("drops task lifecycle messages instead of emitting raw parts", () => {
+    expect(parts.filter((p) => p.type === "raw")).toEqual([]);
+  });
+});
+
+describe("adapter on a background subagent", () => {
+  const agent = { type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "a1", name: "Agent", input: { description: "Scan" } }] } };
+  const started = { type: "system", subtype: "task_started", task_id: "k1", tool_use_id: "a1", description: "Scan", is_backgrounded: true };
+  const result = { type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "a1", content: "running in the background" }] } };
+  const status = (parts: Part[]) => parts.flatMap((p) => (p.type === "subagent" ? [p.status] : []));
+
+  it("stays running after its placeholder tool_result, ends with task_notification", () => {
+    const done = { type: "system", subtype: "task_notification", task_id: "k1", tool_use_id: "a1", status: "completed" };
+    expect(status(run([agent, started, result, done]))).toEqual(["running", "done"]);
+    expect(status(run([agent, started, result, { ...done, status: "failed" }]))).toEqual(["running", "error"]);
+  });
+
+  it("a restored history (no task messages) ends done on the tool_result", () => {
+    expect(status(run([agent, result]))).toEqual(["running", "done"]);
+  });
+});

@@ -134,8 +134,8 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | `tool_result` | `toolUseId`, `output`, `isError` | Merged into its tool card |
 | `permission_request` | `requestId`, `toolUseId`, `tool`, `input`, `suggestions[]`, `settled`, `decision?` | Permission panel |
 | `question` | `requestId`, `questions[]`, `settled`, `answers?` | Question panel |
-| `todo_update` | `items[]` (content, status) | Pinned todo list |
-| `subagent` | `id`, `description`, `status`, child parts | Nested, collapsible group |
+| `todo_update` | `items[]` (content, status, activeForm) | Pinned todo list |
+| `subagent` | `id`, `description`, `status`; child parts carry `parentId` = `id` | Nested, collapsible group |
 | `session_state` | `state` | Header badge, list badge |
 | `commands` | `commands[]` (name, description, argumentHint, aliases?) | Slash command picker; not in the timeline |
 | `turn_result` | `durationMs`, `costUsd`, `usage`, `isError` | Turn footer (live turns only) |
@@ -148,6 +148,8 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 - Streaming deltas accumulate under a stable part `id`; the UI replaces rather than appends.
 - A `tool_result` updates its `tool_call` status; grouped by `toolUseId`.
 - Tool rendering keyed on `tool`: `Bash`, `Edit`/`Write` (diff), `Read`, `Grep`/`Glob`, `TodoWrite`, `Task` (subagent), anything else (JSON).
+- The daemon enables TodoWrite (`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, `CLAUDE_CODE_ENABLE_TASKS=0`; off by default on current models) and `forwardSubagentText`.
+- A background subagent ends with `task_notification`, not with its placeholder `tool_result`.
 - The same adapter converts live SDK messages and `getSessionMessages()` history.
 - Fixture tests recorded from real SDK sessions.
 

@@ -1,12 +1,28 @@
 // Adapter: converts raw SDK messages into parts (CONTEXT.md "Adapter").
 // One adapter instance per session; it holds the accumulated text of streaming blocks and the known tool calls.
 import type { SDKMessage, SlashCommand as SDKSlashCommand } from "@anthropic-ai/claude-agent-sdk";
-import type { Part, ToolStatus } from "./parts.ts";
+import type { Part, TodoItem, ToolStatus } from "./parts.ts";
 
-type ToolCall = Extract<Part, { type: "tool_call" }>;
+type Call = Extract<Part, { type: "tool_call" | "subagent" }>;
+
+// Tools that run a subagent; they become `subagent` parts instead of tool cards.
+const SUBAGENT_TOOLS = new Set(["Agent", "Task"]);
+
+function callPart(id: string, tool: string, input: unknown, status: ToolStatus): Call {
+  if (!SUBAGENT_TOOLS.has(tool)) return { type: "tool_call", id, toolUseId: id, tool, input, status };
+  const description = (input as { description?: unknown }).description;
+  return { type: "subagent", id, toolUseId: id, description: typeof description === "string" ? description : "", status };
+}
 
 // Known SDK messages the UI does not show. Anything else unhandled becomes a `raw` part.
-const IGNORED = new Set(["rate_limit_event", "command_lifecycle", "system:status", "system:thinking_tokens"]);
+const IGNORED = new Set([
+  "rate_limit_event",
+  "command_lifecycle",
+  "system:status",
+  "system:thinking_tokens",
+  "system:task_progress",
+  "system:task_updated",
+]);
 
 // Text/thinking part id = `<API message id>:<content block index>`. Streamed blocks know their index from the
 // stream event. Complete assistant messages arrive split, one SDK message per content block with the
@@ -15,8 +31,10 @@ export function createAdapter() {
   let streamingMessageId = "";
   const streamedText = new Map<string, string>();
   const blocksSeen = new Map<string, number>();
-  const calls = new Map<string, ToolCall>();
+  const calls = new Map<string, Call>();
   const denied = new Set<string>();
+  // Subagents running in the background: their tool_result is a placeholder, task_notification ends them.
+  const background = new Set<string>();
 
   function setStatus(toolUseId: string, status: ToolStatus): Part[] {
     const call = calls.get(toolUseId);
@@ -49,14 +67,26 @@ export function createAdapter() {
     return [{ type: "commands", id: "commands", commands }];
   }
 
+  /** Parts from inside a subagent get `parentId` = the subagent's toolUseId. */
   function convert(m: SDKMessage): Part[] {
+    const parts = convertMessage(m);
+    const parentId = "parent_tool_use_id" in m ? m.parent_tool_use_id : null;
+    if (!parentId) return parts;
+    return parts.map((p) => {
+      const tagged = { ...p, parentId };
+      if (calls.get(p.id) === p) calls.set(p.id, tagged as Call);
+      return tagged;
+    });
+  }
+
+  function convertMessage(m: SDKMessage): Part[] {
     switch (m.type) {
       case "stream_event": {
         const e = m.event;
         if (e.type === "message_start") streamingMessageId = e.message.id;
         if (e.type === "content_block_start" && e.content_block.type === "tool_use") {
           const { id, name } = e.content_block;
-          const call: ToolCall = { type: "tool_call", id, toolUseId: id, tool: name, input: {}, status: "pending" };
+          const call = callPart(id, name, {}, "pending");
           calls.set(id, call);
           return [call];
         }
@@ -91,16 +121,11 @@ export function createAdapter() {
           }
           if (block.type === "redacted_thinking") return [];
           if (block.type === "tool_use") {
-            const call: ToolCall = {
-              type: "tool_call",
-              id: block.id,
-              toolUseId: block.id,
-              tool: block.name,
-              input: block.input,
-              status: denied.has(block.id) ? "denied" : "running",
-            };
+            const call = callPart(block.id, block.name, block.input, denied.has(block.id) ? "denied" : "running");
             calls.set(block.id, call);
-            return [call];
+            const todos = (block.input as { todos?: TodoItem[] }).todos;
+            if (block.name !== "TodoWrite" || m.parent_tool_use_id || !Array.isArray(todos)) return [call];
+            return [call, { type: "todo_update", id: `${block.id}:todos`, items: todos }];
           }
           return [{ type: "raw", id, message: block }];
         });
@@ -118,7 +143,8 @@ export function createAdapter() {
               ? b.content.map((c) => c.text).join("\n")
               : b.content;
           parts.push({ type: "tool_result", id: `${b.tool_use_id}:result`, toolUseId: b.tool_use_id, output, isError });
-          parts.push(...setStatus(b.tool_use_id, denied.has(b.tool_use_id) ? "denied" : isError ? "error" : "done"));
+          if (!background.has(b.tool_use_id))
+            parts.push(...setStatus(b.tool_use_id, denied.has(b.tool_use_id) ? "denied" : isError ? "error" : "done"));
           return false;
         });
         if (rest.length === 0) return parts;
@@ -155,6 +181,12 @@ export function createAdapter() {
           return knownCommands ? commands(knownCommands) : [];
         }
         if (m.type === "system" && m.subtype === "permission_denied") return deny(m.tool_use_id);
+        if (m.type === "system" && m.subtype === "task_started") {
+          if (m.is_backgrounded && m.tool_use_id) background.add(m.tool_use_id);
+          return [];
+        }
+        if (m.type === "system" && m.subtype === "task_notification")
+          return m.tool_use_id ? setStatus(m.tool_use_id, m.status === "completed" ? "done" : "error") : [];
         if (IGNORED.has(m.type) || IGNORED.has(`${m.type}:${"subtype" in m ? m.subtype : ""}`)) return [];
         return [{ type: "raw", id: ("uuid" in m && m.uuid) || crypto.randomUUID(), message: m }];
     }
