@@ -11,6 +11,7 @@ import type {
   Part,
   RewindMode,
   RewindPreview,
+  RespondResult,
   SessionInfo,
   SessionListItem,
   SetModelResult,
@@ -25,7 +26,8 @@ import { choose, matchCommands } from "./commands.ts";
 import { groupByCwd, timeAgo } from "./sessions.ts";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
-import { applyEvent, emptySession, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
+import { PermissionMarker, PermissionPanel, type PermissionAnswer } from "./permission.tsx";
+import { applyEvent, emptySession, pendingPermission, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, Thinking, ToolCard } from "./tool-card.tsx";
 
 type Client = ReturnType<typeof connect>;
@@ -136,6 +138,16 @@ export function App() {
     }
   }
 
+  // The daemon's settlement event updates every tab; `settled: false` means another tab answered first.
+  async function respond(requestId: string, answer: PermissionAnswer) {
+    setError(undefined);
+    try {
+      await client.current!.request<RespondResult>({ type: "permission.respond", requestId, ...answer });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   const active = activeId ? (infos[activeId] ?? list.find((s) => s.id === activeId)) : undefined;
   const view = activeId ? views[activeId] : undefined;
 
@@ -173,6 +185,7 @@ export function App() {
               client.current!.request<RewindPreview>({ type: "session.rewindPreview", sessionId: active.id, userMessageId })
             }
             onRewind={(userMessageId, mode) => client.current!.request({ type: "session.rewind", sessionId: active.id, userMessageId, mode })}
+            onRespond={respond}
           />
         ) : (
           <>
@@ -371,6 +384,7 @@ function SessionPane({
   onMenu,
   onRewindPreview,
   onRewind,
+  onRespond,
 }: {
   session: SessionInfo;
   view: SessionView;
@@ -380,7 +394,9 @@ function SessionPane({
   onMenu: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
+  onRespond: (requestId: string, answer: PermissionAnswer) => void;
 }) {
+  const permission = pendingPermission(view);
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
   const [rewinding, setRewinding] = useState<string>();
@@ -501,48 +517,54 @@ function SessionPane({
         onDragOver={(e) => e.preventDefault()}
         onDrop={onDrop}
       >
-        <ImageStrip images={images} onRemove={(i) => setImages((all) => all.filter((_, j) => j !== i))} />
-        {pickerOpen && (
-          <ul
-            id="command-picker"
-            role="listbox"
-            aria-label="Commands and skills"
-            className="absolute inset-x-4 bottom-full max-h-72 overflow-y-auto rounded-lg border bg-popover p-1 text-sm shadow-md"
-          >
-            {matches.map((c, i) => (
-              <li
-                key={c.name}
-                id={`command-${i}`}
-                role="option"
-                aria-selected={i === selected}
-                ref={(el) => void (i === selected && el?.scrollIntoView({ block: "nearest" }))}
-                className={`flex cursor-pointer gap-2 rounded-md px-2 py-1.5 ${i === selected ? "bg-muted" : ""}`}
-                onMouseDown={(e) => e.preventDefault()}
-                onMouseEnter={() => setSelected(i)}
-                onClick={() => pick(i)}
+        {permission ? (
+          <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} />
+        ) : (
+          <>
+            <ImageStrip images={images} onRemove={(i) => setImages((all) => all.filter((_, j) => j !== i))} />
+            {pickerOpen && (
+              <ul
+                id="command-picker"
+                role="listbox"
+                aria-label="Commands and skills"
+                className="absolute inset-x-4 bottom-full max-h-72 overflow-y-auto rounded-lg border bg-popover p-1 text-sm shadow-md"
               >
-                <span className="shrink-0 font-mono">
-                  /{c.name}
-                  {c.argumentHint && <span className="ml-1 text-muted-foreground">{c.argumentHint}</span>}
-                </span>
-                <span className="truncate text-muted-foreground">{c.description}</span>
-              </li>
-            ))}
-          </ul>
+                {matches.map((c, i) => (
+                  <li
+                    key={c.name}
+                    id={`command-${i}`}
+                    role="option"
+                    aria-selected={i === selected}
+                    ref={(el) => void (i === selected && el?.scrollIntoView({ block: "nearest" }))}
+                    className={`flex cursor-pointer gap-2 rounded-md px-2 py-1.5 ${i === selected ? "bg-muted" : ""}`}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setSelected(i)}
+                    onClick={() => pick(i)}
+                  >
+                    <span className="shrink-0 font-mono">
+                      /{c.name}
+                      {c.argumentHint && <span className="ml-1 text-muted-foreground">{c.argumentHint}</span>}
+                    </span>
+                    <span className="truncate text-muted-foreground">{c.description}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <textarea
+              role="combobox"
+              aria-expanded={pickerOpen}
+              aria-controls="command-picker"
+              aria-activedescendant={pickerOpen ? `command-${selected}` : undefined}
+              className="w-full resize-none rounded-lg border bg-transparent p-3 text-sm"
+              rows={3}
+              placeholder="Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"
+              value={text}
+              onChange={(e) => edit(e.target.value)}
+              onKeyDown={onKeyDown}
+              onPaste={onPaste}
+            />
+          </>
         )}
-        <textarea
-          role="combobox"
-          aria-expanded={pickerOpen}
-          aria-controls="command-picker"
-          aria-activedescendant={pickerOpen ? `command-${selected}` : undefined}
-          className="w-full resize-none rounded-lg border bg-transparent p-3 text-sm"
-          rows={3}
-          placeholder="Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"
-          value={text}
-          onChange={(e) => edit(e.target.value)}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-        />
       </div>
     </>
   );
@@ -626,6 +648,8 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
       return <Thinking part={part} />;
     case "tool_call":
       return <ToolCard call={part} result={resultOf(view, part)} />;
+    case "permission_request":
+      return <PermissionMarker part={part} />;
     case "turn_result":
       return <TurnFooter part={part} />;
     case "raw":
