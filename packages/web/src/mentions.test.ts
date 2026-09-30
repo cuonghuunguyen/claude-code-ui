@@ -29,8 +29,9 @@ describe("insertMention", () => {
 describe("insertAtCaret", () => {
   it("inserts the token at the caret with a space on each side where needed", () => {
     expect(insertAtCaret("", 0, "@a.ts#2")).toEqual({ text: "@a.ts#2 ", caret: 8 });
-    expect(insertAtCaret("fix this", 3, "@a.ts#2")).toEqual({ text: "fix @a.ts#2  this", caret: 12 });
+    expect(insertAtCaret("fix this", 3, "@a.ts#2")).toEqual({ text: "fix @a.ts#2 this", caret: 11 });
     expect(insertAtCaret("fix ", 4, "@a.ts")).toEqual({ text: "fix @a.ts ", caret: 10 });
     expect(insertAtCaret("line\n", 5, "@a.ts")).toEqual({ text: "line\n@a.ts ", caret: 11 });
+    expect(insertAtCaret("fix\nthis", 3, "@a.ts")).toEqual({ text: "fix @a.ts\nthis", caret: 9 });
   });
 });

@@ -186,7 +186,7 @@ export function FilesPanel({
               variant="outline"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => editor.current && onSend(selectionMention(editor.current.state, active.path, cwd))}
-              title="Insert the file and selected lines into the prompt box (Alt+K)"
+              title="Insert the file and selected lines into the prompt box (Alt+K, Option+K on macOS)"
               data-testid="send-selection"
             >
               Send selection to Claude
@@ -325,6 +325,7 @@ function CodeEditor({
     return () => {
       live = false;
       v.destroy();
+      if (viewRef.current === v) viewRef.current = undefined;
     };
   }, [path]);
 

@@ -18,9 +18,9 @@ export function insertMention(text: string, m: Mention, path: string) {
 /** `@path`, quoted when the path has spaces. */
 export const mentionPath = (path: string) => `@${/\s/.test(path) ? `"${path}"` : path}`;
 
-/** Inserts `token` and a space at the caret, with a space before it when it would touch the previous word. */
+/** Inserts `token` at the caret, with a space on each side where it would touch a word. */
 export function insertAtCaret(text: string, caret: number, token: string) {
   const before = text.slice(0, caret);
-  const insert = `${before && !/\s$/.test(before) ? " " : ""}${token} `;
+  const insert = `${before && !/\s$/.test(before) ? " " : ""}${token}${/^\s/.test(text.slice(caret)) ? "" : " "}`;
   return { text: before + insert + text.slice(caret), caret: caret + insert.length };
 }
