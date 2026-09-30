@@ -1,190 +1,237 @@
 # Claude Code Web UI — General Spec
 
-Source: [Claude Docs](https://claude.ai/artifact/QGJWx4mN966peZmokWTN1h), rev 8, 2026-09-28. The doc is the live version; this file is a snapshot.
+Rev 9, 2026-09-30. Based on the Claude Doc spec rev 8 (https://claude.ai/artifact/QGJWx4mN966peZmokWTN1h), revised by the 2026-09-30 grilling session. This file is now ahead of the doc. Glossary: `CONTEXT.md`. Decisions: `docs/adr/`.
 
 ## Overview
 
-A browser UI for running Claude coding agents on a machine you control. A local daemon runs sessions through the Claude Agent SDK and streams them to a web app, so you can drive and approve agent work from any browser, including a phone.
+A browser UI for running Claude coding agents on a machine you control. A local daemon runs sessions through the Claude Agent SDK and streams them to a web app, so you can drive and approve agent work from any browser, including a phone. It should feel like the Claude Code VS Code extension or OpenCode web: smooth, same behavior as Claude Code.
 
 **Goals**
 
 - Start, watch and steer agent sessions in a chosen working directory from the browser.
-- Approve or deny tool use (bash, file edits) with a clear prompt, per request or for the whole session.
+- Approve or deny tool use and answer Claude's questions, with the same options as Claude Code.
 - Keep sessions running when the browser disconnects; catch up on reconnect with nothing lost or duplicated.
 - Show tool activity readably: bash output, file-edit diffs, todo lists, subagent activity.
-- Safe by default: reachable only on localhost or a private network until real auth is added.
+- Browse and edit files, rewind to checkpoints, get push notifications when input is needed.
+- Private by default: no external hosting (ADR 0003), authenticated always.
 
 **Non-goals for v1**
 
-- A code editor or file tree (v2).
+- Plan mode toggle.
 - Multi-user or team hosting.
 - Replacing the agent loop; the SDK owns tools, context and model calls.
-- Parity with every Claude Code CLI feature (slash commands, checkpoints).
 
 ## Architecture
 
-Three layers: a web app, a daemon you write, and the Claude Agent SDK, which owns the agent loop.
-
 ```
 Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic API
-                                     |
-                                   SQLite (session metadata)
+                                                     |
+                                     ~/.claude (transcripts, checkpoints, settings)
 ```
 
-The browser only ever talks to the daemon. The daemon and SDK run on the machine that holds the code; the browser reaches the daemon over localhost, Tailscale or an SSH tunnel.
+- The browser only talks to the daemon. Daemon and SDK run on the machine that holds the code.
+- No database: the SDK transcript is the only store (ADR 0001).
+- Auth: Claude subscription login only (ADR 0002).
 
-**Stack (proposed)**
+**Stack**
 
-- Daemon: Node.js + TypeScript, `@anthropic-ai/claude-agent-sdk`, a WebSocket server (`ws`), SQLite for session metadata.
-- Web app: React + Vite, Tailwind, shadcn/ui and Vercel AI Elements for chat components.
-- One shared TypeScript package for the wire protocol and message model, used by both sides.
+- Daemon: Node.js + TypeScript, `@anthropic-ai/claude-agent-sdk`, `ws`.
+- Web app: React + Vite, Tailwind, shadcn/ui, Vercel AI Elements (shadcn look). Layout and UX copied from OpenCode's new web UI (not its visual design).
+- One shared TypeScript package for the wire protocol and message model.
 
 ## Daemon
 
-The daemon owns every session's lifecycle and is the single source of truth; browsers are disposable views onto it.
-
 ### Sessions
 
-- A session = one SDK `query()` run in one working directory, keyed by the SDK session ID.
-- States: `idle` (waiting for a prompt), `running`, `awaiting_permission`, `error`, `closed`.
-- Sessions keep running when no browser is connected.
-- Several sessions may run at once; each has its own event log.
-- Metadata (id, title, cwd, model, created/updated, state) is stored in SQLite so the list survives a daemon restart. v1 may resume a stored session with the SDK's resume option rather than keeping it live.
+- The daemon generates a UUID at `session.create` and passes it as `Options.sessionId`, so the ID is known before the first prompt.
+- A live session is one long-lived `query()` in streaming input mode (required for `canUseTool`, `interrupt()`, images, `setModel()`). After a daemon restart, a session is resumed by a new `query({resume})` with the same ID.
+- `settingSources: ['user', 'project']`, so CLAUDE.md, commands, skills and permission rules load like in Claude Code.
+- States: `idle`, `running`, `needs_input` (permission request or question pending), `error`, `closed`.
+- Session list = `listSessions()` filtered to cwds inside the allowlisted roots. Includes sessions started in the terminal CLI; they can be resumed.
+- No protection when the terminal CLI and the daemon drive the same session at once (same as OpenCode).
 
 ### Event log and sequence numbers
 
-- Every event sent to clients gets a per-session, monotonically increasing `seq`.
-- The daemon keeps the full event log per session (in memory for v1, appended to disk later).
-- A client subscribes with `{sessionId, sinceSeq}`; the daemon replays everything after `sinceSeq`, then streams live.
-- Clients drop any event with `seq` ≤ the last one they applied, so replays never duplicate.
+- Every event has a per-session, monotonically increasing `seq`. The log is in memory only.
+- History before the daemon started is rebuilt from `getSessionMessages()` through the adapter.
+- Each daemon start has a `logEpoch`. `session.subscribe {sessionId, sinceSeq, logEpoch}`: same epoch → replay after `sinceSeq`; different epoch → client clears its store and gets a full replay.
+- Clients drop events with `seq` ≤ the last applied one.
+- State changes, permission requests, questions and their settlement are all logged events, so replay alone restores the full view.
 
 ### Wire protocol (WebSocket, JSON)
 
 | Direction | Message | Purpose |
 | --- | --- | --- |
-| client → daemon | `session.create {cwd, model?, permissionMode?}` | Start a new session |
-| client → daemon | `session.subscribe {sessionId, sinceSeq}` | Replay and follow a session |
-| client → daemon | `session.prompt {sessionId, text, attachments?}` | Send a user turn |
+| client → daemon | `session.create {cwd, model?}` | Start a new session |
+| client → daemon | `session.subscribe {sessionId, sinceSeq, logEpoch}` | Replay and follow |
+| client → daemon | `session.prompt {sessionId, text, images?}` | Send a user message; while a turn runs it steers the turn |
 | client → daemon | `session.interrupt {sessionId}` | Stop the running turn |
-| client → daemon | `permission.respond {requestId, decision, scope}` | Answer a permission request |
-| client → daemon | `session.list` / `session.close` | Manage sessions |
-| daemon → client | `event {sessionId, seq, part}` | One normalized message part (see message model) |
-| daemon → client | `session.state {sessionId, state}` | State change |
-| daemon → client | `permission.request {requestId, sessionId, tool, input}` | Ask the user to approve a tool call |
+| client → daemon | `session.setModel {sessionId, model}` | Switch model (`setModel()`) |
+| client → daemon | `session.rewind {sessionId, userMessageId, mode}` | `mode`: `code`, `conversation`, `both` |
+| client → daemon | `permission.respond {requestId, decision, ruleIndex?, updatedInput?, message?}` | Answer a permission request |
+| client → daemon | `question.respond {requestId, answers}` | Answer a question |
+| client → daemon | `session.list` / `session.close` / `commands.list` / `models.list` | Lists and management |
+| client → daemon | `fs.list` / `fs.read` / `fs.write` / `fs.search` | File tree, editor, @-mention autocomplete |
+| client → daemon | `push.subscribe {subscription}` | Register a Web Push subscription |
+| daemon → client | `event {sessionId, seq, part}` | One normalized part |
 | daemon → client | `error {code, message}` | Protocol or session error |
 
-### Permission bridge
+### Permission bridge (same behavior as Claude Code)
 
-1. The SDK calls `canUseTool(tool, input)` in the daemon.
-2. The daemon checks session rules ("allow for this session"); if one matches, it resolves immediately.
-3. Otherwise it creates a request with an id, stores the pending promise, sets state `awaiting_permission`, and emits `permission.request` as a logged event.
-4. The first `permission.respond` for that id resolves the promise; later answers are ignored, and every client is told the request is settled.
-5. With no client connected, the request waits. An optional timeout (default: none) resolves as deny.
-6. Interrupting the session denies any pending request.
+1. The SDK calls `canUseTool(tool, input, {suggestions})`. Rules already saved (Claude Code rules in `.claude/settings*.json`) never reach the callback.
+2. The daemon logs a `permission_request` part with the SDK's suggested rules and sets state `needs_input`.
+3. Options shown: **Yes** / **Yes, and don't ask again for `<suggested rule>`** / **No, and tell Claude what to do differently**. Rules are chosen by the SDK, not the user. Bash rules are saved to `.claude/settings.local.json` (via `updatedPermissions`), Edit rules last for the session, as in Claude Code.
+4. Edit/Write requests show a diff; the user may change the proposed content before accepting (`updatedInput`).
+5. The first answer settles the request; a settlement event tells every client. Later answers are ignored.
+6. No timeout: a request waits until someone answers.
+7. Interrupt denies pending requests.
 
-Scopes: `once`, `session` (same tool, and for bash the same command prefix). Persistent project-level rules are v2.
+### Questions
 
-### Interrupt
+`AskUserQuestion` arrives through `canUseTool`. The daemon logs a `question` part; the UI shows a question panel in place of the prompt box, with an "Other" free-text choice. The answer returns through `updatedInput`. Counts as `needs_input`.
 
-- `session.interrupt` calls the SDK's interrupt/abort for the running query, denies pending permissions, and emits a `turn.interrupted` event.
-- The session returns to `idle` and accepts a new prompt, resuming the same SDK session.
+### Steering and interrupt
+
+- A message sent while a turn runs is pushed into the query immediately (steering); Claude Code injects it after the current tool calls. To verify at build time: SDK mid-turn `streamInput` behaves the same.
+- `session.interrupt` calls `interrupt()`, denies pending requests, logs `turn_interrupted`; the session returns to `idle` and stays live.
+
+### Commands, skills, models
+
+- Commands and skills come from `supportedCommands()` and are refreshed on `system/commands_changed`. Terminal-only commands (`terminal_slash_commands`) are hidden.
+- Invoked by sending `/name args` as prompt text.
+- Models from `supportedModels()`; switch with `setModel()` mid-session.
+
+### Checkpoints and rewind (same modes as Claude Code `/rewind`)
+
+- `enableFileCheckpointing: true` and `extraArgs: {'replay-user-messages': null}`; each user message UUID is a checkpoint.
+- Code: `rewindFiles(userMessageId)` (Edit/Write/NotebookEdit only, not Bash; a `dryRun` preview shows changed files).
+- Conversation: resume with `resumeSessionAt` (+ `resumeDropsTurn`); the original prompt is put back in the prompt box.
+- Both: code, then conversation. Code options appear only when the checkpoint has tracked file changes.
+
+### Push notifications (rules copied from Orca)
+
+- Web Push with VAPID keys generated by the daemon; payload end-to-end encrypted, full text (session title + tool/command, or last line of the answer; ~4 KB max).
+- Events: `needs input` and `finished` (an error counts as finished).
+- `finished` waits 1.5 s and is cancelled if work resumes. At most one push per session per 5 s.
+- Suppressed when a focused, visible tab shows that session.
+- Click opens the session and scrolls to the bottom.
+- One on/off toggle in v1.
+- Needs HTTPS (see Security) and, on iOS, 16.4+ with the app added to the Home Screen.
 
 ## Message model
 
-The daemon converts raw SDK messages into one normalized model; the UI renders only this model, so the component library can be swapped without touching the daemon.
+The daemon converts raw SDK messages into one normalized model; the UI renders only this model.
 
 | Part type | Key fields | Rendered as |
 | --- | --- | --- |
-| `user_text` | `text`, `attachments[]` | User bubble |
-| `assistant_text` | `id`, `text`, `streaming` | Markdown, streamed |
+| `user_text` | `id`, `text`, `images[]` | User bubble, with rewind action |
+| `assistant_text` | `id`, `text`, `streaming` | Markdown, streamed at a steady pace |
 | `thinking` | `id`, `text` | Collapsed reasoning block |
 | `tool_call` | `toolUseId`, `tool`, `input`, `status` (pending / running / done / error / denied) | Tool card, by tool type |
 | `tool_result` | `toolUseId`, `output`, `isError` | Merged into its tool card |
-| `permission_request` | `requestId`, `toolUseId`, `tool`, `input`, `settled` | Inline approve / deny prompt |
+| `permission_request` | `requestId`, `toolUseId`, `tool`, `input`, `suggestions[]`, `settled`, `decision?` | Permission panel |
+| `question` | `requestId`, `questions[]`, `settled`, `answers?` | Question panel |
 | `todo_update` | `items[]` (content, status) | Pinned todo list |
 | `subagent` | `id`, `description`, `status`, child parts | Nested, collapsible group |
-| `turn_result` | `durationMs`, `costUsd`, `usage`, `isError` | Turn footer |
+| `session_state` | `state` | Header badge, list badge |
+| `turn_result` | `durationMs`, `costUsd`, `usage`, `isError` | Turn footer (live turns only) |
 | `turn_interrupted` | — | Status line |
+| `raw` | original message | Generic JSON |
 
 **Adapter rules**
 
-- Streaming text arrives as deltas; the adapter accumulates them under a stable part `id` and sends updates for that id, so the UI replaces rather than appends.
-- A `tool_result` updates its `tool_call` status; the UI groups them by `toolUseId`.
-- Tool-specific rendering is keyed on `tool`: `Bash` (command + output), `Edit`/`Write` (diff from input), `Read` (path + line range), `Grep`/`Glob` (pattern + matches), `TodoWrite` (todo list), anything else (JSON input/output).
-- Unknown SDK message types pass through as a generic `raw` part so nothing is silently lost.
-- The model and adapter live in the shared package and are covered by fixture tests recorded from real SDK sessions.
+- Streaming deltas accumulate under a stable part `id`; the UI replaces rather than appends.
+- A `tool_result` updates its `tool_call` status; grouped by `toolUseId`.
+- Tool rendering keyed on `tool`: `Bash`, `Edit`/`Write` (diff), `Read`, `Grep`/`Glob`, `TodoWrite`, `Task` (subagent), anything else (JSON).
+- The same adapter converts live SDK messages and `getSessionMessages()` history.
+- Fixture tests recorded from real SDK sessions.
 
 ## Frontend
 
-One responsive single-page app with two main views, built from AI Elements components restyled toward OpenCode's look.
+React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 
-### Screens
+### Layout
 
-- **Session list**: sessions with title, working directory, state badge (running, needs approval, idle), last activity. "New session" opens a directory picker (paths from the daemon) and optional model choice.
-- **Session view**: the conversation, a prompt box, and a header with cwd, model, state, and a stop button. A pending permission request is shown inline and also as a sticky banner so it can't be missed.
-- On narrow screens the list becomes a drawer; the session view is full width.
+- Sidebar: session list grouped by working directory, with state badge and unread marker. "New session" opens a directory picker (allowlisted roots) and model choice.
+- Session view: timeline, prompt box at the bottom, header with cwd, model switcher, state, stop button.
+- Side panel (resizable): file tree + editor tabs, and a changes/diff tab.
+- Narrow screens: sidebar becomes a drawer; a tab switch replaces the side panel ("session" / "changes" / "files").
+
+### Session view UX (from OpenCode)
+
+- A pending permission request or question replaces the prompt box (panel), and is also marked in the timeline.
+- Consecutive read/search tool calls merge into one "context" group with a count.
+- Tool cards collapse by default; Bash and edits expanded per tool type.
+- Streamed text is revealed at a steady pace; incomplete markdown is repaired while streaming.
+- Auto-scroll only while at the bottom.
+- Unread count in the tab title.
+
+### Prompt box
+
+- Enter sends, Shift+Enter newline; while a turn runs, sending steers.
+- `/` opens a command and skill picker.
+- `@` opens file autocomplete (`fs.search`); the SDK expands `@path`.
+- Image paste and drop.
+- Selection from the editor can be sent as context.
+
+### Editor
+
+- CodeMirror 6 (touch-friendly), editable, saved through `fs.write`, restricted to allowlisted roots.
+- A file changed by Claude reloads when clean; with unsaved edits the editor shows a conflict.
+- "Send selection to Claude" inserts path + line range into the prompt box.
+- Diffs in chat and the changes tab: `@pierre/diffs`.
 
 ### Components
 
-| Component | Source | Notes |
-| --- | --- | --- |
-| Conversation container, scroll-to-bottom | AI Elements `conversation` | Auto-scroll only when already at bottom |
-| Message, markdown response | AI Elements `message`, `response` | Streaming updates by part id |
-| Reasoning | AI Elements `reasoning` | Collapsed by default |
-| Tool card | AI Elements `tool`, customized | Header: icon, tool name, one-line summary, status |
-| Bash output | Custom | Monospace, ANSI colors, collapse after ~20 lines |
-| Edit diff | Custom, `@pierre/diffs` or `diff2html` | Unified diff built from Edit/Write input |
-| Todo list | AI Elements `task`, customized | Pinned above the prompt while a turn runs |
-| Permission prompt | Custom | Tool, full input, Allow once / Allow for session / Deny |
-| Prompt input | AI Elements `prompt-input` | Enter to send, Shift+Enter newline, image paste (v1.1) |
-| Turn footer | AI Elements `context`, customized | Duration, tokens, cost |
+| Component | Source |
+| --- | --- |
+| Conversation, scroll-to-bottom | AI Elements `conversation` |
+| Message, markdown response | AI Elements `message`, `response` |
+| Reasoning | AI Elements `reasoning` |
+| Tool card | AI Elements `tool`, customized |
+| Bash output | Custom: monospace, ANSI colors, collapse after ~20 lines |
+| Edit diff | `@pierre/diffs` |
+| Todo list | AI Elements `task`, customized |
+| Permission panel, question panel | Custom |
+| Prompt input | AI Elements `prompt-input`, extended with `/` and `@` pickers |
+| Editor | CodeMirror 6 |
+| Turn footer | AI Elements `context`, customized |
 
 ### Client state
 
-- One WebSocket per tab, auto-reconnect with backoff; on reconnect, resubscribe with the last applied `seq`.
-- A per-session store keyed by part id; events are applied idempotently.
-- Connection status shown in the header (connected / reconnecting / offline).
+- One WebSocket per tab, auto-reconnect with backoff; resubscribe with last `seq` and `logEpoch`.
+- Per-session store keyed by part id; events applied idempotently.
+- Connection status in the header.
+- Service worker for Web Push; PWA manifest with `display: "standalone"`.
 
 ## Security
 
-The daemon can run arbitrary shell commands, so it is treated as a remote shell: private by default, authenticated always.
+The daemon can run arbitrary shell commands; treat it as a remote shell.
 
-- **Bind to 127.0.0.1 only** by default. Remote access goes through Tailscale or an SSH tunnel; binding to other interfaces requires an explicit flag.
-- **Token auth on every connection**: the daemon generates a random token on first run; the browser sends it on WebSocket connect. Pairing via a printed URL or QR code containing the token.
-- **Origin check** on WebSocket upgrade to block cross-site connections from other pages in the same browser.
-- **Working directory allowlist**: sessions may only start inside configured root folders.
-- **Default permission mode asks** for every write and bash command; "bypass" modes are off unless enabled in daemon config.
-- **Anthropic credentials** live only in the daemon's environment (API key), never sent to the browser. Check current SDK terms before using subscription login.
-- **No secrets in logs**: redact env vars and tokens from event logs and error messages.
+- Bind to 127.0.0.1 only.
+- Remote access and HTTPS: to be decided; no external hosting services (ADR 0003).
+- Token auth on every WebSocket connection; pairing by a printed URL or QR code containing the token.
+- Origin check on WebSocket upgrade.
+- Working directory allowlist for sessions, file tree, editor writes and session list.
+- Default permission mode asks; bypass modes off unless enabled in daemon config.
+- Credentials: the owner's subscription login stays in the daemon's environment, never sent to the browser.
+- No secrets in logs.
 
-## Scope and roadmap
+## Scope and build
 
-v1 is chat, tool cards and permissions over a reliable stream; the editor and power features follow in v2.
+Work is split into GitHub issues along a dependency graph, so independent pieces run in parallel worktrees (Orca).
 
-### v1 build order
+**Core (first)**: shared package → daemon session + streaming + adapter + seq/replay → web app session view with generic tool cards → permission bridge and panel → interrupt, steering, multiple sessions, session list, directory picker → tool-specific cards → auth token, origin check, allowlist.
 
-1. Shared package: wire protocol types and message model.
-2. Daemon: one session, `query()` streaming, adapter, WebSocket with seq numbers and replay.
-3. Web app: session view with streaming text and generic tool cards.
-4. Permission bridge and prompt UI (once / session / deny).
-5. Interrupt, multiple sessions, session list, directory picker.
-6. Tool-specific cards: Bash, Edit/Write diffs, Read, Grep/Glob, todos.
-7. Auth token, origin check, cwd allowlist; test over Tailscale on a phone.
+**Then, in parallel where possible**: model switch; commands and skills; @-mentions; images; questions; edit-before-accept; file tree and editor with send-selection; checkpoints and rewind; push notifications (needs HTTPS).
 
-**v1 is done when**: a session keeps running with the tab closed, the phone reconnects and shows every message once, and a permission request can be answered from either of two open tabs.
+**v1 is done when**: a session keeps running with the tab closed, the phone reconnects and shows every message once, a permission request can be answered from either of two open tabs, and the phone gets a push when a session needs input.
 
-### v2 candidates
-
-- File tree and Monaco editor; edits reviewed as a Monaco diff tied to the permission prompt.
-- @-mention files with fuzzy search; send editor selection to Claude.
-- Checkpoints and rewind (per-turn snapshots via a shadow git repo).
-- Slash commands, plan mode toggle, model switching mid-session.
-- Persistent permission rules per project; event logs on disk.
-- Push notifications when a session needs approval or finishes.
+**Deferred**: plan mode toggle; multi-user.
 
 ### Open questions
 
-- [ ] React + AI Elements, or fork OpenCode's SolidJS UI?
-- [ ] API key only, or also support subscription login (check SDK terms)?
-- [ ] Should a permission request with nobody connected time out, and after how long?
-- [ ] Where do event logs live long-term: SQLite, JSONL files, or both?
+- [ ] Remote access and HTTPS without external hosting (ADR 0003).
+- [ ] Verify: SDK uses `claude login` credentials when no API key is set.
+- [ ] Verify: mid-turn `streamInput` steers like Claude Code.
+- [ ] Verify: which UUID `resumeSessionAt` needs for a conversation rewind.
