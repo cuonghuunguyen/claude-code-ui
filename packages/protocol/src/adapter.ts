@@ -29,6 +29,8 @@ const ABORTED = new Set(["aborted_streaming", "aborted_tools"]);
 
 // Text/thinking part id = `<API message id>:<content block index>`. Streamed blocks know their index from the
 // stream event. Complete assistant messages arrive split, one SDK message per content block with the
+// The CLI's echo of setModel() (SDK 0.3.285); the session_model part already shows the switch.
+const MODEL_SWITCHED = /^<local-command-stdout>Set model to .*<\/local-command-stdout>$/s;
 // same API message id (see test/fixtures), so their index is the count of blocks seen for that id.
 // `resumed`: the session's query resumes a transcript, whose saved total the first result already includes.
 export function createAdapter(opts: { resumed?: boolean } = {}) {
@@ -140,7 +142,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
       case "user": {
         const content = m.message.content;
         const id = m.uuid ?? crypto.randomUUID();
-        if (typeof content === "string") return [{ type: "user_text", id, text: content, images: [] }];
+        if (typeof content === "string") return MODEL_SWITCHED.test(content) ? [] : [{ type: "user_text", id, text: content, images: [] }];
         const parts: Part[] = [];
         const rest = content.filter((b) => {
           if (b.type !== "tool_result") return true;

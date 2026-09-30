@@ -180,6 +180,13 @@ describe("adapter turn cost", () => {
   });
 });
 
+describe("adapter on known SDK noise", () => {
+  it("drops the CLI's echo of a model switch; the session_model part shows it", () => {
+    const echo = { type: "user", uuid: "e1", message: { role: "user", content: "<local-command-stdout>Set model to `sonnet (claude-sonnet-5-5)`</local-command-stdout>" }, parent_tool_use_id: null };
+    expect(run([echo])).toEqual([]);
+  });
+});
+
 describe("adapter on unknown messages", () => {
   it("wraps an unknown SDK message in a raw part keyed by uuid", () => {
     const m = { type: "system", subtype: "compact_boundary", uuid: "c1", compact_metadata: { trigger: "auto" } };
