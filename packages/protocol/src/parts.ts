@@ -21,7 +21,11 @@ export type TokenUsage = {
 /** A slash command or skill; invoked by sending `/name args` as prompt text. */
 export type SlashCommand = { name: string; description: string; argumentHint: string; aliases?: string[] };
 
-export type Part =
+/** One TodoWrite item. */
+export type TodoItem = { content: string; status: "pending" | "in_progress" | "completed"; activeForm?: string };
+
+/** `parentId` = the subagent part id when the part comes from inside that subagent. */
+export type Part = { parentId?: string } & (
   | { type: "user_text"; id: string; text: string; images: string[] }
   | { type: "assistant_text"; id: string; text: string; streaming: boolean }
   | { type: "thinking"; id: string; text: string; streaming: boolean }
@@ -52,6 +56,11 @@ export type Part =
   | { type: "session_model"; id: string; model: string }
   | { type: "commands"; id: "commands"; commands: SlashCommand[] }
   | { type: "turn_result"; id: string; durationMs: number; costUsd: number; usage: TokenUsage; isError: boolean }
+  /** Latest TodoWrite list of the main agent; `id` = `<toolUseId>:todos`. */
+  | { type: "todo_update"; id: string; items: TodoItem[] }
+  /** An Agent/Task call; `id` = `toolUseId`, its `tool_result` is `<toolUseId>:result`, child parts have `parentId` = `id`. */
+  | { type: "subagent"; id: string; toolUseId: string; description: string; status: ToolStatus }
   | { type: "raw"; id: string; message: unknown }
   /** Conversation rewind: the client drops `userMessageId` and every part after it. */
-  | { type: "rewind"; id: string; userMessageId: string };
+  | { type: "rewind"; id: string; userMessageId: string }
+);

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ToolCall } from "./store.ts";
-import { ContextGroup, Thinking, ToolBody, ToolCard } from "./tool-card.tsx";
+import { ContextGroup, SubagentGroup, Thinking, TodoList, ToolBody, ToolCard } from "./tool-card.tsx";
 
 const call = (status: ToolCall["status"], tool = "Bash"): ToolCall => ({
   type: "tool_call",
@@ -125,5 +125,57 @@ describe("Thinking", () => {
       expect(html).toContain('data-testid="thinking"');
       expect(html).not.toContain("secret plan");
     }
+  });
+});
+
+describe("ToolCard edits", () => {
+  const edit = (tool: string, input: unknown): ToolCall => ({ type: "tool_call", id: "e", toolUseId: "e", tool, input, status: "done" });
+
+  it("Edit renders expanded as a diff instead of the JSON parameters", () => {
+    const html = renderToStaticMarkup(<ToolCard call={edit("Edit", { file_path: "/p/a.ts", old_string: "b = 2", new_string: "b = 3" })} />);
+    // @pierre/diffs renders the diff client-side into this element.
+    expect(html).toMatch(/data-testid="edit-diff"><diffs-container>/);
+    expect(html).not.toContain("Parameters");
+  });
+
+  it("an Edit mounted before its input streamed in is already expanded, showing parameters until the input is complete", () => {
+    const html = renderToStaticMarkup(<ToolCard call={{ ...edit("Edit", {}), status: "pending" }} />);
+    expect(html).not.toContain("edit-diff");
+    expect(html).toContain("Parameters");
+  });
+});
+
+describe("SubagentGroup", () => {
+  const sub = (status: ToolCall["status"]) => ({ type: "subagent", id: "s", toolUseId: "s", description: "Inspect value.ts", status }) as const;
+
+  it.each(["pending", "running"] as const)("shows description and status; mounted %s it is open with its child parts", (status) => {
+    const html = renderToStaticMarkup(<SubagentGroup part={sub(status)}>child-part</SubagentGroup>);
+    expect(html).toContain("Inspect value.ts");
+    expect(html).toContain(status === "running" ? "Running" : "Pending");
+    expect(html).toContain("child-part");
+  });
+
+  it("mounted finished (history) it is collapsed", () => {
+    const html = renderToStaticMarkup(<SubagentGroup part={sub("done")}>child-part</SubagentGroup>);
+    expect(html).toContain("Completed");
+    expect(html).not.toContain("child-part");
+  });
+});
+
+describe("TodoList", () => {
+  it("shows progress, each item, and the active form of the in-progress item", () => {
+    const html = renderToStaticMarkup(
+      <TodoList
+        items={[
+          { content: "Inspect", status: "completed" },
+          { content: "Change b", status: "in_progress", activeForm: "Changing b" },
+          { content: "Test", status: "pending" },
+        ]}
+      />,
+    );
+    expect(html).toContain("Todos 1/3");
+    expect(html).toContain("Changing b");
+    expect(html).not.toContain("Change b<");
+    expect(html.match(/data-status="(\w+)"/g)).toEqual(['data-status="completed"', 'data-status="in_progress"', 'data-status="pending"']);
   });
 });

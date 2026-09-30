@@ -1,8 +1,14 @@
 // Tool cards, context groups and thinking blocks (docs/spec.md "Message model", "Session view UX").
-import type { Part, ToolStatus } from "@claude-ui/protocol";
+import type { Part, TodoItem, ToolStatus } from "@claude-ui/protocol";
+import type { FileDiffOptions } from "@pierre/diffs";
+import { MultiFileDiff } from "@pierre/diffs/react";
 import type { ToolUIPart } from "ai";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   BotIcon,
+  CheckCircle2Icon,
+  CircleDotIcon,
+  CircleIcon,
   FilePenIcon,
   FileTextIcon,
   GlobeIcon,
@@ -12,15 +18,15 @@ import {
   WrenchIcon,
   type LucideIcon,
 } from "lucide-react";
+import { Task, TaskContent, TaskItem, TaskTrigger } from "@/components/ai-elements/task";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
-import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
-import { readRange, toolSummary } from "./tools.ts";
+import { editFiles, readRange, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 
@@ -49,8 +55,17 @@ const ICONS: Record<string, LucideIcon> = {
 
 const text = (output: unknown) => (typeof output === "string" ? output : JSON.stringify(output, null, 2));
 
+// ponytail: light only, like the app (nothing sets `.dark` yet); pass themeType "dark" when a theme toggle lands.
+const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {
+  diffStyle: "unified",
+  theme: { light: "pierre-light", dark: "pierre-dark" },
+  themeType: "light",
+  overflow: "wrap",
+  disableFileHeader: true,
+};
+
 // Tools whose card starts expanded (docs/spec.md "Session view UX": Bash and edits expanded).
-const EXPANDED = new Set(["Bash"]);
+const EXPANDED = new Set(["Bash", "Edit", "Write"]);
 
 export function ToolCard({ call, result }: { call: ToolCall; result?: ToolResult }) {
   const Icon = ICONS[call.tool] ?? WrenchIcon;
@@ -113,6 +128,9 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
         </div>
       );
     }
+    case "Edit":
+    case "Write":
+      return <EditDiff call={call} result={result} />;
     default:
       return (
         <>
@@ -126,6 +144,28 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
         </>
       );
   }
+}
+
+/** Unified diff built from the Edit/Write input; the JSON parameters until the input has streamed in. */
+function EditDiff({ call, result }: { call: ToolCall; result?: ToolResult }) {
+  const files = useMemo(() => editFiles(call.tool, call.input), [call.tool, call.input]);
+  return (
+    <>
+      {files ? (
+        <div className="overflow-hidden rounded-md border text-xs" data-testid="edit-diff">
+          <MultiFileDiff oldFile={files.oldFile} newFile={files.newFile} options={DIFF_OPTIONS} />
+        </div>
+      ) : (
+        <ToolInput input={call.input} />
+      )}
+      {result && (
+        <ToolOutput
+          output={result.isError ? undefined : result.output}
+          errorText={result.isError ? text(result.output) : undefined}
+        />
+      )}
+    </>
+  );
 }
 
 const MAX_LINES = 20;
@@ -191,5 +231,67 @@ export function Thinking({ part }: { part: Extract<Part, { type: "thinking" }> }
       <ReasoningTrigger />
       <ReasoningContent>{part.text}</ReasoningContent>
     </Reasoning>
+  );
+}
+
+type Subagent = Extract<Part, { type: "subagent" }>;
+
+/** A subagent run: header with description and status; `children` is its nested timeline. */
+export function SubagentGroup({ part, result, children }: { part: Subagent; result?: ToolResult; children: ReactNode }) {
+  return (
+    // Open when it mounts live (pending/running), so its activity shows; finished ones from history mount collapsed.
+    <Tool data-testid="subagent" data-status={part.status} defaultOpen={part.status === "pending" || part.status === "running"}>
+      <ToolHeader
+        type="dynamic-tool"
+        toolName="Agent"
+        state={STATE[part.status]}
+        summary={part.description}
+        icon={<BotIcon className="size-4 shrink-0 text-muted-foreground" />}
+      />
+      <ToolContent className="space-y-2 border-l-2 p-2 pl-3">
+        {children}
+        {result && (
+          <ToolOutput
+            output={result.isError ? undefined : result.output}
+            errorText={result.isError ? text(result.output) : undefined}
+          />
+        )}
+      </ToolContent>
+    </Tool>
+  );
+}
+
+const TODO_ICONS: Record<TodoItem["status"], ReactNode> = {
+  completed: <CheckCircle2Icon className="size-4 shrink-0 text-green-600" />,
+  in_progress: <CircleDotIcon className="size-4 shrink-0 animate-pulse text-foreground" />,
+  pending: <CircleIcon className="size-4 shrink-0" />,
+};
+
+/** The pinned todo list (TodoWrite); an in-progress item shows its active form. */
+export function TodoList({ items }: { items: TodoItem[] }) {
+  const done = items.filter((i) => i.status === "completed").length;
+  return (
+    <Task className="rounded-lg border bg-background p-3" data-testid="todo-list">
+      <TaskTrigger title="Todos">
+        <div className="flex w-full cursor-pointer items-center gap-2 text-muted-foreground text-sm hover:text-foreground">
+          <ListTodoIcon className="size-4" />
+          <span>
+            Todos {done}/{items.length}
+          </span>
+        </div>
+      </TaskTrigger>
+      <TaskContent>
+        {items.map((item, i) => (
+          <TaskItem
+            key={i}
+            data-status={item.status}
+            className={`flex items-center gap-2 ${item.status === "completed" ? "line-through" : item.status === "in_progress" ? "text-foreground" : ""}`}
+          >
+            {TODO_ICONS[item.status]}
+            {item.status === "in_progress" ? (item.activeForm ?? item.content) : item.content}
+          </TaskItem>
+        ))}
+      </TaskContent>
+    </Task>
   );
 }

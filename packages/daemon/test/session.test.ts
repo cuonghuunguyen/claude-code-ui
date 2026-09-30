@@ -57,6 +57,15 @@ describe("Session", () => {
     expect(env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
   });
 
+  it("forwards subagent text and enables TodoWrite unless the user env says otherwise", () => {
+    vi.stubEnv("CLAUDE_CODE_ENABLE_TASKS", "1");
+    new Session("/tmp", { query: fakeQuery as never });
+    vi.unstubAllEnvs();
+    const opts = calls.at(-1)!;
+    expect(opts.forwardSubagentText).toBe(true);
+    expect(opts.env).toMatchObject({ CLAUDE_CODE_ENABLE_TODO_TOOLS: "1", CLAUDE_CODE_ENABLE_TASKS: "1" });
+  });
+
   it("rejects a prompt once the query failed, and logs the failure reason", async () => {
     const failing = () =>
       Object.assign((async function* () { throw new Error("login expired"); })(), {
