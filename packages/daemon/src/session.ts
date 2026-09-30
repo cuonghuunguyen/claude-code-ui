@@ -9,6 +9,7 @@ import {
   type SDKMessage,
   type SDKUserMessage,
   type SessionMessage,
+  type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   createAdapter,
@@ -29,6 +30,9 @@ const REJECTED = "The user doesn't want to proceed with this tool use. The tool 
 type PermissionPart = Extract<Part, { type: "permission_request" }>;
 type QuestionPart = Extract<Part, { type: "question" }>;
 type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string; updatedInput?: Record<string, unknown> };
+
+// Claude Code's sources: "local" (.claude/settings.local.json) holds the rules "don't ask again" saves.
+const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
 type SessionOpts = { model?: string; query?: typeof sdkQuery };
 
@@ -98,7 +102,7 @@ export class Session {
         cwd: this.cwd,
         model: this.model === "default" ? undefined : this.model,
         includePartialMessages: true,
-        settingSources: ["user", "project"],
+        settingSources: SETTING_SOURCES,
         // Thinking text is omitted by default; summaries feed the thinking parts.
         extraArgs: { "thinking-display": "summarized", "replay-user-messages": null },
         // Subagent text and thinking too, not only its tool calls: the UI shows the nested transcript.
@@ -336,7 +340,7 @@ export class Session {
 
 /** supportedModels() needs a query; this one gets no prompt and is closed right after the answer. */
 export async function listModels(query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> {
-  const q = query({ prompt: new InputQueue(), options: { settingSources: ["user", "project"], env: withoutApiKeys(process.env) } });
+  const q = query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env) } });
   try {
     return await q.supportedModels();
   } finally {
