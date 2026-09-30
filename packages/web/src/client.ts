@@ -8,6 +8,9 @@ type Request = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M
 type FsChanged = Extract<ServerMessage, { type: "fs.changed" }>;
 
 /** "unauthorized": the daemon rejected this browser's token (or it has none); no redial until it is paired. */
+/** A daemon `error` reply; `code` as the daemon sent it (e.g. unknown_session). */
+export type RequestError = Error & { code?: string };
+
 export type ConnectionStatus = "connected" | "reconnecting" | "offline" | "unauthorized";
 
 /** Failed attempts in a row after which the header shows offline; retries continue at the capped delay. */
@@ -61,7 +64,7 @@ export function connect(opts: {
       const p = m.reqId ? pending.get(m.reqId) : undefined;
       if (!p) return console.error("daemon error", m);
       pending.delete(m.reqId!);
-      m.type === "reply" ? p.resolve(m.result) : p.reject(new Error(m.message));
+      m.type === "reply" ? p.resolve(m.result) : p.reject(Object.assign(new Error(m.message), { code: m.code }));
     });
     // Node's WebSocket fires only error on a rejected upgrade, a browser error then close: handle the first, once.
     let down = false;

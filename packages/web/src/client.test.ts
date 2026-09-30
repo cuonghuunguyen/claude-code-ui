@@ -39,6 +39,13 @@ describe("connect", () => {
     // A request sent after reconnecting gets its reply.
     for (const s of wss.clients) s.on("message", (d) => s.send(JSON.stringify({ type: "reply", reqId: JSON.parse(String(d)).reqId, result: 7 })));
     expect(await c.request({ type: "session.subscribe", sessionId: "s", sinceSeq: 0 })).toBe(7);
+
+    // An error reply rejects with the daemon's code, so the app can tell a gone session from other failures.
+    for (const s of wss.clients) {
+      s.removeAllListeners("message");
+      s.on("message", (d) => s.send(JSON.stringify({ type: "error", reqId: JSON.parse(String(d)).reqId, code: "unknown_session", message: "no session s" })));
+    }
+    await expect(c.request({ type: "session.subscribe", sessionId: "s", sinceSeq: 0 })).rejects.toMatchObject({ code: "unknown_session", message: "no session s" });
     c.close();
   });
 

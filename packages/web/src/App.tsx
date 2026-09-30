@@ -21,7 +21,7 @@ import type {
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
-import { connect, type ConnectionStatus } from "./client.ts";
+import { connect, type ConnectionStatus, type RequestError } from "./client.ts";
 import { ImageStrip, readImages } from "./images.tsx";
 import { choose, matchCommands } from "./commands.ts";
 import { activeMention, insertAtCaret, insertMention } from "./mentions.ts";
@@ -109,7 +109,22 @@ export function App() {
       setViews((v) => ({ ...v, [sessionId]: withEpoch(v[sessionId] ?? emptySession(), r.logEpoch) }));
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
     } catch (e) {
+      // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
+      if ((e as RequestError).code === "unknown_session") return forget(sessionId);
       if ((e as Error).message !== "disconnected") setError((e as Error).message); // else resubscribed on reconnect
+    }
+  }
+
+  function forget(sessionId: string) {
+    const without = <T,>(r: Record<string, T>) => Object.fromEntries(Object.entries(r).filter(([id]) => id !== sessionId));
+    setViews(without);
+    setInfos(without);
+    requested.current.delete(sessionId);
+    setList((l) => l.filter((s) => s.id !== sessionId));
+    if (hashId() === sessionId) {
+      setActiveId(undefined);
+      history.replaceState(null, "", location.pathname + location.search);
+      setError("That session no longer exists in the daemon.");
     }
   }
 
@@ -279,9 +294,10 @@ export function App() {
                 onMenu={() => setDrawer(true)}
                 onModel={(model) => setModel(active.id, model)}
                 onPrompt={(text, images) =>
-                  client
-                    .current!.request({ type: "session.prompt", sessionId: active.id, text, images })
-                    .catch((e) => setError((e as Error).message))
+                  // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
+                  status === "connected"
+                    ? client.current!.request({ type: "session.prompt", sessionId: active.id, text, images })
+                    : Promise.reject(new Error(`the daemon is ${status === "unauthorized" ? "not paired" : status}`))
                 }
                 onInterrupt={() =>
                   client.current!.request({ type: "session.interrupt", sessionId: active.id }).catch((e) => setError((e as Error).message))
@@ -560,7 +576,7 @@ function ModelSelect({
   );
 }
 
-function SessionPane({
+export function SessionPane({
   scrollKey,
   insert,
   onInserted,
@@ -584,7 +600,8 @@ function SessionPane({
   view: SessionView;
   models: ModelInfo[];
   onModel: (model: string) => void;
-  onPrompt: (text: string, images: string[]) => void;
+  /** Rejects when the prompt was not taken; the prompt box then gets the text back. */
+  onPrompt: (text: string, images: string[]) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
   onMenu: () => void;
   onInterrupt: () => void;
@@ -611,6 +628,7 @@ function SessionPane({
   const [dismissed, setDismissed] = useState(false);
   const [caret, setCaret] = useState(0);
   const [found, setFound] = useState<{ query: string; paths: string[] }>();
+  const [sendError, setSendError] = useState<string>();
   const input = useRef<HTMLTextAreaElement>(null);
   const matches = dismissed ? undefined : matchCommands(view.commands, text);
   const mention = dismissed || matches ? undefined : activeMention(text, caret);
@@ -643,7 +661,15 @@ function SessionPane({
   }, [insert]);
   const send = (t = text) => {
     if (!t.trim() && !images.length) return;
-    onPrompt(t, images);
+    const sent = images;
+    setSendError(undefined);
+    onPrompt(t, sent).catch((e: Error) => {
+      // Back into the prompt box, before anything typed since.
+      setText((cur) => (cur ? `${t}\n${cur}` : t));
+      setCaret(t.length);
+      setImages((cur) => [...sent, ...cur]);
+      setSendError(`Prompt not sent: ${e.message}`);
+    });
     edit("");
     setImages([]);
   };
@@ -766,6 +792,11 @@ function SessionPane({
           <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} />
         ) : (
           <>
+            {sendError && (
+              <p className="text-destructive text-sm" role="alert" data-testid="prompt-error">
+                {sendError}
+              </p>
+            )}
             <ImageStrip images={images} onRemove={(i) => setImages((all) => all.filter((_, j) => j !== i))} />
             {pickerOpen && !matches?.length && (
               <ul
