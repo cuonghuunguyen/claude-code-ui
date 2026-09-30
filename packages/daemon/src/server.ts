@@ -6,6 +6,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { imageBlock, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
 import { getSessionInfo, getSessionMessages, listSessions, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
+import { searchFiles } from "./search.ts";
 import { listModels, Session } from "./session.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
@@ -233,6 +234,12 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
           } catch (err) {
             return fail("rewind_failed", (err as Error).message);
           }
+        }
+        case "fs.search": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (typeof msg.query !== "string") return fail("bad_query", "query must be a string");
+          return reply({ paths: searchFiles(cwd, msg.query) });
         }
         default:
           return fail("unknown_type", `unknown message type ${(msg as { type?: string }).type}`);

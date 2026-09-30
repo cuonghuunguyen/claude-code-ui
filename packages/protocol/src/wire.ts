@@ -28,6 +28,8 @@ export type ClientMessage = { reqId: string } & (
   | { type: "fs.list"; path?: string }
   | { type: "session.rewindPreview"; sessionId: string; userMessageId: string }
   | { type: "session.rewind"; sessionId: string; userMessageId: string; mode: RewindMode }
+  /** @-mention autocomplete: fuzzy matches under `cwd` (a session's cwd, inside the roots). */
+  | { type: "fs.search"; cwd: string; query: string }
 );
 
 /** Claude Code `/rewind` modes: `both` restores code, then conversation. */
@@ -59,3 +61,5 @@ export type ListResult = { sessions: SessionListItem[] };
 export type FsListResult = { entries: FsEntry[] };
 /** Dry run of a code rewind: files it would restore (empty = no code options); `conversation` false for the first prompt. */
 export type RewindPreview = { filesChanged: string[]; insertions: number; deletions: number; conversation: boolean };
+/** Paths relative to the searched cwd, best first; folders end with `/`. */
+export type FsSearchResult = { paths: string[] };
