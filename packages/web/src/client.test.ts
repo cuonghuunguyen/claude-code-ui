@@ -22,7 +22,9 @@ describe("connect", () => {
   it("reconnects after the socket drops, reports status, runs onOpen again, rejects in-flight requests", async () => {
     const statuses: ConnectionStatus[] = [];
     let opens = 0;
-    const c = connect({ url, onEvent: () => {}, onOpen: () => opens++, onStatus: (s) => statuses.push(s) });
+    const offered: (string | undefined)[] = [];
+    wss.on("connection", (_s, req) => offered.push(req.headers["sec-websocket-protocol"]));
+    const c = connect({ url, token: "t0k", onEvent: () => {}, onOpen: () => opens++, onStatus: (s) => statuses.push(s) });
     await until(() => opens === 1);
     const inflight = c.request({ type: "session.subscribe", sessionId: "s", sinceSeq: 0 });
     await until(() => wss.clients.size === 1);
@@ -30,6 +32,8 @@ describe("connect", () => {
     await expect(inflight).rejects.toThrow("disconnected");
     await until(() => opens === 2);
     expect(statuses).toEqual(["connected", "reconnecting", "connected"]);
+    // Every dial, including the reconnect, offers the pairing token.
+    expect(offered).toEqual(["claude-ui, token.t0k", "claude-ui, token.t0k"]);
 
     // A request sent after reconnecting gets its reply.
     for (const s of wss.clients) s.on("message", (d) => s.send(JSON.stringify({ type: "reply", reqId: JSON.parse(String(d)).reqId, result: 7 })));

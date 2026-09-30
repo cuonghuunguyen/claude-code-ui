@@ -5,18 +5,37 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import type { ServerMessage } from "@claude-ui/protocol";
+import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
 import { calls, fakeQuery, history, models, setModelCalls } from "./fake-query.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
-const http = createDaemon({ webRoot, query: fakeQuery as never });
+const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
+const http = createDaemon({ webRoot, query: fakeQuery as never, token });
 await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
 const { address, port } = http.address() as AddressInfo;
 afterAll(() => void http.close());
 
+const origin = () => `http://127.0.0.1:${port}`;
+const protocols = (t = token) => [WS_PROTOCOL, `${TOKEN_PROTOCOL_PREFIX}${t}`];
+
+/** Resolves with the HTTP status of a rejected upgrade and its body, or "open". */
+function attempt(opts: { protocols?: string[]; headers?: Record<string, string> }) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, opts.protocols ?? [], { headers: opts.headers });
+  return new Promise<{ status: number | "open"; body: string; protocol?: string }>((resolve) => {
+    ws.on("open", () => (resolve({ status: "open", body: "", protocol: ws.protocol }), ws.close()));
+    ws.on("unexpected-response", (_req, res) => {
+      let body = "";
+      res.on("data", (d) => (body += d));
+      res.on("end", () => resolve({ status: res.statusCode!, body }));
+    });
+    ws.on("error", () => {});
+  });
+}
+
 function client(p = port) {
-  const ws = new WebSocket(`ws://127.0.0.1:${p}/ws`);
+  const ws = new WebSocket(`ws://127.0.0.1:${p}/ws`, protocols(), { origin: `http://127.0.0.1:${p}` });
   const inbox: ServerMessage[] = [];
   ws.on("message", (d) => inbox.push(JSON.parse(String(d))));
   const waitFor = (pred: (m: ServerMessage) => boolean) =>
@@ -98,6 +117,7 @@ describe("daemon", () => {
     let reads = 0;
     const restarted = createDaemon({
       webRoot,
+      token,
       query: fakeQuery as never,
       history: {
         getSessionInfo: (async (sid: string) => (sid === id ? { sessionId: id, cwd: webRoot } : undefined)) as never,
@@ -164,5 +184,42 @@ describe("daemon", () => {
       expect(await prompt(bad)).toMatchObject({ type: "error", code: "bad_images" });
     expect(await prompt([])).toMatchObject({ type: "error", code: "bad_prompt" });
     expect(await prompt(["data:image/png;base64,iVBORw0KGgo="])).toMatchObject({ type: "reply" });
+  });
+});
+
+describe("WebSocket auth and origin check", () => {
+  it("accepts the paired token from the daemon's own origin and selects the claude-ui subprotocol", async () => {
+    expect(await attempt({ protocols: protocols(), headers: { origin: origin() } })).toMatchObject({ status: "open", protocol: WS_PROTOCOL });
+    const localhost = `http://localhost:${port}`;
+    expect((await attempt({ protocols: protocols(), headers: { origin: localhost, host: `localhost:${port}` } })).status).toBe("open");
+  });
+
+  it("rejects a connection without a token or with a wrong token (401), without echoing the token", async () => {
+    expect((await attempt({ headers: { origin: origin() } })).status).toBe(401);
+    expect((await attempt({ protocols: [WS_PROTOCOL], headers: { origin: origin() } })).status).toBe(401);
+    const wrong = await attempt({ protocols: protocols("wrong-token"), headers: { origin: origin() } });
+    expect(wrong.status).toBe(401);
+    expect(wrong.body).not.toContain("wrong-token");
+  });
+
+  it("rejects a cross-site, missing or DNS-rebinding Origin (403), even with the valid token", async () => {
+    const bad: Record<string, string>[] = [
+      { origin: "http://evil.example" },
+      { origin: `http://localhost:${port + 1}` },
+      {},
+      { origin: `http://evil.example:${port}`, host: `evil.example:${port}` },
+      { origin: "null" },
+    ];
+    for (const headers of bad) {
+      const r = await attempt({ protocols: protocols(), headers });
+      expect(r.status).toBe(403);
+      expect(r.body).not.toContain(token);
+    }
+  });
+
+  it("rejects upgrades on paths other than /ws", async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/other`, protocols(), { origin: origin() });
+    const status = await new Promise((r) => (ws.on("unexpected-response", (_q, res) => r(res.statusCode)), ws.on("error", () => {})));
+    expect(status).toBe(404);
   });
 });

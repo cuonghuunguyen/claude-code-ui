@@ -1,10 +1,10 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { createReadStream, existsSync, statSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { imageBlock, type ClientMessage, type ServerMessage } from "@claude-ui/protocol";
+import { imageBlock, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type ServerMessage } from "@claude-ui/protocol";
 import { getSessionInfo, getSessionMessages, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { listModels, Session } from "./session.ts";
 
@@ -23,7 +23,10 @@ const MIME: Record<string, string> = {
 
 type History = { getSessionInfo: typeof getSessionInfo; getSessionMessages: typeof getSessionMessages };
 
-export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery; history?: History }) {
+// ponytail: loopback only; add the remote-access hostname here once that is decided (ADR 0003).
+const LOCAL_HOSTNAMES = new Set(["127.0.0.1", "localhost"]);
+
+export function createDaemon(opts: { webRoot: string; token: string; query?: typeof sdkQuery; history?: History }) {
   const logEpoch = randomUUID();
   const sessions = new Map<string, Session>();
   const restoring = new Map<string, Promise<Session | undefined>>();
@@ -70,7 +73,25 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery; h
     createReadStream(file).pipe(res);
   });
 
-  const wss = new WebSocketServer({ server: http, path: "/ws" });
+  const wss = new WebSocketServer({ noServer: true, handleProtocols: () => WS_PROTOCOL });
+  const digest = (t: string) => createHash("sha256").update(t).digest();
+  const expected = digest(opts.token);
+  const hasToken = (req: IncomingMessage) =>
+    (req.headers["sec-websocket-protocol"] ?? "")
+      .split(",")
+      .map((p) => p.trim())
+      .some((p) => p.startsWith(TOKEN_PROTOCOL_PREFIX) && timingSafeEqual(digest(p.slice(TOKEN_PROTOCOL_PREFIX.length)), expected));
+
+  http.on("upgrade", (req, socket, head) => {
+    // Never put request headers in these responses: they carry the token.
+    const reject = (status: string) => void socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+    socket.on("error", () => socket.destroy());
+    if (new URL(req.url ?? "/", "http://x").pathname !== "/ws") return reject("404 Not Found");
+    if (!isOwnOrigin(req)) return reject("403 Forbidden");
+    if (!hasToken(req)) return reject("401 Unauthorized");
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+  });
+
   wss.on("connection", (ws) => {
     const unsubscribes = new Map<string, () => void>();
     ws.on("close", () => unsubscribes.forEach((u) => u()));
@@ -148,6 +169,21 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery; h
 }
 
 const isModel = (m: unknown): m is string => typeof m === "string" && m.trim() !== "";
+
+/**
+ * The Origin must be the origin the browser used to reach this daemon (its Host header), and that host
+ * must be loopback: a cross-site page has a foreign Origin, a DNS-rebinding page has a foreign Host.
+ */
+function isOwnOrigin(req: IncomingMessage) {
+  const { origin, host } = req.headers;
+  if (!origin || !host) return false;
+  try {
+    const o = new URL(origin);
+    return (o.protocol === "http:" || o.protocol === "https:") && o.host === host && LOCAL_HOSTNAMES.has(o.hostname);
+  } catch {
+    return false;
+  }
+}
 
 function send(ws: WebSocket, m: ServerMessage) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m));
