@@ -48,6 +48,8 @@ export class Session {
         model: this.model === "default" ? undefined : this.model,
         includePartialMessages: true,
         settingSources: ["user", "project"],
+        // Thinking text is omitted by default; summaries feed the thinking parts.
+        extraArgs: { "thinking-display": "summarized" },
         // ADR 0002: subscription login only. An inherited API key would take precedence and bill per token.
         env: withoutApiKeys(process.env),
       },

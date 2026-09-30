@@ -1,14 +1,15 @@
-// Records raw SDK messages of a real two-turn streaming session into a JSONL fixture for adapter tests.
-// Usage: npm run record-fixture -w @claude-ui/daemon -- <out.jsonl>
+// Records raw SDK messages of a real multi-turn streaming session into a JSONL fixture for adapter tests.
+// Usage: npm run record-fixture -w @claude-ui/daemon -- <out.jsonl> [prompt...]
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 const out = process.argv[2] ?? "fixture.jsonl";
-const prompts = [
+const defaultPrompts = [
   "Reply with a markdown heading, a 3-item bullet list and a short ts code block about seq numbers. Do not use tools.",
   "Now reply with exactly one short sentence. Do not use tools.",
 ];
+const prompts = process.argv.length > 3 ? process.argv.slice(3) : defaultPrompts;
 
 let next: (() => void) | undefined;
 async function* input(): AsyncGenerator<SDKUserMessage> {
@@ -21,7 +22,13 @@ async function* input(): AsyncGenerator<SDKUserMessage> {
 const lines: string[] = [];
 const q = query({
   prompt: input(),
-  options: { sessionId: randomUUID(), cwd: process.cwd(), includePartialMessages: true, settingSources: [] },
+  options: {
+    sessionId: randomUUID(),
+    cwd: process.cwd(),
+    includePartialMessages: true,
+    settingSources: [],
+    extraArgs: { "thinking-display": "summarized" },
+  },
 });
 let turns = 0;
 for await (const m of q) {
