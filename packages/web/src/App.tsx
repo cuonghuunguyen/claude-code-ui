@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { RotateCcwIcon } from "lucide-react";
 import type {
   CreateResult,
   Event,
@@ -8,18 +9,21 @@ import type {
   ModelInfo,
   ModelsResult,
   Part,
+  RewindMode,
+  RewindPreview,
   SessionInfo,
   SessionListItem,
   SetModelResult,
   SubscribeResult,
 } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
-import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
+import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus } from "./client.ts";
 import { ImageStrip, readImages } from "./images.tsx";
 import { choose, matchCommands } from "./commands.ts";
 import { groupByCwd, timeAgo } from "./sessions.ts";
+import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { applyEvent, emptySession, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, Thinking, ToolCard } from "./tool-card.tsx";
@@ -165,6 +169,10 @@ export function App() {
                 .current!.request({ type: "session.prompt", sessionId: active.id, text, images })
                 .catch((e) => setError((e as Error).message))
             }
+            onRewindPreview={(userMessageId) =>
+              client.current!.request<RewindPreview>({ type: "session.rewindPreview", sessionId: active.id, userMessageId })
+            }
+            onRewind={(userMessageId, mode) => client.current!.request({ type: "session.rewind", sessionId: active.id, userMessageId, mode })}
           />
         ) : (
           <>
@@ -361,6 +369,8 @@ function SessionPane({
   onModel,
   onPrompt,
   onMenu,
+  onRewindPreview,
+  onRewind,
 }: {
   session: SessionInfo;
   view: SessionView;
@@ -368,9 +378,12 @@ function SessionPane({
   onModel: (model: string) => void;
   onPrompt: (text: string, images: string[]) => void;
   onMenu: () => void;
+  onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
+  onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
 }) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
+  const [rewinding, setRewinding] = useState<string>();
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const matches = dismissed ? undefined : matchCommands(view.commands, text);
@@ -447,6 +460,35 @@ function SessionPane({
           {timeline(view).map((item) =>
             item.kind === "context" ? (
               <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} />
+            ) : item.part.type === "user_text" ? (
+              <div key={item.part.id} className="group flex flex-col gap-1" data-testid="user-message">
+                <PartView part={item.part} view={view} />
+                <MessageActions className="ml-auto opacity-60 group-hover:opacity-100">
+                  {/* No tooltip prop: its trigger renders a button around this button. */}
+                  <MessageAction
+                    title="Rewind"
+                    label="Rewind to before this message"
+                    disabled={view.state === "running"}
+                    onClick={() => setRewinding(rewinding === item.part.id ? undefined : item.part.id)}
+                  >
+                    <RotateCcwIcon />
+                  </MessageAction>
+                </MessageActions>
+                {rewinding === item.part.id && (
+                  <RewindPanel
+                    cwd={session.cwd}
+                    preview={() => onRewindPreview(item.part.id)}
+                    rewind={async (mode) => {
+                      const prompt = item.part as Extract<Part, { type: "user_text" }>;
+                      await onRewind(prompt.id, mode);
+                      setRewinding(undefined);
+                      // Conversation modes: the original prompt goes back into the prompt box.
+                      if (mode !== "code") edit(prompt.text), setImages(prompt.images);
+                    }}
+                    onCancel={() => setRewinding(undefined)}
+                  />
+                )}
+              </div>
             ) : (
               <PartView key={item.part.id} part={item.part} view={view} />
             ),
@@ -510,6 +552,62 @@ const resultOf = (view: SessionView, call: ToolCall) => {
   const p = view.parts.get(`${call.toolUseId}:result`);
   return p?.type === "tool_result" ? p : undefined;
 };
+
+function RewindPanel(props: {
+  cwd: string;
+  preview: () => Promise<RewindPreview>;
+  rewind: (mode: RewindMode) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [preview, setPreview] = useState<RewindPreview>();
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  useEffect(() => void props.preview().then(setPreview, (e: Error) => setError(e.message)), []);
+  const run = async (mode: RewindMode) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await props.rewind(mode);
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+  const options = preview ? rewindOptions(preview) : [];
+  const rel = (f: string) => (f.startsWith(props.cwd + "/") ? f.slice(props.cwd.length + 1) : f);
+
+  return (
+    <div className="ml-auto flex w-full max-w-md flex-col gap-2 rounded-lg border p-3 text-sm" data-testid="rewind-panel">
+      {!preview && !error && <p className="text-muted-foreground">Checking file changes…</p>}
+      {preview && preview.filesChanged.length > 0 && (
+        <div>
+          <p className="text-muted-foreground text-xs">
+            Restore code changes {preview.filesChanged.length} file(s), +{preview.insertions} −{preview.deletions}:
+          </p>
+          <ul className="font-mono text-xs" data-testid="rewind-files">
+            {preview.filesChanged.map((f) => (
+              <li key={f} className="truncate" title={f}>
+                {rel(f)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {preview && !options.length && <p className="text-muted-foreground">Nothing to rewind: first message and no file changes.</p>}
+      {error && <p className="text-destructive">{error}</p>}
+      <div className="flex flex-wrap gap-2">
+        {options.map((o) => (
+          <Button key={o.mode} size="sm" variant={o.mode === "both" ? "default" : "outline"} disabled={busy} onClick={() => run(o.mode)}>
+            {o.label}
+          </Button>
+        ))}
+        <Button size="sm" variant="ghost" onClick={props.onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function PartView({ part, view }: { part: Part; view: SessionView }) {
   switch (part.type) {

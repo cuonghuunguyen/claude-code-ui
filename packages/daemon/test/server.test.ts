@@ -276,6 +276,28 @@ describe("daemon", () => {
       d.close();
     }
   });
+
+  it("previews and runs a rewind over WebSocket; bad mode and unknown message are errors", async () => {
+    const c = await client();
+    const { result } = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+    const sessionId = result.session.id;
+    await c.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+    await c.request({ type: "session.prompt", sessionId, text: "hi" });
+    await c.waitFor((m) => m.type === "event" && m.part.type === "session_state" && m.part.state === "idle" && m.seq > 2);
+    const userMessageId = (c.inbox.find((m) => m.type === "event" && m.part.type === "user_text") as { part: { id: string } }).part.id;
+
+    expect(await c.request({ type: "session.rewindPreview", sessionId, userMessageId })).toMatchObject({
+      type: "reply",
+      result: { filesChanged: ["/repo/a.ts"], conversation: false },
+    });
+    expect(await c.request({ type: "session.rewind", sessionId, userMessageId, mode: "code" })).toMatchObject({ type: "reply" });
+    expect(await c.request({ type: "session.rewind", sessionId, userMessageId, mode: "conversation" })).toMatchObject({
+      code: "rewind_failed",
+      message: expect.stringMatching(/first prompt/),
+    });
+    expect(await c.request({ type: "session.rewind", sessionId, userMessageId, mode: "all" })).toMatchObject({ code: "bad_mode" });
+    expect(await c.request({ type: "session.rewindPreview", sessionId, userMessageId: "nope" })).toMatchObject({ code: "rewind_failed" });
+  });
 });
 
 describe("WebSocket auth and origin check", () => {
