@@ -1,5 +1,5 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
-import { createReadStream, existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
@@ -11,6 +11,12 @@ import { createNotifier, type Push } from "./push.ts";
 import { listModels, Session } from "./session.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
+
+/** Larger files are not opened in the editor. */
+const MAX_FILE_BYTES = 2 * 1024 * 1024;
+// ponytail: stat polling, robust to atomic rename-writes and WSL; fs.watch per directory if many tabs make polling costly.
+const WATCH_INTERVAL_MS = 1000;
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MIME: Record<string, string> = {
@@ -152,7 +158,17 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
 
   wss.on("connection", (ws) => {
     const unsubscribes = new Map<string, () => void>();
-    ws.on("close", () => (unsubscribes.forEach((u) => u()), focused.delete(ws)));
+    // fs.watch: watched path as the client gave it → canonical path and its stat listener.
+    const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();
+    const unwatchAll = () => {
+      watched.forEach((w) => unwatchFile(w.real, w.listener));
+      watched.clear();
+    };
+    ws.on("close", () => {
+      unsubscribes.forEach((u) => u());
+      unwatchAll();
+      focused.delete(ws);
+    });
     ws.on("message", async (data) => {
       let msg: ClientMessage;
       try {
@@ -287,6 +303,49 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
           else if (typeof msg.sessionId === "string") focused.set(ws, msg.sessionId);
           else return fail("bad_request", "sessionId must be a string");
           return reply({});
+        case "fs.read": {
+          const file = allowed(msg.path);
+          if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
+          try {
+            const st = statSync(file);
+            if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
+            if (st.size > MAX_FILE_BYTES) return fail("too_large", `larger than ${MAX_FILE_BYTES} bytes: ${msg.path}`);
+            const buf = readFileSync(file);
+            if (buf.includes(0)) return fail("binary", `binary file: ${msg.path}`);
+            return reply({ content: buf.toString("utf8"), mtime: st.mtimeMs });
+          } catch (err) {
+            return fail("fs_error", String(err));
+          }
+        }
+        case "fs.write": {
+          // Existing files only: the editor edits what the tree shows.
+          const file = allowed(msg.path);
+          if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
+          if (typeof msg.content !== "string") return fail("bad_content", "content must be a string");
+          try {
+            const st = statSync(file);
+            if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
+            if (msg.baseMtime !== undefined && st.mtimeMs !== msg.baseMtime)
+              return fail("conflict", `changed on disk since it was read: ${msg.path}`);
+            writeFileSync(file, msg.content);
+            return reply({ mtime: statSync(file).mtimeMs });
+          } catch (err) {
+            return fail("fs_error", String(err));
+          }
+        }
+        case "fs.watch": {
+          if (!Array.isArray(msg.paths)) return fail("bad_paths", "paths must be an array");
+          unwatchAll();
+          for (const path of msg.paths) {
+            const real = allowed(path);
+            if (!real || watched.has(path)) continue;
+            const listener = (curr: Stats, prev: Stats) =>
+              curr.mtimeMs !== prev.mtimeMs && send(ws, { type: "fs.changed", path, mtime: curr.mtimeMs });
+            watchFile(real, { interval: WATCH_INTERVAL_MS }, listener);
+            watched.set(path, { real, listener });
+          }
+          return reply({ watching: [...watched.keys()] });
+        }
         default:
           return fail("unknown_type", `unknown message type ${(msg as { type?: string }).type}`);
       }

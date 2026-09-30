@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -241,6 +241,61 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "prnot" })).toMatchObject({ result: { paths: ["proj/notes.md"] } });
     expect(await c.request({ type: "fs.search", cwd: join(webRoot, ".."), query: "" })).toMatchObject({ code: "cwd_not_allowed" });
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: 42 })).toMatchObject({ code: "bad_query" });
+  });
+
+  it("reads and writes files inside the roots only, refusing a write over a newer disk version", async () => {
+    const file = join(webRoot, "proj", "a.txt");
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    writeFileSync(file, "one");
+    const c = await client();
+    const read = (await c.request({ type: "fs.read", path: file })) as { result: { content: string; mtime: number } };
+    expect(read.result.content).toBe("one");
+    const wrote = (await c.request({ type: "fs.write", path: file, content: "two", baseMtime: read.result.mtime })) as {
+      result: { mtime: number };
+    };
+    expect(readFileSync(file, "utf8")).toBe("two");
+    // Stale base: the file changed since the client read it.
+    expect(
+      await c.request({ type: "fs.write", path: file, content: "three", baseMtime: read.result.mtime - 1000 }),
+    ).toMatchObject({
+      code: "conflict",
+    });
+    expect(readFileSync(file, "utf8")).toBe("two");
+    expect(await c.request({ type: "fs.read", path: file })).toMatchObject({
+      result: { content: "two", mtime: wrote.result.mtime },
+    });
+
+    const outside = join(mkdtempSync(join(tmpdir(), "outside-")), "secret.txt");
+    writeFileSync(outside, "secret");
+    expect(await c.request({ type: "fs.read", path: outside })).toMatchObject({ code: "path_not_allowed" });
+    expect(await c.request({ type: "fs.write", path: outside, content: "x" })).toMatchObject({ code: "path_not_allowed" });
+    expect(readFileSync(outside, "utf8")).toBe("secret");
+    // A symlink inside a root pointing outside it is outside.
+    symlinkSync(outside, join(webRoot, "proj", "link.txt"));
+    expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "link.txt") })).toMatchObject({
+      code: "path_not_allowed",
+    });
+    expect(await c.request({ type: "fs.read", path: join(webRoot, "proj") })).toMatchObject({ code: "not_a_file" });
+    writeFileSync(join(webRoot, "proj", "bin"), Buffer.from([1, 0, 2]));
+    expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "bin") })).toMatchObject({ code: "binary" });
+  });
+
+  it("notifies watchers when a watched file changes on disk", { timeout: 10_000 }, async () => {
+    const file = join(webRoot, "proj", "w.txt");
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    writeFileSync(file, "v1");
+    const c = await client();
+    expect(await c.request({ type: "fs.watch", paths: [file, join(webRoot, "..", "nope")] })).toMatchObject({ type: "reply" });
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(file, "v2 longer");
+    const changed = await c.waitFor((m) => m.type === "fs.changed");
+    expect(changed).toMatchObject({ type: "fs.changed", path: file, mtime: statSync(file).mtimeMs });
+    // An empty set stops watching.
+    await c.request({ type: "fs.watch", paths: [] });
+    c.inbox.length = 0;
+    writeFileSync(file, "v3");
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(c.inbox.some((m) => m.type === "fs.changed")).toBe(false);
   });
 
   it("lists transcripts inside the roots merged with live sessions; opening one resumes it with the same ID", async () => {
