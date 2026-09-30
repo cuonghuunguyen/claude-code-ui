@@ -8,7 +8,7 @@ import { languages } from "@codemirror/language-data";
 import type { FsEntry, FsListResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
 import type { connect, ConnectionStatus } from "./client.ts";
-import { diskChanged, inDir, isDirty, opened, reload, saved, type Tab } from "./files.ts";
+import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saved, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -69,14 +69,17 @@ export function FilesPanel({ client, status, cwd }: { client: Client; status: Co
 
   const paths = Object.keys(tabs);
   const watchKey = paths.join("\n");
+  const watchedRef = useRef(new Set<string>());
   useEffect(() => {
-    if (status !== "connected") return;
-    client.request({ type: "fs.watch", paths }).catch(() => {});
+    if (status !== "connected") return void watchedRef.current.clear();
+    // Re-read each newly watched path once the watch is armed: a change between the opening read (or while offline) and the watch baseline is not reported.
+    const added = paths.filter((p) => !watchedRef.current.has(p));
+    watchedRef.current = new Set(paths);
+    client
+      .request({ type: "fs.watch", paths })
+      .then(() => added.forEach((p) => void refresh(p)))
+      .catch(() => {});
   }, [status, watchKey]);
-  // After a (re)connect, pick up changes made while offline.
-  useEffect(() => {
-    if (status === "connected") Object.keys(tabsRef.current).forEach((p) => void refresh(p));
-  }, [status]);
   useEffect(() => client.onFsChanged((m) => void refresh(m.path)), [client]);
 
   const shown = paths.filter((p) => inDir(p, cwd));
@@ -271,12 +274,13 @@ function CodeEditor({
       doc,
       extensions: [
         basicSetup,
+        lineBreaks(doc),
         keymap.of([{ key: "Mod-s", preventDefault: true, run: () => (cb.current.onSave(), true) }]),
         language.of([]),
         EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { fontFamily: "var(--font-mono, monospace)" } }),
         EditorView.updateListener.of((u) => {
           if (!u.docChanged) return;
-          reported.current = u.state.doc.toString();
+          reported.current = docText(u.state);
           cb.current.onChange(reported.current);
         }),
       ],
@@ -297,7 +301,7 @@ function CodeEditor({
     const v = view.current;
     if (!v || doc === reported.current) return;
     reported.current = doc;
-    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: doc } });
+    v.dispatch(replaceDoc(v.state, doc));
   }, [doc]);
 
   // 16px on narrow screens: iOS zooms into smaller focused text.

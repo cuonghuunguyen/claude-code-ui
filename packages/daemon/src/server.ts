@@ -312,7 +312,14 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
             if (st.size > MAX_FILE_BYTES) return fail("too_large", `larger than ${MAX_FILE_BYTES} bytes: ${msg.path}`);
             const buf = readFileSync(file);
             if (buf.includes(0)) return fail("binary", `binary file: ${msg.path}`);
-            return reply({ content: buf.toString("utf8"), mtime: st.mtimeMs });
+            let content: string;
+            try {
+              // Fatal: a lossy decode would turn invalid bytes into U+FFFD and a save would write that back. ignoreBOM keeps the BOM in the content.
+              content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buf);
+            } catch {
+              return fail("not_utf8", `not UTF-8 text: ${msg.path}`);
+            }
+            return reply({ content, mtime: st.mtimeMs });
           } catch (err) {
             return fail("fs_error", String(err));
           }

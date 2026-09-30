@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { diskChanged, inDir, isDirty, opened, reload, saved } from "./files.ts";
+import { EditorState } from "@codemirror/state";
+import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saved } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -44,5 +45,29 @@ describe("inDir", () => {
     expect(inDir("/p/x/a.ts", "/p/x")).toBe(true);
     expect(inDir("/p/xy/a.ts", "/p/x")).toBe(false);
     expect(inDir("/p/x", "/p/x")).toBe(true);
+  });
+});
+
+describe("editor document", () => {
+  const insert = (s: EditorState, at: number, text: string) => s.update({ changes: { from: at, insert: text } }).state;
+
+  it("keeps the file's line breaks through edits, Enter and a reload", () => {
+    let s = EditorState.create({ doc: "a\r\nb\r\n", extensions: lineBreaks("a\r\nb\r\n") });
+    s = insert(s, 0, "x");
+    s = insert(s, s.doc.length, `c${s.lineBreak}`);
+    expect(docText(s)).toBe("xa\r\nb\r\nc\r\n");
+    // A reload that converts the file to LF, then back to CRLF.
+    s = s.update(replaceDoc(s, "d\ne")).state;
+    expect(docText(s)).toBe("d\ne");
+    s = s.update(replaceDoc(s, "f\r\ng\r\n")).state;
+    expect(docText(s)).toBe("f\r\ng\r\n");
+  });
+
+  it("keeps mixed and lone-CR line breaks, an empty file and a missing final newline as they are", () => {
+    for (const doc of ["a\r\nb\nc", "a\rb", "", "no newline"]) {
+      const s = EditorState.create({ doc, extensions: lineBreaks(doc) });
+      expect(docText(insert(s, 0, ""))).toBe(doc);
+      expect(docText(s.update(replaceDoc(s, doc)).state)).toBe(doc);
+    }
   });
 });

@@ -280,6 +280,26 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "bin") })).toMatchObject({ code: "binary" });
   });
 
+  it("fs.read refuses non-UTF-8 text and keeps a BOM, CRLF and a missing final newline byte for byte", async () => {
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    const c = await client();
+    const latin1 = join(webRoot, "proj", "latin1.txt");
+    writeFileSync(latin1, Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a])); // "café\n" in Latin-1
+    expect(await c.request({ type: "fs.read", path: latin1 })).toMatchObject({ code: "not_utf8" });
+
+    const bytes = Buffer.from("\ufeffa\r\nb", "utf8");
+    const file = join(webRoot, "proj", "bom.txt");
+    writeFileSync(file, bytes);
+    const read = (await c.request({ type: "fs.read", path: file })) as { result: { content: string; mtime: number } };
+    expect(read.result.content).toBe("\ufeffa\r\nb");
+    await c.request({ type: "fs.write", path: file, content: read.result.content, baseMtime: read.result.mtime });
+    expect(readFileSync(file).equals(bytes)).toBe(true);
+
+    const empty = join(webRoot, "proj", "empty.txt");
+    writeFileSync(empty, "");
+    expect(await c.request({ type: "fs.read", path: empty })).toMatchObject({ result: { content: "" } });
+  });
+
   it("notifies watchers when a watched file changes on disk", { timeout: 10_000 }, async () => {
     const file = join(webRoot, "proj", "w.txt");
     mkdirSync(join(webRoot, "proj"), { recursive: true });
