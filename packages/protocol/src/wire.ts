@@ -1,13 +1,19 @@
 // WebSocket wire protocol (docs/spec.md "Wire protocol"). JSON, one message per frame.
+import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import type { Part, SessionState } from "./parts.ts";
 
-export type SessionInfo = { id: string; cwd: string; state: SessionState };
+export type { ModelInfo };
+
+/** `model` is a `ModelInfo.value` from models.list; "default" = the SDK default model. */
+export type SessionInfo = { id: string; cwd: string; state: SessionState; model: string };
 
 /** Every client message carries a `reqId`; the daemon answers with a `reply` or an `error` with the same `reqId`. */
 export type ClientMessage = { reqId: string } & (
   | { type: "session.create"; cwd: string; model?: string }
   | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string }
   | { type: "session.prompt"; sessionId: string; text: string }
+  | { type: "session.setModel"; sessionId: string; model: string }
+  | { type: "models.list" }
 );
 
 export type Event = { type: "event"; sessionId: string; seq: number; part: Part };
@@ -20,3 +26,5 @@ export type ServerMessage =
 export type CreateResult = { session: SessionInfo };
 /** `logEpoch` differs from the one the client sent: its store belongs to an earlier daemon run and the events are a full replay. */
 export type SubscribeResult = { logEpoch: string; session: SessionInfo };
+export type SetModelResult = { session: SessionInfo };
+export type ModelsResult = { models: ModelInfo[] };

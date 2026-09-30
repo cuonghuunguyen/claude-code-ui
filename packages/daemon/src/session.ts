@@ -1,6 +1,6 @@
 // A live session: one long-lived streaming-input query() whose SDK messages become logged events.
 import { randomUUID } from "node:crypto";
-import { query as sdkQuery, type SDKMessage, type SDKUserMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query as sdkQuery, type ModelInfo, type Query, type SDKMessage, type SDKUserMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createAdapter, type Event, type Part, type SessionInfo, type SessionState } from "@claude-ui/protocol";
 
 type Listener = (e: Event) => void;
@@ -14,7 +14,8 @@ export class Session {
   private readonly log: Event[] = [];
   private readonly listeners = new Set<Listener>();
   private readonly input = new InputQueue();
-  private started = false;
+  private query?: Query;
+  private model: string;
 
   constructor(
     readonly cwd: string,
@@ -22,6 +23,7 @@ export class Session {
     restored?: { id: string; history: SessionMessage[] },
   ) {
     this.id = restored?.id ?? randomUUID();
+    this.model = opts.model ?? "default";
     if (!restored) {
       this.start({ sessionId: this.id });
       return;
@@ -38,24 +40,23 @@ export class Session {
   }
 
   private start(ids: { sessionId: string } | { resume: string }) {
-    this.started = true;
-    const q = (this.opts.query ?? sdkQuery)({
+    const q = (this.query = (this.opts.query ?? sdkQuery)({
       prompt: this.input,
       options: {
         ...ids,
         cwd: this.cwd,
-        model: this.opts.model,
+        model: this.model === "default" ? undefined : this.model,
         includePartialMessages: true,
         settingSources: ["user", "project"],
         // ADR 0002: subscription login only. An inherited API key would take precedence and bill per token.
         env: withoutApiKeys(process.env),
       },
-    });
+    }));
     void this.drive(q);
   }
 
   info(): SessionInfo {
-    return { id: this.id, cwd: this.cwd, state: this.state };
+    return { id: this.id, cwd: this.cwd, state: this.state, model: this.model };
   }
 
   /** Replays events with seq > sinceSeq, then follows. Returns an unsubscribe function. */
@@ -75,8 +76,16 @@ export class Session {
     const uuid = randomUUID();
     this.emit({ type: "user_text", id: uuid, text, images: [] });
     this.setState("running");
-    if (!this.started) this.start({ resume: this.id });
+    if (!this.query) this.start({ resume: this.id });
     this.input.push({ type: "user", uuid, message: { role: "user", content: text }, parent_tool_use_id: null });
+  }
+
+  /** Switches the live query's model; "default" resets to the SDK default. A restored session not yet resumed resumes with it. */
+  async setModel(model: string) {
+    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
+    await this.query?.setModel(model);
+    this.model = model;
+    this.emit({ type: "session_model", id: "session_model", model });
   }
 
   private async drive(q: AsyncIterable<SDKMessage>) {
@@ -103,6 +112,16 @@ export class Session {
     const e: Event = { type: "event", sessionId: this.id, seq: this.log.length + 1, part };
     this.log.push(e);
     for (const l of this.listeners) l(e);
+  }
+}
+
+/** supportedModels() needs a query; this one gets no prompt and is closed right after the answer. */
+export async function listModels(query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> {
+  const q = query({ prompt: new InputQueue(), options: { settingSources: ["user", "project"], env: withoutApiKeys(process.env) } });
+  try {
+    return await q.supportedModels();
+  } finally {
+    q.close();
   }
 }
 

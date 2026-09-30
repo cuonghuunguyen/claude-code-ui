@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import type { ServerMessage } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
-import { calls, fakeQuery, history } from "./fake-query.ts";
+import { calls, fakeQuery, history, models, setModelCalls } from "./fake-query.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
@@ -127,5 +127,31 @@ describe("daemon", () => {
     } finally {
       restarted.close();
     }
+  });
+
+  it("lists models from supportedModels() and caches them", async () => {
+    const c = await client();
+    const before = calls.length;
+    expect(await c.request({ type: "models.list" })).toMatchObject({ type: "reply", result: { models } });
+    expect(await c.request({ type: "models.list" })).toMatchObject({ result: { models } });
+    expect(calls.length).toBe(before + 1);
+  });
+
+  it("creates a session with a model and switches it with session.setModel", async () => {
+    const c = await client();
+    const created = await c.request({ type: "session.create", cwd: webRoot, model: "haiku" });
+    const session = (created as { result: { session: { id: string; model: string } } }).result.session;
+    expect(session.model).toBe("haiku");
+    const r = await c.request({ type: "session.setModel", sessionId: session.id, model: "default" });
+    expect(r).toMatchObject({ type: "reply", result: { session: { id: session.id, model: "default" } } });
+    expect(setModelCalls.at(-1)).toBe("default");
+  });
+
+  it("rejects an empty or non-string model", async () => {
+    const c = await client();
+    expect(await c.request({ type: "session.create", cwd: webRoot, model: 5 })).toMatchObject({ code: "bad_model" });
+    const created = await c.request({ type: "session.create", cwd: webRoot });
+    const id = (created as { result: { session: { id: string } } }).result.session.id;
+    expect(await c.request({ type: "session.setModel", sessionId: id, model: "" })).toMatchObject({ code: "bad_model" });
   });
 });

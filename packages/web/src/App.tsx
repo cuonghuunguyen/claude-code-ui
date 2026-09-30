@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import type { CreateResult, Event, Part, SessionInfo, SubscribeResult } from "@claude-ui/protocol";
+import type { CreateResult, Event, ModelInfo, ModelsResult, Part, SessionInfo, SetModelResult, SubscribeResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ export function App() {
   const [activeId, setActiveId] = useState<string>();
   const [error, setError] = useState<string>();
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const client = useRef<ReturnType<typeof connect>>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
@@ -44,7 +45,7 @@ export function App() {
       });
       // Runs before the replayed events: the reply precedes them on the socket and this continuation is a microtask.
       setViews((v) => ({ ...v, [sessionId]: withEpoch(v[sessionId] ?? emptySession(), r.logEpoch) }));
-      setSessions((s) => (s.some((x) => x.id === sessionId) ? s : [...s, r.session]));
+      setSessions((s) => (s.some((x) => x.id === sessionId) ? s.map((x) => (x.id === sessionId ? r.session : x)) : [...s, r.session]));
       setActiveId((a) => a ?? sessionId);
     } catch (e) {
       if ((e as Error).message === "disconnected") return; // resubscribed on reconnect
@@ -57,20 +58,36 @@ export function App() {
     const c = connect({
       onEvent: (e: Event) =>
         setViews((v) => ({ ...v, [e.sessionId]: applyEvent(v[e.sessionId] ?? emptySession(), e) })),
-      onOpen: () => loadIds().forEach((id) => void subscribe(id)),
+      onOpen: () => {
+        loadIds().forEach((id) => void subscribe(id));
+        c.request<ModelsResult>({ type: "models.list" }).then(
+          (r) => setModels(r.models),
+          (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
+        );
+      },
       onStatus: setStatus,
     });
     client.current = c;
     return c.close;
   }, []);
 
-  async function createSession(cwd: string) {
+  async function createSession(cwd: string, model: string) {
     setError(undefined);
     try {
-      const { session } = await client.current!.request<CreateResult>({ type: "session.create", cwd });
+      const { session } = await client.current!.request<CreateResult>({ type: "session.create", cwd, model });
       saveIds([...loadIds(), session.id]);
       await subscribe(session.id);
       setActiveId(session.id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function setModel(sessionId: string, model: string) {
+    setError(undefined);
+    try {
+      const { session } = await client.current!.request<SetModelResult>({ type: "session.setModel", sessionId, model });
+      setSessions((all) => all.map((s) => (s.id === session.id ? session : s)));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -83,7 +100,7 @@ export function App() {
     <div className="flex h-dvh bg-background text-foreground">
       <aside className="flex w-72 shrink-0 flex-col gap-3 border-r p-3">
         <ConnectionBadge status={status} />
-        <NewSessionForm onCreate={createSession} />
+        <NewSessionForm models={models} onCreate={createSession} />
         {error && <p className="text-destructive text-sm">{error}</p>}
         <ul className="flex flex-col gap-1 overflow-y-auto">
           {sessions.map((s) => (
@@ -105,6 +122,8 @@ export function App() {
           <SessionPane
             session={active}
             view={view}
+            models={models}
+            onModel={(model) => setModel(active.id, model)}
             onPrompt={(text) => client.current!.request({ type: "session.prompt", sessionId: active.id, text })}
           />
         ) : (
@@ -130,11 +149,12 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   );
 }
 
-function NewSessionForm({ onCreate }: { onCreate: (cwd: string) => void }) {
+function NewSessionForm({ models, onCreate }: { models: ModelInfo[]; onCreate: (cwd: string, model: string) => void }) {
   const [cwd, setCwd] = useState("");
+  const [model, setModel] = useState("default");
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (cwd.trim()) onCreate(cwd.trim());
+    if (cwd.trim()) onCreate(cwd.trim(), model);
   };
   return (
     <form onSubmit={submit} className="flex flex-col gap-2">
@@ -148,12 +168,52 @@ function NewSessionForm({ onCreate }: { onCreate: (cwd: string) => void }) {
         value={cwd}
         onChange={(e) => setCwd(e.target.value)}
       />
+      <label className="font-medium text-sm" htmlFor="new-model">
+        Model
+      </label>
+      <ModelSelect id="new-model" models={models} value={model} onChange={setModel} className="py-1.5 text-sm" />
       <Button type="submit">New session</Button>
     </form>
   );
 }
 
-function SessionPane({ session, view, onPrompt }: { session: SessionInfo; view: SessionView; onPrompt: (text: string) => void }) {
+function ModelSelect({
+  models,
+  value,
+  onChange,
+  ...rest
+}: { models: ModelInfo[]; value: string; onChange: (model: string) => void; id?: string; className?: string; "aria-label"?: string }) {
+  // Keep the current value selectable while the list loads or if it is not in the list.
+  const options = models.some((m) => m.value === value) ? models : [{ value, displayName: value, description: "" }, ...models];
+  return (
+    <select
+      {...rest}
+      className={`rounded-md border bg-background px-2 ${rest.className ?? ""}`}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {options.map((m) => (
+        <option key={m.value} value={m.value} title={m.description}>
+          {m.displayName}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function SessionPane({
+  session,
+  view,
+  models,
+  onModel,
+  onPrompt,
+}: {
+  session: SessionInfo;
+  view: SessionView;
+  models: ModelInfo[];
+  onModel: (model: string) => void;
+  onPrompt: (text: string) => void;
+}) {
   const [text, setText] = useState("");
   const send = () => {
     if (!text.trim()) return;
@@ -171,7 +231,15 @@ function SessionPane({ session, view, onPrompt }: { session: SessionInfo; view: 
     <>
       <header className="flex items-center gap-3 border-b px-4 py-2 text-sm">
         <span className="truncate font-mono">{session.cwd}</span>
-        <span className="ml-auto rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
+        <ModelSelect
+          aria-label="Model"
+          data-testid="session-model"
+          models={models}
+          value={view.model ?? session.model}
+          onChange={onModel}
+          className="ml-auto py-0.5 text-xs"
+        />
+        <span className="rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
           {view.state}
         </span>
       </header>

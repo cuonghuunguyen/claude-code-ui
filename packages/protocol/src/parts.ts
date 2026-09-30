@@ -14,5 +14,7 @@ export type Part =
   | { type: "user_text"; id: string; text: string; images: string[] }
   | { type: "assistant_text"; id: string; text: string; streaming: boolean }
   | { type: "session_state"; id: string; state: SessionState }
+  /** Model switched with session.setModel. `model` is a `ModelInfo.value`; "default" = the SDK default. */
+  | { type: "session_model"; id: string; model: string }
   | { type: "turn_result"; id: string; durationMs: number; costUsd: number; usage: TokenUsage; isError: boolean }
   | { type: "raw"; id: string; message: unknown };

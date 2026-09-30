@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMessage, ServerMessage } from "@claude-ui/protocol";
 import { getSessionInfo, getSessionMessages, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
-import { Session } from "./session.ts";
+import { listModels, Session } from "./session.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -29,6 +29,8 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery; h
   const restoring = new Map<string, Promise<Session | undefined>>();
   const history = opts.history ?? { getSessionInfo, getSessionMessages };
   const root = resolve(opts.webRoot);
+  // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
+  let models: ReturnType<typeof listModels> | undefined;
 
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
   function findSession(id: string): Promise<Session | undefined> {
@@ -89,6 +91,7 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery; h
         case "session.create": {
           if (typeof msg.cwd !== "string" || !existsSync(msg.cwd) || !statSync(msg.cwd).isDirectory())
             return fail("bad_cwd", `not a directory: ${msg.cwd}`);
+          if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
           const s = new Session(msg.cwd, { model: msg.model, query: opts.query });
           sessions.set(s.id, s);
           return reply({ session: s.info() });
@@ -111,6 +114,27 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery; h
           s.prompt(msg.text);
           return reply({});
         }
+        case "session.setModel": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (!isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
+          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
+          try {
+            await s.setModel(msg.model);
+          } catch (e) {
+            return fail("set_model_failed", (e as Error).message);
+          }
+          return reply({ session: s.info() });
+        }
+        case "models.list": {
+          models ??= listModels(opts.query);
+          try {
+            return reply({ models: await models });
+          } catch (e) {
+            models = undefined;
+            return fail("models_failed", (e as Error).message);
+          }
+        }
         default:
           return fail("unknown_type", `unknown message type ${(msg as { type?: string }).type}`);
       }
@@ -119,6 +143,8 @@ export function createDaemon(opts: { webRoot: string; query?: typeof sdkQuery; h
 
   return http;
 }
+
+const isModel = (m: unknown): m is string => typeof m === "string" && m.trim() !== "";
 
 function send(ws: WebSocket, m: ServerMessage) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m));
