@@ -307,9 +307,9 @@ export class Session {
       for await (const m of q) {
         if (generation !== this.generation) return;
         // Echo of a prompt() message (replay-user-messages); its user_text is already logged. The CLI took it now:
-        // a steering message pushed as the turn ended starts a turn of its own.
+        // a steering message pushed as the turn ended starts a turn of its own. Other replays (the model switch echo) start none.
         if (m.type === "user" && "isReplay" in m && m.isReplay) {
-          if (this.state === "idle") this.setState("running");
+          if (this.state === "idle" && m.uuid && this.checkpoints.has(m.uuid)) this.setState("running");
           continue;
         }
         if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;

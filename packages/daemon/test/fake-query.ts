@@ -190,6 +190,9 @@ export function interruptQuery({ prompt, options }: { prompt: AsyncIterable<SDKU
   return Object.assign(q, {
     supportedCommands: async () => [],
     interrupt: async () => (interrupts.push(1), stop?.(), { still_queued: [] }),
+    // After a turn the CLI replays its /model echo (recorded in development-docs/FIX-A/model-probe.log).
+    setModel: async (m: string) =>
+      emit({ type: "user", isReplay: true, uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: `<local-command-stdout>Set model to \`${m} (claude-${m})\`</local-command-stdout>` } }),
     close: () => void q.return(undefined as never),
   });
 }

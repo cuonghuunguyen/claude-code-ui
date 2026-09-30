@@ -390,6 +390,18 @@ describe("Session steering and interrupt", () => {
     expect(calls.filter((c) => c.sessionId === s.id)).toHaveLength(1);
   });
 
+  it("the CLI's replayed model switch echo after a turn is no prompt: the session stays idle", async () => {
+    const s = new Session("/tmp", { query: interruptQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hi");
+    await idle(events, 0);
+    await s.setModel("haiku");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(s.info().state).toBe("idle");
+    expect(events.filter((e) => e.part.type === "user_text")).toHaveLength(1);
+  });
+
   it("interrupt() while idle does nothing", async () => {
     const s = new Session("/tmp", { query: interruptQuery as never });
     const n = interrupts.length;
