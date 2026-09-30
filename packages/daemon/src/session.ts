@@ -26,6 +26,7 @@ export class Session {
   private input = new InputQueue();
   private query?: Query;
   private model: string;
+  private readonly adapter = createAdapter();
   /** Bumped when a conversation rewind drops the query; the old drive loop then stops logging. */
   private generation = 0;
   /**
@@ -85,6 +86,11 @@ export class Session {
     }));
     this.resumeAt = undefined;
     void this.drive(q);
+    // Later changes arrive as system/commands_changed through drive().
+    q.supportedCommands().then(
+      (list) => this.adapter.commands(list).forEach((p) => this.emit(p)),
+      (err) => console.error(`session ${this.id}: supportedCommands failed:`, err),
+    );
     return q;
   }
 
