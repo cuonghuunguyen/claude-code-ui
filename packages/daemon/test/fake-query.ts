@@ -17,8 +17,8 @@ for (const m of lines) {
 export const calls: Options[] = [];
 export const setModelCalls: (string | undefined)[] = [];
 export const models: ModelInfo[] = [
-  { value: "default", displayName: "Default (recommended)", description: "" },
-  { value: "haiku", displayName: "Haiku 4.5", description: "" },
+  { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "" },
+  { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", description: "" },
 ];
 export const inputs: SDKUserMessage[] = [];
 /** rewindFiles() calls, and the files each dry run reports (set per test). */
@@ -190,6 +190,9 @@ export function interruptQuery({ prompt, options }: { prompt: AsyncIterable<SDKU
   return Object.assign(q, {
     supportedCommands: async () => [],
     interrupt: async () => (interrupts.push(1), stop?.(), { still_queued: [] }),
+    // After a turn the CLI replays its /model echo (recorded in development-docs/FIX-A/model-probe.log).
+    setModel: async (m: string) =>
+      emit({ type: "user", isReplay: true, uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: `<local-command-stdout>Set model to \`${m} (claude-${m})\`</local-command-stdout>` } }),
     close: () => void q.return(undefined as never),
   });
 }

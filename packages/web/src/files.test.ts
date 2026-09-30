@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saved, selectionMention } from "./files.ts";
+import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -32,6 +32,13 @@ describe("editor tab", () => {
     // Typing continued after the save; the watcher then reports the save's mtime.
     expect(diskChanged({ ...s, draft: "two!" }, { content: "two", mtime: 5 })).toEqual({ ...s, draft: "two!" });
     expect(diskChanged(edited, { content: "one", mtime: 9 })).toEqual({ ...edited, mtime: 9 });
+  });
+
+  it("a plain save of a tab in conflict writes against its own version (the daemon refuses it); only Overwrite with mine takes the disk version", () => {
+    const t = diskChanged({ ...tab, draft: "mine" }, { content: "claude", mtime: 2 });
+    expect(saveBase(t, false)).toBe(1);
+    expect(saveBase(t, true)).toBe(2);
+    expect(saveBase(tab, true)).toBe(1);
   });
 
   it("saving over a conflict clears it", () => {

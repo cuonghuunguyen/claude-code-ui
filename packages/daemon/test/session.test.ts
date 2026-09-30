@@ -158,9 +158,9 @@ describe("Session", () => {
     ]);
   });
 
-  it("loads user and project commands and skills (settingSources)", () => {
+  it("loads user, project and local settings like Claude Code: commands, skills, saved permission rules", () => {
     new Session("/tmp", { query: fakeQuery as never });
-    expect(calls.at(-1)).toMatchObject({ settingSources: ["user", "project"] });
+    expect(calls.at(-1)).toMatchObject({ settingSources: ["user", "project", "local"] });
   });
 
   it("logs the supportedCommands() list as a commands part before the first prompt", async () => {
@@ -209,6 +209,17 @@ describe("Session", () => {
       const { s, req, answered } = await ask();
       s.respond(req.requestId, { decision: "allow", updatedInput: { command: "npm test -- --run" } });
       expect(await answered()).toEqual({ behavior: "allow", updatedInput: { command: "npm test -- --run" } });
+    });
+
+    it("an edited accept shows the applied input, marked as the user's edit, on the tool call and the settled request", async () => {
+      const { s, events, req } = await ask();
+      const applied = { command: "npm test -- --run" };
+      s.respond(req.requestId, { decision: "allow", updatedInput: applied });
+      expect(lastPart(events, req.toolUseId)).toMatchObject({ type: "tool_call", input: applied, editedByUser: true });
+      expect(lastPart(events, req.id)).toMatchObject({ settled: true, decision: "allow", input: applied, editedByUser: true });
+      await until(events, (e) => e.part.type === "turn_result");
+      // Later status updates keep the applied input.
+      expect(lastPart(events, req.toolUseId)).toMatchObject({ input: applied, editedByUser: true });
     });
 
     it("don't ask again returns the chosen SDK suggestion as updatedPermissions", async () => {
@@ -379,6 +390,18 @@ describe("Session steering and interrupt", () => {
     expect(calls.filter((c) => c.sessionId === s.id)).toHaveLength(1);
   });
 
+  it("the CLI's replayed model switch echo after a turn is no prompt: the session stays idle", async () => {
+    const s = new Session("/tmp", { query: interruptQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hi");
+    await idle(events, 0);
+    await s.setModel("haiku");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(s.info().state).toBe("idle");
+    expect(events.filter((e) => e.part.type === "user_text")).toHaveLength(1);
+  });
+
   it("interrupt() while idle does nothing", async () => {
     const s = new Session("/tmp", { query: interruptQuery as never });
     const n = interrupts.length;
@@ -500,5 +523,17 @@ describe("Session rewind", () => {
     const { s } = restored();
     s.prompt("third");
     await expect(s.rewind("u2", "code")).rejects.toThrow(/running/);
+  });
+
+  it("rejects a rewind and its preview while a turn waits for a permission answer", async () => {
+    const s = new Session("/tmp", { query: interruptQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("ask first");
+    await until(events, (e) => e.part.type === "permission_request");
+    expect(s.info().state).toBe("needs_input");
+    const prompt = events.find((e) => e.part.type === "user_text")!.part.id;
+    await expect(s.rewind(prompt, "code")).rejects.toThrow(/running/);
+    await expect(s.previewRewind(prompt)).rejects.toThrow(/running/);
   });
 });

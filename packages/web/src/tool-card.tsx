@@ -76,6 +76,8 @@ export function ToolCard({ call, result }: { call: ToolCall; result?: ToolResult
         type="dynamic-tool"
         toolName={call.tool}
         state={STATE[call.status]}
+        // Next to the tool name, which is never truncated like the summary.
+        title={call.editedByUser ? `${call.tool} · edited by you` : undefined}
         summary={[toolSummary(call.input), range].filter(Boolean).join(" · ")}
         icon={<Icon className="size-4 shrink-0 text-muted-foreground" />}
       />

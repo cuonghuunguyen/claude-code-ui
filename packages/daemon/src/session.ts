@@ -9,6 +9,7 @@ import {
   type SDKMessage,
   type SDKUserMessage,
   type SessionMessage,
+  type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   createAdapter,
@@ -29,6 +30,9 @@ const REJECTED = "The user doesn't want to proceed with this tool use. The tool 
 type PermissionPart = Extract<Part, { type: "permission_request" }>;
 type QuestionPart = Extract<Part, { type: "question" }>;
 type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string; updatedInput?: Record<string, unknown> };
+
+// Claude Code's sources: "local" (.claude/settings.local.json) holds the rules "don't ask again" saves.
+const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
 type SessionOpts = { model?: string; query?: typeof sdkQuery };
 
@@ -98,7 +102,7 @@ export class Session {
         cwd: this.cwd,
         model: this.model === "default" ? undefined : this.model,
         includePartialMessages: true,
-        settingSources: ["user", "project"],
+        settingSources: SETTING_SOURCES,
         // Thinking text is omitted by default; summaries feed the thinking parts.
         extraArgs: { "thinking-display": "summarized", "replay-user-messages": null },
         // Subagent text and thinking too, not only its tool calls: the UI shows the nested transcript.
@@ -219,7 +223,7 @@ export class Session {
   private control(userMessageId: string): Query {
     if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
     if (this.rewinding) throw new Error("session is rewinding");
-    if (this.state === "running") throw new Error("session is running: interrupt the turn first");
+    if (this.state !== "idle") throw new Error("session is running: interrupt the turn first");
     if (!this.checkpoints.has(userMessageId)) throw new Error(`unknown user message ${userMessageId}`);
     return this.query ?? this.start({ resume: this.id });
   }
@@ -264,9 +268,11 @@ export class Session {
       );
     }
     const updatedPermissions = ruleIndex === undefined ? suggestions : suggestions.slice(ruleIndex, ruleIndex + 1);
+    // Edit before accept: the timeline shows what runs, not Claude's proposal.
+    if (updatedInput) for (const part of this.adapter.edit(toolUseId, updatedInput)) this.emit(part);
     return this.settle(
       requestId,
-      { decision },
+      { decision, ...(updatedInput ? { input: updatedInput, editedByUser: true } : {}) },
       { behavior: "allow", updatedInput: updatedInput ?? (input as Record<string, unknown>), ...(decision === "allow_always" ? { updatedPermissions } : {}) },
     );
   }
@@ -301,9 +307,9 @@ export class Session {
       for await (const m of q) {
         if (generation !== this.generation) return;
         // Echo of a prompt() message (replay-user-messages); its user_text is already logged. The CLI took it now:
-        // a steering message pushed as the turn ended starts a turn of its own.
+        // a steering message pushed as the turn ended starts a turn of its own. Other replays (the model switch echo) start none.
         if (m.type === "user" && "isReplay" in m && m.isReplay) {
-          if (this.state === "idle") this.setState("running");
+          if (this.state === "idle" && m.uuid && this.checkpoints.has(m.uuid)) this.setState("running");
           continue;
         }
         if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
@@ -334,9 +340,24 @@ export class Session {
   }
 }
 
+// The CLI's echo of a model switch, with the resolved model ID in parentheses.
+const SET_MODEL = /^<local-command-stdout>Set model to `.*\(([^()\s]+)\)`<\/local-command-stdout>$/s;
+
+/** Model ID a transcript last ran on (main-thread reply) or switched to (model switch echo); undefined when it has none. */
+export function transcriptModel(history: SessionMessage[]): string | undefined {
+  let model: string | undefined;
+  for (const m of history) {
+    const { model: used, content } = m.message as { model?: unknown; content?: unknown };
+    // "<synthetic>": a CLI-made reply (API error), no model ran.
+    if (m.type === "assistant" && !m.parent_tool_use_id && typeof used === "string" && !used.startsWith("<")) model = used;
+    if (m.type === "user" && typeof content === "string") model = SET_MODEL.exec(content)?.[1] ?? model;
+  }
+  return model;
+}
+
 /** supportedModels() needs a query; this one gets no prompt and is closed right after the answer. */
 export async function listModels(query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> {
-  const q = query({ prompt: new InputQueue(), options: { settingSources: ["user", "project"], env: withoutApiKeys(process.env) } });
+  const q = query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env) } });
   try {
     return await q.supportedModels();
   } finally {

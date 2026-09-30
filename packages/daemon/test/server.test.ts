@@ -167,6 +167,38 @@ describe("daemon", () => {
     }
   });
 
+  it("a restored session keeps the model its transcript last ran on or switched to: header and resumed query agree", async () => {
+    const id = "9b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d";
+    const onHaiku = history.map((m: { type: string; message: object }) =>
+      m.type === "assistant" ? { ...m, message: { ...m.message, model: "claude-haiku-4-5-20251001" } } : m,
+    );
+    const switched = [...history, { type: "user", uuid: "u3", session_id: "x", message: { role: "user", content: "<local-command-stdout>Set model to `haiku (claude-haiku-4-5-20251001)`</local-command-stdout>" }, parent_tool_use_id: null }];
+    const restart = async (transcript: unknown[]) => {
+      const d = createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        query: fakeQuery as never,
+        history: {
+          listSessions: (async () => []) as never,
+          getSessionInfo: (async () => ({ sessionId: id, cwd: webRoot })) as never,
+          getSessionMessages: (async () => transcript) as never,
+        },
+      });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      const c = await client((d.address() as AddressInfo).port);
+      const sub = (await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })) as { result: { session: { model: string } } };
+      await c.request({ type: "session.prompt", sessionId: id, text: "go" });
+      d.close();
+      return { model: sub.result.session.model, resumedWith: calls.at(-1)!.model };
+    };
+    expect(await restart(onHaiku)).toEqual({ model: "haiku", resumedWith: "haiku" });
+    // A switch after the last reply, before any prompt on the new model.
+    expect(await restart(switched)).toEqual({ model: "haiku", resumedWith: "haiku" });
+    // The default model's reply maps to "default", not to an alias row with the same resolved model.
+    expect(await restart(history)).toEqual({ model: "default", resumedWith: undefined });
+  });
+
   it("lists models from supportedModels() and caches them", async () => {
     const c = await client();
     const before = calls.length;
@@ -241,6 +273,13 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "prnot" })).toMatchObject({ result: { paths: ["proj/notes.md"] } });
     expect(await c.request({ type: "fs.search", cwd: join(webRoot, ".."), query: "" })).toMatchObject({ code: "cwd_not_allowed" });
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: 42 })).toMatchObject({ code: "bad_query" });
+  });
+
+  it("does not offer a symlink whose real path is outside the roots as an @-mention", async () => {
+    symlinkSync(mkdtempSync(join(tmpdir(), "outside-")), join(webRoot, "linkedout"));
+    symlinkSync(join(webRoot, "proj"), join(webRoot, "linkedin"));
+    const c = await client();
+    expect(await c.request({ type: "fs.search", cwd: webRoot, query: "linked" })).toMatchObject({ result: { paths: ["linkedin"] } });
   });
 
   it("reads and writes files inside the roots only, refusing a write over a newer disk version", async () => {

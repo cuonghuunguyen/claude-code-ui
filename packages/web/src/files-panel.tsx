@@ -8,7 +8,7 @@ import { languages } from "@codemirror/language-data";
 import type { FsEntry, FsListResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
 import type { connect, ConnectionStatus } from "./client.ts";
-import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saved, selectionMention, type Tab } from "./files.ts";
+import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -58,13 +58,12 @@ export function FilesPanel({
     setActivePath(path);
   }
 
-  async function save(path: string) {
+  async function save(path: string, overwrite = false) {
     const t = tabsRef.current[path];
     if (!t) return;
     const content = t.draft;
     try {
-      // Saving over a conflict overwrites the disk version the user has seen in the conflict banner, nothing newer.
-      const r = await client.request<FsWriteResult>({ type: "fs.write", path, content, baseMtime: t.conflict?.mtime ?? t.mtime });
+      const r = await client.request<FsWriteResult>({ type: "fs.write", path, content, baseMtime: saveBase(t, overwrite) });
       update(path, (t) => saved(t, content, r.mtime));
     } catch (e) {
       update(path, (t) => ({ ...t, error: (e as Error).message }));
@@ -77,6 +76,15 @@ export function FilesPanel({
     if (t && isDirty(t) && !confirm(`Discard unsaved changes to ${baseName(path)}?`)) return;
     setTabs(({ [path]: _, ...rest }) => rest);
   }
+
+  // Like an editor: leaving or reloading the page with unsaved edits asks first.
+  const dirty = Object.values(tabs).some(isDirty);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
 
   const paths = Object.keys(tabs);
   const watchKey = paths.join("\n");
@@ -170,7 +178,7 @@ export function FilesPanel({
               <Button size="xs" variant="outline" onClick={() => update(active.path, reload)}>
                 Reload from disk
               </Button>
-              <Button size="xs" variant="outline" onClick={() => void save(active.path)}>
+              <Button size="xs" variant="outline" onClick={() => void save(active.path, true)}>
                 Overwrite with mine
               </Button>
             </div>
@@ -191,7 +199,7 @@ export function FilesPanel({
             >
               Send selection to Claude
             </Button>
-            <Button size="xs" disabled={!isDirty(active)} onClick={() => void save(active.path)} data-testid="editor-save">
+            <Button size="xs" disabled={!isDirty(active) || !!active.conflict} onClick={() => void save(active.path)} data-testid="editor-save">
               Save
             </Button>
           </div>

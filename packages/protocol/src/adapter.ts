@@ -22,9 +22,15 @@ const IGNORED = new Set([
   "system:thinking_tokens",
   "system:task_progress",
   "system:task_updated",
+  "system:hook_started",
+  "system:hook_progress",
+  "system:hook_response",
+  "tool_progress",
 ]);
 // After an interrupt the CLI sends this user text, then a result with an aborted terminal_reason (SDK 0.3.285).
 const INTERRUPTED = /^\[Request interrupted by user( for tool use)?\]$/;
+// The CLI's echo of setModel() and, in a transcript, its /model command record (SDK 0.3.285); the session_model part already shows the switch.
+const MODEL_SWITCHED = /^(<local-command-stdout>Set model to .*<\/local-command-stdout>|<command-name>\/model<\/command-name>.*)$/s;
 const ABORTED = new Set(["aborted_streaming", "aborted_tools"]);
 
 // Text/thinking part id = `<API message id>:<content block index>`. Streamed blocks know their index from the
@@ -140,7 +146,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
       case "user": {
         const content = m.message.content;
         const id = m.uuid ?? crypto.randomUUID();
-        if (typeof content === "string") return [{ type: "user_text", id, text: content, images: [] }];
+        if (typeof content === "string") return MODEL_SWITCHED.test(content) ? [] : [{ type: "user_text", id, text: content, images: [] }];
         const parts: Part[] = [];
         const rest = content.filter((b) => {
           if (b.type !== "tool_result") return true;
@@ -206,6 +212,15 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     }
   }
 
+  /** The user edited the call's input before accepting it (permission panel); later updates keep the applied input. */
+  function edit(toolUseId: string, input: unknown): Part[] {
+    const call = calls.get(toolUseId);
+    if (call?.type !== "tool_call") return [];
+    const next = { ...call, input, editedByUser: true };
+    calls.set(toolUseId, next);
+    return [next];
+  }
+
   /** deny: marks a tool call denied now; its later tool_result keeps status denied. */
-  return { convert, commands, deny };
+  return { convert, commands, deny, edit };
 }

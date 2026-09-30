@@ -37,8 +37,8 @@ export type Part = { parentId?: string } & (
   | { type: "user_text"; id: string; text: string; images: string[] }
   | { type: "assistant_text"; id: string; text: string; streaming: boolean }
   | { type: "thinking"; id: string; text: string; streaming: boolean }
-  /** `id` = `toolUseId`; re-emitted on every status change. */
-  | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus }
+  /** `id` = `toolUseId`; re-emitted on every status change. `editedByUser`: `input` is the user's edit of Claude's input, accepted in the permission panel. */
+  | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus; editedByUser?: boolean }
   /** `id` = `<toolUseId>:result`. */
   | { type: "tool_result"; id: string; toolUseId: string; output: unknown; isError: boolean }
   /**
@@ -58,6 +58,8 @@ export type Part = { parentId?: string } & (
       decision?: PermissionDecision;
       /** Feedback sent to Claude with a "deny" decision. */
       message?: string;
+      /** Accepted with the user's edit: `input` is then the applied input. */
+      editedByUser?: boolean;
     }
   /**
    * `AskUserQuestion` waiting for an answer. `id` = `requestId`; re-emitted once settled.
