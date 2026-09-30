@@ -201,6 +201,29 @@ describe("adapter on known SDK noise", () => {
   });
 });
 
+describe("adapter on CLI markup in a transcript (getSessionMessages, SDK 0.3.285)", () => {
+  const user = (uuid: string, content: string) => ({ type: "user", uuid, message: { role: "user", content }, parent_tool_use_id: null });
+  const texts = (parts: Part[]) => parts.map((p) => (p.type === "user_text" ? p.text : p.type));
+
+  it("shows a slash command record as the prompt the user typed, as live", () => {
+    const skill = user("c1", "<command-message>tester-hi</command-message>\n<command-name>/tester-hi</command-name>\n<command-args>Alice</command-args>");
+    const noArgs = user("c2", "<command-message>tester-skill</command-message>\n<command-name>/tester-skill</command-name>");
+    const local = user("c3", "<command-name>/context</command-name>\n            <command-message>context</command-message>\n            <command-args></command-args>");
+    expect(texts(run([skill, noArgs, local]))).toEqual(["/tester-hi Alice", "/tester-skill", "/context"]);
+  });
+
+  it("drops local command output and background task notifications, which live are no user message", () => {
+    const stdout = user("s1", "<local-command-stdout>\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m</local-command-stdout>");
+    const stderr = user("s2", "<local-command-stderr>Error: nope</local-command-stderr>");
+    const notification = user("n1", "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>");
+    expect(run([stdout, stderr, notification])).toEqual([]);
+  });
+
+  it("keeps a prompt that only mentions the markup", () => {
+    expect(texts(run([user("p1", "what does <command-name> mean?")]))).toEqual(["what does <command-name> mean?"]);
+  });
+});
+
 describe("adapter on unknown messages", () => {
   it("wraps an unknown SDK message in a raw part keyed by uuid", () => {
     const m = { type: "system", subtype: "compact_boundary", uuid: "c1", compact_metadata: { trigger: "auto" } };
