@@ -1,6 +1,6 @@
 // Fake SDK query(): answers each input message with the next turn of a recorded fixture.
 import { readFileSync } from "node:fs";
-import type { Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { ModelInfo, Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 const lines: SDKMessage[] = readFileSync(
   new URL("../../protocol/test/fixtures/two-turn-text.jsonl", import.meta.url),
@@ -14,13 +14,23 @@ for (const m of lines) {
 }
 
 export const calls: Options[] = [];
+export const setModelCalls: (string | undefined)[] = [];
+export const models: ModelInfo[] = [
+  { value: "default", displayName: "Default (recommended)", description: "" },
+  { value: "haiku", displayName: "Haiku 4.5", description: "" },
+];
 
 export function fakeQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
   calls.push(options ?? {});
-  return (async function* () {
+  const q = (async function* () {
     let turn = 0;
     for await (const _ of prompt) yield* turns[turn++ % 2]!;
   })();
+  return Object.assign(q, {
+    setModel: async (m?: string) => void setModelCalls.push(m),
+    supportedModels: async () => models,
+    close: () => void q.return(undefined),
+  });
 }
 
 /** Transcript as `getSessionMessages()` returns it: the fixture's complete messages plus the user prompts. */

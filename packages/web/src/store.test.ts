@@ -46,6 +46,12 @@ describe("applyEvent", () => {
     expect(s.state).toBe("running");
     expect(s.order).toEqual(["a"]);
   });
+
+  it("tracks the current model from session_model parts without adding them to the timeline", () => {
+    const s = applyEvent(emptySession(), ev(1, { type: "session_model", id: "session_model", model: "haiku" }));
+    expect(s.model).toBe("haiku");
+    expect(s.order).toEqual([]);
+  });
 });
 
 describe("withEpoch", () => {

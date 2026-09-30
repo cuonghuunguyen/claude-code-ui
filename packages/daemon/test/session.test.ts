@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
-import { calls, fakeQuery, history } from "./fake-query.ts";
+import { calls, fakeQuery, setModelCalls, history } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -83,5 +84,34 @@ describe("Session", () => {
     expect(calls.at(-1)).toMatchObject({ resume: id, cwd: "/tmp" });
     expect(calls.at(-1)).not.toHaveProperty("sessionId");
     await until(events, (e) => e.part.type === "turn_result");
+  });
+
+  it("passes the chosen model to the SDK; 'default' means no model option", () => {
+    const s = new Session("/tmp", { model: "haiku", query: fakeQuery as never });
+    expect(calls.at(-1)!.model).toBe("haiku");
+    expect(s.info().model).toBe("haiku");
+    const d = new Session("/tmp", { model: "default", query: fakeQuery as never });
+    expect(calls.at(-1)!.model).toBeUndefined();
+    expect(d.info().model).toBe("default");
+    expect(new Session("/tmp", { query: fakeQuery as never }).info().model).toBe("default");
+  });
+
+  it("setModel switches the live query and logs a session_model part", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await s.setModel("haiku");
+    expect(setModelCalls.at(-1)).toBe("haiku");
+    expect(s.info().model).toBe("haiku");
+    expect(events.at(-1)!.part).toEqual({ type: "session_model", id: "session_model", model: "haiku" });
+  });
+
+  it("setModel on a restored session before its first prompt applies when the query resumes", async () => {
+    const s = Session.restore(randomUUID(), "/tmp", [], { query: fakeQuery as never });
+    const before = setModelCalls.length;
+    await s.setModel("haiku");
+    expect(setModelCalls.length).toBe(before);
+    s.prompt("hi");
+    expect(calls.at(-1)).toMatchObject({ resume: s.id, model: "haiku" });
   });
 });
