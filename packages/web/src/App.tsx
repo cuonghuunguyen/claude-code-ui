@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { RotateCcwIcon, SquareIcon } from "lucide-react";
 import type {
   CreateResult,
@@ -34,6 +34,7 @@ import { PermissionMarker, PermissionPanel, type PermissionAnswer } from "./perm
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, SubagentGroup, Thinking, TodoList, ToolCard } from "./tool-card.tsx";
+import { FilesPanel } from "./files-panel.tsx";
 
 type Client = ReturnType<typeof connect>;
 
@@ -70,6 +71,9 @@ export function App() {
   // Bumped by a notification click: remounts the conversation, which starts scrolled to the bottom.
   const [scrollKey, setScrollKey] = useState(0);
   const focused = usePageFocused();
+  // Narrow screens show one pane; wide screens show the session plus a side panel with changes or files.
+  const [pane, setPane] = useState<Pane>("session");
+  const [panelWidth, setPanelWidth] = useState(480);
   const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
@@ -254,34 +258,58 @@ export function App() {
         {error && <p className="text-destructive text-sm">{error}</p>}
         <SessionList list={list} views={views} unread={unread} activeId={activeId} onOpen={open} />
       </aside>
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="flex min-w-0 flex-1 flex-col lg:flex-row">
         {active && view ? (
-          <SessionPane
-            key={active.id}
-            scrollKey={scrollKey}
-            session={active}
-            view={view}
-            models={models}
-            onMenu={() => setDrawer(true)}
-            onModel={(model) => setModel(active.id, model)}
-            onPrompt={(text, images) =>
-              client
-                .current!.request({ type: "session.prompt", sessionId: active.id, text, images })
-                .catch((e) => setError((e as Error).message))
-            }
-            onInterrupt={() =>
-              client.current!.request({ type: "session.interrupt", sessionId: active.id }).catch((e) => setError((e as Error).message))
-            }
-            onRewindPreview={(userMessageId) =>
-              client.current!.request<RewindPreview>({ type: "session.rewindPreview", sessionId: active.id, userMessageId })
-            }
-            onRewind={(userMessageId, mode) => client.current!.request({ type: "session.rewind", sessionId: active.id, userMessageId, mode })}
-            onRespond={respond}
-            onSearch={(query) =>
-              client.current!.request<FsSearchResult>({ type: "fs.search", cwd: active.cwd, query }).then((r) => r.paths)
-            }
-            onAnswer={answer}
-          />
+          <>
+            <div className="flex items-center gap-1 border-b px-2 py-1 lg:hidden">
+              {pane !== "session" && <MenuButton onClick={() => setDrawer(true)} />}
+              <PaneTabs panes={["session", "changes", "files"]} value={pane} onChange={setPane} />
+            </div>
+            <div className={`min-h-0 min-w-0 flex-1 flex-col ${pane === "session" ? "flex" : "hidden lg:flex"}`}>
+              <SessionPane
+                key={active.id}
+                scrollKey={scrollKey}
+                session={active}
+                view={view}
+                models={models}
+                onMenu={() => setDrawer(true)}
+                onModel={(model) => setModel(active.id, model)}
+                onPrompt={(text, images) =>
+                  client
+                    .current!.request({ type: "session.prompt", sessionId: active.id, text, images })
+                    .catch((e) => setError((e as Error).message))
+                }
+                onInterrupt={() =>
+                  client.current!.request({ type: "session.interrupt", sessionId: active.id }).catch((e) => setError((e as Error).message))
+                }
+                onRewindPreview={(userMessageId) =>
+                  client.current!.request<RewindPreview>({ type: "session.rewindPreview", sessionId: active.id, userMessageId })
+                }
+                onRewind={(userMessageId, mode) =>
+                  client.current!.request({ type: "session.rewind", sessionId: active.id, userMessageId, mode })
+                }
+                onRespond={respond}
+                onSearch={(query) =>
+                  client.current!.request<FsSearchResult>({ type: "fs.search", cwd: active.cwd, query }).then((r) => r.paths)
+                }
+                onAnswer={answer}
+              />
+            </div>
+            <PanelResizer width={panelWidth} onResize={setPanelWidth} />
+            <section
+              className={`min-h-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${pane === "session" ? "hidden lg:flex" : "flex"}`}
+              style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
+              data-testid="side-panel"
+            >
+              <div className="hidden border-b px-2 py-1 lg:flex">
+                <PaneTabs panes={["changes", "files"]} value={pane === "changes" ? "changes" : "files"} onChange={setPane} />
+              </div>
+              <div className={`min-h-0 flex-1 flex-col ${pane === "changes" ? "hidden" : "flex"}`}>
+                <FilesPanel client={client.current!} status={status} cwd={active.cwd} />
+              </div>
+              {pane === "changes" && <p className="m-auto p-4 text-muted-foreground text-sm">No changes view yet.</p>}
+            </section>
+          </>
         ) : (
           <>
             <header className="flex items-center border-b px-4 py-2 md:hidden">
@@ -292,6 +320,49 @@ export function App() {
         )}
       </main>
     </div>
+  );
+}
+
+type Pane = "session" | "changes" | "files";
+
+function PaneTabs({ panes, value, onChange }: { panes: Pane[]; value: Pane; onChange: (p: Pane) => void }) {
+  return (
+    <div className="flex gap-1" role="tablist" aria-label="Panes">
+      {panes.map((p) => (
+        <Button
+          key={p}
+          size="sm"
+          variant={p === value ? "secondary" : "ghost"}
+          role="tab"
+          aria-selected={p === value}
+          onClick={() => onChange(p)}
+          data-testid={`pane-${p}`}
+        >
+          {p}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+/** Drag handle (or arrow keys) between the session and the side panel on wide screens. */
+function PanelResizer({ width, onResize }: { width: number; onResize: (w: number) => void }) {
+  const clamp = (w: number) => Math.round(Math.max(280, Math.min(w, window.innerWidth - 480)));
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize side panel"
+      aria-valuenow={width}
+      tabIndex={0}
+      className="hidden w-1.5 shrink-0 cursor-col-resize touch-none border-l bg-border/40 hover:bg-primary/30 focus-visible:bg-primary/30 lg:block"
+      onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
+      onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && onResize(clamp(window.innerWidth - e.clientX))}
+      onKeyDown={(e) => {
+        const d = { ArrowLeft: 32, ArrowRight: -32 }[e.key];
+        if (d) onResize(clamp(width + d));
+      }}
+    />
   );
 }
 

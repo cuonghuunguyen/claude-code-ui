@@ -5,6 +5,8 @@ import { takeToken } from "./pairing.ts";
 
 type Request = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M, "reqId"> : never) : never;
 
+type FsChanged = Extract<ServerMessage, { type: "fs.changed" }>;
+
 export type ConnectionStatus = "connected" | "reconnecting" | "offline";
 
 /** Failed attempts in a row after which the header shows offline; retries continue at the capped delay. */
@@ -21,6 +23,7 @@ export function connect(opts: {
   onStatus?: (s: ConnectionStatus) => void;
 }) {
   const url = opts.url ?? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
+  const fsListeners = new Set<(m: FsChanged) => void>();
   const pending = new Map<string, { resolve: (r: unknown) => void; reject: (e: Error) => void }>();
   let ws: WebSocket;
   let isOpen = false;
@@ -46,6 +49,7 @@ export function connect(opts: {
     ws.addEventListener("message", (ev) => {
       const m: ServerMessage = JSON.parse(ev.data);
       if (m.type === "event") return opts.onEvent(m);
+      if (m.type === "fs.changed") return fsListeners.forEach((l) => l(m));
       const p = m.reqId ? pending.get(m.reqId) : undefined;
       if (!p) return console.error("daemon error", m);
       pending.delete(m.reqId!);
@@ -74,6 +78,11 @@ export function connect(opts: {
 
   return {
     request,
+    /** Listens for `fs.changed` of the files this connection watches (`fs.watch`); returns the unsubscribe. */
+    onFsChanged(l: (m: FsChanged) => void) {
+      fsListeners.add(l);
+      return () => void fsListeners.delete(l);
+    },
     close() {
       closed = true;
       clearTimeout(timer);

@@ -39,6 +39,12 @@ export type ClientMessage = { reqId: string } & (
   | { type: "push.subscribe"; subscription: WebPushSubscription }
   /** The session this tab shows while focused and visible (none otherwise); pushes for it are suppressed. */
   | { type: "push.focus"; sessionId?: string }
+  /** Text files only; `mtime` (ms) identifies the disk version. */
+  | { type: "fs.read"; path: string }
+  /** Overwrites an existing file. Fails with `conflict` when `baseMtime` is given and the disk version differs. */
+  | { type: "fs.write"; path: string; content: string; baseMtime?: number }
+  /** Replaces this connection's watched files; each change on disk sends `fs.changed`. */
+  | { type: "fs.watch"; paths: string[] }
 );
 
 /** `PushSubscription.toJSON()`. */
@@ -55,6 +61,8 @@ export type Event = { type: "event"; sessionId: string; seq: number; part: Part 
 export type ServerMessage =
   | Event
   | { type: "reply"; reqId: string; result: unknown }
+  /** A watched file changed on disk; `path` as given in `fs.watch`, `mtime` 0 when it was deleted. */
+  | { type: "fs.changed"; path: string; mtime: number }
   | { type: "error"; reqId?: string; code: string; message: string };
 
 export type CreateResult = { session: SessionInfo };
@@ -78,3 +86,5 @@ export type FsListResult = { entries: FsEntry[] };
 export type RewindPreview = { filesChanged: string[]; insertions: number; deletions: number; conversation: boolean };
 /** Paths relative to the searched cwd, best first; folders end with `/`. */
 export type FsSearchResult = { paths: string[] };
+export type FsReadResult = { content: string; mtime: number };
+export type FsWriteResult = { mtime: number };
