@@ -32,6 +32,9 @@ export const reload = (t: Tab): Tab =>
     ? { ...t, disk: t.conflict.content, draft: t.conflict.content, mtime: t.conflict.mtime, conflict: undefined, error: undefined }
     : t;
 
+/** `baseMtime` of a save: "Overwrite with mine" replaces the disk version seen in the conflict banner; a plain save of a tab in conflict gets refused. */
+export const saveBase = (t: Tab, overwrite: boolean) => (overwrite && t.conflict ? t.conflict.mtime : t.mtime);
+
 /** `content` was written with the resulting `mtime`; the draft may have moved on meanwhile. */
 export const saved = (t: Tab, content: string, mtime: number): Tab => ({
   ...t,
