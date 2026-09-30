@@ -12,6 +12,8 @@ export type SessionView = {
   logEpoch?: string;
   lastSeq: number;
   state: SessionState;
+  /** Seq of the last "needs input" or "finished" (idle or error after work): what makes a session unread. 0 = none. */
+  attentionSeq: number;
   /** Latest model from a session_model part; undefined until the model was switched. */
   model?: string;
   commands: SlashCommand[];
@@ -21,12 +23,16 @@ export type SessionView = {
   parts: Map<string, Part>;
 };
 
-export const emptySession = (): SessionView => ({ lastSeq: 0, state: "idle", commands: [], todos: [], order: [], parts: new Map() });
+export const emptySession = (): SessionView => ({ lastSeq: 0, state: "idle", attentionSeq: 0, commands: [], todos: [], order: [], parts: new Map() });
 
 export function applyEvent(s: SessionView, e: Event): SessionView {
   if (e.seq <= s.lastSeq) return s;
   const { part } = e;
-  if (part.type === "session_state") return { ...s, lastSeq: e.seq, state: part.state };
+  if (part.type === "session_state") {
+    const busy = s.state === "running" || s.state === "needs_input";
+    const attention = part.state === "needs_input" || (busy && (part.state === "idle" || part.state === "error"));
+    return { ...s, lastSeq: e.seq, state: part.state, attentionSeq: attention ? e.seq : s.attentionSeq };
+  }
   if (part.type === "session_model") return { ...s, lastSeq: e.seq, model: part.model };
   if (part.type === "commands") return { ...s, lastSeq: e.seq, commands: part.commands };
   if (part.type === "rewind") {

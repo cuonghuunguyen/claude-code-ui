@@ -28,6 +28,8 @@ import { activeMention, insertMention } from "./mentions.ts";
 import { groupByCwd, timeAgo } from "./sessions.ts";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
+import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
+import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
 import { PermissionMarker, PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
@@ -37,6 +39,20 @@ type Client = ReturnType<typeof connect>;
 
 // The open session lives in the URL hash, so a reloaded tab reopens it.
 const hashId = () => /^#[0-9a-f-]{36}$/i.exec(location.hash)?.[0].slice(1);
+
+const pageFocused = () => document.visibilityState === "visible" && document.hasFocus();
+
+/** True while this tab is visible and has focus: the only case in which a session counts as seen. */
+function usePageFocused() {
+  const [focused, setFocused] = useState(pageFocused);
+  useEffect(() => {
+    const update = () => setFocused(pageFocused());
+    const events = ["focus", "blur", "visibilitychange"] as const;
+    events.forEach((e) => window.addEventListener(e, update));
+    return () => events.forEach((e) => window.removeEventListener(e, update));
+  }, []);
+  return focused;
+}
 
 export function App() {
   const [list, setList] = useState<SessionListItem[]>([]);
@@ -49,13 +65,24 @@ export function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
   const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
+  const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
+  const [pushOn, setPushOn] = useState(false);
+  // Bumped by a notification click: remounts the conversation, which starts scrolled to the bottom.
+  const [scrollKey, setScrollKey] = useState(0);
+  const focused = usePageFocused();
   const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
+  const requested = useRef(new Set<string>());
 
   async function refreshList() {
     try {
-      setList((await client.current!.request<ListResult>({ type: "session.list" })).sessions);
+      const { sessions } = await client.current!.request<ListResult>({ type: "session.list" });
+      setList(sessions);
+      // Live sessions are followed so their unread markers update without opening them.
+      // ponytail: replays every live session's log into this tab; follow state only if that gets heavy.
+      for (const s of sessions)
+        if (s.state !== "closed" && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id);
     } catch (e) {
       if ((e as Error).message !== "disconnected") setError((e as Error).message);
     }
@@ -105,6 +132,10 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
+        void pushSubscription().then((sub) => {
+          setPushOn(!!sub);
+          if (sub) sendSubscription(c, sub).catch(() => {});
+        });
       },
       onStatus: setStatus,
     });
@@ -112,11 +143,48 @@ export function App() {
     // Picks up sessions started in the terminal CLI meanwhile.
     const onFocus = () => void refreshList();
     window.addEventListener("focus", onFocus);
+    // Notification click (sw.js): open the session at the bottom.
+    const onWorkerMessage = (e: MessageEvent) => {
+      if (e.data?.type !== "open" || typeof e.data.sessionId !== "string") return;
+      open(e.data.sessionId);
+      setScrollKey((k) => k + 1);
+    };
+    navigator.serviceWorker?.addEventListener("message", onWorkerMessage);
     return () => {
       window.removeEventListener("focus", onFocus);
+      navigator.serviceWorker?.removeEventListener("message", onWorkerMessage);
       c.close();
     };
   }, []);
+
+  // The daemon suppresses pushes for the session a focused, visible tab shows; resent after every reconnect.
+  useEffect(() => {
+    if (status !== "connected") return;
+    const sessionId = focused ? activeId : undefined;
+    client.current!.request(sessionId ? { type: "push.focus", sessionId } : { type: "push.focus" }).catch(() => {});
+  }, [status, focused, activeId]);
+
+  const activeView = activeId ? views[activeId] : undefined;
+  useEffect(() => {
+    if (!focused || !activeId || !activeView || !isUnread(activeView, seen[activeId])) return;
+    const next = { ...seen, [activeId]: seenNow(activeView) };
+    setSeen(next);
+    saveSeen(next);
+  }, [focused, activeId, activeView?.lastSeq]);
+
+  const unread = new Set(list.filter((s) => views[s.id] && isUnread(views[s.id]!, seen[s.id])).map((s) => s.id));
+  useEffect(() => void (document.title = tabTitle(unread.size)), [unread.size]);
+
+  async function togglePush() {
+    setError(undefined);
+    try {
+      if (pushOn) await disablePush();
+      else await enablePush(client.current!);
+      setPushOn(!pushOn);
+    } catch (e) {
+      setError(`notifications: ${(e as Error).message}`);
+    }
+  }
 
   async function createSession(cwd: string, model: string) {
     setError(undefined);
@@ -171,18 +239,26 @@ export function App() {
         className={`fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col gap-3 border-r bg-background p-3 transition-transform md:static md:translate-x-0 ${drawer ? "translate-x-0" : "-translate-x-full"}`}
       >
         <ConnectionBadge status={status} />
+        <label
+          className="flex items-center gap-2 text-sm"
+          title={pushSupported() ? "Push notification when a session needs input or finishes" : "Push needs HTTPS or localhost and a browser with Web Push"}
+        >
+          <input type="checkbox" checked={pushOn} disabled={!pushSupported()} onChange={togglePush} data-testid="push-toggle" />
+          Notifications
+        </label>
         {picking ? (
           <DirPicker client={client.current!} models={models} onPick={createSession} onCancel={() => setPicking(false)} />
         ) : (
           <Button onClick={() => (setError(undefined), setPicking(true))}>New session</Button>
         )}
         {error && <p className="text-destructive text-sm">{error}</p>}
-        <SessionList list={list} views={views} activeId={activeId} onOpen={open} />
+        <SessionList list={list} views={views} unread={unread} activeId={activeId} onOpen={open} />
       </aside>
       <main className="flex min-w-0 flex-1 flex-col">
         {active && view ? (
           <SessionPane
             key={active.id}
+            scrollKey={scrollKey}
             session={active}
             view={view}
             models={models}
@@ -245,11 +321,13 @@ function MenuButton({ onClick }: { onClick: () => void }) {
 function SessionList({
   list,
   views,
+  unread,
   activeId,
   onOpen,
 }: {
   list: SessionListItem[];
   views: Record<string, SessionView>;
+  unread: Set<string>;
   activeId?: string;
   onOpen: (id: string) => void;
 }) {
@@ -271,7 +349,8 @@ function SessionList({
                   onClick={() => onOpen(s.id)}
                   title={`${s.title}\n${s.cwd}`}
                 >
-                  <span className="min-w-0 flex-1 truncate">{s.title}</span>
+                  {unread.has(s.id) && <span className="size-2 shrink-0 rounded-full bg-blue-500" data-testid="unread-marker" aria-label="unread" />}
+                  <span className={`min-w-0 flex-1 truncate ${unread.has(s.id) ? "font-semibold" : ""}`}>{s.title}</span>
                   <StateBadge state={views[s.id]?.state ?? s.state} />
                   <span className="text-muted-foreground text-xs">{timeAgo(s.lastActivity)}</span>
                 </button>
@@ -395,6 +474,7 @@ function ModelSelect({
 }
 
 function SessionPane({
+  scrollKey,
   session,
   view,
   models,
@@ -408,6 +488,7 @@ function SessionPane({
   onRespond,
   onAnswer,
 }: {
+  scrollKey: number;
   session: SessionInfo;
   view: SessionView;
   models: ModelInfo[];
@@ -534,7 +615,7 @@ function SessionPane({
           </Button>
         )}
       </header>
-      <Conversation className="flex-1">
+      <Conversation key={scrollKey} className="flex-1">
         <ConversationContent className="mx-auto w-full max-w-3xl">
           {timeline(view).map((item) =>
             item.kind === "context" ? (
