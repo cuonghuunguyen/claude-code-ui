@@ -14,3 +14,13 @@ export function toolSummary(input: unknown): string {
   const value = key ? fields[key] : Object.values(fields).find((v) => typeof v === "string");
   return typeof value === "string" ? (value.split("\n")[0] ?? "") : "";
 }
+
+/** Line range of a Read call, from the numbered result lines if any, else from offset/limit. */
+export function readRange(input: unknown, output?: unknown): string {
+  const nums = typeof output === "string" ? [...output.matchAll(/^\s*(\d+)[\t→]/gm)].map((m) => Number(m[1])) : [];
+  if (nums.length > 0) return `lines ${nums[0]}–${nums.at(-1)}`;
+  const { offset, limit } = (input ?? {}) as { offset?: unknown; limit?: unknown };
+  const start = typeof offset === "number" ? offset : 1;
+  if (typeof limit === "number") return `lines ${start}–${start + limit - 1}`;
+  return typeof offset === "number" ? `from line ${start}` : "";
+}
