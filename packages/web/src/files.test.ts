@@ -19,6 +19,11 @@ describe("editor tab", () => {
     expect(reload(t)).toMatchObject({ draft: "claude", disk: "claude", mtime: 2, conflict: undefined });
   });
 
+  it("reload clears the error of the save that hit the conflict", () => {
+    const t = diskChanged({ ...tab, draft: "mine", error: "changed on disk" }, { content: "claude", mtime: 2 });
+    expect(reload(t).error).toBeUndefined();
+  });
+
   it("ignores its own save and a change that leaves the content as it was", () => {
     const edited = { ...tab, draft: "two" };
     const s = saved(edited, "two", 5);

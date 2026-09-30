@@ -298,6 +298,21 @@ describe("daemon", () => {
     expect(c.inbox.some((m) => m.type === "fs.changed")).toBe(false);
   });
 
+  it("keeps reporting a change made just before the watched set changes", { timeout: 10_000 }, async () => {
+    const a = join(webRoot, "proj", "a.txt");
+    const b = join(webRoot, "proj", "b.txt");
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    writeFileSync(a, "v1");
+    writeFileSync(b, "v1");
+    const c = await client();
+    await c.request({ type: "fs.watch", paths: [a] });
+    await new Promise((r) => setTimeout(r, 1100)); // at least one poll with the old stat
+    writeFileSync(a, "v2 by claude");
+    // The user opens another tab before the next poll: a's watcher must keep its baseline.
+    await c.request({ type: "fs.watch", paths: [a, b] });
+    expect(await c.waitFor((m) => m.type === "fs.changed" && m.path === a)).toMatchObject({ path: a });
+  });
+
   it("lists transcripts inside the roots merged with live sessions; opening one resumes it with the same ID", async () => {
     const inside = "1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
     const outside = "2b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";

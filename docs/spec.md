@@ -73,11 +73,13 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | client → daemon | `question.respond {requestId, answers}` | Answer a question |
 | client → daemon | `session.list` / `session.close` / `models.list` | Lists and management |
 | client → daemon | `fs.list` / `fs.read` / `fs.write` / `fs.search` | File tree, editor, @-mention autocomplete |
+| client → daemon | `fs.watch {paths}` | Replace this connection's watched files (stat polling, 1 s) |
 | client → daemon | `push.key` | The daemon's VAPID public key, for `PushManager.subscribe()` |
 | client → daemon | `push.subscribe {subscription}` | Register a Web Push subscription |
 | client → daemon | `push.focus {sessionId?}` | The session this tab shows while focused and visible; none otherwise |
 | daemon → client | `event {sessionId, seq, part}` | One normalized part |
 | daemon → client | `error {code, message}` | Protocol or session error |
+| daemon → client | `fs.changed {path, mtime}` | A watched file changed on disk; not a session event |
 
 ### Permission bridge (same behavior as Claude Code)
 

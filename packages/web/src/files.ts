@@ -26,7 +26,9 @@ export function diskChanged(t: Tab, r: FsReadResult): Tab {
 
 /** Takes the conflicting disk version, dropping the draft. */
 export const reload = (t: Tab): Tab =>
-  t.conflict ? { ...t, disk: t.conflict.content, draft: t.conflict.content, mtime: t.conflict.mtime, conflict: undefined } : t;
+  t.conflict
+    ? { ...t, disk: t.conflict.content, draft: t.conflict.content, mtime: t.conflict.mtime, conflict: undefined, error: undefined }
+    : t;
 
 /** `content` was written with the resulting `mtime`; the draft may have moved on meanwhile. */
 export const saved = (t: Tab, content: string, mtime: number): Tab => ({

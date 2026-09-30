@@ -335,7 +335,12 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
         }
         case "fs.watch": {
           if (!Array.isArray(msg.paths)) return fail("bad_paths", "paths must be an array");
-          unwatchAll();
+          // Only the diff: re-arming a kept path would take a new stat baseline and drop a change made since the last poll.
+          for (const [path, w] of watched)
+            if (!msg.paths.includes(path)) {
+              unwatchFile(w.real, w.listener);
+              watched.delete(path);
+            }
           for (const path of msg.paths) {
             const real = allowed(path);
             if (!real || watched.has(path)) continue;
