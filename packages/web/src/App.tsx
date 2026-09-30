@@ -5,7 +5,8 @@ import { Message, MessageContent, MessageResponse } from "@/components/ai-elemen
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus } from "./client.ts";
 import { useSmoothText } from "./smooth.ts";
-import { applyEvent, emptySession, withEpoch, type SessionView } from "./store.ts";
+import { applyEvent, emptySession, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
+import { ContextGroup, Thinking, ToolCard } from "./tool-card.tsx";
 
 // ponytail: session IDs this browser opened, so a reopened tab resubscribes; the session list issue replaces this with session.list.
 const STORAGE_KEY = "claude-ui.sessions";
@@ -177,9 +178,13 @@ function SessionPane({ session, view, onPrompt }: { session: SessionInfo; view: 
       </header>
       <Conversation className="flex-1">
         <ConversationContent className="mx-auto w-full max-w-3xl">
-          {view.order.map((id) => (
-            <PartView key={id} part={view.parts.get(id)!} />
-          ))}
+          {timeline(view).map((item) =>
+            item.kind === "context" ? (
+              <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} />
+            ) : (
+              <PartView key={item.part.id} part={item.part} view={view} />
+            ),
+          )}
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
@@ -197,7 +202,12 @@ function SessionPane({ session, view, onPrompt }: { session: SessionInfo; view: 
   );
 }
 
-function PartView({ part }: { part: Part }) {
+const resultOf = (view: SessionView, call: ToolCall) => {
+  const p = view.parts.get(`${call.toolUseId}:result`);
+  return p?.type === "tool_result" ? p : undefined;
+};
+
+function PartView({ part, view }: { part: Part; view: SessionView }) {
   switch (part.type) {
     case "user_text":
       return (
@@ -207,10 +217,18 @@ function PartView({ part }: { part: Part }) {
       );
     case "assistant_text":
       return <AssistantText text={part.text} streaming={part.streaming} />;
+    case "thinking":
+      return <Thinking part={part} />;
+    case "tool_call":
+      return <ToolCard call={part} result={resultOf(view, part)} />;
     case "turn_result":
       return <TurnFooter part={part} />;
     case "raw":
-      return <pre className="overflow-x-auto rounded bg-muted p-2 text-xs">{JSON.stringify(part.message, null, 2)}</pre>;
+      return (
+        <pre className="overflow-x-auto rounded bg-muted p-2 text-xs" data-testid="raw-part">
+          {JSON.stringify(part.message, null, 2)}
+        </pre>
+      );
     default:
       return null;
   }

@@ -1,26 +1,61 @@
 // Adapter: converts raw SDK messages into parts (CONTEXT.md "Adapter").
-// One adapter instance per session; it holds the accumulated text of streaming blocks.
+// One adapter instance per session; it holds the accumulated text of streaming blocks and the known tool calls.
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { Part } from "./parts.ts";
+import type { Part, ToolStatus } from "./parts.ts";
 
-// Text part id = `<API message id>:<content block index>`. Streamed blocks know their index from the
+type ToolCall = Extract<Part, { type: "tool_call" }>;
+
+// Known SDK messages the UI does not show. Anything else unhandled becomes a `raw` part.
+const IGNORED = new Set(["rate_limit_event", "command_lifecycle", "system:init", "system:status", "system:thinking_tokens", "system:commands_changed"]);
+
+// Text/thinking part id = `<API message id>:<content block index>`. Streamed blocks know their index from the
 // stream event. Complete assistant messages arrive split, one SDK message per content block with the
 // same API message id (see test/fixtures), so their index is the count of blocks seen for that id.
 export function createAdapter() {
   let streamingMessageId = "";
   const streamedText = new Map<string, string>();
   const blocksSeen = new Map<string, number>();
+  const calls = new Map<string, ToolCall>();
+  const denied = new Set<string>();
+
+  function setStatus(toolUseId: string, status: ToolStatus): Part[] {
+    const call = calls.get(toolUseId);
+    if (!call || call.status === status) return [];
+    const next = { ...call, status };
+    calls.set(toolUseId, next);
+    return [next];
+  }
+
+  function deny(toolUseId: string): Part[] {
+    denied.add(toolUseId);
+    return setStatus(toolUseId, "denied");
+  }
 
   function convert(m: SDKMessage): Part[] {
     switch (m.type) {
       case "stream_event": {
         const e = m.event;
         if (e.type === "message_start") streamingMessageId = e.message.id;
-        if (e.type !== "content_block_delta" || e.delta.type !== "text_delta") return [];
+        if (e.type === "content_block_start" && e.content_block.type === "tool_use") {
+          const { id, name } = e.content_block;
+          const call: ToolCall = { type: "tool_call", id, toolUseId: id, tool: name, input: {}, status: "pending" };
+          calls.set(id, call);
+          return [call];
+        }
+        if (e.type !== "content_block_delta") return [];
         const id = `${streamingMessageId}:${e.index}`;
-        const text = (streamedText.get(id) ?? "") + e.delta.text;
-        streamedText.set(id, text);
-        return [{ type: "assistant_text", id, text, streaming: true }];
+        if (e.delta.type === "text_delta") {
+          const text = (streamedText.get(id) ?? "") + e.delta.text;
+          streamedText.set(id, text);
+          return [{ type: "assistant_text", id, text, streaming: true }];
+        }
+        if (e.delta.type === "thinking_delta") {
+          const text = (streamedText.get(id) ?? "") + e.delta.thinking;
+          streamedText.set(id, text);
+          // With thinking display "omitted" the deltas are empty; nothing to show.
+          return text ? [{ type: "thinking", id, text, streaming: true }] : [];
+        }
+        return [];
       }
       case "assistant": {
         const msgId = m.message.id;
@@ -32,7 +67,23 @@ export function createAdapter() {
             streamedText.delete(id);
             return [{ type: "assistant_text", id, text: block.text, streaming: false }];
           }
-          if (block.type === "thinking" || block.type === "redacted_thinking") return [];
+          if (block.type === "thinking") {
+            streamedText.delete(id);
+            return block.thinking ? [{ type: "thinking", id, text: block.thinking, streaming: false }] : [];
+          }
+          if (block.type === "redacted_thinking") return [];
+          if (block.type === "tool_use") {
+            const call: ToolCall = {
+              type: "tool_call",
+              id: block.id,
+              toolUseId: block.id,
+              tool: block.name,
+              input: block.input,
+              status: denied.has(block.id) ? "denied" : "running",
+            };
+            calls.set(block.id, call);
+            return [call];
+          }
           return [{ type: "raw", id, message: block }];
         });
       }
@@ -40,12 +91,26 @@ export function createAdapter() {
         const content = m.message.content;
         const id = m.uuid ?? crypto.randomUUID();
         if (typeof content === "string") return [{ type: "user_text", id, text: content, images: [] }];
-        if (content.every((b) => b.type === "text"))
-          return [{ type: "user_text", id, text: content.map((b) => b.text).join("\n"), images: [] }];
-        return [{ type: "raw", id, message: m }];
+        const parts: Part[] = [];
+        const rest = content.filter((b) => {
+          if (b.type !== "tool_result") return true;
+          const isError = b.is_error ?? false;
+          const output =
+            Array.isArray(b.content) && b.content.every((c) => c.type === "text")
+              ? b.content.map((c) => c.text).join("\n")
+              : b.content;
+          parts.push({ type: "tool_result", id: `${b.tool_use_id}:result`, toolUseId: b.tool_use_id, output, isError });
+          parts.push(...setStatus(b.tool_use_id, denied.has(b.tool_use_id) ? "denied" : isError ? "error" : "done"));
+          return false;
+        });
+        if (rest.length === 0) return parts;
+        if (rest.every((b) => b.type === "text"))
+          return [...parts, { type: "user_text", id, text: rest.map((b) => b.text).join("\n"), images: [] }];
+        return [...parts, { type: "raw", id, message: m }];
       }
       case "result":
         return [
+          ...(m.permission_denials ?? []).flatMap((d) => deny(d.tool_use_id)),
           {
             type: "turn_result",
             id: m.uuid,
@@ -61,8 +126,9 @@ export function createAdapter() {
           },
         ];
       default:
-        // ponytail: system/status/rate-limit messages are dropped; later issues add parts for the ones the UI needs.
-        return [];
+        if (m.type === "system" && m.subtype === "permission_denied") return deny(m.tool_use_id);
+        if (IGNORED.has(m.type) || IGNORED.has(`${m.type}:${"subtype" in m ? m.subtype : ""}`)) return [];
+        return [{ type: "raw", id: ("uuid" in m && m.uuid) || crypto.randomUUID(), message: m }];
     }
   }
 
