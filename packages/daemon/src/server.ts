@@ -303,7 +303,8 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (typeof msg.query !== "string") return fail("bad_query", "query must be a string");
-          return reply({ paths: searchFiles(cwd, msg.query) });
+          // A symlink pointing outside the roots is not offered: the SDK would read its target (like fs.read refuses it).
+          return reply({ paths: searchFiles(cwd, msg.query).filter((p) => allowed(join(cwd, p))) });
         }
         case "push.key":
           return opts.push ? reply({ publicKey: opts.push.publicKey }) : fail("push_unavailable", "push is not configured");

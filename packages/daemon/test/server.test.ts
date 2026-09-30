@@ -275,6 +275,13 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: 42 })).toMatchObject({ code: "bad_query" });
   });
 
+  it("does not offer a symlink whose real path is outside the roots as an @-mention", async () => {
+    symlinkSync(mkdtempSync(join(tmpdir(), "outside-")), join(webRoot, "linkedout"));
+    symlinkSync(join(webRoot, "proj"), join(webRoot, "linkedin"));
+    const c = await client();
+    expect(await c.request({ type: "fs.search", cwd: webRoot, query: "linked" })).toMatchObject({ result: { paths: ["linkedin"] } });
+  });
+
   it("reads and writes files inside the roots only, refusing a write over a newer disk version", async () => {
     const file = join(webRoot, "proj", "a.txt");
     mkdirSync(join(webRoot, "proj"), { recursive: true });
