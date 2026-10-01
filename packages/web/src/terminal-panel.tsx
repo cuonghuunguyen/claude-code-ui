@@ -14,6 +14,25 @@ import { useDark } from "./theme.ts";
 
 type Client = ReturnType<typeof connect>;
 
+/** The selected terminal's ID (IDs are unique across projects), so a reload selects it again. */
+const ACTIVE_KEY = "claude-ui.terminalActive";
+const storage = {
+  get: () => {
+    try {
+      return localStorage.getItem(ACTIVE_KEY) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  },
+  set: (id: string) => {
+    try {
+      localStorage.setItem(ACTIVE_KEY, id);
+    } catch {
+      // Storage blocked: a reload selects the first terminal.
+    }
+  },
+};
+
 /**
  * Mounted when the user opens the panel: then, with none running, it starts one. A project switch (`cwd`) or a reconnect
  * to an empty list starts none. `onEmpty`: the last terminal was closed or its shell exited; the panel should hide.
@@ -69,7 +88,8 @@ export function TerminalPanel({ client, status, cwd, onEmpty }: { client: Client
       (r) => {
         if (stale) return;
         setTerminals(r.terminals);
-        setActiveId((a) => (r.terminals.some((t) => t.id === a) ? a : r.terminals[0]?.id));
+        const has = (id?: string) => r.terminals.some((t) => t.id === id);
+        setActiveId((a) => (has(a) ? a : has(storage.get()) ? storage.get() : r.terminals[0]?.id));
         if (!r.terminals.length && spawn.current) void create();
         spawn.current = false;
       },
@@ -77,6 +97,8 @@ export function TerminalPanel({ client, status, cwd, onEmpty }: { client: Client
     );
     return () => void (stale = true);
   }, [client, status, cwd]);
+
+  useEffect(() => void (activeId && storage.set(activeId)), [activeId]);
 
   useEffect(() => client.onTerminal((m) => m.type === "terminal.exit" && remove(m.terminalId)), [client]);
 
@@ -96,7 +118,8 @@ export function TerminalPanel({ client, status, cwd, onEmpty }: { client: Client
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="terminal">
       {/* WAI-ARIA tabs like tabs-bar.tsx: one tab in the Tab order; arrows, Home and End select and focus. */}
-      <div className="flex h-11 shrink-0 items-center gap-1 border-b px-2 text-sm">
+      {/* OpenCode terminal-panel-v2: tabs bar 52px, tab text 14px/500. */}
+      <div className="flex h-13 shrink-0 items-center gap-1 border-b px-2 font-[500] text-[14px]">
         <div className="flex min-w-0 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Terminals" onKeyDown={onTabKey}>
           {terminals.map((t) => (
             <div
@@ -161,7 +184,7 @@ function TerminalView({
   onInputError: (message: string | undefined) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  const term = useRef<{ t: Terminal; fit: FitAddon }>(undefined);
+  const term = useRef<{ t: Terminal; show: () => void }>(undefined);
   const connected = useRef(false);
   connected.current = status === "connected";
   const dark = useDark();
@@ -171,8 +194,14 @@ function TerminalView({
     const t = new Terminal({ cursorBlink: true, cursorStyle: "bar", fontSize: 14, scrollback: 10_000, fontFamily: 'ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, Consolas, monospace' });
     const fit = new FitAddon();
     t.loadAddon(fit);
-    t.open(box.current!);
-    term.current = { t, fit };
+    // Opened once the box is on screen, then fitted to it. Opened in a hidden box (a tab not selected after a reload),
+    // xterm measured no cell size and its fit on the first show left the viewport above the newest rows, frozen there.
+    const show = () => {
+      if (!box.current?.offsetParent) return;
+      if (!t.element) t.open(box.current);
+      fit.fit();
+    };
+    term.current = { t, show };
     // Typed while offline it would arrive late, out of context: dropped.
     t.onData((data) => {
       if (!connected.current) return;
@@ -191,14 +220,15 @@ function TerminalView({
       const k = e.key.toLowerCase();
       // Copy: Ctrl+Shift+C, Cmd+C, or Ctrl+C over a selection (without one it is the shell's interrupt).
       if (mod && k === "c" && (e.shiftKey || e.metaKey || t.hasSelection())) {
-        void navigator.clipboard?.writeText(t.getSelection()).catch(() => {});
+        // No selection: the clipboard keeps what it has.
+        if (t.hasSelection()) void navigator.clipboard?.writeText(t.getSelection()).catch(() => {});
         return false;
       }
       // Paste: the browser's paste event, which xterm turns into input (bracketed paste when the shell asks).
       return !(mod && k === "v");
     });
     const off = client.onTerminal((m) => m.terminalId === id && m.type === "terminal.output" && t.write(m.data));
-    const ro = new ResizeObserver(() => box.current?.offsetParent && fit.fit());
+    const ro = new ResizeObserver(show);
     ro.observe(box.current!);
     return () => {
       ro.disconnect();
@@ -219,7 +249,7 @@ function TerminalView({
         v.t.reset();
         if (buffer) v.t.write(buffer);
         // The daemon's size may be another browser's: send this view's.
-        if (box.current?.offsetParent) v.fit.fit();
+        v.show();
         client.request({ type: "terminal.resize", terminalId: id, cols: v.t.cols, rows: v.t.rows }).catch(() => {});
       },
       () => {}, // gone (terminal.exit) or disconnected (attached again on reconnect)
@@ -229,7 +259,7 @@ function TerminalView({
   useEffect(() => {
     const v = term.current;
     if (!active || !v) return;
-    v.fit.fit();
+    v.show();
     if (focusShell.current) v.t.focus();
   }, [active, focusTick]);
 

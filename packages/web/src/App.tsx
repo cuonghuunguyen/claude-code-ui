@@ -88,6 +88,14 @@ const saveFlag = (key: string, on: boolean) => {
     // Storage blocked: the state lasts until the page reloads.
   }
 };
+const TERMINAL_HEIGHT_KEY = "claude-ui.terminalHeight";
+const loadNumber = (key: string, fallback: number) => {
+  try {
+    return Number(localStorage.getItem(key)) || fallback;
+  } catch {
+    return fallback;
+  }
+};
 const hashId = () => (hashTab() === NEW_TAB ? undefined : hashTab());
 
 const pageFocused = () => document.visibilityState === "visible" && document.hasFocus();
@@ -158,6 +166,15 @@ export function App() {
   // Kept per browser across reloads; the daemon's shells outlive the page.
   const [terminalOpen, setTerminalOpen] = useState(() => loadFlag(TERMINAL_KEY));
   useEffect(() => saveFlag(TERMINAL_KEY, terminalOpen), [terminalOpen]);
+  // OpenCode: 280px by default, resizable when stacked below the side panel.
+  const [terminalHeight, setTerminalHeight] = useState(() => loadNumber(TERMINAL_HEIGHT_KEY, 280));
+  useEffect(() => {
+    try {
+      localStorage.setItem(TERMINAL_HEIGHT_KEY, String(terminalHeight));
+    } catch {
+      // Storage blocked: the height lasts until the page reloads.
+    }
+  }, [terminalHeight]);
   // A mention from "Send selection to Claude", waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
@@ -729,8 +746,8 @@ export function App() {
               {shown && (panel || terminalOpen) && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
               {panelSession && (
                 <div
-                  className={`flex min-h-0 min-w-0 flex-1 flex-col gap-2 lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${panel || terminalOpen ? "" : "lg:hidden"}`}
-                  style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
+                  className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${panel || terminalOpen ? "" : "lg:hidden"}`}
+                  style={{ "--panel-w": `${panelWidth}px`, "--terminal-h": `${terminalHeight}px` } as CSSProperties}
                 >
                 <section className={`${card} flex-1 ${pane === "terminal" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`} data-testid="side-panel">
                   <div className="hidden items-center border-b px-2 py-1 lg:flex">
@@ -762,10 +779,11 @@ export function App() {
                     />
                   )}
                 </section>
+                {panel && terminalOpen && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
                 {(terminalOpen || pane === "terminal") && (
-                  // OpenCode: 280px high below the side panel.
+                  // OpenCode: below the side panel, 100px to 60% of the window high (CSS keeps it there when the window shrinks).
                   <section
-                    className={`${card} ${pane === "terminal" ? "flex-1" : "max-lg:hidden"} ${!terminalOpen ? "lg:hidden" : panel ? "lg:h-70 lg:flex-none" : "lg:flex-1"}`}
+                    className={`${card} ${pane === "terminal" ? "flex-1" : "max-lg:hidden"} ${!terminalOpen ? "lg:hidden" : panel ? "lg:h-(--terminal-h) lg:max-h-[60vh] lg:min-h-25 lg:flex-none" : "lg:flex-1"}`}
                     data-testid="terminal-panel"
                   >
                     <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading terminal…</p>}>
@@ -886,6 +904,29 @@ function PanelResizer({ width, onResize }: { width: number; onResize: (w: number
       onKeyDown={(e) => {
         const d = { ArrowLeft: 32, ArrowRight: -32 }[e.key];
         if (d) onResize(clamp(width + d));
+      }}
+    />
+  );
+}
+
+/** Drag handle (or arrow keys) between the side panel and the terminal panel below it on wide screens (OpenCode: 100px to 60% of the window). */
+function TerminalResizer({ height, onResize }: { height: number; onResize: (h: number) => void }) {
+  const clamp = (h: number) => Math.round(Math.max(100, Math.min(h, window.innerHeight * 0.6)));
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize terminal"
+      aria-valuenow={height}
+      tabIndex={0}
+      className="hidden h-2 shrink-0 cursor-row-resize touch-none rounded-full hover:bg-primary/30 focus-visible:bg-primary/30 lg:block"
+      onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
+      onPointerMove={(e) =>
+        e.currentTarget.hasPointerCapture(e.pointerId) && onResize(clamp(e.currentTarget.parentElement!.getBoundingClientRect().bottom - e.clientY - 4))
+      }
+      onKeyDown={(e) => {
+        const d = { ArrowUp: 32, ArrowDown: -32 }[e.key];
+        if (d) (e.preventDefault(), onResize(clamp(height + d)));
       }}
     />
   );

@@ -317,3 +317,25 @@ it("the terminal panel stays open across a reload", async () => {
   await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
   localStorage.clear();
 });
+
+it("the terminal below the side panel resizes with the arrow keys (100px to 60% of the window) and keeps its height across a reload", async () => {
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
+  const handle = () => el.querySelector<HTMLElement>('[role="separator"][aria-label="Resize terminal"]')!;
+  expect(handle().getAttribute("aria-orientation")).toBe("horizontal");
+  expect(handle().getAttribute("aria-valuenow")).toBe("280");
+  await press({ key: "ArrowUp" }, handle());
+  expect(handle().getAttribute("aria-valuenow")).toBe("312");
+  for (let i = 0; i < 30; i++) await press({ key: "ArrowUp" }, handle());
+  expect(handle().getAttribute("aria-valuenow")).toBe(String(Math.round(window.innerHeight * 0.6)));
+  for (let i = 0; i < 30; i++) await press({ key: "ArrowDown" }, handle());
+  expect(handle().getAttribute("aria-valuenow")).toBe("100");
+  await press({ key: "ArrowUp" }, handle());
+  act(() => root.unmount());
+  root = createRoot(el);
+  await act(async () => root.render(<App />));
+  await act(async () => {});
+  expect(handle().getAttribute("aria-valuenow")).toBe("132");
+  expect(el.querySelector<HTMLElement>('[data-testid="terminal-panel"]')!.parentElement!.style.getPropertyValue("--terminal-h")).toBe("132px");
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
+  localStorage.clear();
+});
