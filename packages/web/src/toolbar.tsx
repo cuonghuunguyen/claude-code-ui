@@ -29,9 +29,9 @@ export function effortOptions(models: ModelInfo[], model: string): Effort[] {
 // OpenCode ghost-muted ButtonV2: 28px (44px on touch screens), padding 0 11px, 13px/20px weight 440, focus outline 2px offset 2px.
 // Focus outline uses --info (3:1 on every surface; OpenCode's #7698fd is 2.8:1 on white). `!`: SelectTrigger's data-[size] height has higher specificity.
 const FOCUS = "outline-none focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info";
-const GHOST = `h-7! cursor-pointer gap-1.5 rounded-md border-0 bg-transparent px-[11px] text-muted-foreground text-sm font-normal tracking-[-0.04px] hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground pointer-coarse:h-11! dark:bg-transparent ${FOCUS}`;
+export const GHOST = `h-7! cursor-pointer gap-1.5 rounded-md border-0 bg-transparent px-[11px] text-muted-foreground text-sm font-normal tracking-[-0.04px] hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground pointer-coarse:h-11! dark:bg-transparent ${FOCUS}`;
 
-function Chooser<T extends string>({
+export function Chooser<T extends string>({
   label,
   value,
   items,

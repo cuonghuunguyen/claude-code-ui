@@ -24,6 +24,8 @@ import type {
   SubscribeResult,
   TodoItem,
   UploadResult,
+  GitStatus,
+  GitStatusResult,
 } from "@claude-ui/protocol";
 import { isPromptImage, MAX_UPLOAD_BYTES, PERMISSION_MODES } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
@@ -39,6 +41,7 @@ import { activeMention, insertAtCaret, insertMention, mentionPath, splitUploads 
 import { SessionList } from "./sidebar.tsx";
 import { inProject, patchSession } from "./sessions.ts";
 import { PlanMeter } from "./plan-meter.tsx";
+import { StatusBar } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
@@ -628,6 +631,12 @@ export function App() {
                         onSearch={search(s.cwd)}
                         onAnswer={answer}
                         connected={status === "connected"}
+                        plan={plan}
+                        onGitStatus={() =>
+                          status === "connected"
+                            ? client.current!.request<GitStatusResult>({ type: "git.status", cwd: s.cwd }).then((r) => r.status)
+                            : Promise.reject(new Error(`the daemon is ${status}`))
+                        }
                       />
                     </Activity>
                   );
@@ -959,6 +968,8 @@ export function SessionPane({
   onRespond,
   onAnswer,
   connected,
+  plan,
+  onGitStatus,
 }: {
   scrollKey: number;
   insert?: string;
@@ -984,6 +995,9 @@ export function SessionPane({
   onAnswer: (requestId: string, answers: Record<string, string>) => void;
   /** The daemon is reachable; otherwise the send button is disabled. */
   connected: boolean;
+  /** Account plan limits for the status bar; null hides its plan fields. */
+  plan?: PlanUsage | null;
+  onGitStatus?: () => Promise<GitStatus | null>;
 }) {
   const permission = pendingPermission(view);
   const question = pendingQuestion(view);
@@ -1113,6 +1127,15 @@ export function SessionPane({
             />
           </>
         )}
+        <StatusBar
+          view={view}
+          model={models.find((m) => m.value === (view.model ?? session.model))?.displayName ?? view.model ?? session.model}
+          mode={view.permissionMode ?? session.permissionMode}
+          modes={session.permissionModes}
+          onMode={onMode}
+          plan={plan ?? null}
+          git={onGitStatus}
+        />
       </div>
     </CwdContext>
   );

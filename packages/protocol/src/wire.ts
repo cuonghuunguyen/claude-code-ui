@@ -102,6 +102,8 @@ export type ClientMessage = { reqId: string } & (
   | { type: "terminal.resize"; terminalId: string; cols: number; rows: number }
   /** Kills the shell. */
   | { type: "terminal.close"; terminalId: string }
+  /** Status bar: branch and diff size of `cwd` (a session's cwd, inside the roots). */
+  | { type: "git.status"; cwd: string }
 );
 
 /** `PushSubscription.toJSON()`. */
@@ -175,3 +177,7 @@ export type TerminalAttachResult = { buffer: string };
 
 /** Larger `terminal.input` data (UTF-8 bytes) is refused (`too_large`); the panel sends a big paste in parts. */
 export const MAX_TERMINAL_INPUT_BYTES = 64 * 1024;
+/** `branch`: short commit hash on a detached HEAD. `added`/`removed`: lines changed in tracked files against HEAD. */
+export type GitStatus = { branch: string; added: number; removed: number };
+/** `status` null outside a git work tree. */
+export type GitStatusResult = { status: GitStatus | null };

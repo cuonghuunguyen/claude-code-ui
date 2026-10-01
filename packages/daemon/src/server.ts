@@ -8,6 +8,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, listSessions, renameSession, tagSession, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
+import { gitStatus } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { createPlanTracker } from "./plan-usage.ts";
@@ -547,6 +548,11 @@ export function createDaemon(opts: {
           if (typeof msg.query !== "string") return fail("bad_query", "query must be a string");
           // A symlink pointing outside the roots is not offered: the SDK would read its target (like fs.read refuses it).
           return reply({ paths: searchFiles(cwd, msg.query).filter((p) => allowed(join(cwd, p))) });
+        }
+        case "git.status": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          return reply({ status: await gitStatus(cwd) });
         }
         case "push.key":
           return opts.push ? reply({ publicKey: opts.push.publicKey }) : fail("push_unavailable", "push is not configured");
