@@ -49,7 +49,10 @@ import { relPath } from "./tools.ts";
 import { FilesPanel } from "./files-panel.tsx";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionChanges } from "./changes.ts";
-import { QuickOpen, isQuickOpenKey, quickOpenLabel } from "./quick-open.tsx";
+import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
+import { CommandPalette } from "./palette.tsx";
+import { appCommands, shortcutFor } from "./app-commands.ts";
+import { KEYS, matchesKey } from "./shortcuts.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { NEW_TAB, avatarColors, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar } from "./tabs-bar.tsx";
@@ -112,6 +115,12 @@ export function App() {
   const pane = (activeId && panes[activeId]) || "session";
   const setPane = (p: Pane) => activeId && setPanes((x) => ({ ...x, [activeId]: p }));
   const [panelWidth, setPanelWidth] = useState(480);
+  // Wide screens: the side panel can be hidden (Toggle side panel).
+  const [panel, setPanel] = useState(true);
+  // Command palette, open on its first page or on a command's page (e.g. the model page).
+  const [palette, setPalette] = useState<{ start?: string }>();
+  // A user message whose rewind panel the palette asked for, waiting for its SessionPane.
+  const [rewindTo, setRewindTo] = useState<string>();
   // A mention from "Send selection to Claude", waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
@@ -122,6 +131,7 @@ export function App() {
   const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab" }>();
   // Session waiting for the delete confirmation.
   const [deleting, setDeleting] = useState<string>();
+  const paletteOpener = useRef<Element>(null);
   const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
@@ -417,13 +427,60 @@ export function App() {
     setQuickOpen(false);
     if (restoreFocus && quickOpener.current instanceof HTMLElement) quickOpener.current.focus();
   };
-  // Ctrl+P / Cmd+P while a session shows; the browser's print dialog stays on Ctrl+P elsewhere.
+  const wide = (px: number) => window.matchMedia(`(min-width: ${px}px)`).matches;
+  const commands = appCommands({
+    tabs,
+    activeId,
+    sessions: list,
+    session: shown && {
+      model: view?.model ?? shown.model,
+      effort: view?.effort ?? shown.effort,
+      mode: view?.permissionMode ?? shown.permissionMode,
+      modes: shown.permissionModes,
+      running: view?.state === "running" || view?.state === "needs_input",
+      prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" ? [{ id: i.part.id, text: i.part.text }] : [])),
+    },
+    models,
+    canQuickOpen,
+    newSession: () => newSession(),
+    selectTab: open,
+    closeTab: close,
+    quickOpen: showQuickOpen,
+    // md: the sidebar breakpoint; below it the sidebar is a drawer.
+    toggleSidebar: () => (wide(768) ? setSidebar((v) => !v) : setDrawer((v) => !v)),
+    // lg: the side panel breakpoint; below it the session and the files share one pane.
+    toggleSidePanel: () => (wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
+    focusPrompt: () => {
+      setPane("session");
+      // After the pane shows: only the visible session's prompt box has a layout box.
+      requestAnimationFrame(() => [...document.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"]')].find((el) => el.offsetParent)?.focus());
+    },
+    setModel: (model) => configure({ type: "session.setModel", sessionId: shown!.id, model }),
+    setEffort: (effort) => configure({ type: "session.setEffort", sessionId: shown!.id, effort }),
+    setMode: (mode) => configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode }),
+    rewind: (id) => (setRewindTo(id), setPane("session")),
+    stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
+  });
+  // App shortcuts. Each has Ctrl, Cmd or Alt, so it also fires in the prompt box; an open dialog (quick open, palette) owns the keyboard.
+  // A shortcut whose command does not apply now is left to the browser (e.g. Ctrl+P prints without a session).
+  const latestCommands = useRef(commands);
+  latestCommands.current = commands;
   useEffect(() => {
-    if (!canQuickOpen) return;
-    const onKey = (e: globalThis.KeyboardEvent) => isQuickOpenKey(e) && (e.preventDefault(), showQuickOpen());
+    if (status === "unauthorized") return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.defaultPrevented || document.querySelector('[aria-modal="true"]')) return;
+      const isPalette = matchesKey(KEYS.palette, e) || matchesKey(KEYS.paletteAlt, e);
+      const c = isPalette ? undefined : shortcutFor(latestCommands.current, e);
+      if (!isPalette && !c) return;
+      e.preventDefault();
+      if (c && "run" in c) return c.run();
+      // Focus goes back there when the palette closes, like quick open.
+      paletteOpener.current = document.activeElement;
+      setPalette({ start: c?.id });
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [canQuickOpen, quickOpen]);
+  }, [status]);
 
   return (
     <AvatarColors value={colors}>
@@ -522,6 +579,8 @@ export function App() {
                         scrollKey={scrollKeys[id] ?? 0}
                         insert={id === activeId ? insert : undefined}
                         onInserted={() => setInsert(undefined)}
+                        rewindTo={id === activeId ? rewindTo : undefined}
+                        onRewindShown={() => setRewindTo(undefined)}
                         session={s}
                         view={v}
                         models={models}
@@ -553,10 +612,10 @@ export function App() {
                   );
                 })}
               </div>
-              {shown && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
+              {shown && panel && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
               {panelSession && (
                 <section
-                  className={`${card} flex-1 lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""}`}
+                  className={`${card} flex-1 lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`}
                   style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
                   data-testid="side-panel"
                 >
@@ -617,6 +676,7 @@ export function App() {
             hideQuickOpen(false);
             setOpenFile(`${shown.cwd.replace(/\/$/, "")}/${p}`);
             setPane("files");
+            setPanel(true);
           }}
           onMention={(p) => {
             hideQuickOpen(false);
@@ -624,6 +684,17 @@ export function App() {
             setPane("session");
           }}
           onClose={() => hideQuickOpen(true)}
+        />
+      )}
+      {palette && (
+        <CommandPalette
+          items={commands}
+          start={palette.start}
+          onClose={() => {
+            setPalette(undefined);
+            // Before the chosen command runs, so a dialog it opens (quick open) returns focus here too.
+            if (paletteOpener.current instanceof HTMLElement) paletteOpener.current.focus();
+          }}
         />
       )}
       <OpenProjectDialog
@@ -836,6 +907,8 @@ export function SessionPane({
   scrollKey,
   insert,
   onInserted,
+  rewindTo,
+  onRewindShown,
   session,
   view,
   models,
@@ -855,6 +928,9 @@ export function SessionPane({
   scrollKey: number;
   insert?: string;
   onInserted: () => void;
+  /** Opens the rewind panel of this user message (palette Rewind). */
+  rewindTo?: string;
+  onRewindShown?: () => void;
   session: SessionInfo;
   view: SessionView;
   models: ModelInfo[];
@@ -887,6 +963,11 @@ export function SessionPane({
     return () => window.removeEventListener("keydown", onEsc);
   }, [turnRunning, onInterrupt]);
   const [rewinding, setRewinding] = useState<string>();
+  useEffect(() => {
+    if (!rewindTo) return;
+    setRewinding(rewindTo);
+    onRewindShown?.();
+  }, [rewindTo]);
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
 
   return (
@@ -1351,7 +1432,12 @@ function RewindPanel(props: {
   const options = preview ? rewindOptions(preview) : [];
 
   return (
-    <div className="ml-auto flex w-full max-w-md flex-col gap-2 rounded-lg border p-3 text-sm" data-testid="rewind-panel">
+    <div
+      className="ml-auto flex w-full max-w-md flex-col gap-2 rounded-lg border p-3 text-sm"
+      data-testid="rewind-panel"
+      // Opened from the palette, the message can be far up the timeline.
+      ref={(el) => void el?.scrollIntoView?.({ block: "nearest" })}
+    >
       {!preview && !error && <p className="text-muted-foreground">Checking file changes…</p>}
       {preview && preview.filesChanged.length > 0 && (
         <div>
