@@ -49,6 +49,17 @@ describe("connect", () => {
     c.close();
   });
 
+  it("a request with timeoutMs rejects when no reply comes in time, connected or not", async () => {
+    let opens = 0;
+    const c = connect({ url, token: "t", onEvent: () => {}, onOpen: () => opens++ });
+    await until(() => opens === 1);
+    await expect(c.request({ type: "fs.search", cwd: "/", query: "" }, { timeoutMs: 20 })).rejects.toThrow("timed out");
+    c.close();
+    const down = connect({ url: "ws://127.0.0.1:1", token: "t", onEvent: () => {} });
+    await expect(down.request({ type: "fs.search", cwd: "/", query: "" }, { timeoutMs: 20 })).rejects.toThrow("timed out");
+    down.close();
+  });
+
   it("stops redialing and reports unauthorized when the daemon rejects the token; a down daemon stays reconnecting", async () => {
     // The daemon's answers: every upgrade 401, the /auth probe 401 unless the token is "good".
     const http = createServer((req, res) => res.writeHead(req.headers.authorization === "Bearer good" ? 204 : 401).end());

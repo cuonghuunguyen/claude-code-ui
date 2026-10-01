@@ -399,8 +399,11 @@ export function App() {
     const data = (await readDataUrl(file)).replace(/^data:[^,]*,/, "");
     return (await client.current!.request<UploadResult>({ type: "fs.upload", name: file.name, data })).path;
   };
+  // Offline, a request would wait for the reconnect with no feedback; a reply that never comes times out.
   const search = (cwd: string) => (query: string) =>
-    client.current!.request<FsSearchResult>({ type: "fs.search", cwd, query }).then((r) => r.paths);
+    status === "connected"
+      ? client.current!.request<FsSearchResult>({ type: "fs.search", cwd, query }, { timeoutMs: 10_000 }).then((r) => r.paths)
+      : Promise.reject(new Error(`the daemon is ${status}`));
   const canQuickOpen = !!shown && status !== "unauthorized";
   const showQuickOpen = () => {
     if (!quickOpen) quickOpener.current = document.activeElement;
@@ -595,6 +598,7 @@ export function App() {
       </div>
       {quickOpen && shown && (
         <QuickOpen
+          connected={status === "connected"}
           onSearch={search(shown.cwd)}
           onOpen={(p) => {
             hideQuickOpen(false);

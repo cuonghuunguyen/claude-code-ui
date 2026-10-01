@@ -18,13 +18,14 @@ const FILES: Record<string, string[]> = {
   au: ["src/auth/", "src/auth/login.ts"],
 };
 
-async function render() {
+async function render(connected = true) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
   const onSearch = vi.fn(async (q: string) => FILES[q] ?? []);
   const handlers = { onOpen: vi.fn(), onMention: vi.fn(), onClose: vi.fn() };
-  await act(async () => root!.render(<QuickOpen onSearch={onSearch} {...handlers} />));
+  const draw = (c: boolean) => act(async () => root!.render(<QuickOpen onSearch={onSearch} connected={c} {...handlers} />));
+  await draw(connected);
   const input = el.querySelector<HTMLInputElement>('[data-testid="quick-open-input"]')!;
   const rows = () => [...el.querySelectorAll<HTMLElement>('[role="option"]')];
   const type = async (value: string) => {
@@ -39,7 +40,7 @@ async function render() {
     await act(async () => void input.dispatchEvent(e));
     return e;
   };
-  return { el, input, rows, type, key, onSearch, ...handlers };
+  return { el, input, rows, type, key, onSearch, draw, ...handlers };
 }
 
 it("focuses the search box and lists files, not folders, for an empty query", async () => {
@@ -159,4 +160,23 @@ it("shows the error when the search fails", async () => {
   onSearch.mockRejectedValueOnce(new Error("Not connected"));
   await type("x");
   expect(el.textContent).toContain("Not connected");
+});
+
+it("a failed search offers Retry, which searches again", async () => {
+  const { el, type, onSearch, rows } = await render();
+  onSearch.mockRejectedValueOnce(new Error("timed out"));
+  await type("a");
+  const retry = [...el.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
+  await act(async () => retry.click());
+  expect(onSearch).toHaveBeenLastCalledWith("a");
+  expect(rows().map((r) => r.dataset.path)).toEqual(["src/app.ts", "src/auth/login.ts"]);
+});
+
+it("offline it says so instead of searching, and searches once the daemon reconnects", async () => {
+  const { el, onSearch, rows, draw } = await render(false);
+  expect(onSearch).not.toHaveBeenCalled();
+  expect(el.textContent).toContain("Not connected to the daemon");
+  await draw(true);
+  expect(onSearch).toHaveBeenLastCalledWith("");
+  expect(rows()).toHaveLength(3);
 });
