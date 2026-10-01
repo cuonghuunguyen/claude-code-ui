@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,5 +48,27 @@ describe("searchFiles", () => {
 
   it("returns at most limit matches", () => {
     expect(searchFiles(dir, "", 2)).toHaveLength(2);
+  });
+});
+
+describe("searchFiles in a git repository", () => {
+  const dir = mkdtempSync(join(tmpdir(), "search-git-"));
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  mkdirSync(join(dir, "src"));
+  mkdirSync(join(dir, "dist"));
+  writeFileSync(join(dir, ".gitignore"), "dist/\n*.log\n");
+  writeFileSync(join(dir, "src/main.ts"), "");
+  writeFileSync(join(dir, "dist/main.js"), "");
+  writeFileSync(join(dir, "main.log"), "");
+
+  it("leaves out gitignored files and folders, keeps untracked ones", () => {
+    const all = searchFiles(dir, "");
+    expect(all).toContain("src/main.ts");
+    expect(all).toContain("src/");
+    expect(all.some((p) => p.startsWith("dist") || p.endsWith(".log"))).toBe(false);
+  });
+
+  it("searched from a subfolder, paths stay relative to it", () => {
+    expect(searchFiles(join(dir, "src"), "main")).toEqual(["main.ts"]);
   });
 });

@@ -1,5 +1,5 @@
 import { Activity, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
-import { CheckIcon, CopyIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SquareIcon, SunIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SunIcon } from "lucide-react";
 import type {
   CreateResult,
   Event,
@@ -25,7 +25,7 @@ import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type RequestError } from "./client.ts";
 import { ImageStrip, readImages } from "./images.tsx";
 import { choose, matchCommands } from "./commands.ts";
-import { activeMention, insertAtCaret, insertMention } from "./mentions.ts";
+import { activeMention, insertAtCaret, insertMention, mentionPath } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
@@ -36,6 +36,7 @@ import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, SubagentGroup, TodoList, ToolCard } from "./tool-card.tsx";
 import { FilesPanel } from "./files-panel.tsx";
+import { QuickOpen, isQuickOpenKey, quickOpenLabel } from "./quick-open.tsx";
 import { NEW_TAB, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs, staleTabs } from "./tabs.ts";
 import { IconButton, ProjectAvatar, TabsBar } from "./tabs-bar.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -88,6 +89,10 @@ export function App() {
   const [panelWidth, setPanelWidth] = useState(480);
   // A mention from "Send selection to Claude", waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
+  // Quick open, and the file it asks the files panel to open (absolute path).
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [openFile, setOpenFile] = useState<string>();
+  const quickOpener = useRef<Element>(null);
   const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
@@ -294,6 +299,24 @@ export function App() {
   const panelSession = shown ?? lastShown.current;
   const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-raised";
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
+  const search = (cwd: string) => (query: string) =>
+    client.current!.request<FsSearchResult>({ type: "fs.search", cwd, query }).then((r) => r.paths);
+  const canQuickOpen = !!shown && status !== "unauthorized";
+  const showQuickOpen = () => {
+    if (!quickOpen) quickOpener.current = document.activeElement;
+    setQuickOpen(true);
+  };
+  const hideQuickOpen = (restoreFocus: boolean) => {
+    setQuickOpen(false);
+    if (restoreFocus && quickOpener.current instanceof HTMLElement) quickOpener.current.focus();
+  };
+  // Ctrl+P / Cmd+P while a session shows; the browser's print dialog stays on Ctrl+P elsewhere.
+  useEffect(() => {
+    if (!canQuickOpen) return;
+    const onKey = (e: globalThis.KeyboardEvent) => isQuickOpenKey(e) && (e.preventDefault(), showQuickOpen());
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canQuickOpen, quickOpen]);
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
@@ -316,7 +339,12 @@ export function App() {
             onNew={() => open(NEW_TAB)}
           />
         )}
-        <IconButton className="ml-auto" label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
+        {canQuickOpen && (
+          <IconButton className="ml-auto" label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button">
+            <SearchIcon />
+          </IconButton>
+        )}
+        <IconButton className={canQuickOpen ? "" : "ml-auto"} label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
           <ThemeIcon />
         </IconButton>
       </header>
@@ -385,7 +413,7 @@ export function App() {
                           client.current!.request({ type: "session.rewind", sessionId: s.id, userMessageId, mode })
                         }
                         onRespond={respond}
-                        onSearch={(query) => client.current!.request<FsSearchResult>({ type: "fs.search", cwd: s.cwd, query }).then((r) => r.paths)}
+                        onSearch={search(s.cwd)}
                         onAnswer={answer}
                       />
                     </Activity>
@@ -408,6 +436,8 @@ export function App() {
                       status={status}
                       cwd={panelSession.cwd}
                       onSend={(mention) => (setInsert(mention), setPane("session"))}
+                      openPath={openFile}
+                      onOpened={() => setOpenFile(undefined)}
                     />
                   </div>
                   {pane === "changes" && <p className="m-auto p-4 text-muted-foreground">No changes view yet.</p>}
@@ -431,6 +461,22 @@ export function App() {
           )}
         </main>
       </div>
+      {quickOpen && shown && (
+        <QuickOpen
+          onSearch={search(shown.cwd)}
+          onOpen={(p) => {
+            hideQuickOpen(false);
+            setOpenFile(`${shown.cwd.replace(/\/$/, "")}/${p}`);
+            setPane("files");
+          }}
+          onMention={(p) => {
+            hideQuickOpen(false);
+            setInsert(mentionPath(p));
+            setPane("session");
+          }}
+          onClose={() => hideQuickOpen(true)}
+        />
+      )}
     </div>
   );
 }
