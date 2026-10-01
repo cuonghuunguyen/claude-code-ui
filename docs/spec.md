@@ -79,7 +79,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | client → daemon | `session.rewindPreview {sessionId, userMessageId}` | `rewindFiles` dry run: `filesChanged[]`, `insertions`, `deletions`, `conversation` |
 | client → daemon | `permission.respond {requestId, decision, ruleIndex?, updatedInput?, message?}` | Answer a permission request |
 | client → daemon | `question.respond {requestId, answers}` | Answer a question |
-| client → daemon | `session.list` / `session.close` / `models.list` | Lists and management; `session.list` also returns the known projects |
+| client → daemon | `session.list` / `session.close` / `models.list` | Lists and management; `session.list` also returns the known projects and `permissionModes` (the modes a new session may start in; bypass only when enabled) |
 | client → daemon | `project.open {cwd}` / `project.remove {cwd}` | Add a directory inside the roots to the known projects / remove one from the list |
 | client → daemon | `session.rename {sessionId, title}` | SDK custom title (`renameSession()`); the terminal CLI shows it too |
 | client → daemon | `session.archive {sessionId, archived}` | SDK session tag `archived` (`tagSession()`); hidden from the list unless the archived filter is on; the SDK keeps one tag per session, so archive replaces a CLI `/tag` and unarchive clears it |

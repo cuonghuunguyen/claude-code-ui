@@ -184,3 +184,41 @@ it("Remove project asks first; Cancel keeps it, Remove sends project.remove", as
   await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-confirm"]')!.click());
   expect(removeSent()).toEqual([{ type: "project.remove", cwd: "/p/demo" }]);
 });
+
+const openNewTab = async () => {
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="project-new-session"]')!.click());
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+};
+const newPrompt = () => el.querySelector<HTMLElement>('[data-testid="new-session-tab"] textarea');
+const paletteRow = (title: string) => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith(title));
+
+it("Ctrl+L on the new-session tab focuses its first prompt", async () => {
+  await openNewTab();
+  (document.activeElement as HTMLElement).blur();
+  await press({ key: "l", code: "KeyL", ctrlKey: true });
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(newPrompt());
+});
+
+it("the palette on the new-session tab changes the draft's permission mode, and offers Bypass when the daemon allows it", async () => {
+  replies["session.list"] = { sessions: [session], projects: ["/p/demo"], permissionModes: ["default", "acceptEdits", "plan", "bypassPermissions"] };
+  try {
+    // Mounted again, so the first session.list brings the daemon's modes.
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    await openNewTab();
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    expect(paletteRow("Focus prompt")).toBeDefined();
+    // No side panel or terminal on the new-session tab.
+    expect(paletteRow("Toggle side panel")).toBeUndefined();
+    expect(paletteRow("Toggle terminal")).toBeUndefined();
+    await act(async () => paletteRow("Change permission mode")!.click());
+    expect(paletteRow("Bypass permissions")).toBeDefined();
+    await act(async () => paletteRow("Plan mode")!.click());
+    expect(el.querySelector('[data-testid="new-session-tab"] [data-testid="mode-select"]')?.textContent).toContain("Plan mode");
+  } finally {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+  }
+});

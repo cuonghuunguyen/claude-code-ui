@@ -51,6 +51,11 @@ for (const theme of [":root", ".dark"]) {
         for (const fg of ["accent-foreground", "muted-foreground"]) expect(contrast(solid(fg), over(t.accent!, t[bg]!))).toBeGreaterThanOrEqual(4.5);
     });
 
+    it("keybind chip: OpenCode bg-layer-03 (#eeeeee light, #3a3a3a dark); its muted text reaches 4.5:1", () => {
+      expect(t.kbd).toBe(theme === ":root" ? "#eeeeee" : "#3a3a3a");
+      expect(contrast(solid("muted-foreground"), solid("kbd"))).toBeGreaterThanOrEqual(4.5);
+    });
+
     it("faint icons reach 3:1 on every surface", () => {
       for (const bg of SURFACES) expect(contrast(solid("faint"), solid(bg))).toBeGreaterThanOrEqual(3);
     });

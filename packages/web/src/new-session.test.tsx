@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { act, type ComponentProps } from "react";
+import { act, useState, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelInfo } from "@claude-ui/protocol";
-import { NewSession, NewSessionTab, startSession } from "./App.tsx";
+import { NewSession, NewSessionTab, startSession, type StartOptions } from "./App.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -15,13 +15,19 @@ Element.prototype.scrollIntoView ??= () => {};
 
 const models: ModelInfo[] = [{ value: "default", displayName: "Default (recommended)", description: "", supportsEffort: true, supportedEffortLevels: ["low", "high"] }];
 let unmount = () => {};
+// App owns the draft's model, mode and effort; the harness holds them like App does.
+type Props = Omit<ComponentProps<typeof NewSession>, "draft" | "onDraft" | "modes">;
+function Draft(p: Props) {
+  const [draft, setDraft] = useState<StartOptions>({ model: "default", mode: "default", effort: "default" });
+  return <NewSession {...p} draft={draft} onDraft={setDraft} modes={["default", "acceptEdits", "plan"]} />;
+}
 afterEach(() => unmount());
 
-async function render(over: Partial<ComponentProps<typeof NewSession>> = {}) {
+async function render(over: Partial<Props> = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   const root = createRoot(el);
-  const props: ComponentProps<typeof NewSession> = {
+  const props: Props = {
     projects: ["/p/a", "/p/b"],
     cwd: "/p/a",
     onCwd: () => {},
@@ -32,9 +38,9 @@ async function render(over: Partial<ComponentProps<typeof NewSession>> = {}) {
     onStart: async () => {},
     ...over,
   };
-  await act(async () => root.render(<NewSession {...props} />));
+  await act(async () => root.render(<Draft {...props} />));
   unmount = () => (root.unmount(), el.remove());
-  return { el, box: el.querySelector("textarea")!, rerender: (p: Partial<ComponentProps<typeof NewSession>>) => act(async () => root.render(<NewSession {...props} {...p} />)) };
+  return { el, box: el.querySelector("textarea")!, rerender: (p: Partial<Props>) => act(async () => root.render(<Draft {...props} {...p} />)) };
 }
 
 async function type(box: HTMLTextAreaElement, text: string) {
@@ -96,7 +102,11 @@ it("switching to another tab and back keeps the new-session draft and the chosen
   document.body.append(el);
   const root = createRoot(el);
   unmount = () => (root.unmount(), el.remove());
-  const show = (active: boolean) => act(async () => root.render(<NewSessionTab active={active} {...props} />));
+  function Tab({ active }: { active: boolean }) {
+    const [draft, setDraft] = useState<StartOptions>({ model: "default", mode: "default", effort: "default" });
+    return <NewSessionTab active={active} {...props} draft={draft} onDraft={setDraft} modes={["default", "acceptEdits"]} />;
+  }
+  const show = (active: boolean) => act(async () => root.render(<Tab active={active} />));
   await show(true);
   const input = el.querySelector("textarea")!;
   await type(input, "draft text");

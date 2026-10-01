@@ -157,8 +157,9 @@ export const TOKEN_PROTOCOL_PREFIX = "token.";
 /**
  * `projects`: known project cwds, newest activity first: session cwds plus opened projects, minus removed ones.
  * `sessions`: only sessions of those projects.
+ * `permissionModes`: the modes a new session can start in (PERMISSION_MODES, without bypassPermissions unless enabled).
  */
-export type ListResult = { sessions: SessionListItem[]; projects: string[] };
+export type ListResult = { sessions: SessionListItem[]; projects: string[]; permissionModes: PermissionMode[] };
 /** `cwd`: the canonical path of the opened project. */
 export type ProjectOpenResult = { cwd: string };
 export type FsListResult = { entries: FsEntry[] };

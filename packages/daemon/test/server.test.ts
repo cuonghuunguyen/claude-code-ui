@@ -351,6 +351,17 @@ describe("daemon", () => {
     });
   });
 
+  it("session.list names the modes a new session may start in: bypassPermissions only when the daemon enables it", async () => {
+    for (const allowBypass of [false, true]) {
+      const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, allowBypass, history: { listSessions: (async () => []) as never } as never });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      const c = await client((d.address() as AddressInfo).port);
+      const modes = allowBypass ? ["default", "acceptEdits", "plan", "bypassPermissions"] : ["default", "acceptEdits", "plan"];
+      expect(await c.request({ type: "session.list" })).toMatchObject({ result: { permissionModes: modes } });
+      d.close();
+    }
+  });
+
   it("lists models from supportedModels() and caches them", async () => {
     const c = await client();
     const before = calls.length;
@@ -949,7 +960,7 @@ describe("daemon", () => {
       const other = await client((b.d.address() as AddressInfo).port);
       await b.c.request({ type: "project.remove", cwd });
       await other.waitFor((m) => m.type === "sessions.changed");
-      expect(await list(b.c)).toEqual({ projects: [opened], sessions: [] });
+      expect(await list(b.c)).toMatchObject({ projects: [opened], sessions: [] });
       expect(await b.c.request({ type: "project.remove", cwd: 7 })).toMatchObject({ code: "bad_cwd" });
       // Files stay.
       expect(statSync(cwd).isDirectory()).toBe(true);

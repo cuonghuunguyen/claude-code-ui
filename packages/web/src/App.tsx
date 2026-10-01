@@ -95,6 +95,10 @@ export function App() {
   const [projects, setProjects] = useState<string[]>([]);
   // Project the new-session tab starts in.
   const [draftCwd, setDraftCwd] = useState<string>();
+  // The new-session tab's model, mode and effort: here, not in the tab, so the palette can change them too.
+  const [draft, setDraft] = useState<StartOptions>(NEW_DRAFT);
+  // Modes a new session may start in (session.list): bypassPermissions only when the daemon enables it.
+  const [newModes, setNewModes] = useState<PermissionMode[]>(NEW_SESSION_MODES);
   const [openingProject, setOpeningProject] = useState(false);
   const newPrompt = useRef<HTMLTextAreaElement>(null);
   const [views, setViews] = useState<Record<string, SessionView>>({});
@@ -104,6 +108,9 @@ export function App() {
     const h = hashTab();
     return h ? openTab(loadTabs(), h) : loadTabs();
   });
+  // A closed or replaced new-session tab starts with the defaults next time.
+  const draftOpen = tabs.includes(NEW_TAB);
+  useEffect(() => void (!draftOpen && setDraft(NEW_DRAFT)), [draftOpen]);
   const [theme, setTheme] = useState<ThemePref>(loadPref);
   const [error, setError] = useState<string>();
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
@@ -161,9 +168,10 @@ export function App() {
 
   async function refreshList() {
     try {
-      const { sessions, projects } = await client.current!.request<ListResult>({ type: "session.list" });
+      const { sessions, projects, permissionModes } = await client.current!.request<ListResult>({ type: "session.list" });
       setList(sessions);
       setProjects(projects);
+      if (permissionModes) setNewModes(permissionModes);
       if (restored.current) {
         for (const id of staleTabs(restored.current, new Set(sessions.map((s) => s.id)))) forget(id);
         restored.current = undefined;
@@ -464,11 +472,14 @@ export function App() {
     setPane("files");
     setPanel(true);
   };
+  const draftShown = activeId === NEW_TAB && tabs.includes(NEW_TAB);
   const commands = appCommands({
     tabs,
     activeId,
     sessions: list,
-    session: shown && {
+    session: draftShown
+      ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: newModes, running: false, prompts: [], draft: true }
+      : shown && {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
       mode: view?.permissionMode ?? shown.permissionMode,
@@ -488,13 +499,14 @@ export function App() {
     toggleSidePanel: () => (wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
     toggleTerminal: () => (wide(1024) ? setTerminalOpen((v) => !v) : setPane(pane === "terminal" ? "session" : "terminal")),
     focusPrompt: () => {
+      if (draftShown) return newPrompt.current?.focus();
       showSession();
       // After the pane shows: only the visible session's prompt box has a layout box.
       requestAnimationFrame(() => [...document.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"]')].find((el) => el.offsetParent)?.focus());
     },
-    setModel: (model) => configure({ type: "session.setModel", sessionId: shown!.id, model }),
-    setEffort: (effort) => configure({ type: "session.setEffort", sessionId: shown!.id, effort }),
-    setMode: (mode) => configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode }),
+    setModel: (model) => (draftShown ? setDraft((d) => ({ ...d, model })) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
+    setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
+    setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
   });
@@ -727,6 +739,9 @@ export function App() {
                   cwd={draftCwd && projects.includes(draftCwd) ? draftCwd : projects[0]}
                   onCwd={setDraftCwd}
                   models={models}
+                  draft={draft}
+                  onDraft={setDraft}
+                  modes={newModes}
                   onOpenProject={() => setOpeningProject(true)}
                   onUpload={upload}
                   onSearch={search}
@@ -891,6 +906,9 @@ export function NewSession({
   cwd,
   onCwd,
   models,
+  draft,
+  onDraft,
+  modes,
   onOpenProject,
   onUpload,
   onSearch,
@@ -901,6 +919,9 @@ export function NewSession({
   cwd?: string;
   onCwd: (cwd: string) => void;
   models: ModelInfo[];
+  draft: StartOptions;
+  onDraft: (d: StartOptions) => void;
+  modes: PermissionMode[];
   onOpenProject: () => void;
   onUpload: (file: File) => Promise<string>;
   onSearch: (cwd: string) => (query: string) => Promise<string[]>;
@@ -908,9 +929,7 @@ export function NewSession({
   onStart: (cwd: string, opts: StartOptions, text: string, images: string[]) => Promise<void>;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
-  const [model, setModel] = useState("default");
-  const [mode, setMode] = useState<PermissionMode>("default");
-  const [effort, setEffort] = useState<Effort>("default");
+  const { model, mode, effort } = draft;
   const OPEN = "\0open";
 
   return (
@@ -921,13 +940,12 @@ export function NewSession({
           commands={[]}
           models={models}
           model={model}
-          onModel={setModel}
+          onModel={(m) => onDraft({ ...draft, model: m })}
           effort={effort}
-          onEffort={setEffort}
+          onEffort={(e) => onDraft({ ...draft, effort: e })}
           mode={mode}
-          // ponytail: bypassPermissions is not offered before the session exists (the daemon's allowBypass is per session info).
-          modes={NEW_SESSION_MODES}
-          onMode={setMode}
+          modes={modes}
+          onMode={(m) => onDraft({ ...draft, mode: m })}
           onUpload={onUpload}
           onSearch={cwd ? onSearch(cwd) : async () => []}
           onPrompt={(text, images) => (cwd ? onStart(cwd, { model, mode, effort }, text, images) : Promise.reject(new Error("no project")))}
@@ -973,6 +991,7 @@ export function NewSession({
 
 export type StartOptions = { model: string; mode: PermissionMode; effort: Effort };
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
+const NEW_DRAFT: StartOptions = { model: "default", mode: "default", effort: "default" };
 
 export function SessionPane({
   scrollKey,

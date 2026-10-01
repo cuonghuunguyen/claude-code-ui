@@ -64,6 +64,8 @@ it("lists commands with their shortcut chips and the sessions, grouped; the sear
   expect([...el.querySelectorAll('[role="group"]')].map((g) => g.getAttribute("aria-label"))).toEqual(["Commands", "Sessions"]);
   expect(rows().map((r) => r.dataset.id)).toEqual(["new", "model", "s1"]);
   expect([...rows()[0]!.querySelectorAll('[data-testid="keybind"] span')].map((s) => s.textContent)).toEqual(["Ctrl", "Shift", "S"]);
+  // OpenCode KeybindV2 fill: bg-layer-03 (theme.test.ts checks the token).
+  expect(rows()[0]!.querySelector('[data-testid="keybind"] span')!.className).toContain("bg-kbd");
 });
 
 it("typing filters by title or description; Enter runs the active item and closes", async () => {
