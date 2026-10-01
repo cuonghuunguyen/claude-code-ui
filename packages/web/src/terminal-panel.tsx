@@ -134,13 +134,28 @@ export function TerminalPanel({ client, status, cwd, onEmpty }: { client: Client
         </p>
       )}
       {terminals.map((t) => (
-        <TerminalView key={t.id} client={client} status={status} id={t.id} active={t.id === activeId} focusShell={focusShell} />
+        <TerminalView key={t.id} client={client} status={status} id={t.id} active={t.id === activeId} focusShell={focusShell} onInputError={setError} />
       ))}
     </div>
   );
 }
 
-function TerminalView({ client, status, id, active, focusShell }: { client: Client; status: ConnectionStatus; id: string; active: boolean; focusShell: RefObject<boolean> }) {
+/** `onInputError`: the daemon refused input (e.g. input_backlog: the shell does not read), or undefined once it takes input again. */
+function TerminalView({
+  client,
+  status,
+  id,
+  active,
+  focusShell,
+  onInputError,
+}: {
+  client: Client;
+  status: ConnectionStatus;
+  id: string;
+  active: boolean;
+  focusShell: RefObject<boolean>;
+  onInputError: (message: string | undefined) => void;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const term = useRef<{ t: Terminal; fit: FitAddon }>(undefined);
   const connected = useRef(false);
@@ -157,7 +172,11 @@ function TerminalView({ client, status, id, active, focusShell }: { client: Clie
     // Typed while offline it would arrive late, out of context: dropped.
     t.onData((data) => {
       if (!connected.current) return;
-      for (const part of inputParts(data)) client.request({ type: "terminal.input", terminalId: id, data: part }).catch(() => {});
+      for (const part of inputParts(data))
+        client.request({ type: "terminal.input", terminalId: id, data: part }).then(
+          () => onInputError(undefined),
+          (e: Error) => e.message !== "disconnected" && onInputError(e.message),
+        );
     });
     t.onResize(({ cols, rows }) => connected.current && client.request({ type: "terminal.resize", terminalId: id, cols, rows }).catch(() => {}));
     t.attachCustomKeyEventHandler((e) => {

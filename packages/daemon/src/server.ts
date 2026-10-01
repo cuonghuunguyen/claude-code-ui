@@ -754,7 +754,8 @@ export function createDaemon(opts: {
           if (msg.type === "terminal.input") {
             if (typeof msg.data !== "string") return fail("bad_input", "data must be a string");
             if (Buffer.byteLength(msg.data) > MAX_TERMINAL_INPUT_BYTES) return fail("too_large", `terminal input larger than ${MAX_TERMINAL_INPUT_BYTES} bytes`);
-            if (!terminals.write(t, msg.data)) return fail("input_backlog", "the shell has not read the earlier input yet; send again later");
+            const err = terminals.write(t, msg.data);
+            if (err) return fail(err, { input_backlog: "the shell has not read the earlier input yet; send again later", unknown_terminal: "the terminal is closed", write_failed: "writing to the terminal failed" }[err]);
           } else if (msg.type === "terminal.resize") {
             if (!isSize(msg.cols) || !isSize(msg.rows)) return fail("bad_size", "cols and rows must be integers from 1 to 1000");
             terminals.resize(t, msg.cols, msg.rows);
