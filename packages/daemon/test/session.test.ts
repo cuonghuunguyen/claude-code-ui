@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
-import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, fakeCommands, fakeQuery, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, controlCalls, fakeCommands, fakeQuery, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -142,6 +142,56 @@ describe("Session", () => {
     expect(setModelCalls.length).toBe(before);
     s.prompt("hi");
     expect(calls.at(-1)).toMatchObject({ resume: s.id, model: "haiku" });
+  });
+
+  it("starts in default permission mode and model default effort; bypass only when the daemon enables it", () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    expect(calls.at(-1)).toMatchObject({ permissionMode: "default", allowDangerouslySkipPermissions: false, effort: undefined });
+    expect(s.info()).toMatchObject({ permissionMode: "default", effort: "default", permissionModes: ["default", "acceptEdits", "plan"] });
+    new Session("/tmp", { allowBypass: true, query: fakeQuery as never });
+    expect(calls.at(-1)).toMatchObject({ allowDangerouslySkipPermissions: true });
+  });
+
+  it("setPermissionMode and setEffort change the live query and log parts", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await s.setPermissionMode("plan");
+    await s.setEffort("high");
+    await s.setEffort("default");
+    expect(controlCalls.slice(-3)).toEqual([{ setPermissionMode: "plan" }, { applyFlagSettings: { effortLevel: "high" } }, { applyFlagSettings: { effortLevel: null } }]);
+    expect(lastPart(events, "session_permission_mode")).toEqual({ type: "session_permission_mode", id: "session_permission_mode", mode: "plan" });
+    expect(lastPart(events, "session_effort")).toEqual({ type: "session_effort", id: "session_effort", effort: "default" });
+    expect(s.info()).toMatchObject({ permissionMode: "plan", effort: "default" });
+    await expect(s.setPermissionMode("bypassPermissions")).rejects.toThrow("not enabled");
+  });
+
+  it("a restored session not yet resumed starts with the chosen mode and effort", async () => {
+    const s = Session.restore(randomUUID(), "/tmp", [], { query: fakeQuery as never });
+    const before = controlCalls.length;
+    await s.setPermissionMode("acceptEdits");
+    await s.setEffort("low");
+    expect(controlCalls.length).toBe(before);
+    s.prompt("hi");
+    expect(calls.at(-1)).toMatchObject({ resume: s.id, permissionMode: "acceptEdits", effort: "low" });
+  });
+
+  it("follows a permission mode change the CLI reports in system/status (plan approved)", async () => {
+    const msgs = [{ type: "system", subtype: "status", status: null, permissionMode: "acceptEdits", uuid: randomUUID(), session_id: "x" }];
+    const query = ({ prompt }: { prompt: AsyncIterable<unknown> }) =>
+      Object.assign(
+        (async function* () {
+          for await (const _ of prompt) yield* msgs;
+        })(),
+        { supportedCommands: async () => [], setPermissionMode: async () => {} },
+      );
+    const s = new Session("/tmp", { query: query as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await s.setPermissionMode("plan");
+    s.prompt("go");
+    await until(events, (e) => e.part.type === "session_permission_mode" && e.part.mode === "acceptEdits");
+    expect(s.info().permissionMode).toBe("acceptEdits");
   });
 
   it("sends attached images as image content blocks and shows them in user_text", async () => {
@@ -284,6 +334,80 @@ describe("Session questions", () => {
     const answered = () => until(events, () => permissionResults.length > results).then(() => permissionResults.at(-1)!);
     return { s, events, q, answered };
   };
+
+  it("ExitPlanMode offers Claude Code's 'Yes, and auto-accept edits' as its suggestion", async () => {
+    const plan = { plan: "1. edit a.txt" };
+    const query = ({ prompt, options }: { prompt: AsyncIterable<unknown>; options: { canUseTool: Function } }) =>
+      Object.assign(
+        (async function* () {
+          for await (const _ of prompt) {
+            permissionResults.push(await options.canUseTool("ExitPlanMode", plan, { signal: new AbortController().signal, toolUseID: "t1", requestId: "r" }));
+            yield* [];
+          }
+        })(),
+        { supportedCommands: async () => [] },
+      );
+    const s = new Session("/tmp", { query: query as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("go");
+    await until(events, (e) => e.part.type === "permission_request");
+    const req = events.find((e) => e.part.type === "permission_request")!.part as Extract<Event["part"], { type: "permission_request" }>;
+    expect(req).toMatchObject({ tool: "ExitPlanMode", input: plan, suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }] });
+    s.respond(req.requestId, { decision: "allow_always" });
+    await vi.waitFor(() => expect(permissionResults.at(-1)).toMatchObject({ behavior: "allow", updatedPermissions: [{ type: "setMode", mode: "acceptEdits" }] }));
+  });
+
+  // Review round 2: the CLI restores the mode active before plan mode unless told otherwise, so each answer names its mode.
+  describe.each([
+    ["the mode menu", ["plan"], []],
+    ["Shift+Tab (via acceptEdits)", ["acceptEdits", "plan"], []],
+    ["the CLI (system/status)", [], [{ type: "system", subtype: "status", status: null, permissionMode: "plan", uuid: randomUUID(), session_id: "x" }]],
+  ] as const)("ExitPlanMode after plan mode entered from %s", (_, modes, msgs) => {
+    const planExit = async () => {
+      const query = ({ prompt, options }: { prompt: AsyncIterable<unknown>; options: { canUseTool: Function } }) =>
+        Object.assign(
+          (async function* () {
+            for await (const _ of prompt) {
+              yield* msgs;
+              permissionResults.push(await options.canUseTool("ExitPlanMode", { plan: "p" }, { signal: new AbortController().signal, toolUseID: "t1", requestId: "r" }));
+            }
+          })(),
+          { supportedCommands: async () => [], setPermissionMode: async () => {} },
+        );
+      const s = new Session("/tmp", { query: query as never });
+      const events: Event[] = [];
+      s.subscribe(0, (e) => events.push(e));
+      for (const m of modes) await s.setPermissionMode(m);
+      s.prompt("go");
+      await until(events, (e) => e.part.type === "permission_request");
+      expect(s.info().permissionMode).toBe("plan");
+      const req = events.find((e) => e.part.type === "permission_request")!.part as Extract<Event["part"], { type: "permission_request" }>;
+      const results = permissionResults.length;
+      return { s, req, result: () => vi.waitFor(() => (expect(permissionResults.length).toBeGreaterThan(results), permissionResults.at(-1)!)) };
+    };
+    const setMode = (mode: string) => ({ updatedPermissions: [{ type: "setMode", mode, destination: "session" }] });
+
+    it("'Yes, manually approve edits' sets default", async () => {
+      const { s, req, result } = await planExit();
+      s.respond(req.requestId, { decision: "allow" });
+      expect(await result()).toMatchObject({ behavior: "allow", ...setMode("default") });
+    });
+    it("'Yes, and auto-accept edits' sets acceptEdits", async () => {
+      const { s, req, result } = await planExit();
+      s.respond(req.requestId, { decision: "allow_always" });
+      expect(await result()).toMatchObject({ behavior: "allow", ...setMode("acceptEdits") });
+    });
+    it("'No, keep planning' (with or without feedback) changes no mode", async () => {
+      for (const message of [undefined, "smaller steps"]) {
+        const { s, req, result } = await planExit();
+        s.respond(req.requestId, { decision: "deny", message });
+        const r = await result();
+        expect(r).toMatchObject({ behavior: "deny" });
+        expect(r).not.toHaveProperty("updatedPermissions");
+      }
+    });
+  });
 
   it("AskUserQuestion through canUseTool logs a question part and sets needs_input", async () => {
     const { s, events, q } = await ask();

@@ -46,10 +46,13 @@ const render = (v: SessionView) =>
       <SessionPane
         scrollKey={0}
         onInserted={noop}
-        session={{ id: "s1", cwd: "/tmp", state: "idle", model: "default" }}
+        session={{ id: "s1", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [] }}
         view={v}
         models={[]}
         onModel={noop}
+        onMode={noop}
+        onEffort={noop}
+        onUpload={async () => ""}
         onPrompt={async () => {}}
         onSearch={async () => []}
         onInterrupt={noop}

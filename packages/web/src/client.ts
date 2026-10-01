@@ -3,7 +3,7 @@
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type Event, type ServerMessage } from "@claude-ui/protocol";
 import { takeToken } from "./pairing.ts";
 
-type Request = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M, "reqId"> : never) : never;
+export type Request = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M, "reqId"> : never) : never;
 
 type FsChanged = Extract<ServerMessage, { type: "fs.changed" }>;
 

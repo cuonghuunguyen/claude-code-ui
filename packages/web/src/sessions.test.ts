@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { groupByCwd, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
 
-const item = (id: string, cwd: string, lastActivity: number, title = id): SessionListItem => ({ id, cwd, state: "idle", model: "default", title, lastActivity });
+const item = (id: string, cwd: string, lastActivity: number, title = id): SessionListItem => ({ id, cwd, state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [], title, lastActivity });
 
 describe("groupByCwd", () => {
   it("groups sessions by working directory, most recent group first, keeping order inside a group", () => {

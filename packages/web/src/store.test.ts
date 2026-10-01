@@ -64,6 +64,14 @@ describe("applyEvent", () => {
     expect(s.model).toBe("haiku");
     expect(s.order).toEqual([]);
   });
+
+  it("tracks permission mode and effort without adding them to the timeline", () => {
+    const s = [
+      ev(1, { type: "session_permission_mode", id: "session_permission_mode", mode: "plan" }),
+      ev(2, { type: "session_effort", id: "session_effort", effort: "high" }),
+    ].reduce(applyEvent, emptySession());
+    expect(s).toMatchObject({ permissionMode: "plan", effort: "high", order: [] });
+  });
 });
 
 describe("withEpoch", () => {

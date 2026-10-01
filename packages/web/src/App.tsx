@@ -2,6 +2,7 @@ import { Activity, useEffect, useLayoutEffect, useRef, useState, type ClipboardE
 import { CheckIcon, CopyIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SquareIcon, SunIcon } from "lucide-react";
 import type {
   CreateResult,
+  Effort,
   Event,
   FsEntry,
   FsListResult,
@@ -10,6 +11,7 @@ import type {
   ModelInfo,
   ModelsResult,
   Part,
+  PermissionMode,
   RewindMode,
   RewindPreview,
   RespondResult,
@@ -17,15 +19,18 @@ import type {
   SessionListItem,
   SetModelResult,
   SubscribeResult,
+  UploadResult,
 } from "@claude-ui/protocol";
+import { isPromptImage, MAX_UPLOAD_BYTES } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
-import { connect, type ConnectionStatus, type RequestError } from "./client.ts";
-import { ImageStrip, readImages } from "./images.tsx";
+import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
+import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
+import { nextMode, PromptToolbar } from "./toolbar.tsx";
 import { choose, matchCommands } from "./commands.ts";
-import { activeMention, insertAtCaret, insertMention } from "./mentions.ts";
+import { activeMention, insertAtCaret, insertMention, mentionPath } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
@@ -256,10 +261,11 @@ export function App() {
     }
   }
 
-  async function setModel(sessionId: string, model: string) {
+  /** session.setModel, session.setPermissionMode, session.setEffort: the reply carries the new SessionInfo. */
+  async function configure(msg: Extract<Request, { type: "session.setModel" | "session.setPermissionMode" | "session.setEffort" }>) {
     setError(undefined);
     try {
-      const { session } = await client.current!.request<SetModelResult>({ type: "session.setModel", sessionId, model });
+      const { session } = await client.current!.request<SetModelResult>(msg);
       setInfos((i) => ({ ...i, [session.id]: session }));
     } catch (e) {
       setError((e as Error).message);
@@ -369,7 +375,13 @@ export function App() {
                         session={s}
                         view={v}
                         models={models}
-                        onModel={(model) => setModel(s.id, model)}
+                        onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
+                        onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
+                        onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
+                        onUpload={async (file) => {
+                          const data = (await readDataUrl(file)).replace(/^data:[^,]*,/, "");
+                          return (await client.current!.request<UploadResult>({ type: "fs.upload", name: file.name, data })).path;
+                        }}
                         onPrompt={(text, images) =>
                           // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
                           status === "connected"
@@ -597,6 +609,9 @@ export function SessionPane({
   view,
   models,
   onModel,
+  onMode,
+  onEffort,
+  onUpload,
   onPrompt,
   onSearch,
   onInterrupt,
@@ -612,6 +627,10 @@ export function SessionPane({
   view: SessionView;
   models: ModelInfo[];
   onModel: (model: string) => void;
+  onMode: (mode: PermissionMode) => void;
+  onEffort: (effort: Effort) => void;
+  /** Stores a non-image attachment in the daemon; resolves to its absolute path. */
+  onUpload: (file: File) => Promise<string>;
   /** Rejects when the prompt was not taken; the prompt box then gets the text back. */
   onPrompt: (text: string, images: string[]) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
@@ -692,9 +711,27 @@ export function SessionPane({
     const r = choose(matches[i]!);
     "send" in r ? send(r.send) : edit(r.text);
   };
-  const attach = async (files: FileList) => {
-    const added = await readImages(files);
+  const mode = view.permissionMode ?? session.permissionMode;
+  /** Images go with the prompt; other files are uploaded and become `@path` mentions. */
+  const attach = async (files: Iterable<File>) => {
+    const all = [...files];
+    // Checked before reading: a big file would be held in memory as base64 and could exceed the daemon's frame limit.
+    const big = all.find((f) => f.size > MAX_UPLOAD_BYTES);
+    if (big) return setSendError(`Attach failed: ${big.name} is larger than ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
+    const others = all.filter((f) => !isPromptImage(f.type));
+    const added = await readImages(all);
     setImages((i) => [...i, ...added]);
+    try {
+      const paths = await Promise.all(others.map(onUpload));
+      if (!paths.length) return;
+      setText((t) => {
+        const r = insertAtCaret(t, Math.min(caret, t.length), paths.map(mentionPath).join(" "));
+        setCaret(r.caret);
+        return r.text;
+      });
+    } catch (e) {
+      setSendError(`Attach failed: ${(e as Error).message}`);
+    }
   };
   const onPaste = (e: ClipboardEvent) => {
     if (![...e.clipboardData.files].some((f) => f.type.startsWith("image/"))) return;
@@ -706,6 +743,12 @@ export function SessionPane({
     void attach(e.dataTransfer.files);
   };
   const onKeyDown = (e: KeyboardEvent) => {
+    // Claude Code: Shift+Tab cycles the permission mode.
+    if (e.key === "Tab" && e.shiftKey) {
+      e.preventDefault();
+      const next = nextMode(session.permissionModes, mode);
+      return next !== mode && onMode(next);
+    }
     if (pickerOpen) {
       const n = rows;
       const keys: Record<string, () => void> = {
@@ -737,15 +780,7 @@ export function SessionPane({
         <span className="hidden min-w-0 truncate text-muted-foreground sm:inline" title={session.cwd}>
           {session.cwd}
         </span>
-        <ModelSelect
-          aria-label="Model"
-          data-testid="session-model"
-          models={models}
-          value={view.model ?? session.model}
-          onChange={onModel}
-          className="ml-auto py-0.5 text-xs"
-        />
-        <span className="rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
+        <span className="ml-auto rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
           {view.state}
         </span>
         {turnRunning && (
@@ -817,7 +852,7 @@ export function SessionPane({
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} />
         ) : question ? (
-          <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} />
+          <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} onDismiss={onInterrupt} />
         ) : (
           <>
             {sendError && (
@@ -879,25 +914,43 @@ export function SessionPane({
                 ))}
               </ul>
             )}
-            <textarea
-              role="combobox"
-              aria-expanded={pickerOpen}
-              aria-controls="command-picker"
-              aria-activedescendant={pickerOpen ? `command-${selected}` : undefined}
-              className="w-full resize-none rounded-lg border bg-transparent p-3 text-sm"
-              rows={3}
-              placeholder={
-                turnRunning
-                  ? "Claude is working… (Enter to steer, Esc to stop)"
-                  : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"
-              }
-              value={text}
-              ref={input}
-              onChange={(e) => edit(e.target.value, e.target.selectionStart)}
-              onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-              onKeyDown={onKeyDown}
-              onPaste={onPaste}
-            />
+            <div className="flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50" data-testid="prompt-box">
+              <textarea
+                role="combobox"
+                aria-expanded={pickerOpen}
+                aria-controls="command-picker"
+                aria-activedescendant={pickerOpen ? `command-${selected}` : undefined}
+                aria-label="Prompt"
+                className="max-h-45 min-h-15 w-full resize-none bg-transparent px-4 pt-4 pb-2 text-sm outline-none pointer-coarse:text-base"
+                rows={2}
+                placeholder={
+                  turnRunning
+                    ? "Claude is working… (Enter to steer, Esc to stop)"
+                    : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"
+                }
+                value={text}
+                ref={input}
+                onChange={(e) => edit(e.target.value, e.target.selectionStart)}
+                onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+                onKeyDown={onKeyDown}
+                onPaste={onPaste}
+              />
+              <PromptToolbar
+                models={models}
+                model={view.model ?? session.model}
+                onModel={onModel}
+                effort={view.effort ?? session.effort}
+                onEffort={onEffort}
+                mode={mode}
+                modes={session.permissionModes}
+                onMode={onMode}
+                onAttach={(f) => void attach(f)}
+                stop={turnRunning && !text.trim() && !images.length}
+                canSend={!!text.trim() || images.length > 0}
+                onSend={() => send()}
+                onStop={onInterrupt}
+              />
+            </div>
           </>
         )}
       </div>

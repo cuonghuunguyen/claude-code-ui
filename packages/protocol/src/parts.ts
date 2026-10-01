@@ -1,8 +1,11 @@
 // Normalized message model (docs/spec.md "Message model"). The UI renders only parts.
 // Every part has an `id`; the client store is keyed by it and replaces a part on update.
-import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
+import type { EffortLevel, PermissionMode, PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 
-export type { PermissionUpdate };
+export type { EffortLevel, PermissionMode, PermissionUpdate };
+
+/** Thinking effort; "default" = the model's default (no `effort` option). */
+export type Effort = EffortLevel | "default";
 
 export type SessionState = "idle" | "running" | "needs_input" | "error" | "closed";
 
@@ -69,6 +72,10 @@ export type Part = { parentId?: string } & (
   | { type: "session_state"; id: string; state: SessionState }
   /** Model switched with session.setModel. `model` is a `ModelInfo.value`; "default" = the SDK default. */
   | { type: "session_model"; id: string; model: string }
+  /** Permission mode changed: by session.setPermissionMode, or by the CLI (plan approved, "all edits this session"). */
+  | { type: "session_permission_mode"; id: string; mode: PermissionMode }
+  /** Effort changed with session.setEffort. */
+  | { type: "session_effort"; id: string; effort: Effort }
   | { type: "commands"; id: "commands"; commands: SlashCommand[] }
   /** `costUsd`: this turn's cost; absent when unknown (first turn after a daemon restart). */
   | { type: "turn_result"; id: string; durationMs: number; costUsd?: number; usage: TokenUsage; isError: boolean }

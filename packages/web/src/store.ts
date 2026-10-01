@@ -1,5 +1,5 @@
 // Per-session client store keyed by part id; events apply idempotently by seq (docs/spec.md "Client state").
-import type { Event, Part, SessionState, SlashCommand, TodoItem } from "@claude-ui/protocol";
+import type { Effort, Event, Part, PermissionMode, SessionState, SlashCommand, TodoItem } from "@claude-ui/protocol";
 import { CONTEXT_TOOLS } from "./tools.ts";
 
 export type ToolCall = Extract<Part, { type: "tool_call" }>;
@@ -16,6 +16,9 @@ export type SessionView = {
   attentionSeq: number;
   /** Latest model from a session_model part; undefined until the model was switched. */
   model?: string;
+  /** Latest session_permission_mode / session_effort; undefined until changed (SessionInfo has the start value). */
+  permissionMode?: PermissionMode;
+  effort?: Effort;
   commands: SlashCommand[];
   /** Latest todo list (todo_update); pinned above the prompt box while a turn runs. */
   todos: TodoItem[];
@@ -34,6 +37,8 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
     return { ...s, lastSeq: e.seq, state: part.state, attentionSeq: attention ? e.seq : s.attentionSeq };
   }
   if (part.type === "session_model") return { ...s, lastSeq: e.seq, model: part.model };
+  if (part.type === "session_permission_mode") return { ...s, lastSeq: e.seq, permissionMode: part.mode };
+  if (part.type === "session_effort") return { ...s, lastSeq: e.seq, effort: part.effort };
   if (part.type === "commands") return { ...s, lastSeq: e.seq, commands: part.commands };
   if (part.type === "rewind") {
     const at = s.order.indexOf(part.userMessageId);
