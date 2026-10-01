@@ -41,7 +41,14 @@ it("formats tokens with k and M, countdowns like the Claude Code status line", (
 
 it("sums the session's turn results: In = uncached input + cache writes, Cached = cache reads", () => {
   expect(totals(view())).toBeUndefined();
-  expect(totals(view(result("r1", 100, 20, 1000, 50), result("r2", 10, 5, 2000)))).toEqual({ input: 160, output: 25, cached: 3000 });
+  expect(totals(view(result("r1", 100, 20, 1000, 50), result("r2", 10, 5, 2000)))).toMatchObject({ input: 160, output: 25, cached: 3000 });
+});
+
+it("also keeps uncached input, cache writes and the known cost for the context breakdown (OpenCode Context tab)", () => {
+  const paid = (id: string, costUsd?: number): Part => ({ ...(result(id, 100, 20, 1000, 50) as Extract<Part, { type: "turn_result" }>), costUsd });
+  expect(totals(view(paid("r1", 0.1), paid("r2", 0.025)))).toEqual({ input: 300, output: 40, cached: 2000, uncached: 200, cacheWrite: 100, cost: 0.125 });
+  // No turn with a known cost (restored after a daemon restart): no cost.
+  expect(totals(view(paid("r1")))!.cost).toBeUndefined();
 });
 
 it("lists running background Bash calls only", () => {

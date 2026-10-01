@@ -43,4 +43,9 @@ describe("choose", () => {
   it("puts a command with an argument hint in the prompt box for the arguments", () => {
     expect(choose(cmd("review", "<pr>"))).toEqual({ text: "/review " });
   });
+
+  it("sends a command with an argument hint when its full name is typed, like Enter in Claude Code (/compact needs one Enter)", () => {
+    expect(choose(cmd("compact", "<optional custom summarization instructions>"), "/compact")).toEqual({ send: "/compact" });
+    expect(choose(cmd("compact", "<optional custom summarization instructions>"), "/comp")).toEqual({ text: "/compact " });
+  });
 });

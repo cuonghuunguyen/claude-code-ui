@@ -41,7 +41,7 @@ import { activeMention, insertAtCaret, insertMention, mentionPath, splitUploads 
 import { SessionList } from "./sidebar.tsx";
 import { inProject, patchSession, projectCwd } from "./sessions.ts";
 import { PlanMeter } from "./plan-meter.tsx";
-import { StatusBar } from "./status-bar.tsx";
+import { StatusBar, totals, type Totals } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
@@ -1193,6 +1193,7 @@ export function SessionPane({
               state={connected ? (turnRunning ? (view.state as "running" | "needs_input") : "idle") : "disconnected"}
               onInterrupt={onInterrupt}
               usage={view.contextUsage}
+              stats={totals(view)}
               todos={showTodoDock(view.state, view.todos, false) ? view.todos : undefined}
               label="Prompt"
               placeholder={turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
@@ -1234,6 +1235,7 @@ function PromptBox({
   state = "idle",
   onInterrupt,
   usage,
+  stats,
   todos,
   label,
   placeholder,
@@ -1266,6 +1268,7 @@ function PromptBox({
   onInterrupt?: () => void;
   /** Context window meter; none = hidden. */
   usage?: ContextUsage;
+  stats?: Totals;
   /** Todo dock above the box; none = hidden. */
   todos?: TodoItem[];
   label: string;
@@ -1340,7 +1343,7 @@ function PromptBox({
       const r = insertMention(text, mention!, paths[i]!);
       return edit(r.text, r.caret);
     }
-    const r = choose(matches[i]!);
+    const r = choose(matches[i]!, text);
     "send" in r ? send(r.send) : edit(r.text);
   };
   /** Images go with the prompt; other files are uploaded and become `@path` mentions. */
@@ -1498,6 +1501,7 @@ function PromptBox({
         onMode={onMode}
         onAttach={(f) => void attach(f)}
         usage={usage}
+        stats={stats}
         state={state}
         hasInput={!disabled && (!!text.trim() || images.length > 0)}
         onSend={() => send()}

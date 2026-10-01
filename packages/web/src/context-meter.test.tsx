@@ -94,3 +94,33 @@ it("the store keeps the latest context_usage part outside the timeline", () => {
   expect(timeline(s)).toEqual([]);
   expect(s.lastSeq).toBe(2);
 });
+
+it("the breakdown shows OpenCode's Context tab stats (input, output, cache read/write tokens, total cost) in 12px text", async () => {
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const stats = { input: 1250, output: 300, cached: 5000, uncached: 1200, cacheWrite: 50, cost: 0.1234 };
+  await act(async () => root.render(<ContextMeter usage={usage} stats={stats} />));
+  unmount = () => (root.unmount(), el.remove());
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="context-meter"]')!.click());
+  const pop = document.querySelector<HTMLElement>('[data-testid="context-breakdown"]')!;
+  const stat = [...pop.querySelectorAll('[data-testid="context-stats"] > div')].map((d) => d.textContent);
+  expect(stat).toEqual(["Input tokens1,200", "Output tokens300", "Cache tokens (read/write)5,000 / 50", "Total cost$0.12"]);
+  expect(pop.querySelector("li")!.className).toContain("text-[12px]");
+});
+
+it("hover or focus shows OpenCode's context tooltip: tokens used / max, usage, cost (the narrow toolbar shows only the ring and percent)", async () => {
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  await act(async () => root.render(<ContextMeter usage={usage} stats={{ input: 0, output: 0, cached: 0, uncached: 0, cacheWrite: 0, cost: 0.5 }} />));
+  unmount = () => (root.unmount(), el.remove());
+  const meter = el.querySelector<HTMLElement>('[data-testid="context-meter"]')!;
+  const tip = document.getElementById(meter.getAttribute("aria-describedby")!)!;
+  expect(tip.getAttribute("role")).toBe("tooltip");
+  expect([...tip.children].map((r) => r.textContent)).toEqual(["Tokens25,815 / 1,000,000", "Usage3%", "Cost$0.50"]);
+  // Shown on hover and keyboard focus, hidden while the breakdown is open; no native title on top of it.
+  expect(tip.className).toMatch(/group-hover:/);
+  expect(tip.className).toMatch(/group-has-focus-visible:/);
+  expect(meter.hasAttribute("title")).toBe(false);
+});

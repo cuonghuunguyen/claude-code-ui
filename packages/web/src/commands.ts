@@ -17,7 +17,11 @@ export function matchCommands(commands: SlashCommand[], text: string): SlashComm
     .map((x) => x.c);
 }
 
-/** Choosing a command sends it, unless it takes arguments: then the prompt box gets `/name ` to type them. */
-export function choose(c: SlashCommand): { send: string } | { text: string } {
-  return c.argumentHint ? { text: `/${c.name} ` } : { send: `/${c.name}` };
+/**
+ * Choosing a command sends it, unless it takes arguments and was not typed in full: then the prompt box gets `/name ` to type them.
+ * `typed`: the prompt box text; `/name` typed in full sends at once, as Enter does in Claude Code.
+ */
+export function choose(c: SlashCommand, typed = ""): { send: string } | { text: string } {
+  const full = [c.name, ...(c.aliases ?? [])].some((n) => typed.toLowerCase() === `/${n.toLowerCase()}`);
+  return c.argumentHint && !full ? { text: `/${c.name} ` } : { send: `/${c.name}` };
 }
