@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, s
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
@@ -356,12 +356,23 @@ describe("daemon", () => {
     expect(await c.request({ type: "session.create", cwd: join(webRoot, "..", "..") })).toMatchObject({ code: "cwd_not_allowed" });
   });
 
-  describe("terminals", () => {
+  // Spawning a PTY and waiting for shell output takes seconds on a loaded machine.
+  describe("terminals", { timeout: 30_000 }, () => {
     process.env.SHELL = "/bin/sh";
     const output = (inbox: ServerMessage[], terminalId: string) =>
       inbox.map((m) => (m.type === "terminal.output" && m.terminalId === terminalId ? m.data : "")).join("");
-    const create = async (c: Awaited<ReturnType<typeof client>>, cwd = webRoot) =>
-      ((await c.request({ type: "terminal.create", cwd, cols: 80, rows: 24 })) as { result: { terminal: { id: string; title: string } } }).result.terminal;
+    const opened: string[] = [];
+    const create = async (c: Awaited<ReturnType<typeof client>>, cwd = webRoot) => {
+      const t = ((await c.request({ type: "terminal.create", cwd, cols: 80, rows: 24 })) as { result: { terminal: { id: string; title: string } } }).result.terminal;
+      opened.push(t.id);
+      return t;
+    };
+    // Shells outlive their connection: one left by a failed test counts against MAX_TERMINALS and takes the next test's "Terminal 1".
+    afterEach(async () => {
+      const c = await client();
+      for (const id of opened.splice(0)) await c.request({ type: "terminal.close", terminalId: id });
+      c.ws.close();
+    });
 
     it("opens a shell in a cwd inside the roots only", async () => {
       const c = await client();
