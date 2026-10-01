@@ -417,12 +417,20 @@ export function createDaemon(opts: {
         case "project.open": {
           const cwd = allowed(msg.cwd);
           if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
-          projects.open(cwd);
+          try {
+            projects.open(cwd);
+          } catch (err) {
+            return fail("fs_error", String(err));
+          }
           return reply({ cwd });
         }
         case "project.remove":
           if (typeof msg.cwd !== "string" || !isAbsolute(msg.cwd)) return fail("bad_cwd", "cwd must be an absolute path");
-          projects.remove(msg.cwd);
+          try {
+            projects.remove(msg.cwd);
+          } catch (err) {
+            return fail("fs_error", String(err));
+          }
           return reply({});
         case "fs.list": {
           if (msg.path === undefined)

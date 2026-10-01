@@ -11,7 +11,7 @@ export function groupByCwd(items: SessionListItem[], query = "", projects?: stri
   const q = query.trim().toLowerCase();
   const groups = new Map<string, SessionListItem[]>(projects?.map((p) => [p, []]));
   for (const s of [...items].sort((a, b) => b.lastActivity - a.lastActivity)) {
-    const cwd = s.cwd.replace(/(.)\/+$/, "$1");
+    const cwd = projectCwd(s.cwd);
     if (projects && !projects.includes(cwd)) continue;
     if (q && !s.title.toLowerCase().includes(q) && !projectName(cwd).toLowerCase().includes(q)) continue;
     const g = groups.get(cwd);
@@ -22,6 +22,10 @@ export function groupByCwd(items: SessionListItem[], query = "", projects?: stri
     .filter(([cwd, sessions]) => sessions.length || !q || projectName(cwd).toLowerCase().includes(q))
     .map(([cwd, sessions]) => ({ cwd, sessions }));
 }
+
+/** "/p/x/" and "/p/x" are one project (as in the daemon). */
+const projectCwd = (cwd: string) => cwd.replace(/(.)\/+$/, "$1");
+export const inProject = (cwd: string) => (s: SessionListItem) => projectCwd(s.cwd) === cwd;
 
 export function timeAgo(ms: number, now = Date.now()) {
   const m = Math.floor((now - ms) / 60_000);

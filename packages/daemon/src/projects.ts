@@ -10,7 +10,9 @@ export function createProjects({ file, now = Date.now }: { file?: string; now?: 
   let data: Stored = { opened: {}, removed: {} };
   if (file)
     try {
-      data = { ...data, ...JSON.parse(readFileSync(file, "utf8")) };
+      const read = JSON.parse(readFileSync(file, "utf8"));
+      // A hand-edited file of another shape counts as empty.
+      data = { opened: map(read?.opened), removed: map(read?.removed) };
     } catch (e) {
       // A truncated file (crash in an older version's write) only loses the list; it must not stop the daemon.
       if ((e as NodeJS.ErrnoException).code !== "ENOENT" && !(e instanceof SyntaxError)) throw e;
@@ -43,6 +45,8 @@ export function createProjects({ file, now = Date.now }: { file?: string; now?: 
     },
   };
 }
+
+const map = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, number>) : {});
 
 /** "/p/x/" and "/p/x" are one project. */
 export const trim = (cwd: string) => cwd.replace(/(.)\/+$/, "$1");

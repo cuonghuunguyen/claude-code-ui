@@ -91,7 +91,7 @@ export function SessionList({
             <section key={g.cwd} data-testid="session-group" data-cwd={g.cwd}>
               <h3 className="group/project relative">
                 <button
-                  className="flex h-7 w-full items-center gap-2 rounded-md pr-16 pl-1.5 text-left max-md:pr-26 text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
+                  className="flex h-7 w-full items-center gap-2 rounded-md pr-16 pl-1.5 text-left max-md:pr-26 pointer-coarse:pr-26 text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
                   aria-expanded={open}
                   onClick={() => toggle(g.cwd)}
                   title={g.cwd}
@@ -101,8 +101,8 @@ export function SessionList({
                   <span className="min-w-0 flex-1 truncate font-medium">{projectName(g.cwd)}</span>
                   <ChevronRightIcon className={cn("size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden />
                 </button>
-                {/* OpenCode project row actions: shown on hover or focus; always on touch screens. */}
-                <span className="absolute inset-y-0 right-0.5 flex items-center gap-0.5 opacity-100 transition-opacity group-focus-within/project:opacity-100 group-hover/project:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2">
+                {/* OpenCode project row actions: shown on hover or focus; always on touch screens (no hover there), any width. */}
+                <span className="absolute inset-y-0 right-0.5 flex items-center gap-0.5 opacity-100 transition-opacity group-focus-within/project:opacity-100 group-hover/project:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100">
                   <IconButton label={`New session in ${projectName(g.cwd)}`} onClick={() => onNew(g.cwd)} testId="project-new-session" className="size-6">
                     <SquarePenIcon />
                   </IconButton>

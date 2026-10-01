@@ -46,4 +46,12 @@ describe("projects", () => {
     expect(createProjects({ file }).list([])).toEqual(["/r/kept"]);
     expect(statSync(file).mode & 0o777).toBe(0o600);
   });
+
+  it("a hand-edited file of the wrong shape is ignored like a truncated one", () => {
+    const file = join(mkdtempSync(join(tmpdir(), "projects-")), "projects.json");
+    writeFileSync(file, '{"opened":null,"removed":[1]}');
+    const p = createProjects({ file });
+    p.open("/r/x");
+    expect(p.list([])).toEqual(["/r/x"]);
+  });
 });

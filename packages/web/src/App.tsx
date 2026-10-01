@@ -34,6 +34,7 @@ import { nextMode, PromptToolbar, type SendState } from "./toolbar.tsx";
 import { choose, matchCommands } from "./commands.ts";
 import { activeMention, insertAtCaret, insertMention, mentionPath } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
+import { inProject } from "./sessions.ts";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
@@ -268,28 +269,19 @@ export function App() {
   }
 
   /** Creates the session in a known project with the chosen start options and sends its first prompt. Rejects when the session was not created. */
-  async function createSession(cwd: string, { model, mode, effort }: StartOptions, text: string, images: string[]) {
+  // A session whose first prompt failed: the retry from the new-session tab sends to it instead of creating another.
+  const unprompted = useRef<SessionInfo>(undefined);
+  async function createSession(cwd: string, opts: StartOptions, text: string, images: string[]) {
     setError(undefined);
     if (status !== "connected") throw new Error(`the daemon is ${status}`);
-    const { session } = await client.current!.request<CreateResult>({ type: "session.create", cwd, model });
-    setInfos((i) => ({ ...i, [session.id]: session }));
-    setTabs((t) => replaceTab(t, NEW_TAB, session.id));
-    open(session.id);
     try {
-      // Before the first prompt, mode and effort become the query's start options; on failure the prompt is not sent.
-      for (const msg of [
-        mode !== session.permissionMode && { type: "session.setPermissionMode" as const, sessionId: session.id, mode },
-        effort !== session.effort && { type: "session.setEffort" as const, sessionId: session.id, effort },
-      ])
-        if (msg) {
-          const { session: info } = await client.current!.request<SetModelResult>(msg);
-          setInfos((i) => ({ ...i, [info.id]: info }));
-        }
-      await client.current!.request({ type: "session.prompt", sessionId: session.id, text, images });
-    } catch (e) {
-      setError((e as Error).message);
+      // The new-session tab (and its draft) stays until the first prompt is taken.
+      const session = await startSession(client.current!.request, unprompted, cwd, opts, text, images, (s) => setInfos((i) => ({ ...i, [s.id]: s })));
+      setTabs((t) => replaceTab(t, NEW_TAB, session.id));
+      open(session.id);
+    } finally {
+      void refreshList();
     }
-    await refreshList();
   }
 
   /** The new-session tab, starting in `cwd`: by default the active session's project, else the newest project. */
@@ -310,7 +302,7 @@ export function App() {
     setError(undefined);
     try {
       await client.current!.request({ type: "project.remove", cwd });
-      const gone = new Set(list.filter((s) => s.cwd === cwd).map((s) => s.id));
+      const gone = new Set(list.filter(inProject(cwd)).map((s) => s.id));
       setTabs((t) => t.filter((id) => !gone.has(id)));
       if (activeId && gone.has(activeId)) open(undefined), history.replaceState(null, "", location.pathname + location.search);
       if (draftCwd === cwd) setDraftCwd(undefined);
@@ -640,6 +632,38 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   );
 }
 
+/**
+ * Creates the session (or reuses `created`: one in `cwd` whose first prompt failed), applies mode and effort, sends the first prompt.
+ * Rejects when the prompt was not taken; `created` then keeps the session for the retry.
+ */
+export async function startSession(
+  request: Client["request"],
+  created: { current?: SessionInfo },
+  cwd: string,
+  { model, mode, effort }: StartOptions,
+  text: string,
+  images: string[],
+  onInfo: (s: SessionInfo) => void = () => {},
+): Promise<SessionInfo> {
+  const reused = created.current?.cwd === cwd;
+  let session = reused ? created.current! : (await request<CreateResult>({ type: "session.create", cwd, model })).session;
+  created.current = session;
+  onInfo(session);
+  // Before the first prompt, mode and effort become the query's start options; on failure the prompt is not sent.
+  for (const msg of [
+    reused && model !== session.model && { type: "session.setModel" as const, sessionId: session.id, model },
+    mode !== session.permissionMode && { type: "session.setPermissionMode" as const, sessionId: session.id, mode },
+    effort !== session.effort && { type: "session.setEffort" as const, sessionId: session.id, effort },
+  ])
+    if (msg) {
+      session = created.current = (await request<SetModelResult>(msg)).session;
+      onInfo(session);
+    }
+  await request({ type: "session.prompt", sessionId: session.id, text, images });
+  created.current = undefined;
+  return session;
+}
+
 /** New-session tab (OpenCode empty state): prompt box, model, and the project chip; the first prompt creates the session. */
 export function NewSession({
   projects,
@@ -816,7 +840,7 @@ export function SessionPane({
               <div key={item.part.id} className="group flex flex-col gap-1 not-first:mt-3" data-testid="user-message">
                 <PartView part={item.part} view={view} />
                 {/* Shown on hover or keyboard focus (OpenCode user bubble). */}
-                <MessageActions className="ml-auto opacity-0 transition-opacity motion-reduce:transition-none group-focus-within:opacity-100 group-hover:opacity-100">
+                <MessageActions className="ml-auto opacity-0 transition-opacity motion-reduce:transition-none group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100">
                   <CopyAction text={item.part.text} />
                   {/* No tooltip prop: its trigger renders a button around this button. */}
                   <MessageAction

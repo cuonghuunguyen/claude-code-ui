@@ -3,7 +3,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelInfo } from "@claude-ui/protocol";
-import { NewSession } from "./App.tsx";
+import { NewSession, startSession } from "./App.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -66,4 +66,26 @@ it("a failed start keeps the draft; the error goes away when the project changes
   await rerender({ cwd: "/p/b" });
   expect(el.querySelector('[data-testid="prompt-error"]')).toBeNull();
   expect(box.value).toBe("hello");
+});
+
+it("a first prompt that fails after session.create rejects (the draft stays); the retry reuses that session", async () => {
+  const info = { id: "s1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" };
+  const sent: string[] = [];
+  let failPrompt = true;
+  const request = vi.fn(async (msg: { type: string; model?: string }) => {
+    sent.push(msg.type);
+    if (msg.type === "session.prompt" && failPrompt) throw new Error("disconnected");
+    return { session: { ...info, model: msg.model ?? info.model } };
+  });
+  const created: { current?: never } = {};
+  const opts = { model: "default", mode: "default", effort: "default" } as const;
+  await expect(startSession(request as never, created, "/p/a", opts, "hello", [])).rejects.toThrow("disconnected");
+  expect(sent).toEqual(["session.create", "session.prompt"]);
+  failPrompt = false;
+  sent.length = 0;
+  const s = await startSession(request as never, created, "/p/a", { ...opts, model: "opus" }, "hello", []);
+  // No second session: the model goes to the one already created.
+  expect(sent).toEqual(["session.setModel", "session.prompt"]);
+  expect(s).toMatchObject({ id: "s1", model: "opus" });
+  expect(created.current).toBeUndefined();
 });

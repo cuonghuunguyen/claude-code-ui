@@ -585,6 +585,23 @@ describe("daemon", () => {
     }
   });
 
+  it("a projects.json write that fails is an fs_error reply; the daemon keeps running", async () => {
+    // The config dir is gone after the start: the write fails (as EACCES, ENOSPC, EROFS would).
+    const dir = mkdtempSync(join(tmpdir(), "cfg-"));
+    const projects = createProjects({ file: join(dir, "projects.json") });
+    rmSync(dir, { recursive: true });
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, projects, history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never } });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      expect(await c.request({ type: "project.open", cwd: webRoot })).toMatchObject({ code: "fs_error" });
+      expect(await c.request({ type: "project.remove", cwd: webRoot })).toMatchObject({ code: "fs_error" });
+      expect(await c.request({ type: "session.list" })).toMatchObject({ result: { sessions: [] } });
+    } finally {
+      d.close();
+    }
+  });
+
   it("project.open keeps a project with no sessions across a restart; project.remove hides it and its sessions", async () => {
     const cwd = mkdtempSync(join(webRoot, "proj-"));
     const opened = mkdtempSync(join(webRoot, "opened-"));

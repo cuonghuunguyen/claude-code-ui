@@ -261,7 +261,7 @@ export function IconButton({
       title={label}
       aria-pressed={pressed}
       className={cn(
-        "grid size-7 shrink-0 cursor-pointer place-items-center max-md:size-11 rounded-md text-faint outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-secondary aria-pressed:text-foreground [&_svg]:size-4",
+        "grid size-7 shrink-0 cursor-pointer place-items-center max-md:size-11 pointer-coarse:size-11 rounded-md text-faint outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-secondary aria-pressed:text-foreground [&_svg]:size-4",
         className,
       )}
       onClick={onClick}

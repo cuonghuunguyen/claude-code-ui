@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { groupByCwd, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
+import { groupByCwd, inProject, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id): SessionListItem => ({ id, cwd, state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [], title, lastActivity });
 
@@ -70,4 +70,9 @@ describe("timeAgo", () => {
     expect(timeAgo(now - 3 * 3_600_000, now)).toBe("3h");
     expect(timeAgo(now - 2 * 86_400_000, now)).toBe("2d");
   });
+});
+
+it("inProject matches a session cwd with a trailing slash, like its group (Remove closes its tab)", () => {
+  expect(inProject("/p/x")(item("a", "/p/x/", 1))).toBe(true);
+  expect(inProject("/p/x")(item("b", "/p/xy", 1))).toBe(false);
 });

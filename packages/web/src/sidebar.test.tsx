@@ -138,3 +138,12 @@ it("with no projects it offers Open project", async () => {
   await act(async () => el.querySelector<HTMLElement>('[data-testid="open-project"]')!.click());
   expect(onOpenProject).toHaveBeenCalled();
 });
+
+it("project actions and Open project are visible and 44px on touch screens of any width (no hover there)", async () => {
+  const { el } = await render();
+  // jsdom has no media queries: the classes are the contract (same convention as quick-open, toolbar).
+  const actions = el.querySelector<HTMLElement>('[data-cwd="/home/u/web"] [data-testid="project-new-session"]')!.parentElement!;
+  expect(actions.className).toContain("pointer-coarse:opacity-100");
+  for (const id of ["project-new-session", "project-remove", "open-project"])
+    expect(el.querySelector<HTMLElement>(`[data-testid="${id}"]`)!.className).toContain("pointer-coarse:size-11");
+});
