@@ -185,7 +185,7 @@ it("Alt+Shift+Arrow and Ctrl+Shift+PageUp/PageDown move the focused tab; focus s
 });
 
 it("the tab context menu moves the tab left / right and closes it", async () => {
-  const { el, order } = await renderLive();
+  const { el, btn, order } = await renderLive();
   const menu = async (id: string, item: string) => {
     await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
     const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
@@ -194,10 +194,28 @@ it("the tab context menu moves the tab left / right and closes it", async () => 
   };
   await menu("b", "Move right");
   expect(order()).toEqual(["a", "c", "b"]);
+  expect(document.activeElement).toBe(btn("b"));
   await menu("b", "Move left");
   expect(order()).toEqual(["a", "b", "c"]);
   await menu("a", "Close tab");
   expect(order()).toEqual(["b", "c"]);
+  expect(document.activeElement).toBe(btn("b"));
+  await menu("b", "Close tab");
+  expect(order()).toEqual(["c"]);
+  expect(document.activeElement).toBe(btn("c"));
+});
+
+it("Escape on the tab context menu returns focus to that tab", async () => {
+  const { el, btn } = await renderLive();
+  for (const id of ["b", "c"]) {
+    btn("b").focus();
+    await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    await act(async () => void (document.activeElement ?? document).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => {});
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(btn(id));
+  }
 });
 
 it("first and last tab: the move items that do nothing are disabled", async () => {

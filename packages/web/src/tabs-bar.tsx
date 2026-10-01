@@ -249,6 +249,14 @@ function Tab({
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
   };
+  const button = useRef<HTMLButtonElement>(null);
+  const popup = useRef<HTMLDivElement>(null);
+  // Dismissed (Escape, outside click): back to this tab; the trigger div is not focusable. Move and Close tab already focused a tab (refocus),
+  // Rename and Delete… focused the title editor or the dialog: leave those. A closed tab has no button: nothing to do.
+  const finalFocus = () => {
+    const a = document.activeElement;
+    return (!a || a === document.body || !!popup.current?.contains(a)) && (button.current ?? false);
+  };
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger
@@ -286,6 +294,7 @@ function Tab({
           </div>
         ) : (
           <button
+            ref={button}
             role="tab"
             aria-selected={active}
             tabIndex={focusable ? 0 : -1}
@@ -320,8 +329,7 @@ function Tab({
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
-          {/* Focus goes to the moved tab or the new active one (refocus), not back to the trigger. */}
-          <ContextMenu.Popup finalFocus={false} className={POPUP}>
+          <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
             <ContextMenu.Item className={ITEM} disabled={first} onClick={() => onMenuMove(-1)}>
               Move left
             </ContextMenu.Item>
