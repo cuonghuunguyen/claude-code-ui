@@ -314,6 +314,8 @@ export class Session {
     let drop = false;
     for (const id of [...this.checkpoints.keys()]) if ((drop ||= id === userMessageId)) this.checkpoints.delete(id);
     this.emit({ type: "rewind", id: randomUUID(), userMessageId });
+    // The window now holds the conversation up to forkAt only.
+    void this.refreshUsage();
   }
 
   /** The query to send control requests to, started (resumed) without a prompt if none runs. */

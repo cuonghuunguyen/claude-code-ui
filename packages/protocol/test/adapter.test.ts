@@ -249,7 +249,7 @@ describe("adapter on CLI markup in a transcript (getSessionMessages, SDK 0.3.285
 
 describe("adapter on unknown messages", () => {
   it("wraps an unknown SDK message in a raw part keyed by uuid", () => {
-    const m = { type: "system", subtype: "compact_boundary", uuid: "c1", compact_metadata: { trigger: "auto" } };
+    const m = { type: "system", subtype: "some_future_subtype", uuid: "c1" };
     expect(run([m])).toEqual([{ type: "raw", id: "c1", message: m }]);
   });
 
@@ -387,5 +387,28 @@ describe("adapter on a background subagent", () => {
 
   it("a restored history (no task messages) ends done on the tool_result", () => {
     expect(status(run([agent, result]))).toEqual(["running", "done"]);
+  });
+});
+
+describe("adapter on a compaction (shapes recorded in development-docs/FIX-C/probe-compact.log, SDK 0.3.285)", () => {
+  const SUMMARY = "This session is being continued from a previous conversation that ran out of context.\n\nSummary:\n1. Primary Request";
+  it("live: compact_boundary is a compaction divider, the synthetic summary after it fills that divider, not a user bubble", () => {
+    const parts = run([
+      { type: "system", subtype: "compact_boundary", uuid: "b1", session_id: "x", compact_metadata: { trigger: "manual", pre_tokens: 18500 } },
+      { type: "user", uuid: "s1", session_id: "x", parent_tool_use_id: null, isSynthetic: true, message: { role: "user", content: SUMMARY } },
+    ]);
+    expect(parts).toEqual([
+      { type: "compaction", id: "b1", trigger: "manual" },
+      { type: "compaction", id: "b1", trigger: "manual", summary: SUMMARY },
+    ]);
+  });
+
+  it("transcript: the isCompactSummary message becomes a compaction with its summary", () => {
+    const parts = run([{ type: "user", uuid: "s1", session_id: "x", parent_tool_use_id: null, isCompactSummary: true, message: { role: "user", content: SUMMARY } }]);
+    expect(parts).toEqual([{ type: "compaction", id: "s1", summary: SUMMARY }]);
+  });
+
+  it("a synthetic message not right after a boundary stays hidden", () => {
+    expect(run([{ type: "user", uuid: "n1", session_id: "x", parent_tool_use_id: null, isSynthetic: true, message: { role: "user", content: "nudge" } }])).toEqual([]);
   });
 });

@@ -1601,6 +1601,8 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
       return <QuestionMarker part={part} />;
     case "turn_result":
       return <TurnFooter part={part} />;
+    case "compaction":
+      return <CompactionDivider summary={part.summary} />;
     case "turn_interrupted":
       return (
         <div className="text-muted-foreground text-xs" data-testid="turn-interrupted">
@@ -1620,10 +1622,33 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
   }
 }
 
-/** "type/subtype" of an SDK message, e.g. "system/compact_boundary". */
+/** "type/subtype" of an SDK message, e.g. "system/task_updated". */
 function rawLabel(m: unknown) {
   const { type, subtype } = (m ?? {}) as { type?: unknown; subtype?: unknown };
   return [type, subtype].filter((v) => typeof v === "string").join("/") || "SDK message";
+}
+
+/** OpenCode compaction divider (line, label, line, 10px block padding); the summary Claude continues from, collapsed below it. */
+function CompactionDivider({ summary }: { summary?: string }) {
+  return (
+    <div data-testid="compaction" className="flex flex-col">
+      <div className="flex items-center gap-3 py-2.5 text-muted-foreground text-xs">
+        <span className="h-px flex-1 bg-border" aria-hidden />
+        <span className="whitespace-nowrap">Conversation compacted</span>
+        <span className="h-px flex-1 bg-border" aria-hidden />
+      </div>
+      {summary && (
+        <details className="group text-sm" data-testid="compaction-summary">
+          <summary className="mx-auto flex min-h-6 w-fit cursor-pointer items-center rounded px-2 text-muted-foreground text-xs hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+            Summary
+          </summary>
+          <div className="mt-2 rounded-lg bg-muted p-3">
+            <MessageResponse mode="static">{summary}</MessageResponse>
+          </div>
+        </details>
+      )}
+    </div>
+  );
 }
 
 function AssistantText({ text, streaming }: { text: string; streaming: boolean }) {

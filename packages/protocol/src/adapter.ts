@@ -74,6 +74,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   // total_cost_usd is cumulative per query; a turn's cost is the difference to the previous result. Undefined = unknown.
   // ponytail: the first turn after a daemon restart shows no cost; the CLI saves the resumed total only in the transcript's cost-state.
   let costTotal: number | undefined = opts.resumed ? undefined : 0;
+  // Live compact_boundary waiting for its summary, the synthetic user message that follows it (SDK 0.3.285).
+  let compacting: Extract<Part, { type: "compaction" }> | undefined;
 
   function setStatus(toolUseId: string, status: ToolStatus): Part[] {
     const call = calls.get(toolUseId);
@@ -173,7 +175,14 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
         const content = m.message.content;
         const id = m.uuid ?? crypto.randomUUID();
         const synthetic = m.isSynthetic === true || (m as { isMeta?: boolean }).isMeta === true;
-        if (typeof content === "string") return synthetic ? [] : userString(id, content);
+        const boundary = compacting;
+        compacting = undefined;
+        if (typeof content === "string") {
+          // Transcript: isCompactSummary; live: the synthetic message right after the boundary.
+          if ((m as { isCompactSummary?: boolean }).isCompactSummary) return [{ type: "compaction", id, summary: content }];
+          if (synthetic && boundary) return [{ ...boundary, summary: content }];
+          return synthetic ? [] : userString(id, content);
+        }
         const parts: Part[] = [];
         const rest = content.filter((b) => {
           if (b.type !== "tool_result") return true;
@@ -239,6 +248,10 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           return knownCommands ? commands(knownCommands) : [];
         }
         if (m.type === "system" && m.subtype === "permission_denied") return deny(m.tool_use_id);
+        if (m.type === "system" && m.subtype === "compact_boundary") {
+          compacting = { type: "compaction", id: m.uuid, trigger: m.compact_metadata.trigger };
+          return [compacting];
+        }
         if (m.type === "system" && m.subtype === "task_started") {
           if (m.is_backgrounded && m.tool_use_id) background.add(m.tool_use_id);
           return [];

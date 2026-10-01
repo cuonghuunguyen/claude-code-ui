@@ -108,6 +108,11 @@ export type Part = { parentId?: string } & (
   /** The turn was stopped (session.interrupt, or No without feedback); replaces its turn_result. */
   | { type: "turn_interrupted"; id: string }
   | { type: "raw"; id: string; message: unknown }
+  /**
+   * Compaction: live from `system/compact_boundary` (`trigger`), re-emitted with `summary` once the CLI sends the summary
+   * Claude continues from; a restored transcript starts at that summary (no boundary).
+   */
+  | { type: "compaction"; id: string; trigger?: "manual" | "auto"; summary?: string }
   /** Conversation rewind: the client drops `userMessageId` and every part after it. */
   | { type: "rewind"; id: string; userMessageId: string }
 );

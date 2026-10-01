@@ -840,6 +840,18 @@ describe("Session context usage", () => {
     expect(spawnedThrowaway).toBe(0);
   });
 
+  it("a conversation rewind refreshes the usage from a throwaway resumed at the fork point", async () => {
+    const id = randomUUID();
+    const s = Session.restore(id, "/tmp", history, { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await until(events, (e) => e.part.type === "context_usage");
+    await s.rewind("u2", "conversation");
+    const rewound = events.find((e) => e.part.type === "rewind")!.seq;
+    await until(events, (e) => e.part.type === "context_usage" && e.seq > rewound);
+    expect(usageCalls.at(-1)!.options).toMatchObject({ resume: id, resumeSessionAt: firstTurnLastAssistant, persistSession: false });
+  });
+
   it("a throwaway CLI that does not answer within the timeout is closed, the failure logged, and the queue moves on", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
