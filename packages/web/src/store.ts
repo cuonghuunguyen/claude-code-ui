@@ -93,7 +93,9 @@ export function awaitingPermission(s: SessionView): Set<string> {
   for (const p of s.parts.values())
     if (p.type === "permission_request" && !p.settled) {
       ids.add(p.toolUseId);
-      if (p.parentId) ids.add(p.parentId);
+      // The daemon sends no parentId on permission requests; walk up from the call, so every enclosing subagent opens too.
+      for (let parent = s.parts.get(p.toolUseId)?.parentId; parent && !ids.has(parent); parent = s.parts.get(parent)?.parentId)
+        ids.add(parent);
     }
   awaiting.set(s.parts, ids);
   return ids;

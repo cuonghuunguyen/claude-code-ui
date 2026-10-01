@@ -122,3 +122,14 @@ it("a user message has Copy and Rewind actions", async () => {
   const labels = [...el.querySelectorAll('[data-testid="user-message"] button')].map((b) => b.textContent);
   expect(labels).toEqual(["Copy message", "Rewind to before this message"]);
 });
+
+it("a subagent is expanded while a child call waits for permission (daemon sends no parentId)", async () => {
+  await render(
+    view([
+      { type: "subagent", id: "t1", toolUseId: "t1", description: "Run tests", status: "running" },
+      { ...call("b6", "Bash", { command: "npm test" }, "running"), parentId: "t1" },
+      permission("b6"),
+    ]),
+  );
+  expect(el.querySelector('[data-testid="subagent"] button')?.getAttribute("aria-expanded")).toBe("true");
+});
