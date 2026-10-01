@@ -92,6 +92,8 @@ function fakeClient(running: { id: string; title: string }[] = [], createError?:
   let n = running.length;
   const terminals = running.map((t) => ({ ...t, cwd: "/p" }));
   const buffers: Record<string, string> = {};
+  /** Set: terminal.input fails with it, like the daemon's input_backlog. */
+  const inputError: { message?: string } = {};
   const request = vi.fn(async (m: { type: string; terminalId?: string; cwd?: string }) => {
     if (m.type === "terminal.list") return { terminals: terminals.filter((t) => t.cwd === m.cwd).map(({ id, title }) => ({ id, title })) };
     if (m.type === "terminal.create") {
@@ -100,6 +102,7 @@ function fakeClient(running: { id: string; title: string }[] = [], createError?:
       terminals.push({ ...t, cwd: m.cwd! });
       return { terminal: t };
     }
+    if (m.type === "terminal.input" && inputError.message) throw Object.assign(new Error(inputError.message), { code: "input_backlog" });
     if (m.type === "terminal.attach") return { buffer: buffers[m.terminalId!] ?? "" };
     if (m.type === "terminal.close") terminals.splice(terminals.findIndex((t) => t.id === m.terminalId), 1);
     return {};
@@ -107,7 +110,7 @@ function fakeClient(running: { id: string; title: string }[] = [], createError?:
   const listeners = new Set<(m: TerminalMessage) => void>();
   const onTerminal = (l: (m: TerminalMessage) => void) => (listeners.add(l), () => void listeners.delete(l));
   const emit = (m: TerminalMessage) => listeners.forEach((l) => l(m));
-  return Object.assign({ request, onTerminal } as unknown as ReturnType<typeof connect>, { emit, buffers, sent: () => request.mock.calls.map((c) => c[0]) });
+  return Object.assign({ request, onTerminal } as unknown as ReturnType<typeof connect>, { emit, buffers, inputError, sent: () => request.mock.calls.map((c) => c[0]) });
 }
 
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
@@ -252,6 +255,21 @@ it("shows the daemon's too_many_terminals error", async () => {
   await render(client);
   await flush();
   expect(el.querySelector("[role=alert]")?.textContent).toBe("at most 8 terminals per browser tab; close one");
+});
+
+it("shows the daemon's input_backlog error until an input is accepted again", async () => {
+  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+  await render(client);
+  await flush();
+  const message = "the shell has not read the earlier input yet; send again later";
+  client.inputError.message = message;
+  await act(async () => xterm.all[0]!.data!("x"));
+  await flush();
+  expect(el.querySelector("[role=alert]")?.textContent).toBe(message);
+  client.inputError.message = undefined;
+  await act(async () => xterm.all[0]!.data!("y"));
+  await flush();
+  expect(el.querySelector("[role=alert]")).toBeNull();
 });
 
 it("sends a paste above MAX_TERMINAL_INPUT_BYTES in parts, each within the limit, without splitting a surrogate pair", async () => {
