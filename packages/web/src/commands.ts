@@ -6,10 +6,15 @@ export function matchCommands(commands: SlashCommand[], text: string): SlashComm
   const m = /^\/(\S*)$/.exec(text);
   if (!m) return undefined;
   const q = m[1]!.toLowerCase();
-  const isPrefix = (c: SlashCommand) => [c.name, ...(c.aliases ?? [])].some((n) => n.toLowerCase().startsWith(q));
-  const prefix = commands.filter(isPrefix);
-  const inner = commands.filter((c) => !isPrefix(c) && c.name.toLowerCase().includes(q));
-  return [...prefix, ...inner];
+  const names = (c: SlashCommand) => [c.name, ...(c.aliases ?? [])].map((n) => n.toLowerCase());
+  // 0 exact, 1 prefix, 2 substring, 3 no match; Enter picks the first row, so an exact name wins.
+  const rank = (c: SlashCommand) =>
+    names(c).includes(q) ? 0 : names(c).some((n) => n.startsWith(q)) ? 1 : c.name.toLowerCase().includes(q) ? 2 : 3;
+  return commands
+    .map((c) => ({ c, r: rank(c) }))
+    .filter((x) => x.r < 3)
+    .sort((a, b) => a.r - b.r)
+    .map((x) => x.c);
 }
 
 /** Choosing a command sends it, unless it takes arguments: then the prompt box gets `/name ` to type them. */
