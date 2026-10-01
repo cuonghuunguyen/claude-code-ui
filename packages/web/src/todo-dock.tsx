@@ -1,0 +1,82 @@
+// Todo dock above the prompt box: the latest TodoWrite list (OpenCode session-todo-dock), on AI Elements `task`.
+import type { SessionState, TodoItem } from "@claude-ui/protocol";
+import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import { useState } from "react";
+import { Task, TaskItem, TaskTrigger } from "@/components/ai-elements/task";
+import { CollapsibleContent } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
+
+/** OpenCode shows the dock only while the session works or waits for an answer, and hides it once all items are done. */
+export const showTodoDock = (state: SessionState, items: TodoItem[]) =>
+  (state === "running" || state === "needs_input") && items.some((i) => i.status !== "completed");
+
+// An in-progress item shows its active form (Claude Code spinner text).
+const label = (i: TodoItem) => (i.status === "in_progress" ? (i.activeForm ?? i.content) : i.content);
+
+function Mark({ status }: { status: TodoItem["status"] }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "mt-[3px] flex size-3.5 shrink-0 items-center justify-center rounded-sm border bg-card text-muted-foreground",
+        status !== "pending" && "bg-secondary",
+      )}
+    >
+      {status === "completed" && <CheckIcon className="size-2.5" strokeWidth={3} />}
+      {status === "in_progress" && (
+        <span className="size-1.5 rounded-full bg-muted-foreground animate-[pulse-scale_1.2s_ease-in-out_infinite] motion-reduce:animate-none" />
+      )}
+    </span>
+  );
+}
+
+export function TodoDock({ items, className }: { items: TodoItem[]; className?: string }) {
+  const [open, setOpen] = useState(true);
+  const done = items.filter((i) => i.status === "completed").length;
+  const active = items.find((i) => i.status === "in_progress") ?? items.find((i) => i.status === "pending") ?? items.at(-1);
+  return (
+    <Task
+      open={open}
+      onOpenChange={setOpen}
+      data-testid="todo-dock"
+      className={cn("w-full overflow-hidden rounded-2xl border-[0.5px] bg-muted", className)}
+    >
+      <TaskTrigger title="Todos" className="flex h-[42px] w-full cursor-pointer items-center gap-2 pr-3 pl-4 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset pointer-coarse:h-11">
+        <span className="shrink-0 text-muted-foreground">
+          {done} of {items.length} todos completed
+        </span>
+        {!open && active && (
+          <span data-testid="todo-preview" className="ml-1 min-w-0 flex-1 truncate text-muted-foreground">
+            {label(active)}
+          </span>
+        )}
+        <ChevronDownIcon
+          aria-hidden
+          // Down while open, up while collapsed (OpenCode).
+          className={cn(
+            "ml-auto size-4 shrink-0 text-muted-foreground transition-transform duration-300 motion-reduce:transition-none",
+            !open && "rotate-180",
+          )}
+        />
+      </TaskTrigger>
+      <CollapsibleContent>
+        <div role="list" className="flex max-h-42 flex-col gap-1.5 overflow-y-auto px-4 pb-3 text-sm">
+          {items.map((item, i) => (
+            <TaskItem
+              key={i}
+              role="listitem"
+              data-status={item.status}
+              className={cn(
+                "flex gap-2 break-words",
+                item.status === "completed" ? "text-muted-foreground line-through" : "text-foreground",
+              )}
+            >
+              <Mark status={item.status} />
+              <span className="min-w-0">{label(item)}</span>
+            </TaskItem>
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Task>
+  );
+}

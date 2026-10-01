@@ -42,7 +42,8 @@ import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./un
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withSubscribe, type SessionView, type ToolCall } from "./store.ts";
-import { ContextGroup, CwdContext, SubagentGroup, TodoList, ToolCard } from "./tool-card.tsx";
+import { ContextGroup, CwdContext, SubagentGroup, ToolCard } from "./tool-card.tsx";
+import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { relPath } from "./tools.ts";
 import { FilesPanel } from "./files-panel.tsx";
 import { QuickOpen, isQuickOpenKey, quickOpenLabel } from "./quick-open.tsx";
@@ -896,7 +897,8 @@ export function SessionPane({
       <div
         className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4"
       >
-        {(view.state === "running" || view.state === "needs_input") && view.todos.length > 0 && <TodoList items={view.todos} />}
+        {/* The prompt box covers the dock's bottom 36px (OpenCode prompt lift); a permission or question panel does not. */}
+        {showTodoDock(view.state, view.todos) && <TodoDock items={view.todos} className={permission || question ? undefined : "-mb-11 pb-9"} />}
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} />
         ) : question ? (
@@ -1176,7 +1178,7 @@ function PromptBox({
         ))}
       </ul>
     )}
-    <div className="flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50" data-testid="prompt-box">
+    <div className="relative flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50" data-testid="prompt-box">
       <textarea
         role="combobox"
         aria-expanded={pickerOpen}
