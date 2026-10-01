@@ -77,7 +77,8 @@ export function CommandPalette({
   }, [q, page]);
   const listRef = useRef<HTMLDivElement>(null);
   // On a move only: the palette re-renders with every session event, which must not scroll the list.
-  useEffect(() => listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" }), [active, page]);
+  // void: current Chromium returns a Promise, which React would call as the cleanup.
+  useEffect(() => void listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" }), [active, page]);
   const choose = (item: PaletteItem | undefined) => {
     if (!item) return;
     if ("page" in item) return setPage(item.page), setQuery(""), setActive(startRow(item.page.items));

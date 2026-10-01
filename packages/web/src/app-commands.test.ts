@@ -113,5 +113,5 @@ it("sessions newest first: the 5 most recent show at an empty query, the rest on
     ["session:s1", true, false],
     ["session:s0", true, false],
   ]);
-  expect(rows[0]).toMatchObject({ cwd: "/w/api", description: "api", meta: "1m" });
+  expect(rows[0]).toMatchObject({ cwd: "/w/api", description: "api", meta: "1m ago" });
 });

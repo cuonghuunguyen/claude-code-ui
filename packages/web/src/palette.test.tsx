@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { CommandPalette, type PaletteItem } from "./palette.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+Element.prototype.scrollIntoView ??= () => {};
 
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => {
@@ -150,4 +151,18 @@ it("a query also searches files of the shown session (Files group, folders left 
   expect(rows()[0]!.textContent).toBe("src/login.ts");
   await key("Enter");
   expect(open).toHaveBeenCalledWith("src/login.ts");
+});
+
+it("closes cleanly where scrollIntoView returns a Promise (current Chromium): no effect returns it as its cleanup", async () => {
+  const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => Promise.resolve() as never);
+  const { key } = await render();
+  await key("ArrowDown");
+  const errors: unknown[] = [];
+  const onError = (e: ErrorEvent) => (errors.push(e.error), e.preventDefault());
+  window.addEventListener("error", onError);
+  act(() => root!.unmount());
+  window.removeEventListener("error", onError);
+  root = undefined;
+  expect(errors).toEqual([]);
+  scroll.mockRestore();
 });

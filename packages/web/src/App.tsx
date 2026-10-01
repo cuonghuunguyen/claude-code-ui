@@ -1425,7 +1425,7 @@ function RewindPanel(props: {
   useEffect(() => void props.preview().then(setPreview, (e: Error) => setError(e.message)), []);
   // Once, on open: opened from the palette, the message can be far up the timeline.
   const self = useRef<HTMLDivElement>(null);
-  useEffect(() => self.current?.scrollIntoView?.({ block: "nearest" }), []);
+  useEffect(() => void self.current?.scrollIntoView?.({ block: "nearest" }), []);
   const run = async (mode: RewindMode) => {
     setBusy(true);
     setError(undefined);

@@ -104,7 +104,8 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         description: projectName(x.cwd),
         cwd: x.cwd,
         open: c.tabs.includes(x.id),
-        meta: timeAgo(x.lastActivity),
+        // OpenCode's palette: "Just now", "2m ago".
+        meta: ((t) => (t === "now" ? "Just now" : `${t} ago`))(timeAgo(x.lastActivity)),
         searchOnly: i >= RECENT_SESSIONS,
         run: () => c.selectTab(x.id),
       })),
