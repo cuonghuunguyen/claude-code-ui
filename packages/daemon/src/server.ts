@@ -2,7 +2,7 @@
 import { closeSync, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { createServer, type IncomingMessage } from "node:http";
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { EFFORTS, imageBlock, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
@@ -476,6 +476,8 @@ export function createDaemon(opts: {
           return reply({});
         case "fs.read": {
           const file = allowed(msg.path);
+          // A missing file in an allowed directory (e.g. deleted after an Edit): the changes tab shows it deleted.
+          if (!file && typeof msg.path === "string" && allowed(dirname(msg.path)) && !existsSync(msg.path)) return fail("not_found", `no such file: ${msg.path}`);
           if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           try {
             const st = statSync(file);

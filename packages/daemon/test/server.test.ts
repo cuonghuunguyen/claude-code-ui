@@ -405,6 +405,17 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "bin") })).toMatchObject({ code: "binary" });
   });
 
+  it("fs.read of a deleted file inside a root replies not_found, outside a root still path_not_allowed", async () => {
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    const file = join(webRoot, "proj", "gone.txt");
+    writeFileSync(file, "x");
+    rmSync(file);
+    const c = await client();
+    expect(await c.request({ type: "fs.read", path: file })).toMatchObject({ code: "not_found" });
+    expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "no-dir", "f.txt") })).toMatchObject({ code: "path_not_allowed" });
+    expect(await c.request({ type: "fs.read", path: join(mkdtempSync(join(tmpdir(), "outside-")), "f.txt") })).toMatchObject({ code: "path_not_allowed" });
+  });
+
   it("fs.read refuses non-UTF-8 text and keeps a BOM, CRLF and a missing final newline byte for byte", async () => {
     mkdirSync(join(webRoot, "proj"), { recursive: true });
     const c = await client();

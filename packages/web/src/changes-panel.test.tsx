@@ -53,7 +53,8 @@ afterEach(() => {
 function fakeClient(files: Record<string, string>) {
   const request = vi.fn(async (m: { type: string; path: string }) => {
     if (m.path in files) return { content: files[m.path], mtime: 1 };
-    throw new Error("fs_error: ENOENT");
+    // What the daemon replies for a missing file inside a root (server.test.ts "fs.read of a deleted file…").
+    throw Object.assign(new Error(`no such file: ${m.path}`), { code: "not_found" });
   });
   const listeners = new Set<(m: { path: string }) => void>();
   const onFsChanged = (l: (m: { path: string }) => void) => (listeners.add(l), () => void listeners.delete(l));
@@ -178,6 +179,9 @@ it("badges each file A (created), D (deleted) or M, like OpenCode's file list", 
   await flush();
   expect(rows()).toEqual(["Anew.ts+1-0", "Ma.ts+1-1", "Dgone.ts+0-1"]);
   expect(el.querySelector("[data-testid=change-badge]")!.getAttribute("title")).toBe("Added");
+  const badges = [...el.querySelectorAll("[data-testid=change-badge]")];
+  // Colors as OpenCode's change badge: added success, deleted danger, modified info.
+  expect(badges.map((b) => b.className.match(/text-(success|destructive|info|warning)/)?.[1])).toEqual(["success", "info", "destructive", "success"]);
 });
 
 it("without a known before, says so without blaming a restored session (a live rewind lands here too) and shows each edit", async () => {
@@ -186,4 +190,22 @@ it("without a known before, says so without blaming a restored session (a live r
   await flush();
   expect(el.querySelector("[data-testid=file-diff]")!.textContent).toContain("The file before this session is unknown: each edit is shown.");
   expect(diff.options!.disableFileHeader).toBe(true);
+});
+
+it("badges an existing empty file M (original \"\"), not A", async () => {
+  const client = fakeClient({ "/p/e.ts": "x\n" });
+  await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "/p/e.ts", "", "x\n"), original("e1", "")])} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  expect(rows()).toEqual(["Me.ts+1-0"]);
+});
+
+it("says a file with zero net change has no changes instead of an empty diff", async () => {
+  const client = fakeClient({ "/p/a.ts": "a\n" });
+  const parts = [edit("e1", "/p/a.ts", "a", "b"), original("e1", "a\n"), edit("e2", "/p/a.ts", "b", "a")];
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  const body = el.querySelector("[data-testid=file-diff]")!;
+  expect(body.textContent).toContain("No changes against the file before this session.");
+  expect(body.querySelector("[data-testid=pierre-diff]")).toBeNull();
+  expect(body.querySelector("[data-testid=diff-loading]")).toBeNull();
 });

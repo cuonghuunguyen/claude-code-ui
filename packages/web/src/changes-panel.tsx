@@ -19,7 +19,7 @@ type Disk = { content?: string; deleted?: boolean; error?: string };
 type Row = { change: FileChange; before?: string; after?: string; error?: string; stats?: Stats; kind: Kind };
 type Kind = "A" | "D" | "M";
 const KIND_TITLE = { A: "Added", D: "Deleted", M: "Modified" } as const;
-const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-warning" } as const;
+const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info" } as const;
 
 const baseName = (path: string) => path.split("/").at(-1) ?? path;
 const relative = (path: string, cwd: string) => (path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path);
@@ -69,7 +69,7 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
       client
         .request<FsReadResult>({ type: "fs.read", path })
         .then((r): Disk => ({ content: r.content }))
-        .catch((e: RequestError): Disk => (/ENOENT/.test(e.message) ? { content: "", deleted: true } : { error: e.message }))
+        .catch((e: RequestError): Disk => (e.code === "not_found" ? { content: "", deleted: true } : { error: e.message }))
         .then((d) => live && setDisk((x) => ({ ...x, [path]: d })));
     return () => void (live = false);
   }, [key, reload]);
@@ -81,7 +81,8 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
         const d = disk[change.path];
         if (d?.content === undefined) return { change, error: d?.error, stats: callStats(change), kind: "M" };
         const before = baseline(d.content, change);
-        const kind = d.deleted ? "D" : before === "" ? "A" : "M";
+        // Added: the file did not exist (original null), or a restored transcript's Write created it. An existing empty file is M.
+        const kind = d.deleted ? "D" : change.original === null || (change.original === undefined && before === "") ? "A" : "M";
         return before === undefined
           ? { change, after: d.content, stats: callStats(change), kind }
           : { change, before, after: d.content, stats: fileStats(before, d.content, change.path), kind };
@@ -175,7 +176,7 @@ function StatsText({ stats }: { stats: Stats }) {
 
 function KindBadge({ kind }: { kind: Kind }) {
   return (
-    <span className={cn("w-3 shrink-0 font-mono font-medium text-xs", KIND_COLOR[kind])} title={KIND_TITLE[kind]} data-testid="change-badge">
+    <span className={cn("w-4 shrink-0 text-center font-[530] font-mono text-[11px]", KIND_COLOR[kind])} title={KIND_TITLE[kind]} data-testid="change-badge">
       {kind}
     </span>
   );
@@ -195,6 +196,7 @@ function FileDiff({ row, cwd, style, onOpen }: { row: Row; cwd: string; style: D
     () => (row.before === undefined || row.after === undefined ? undefined : { old: { name: path, contents: row.before }, new: { name: path, contents: row.after } }),
     [path, row.before, row.after],
   );
+  const same = files !== undefined && row.before === row.after;
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="file-diff" data-diff-style={style}>
       <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3 max-md:h-14" data-testid="file-diff-header">
@@ -209,12 +211,14 @@ function FileDiff({ row, cwd, style, onOpen }: { row: Row; cwd: string; style: D
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2 text-xs">
         {row.error && <p className="p-2 text-destructive">{row.error}</p>}
-        {!row.error && (row.after === undefined || (files && !drawn)) && (
+        {!row.error && (row.after === undefined || (files && !same && !drawn)) && (
           <p className="p-2 text-muted-foreground" data-testid="diff-loading">
             Loading diff…
           </p>
         )}
-        {files ? (
+        {same ? (
+          <p className="p-2 text-muted-foreground">No changes against the file before this session.</p>
+        ) : files ? (
           <MultiFileDiff oldFile={files.old} newFile={files.new} options={options} />
         ) : (
           !row.error &&
