@@ -26,7 +26,7 @@ import { connect, type ConnectionStatus, type RequestError } from "./client.ts";
 import { ImageStrip, readImages } from "./images.tsx";
 import { choose, matchCommands } from "./commands.ts";
 import { activeMention, insertAtCaret, insertMention } from "./mentions.ts";
-import { groupByCwd, timeAgo } from "./sessions.ts";
+import { SessionList } from "./sidebar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
@@ -336,7 +336,7 @@ export function App() {
           </label>
           <Button onClick={() => open(NEW_TAB)}>New session</Button>
           {error && <p className="text-destructive">{error}</p>}
-          {status !== "unauthorized" && <SessionList list={list} views={views} unread={unread} activeId={activeId} onOpen={open} />}
+          {status !== "unauthorized" && <SessionList list={list} state={(s) => views[s.id]?.state ?? s.state} unread={unread} activeId={activeId} onOpen={open} />}
         </aside>
         <main className="flex min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-0">
           {status === "unauthorized" ? (
@@ -491,67 +491,6 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
       <span className={`size-2 rounded-full ${STATUS_STYLE[status]}`} aria-hidden />
       {status === "unauthorized" ? "not paired" : status}
     </div>
-  );
-}
-
-function SessionList({
-  list,
-  views,
-  unread,
-  activeId,
-  onOpen,
-}: {
-  list: SessionListItem[];
-  views: Record<string, SessionView>;
-  unread: Set<string>;
-  activeId?: string;
-  onOpen: (id: string) => void;
-}) {
-  if (!list.length) return <p className="text-muted-foreground text-sm">No sessions in the allowlisted roots.</p>;
-  return (
-    <nav className="-mx-1 flex min-h-0 flex-col gap-3 overflow-y-auto" data-testid="session-list">
-      {groupByCwd(list).map((g) => (
-        <section key={g.cwd}>
-          <h2 className="px-1 text-xs" title={g.cwd}>
-            <div className="truncate font-medium">{g.cwd.split("/").at(-1) || g.cwd}</div>
-            <div className="truncate font-mono text-muted-foreground">{g.cwd}</div>
-          </h2>
-          <ul className="mt-1 flex flex-col gap-0.5">
-            {g.sessions.map((s) => (
-              <li key={s.id}>
-                <button
-                  data-testid="session-item"
-                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted ${s.id === activeId ? "bg-muted" : ""}`}
-                  onClick={() => onOpen(s.id)}
-                  title={`${s.title}\n${s.cwd}`}
-                >
-                  {unread.has(s.id) && <span className="size-2 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-label="unread" />}
-                  <span className={`min-w-0 flex-1 truncate ${unread.has(s.id) ? "font-semibold" : ""}`}>{s.title}</span>
-                  <StateBadge state={views[s.id]?.state ?? s.state} />
-                  <span className="text-muted-foreground text-xs">{timeAgo(s.lastActivity)}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
-    </nav>
-  );
-}
-
-const STATE_STYLE: Record<SessionInfo["state"], string> = {
-  idle: "bg-muted text-muted-foreground",
-  running: "bg-secondary text-info",
-  needs_input: "bg-secondary text-warning",
-  error: "bg-secondary text-destructive",
-  closed: "text-muted-foreground",
-};
-
-function StateBadge({ state }: { state: SessionInfo["state"] }) {
-  return (
-    <span className={`rounded-sm px-1.5 py-0.5 font-medium text-xs ${STATE_STYLE[state]}`} data-testid="state-badge">
-      {state.replace("_", " ")}
-    </span>
   );
 }
 
