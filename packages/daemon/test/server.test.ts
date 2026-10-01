@@ -502,6 +502,45 @@ describe("daemon", () => {
     }
   });
 
+  it("lists by the last message time in the transcript, not the file mtime that metadata appended on CLI exit bumps", async () => {
+    const [older, newer, noFile] = ["4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", "5b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", "6b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b"];
+    const cwd = join(webRoot, "my proj");
+    mkdirSync(cwd, { recursive: true });
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const dir = join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+    mkdirSync(dir);
+    const line = (o: object) => JSON.stringify(o) + "\n";
+    const exitLines = line({ type: "last-prompt", lastPrompt: "hi" }) + line({ type: "cost-state", totalCostUSD: 0 });
+    writeFileSync(join(dir, `${older}.jsonl`), line({ type: "user", timestamp: "2026-10-01T10:00:00.000Z" }) + line({ type: "assistant", timestamp: "2026-10-01T10:00:05.000Z" }) + exitLines);
+    writeFileSync(join(dir, `${newer}.jsonl`), line({ type: "user", timestamp: "2026-10-01T11:00:00.000Z" }) + line({ type: "attachment", timestamp: "2026-10-01T11:30:00.000Z" }) + exitLines);
+    // All rewritten at the same daemon restart; mtime order is the reverse of the real one.
+    const transcripts = [
+      { sessionId: older, summary: "older", lastModified: 9_000, cwd },
+      { sessionId: newer, summary: "newer", lastModified: 8_000, cwd },
+      { sessionId: noFile, summary: "no file", lastModified: 7_000, cwd },
+    ];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      projectsDir,
+      history: { listSessions: (async () => transcripts) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const list = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; lastActivity: number }[] } };
+      expect(list.result.sessions.map((s) => [s.id, s.lastActivity])).toEqual([
+        [newer, Date.parse("2026-10-01T11:00:00.000Z")],
+        [older, Date.parse("2026-10-01T10:00:05.000Z")],
+        [noFile, 7_000],
+      ]);
+    } finally {
+      d.close();
+    }
+  });
+
   it("previews and runs a rewind over WebSocket; bad mode and unknown message are errors", async () => {
     const c = await client();
     const { result } = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
