@@ -19,6 +19,16 @@ describe("matchCommands", () => {
     expect(matchCommands(all, "/RE")!.map((c) => c.name)).toEqual(["review", "code-review"]);
   });
 
+  it("ranks an exact name match first, then prefix, then substring matches", () => {
+    const list = [cmd("context7-mcp"), cmd("my-context"), cmd("context")];
+    expect(matchCommands(list, "/context")!.map((c) => c.name)).toEqual(["context", "context7-mcp", "my-context"]);
+  });
+
+  it("ranks an exact alias match first", () => {
+    const usage = { ...cmd("usage"), aliases: ["cost"] };
+    expect(matchCommands([cmd("costly"), usage], "/cost")!.map((c) => c.name)).toEqual(["usage", "costly"]);
+  });
+
   it("matches aliases by prefix", () => {
     const usage = { ...cmd("usage"), aliases: ["cost", "stats"] };
     expect(matchCommands([...all, usage], "/cos")!.map((c) => c.name)).toEqual(["usage"]);
