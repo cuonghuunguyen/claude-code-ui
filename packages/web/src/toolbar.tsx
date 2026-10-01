@@ -15,7 +15,7 @@ export const MODE_LABEL: Record<PermissionMode, { label: string; short: string; 
   auto: { label: "Auto", short: "Auto", Icon: ShieldIcon },
 };
 
-const EFFORT_LABEL: Record<Effort, string> = { default: "Default", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
+export const EFFORT_LABEL: Record<Effort, string> = { default: "Default", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
 
 /** Shift+Tab: the next mode in Claude Code's order, wrapping around. */
 export const nextMode = (modes: PermissionMode[], mode: PermissionMode) => modes[(modes.indexOf(mode) + 1) % modes.length] ?? mode;

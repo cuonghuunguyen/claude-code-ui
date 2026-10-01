@@ -34,6 +34,8 @@ export function OpenProjectDialog({
           finalFocus={() => finalFocus?.current ?? true}
           className="-translate-x-1/2 fixed top-[max(48px,calc((100dvh-480px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,480px)] w-[min(100vw-24px,640px)] flex-col rounded-xl bg-card text-foreground shadow-floating outline-none"
           data-testid="open-project-dialog"
+          // App shortcuts and Esc (stop turn) skip while an aria-modal dialog shows; Base UI does not set it.
+          aria-modal="true"
         >
           <div className="flex items-center gap-2 py-2 pr-2 pl-4">
             <Dialog.Title className="flex-1 font-medium text-[15px] tracking-[-0.13px]">Open project</Dialog.Title>
