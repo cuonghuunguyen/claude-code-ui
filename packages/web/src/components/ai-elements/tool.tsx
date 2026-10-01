@@ -89,7 +89,7 @@ export const ToolHeader = ({
   return (
     <CollapsibleTrigger
       className={cn(
-        "flex min-h-6 w-full items-center gap-2 rounded-md text-left text-sm hover:bg-muted/50",
+        "flex min-h-6 w-full cursor-pointer items-center gap-2 rounded-md text-left text-sm hover:bg-muted/50",
         className
       )}
       {...props}
@@ -99,7 +99,7 @@ export const ToolHeader = ({
       <span className="ml-auto flex shrink-0 items-center gap-2">
         {meta}
         <ToolStatusMark state={state} />
-        <ChevronDownIcon className="size-4 text-muted-foreground transition-transform in-data-panel-open:rotate-180" />
+        <ChevronDownIcon className="size-4 text-muted-foreground transition-transform in-data-panel-open:rotate-180 motion-reduce:transition-none" />
       </span>
     </CollapsibleTrigger>
   );

@@ -4,7 +4,7 @@ import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import type { ToolUIPart } from "ai";
 import { useMemo, useState, type ReactNode } from "react";
-import { CheckCircle2Icon, CircleDotIcon, CircleIcon, ListTodoIcon } from "lucide-react";
+import { CheckCircle2Icon, ChevronDownIcon, CircleDotIcon, CircleIcon, ListTodoIcon } from "lucide-react";
 import { Task, TaskContent, TaskItem, TaskTrigger } from "@/components/ai-elements/task";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark } from "@/components/ai-elements/tool";
@@ -210,10 +210,13 @@ export function ContextGroup({
   const counts = [count(reads, "read", "reads"), count(calls.length - reads, "search", "searches")].filter(Boolean).join(", ");
   return (
     <Tool data-testid="context-group" {...useExpanded(`context:${calls[0]!.id}`, calls.some(awaiting))}>
-      <CollapsibleTrigger className="flex min-h-6 w-full items-center gap-2 rounded-md text-left text-sm hover:bg-muted/50">
+      <CollapsibleTrigger className="flex min-h-6 w-full cursor-pointer items-center gap-2 rounded-md text-left text-sm hover:bg-muted/50">
         {busy ? <Shimmer as="span" className="font-medium">Exploring</Shimmer> : <span className="font-medium">Explored</span>}
         <span className="truncate text-muted-foreground">{counts}</span>
-        {failed && <ToolStatusMark state="output-error" />}
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          {failed && <ToolStatusMark state="output-error" />}
+          <ChevronDownIcon className="size-4 text-muted-foreground transition-transform in-data-panel-open:rotate-180 motion-reduce:transition-none" />
+        </span>
       </CollapsibleTrigger>
       <ToolContent className="space-y-1 pl-3">
         {calls.map((c) => (

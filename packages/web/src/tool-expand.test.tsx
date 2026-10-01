@@ -133,3 +133,18 @@ it("a subagent is expanded while a child call waits for permission (daemon sends
   );
   expect(el.querySelector('[data-testid="subagent"] button')?.getAttribute("aria-expanded")).toBe("true");
 });
+
+it("Copy on a non-secure origin (no navigator.clipboard) does not throw", async () => {
+  await render(view([{ type: "user_text", id: "u2", text: "hello", images: [] }]));
+  const errors: unknown[] = [];
+  const onError = (e: ErrorEvent) => (errors.push(e.error), e.preventDefault());
+  window.addEventListener("error", onError);
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="user-message"] button')!.click());
+  window.removeEventListener("error", onError);
+  expect(errors).toEqual([]);
+});
+
+it("the Explored row has a chevron like every other row", async () => {
+  await render(view([call("r3", "Read", { file_path: "/p/a.ts" }), call("r4", "Read", { file_path: "/p/b.ts" })]));
+  expect(el.querySelector('[data-testid="context-group"] button svg.lucide-chevron-down')).not.toBeNull();
+});

@@ -901,10 +901,15 @@ function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) 
 
 function CopyAction({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
-  const copy = () => navigator.clipboard.writeText(text).then(() => {
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  });
+  // navigator.clipboard is undefined on a non-secure origin (http://<LAN IP>), so Copy does nothing there.
+  const copy = () =>
+    navigator.clipboard?.writeText(text).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      },
+      () => {},
+    );
   return (
     <MessageAction title="Copy" label="Copy message" onClick={copy}>
       {copied ? <CheckIcon /> : <CopyIcon />}
