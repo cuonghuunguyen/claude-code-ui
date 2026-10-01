@@ -6,6 +6,7 @@ import { takeToken } from "./pairing.ts";
 export type Request = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M, "reqId"> : never) : never;
 
 type FsChanged = Extract<ServerMessage, { type: "fs.changed" }>;
+export type TerminalMessage = Extract<ServerMessage, { type: "terminal.output" | "terminal.exit" }>;
 
 /** "unauthorized": the daemon rejected this browser's token (or it has none); no redial until it is paired. */
 /** A daemon `error` reply; `code` as the daemon sent it (e.g. unknown_session). */
@@ -32,6 +33,7 @@ export function connect(opts: {
 }) {
   const url = opts.url ?? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
   const fsListeners = new Set<(m: FsChanged) => void>();
+  const terminalListeners = new Set<(m: TerminalMessage) => void>();
   const pending = new Map<string, { resolve: (r: unknown) => void; reject: (e: Error) => void }>();
   let ws: WebSocket;
   let isOpen = false;
@@ -65,6 +67,7 @@ export function connect(opts: {
       const m: ServerMessage = JSON.parse(ev.data);
       if (m.type === "event") return opts.onEvent(m);
       if (m.type === "fs.changed") return fsListeners.forEach((l) => l(m));
+      if (m.type === "terminal.output" || m.type === "terminal.exit") return terminalListeners.forEach((l) => l(m));
       if (m.type === "sessions.changed") return opts.onSessionsChanged?.(m);
       if (m.type === "plan_usage") return opts.onPlanUsage?.(m.usage);
       const p = m.reqId ? pending.get(m.reqId) : undefined;
@@ -118,6 +121,11 @@ export function connect(opts: {
     onFsChanged(l: (m: FsChanged) => void) {
       fsListeners.add(l);
       return () => void fsListeners.delete(l);
+    },
+    /** Listens for output and exits of the terminals this connection attached; returns the unsubscribe. */
+    onTerminal(l: (m: TerminalMessage) => void) {
+      terminalListeners.add(l);
+      return () => void terminalListeners.delete(l);
     },
     close() {
       closed = true;

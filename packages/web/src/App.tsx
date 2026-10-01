@@ -1,5 +1,5 @@
 import { Activity, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type RefObject } from "react";
-import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SunIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SquareTerminalIcon, SunIcon } from "lucide-react";
 import type {
   ContextUsage,
   CreateResult,
@@ -51,6 +51,7 @@ import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { relPath } from "./tools.ts";
 import { FilesPanel } from "./files-panel.tsx";
 import { ChangesPanel } from "./changes-panel.tsx";
+import { TerminalPanel } from "./terminal-panel.tsx";
 import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
@@ -126,6 +127,8 @@ export function App() {
   const [palette, setPalette] = useState<{ start?: string }>();
   // A user message whose rewind panel the palette asked for, waiting for its SessionPane.
   const [rewindTo, setRewindTo] = useState<string>();
+  // Wide screens: the terminal panel below the side panel (Toggle terminal); narrow screens show it as the "terminal" pane.
+  const [terminalOpen, setTerminalOpen] = useState(false);
   // A mention from "Send selection to Claude", waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
@@ -464,6 +467,7 @@ export function App() {
     toggleSidebar: () => (wide(768) ? setSidebar((v) => !v) : setDrawer((v) => !v)),
     // lg: the side panel breakpoint; below it the session and the files share one pane.
     toggleSidePanel: () => (wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
+    toggleTerminal: () => (wide(1024) ? setTerminalOpen((v) => !v) : setPane(pane === "terminal" ? "session" : "terminal")),
     focusPrompt: () => {
       showSession();
       // After the pane shows: only the visible session's prompt box has a layout box.
@@ -581,7 +585,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files"]} value={pane} onChange={setPane} changes={changedPaths.length} />
+                  <PaneTabs panes={["session", "changes", "files", "terminal"]} value={pane} onChange={setPane} changes={changedPaths.length} />
                 </div>
               )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
@@ -629,15 +633,18 @@ export function App() {
                   );
                 })}
               </div>
-              {shown && panel && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
+              {shown && (panel || terminalOpen) && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
               {panelSession && (
-                <section
-                  className={`${card} flex-1 lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`}
+                <div
+                  className={`flex min-h-0 min-w-0 flex-1 flex-col gap-2 lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${panel || terminalOpen ? "" : "lg:hidden"}`}
                   style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
-                  data-testid="side-panel"
                 >
-                  <div className="hidden border-b px-2 py-1 lg:flex">
+                <section className={`${card} flex-1 ${pane === "terminal" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`} data-testid="side-panel">
+                  <div className="hidden items-center border-b px-2 py-1 lg:flex">
                     <PaneTabs panes={["changes", "files"]} value={pane === "changes" ? "changes" : "files"} onChange={setPane} changes={changedPaths.length} />
+                    <IconButton className="ml-auto" label="Toggle terminal (Ctrl+`)" pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle">
+                      <SquareTerminalIcon />
+                    </IconButton>
                   </div>
                   <div className={`min-h-0 flex-1 flex-col ${pane === "changes" ? "hidden" : "flex"}`}>
                     <FilesPanel
@@ -660,6 +667,22 @@ export function App() {
                     />
                   )}
                 </section>
+                {(terminalOpen || pane === "terminal") && (
+                  // OpenCode: 280px high below the side panel.
+                  <section
+                    className={`${card} ${pane === "terminal" ? "flex-1" : "max-lg:hidden"} ${!terminalOpen ? "lg:hidden" : panel ? "lg:h-70 lg:flex-none" : "lg:flex-1"}`}
+                    data-testid="terminal-panel"
+                  >
+                    <TerminalPanel
+                      key={panelSession.cwd}
+                      client={client.current!}
+                      status={status}
+                      cwd={panelSession.cwd}
+                      onEmpty={() => (setTerminalOpen(false), pane === "terminal" && setPane("session"))}
+                    />
+                  </section>
+                )}
+                </div>
               )}
               {/* Mounted while the tab is open: hidden, it keeps its draft; replaced by the created session, it starts empty next time. */}
               {tabs.includes(NEW_TAB) && (
@@ -723,7 +746,7 @@ export function App() {
   );
 }
 
-type Pane = "session" | "changes" | "files";
+type Pane = "session" | "changes" | "files" | "terminal";
 
 /** `changes`: the changed file count, shown on the changes tab like OpenCode's "Files Changed N". */
 export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[]; value: Pane; onChange: (p: Pane) => void; changes?: number }) {

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -344,6 +344,70 @@ describe("daemon", () => {
     const c = await client();
     expect(await c.request({ type: "session.create", cwd: tmpdir() })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
     expect(await c.request({ type: "session.create", cwd: join(webRoot, "..", "..") })).toMatchObject({ code: "cwd_not_allowed" });
+  });
+
+  describe("terminals", () => {
+    process.env.SHELL = "/bin/sh";
+    const output = (inbox: ServerMessage[], terminalId: string) =>
+      inbox.map((m) => (m.type === "terminal.output" && m.terminalId === terminalId ? m.data : "")).join("");
+    const create = async (c: Awaited<ReturnType<typeof client>>, cwd = webRoot) =>
+      ((await c.request({ type: "terminal.create", cwd, cols: 80, rows: 24 })) as { result: { terminal: { id: string; title: string } } }).result.terminal;
+
+    it("opens a shell in a cwd inside the roots only", async () => {
+      const c = await client();
+      expect(await c.request({ type: "terminal.create", cwd: tmpdir(), cols: 80, rows: 24 })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+      expect(await c.request({ type: "terminal.create", cwd: "relative", cols: 80, rows: 24 })).toMatchObject({ code: "cwd_not_allowed" });
+      expect(await c.request({ type: "terminal.create", cwd: webRoot, cols: 0, rows: 24 })).toMatchObject({ code: "bad_size" });
+      const t = await create(c);
+      await c.request({ type: "terminal.attach", terminalId: t.id });
+      await c.request({ type: "terminal.input", terminalId: t.id, data: "pwd\r" });
+      await c.waitFor(() => output(c.inbox, t.id).includes(`\n${realpathSync(webRoot)}`));
+      await c.request({ type: "terminal.close", terminalId: t.id });
+    });
+
+    it("numbers terminals per cwd, lists them, resizes, and drops one whose shell exits", async () => {
+      const c = await client();
+      const a = await create(c);
+      const b = await create(c);
+      expect([a.title, b.title]).toEqual(["Terminal 1", "Terminal 2"]);
+      expect(await c.request({ type: "terminal.list", cwd: webRoot })).toMatchObject({ result: { terminals: [a, b] } });
+      await c.request({ type: "terminal.attach", terminalId: b.id });
+      expect(await c.request({ type: "terminal.resize", terminalId: b.id, cols: 100, rows: 30 })).toMatchObject({ type: "reply" });
+      await c.request({ type: "terminal.input", terminalId: b.id, data: "stty size\r" });
+      await c.waitFor(() => output(c.inbox, b.id).includes("30 100"));
+      await c.request({ type: "terminal.input", terminalId: b.id, data: "exit\r" });
+      await c.waitFor((m) => m.type === "terminal.exit" && m.terminalId === b.id);
+      await c.request({ type: "terminal.close", terminalId: a.id });
+      expect(await c.request({ type: "terminal.list", cwd: webRoot })).toMatchObject({ result: { terminals: [] } });
+      expect(await c.request({ type: "terminal.input", terminalId: a.id, data: "x" })).toMatchObject({ code: "unknown_terminal" });
+    });
+
+    it("keeps running after the connection drops; a new connection gets the scrollback, then live output", async () => {
+      const a = await client();
+      const t = await create(a);
+      await a.request({ type: "terminal.attach", terminalId: t.id });
+      await a.request({ type: "terminal.input", terminalId: t.id, data: "echo before-$((40+2))\r" });
+      await a.waitFor(() => output(a.inbox, t.id).includes("before-42"));
+      a.ws.close();
+      const b = await client();
+      const r = (await b.request({ type: "terminal.attach", terminalId: t.id })) as { result: { buffer: string } };
+      expect(r.result.buffer).toContain("before-42");
+      await b.request({ type: "terminal.input", terminalId: t.id, data: "echo after-$((40+3))\r" });
+      await b.waitFor(() => output(b.inbox, t.id).includes("after-43"));
+      // Attached once: a second attach on the same connection does not double the output.
+      await b.request({ type: "terminal.attach", terminalId: t.id });
+      await b.request({ type: "terminal.input", terminalId: t.id, data: "echo once-$((40+4))\r" });
+      await b.waitFor(() => output(b.inbox, t.id).includes("once-44"));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(output(b.inbox, t.id).split("once-44").length).toBe(2);
+      // Detached: the shell keeps running, its output no longer comes here.
+      await b.request({ type: "terminal.detach", terminalId: t.id });
+      await b.request({ type: "terminal.input", terminalId: t.id, data: "echo gone-$((40+5))\r" });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(output(b.inbox, t.id)).not.toContain("gone-45");
+      expect(((await b.request({ type: "terminal.attach", terminalId: t.id })) as { result: { buffer: string } }).result.buffer).toContain("gone-45");
+      await b.request({ type: "terminal.close", terminalId: t.id });
+    });
   });
 
   it("runs several sessions at the same time, each with its own event log", async () => {

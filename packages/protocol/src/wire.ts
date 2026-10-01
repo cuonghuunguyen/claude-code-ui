@@ -90,6 +90,18 @@ export type ClientMessage = { reqId: string } & (
   | { type: "fs.write"; path: string; content: string; baseMtime?: number }
   /** Replaces this connection's watched files; each change on disk sends `fs.changed`. */
   | { type: "fs.watch"; paths: string[] }
+  /** Starts the user's shell in a PTY in `cwd` (inside the roots). It runs until closed or its shell exits, across reconnects. */
+  | { type: "terminal.create"; cwd: string; cols: number; rows: number }
+  /** The terminals running in `cwd`, oldest first. */
+  | { type: "terminal.list"; cwd: string }
+  /** Replies the scrollback, then streams `terminal.output` to this connection. Attaching again is a no-op for the stream. */
+  | { type: "terminal.attach"; terminalId: string }
+  /** Stops streaming that terminal to this connection; it keeps running. */
+  | { type: "terminal.detach"; terminalId: string }
+  | { type: "terminal.input"; terminalId: string; data: string }
+  | { type: "terminal.resize"; terminalId: string; cols: number; rows: number }
+  /** Kills the shell. */
+  | { type: "terminal.close"; terminalId: string }
 );
 
 /** `PushSubscription.toJSON()`. */
@@ -112,6 +124,10 @@ export type ServerMessage =
   | { type: "sessions.changed"; deleted?: string }
   /** Plan usage, not a session event: on connect and on each change. `usage` null: no plan limits (API key, Bedrock, Vertex). */
   | { type: "plan_usage"; usage: PlanUsage | null }
+  /** Output of an attached terminal. */
+  | { type: "terminal.output"; terminalId: string; data: string }
+  /** The terminal's shell exited (or it was closed); sent to every attached connection. The terminal is gone. */
+  | { type: "terminal.exit"; terminalId: string; exitCode: number }
   | { type: "error"; reqId?: string; code: string; message: string };
 
 export type CreateResult = { session: SessionInfo };
@@ -150,3 +166,9 @@ export type RewindPreview = { filesChanged: string[]; insertions: number; deleti
 export type FsSearchResult = { paths: string[] };
 export type FsReadResult = { content: string; mtime: number };
 export type FsWriteResult = { mtime: number };
+/** `title`: "Terminal N", the smallest N free in its cwd. */
+export type TerminalInfo = { id: string; title: string };
+export type TerminalCreateResult = { terminal: TerminalInfo };
+export type TerminalListResult = { terminals: TerminalInfo[] };
+/** `buffer`: the last output (capped), to replay into a fresh view. */
+export type TerminalAttachResult = { buffer: string };

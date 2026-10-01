@@ -14,7 +14,7 @@ Packages are consumed as TypeScript source; the daemon runs with `tsx`.
 
 ## Run
 
-Requires Node 22+ and a `claude login` session (no API key needed, ADR 0002).
+Requires Node 22+ and a `claude login` session (no API key needed, ADR 0002). The terminal panel's `node-pty` has no Linux prebuild: `npm install` compiles it (python3, make, g++).
 
 ```sh
 npm install
