@@ -44,7 +44,18 @@ it("tab shows running / needs-input / unread state", async () => {
   expect(tab("c").dataset.state).toBe("unread");
   expect(tab("d").dataset.state).toBe("idle");
   expect(tab(NEW_TAB).dataset.state).toBe("new");
-  expect(tab("b").textContent).toContain("needs input");
+  expect(tab("b").querySelector('[role="tab"]')!.getAttribute("aria-label")).toBe("Docs, needs input");
+  expect(tab("c").querySelector('[role="tab"]')!.getAttribute("aria-label")).toBe("Refactor, unread");
+});
+
+it("needs input and unread differ by shape, not only by colour", async () => {
+  const { tab } = await render();
+  // Needs input: an alert icon in place of the avatar. Unread: a dot on the avatar.
+  expect(tab("b").querySelector(".lucide-circle-alert")).not.toBeNull();
+  expect(tab("b").querySelector('[data-dot]')).toBeNull();
+  expect(tab("c").querySelector(".lucide-circle-alert")).toBeNull();
+  expect(tab("c").querySelector('[data-dot="unread"]')).not.toBeNull();
+  expect(tab("b").title).toContain("needs input");
 });
 
 it("click selects; the close button and a middle click close the tab without selecting it", async () => {
@@ -83,4 +94,11 @@ it("+ opens a new-session tab; the narrow switcher selects a tab", async () => {
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
   expect(onSelect).toHaveBeenCalledWith("b");
+});
+
+it("below md the titlebar controls have a 44px hit area and 8px gaps (touch-target-size, touch-spacing)", async () => {
+  const { el } = await render();
+  for (const id of ["tab-new", "tab-close-active"]) expect(el.querySelector(`[data-testid="${id}"]`)!.className).toMatch(/\bmax-md:size-11\b/);
+  expect(el.querySelector('[data-testid="tab-switcher"]')!.parentElement!.className).toMatch(/\bmax-md:h-11\b/);
+  expect(el.firstElementChild!.className).toMatch(/\bmax-md:gap-2\b/);
 });

@@ -1,7 +1,7 @@
 // Titlebar tabs (OpenCode titlebar-tab-strip): avatar + title + close; middle click closes, drag reorders, overflow scrolls.
 // Below md the strip collapses into a switcher (native select over the active tab).
 import { useEffect, useRef, type CSSProperties, type DragEvent } from "react";
-import { ChevronDownIcon, LoaderCircleIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, CircleAlertIcon, LoaderCircleIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn } from "@/lib/utils";
 import { NEW_TAB, avatarColor, projectName } from "./tabs.ts";
@@ -15,7 +15,7 @@ const status = (id: string, t: TabInfo): TabStatus =>
 const STATUS_LABEL: Record<TabStatus, string> = { new: "", running: "running", needs_input: "needs input", unread: "unread", idle: "" };
 
 /** 16px project initial on the project's color (OpenCode project-avatar-v2). */
-export function ProjectAvatar({ cwd, dot }: { cwd: string; dot?: "warning" | "info" }) {
+export function ProjectAvatar({ cwd, unread }: { cwd: string; unread?: boolean }) {
   const c = avatarColor(cwd);
   return (
     <span
@@ -24,11 +24,7 @@ export function ProjectAvatar({ cwd, dot }: { cwd: string; dot?: "warning" | "in
       aria-hidden
     >
       {[...projectName(cwd)][0]?.toUpperCase()}
-      {dot && (
-        <span
-          className={cn("-top-0.5 -right-0.5 absolute size-1.5 rounded-full ring-2 ring-background", dot === "warning" ? "bg-warning" : "bg-info")}
-        />
-      )}
+      {unread && <span data-dot="unread" className="-top-0.5 -right-0.5 absolute size-1.5 rounded-full bg-info ring-2 ring-background" />}
     </span>
   );
 }
@@ -36,8 +32,10 @@ export function ProjectAvatar({ cwd, dot }: { cwd: string; dot?: "warning" | "in
 function TabIcon({ s, cwd }: { s: TabStatus; cwd?: string }) {
   if (s === "new") return <SquarePenIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "running") return <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />;
+  // Needs input gets its own shape, not only another dot colour than unread.
+  if (s === "needs_input") return <CircleAlertIcon className="size-4 shrink-0 text-warning" aria-hidden />;
   if (!cwd) return <span className="size-4 shrink-0 rounded-[3px] border border-border" aria-hidden />;
-  return <ProjectAvatar cwd={cwd} dot={s === "needs_input" ? "warning" : s === "unread" ? "info" : undefined} />;
+  return <ProjectAvatar cwd={cwd} unread={s === "unread"} />;
 }
 
 const DRAG_TYPE = "application/x-claude-ui-tab";
@@ -67,7 +65,8 @@ export function TabsBar({
   const active = activeId ? info(activeId) : undefined;
 
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+    // Below md: 44px hit areas, 8px apart (touch-target-size, touch-spacing).
+    <div className="flex min-w-0 flex-1 items-center gap-1.5 max-md:gap-2">
       <div
         ref={strip}
         role="tablist"
@@ -82,9 +81,9 @@ export function TabsBar({
         ))}
       </div>
       {tabs.length > 0 && (
-        <div className="relative flex h-7 min-w-0 flex-1 rounded-md has-focus-visible:ring-2 has-focus-visible:ring-ring md:hidden">
+        <div className="relative flex h-7 min-w-0 flex-1 rounded-md max-md:h-11 has-focus-visible:ring-2 has-focus-visible:ring-ring md:hidden">
           <div
-            className="pointer-events-none flex min-w-0 flex-1 items-center gap-1.5 rounded-md bg-secondary px-1.5 font-medium"
+            className="pointer-events-none flex min-w-0 flex-1 items-center gap-1.5 rounded-md bg-secondary px-1.5 font-medium max-md:my-2"
             aria-hidden
           >
             {active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} /> : null}
@@ -170,11 +169,12 @@ function Tab({
       data-testid="tab"
       data-tab-id={id}
       data-state={s}
-      title={t.cwd ? `${t.title}\n${t.cwd}` : t.title}
+      title={[STATUS_LABEL[s] ? `${t.title} (${STATUS_LABEL[s]})` : t.title, t.cwd].filter(Boolean).join("\n")}
     >
       <button
         role="tab"
         aria-selected={active}
+        aria-label={STATUS_LABEL[s] ? `${t.title}, ${STATUS_LABEL[s]}` : undefined}
         className={cn(
           "flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
           active ? "text-foreground" : "text-muted-foreground",
@@ -183,7 +183,6 @@ function Tab({
       >
         <TabIcon s={s} cwd={t.cwd} />
         <span className="truncate leading-4">{t.title}</span>
-        {STATUS_LABEL[s] && <span className="sr-only">, {STATUS_LABEL[s]}</span>}
       </button>
       <button
         aria-label={`Close ${t.title}`}
@@ -221,7 +220,7 @@ export function IconButton({
       title={label}
       aria-pressed={pressed}
       className={cn(
-        "grid size-7 shrink-0 place-items-center rounded-md text-faint outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-secondary aria-pressed:text-foreground [&_svg]:size-4",
+        "grid size-7 shrink-0 place-items-center max-md:size-11 rounded-md text-faint outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-secondary aria-pressed:text-foreground [&_svg]:size-4",
         className,
       )}
       onClick={onClick}

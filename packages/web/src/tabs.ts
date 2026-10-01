@@ -27,6 +27,9 @@ export function replaceTab(tabs: string[], old: string, id: string) {
   return tabs.includes(id) ? tabs.filter((t) => t !== old) : tabs.map((t, i) => (i === at ? id : t));
 }
 
+/** Session tabs the daemon does not list, e.g. never prompted before a daemon restart. */
+export const staleTabs = (tabs: string[], known: Set<string>) => tabs.filter((id) => id !== NEW_TAB && !known.has(id));
+
 /** Project avatar color (OpenCode project-avatar-v2 palette), stable per working directory. */
 export const AVATAR_COLORS = ["orange", "yellow", "cyan", "green", "red", "pink", "blue", "purple", "gray"] as const;
 

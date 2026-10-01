@@ -36,7 +36,7 @@ import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, SubagentGroup, TodoList, ToolCard } from "./tool-card.tsx";
 import { FilesPanel } from "./files-panel.tsx";
-import { NEW_TAB, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs } from "./tabs.ts";
+import { NEW_TAB, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs, staleTabs } from "./tabs.ts";
 import { IconButton, ProjectAvatar, TabsBar } from "./tabs-bar.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 
@@ -92,11 +92,17 @@ export function App() {
   const viewsRef = useRef(views);
   viewsRef.current = views;
   const requested = useRef(new Set<string>());
+  // Tabs restored from storage, checked against the first session list: a stale one would show "Untitled".
+  const restored = useRef<string[] | undefined>(tabs);
 
   async function refreshList() {
     try {
       const { sessions } = await client.current!.request<ListResult>({ type: "session.list" });
       setList(sessions);
+      if (restored.current) {
+        for (const id of staleTabs(restored.current, new Set(sessions.map((s) => s.id)))) forget(id);
+        restored.current = undefined;
+      }
       // Live sessions are followed so their unread markers update without opening them.
       // ponytail: replays every live session's log into this tab; follow state only if that gets heavy.
       for (const s of sessions)
@@ -291,7 +297,7 @@ export function App() {
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
-      <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 md:pr-3" data-testid="titlebar">
+      <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3" data-testid="titlebar">
         <IconButton className="md:hidden" label="Sessions" onClick={() => setDrawer(true)} testId="open-drawer">
           <MenuIcon />
         </IconButton>

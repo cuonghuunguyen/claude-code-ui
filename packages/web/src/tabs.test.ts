@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { NEW_TAB, avatarColor, closeTab, loadTabs, moveTab, openTab, replaceTab, saveTabs } from "./tabs.ts";
+import { NEW_TAB, avatarColor, closeTab, loadTabs, moveTab, openTab, staleTabs, replaceTab, saveTabs } from "./tabs.ts";
 
 describe("tabs", () => {
+  it("restored tabs the daemon does not list are stale; the new-session tab always stays", () => {
+    expect(staleTabs(["a", "gone", NEW_TAB, "b"], new Set(["a", "b"]))).toEqual(["gone"]);
+    expect(staleTabs(["a", NEW_TAB], new Set(["a"]))).toEqual([]);
+  });
+
   it("opening a session adds its tab at the end once; opening it again only focuses it", () => {
     expect(openTab([], "a")).toEqual(["a"]);
     expect(openTab(["a", "b"], "c")).toEqual(["a", "b", "c"]);
