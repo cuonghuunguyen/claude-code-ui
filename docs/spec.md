@@ -162,7 +162,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | `tool_result` | `toolUseId`, `output`, `isError`, `original?` (file before the first Edit/Write of a path, live only) | Merged into its tool card; `original` feeds the changes tab |
 | `permission_request` | `requestId`, `toolUseId`, `tool`, `input`, `suggestions[]`, `settled`, `decision?` | Permission panel; in the timeline its tool card is held expanded with status "Awaiting approval" |
 | `question` | `requestId`, `toolUseId`, `questions[]`, `settled`, `answers?` (absent = cancelled) | Question panel |
-| `todo_update` | `items[]` (content, status, activeForm) | Pinned todo list |
+| `todo_update` | `items[]` (content, status, activeForm) | Pinned todo list (todo dock: each item by its content, as OpenCode; collapsed state kept per browser) |
 | `subagent` | `id`, `description`, `status`; child parts carry `parentId` = `id` | Nested, collapsible group |
 | `session_state` | `state` | Header badge, list badge |
 | `commands` | `commands[]` (name, description, argumentHint, aliases?) | Slash command picker; not in the timeline |
