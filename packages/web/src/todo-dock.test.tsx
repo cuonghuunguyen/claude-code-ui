@@ -32,6 +32,9 @@ describe("TodoDock", () => {
       ["in_progress", "In progress: Changing b"],
       ["pending", "Pending: Test"],
     ]);
+    // Item text 14px / 130% on the row itself (TaskItem's text-sm must not win); dock radius 10px (OpenCode rounded-xl).
+    expect(rows.every((r) => r.className.includes("text-[14px]/[1.3]") && !r.className.includes("text-sm"))).toBe(true);
+    expect(el.querySelector('[data-testid="todo-dock"]')!.className).toContain("rounded-xl");
   });
 
   it("collapses to the header with the active todo as preview, and expands again", async () => {

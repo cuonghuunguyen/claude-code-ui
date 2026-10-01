@@ -44,7 +44,7 @@ export function TodoDock({ items, className }: { items: TodoItem[]; className?: 
       open={open}
       onOpenChange={setOpen}
       data-testid="todo-dock"
-      className={cn("w-full overflow-hidden rounded-2xl border-[0.5px] bg-muted", className)}
+      className={cn("w-full overflow-hidden rounded-xl border-[0.5px] bg-muted", className)}
     >
       <TaskTrigger title="Todos" className="flex h-[42px] w-full cursor-pointer items-center gap-2 pr-3 pl-4 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset pointer-coarse:h-11">
         <span className="shrink-0 text-muted-foreground">
@@ -65,14 +65,14 @@ export function TodoDock({ items, className }: { items: TodoItem[]; className?: 
         />
       </TaskTrigger>
       <CollapsibleContent>
-        <div role="list" className="flex max-h-42 flex-col gap-1.5 overflow-y-auto px-4 pb-3 text-[14px]/[1.3]">
+        <div role="list" className="flex max-h-42 flex-col gap-1.5 overflow-y-auto px-4 pb-3">
           {items.map((item, i) => (
             <TaskItem
               key={i}
               role="listitem"
               data-status={item.status}
               className={cn(
-                "flex gap-2 break-words",
+                "flex gap-2 break-words text-[14px]/[1.3]",
                 item.status === "completed" ? "text-muted-foreground line-through" : "text-foreground",
               )}
             >

@@ -202,4 +202,7 @@ it("TodoWrite: the timeline card stays collapsed, the dock above the prompt show
   // Idle with open items: hidden (OpenCode shows the dock only while live).
   await render(view([running, ...todos("t1", false), { type: "session_state", id: "st", state: "idle" }]));
   expect(dock()).toBeNull();
+  // The next turn calls no TodoWrite: the old list stays gone (OpenCode todoState "clear").
+  await render(view([running, ...todos("t1", false), { type: "session_state", id: "st", state: "idle" }, running]));
+  expect(dock()).toBeNull();
 });

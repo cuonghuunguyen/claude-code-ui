@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelInfo } from "@claude-ui/protocol";
 import { SessionPane } from "./App.tsx";
-import { emptySession, type SessionView } from "./store.ts";
+import { applyEvent, emptySession, type SessionView } from "./store.ts";
 import { effortOptions, nextMode } from "./toolbar.tsx";
 import { QuestionPanel } from "./question.tsx";
 
@@ -72,6 +72,19 @@ it("a failed prompt goes back into the prompt box and shows the error in the pan
   expect(onPrompt).toHaveBeenCalledWith("hello sandbox2", []);
   expect(box.value).toBe("hello sandbox2");
   expect(el.querySelector('[data-testid="prompt-error"]')?.textContent).toContain("no session s1");
+});
+
+it("a send error sits between the todo dock and the prompt box, so the prompt box drops its lift and stays outside the dock", async () => {
+  const running = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "session_state", id: "st", state: "running" } });
+  const view = applyEvent(running, { type: "event", sessionId: "s1", seq: 2, part: { type: "todo_update", id: "t:todos", items: [{ content: "Fix", status: "pending" }] } });
+  const onPrompt = vi.fn(() => Promise.reject(new Error("no session s1")));
+  const { box, $ } = await render({ onPrompt }, view);
+  expect($("prompt-box")!.className).toContain("-mt-11");
+  await type(box, "hello");
+  await key(box, { key: "Enter" });
+  expect($("todo-dock")!.nextElementSibling).toBe($("prompt-error"));
+  expect($("todo-dock")!.className).not.toContain("pb-9");
+  expect($("prompt-box")!.className).not.toContain("-mt-11");
 });
 
 it("the header holds no model chooser; the prompt toolbar shows model, effort and permission mode", async () => {

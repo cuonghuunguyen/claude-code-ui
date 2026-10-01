@@ -120,4 +120,17 @@ describe("applyEvent todo_update", () => {
     expect(s.todos).toEqual([{ content: "Fix", status: "completed" }]);
     expect(s.order).toEqual([]);
   });
+
+  it("clears the list when the session stops being live or rewinds, so a later turn without TodoWrite shows no stale list", () => {
+    const items = [{ content: "Fix", status: "in_progress" as const }];
+    const open = [ev(1, { type: "session_state", id: "st", state: "running" }), ev(2, { type: "todo_update", id: "t:todos", items })];
+    for (const state of ["idle", "error"] as const) {
+      const s = [...open, ev(3, { type: "session_state", id: "st", state }), ev(4, { type: "session_state", id: "st", state: "running" })].reduce(applyEvent, emptySession());
+      expect(s.todos).toEqual([]);
+    }
+    // needs_input keeps the list (still live).
+    expect([...open, ev(3, { type: "session_state", id: "st", state: "needs_input" })].reduce(applyEvent, emptySession()).todos).toEqual(items);
+    const user = ev(3, { type: "user_message", id: "u1", text: "hi" } as never);
+    expect([...open, user, ev(4, { type: "rewind", id: "rw", userMessageId: "u1" } as never)].reduce(applyEvent, emptySession()).todos).toEqual([]);
+  });
 });
