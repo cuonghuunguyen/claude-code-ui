@@ -670,10 +670,11 @@ export function SessionPane({
   const question = pendingQuestion(view);
   // Waiting for a permission answer is part of the running turn.
   const turnRunning = view.state === "running" || view.state === "needs_input";
-  // Esc stops the turn, like Claude Code; the command picker handles its own Esc first (preventDefault).
+  // Esc stops the turn, like Claude Code; the command picker handles its own Esc first (preventDefault), and an open modal dialog owns Esc.
   useEffect(() => {
     if (!turnRunning) return;
-    const onEsc = (e: globalThis.KeyboardEvent) => e.key === "Escape" && !e.defaultPrevented && onInterrupt();
+    const onEsc = (e: globalThis.KeyboardEvent) =>
+      e.key === "Escape" && !e.defaultPrevented && !document.querySelector('[aria-modal="true"]') && onInterrupt();
     window.addEventListener("keydown", onEsc);
     return () => window.removeEventListener("keydown", onEsc);
   }, [turnRunning, onInterrupt]);

@@ -1,5 +1,5 @@
 // Quick open (Ctrl+P / Cmd+P): fuzzy file search over the session's project through `fs.search`, like OpenCode's file dialog.
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AtSignIcon, FileIcon, SearchIcon } from "lucide-react";
 
 /** Ctrl+P or Cmd+P, without Shift or Alt. */
@@ -22,7 +22,7 @@ export function QuickOpen({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const [found, setFound] = useState<{ query: string; paths: string[] }>();
+  const [found, setFound] = useState<{ query: string; paths: string[]; error?: string }>();
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   // Folders are for @-mentions; quick open opens files.
@@ -33,11 +33,13 @@ export function QuickOpen({
     let current = true;
     onSearch(query)
       .then((p) => current && (setFound({ query, paths: p }), setActive(0)))
-      .catch(() => current && setFound({ query, paths: [] }));
+      .catch((err: Error) => current && setFound({ query, paths: [], error: err.message }));
     return () => void (current = false);
   }, [query]);
 
-  const onKeyDown = (e: KeyboardEvent) => {
+  // Window capture: the dialog owns these keys wherever focus is (a click on the title or empty space moves it to body),
+  // so Esc never reaches SessionPane's interrupt listener while quick open is shown.
+  const onKeyDown = (e: globalThis.KeyboardEvent) => {
     const n = paths.length;
     // Only results for the typed query, so Enter never acts on a path the user has typed past.
     const pick = found?.query === query ? paths[active] : undefined;
@@ -48,10 +50,18 @@ export function QuickOpen({
       Escape: onClose,
       Tab: () => {}, // the search box is the only focus stop
     };
-    if (!keys[e.key]) return;
+    if (!keys[e.key]) return e.target !== input.current && input.current?.focus();
     e.preventDefault();
+    e.stopPropagation();
     keys[e.key]!();
   };
+  const latest = useRef(onKeyDown);
+  latest.current = onKeyDown;
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => latest.current(e);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-center px-3 pt-[max(48px,calc((100dvh-480px)/2))]">
@@ -62,6 +72,8 @@ export function QuickOpen({
         aria-label="Quick open"
         className="relative flex max-h-[min(100dvh-96px,480px)] self-start min-h-70 w-full max-w-160 flex-col rounded-2xl bg-popover text-popover-foreground shadow-floating"
         data-testid="quick-open"
+        // The search box is the only focus stop: a click elsewhere in the dialog leaves focus there.
+        onMouseDown={(e) => e.target !== input.current && e.preventDefault()}
       >
         <div className="p-1.5">
           <label className="flex h-9 items-center gap-2 rounded-md bg-secondary/60 pl-3 pr-2 focus-within:bg-secondary focus-within:ring-2 focus-within:ring-ring/50 hover:bg-secondary">
@@ -79,14 +91,13 @@ export function QuickOpen({
               className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground max-md:text-base"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={onKeyDown}
               data-testid="quick-open-input"
             />
           </label>
         </div>
         {!found || !paths.length ? (
           <p className="grid min-h-30 flex-1 place-items-center text-muted-foreground" role="status">
-            {found ? "No files found" : "Searching…"}
+            {found ? found.error ?? "No files found" : "Searching…"}
           </p>
         ) : (
           <ul id="quick-open-list" role="listbox" aria-labelledby="quick-open-group" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-1.5 pt-1.5 pb-2">
@@ -131,12 +142,6 @@ export function QuickOpen({
             })}
           </ul>
         )}
-        <p className="flex gap-3 border-t px-3 py-1.5 text-muted-foreground text-xs pointer-coarse:hidden" aria-hidden>
-          <span>↑↓ navigate</span>
-          <span>↵ open</span>
-          <span>{mod}↵ insert @path</span>
-          <span>Esc close</span>
-        </p>
       </div>
     </div>
   );

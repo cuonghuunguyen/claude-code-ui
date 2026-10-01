@@ -117,3 +117,46 @@ it("Ctrl+P and Cmd+P are the shortcut, not Ctrl+Shift+P", () => {
   expect(k({ key: "P", ctrlKey: true, shiftKey: true })).toBe(false);
   expect(k({ key: "p" })).toBe(false);
 });
+
+it("owns Escape and the arrow keys after a click moved focus off the search box", async () => {
+  const { rows, onClose } = await render();
+  const outside = vi.fn(); // like SessionPane's window Esc listener, which interrupts the turn
+  window.addEventListener("keydown", outside);
+  try {
+    (document.activeElement as HTMLElement).blur();
+    const press = async (k: string) => {
+      const e = new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true });
+      await act(async () => void document.body.dispatchEvent(e));
+      return e;
+    };
+    await press("ArrowDown");
+    expect(rows()[1]!.getAttribute("aria-selected")).toBe("true");
+    const e = await press("Escape");
+    expect(e.defaultPrevented).toBe(true);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(outside).not.toHaveBeenCalled();
+  } finally {
+    window.removeEventListener("keydown", outside);
+  }
+});
+
+it("a click inside the dialog keeps focus in the search box", async () => {
+  const { el, input } = await render();
+  const title = el.querySelector<HTMLElement>("#quick-open-group")!;
+  const e = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+  await act(async () => void title.dispatchEvent(e));
+  expect(e.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(input);
+});
+
+it("has no footer key-hint bar (OpenCode has none)", async () => {
+  const { el } = await render();
+  expect(el.textContent).not.toContain("navigate");
+});
+
+it("shows the error when the search fails", async () => {
+  const { el, type, onSearch } = await render();
+  onSearch.mockRejectedValueOnce(new Error("Not connected"));
+  await type("x");
+  expect(el.textContent).toContain("Not connected");
+});
