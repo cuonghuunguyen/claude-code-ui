@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { groupByCwd, timeAgo } from "./sessions.ts";
+import { groupByCwd, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
 
-const item = (id: string, cwd: string, lastActivity: number): SessionListItem => ({ id, cwd, state: "idle", model: "default", title: id, lastActivity });
+const item = (id: string, cwd: string, lastActivity: number, title = id): SessionListItem => ({ id, cwd, state: "idle", model: "default", title, lastActivity });
 
 describe("groupByCwd", () => {
   it("groups sessions by working directory, most recent group first, keeping order inside a group", () => {
@@ -11,6 +12,37 @@ describe("groupByCwd", () => {
       ["/p/x", ["a", "c"]],
       ["/p/y", ["b"]],
     ]);
+  });
+
+  it("makes exactly one group per working directory whatever the input order, sessions newest first", () => {
+    const groups = groupByCwd([item("a", "/p/x", 10), item("b", "/p/y", 40), item("c", "/p/x/", 30), item("d", "/p/y", 5), item("e", "/p/x", 20)]);
+    expect(groups.map((g) => [g.cwd, g.sessions.map((s) => s.id)])).toEqual([
+      ["/p/y", ["b", "d"]],
+      ["/p/x", ["c", "e", "a"]],
+    ]);
+  });
+
+  it("filters by session title or project name, case-insensitive", () => {
+    const list = [item("a", "/p/web", 3, "Fix login"), item("b", "/p/api", 2, "Docs"), item("c", "/p/api", 1, "Add LOGIN test")];
+    const ids = (q: string) => groupByCwd(list, q).map((g) => [g.cwd, g.sessions.map((s) => s.id)]);
+    expect(ids("login")).toEqual([
+      ["/p/web", ["a"]],
+      ["/p/api", ["c"]],
+    ]);
+    expect(ids(" API ")).toEqual([["/p/api", ["b", "c"]]]);
+    expect(ids("p/")).toEqual([]);
+    expect(ids("")).toHaveLength(2);
+  });
+});
+
+describe("collapsed groups", () => {
+  afterEach(() => localStorage.clear());
+  it("persist across reloads", () => {
+    expect(loadCollapsed()).toEqual(new Set());
+    saveCollapsed(new Set(["/p/x"]));
+    expect(loadCollapsed()).toEqual(new Set(["/p/x"]));
+    localStorage.setItem("claude-ui.collapsed", "{bad");
+    expect(loadCollapsed()).toEqual(new Set());
   });
 });
 
