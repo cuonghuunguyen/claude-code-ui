@@ -63,7 +63,7 @@ import { KEYS, matchesKey } from "./shortcuts.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { NEW_TAB, avatarColors, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar } from "./tabs-bar.tsx";
-import { DeleteDialog, type SessionAction } from "./session-actions.tsx";
+import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -142,6 +142,11 @@ export function App() {
   const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab" }>();
   // Session waiting for the delete confirmation.
   const [deleting, setDeleting] = useState<string>();
+  // Project cwd whose Remove waits for the confirmation.
+  const [removing, setRemoving] = useState<string>();
+  // Keeps the name while the dialog fades out.
+  const lastRemoving = useRef("");
+  if (removing) lastRemoving.current = removing;
   const paletteOpener = useRef<Element>(null);
   const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
@@ -330,6 +335,8 @@ export function App() {
   function newSession(cwd?: string) {
     setDraftCwd(cwd ?? (activeId && activeId !== NEW_TAB ? sessionOf(activeId)?.cwd : undefined) ?? draftCwd);
     open(NEW_TAB);
+    // autoFocus works only on the first mount; the tab may be open already, hidden. After the render shows it.
+    requestAnimationFrame(() => newPrompt.current?.focus());
   }
 
   async function openProject(path: string) {
@@ -344,6 +351,8 @@ export function App() {
     setError(undefined);
     try {
       await client.current!.request({ type: "project.remove", cwd });
+      // Gone at once; the list refresh below scans every transcript and can take seconds.
+      setProjects((p) => p.filter((x) => x !== cwd));
       const gone = new Set(list.filter(inProject(cwd)).map((s) => s.id));
       setTabs((t) => t.filter((id) => !gone.has(id)));
       if (activeId && gone.has(activeId)) open(undefined), history.replaceState(null, "", location.pathname + location.search);
@@ -544,6 +553,15 @@ export function App() {
         </div>
       </header>
       <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? "Untitled")} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
+      <ConfirmDialog
+        open={removing !== undefined}
+        title="Remove project?"
+        description={`“${projectName(lastRemoving.current)}” leaves the list. Its files and sessions stay on disk; open the folder again to bring it back.`}
+        confirm="Remove"
+        onConfirm={() => (setRemoving(undefined), void removeProject(removing!))}
+        onCancel={() => setRemoving(undefined)}
+        testId="remove-project"
+      />
       <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
         {drawer && <div className="fixed inset-0 z-30 bg-overlay md:hidden" onClick={() => setDrawer(false)} aria-hidden />}
         <aside
@@ -568,7 +586,7 @@ export function App() {
               activeId={activeId}
               onOpen={open}
               onNew={newSession}
-              onRemove={removeProject}
+              onRemove={setRemoving}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}
               renaming={renaming?.in === "list" ? renaming.id : undefined}
               onAction={sessionAction("list")}

@@ -74,3 +74,43 @@ it("shows the daemon's refusal and an empty match", async () => {
   await key("Enter");
   expect(document.querySelector('[role="alert"]')?.textContent).toBe("outside the allowlisted roots");
 });
+
+it("Tab and Shift+Tab wrap inside the dialog: focus never reaches the page behind it", async () => {
+  const { input } = await render();
+  const close = document.querySelector<HTMLElement>('[aria-label="Close"]')!;
+  const openButton = document.querySelector<HTMLElement>('[data-testid="open-folder"]')!;
+  const tab = (from: HTMLElement, shiftKey = false) =>
+    act(async () => void from.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true })));
+  input().focus();
+  await tab(input(), true);
+  expect(document.activeElement).toBe(close);
+  await tab(close, true);
+  expect(document.activeElement).toBe(openButton);
+  await tab(openButton);
+  expect(document.activeElement).toBe(close);
+  await tab(close);
+  expect(document.activeElement).toBe(input());
+});
+
+it("closing without a pick gives the focus back to the opener; after a pick the focus goes to finalFocus", async () => {
+  const trigger = document.createElement("button");
+  const prompt = document.createElement("textarea");
+  document.body.append(trigger, prompt);
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  const show = (open: boolean, onPick = async () => {}) =>
+    act(async () => root!.render(<OpenProjectDialog open={open} onOpenChange={() => {}} list={list} onPick={onPick} finalFocus={{ current: prompt }} />));
+  trigger.focus();
+  await show(true);
+  await show(false);
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(trigger);
+  trigger.focus();
+  await show(true);
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="open-folder"]')!.click());
+  await show(false);
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(prompt);
+  trigger.remove(), prompt.remove();
+});

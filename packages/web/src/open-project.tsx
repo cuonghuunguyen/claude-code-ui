@@ -6,6 +6,7 @@ import { FolderIcon, SearchIcon, XIcon } from "lucide-react";
 import type { FsEntry } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { trapTab } from "./focus-trap.ts";
 import { browse, matchFolders } from "./folders.ts";
 import { projectName } from "./tabs.ts";
 
@@ -21,17 +22,30 @@ export function OpenProjectDialog({
   onOpenChange: (open: boolean) => void;
   list: (path?: string) => Promise<FsEntry[]>;
   onPick: (cwd: string) => Promise<unknown>;
-  /** Gets the focus when the dialog closes, when it exists; else the opener does. */
+  /** Gets the focus when the dialog closes after a pick, when it exists; a cancel gives it back to the opener. */
   finalFocus?: React.RefObject<HTMLElement | null>;
 }) {
   const input = useRef<HTMLInputElement>(null);
+  // Set when a pick starts: the parent closes the dialog before onPick resolves.
+  const picked = useRef(false);
+  useEffect(() => void (open && (picked.current = false)), [open]);
+  const pick = async (cwd: string) => {
+    picked.current = true;
+    try {
+      await onPick(cwd);
+    } catch (e) {
+      picked.current = false;
+      throw e;
+    }
+  };
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-overlay" />
         <Dialog.Popup
           initialFocus={input}
-          finalFocus={() => finalFocus?.current ?? true}
+          finalFocus={() => (picked.current && finalFocus?.current) || true}
+          onKeyDown={trapTab}
           className="-translate-x-1/2 fixed top-[max(48px,calc((100dvh-480px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,480px)] w-[min(100vw-24px,640px)] flex-col rounded-xl bg-card text-foreground shadow-floating outline-none"
           data-testid="open-project-dialog"
           // App shortcuts and Esc (stop turn) skip while an aria-modal dialog shows; Base UI does not set it.
@@ -46,7 +60,7 @@ export function OpenProjectDialog({
               <XIcon className="size-4" />
             </Dialog.Close>
           </div>
-          <Browser input={input} list={list} onPick={onPick} />
+          <Browser input={input} list={list} onPick={pick} />
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>

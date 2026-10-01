@@ -6,6 +6,7 @@ import { Menu } from "@base-ui/react/menu";
 import { EllipsisIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { trapTab } from "./focus-trap.ts";
 
 export type SessionAction = "rename" | "archive" | "unarchive" | "delete";
 
@@ -112,25 +113,58 @@ export function RenameInput({ title, onDone, className }: { title: string; onDon
 
 export function DeleteDialog({ title, onConfirm, onCancel }: { title?: string; onConfirm: () => void; onCancel: () => void }) {
   return (
-    <AlertDialog.Root open={title !== undefined} onOpenChange={(open) => !open && onCancel()}>
+    <ConfirmDialog
+      open={title !== undefined}
+      title="Delete session?"
+      description={`“${title ?? ""}” and its transcript are removed for good. The terminal CLI loses it too.`}
+      confirm="Delete"
+      destructive
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+      testId="delete"
+    />
+  );
+}
+
+/** Asks before an action; `testId`: prefix of the `-dialog`, `-cancel` and `-confirm` test ids. */
+export function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirm,
+  destructive,
+  onConfirm,
+  onCancel,
+  testId,
+}: {
+  open: boolean;
+  title: string;
+  description: string;
+  confirm: string;
+  destructive?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  testId: string;
+}) {
+  return (
+    <AlertDialog.Root open={open} onOpenChange={(o) => !o && onCancel()}>
       <AlertDialog.Portal>
         <AlertDialog.Backdrop className="fixed inset-0 z-50 bg-overlay transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0 motion-reduce:transition-none" />
         <AlertDialog.Popup
           className="-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 flex w-96 max-w-[calc(100vw-2rem)] flex-col gap-4 rounded-2xl bg-popover p-4 text-popover-foreground shadow-floating outline-none"
-          data-testid="delete-dialog"
+          onKeyDown={trapTab}
+          data-testid={`${testId}-dialog`}
         >
           <div className="flex flex-col gap-1">
-            <AlertDialog.Title className="font-medium text-[15px] tracking-[-0.13px]">Delete session?</AlertDialog.Title>
-            <AlertDialog.Description className="text-muted-foreground text-sm">
-              “{title}” and its transcript are removed for good. The terminal CLI loses it too.
-            </AlertDialog.Description>
+            <AlertDialog.Title className="font-medium text-[15px] tracking-[-0.13px]">{title}</AlertDialog.Title>
+            <AlertDialog.Description className="text-muted-foreground text-sm">{description}</AlertDialog.Description>
           </div>
           <div className="flex justify-end gap-2">
-            <AlertDialog.Close render={<Button variant="ghost" className="cursor-pointer max-md:h-11" />} data-testid="delete-cancel">
+            <AlertDialog.Close render={<Button variant="ghost" className="cursor-pointer max-md:h-11" />} data-testid={`${testId}-cancel`}>
               Cancel
             </AlertDialog.Close>
-            <Button variant="destructive" className="cursor-pointer max-md:h-11" onClick={onConfirm} data-testid="delete-confirm">
-              Delete
+            <Button variant={destructive ? "destructive" : "default"} className="cursor-pointer max-md:h-11" onClick={onConfirm} data-testid={`${testId}-confirm`}>
+              {confirm}
             </Button>
           </div>
         </AlertDialog.Popup>
