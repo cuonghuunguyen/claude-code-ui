@@ -2,13 +2,20 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Event } from "@claude-ui/protocol";
-import { queuedQuery, Session } from "../src/session.ts";
+import { queuedQuery, Session, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
 import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
     const t = setInterval(() => events.some(pred) && (clearInterval(t), resolve()), 5);
   });
+
+/** A new session whose CLI runs: it starts on the first prompt. */
+const started = (opts: ConstructorParameters<typeof Session>[1], cwd = "/tmp") => {
+  const s = new Session(cwd, opts);
+  s.prompt("hi");
+  return s;
+};
 
 const lastPart = (events: Event[], id: string) => events.filter((e) => e.part.id === id).at(-1)!.part;
 
@@ -24,9 +31,11 @@ describe("Session", () => {
         })(),
         { supportedCommands: async () => [], close: () => void setTimeout(() => exit(), 30) },
       );
-    const s = new Session("/repo", { query: query as never });
+    const s = started({ query: query as never }, "/repo");
     await s.close();
     expect(exited).toBe(true);
+    // A new session that never got a prompt has no CLI to wait for.
+    await new Session("/repo", { query: query as never }).close();
     // A restored session that never started a query has nothing to wait for.
     await Session.restore(randomUUID(), "/repo", history, { query: query as never }).close();
   });
@@ -34,7 +43,24 @@ describe("Session", () => {
   it("has a UUID before the first prompt and passes it to the SDK as sessionId", () => {
     const s = new Session("/tmp", { query: fakeQuery as never });
     expect(s.id).toMatch(/^[0-9a-f-]{36}$/);
+    s.prompt("hi");
     expect(calls.at(-1)).toMatchObject({ sessionId: s.id, cwd: "/tmp", includePartialMessages: true });
+  });
+
+  it("starts no CLI for a new session before its first prompt: a closed throwaway lists the commands, without hooks", async () => {
+    const before = calls.length;
+    const closedBefore = closed;
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await until(events, (e) => e.part.type === "commands");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls.slice(before)).toEqual([expect.objectContaining({ cwd: "/tmp", persistSession: false, settings: { disableAllHooks: true } })]);
+    expect(calls.at(-1)).not.toHaveProperty("sessionId");
+    expect(closed).toBe(closedBefore + 1);
+    s.prompt("hi");
+    expect(calls.length).toBe(before + 2);
+    expect(calls.at(-1)).toMatchObject({ sessionId: s.id });
   });
 
   it("logs user_text, running, streamed parts, turn_result, idle with increasing seq", async () => {
@@ -69,7 +95,7 @@ describe("Session", () => {
   it("strips API key env vars from the SDK env (ADR 0002)", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "tok");
-    new Session("/tmp", { query: fakeQuery as never });
+    started({ query: fakeQuery as never });
     vi.unstubAllEnvs();
     const env = calls.at(-1)!.env!;
     expect(env.PATH).toBe(process.env.PATH);
@@ -79,7 +105,7 @@ describe("Session", () => {
 
   it("forwards subagent text and enables TodoWrite unless the user env says otherwise", () => {
     vi.stubEnv("CLAUDE_CODE_ENABLE_TASKS", "1");
-    new Session("/tmp", { query: fakeQuery as never });
+    started({ query: fakeQuery as never });
     vi.unstubAllEnvs();
     const opts = calls.at(-1)!;
     expect(opts.forwardSubagentText).toBe(true);
@@ -94,6 +120,7 @@ describe("Session", () => {
     const s = new Session("/tmp", { query: failing as never });
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
+    s.prompt("hi");
     await until(events, (e) => e.part.type === "session_state" && e.part.state === "error");
     expect(events.some((e) => e.part.type === "raw" && JSON.stringify(e.part.message).includes("login expired"))).toBe(true);
     expect(() => s.prompt("hello")).toThrow(/not live/);
@@ -138,17 +165,17 @@ describe("Session", () => {
   });
 
   it("passes the chosen model to the SDK; 'default' means no model option", () => {
-    const s = new Session("/tmp", { model: "haiku", query: fakeQuery as never });
+    const s = started({ model: "haiku", query: fakeQuery as never });
     expect(calls.at(-1)!.model).toBe("haiku");
     expect(s.info().model).toBe("haiku");
-    const d = new Session("/tmp", { model: "default", query: fakeQuery as never });
+    const d = started({ model: "default", query: fakeQuery as never });
     expect(calls.at(-1)!.model).toBeUndefined();
     expect(d.info().model).toBe("default");
     expect(new Session("/tmp", { query: fakeQuery as never }).info().model).toBe("default");
   });
 
   it("setModel switches the live query and logs a session_model part", async () => {
-    const s = new Session("/tmp", { query: fakeQuery as never });
+    const s = started({ query: fakeQuery as never });
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
     await s.setModel("haiku");
@@ -167,15 +194,15 @@ describe("Session", () => {
   });
 
   it("starts in default permission mode and model default effort; bypass only when the daemon enables it", () => {
-    const s = new Session("/tmp", { query: fakeQuery as never });
+    const s = started({ query: fakeQuery as never });
     expect(calls.at(-1)).toMatchObject({ permissionMode: "default", allowDangerouslySkipPermissions: false, effort: undefined });
     expect(s.info()).toMatchObject({ permissionMode: "default", effort: "default", permissionModes: ["default", "acceptEdits", "plan"] });
-    new Session("/tmp", { allowBypass: true, query: fakeQuery as never });
+    started({ allowBypass: true, query: fakeQuery as never });
     expect(calls.at(-1)).toMatchObject({ allowDangerouslySkipPermissions: true });
   });
 
   it("setPermissionMode and setEffort change the live query and log parts", async () => {
-    const s = new Session("/tmp", { query: fakeQuery as never });
+    const s = started({ query: fakeQuery as never });
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
     await s.setPermissionMode("plan");
@@ -231,7 +258,7 @@ describe("Session", () => {
   });
 
   it("loads user, project and local settings like Claude Code: commands, skills, saved permission rules", () => {
-    new Session("/tmp", { query: fakeQuery as never });
+    started({ query: fakeQuery as never });
     expect(calls.at(-1)).toMatchObject({ settingSources: ["user", "project", "local"] });
   });
 
@@ -577,7 +604,7 @@ describe("Session rewind", () => {
   };
 
   it("runs the SDK with file checkpointing and replayed user message UUIDs", () => {
-    new Session("/tmp", { query: fakeQuery as never });
+    started({ query: fakeQuery as never });
     expect(calls.at(-1)).toMatchObject({ enableFileCheckpointing: true, extraArgs: { "replay-user-messages": null } });
   });
 
@@ -747,7 +774,7 @@ describe("Session context usage", () => {
     s.subscribe(0, (e) => events.push(e));
     await until(events, (e) => e.part.type === "context_usage");
     expect(lastPart(events, "context_usage")).toEqual(usagePart);
-    expect(usageCalls.at(-1)!.options).toMatchObject({ resume: id, cwd: "/tmp", model: "haiku", persistSession: false });
+    expect(usageCalls.at(-1)!.options).toMatchObject({ resume: id, cwd: "/tmp", model: "haiku", persistSession: false, settings: { disableAllHooks: true } });
     expect(usageCalls.at(-1)!.options).not.toHaveProperty("canUseTool");
     await vi.waitFor(() => expect(closed).toBe(closedBefore + 1));
   });
@@ -811,6 +838,37 @@ describe("Session context usage", () => {
     release();
     await new Promise((r) => setTimeout(r, 10));
     expect(spawnedThrowaway).toBe(0);
+  });
+
+  it("a conversation rewind refreshes the usage from a throwaway resumed at the fork point", async () => {
+    const id = randomUUID();
+    const s = Session.restore(id, "/tmp", history, { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await until(events, (e) => e.part.type === "context_usage");
+    await s.rewind("u2", "conversation");
+    const rewound = events.find((e) => e.part.type === "rewind")!.seq;
+    await until(events, (e) => e.part.type === "context_usage" && e.seq > rewound);
+    expect(usageCalls.at(-1)!.options).toMatchObject({ resume: id, resumeSessionAt: firstTurnLastAssistant, persistSession: false });
+  });
+
+  it("a throwaway CLI that does not answer within the timeout is closed, the failure logged, and the queue moves on", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    let closes = 0;
+    const hung = ({ prompt }: { prompt: AsyncIterable<unknown> }) =>
+      Object.assign((async function* () { for await (const _ of prompt); })(), { getContextUsage: () => new Promise(() => {}), close: () => void closes++ });
+    try {
+      Session.restore(randomUUID(), "/tmp", history, { query: hung as never });
+      const next = queuedQuery(async () => "next", fakeQuery as never);
+      await vi.advanceTimersByTimeAsync(THROWAWAY_TIMEOUT_MS);
+      expect(closes).toBe(1);
+      expect(err).toHaveBeenCalledWith(expect.stringContaining("context usage failed"), expect.objectContaining({ message: expect.stringContaining("no answer") }));
+      expect(await next).toBe("next");
+    } finally {
+      vi.useRealTimers();
+      err.mockRestore();
+    }
   });
 
   it("refreshes after a model switch: the window size can differ", async () => {

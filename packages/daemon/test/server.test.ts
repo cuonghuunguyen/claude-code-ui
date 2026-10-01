@@ -1,13 +1,13 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createProjects } from "../src/projects.ts";
-import { createDaemon, MAX_FRAME_BYTES } from "../src/server.ts";
+import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, fakeQuery, planCalls, history, interruptQuery, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
 
@@ -267,6 +267,90 @@ describe("daemon", () => {
     third.d.close();
   });
 
+  describe("sessions.json", () => {
+    const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+    const daemon = async (settingsFile: string, transcripts: { sessionId: string; cwd: string }[] = [], projectsDir?: string) => {
+      const d = createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        query: fakeQuery as never,
+        settingsFile,
+        projectsDir,
+        history: {
+          listSessions: (async () => transcripts.map((t) => ({ ...t, summary: "t", lastModified: 1 }))) as never,
+          getSessionInfo: (async (sid: string) => ({ sessionId: sid, cwd: webRoot })) as never,
+          getSessionMessages: (async () => history) as never,
+          deleteSession: (async () => {}) as never,
+        },
+      });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      return { d, c: await client((d.address() as AddressInfo).port) };
+    };
+    const file = () => join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json");
+    const read = (f: string) => JSON.parse(readFileSync(f, "utf8")) as Record<string, unknown>;
+
+    it("is replaced atomically (a new file renamed over the old one), no temp file left", async () => {
+      const f = file();
+      const { d, c } = await daemon(f);
+      const id = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      await c.request({ type: "session.setEffort", sessionId: id, effort: "high" });
+      const inode = statSync(f).ino;
+      await c.request({ type: "session.setEffort", sessionId: id, effort: "low" });
+      expect(statSync(f).ino).not.toBe(inode);
+      expect(read(f)[id]).toMatchObject({ effort: "low" });
+      expect(readdirSync(dirname(f))).toEqual(["sessions.json"]);
+      d.close();
+    });
+
+    it("session.delete removes the entry; a list drops entries whose session has no transcript and is not live", async () => {
+      const f = file();
+      const [kept, gone, deleted] = [uuid(1), uuid(2), uuid(3)];
+      const entry = { model: "haiku", permissionMode: "default", effort: "high" };
+      writeFileSync(f, JSON.stringify({ [kept]: entry, [gone]: entry, [deleted]: entry }));
+      const { d, c } = await daemon(f, [{ sessionId: kept, cwd: webRoot }, { sessionId: deleted, cwd: webRoot }]);
+      expect(await c.request({ type: "session.delete", sessionId: deleted })).toMatchObject({ type: "reply" });
+      expect(Object.keys(read(f))).toEqual([kept, gone]);
+      await c.request({ type: "session.list" });
+      expect(Object.keys(read(f))).toEqual([kept]);
+      d.close();
+    });
+
+    it(`keeps at most ${MAX_SETTINGS} entries: the least recently changed go first`, async () => {
+      const f = file();
+      const entry = { model: "haiku", permissionMode: "default", effort: "high" };
+      writeFileSync(f, JSON.stringify(Object.fromEntries(Array.from({ length: MAX_SETTINGS }, (_, i) => [uuid(i), entry]))));
+      const { d, c } = await daemon(f);
+      // Re-saving an existing entry moves it to the end; a new one pushes out the oldest.
+      await c.request({ type: "session.subscribe", sessionId: uuid(0), sinceSeq: 0 });
+      await c.request({ type: "session.setEffort", sessionId: uuid(0), effort: "low" });
+      const id = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      await c.request({ type: "session.setEffort", sessionId: id, effort: "max" });
+      const keys = Object.keys(read(f));
+      expect(keys).toHaveLength(MAX_SETTINGS);
+      expect(keys.slice(0, 1)).toEqual([uuid(2)]);
+      expect(keys.slice(-2)).toEqual([uuid(0), id]);
+      d.close();
+    });
+
+    it("without an entry a restored session takes mode and effort from its raw transcript", async () => {
+      const id = uuid(7);
+      const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+      const dir = join(projectsDir, webRoot.replace(/[^a-zA-Z0-9]/g, "-"));
+      mkdirSync(dir);
+      const line = (o: object) => JSON.stringify(o) + "\n";
+      writeFileSync(
+        join(dir, `${id}.jsonl`),
+        line({ type: "user", permissionMode: "plan" }) + line({ type: "assistant", effort: "low" }) + line({ type: "user", permissionMode: "acceptEdits" }) +
+          line({ type: "assistant", effort: "high" }) + line({ type: "assistant", isSidechain: true, effort: "max" }),
+      );
+      const { d, c } = await daemon(file(), [], projectsDir);
+      const sub = (await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })) as { result: { session: object } };
+      expect(sub.result.session).toMatchObject({ permissionMode: "acceptEdits", effort: "high" });
+      d.close();
+    });
+  });
+
   it("lists models from supportedModels() and caches them", async () => {
     const c = await client();
     const before = calls.length;
@@ -275,14 +359,18 @@ describe("daemon", () => {
     expect(calls.length).toBe(before + 1);
   });
 
-  it("creates a session with a model and switches it with session.setModel", async () => {
+  it("creates a session with a model and switches it with session.setModel; its CLI starts on the first prompt", async () => {
     const c = await client();
     const created = await c.request({ type: "session.create", cwd: webRoot, model: "haiku" });
     const session = (created as { result: { session: { id: string; model: string } } }).result.session;
     expect(session.model).toBe("haiku");
     const r = await c.request({ type: "session.setModel", sessionId: session.id, model: "default" });
     expect(r).toMatchObject({ type: "reply", result: { session: { id: session.id, model: "default" } } });
-    expect(setModelCalls.at(-1)).toBe("default");
+    expect(calls.some((o) => o.sessionId === session.id)).toBe(false);
+    await c.request({ type: "session.prompt", sessionId: session.id, text: "hi" });
+    expect(calls.find((o) => o.sessionId === session.id)).toMatchObject({ model: undefined });
+    await c.request({ type: "session.setModel", sessionId: session.id, model: "haiku" });
+    expect(setModelCalls.at(-1)).toBe("haiku");
   });
 
   it("switches permission mode and effort; rejects unknown values and bypass when not enabled", async () => {
@@ -311,6 +399,7 @@ describe("daemon", () => {
     const c = await client();
     const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
     const up = (await c.request({ type: "fs.upload", name: "notes.txt", data: Buffer.from("hi").toString("base64") })) as { result: { path: string } };
+    await c.request({ type: "session.prompt", sessionId: created.result.session.id, text: "read it" });
     const dirs = calls.find((o) => o.sessionId === created.result.session.id)!.additionalDirectories!;
     expect(dirs).toHaveLength(1);
     expect(up.result.path.startsWith(`${dirs[0]}/`)).toBe(true);
@@ -728,6 +817,39 @@ describe("daemon", () => {
       // Requests that arrived during scan 1 get scan 2: no reply is older than its request.
       for (const r of await Promise.all(burst)) expect(titles(r)).toEqual(["scan 2"]);
       expect({ scans, maxRunning }).toEqual({ scans: 2, maxRunning: 1 });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("reuses the last transcript scan while no transcript file changed (listSessions() leaks RSS per call)", async () => {
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const dir = join(projectsDir, "-p");
+    mkdirSync(dir);
+    const file = join(dir, "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b.jsonl");
+    writeFileSync(file, "{}\n");
+    let scans = 0;
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      projectsDir,
+      listCache: true,
+      history: { listSessions: (async () => (scans++, [])) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.list" });
+      await c.request({ type: "session.list" });
+      expect(scans).toBe(1);
+      writeFileSync(file, "{}\n{}\n");
+      await c.request({ type: "session.list" });
+      expect(scans).toBe(2);
+      writeFileSync(join(dir, "5b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b.jsonl"), "{}\n");
+      await c.request({ type: "session.list" });
+      expect(scans).toBe(3);
     } finally {
       d.close();
     }

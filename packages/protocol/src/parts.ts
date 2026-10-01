@@ -43,8 +43,9 @@ export type PlanWindow = { kind: string; label: string; percent: number; resetsA
 /**
  * Claude subscription limits, account-wide. `plan`: subscription type (pro, max, team, enterprise).
  * `status`: last `rate_limit_event`; allowed_warning = near a limit, rejected = a limit is hit, until `statusResetsAt` (ms).
+ * `statusLimit`: label of the window that status is about (e.g. "Current week (Opus)"), when the event names it.
  */
-export type PlanUsage = { plan: string | null; windows: PlanWindow[]; status: "allowed" | "allowed_warning" | "rejected"; statusResetsAt?: number };
+export type PlanUsage = { plan: string | null; windows: PlanWindow[]; status: "allowed" | "allowed_warning" | "rejected"; statusResetsAt?: number; statusLimit?: string };
 
 /** A slash command or skill; invoked by sending `/name args` as prompt text. */
 export type SlashCommand = { name: string; description: string; argumentHint: string; aliases?: string[] };
@@ -108,6 +109,11 @@ export type Part = { parentId?: string } & (
   /** The turn was stopped (session.interrupt, or No without feedback); replaces its turn_result. */
   | { type: "turn_interrupted"; id: string }
   | { type: "raw"; id: string; message: unknown }
+  /**
+   * Compaction: live from `system/compact_boundary` (`trigger`), re-emitted with `summary` once the CLI sends the summary
+   * Claude continues from; a restored transcript starts at that summary (no boundary).
+   */
+  | { type: "compaction"; id: string; trigger?: "manual" | "auto"; summary?: string }
   /** Conversation rewind: the client drops `userMessageId` and every part after it. */
   | { type: "rewind"; id: string; userMessageId: string }
 );

@@ -101,6 +101,36 @@ describe("plan usage", () => {
     }
   });
 
+  it("a reset more than 24.8 days away (above the setTimeout limit) waits in clamped steps: no read loop, read at the reset", async () => {
+    vi.useFakeTimers({ now: at("2026-10-01T10:00:00Z") });
+    try {
+      const seen: (PlanUsage | null)[] = [];
+      const read = vi.fn(async () => {});
+      const t = createPlanTracker({ onChange: (u) => seen.push(u), read });
+      const q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({ ...fakePlanUsage, rate_limits: { ...fakePlanUsage.rate_limits, limits: [] } }) };
+      const reset = at("2026-10-31T10:00:00Z");
+      await t.rateLimit({ status: "rejected", resetsAt: reset / 1000, rateLimitType: "overage" }, q as never);
+      const changes = seen.length;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect({ reads: read.mock.calls.length, changes: seen.length }).toEqual({ reads: 0, changes });
+      await vi.advanceTimersByTimeAsync(2 ** 31);
+      expect(read).not.toHaveBeenCalled();
+      expect(t.current()).toMatchObject({ status: "rejected" });
+      await vi.advanceTimersByTimeAsync(reset - Date.now() + 10_000);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(t.current()).toMatchObject({ status: "allowed" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a rejected status names its window from rateLimitType", async () => {
+    const t = createPlanTracker({ onChange: () => {} });
+    const q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => fakePlanUsage };
+    await t.rateLimit({ status: "rejected", rateLimitType: "seven_day_opus" }, q as never);
+    expect(t.current()).toMatchObject({ status: "rejected", statusLimit: "Current week (Opus)" });
+  });
+
   it("coalesces rereads: a burst while one is pending starts one read", async () => {
     let release!: () => void;
     const read = vi.fn(() => new Promise<void>((r) => (release = r)));

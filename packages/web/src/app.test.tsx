@@ -144,6 +144,32 @@ it("New session in a project focuses the first prompt, also when the new-session
   }
 });
 
+it("a replayed session_state lists no sessions; a live one does", async () => {
+  const lists = () => sent.filter((m) => m.type === "session.list").length;
+  replies["session.subscribe"] = { logEpoch: "e1", seq: 2, session };
+  // Reopen: the subscribe reply (seq 2) comes first, then its replay.
+  await act(async () => root.unmount());
+  root = createRoot(el);
+  await act(async () => root.render(<App />));
+  await act(async () => {});
+  const before = lists();
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_state", id: "session_state", state: "running" } }));
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "session_state", id: "session_state", state: "idle" } }));
+  expect(lists()).toBe(before);
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 3, part: { type: "session_state", id: "session_state", state: "running" } }));
+  expect(lists()).toBe(before + 1);
+  replies["session.subscribe"] = { logEpoch: "e1", session };
+});
+
+it("a compaction shows a 'Conversation compacted' divider with its summary collapsed, not a user bubble", async () => {
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "compaction", id: "b1", trigger: "manual", summary: "This session is being continued…" } }));
+  const c = el.querySelector('[data-testid="compaction"]')!;
+  expect(c.textContent).toContain("Conversation compacted");
+  expect(c.querySelector<HTMLDetailsElement>('[data-testid="compaction-summary"]')!.open).toBe(false);
+  expect(el.querySelector('[data-testid="raw-part"]')).toBeNull();
+  expect([...el.querySelectorAll('[data-testid="user-message"]')].length).toBe(0);
+});
+
 it("Remove project asks first; Cancel keeps it, Remove sends project.remove", async () => {
   const removeSent = () => sent.filter((m) => m.type === "project.remove");
   const remove = () => act(async () => el.querySelector<HTMLElement>('[data-testid="project-remove"]')!.click());

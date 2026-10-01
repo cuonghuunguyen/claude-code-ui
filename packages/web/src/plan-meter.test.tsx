@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { PlanUsage } from "@claude-ui/protocol";
 import { PlanMeter, planLevel, resetText } from "./plan-meter.tsx";
 
@@ -73,6 +73,21 @@ it("limit hit: a window at 100% or a rejected rate_limit_event, shown with its r
   expect(meter(el).getAttribute("aria-label")).toMatch(/^Plan usage: limit reached, resets .* \(in 1h 5m\), show details$/);
   await act(async () => meter(el).click());
   expect(document.querySelector('[data-testid="plan-limit"]')!.textContent).toMatch(/^Limit reached\. Resets .* \(in 1h 5m\)$/);
+});
+
+it("a rejected limit names its window when the event did; the popover's relative reset time counts down while open", async () => {
+  vi.useFakeTimers({ now, toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    const el = await render({ ...usage, status: "rejected", statusLimit: "Current week (Opus)", statusResetsAt: now + 65 * 60_000 + 30_000 });
+    expect(meter(el).getAttribute("aria-label")).toMatch(/^Plan usage: limit reached: Current week \(Opus\), resets /);
+    await act(async () => meter(el).click());
+    const limit = () => document.querySelector('[data-testid="plan-limit"]')!.textContent;
+    expect(limit()).toMatch(/^Limit reached: Current week \(Opus\)\. Resets .* \(in 1h 5m\)$/);
+    await act(async () => void vi.advanceTimersByTime(60_000));
+    expect(limit()).toMatch(/\(in 1h 4m\)$/);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("reset text: time today, weekday otherwise, relative part", () => {
