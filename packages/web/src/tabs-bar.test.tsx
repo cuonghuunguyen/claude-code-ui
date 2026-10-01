@@ -177,3 +177,8 @@ it("a tab with no transcript yet does not rename on double click", async () => {
   await act(async () => void tab("c").querySelector('[role="tab"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
   expect(onAction).not.toHaveBeenCalled();
 });
+
+it("session tab buttons show the pointer cursor", async () => {
+  const { tab } = await render();
+  for (const id of ["a", "c", NEW_TAB]) expect(tab(id).querySelector('[role="tab"]')!.className).toMatch(/(^|\s)cursor-pointer(\s|$)/);
+});

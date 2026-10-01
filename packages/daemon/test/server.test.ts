@@ -774,6 +774,48 @@ describe("daemon", () => {
     }
   });
 
+  it("a delete while a restore of the same session is in flight waits for it; the session does not come back", async () => {
+    const id = "6c2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const cwd = join(webRoot, "proj");
+    mkdirSync(cwd, { recursive: true });
+    let transcripts = [{ sessionId: id, summary: "fix the bug", lastModified: 1000, cwd }];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: permissionQuery as never,
+      history: {
+        listSessions: (async () => transcripts) as never,
+        getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,
+        getSessionMessages: (async () => {
+          await gate;
+          return history;
+        }) as never,
+        deleteSession: (async () => {
+          transcripts = [];
+        }) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const p = (d.address() as AddressInfo).port;
+    try {
+      const [a, b] = await Promise.all([client(p), client(p)]);
+      const subscribed = b.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await new Promise((r) => setTimeout(r, 20));
+      const deleted = a.request({ type: "session.delete", sessionId: id });
+      await new Promise((r) => setTimeout(r, 20));
+      release();
+      expect(await deleted).toMatchObject({ type: "reply" });
+      await subscribed;
+      const list = (await b.request({ type: "session.list" })) as { result: { sessions: unknown[] } };
+      expect(list.result.sessions).toEqual([]);
+    } finally {
+      d.close();
+    }
+  });
+
   it("previews and runs a rewind over WebSocket; bad mode and unknown message are errors", async () => {
     const c = await client();
     const { result } = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };

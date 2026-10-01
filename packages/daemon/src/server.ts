@@ -478,6 +478,8 @@ export function createDaemon(opts: {
           return reply({});
         }
         case "session.delete": {
+          // A restore already in flight would put the session back after the delete; let it finish, then close it below.
+          await restoring.get(msg.sessionId);
           const at = await locate(msg.sessionId);
           if (!at) return fail("unknown_session", `no session ${msg.sessionId}`);
           const state = at.live?.info().state;

@@ -237,7 +237,7 @@ function Tab({
       title={[STATUS_LABEL[s] ? `${t.title} (${STATUS_LABEL[s]})` : t.title, t.cwd].filter(Boolean).join("\n")}
     >
       {renaming ? (
-        <div className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 pr-1 pl-1.5">
+        <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
           <TabIcon s={s} cwd={t.cwd} />
           <RenameInput title={t.title} onDone={onRenamed} />
         </div>
@@ -248,7 +248,7 @@ function Tab({
           tabIndex={focusable ? 0 : -1}
           aria-label={STATUS_LABEL[s] ? `${t.title}, ${STATUS_LABEL[s]}` : undefined}
           className={cn(
-            "flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+            "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
             active ? "text-foreground" : "text-muted-foreground",
           )}
           onClick={() => onSelect(id)}
