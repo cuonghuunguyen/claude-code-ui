@@ -4,24 +4,10 @@ import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import type { ToolUIPart } from "ai";
 import { useMemo, useState, type ReactNode } from "react";
-import {
-  BotIcon,
-  CheckCircle2Icon,
-  CircleDotIcon,
-  CircleIcon,
-  FilePenIcon,
-  FileTextIcon,
-  GlobeIcon,
-  ListTodoIcon,
-  SearchIcon,
-  TerminalIcon,
-  WrenchIcon,
-  type LucideIcon,
-} from "lucide-react";
+import { CheckCircle2Icon, CircleDotIcon, CircleIcon, ListTodoIcon } from "lucide-react";
 import { Task, TaskContent, TaskItem, TaskTrigger } from "@/components/ai-elements/task";
-import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
-import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
-import { Badge } from "@/components/ui/badge";
+import { Shimmer } from "@/components/ai-elements/shimmer";
+import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark } from "@/components/ai-elements/tool";
 import { CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { parseAnsi } from "./ansi.ts";
@@ -36,21 +22,6 @@ const STATE: Record<ToolStatus, ToolUIPart["state"]> = {
   done: "output-available",
   error: "output-error",
   denied: "output-denied",
-};
-
-const ICONS: Record<string, LucideIcon> = {
-  Read: FileTextIcon,
-  Grep: SearchIcon,
-  Glob: SearchIcon,
-  Bash: TerminalIcon,
-  Edit: FilePenIcon,
-  Write: FilePenIcon,
-  NotebookEdit: FilePenIcon,
-  WebFetch: GlobeIcon,
-  WebSearch: GlobeIcon,
-  Task: BotIcon,
-  Agent: BotIcon,
-  TodoWrite: ListTodoIcon,
 };
 
 const text = (output: unknown) => (typeof output === "string" ? output : JSON.stringify(output, null, 2));
@@ -81,7 +52,6 @@ function useExpanded(id: string, force = false) {
 
 /** `awaiting`: the call waits for a permission answer, so the card is held open. */
 export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: ToolResult; awaiting?: boolean }) {
-  const Icon = ICONS[call.tool] ?? WrenchIcon;
   const range = call.tool === "Read" ? readRange(call.input, result?.output) : "";
   const stats = useMemo(() => diffStats(call.tool, call.input), [call.tool, call.input]);
   return (
@@ -89,7 +59,7 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
       <ToolHeader
         type="dynamic-tool"
         toolName={call.tool}
-        state={STATE[call.status]}
+        state={awaiting ? "approval-requested" : STATE[call.status]}
         // Next to the tool name, which is never truncated like the summary.
         title={call.editedByUser ? `${call.tool} · edited by you` : undefined}
         summary={[toolSummary(call.input), range].filter(Boolean).join(" · ")}
@@ -101,7 +71,6 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
             </span>
           )
         }
-        icon={<Icon className="size-4 shrink-0 text-muted-foreground" />}
       />
       <ToolContent>
         <ToolBody call={call} result={result} />
@@ -121,8 +90,8 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
   switch (call.tool) {
     case "Bash":
       return (
-        <div className="space-y-2">
-          <pre data-testid="bash-command" className="overflow-x-auto whitespace-pre-wrap font-mono text-xs">
+        <div className="max-h-60 space-y-2 overflow-auto rounded-md border p-3">
+          <pre data-testid="bash-command" className="whitespace-pre-wrap font-mono text-xs">
             <span className="select-none text-muted-foreground">$ </span>
             {field(call.input, "command")}
           </pre>
@@ -170,17 +139,12 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
   }
 }
 
-/** Unified diff built from the Edit/Write input; the JSON parameters until the input has streamed in. */
+/** Unified diff built from the Edit/Write input; the JSON parameters until the input has streamed in. The result text only on error. */
 function EditDiff({ call, result }: { call: ToolCall; result?: ToolResult }) {
   return (
     <>
       <InputDiff tool={call.tool} input={call.input} fallback={<ToolInput input={call.input} />} />
-      {result && (
-        <ToolOutput
-          output={result.isError ? undefined : result.output}
-          errorText={result.isError ? text(result.output) : undefined}
-        />
-      )}
+      {result?.isError && <ToolOutput output={undefined} errorText={text(result.output)} />}
     </>
   );
 }
@@ -228,6 +192,9 @@ function Lines({ text, error, ansi }: { text: string; error: boolean; ansi: bool
   );
 }
 
+const count = (n: number, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : "");
+
+/** Consecutive read/search calls as one row: "Exploring"/"Explored" and the counts (OpenCode context group). */
 export function ContextGroup({
   calls,
   result,
@@ -239,34 +206,21 @@ export function ContextGroup({
 }) {
   const failed = calls.some((c) => c.status === "error" || c.status === "denied");
   const busy = calls.some((c) => c.status === "pending" || c.status === "running");
+  const reads = calls.filter((c) => c.tool === "Read").length;
+  const counts = [count(reads, "read", "reads"), count(calls.length - reads, "search", "searches")].filter(Boolean).join(", ");
   return (
     <Tool data-testid="context-group" {...useExpanded(`context:${calls[0]!.id}`, calls.some(awaiting))}>
-      <CollapsibleTrigger className="flex w-full items-center gap-2 p-3">
-        <SearchIcon className="size-4 text-muted-foreground" />
-        <span className="font-medium text-sm">Context</span>
-        <Badge className="rounded-full text-xs" variant="secondary">
-          {calls.length}
-        </Badge>
-        <span className="truncate text-muted-foreground text-xs">
-          {[...new Set(calls.map((c) => c.tool))].join(", ")}
-          {busy ? " · running" : failed ? " · some failed" : ""}
-        </span>
+      <CollapsibleTrigger className="flex min-h-6 w-full items-center gap-2 rounded-md text-left text-sm hover:bg-muted/50">
+        {busy ? <Shimmer as="span" className="font-medium">Exploring</Shimmer> : <span className="font-medium">Explored</span>}
+        <span className="truncate text-muted-foreground">{counts}</span>
+        {failed && <ToolStatusMark state="output-error" />}
       </CollapsibleTrigger>
-      <ToolContent className="space-y-2 p-2">
+      <ToolContent className="space-y-1 pl-3">
         {calls.map((c) => (
           <ToolCard key={c.id} call={c} result={result(c)} awaiting={awaiting(c)} />
         ))}
       </ToolContent>
     </Tool>
-  );
-}
-
-export function Thinking({ part }: { part: Extract<Part, { type: "thinking" }> }) {
-  return (
-    <Reasoning isStreaming={part.streaming} defaultOpen={false} data-testid="thinking">
-      <ReasoningTrigger />
-      <ReasoningContent>{part.text}</ReasoningContent>
-    </Reasoning>
   );
 }
 
@@ -281,9 +235,8 @@ export function SubagentGroup({ part, result, awaiting, children }: { part: Suba
         toolName="Agent"
         state={STATE[part.status]}
         summary={part.description}
-        icon={<BotIcon className="size-4 shrink-0 text-muted-foreground" />}
       />
-      <ToolContent className="space-y-2 border-l-2 p-2 pl-3">
+      <ToolContent className="space-y-2 border-l-2 pl-3">
         {children}
         {result && (
           <ToolOutput

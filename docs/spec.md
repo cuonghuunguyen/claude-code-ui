@@ -133,12 +133,12 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 
 | Part type | Key fields | Rendered as |
 | --- | --- | --- |
-| `user_text` | `id`, `text`, `images[]` | User bubble, with rewind action |
+| `user_text` | `id`, `text`, `images[]` | User bubble, with copy and rewind actions (shown on hover or focus) |
 | `assistant_text` | `id`, `text`, `streaming` | Markdown, streamed at a steady pace |
-| `thinking` | `id`, `text` | Collapsed reasoning block |
+| `thinking` | `id`, `text` | Not shown; a "Thinking" row shows while the turn runs |
 | `tool_call` | `toolUseId`, `tool`, `input`, `status` (pending / running / done / error / denied) | Tool card, by tool type |
 | `tool_result` | `toolUseId`, `output`, `isError` | Merged into its tool card |
-| `permission_request` | `requestId`, `toolUseId`, `tool`, `input`, `suggestions[]`, `settled`, `decision?` | Permission panel |
+| `permission_request` | `requestId`, `toolUseId`, `tool`, `input`, `suggestions[]`, `settled`, `decision?` | Permission panel; in the timeline its tool card is held expanded with status "Awaiting approval" |
 | `question` | `requestId`, `toolUseId`, `questions[]`, `settled`, `answers?` (absent = cancelled) | Question panel |
 | `todo_update` | `items[]` (content, status, activeForm) | Pinned todo list |
 | `subagent` | `id`, `description`, `status`; child parts carry `parentId` = `id` | Nested, collapsible group |
@@ -172,8 +172,10 @@ React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 
 ### Session view UX (from OpenCode)
 
-- A pending permission request or question replaces the prompt box (panel), and is also marked in the timeline.
-- Consecutive read/search tool calls merge into one "context" group with a count.
+- A pending permission request or question replaces the prompt box (panel), and is also marked in the timeline (permission: its tool card; no separate approval row).
+- Consecutive read/search tool calls merge into one "context" group: one row "Explored" ("Exploring" while running) with "N reads, N searches".
+- A tool card is a borderless row: tool name, muted summary, `+N -N` for edits, a status icon (label only for awaiting approval, error, denied), chevron. Expanded Bash: `$ command` and output in one bordered box; expanded Edit/Write: the diff, result text only on error.
+- CLI text that is no user input (synthetic or meta user messages, e.g. the "no visible output" nudge) is not shown.
 - Every tool card, context group and subagent group renders collapsed, live and in a restored transcript; the collapsed header still tells what happened: tool name, summary (command, path, pattern), status, and `+N -N` line counts for edits. A card whose call waits for a permission answer is held expanded. Expand state is per card and survives re-renders and regrouping.
 - Streamed text is revealed at a steady pace; incomplete markdown is repaired while streaming.
 - Auto-scroll only while at the bottom.

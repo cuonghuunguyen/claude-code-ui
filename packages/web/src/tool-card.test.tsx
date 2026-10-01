@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ToolCall } from "./store.ts";
-import { ContextGroup, SubagentGroup, Thinking, TodoList, ToolBody, ToolCard } from "./tool-card.tsx";
+import { ContextGroup, SubagentGroup, TodoList, ToolBody, ToolCard } from "./tool-card.tsx";
 
 const call = (status: ToolCall["status"], tool = "Bash"): ToolCall => ({
   type: "tool_call",
@@ -115,21 +115,20 @@ describe("other tools", () => {
 });
 
 describe("ContextGroup", () => {
-  it("shows the call count and tool names", () => {
-    const calls = [call("done", "Read"), { ...call("done", "Grep"), id: "t2" }, { ...call("done", "Read"), id: "t3" }];
-    const html = renderToStaticMarkup(<ContextGroup calls={calls} result={() => undefined} />);
-    expect(html).toMatch(/Context<\/span><span[^>]*>3<\/span>/);
-    expect(html).toContain("Read, Grep");
-  });
-});
+  const calls = [call("done", "Read"), { ...call("done", "Grep"), id: "t2" }, { ...call("done", "Read"), id: "t3" }];
 
-describe("Thinking", () => {
-  it("renders collapsed by default, even while streaming", () => {
-    for (const streaming of [false, true]) {
-      const html = renderToStaticMarkup(<Thinking part={{ type: "thinking", id: "k", text: "secret plan", streaming }} />);
-      expect(html).toContain('data-testid="thinking"');
-      expect(html).not.toContain("secret plan");
-    }
+  it("is one row: Explored and the read/search counts", () => {
+    const html = renderToStaticMarkup(<ContextGroup calls={calls} result={() => undefined} />);
+    expect(html).toContain("Explored");
+    expect(html).toContain("2 reads, 1 search");
+    expect(html).not.toContain("Error");
+  });
+
+  it("says Exploring while a call runs, and flags a failed call", () => {
+    expect(renderToStaticMarkup(<ContextGroup calls={[...calls, { ...call("running", "Glob"), id: "t4" }]} result={() => undefined} />)).toContain(
+      "Exploring",
+    );
+    expect(renderToStaticMarkup(<ContextGroup calls={[...calls, { ...call("error", "Glob"), id: "t4" }]} result={() => undefined} />)).toContain("Error");
   });
 });
 
@@ -147,6 +146,12 @@ describe("ToolCard edits", () => {
     const html = renderToStaticMarkup(<ToolBody call={{ ...edit("Edit", {}), status: "pending" }} />);
     expect(html).not.toContain("edit-diff");
     expect(html).toContain("Parameters");
+  });
+
+  it("Edit body shows the result text only on error", () => {
+    const input = { file_path: "/p/a.ts", old_string: "b = 2", new_string: "b = 3" };
+    expect(renderToStaticMarkup(<ToolBody call={edit("Edit", input)} result={result("The file was updated")} />)).not.toContain("was updated");
+    expect(renderToStaticMarkup(<ToolBody call={edit("Edit", input)} result={result("String not found", true)} />)).toContain("String not found");
   });
 
   it("collapsed Edit header shows path and +/- line counts", () => {
@@ -178,10 +183,11 @@ describe("collapsed by default", () => {
     expect(html).toContain('aria-expanded="false"');
   });
 
-  it("a card with a pending permission request is expanded", () => {
+  it("a card with a pending permission request is expanded and says it awaits approval", () => {
     const html = renderToStaticMarkup(<ToolCard call={{ ...done("Bash", { command: "rm -rf x" }), status: "running" }} awaiting />);
     expect(html).toContain("bash-command");
     expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("Awaiting approval");
   });
 
   it("a context group holding the awaited call is expanded", () => {

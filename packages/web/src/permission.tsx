@@ -1,7 +1,6 @@
 // Permission panel (replaces the prompt box) and its timeline marker (docs/spec.md "Permission bridge").
 import { useState, type FormEvent } from "react";
 import type { PermissionUpdate } from "@claude-ui/protocol";
-import { ShieldAlertIcon, ShieldCheckIcon, ShieldXIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { PermissionRequest } from "./store.ts";
 import { InputDiff } from "./tool-card.tsx";
@@ -99,28 +98,5 @@ export function PermissionPanel({ part, onRespond }: { part: PermissionRequest; 
         </Button>
       </form>
     </section>
-  );
-}
-
-const DECISION = {
-  allow: { label: "Allowed", Icon: ShieldCheckIcon, className: "text-green-600" },
-  allow_always: { label: "Always allowed", Icon: ShieldCheckIcon, className: "text-green-600" },
-  deny: { label: "Denied", Icon: ShieldXIcon, className: "text-destructive" },
-  cancelled: { label: "Cancelled", Icon: ShieldXIcon, className: "text-muted-foreground" },
-};
-
-export function PermissionMarker({ part }: { part: PermissionRequest }) {
-  const d = part.settled && part.decision ? DECISION[part.decision] : { label: "Waiting for approval", Icon: ShieldAlertIcon, className: "text-amber-600" };
-  const rule = part.decision === "allow_always" && part.suggestions.length ? `: ${part.suggestions.map(ruleLabel).join(", ")}` : "";
-  return (
-    <div className="flex items-center gap-2 text-muted-foreground text-xs" data-testid="permission-marker" data-settled={part.settled}>
-      <d.Icon className={`size-4 shrink-0 ${d.className}`} />
-      <span className="truncate">
-        {part.tool} · {d.label}
-        {part.editedByUser ? " · edited by you" : ""}
-        {rule}
-        {part.message ? ` · “${part.message}”` : ""}
-      </span>
-    </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
-import { RotateCcwIcon, SquareIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, RotateCcwIcon, SquareIcon } from "lucide-react";
 import type {
   CreateResult,
   Event,
@@ -19,6 +19,7 @@ import type {
   SubscribeResult,
 } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
+import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type RequestError } from "./client.ts";
@@ -30,10 +31,10 @@ import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
 import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
-import { PermissionMarker, PermissionPanel, type PermissionAnswer } from "./permission.tsx";
+import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
-import { ContextGroup, SubagentGroup, Thinking, TodoList, ToolCard } from "./tool-card.tsx";
+import { ContextGroup, SubagentGroup, TodoList, ToolCard } from "./tool-card.tsx";
 import { FilesPanel } from "./files-panel.tsx";
 
 type Client = ReturnType<typeof connect>;
@@ -746,7 +747,9 @@ export function SessionPane({
             ) : item.part.type === "user_text" ? (
               <div key={item.part.id} className="group flex flex-col gap-1" data-testid="user-message">
                 <PartView part={item.part} view={view} />
-                <MessageActions className="ml-auto opacity-60 group-hover:opacity-100">
+                {/* Shown on hover or keyboard focus (OpenCode user bubble). */}
+                <MessageActions className="ml-auto opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+                  <CopyAction text={item.part.text} />
                   {/* No tooltip prop: its trigger renders a button around this button. */}
                   <MessageAction
                     title="Rewind"
@@ -776,6 +779,14 @@ export function SessionPane({
             ) : (
               <PartView key={item.part.id} part={item.part} view={view} />
             ),
+          )}
+          {/* Reasoning text stays hidden (OpenCode default); this row shows the turn is working. */}
+          {view.state === "running" && (
+            <div data-testid="thinking">
+              <Shimmer as="span" className="font-medium text-sm">
+                Thinking
+              </Shimmer>
+            </div>
           )}
         </ConversationContent>
         <ConversationScrollButton />
@@ -888,6 +899,19 @@ function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) 
   );
 }
 
+function CopyAction({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => navigator.clipboard.writeText(text).then(() => {
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  });
+  return (
+    <MessageAction title="Copy" label="Copy message" onClick={copy}>
+      {copied ? <CheckIcon /> : <CopyIcon />}
+    </MessageAction>
+  );
+}
+
 const resultOf = (view: SessionView, call: { toolUseId: string }) => {
   const p = view.parts.get(`${call.toolUseId}:result`);
   return p?.type === "tool_result" ? p : undefined;
@@ -962,12 +986,8 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
       );
     case "assistant_text":
       return <AssistantText text={part.text} streaming={part.streaming} />;
-    case "thinking":
-      return <Thinking part={part} />;
     case "tool_call":
       return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} />;
-    case "permission_request":
-      return <PermissionMarker part={part} />;
     case "subagent":
       return (
         <SubagentGroup part={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.id)}>

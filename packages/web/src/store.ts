@@ -52,17 +52,20 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
 export const withEpoch = (s: SessionView, logEpoch: string): SessionView =>
   s.logEpoch === logEpoch ? s : { ...emptySession(), logEpoch };
 
+const HIDDEN = new Set<Part["type"]>(["tool_result", "thinking", "permission_request"]);
+
 const isContextCall = (p: Part): p is ToolCall => p.type === "tool_call" && CONTEXT_TOOLS.has(p.tool);
 
 /**
- * Render order: tool_result parts fold into their tool card; consecutive read/search calls form one context group.
+ * Render order: tool_result parts fold into their tool card; thinking and permission_request parts are not shown; consecutive read/search calls form one context group.
  * Top level by default; with `parentId`, the child parts of that subagent.
  */
 export function timeline(s: SessionView, parentId?: string): TimelineItem[] {
   const items: TimelineItem[] = [];
   for (const id of s.order) {
     const part = s.parts.get(id)!;
-    if (part.type === "tool_result" || part.parentId !== parentId) continue;
+    // Results fold into their card; reasoning is hidden; a permission request is marked by its tool card.
+    if (HIDDEN.has(part.type) || part.parentId !== parentId) continue;
     const prev = items.at(-1);
     if (isContextCall(part) && prev?.kind === "context") prev.calls.push(part);
     else if (isContextCall(part) && prev?.kind === "part" && isContextCall(prev.part))

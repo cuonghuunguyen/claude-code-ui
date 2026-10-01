@@ -104,3 +104,21 @@ it("a card with a pending permission request is expanded, and collapses again on
   await render(view([bash, permission("b5"), permission("b5", true)]));
   expect(expanded(cards()[0]!)).toBe(false);
 });
+
+it("reasoning text is hidden; a Thinking row shows only while the turn runs", async () => {
+  const parts: Part[] = [
+    { type: "thinking", id: "k1", text: "secret plan", streaming: true },
+    { type: "session_state", id: "st", state: "running" },
+  ];
+  await render(view(parts));
+  expect(el.textContent).not.toContain("secret plan");
+  expect(el.querySelector('[data-testid="thinking"]')?.textContent).toBe("Thinking");
+  await render(view([...parts, { type: "session_state", id: "st", state: "idle" }]));
+  expect(el.querySelector('[data-testid="thinking"]')).toBeNull();
+});
+
+it("a user message has Copy and Rewind actions", async () => {
+  await render(view([{ type: "user_text", id: "u1", text: "hello", images: [] }]));
+  const labels = [...el.querySelectorAll('[data-testid="user-message"] button')].map((b) => b.textContent);
+  expect(labels).toEqual(["Copy message", "Rewind to before this message"]);
+});

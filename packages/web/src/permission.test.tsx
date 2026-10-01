@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Event, Part, PermissionUpdate } from "@claude-ui/protocol";
-import { editedInput, PermissionMarker, PermissionPanel, ruleLabel } from "./permission.tsx";
+import { editedInput, PermissionPanel, ruleLabel } from "./permission.tsx";
 import { applyEvent, emptySession, pendingPermission, type PermissionRequest } from "./store.ts";
 
 const bash: PermissionUpdate = { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "npm test:*" }], behavior: "allow", destination: "localSettings" };
@@ -65,19 +65,6 @@ describe("edit before accept", () => {
     expect(editedInput(write, "y\n")).toEqual({ file_path: "/w/b.ts", content: "y\n" });
     expect(editedInput(edit, "b")).toBeUndefined();
     expect(editedInput(request(), "anything")).toBeUndefined();
-  });
-});
-
-describe("PermissionMarker", () => {
-  it.each([
-    [request(), "Waiting for approval"],
-    [request({ settled: true, decision: "allow" }), "Allowed"],
-    [request({ settled: true, decision: "allow_always" }), "Always allowed"],
-    [request({ settled: true, decision: "deny", message: "use pnpm" }), "use pnpm"],
-    [request({ settled: true, decision: "cancelled" }), "Cancelled"],
-    [request({ settled: true, decision: "allow", editedByUser: true }), "Allowed · edited by you"],
-  ])("shows the request state in the timeline", (part, label) => {
-    expect(renderToStaticMarkup(<PermissionMarker part={part} />)).toContain(label);
   });
 });
 

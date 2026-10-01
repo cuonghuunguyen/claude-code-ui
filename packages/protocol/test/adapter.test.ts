@@ -201,6 +201,22 @@ describe("adapter on known SDK noise", () => {
   });
 });
 
+describe("adapter on the CLI's synthetic nudge (SDK 0.3.285)", () => {
+  const nudge = "[Your previous response had no visible output. Please continue and produce a user-visible response.]";
+
+  it("drops it: it is no user input", () => {
+    const plain = { type: "user", uuid: "y1", message: { role: "user", content: nudge }, parent_tool_use_id: null };
+    const flagged = { type: "user", uuid: "y2", isSynthetic: true, message: { role: "user", content: [{ type: "text", text: "other CLI text" }] }, parent_tool_use_id: null };
+    const meta = { ...plain, uuid: "y3", isMeta: true, message: { role: "user", content: "skill body" } };
+    expect(run([plain, flagged, meta])).toEqual([]);
+  });
+
+  it("keeps the tool results of a synthetic message", () => {
+    const m = { type: "user", uuid: "y4", isSynthetic: true, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] }, parent_tool_use_id: null };
+    expect(run([m]).map((p) => p.type)).toContain("tool_result");
+  });
+});
+
 describe("adapter on CLI markup in a transcript (getSessionMessages, SDK 0.3.285)", () => {
   const user = (uuid: string, content: string) => ({ type: "user", uuid, message: { role: "user", content }, parent_tool_use_id: null });
   const texts = (parts: Part[]) => parts.map((p) => (p.type === "user_text" ? p.text : p.type));
