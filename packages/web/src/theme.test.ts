@@ -55,6 +55,10 @@ for (const theme of [":root", ".dark"]) {
       for (const bg of SURFACES) expect(contrast(solid("faint"), solid(bg))).toBeGreaterThanOrEqual(3);
     });
 
+    it("context ring progress reaches 3:1 on every surface and on its track", () => {
+      for (const bg of [...SURFACES, "ring-track"]) expect(contrast(solid("ring-progress"), solid(bg)), bg).toBeGreaterThanOrEqual(3);
+    });
+
     it.each(AVATAR_COLORS)("avatar %s letter reaches 4.5:1", (c) => {
       expect(contrast(solid(`avatar-${c}-fg`), solid(`avatar-${c}`))).toBeGreaterThanOrEqual(4.5);
     });

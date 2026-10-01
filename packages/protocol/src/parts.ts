@@ -31,9 +31,9 @@ export type TokenUsage = {
 
 /**
  * Claude Code `/context` numbers (`getContextUsage()`): `totalTokens` of the `maxTokens` window, `percentage` rounded.
- * `categories`: what fills the window, deferred ones (not loaded) left out; "Autocompact buffer" and "Free space" are not in `totalTokens`.
+ * `categories`: what fills the window, deferred ones (not loaded) left out; `kind` `buffer` (autocompact reserve) and `free` are not in `totalTokens`.
  */
-export type ContextUsage = { totalTokens: number; maxTokens: number; percentage: number; categories: { name: string; tokens: number }[] };
+export type ContextUsage = { totalTokens: number; maxTokens: number; percentage: number; categories: { name: string; tokens: number; kind: "used" | "free" | "buffer" }[] };
 
 /** A slash command or skill; invoked by sending `/name args` as prompt text. */
 export type SlashCommand = { name: string; description: string; argumentHint: string; aliases?: string[] };

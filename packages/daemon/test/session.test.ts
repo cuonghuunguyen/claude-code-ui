@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
 import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
@@ -85,8 +86,8 @@ describe("Session", () => {
     const id = "0b5f1d5e-8a8e-4c9b-9f5e-3c1f2a4b5c6d";
     const before = calls.length;
     const s = Session.restore(id, "/tmp", history, { query: fakeQuery as never });
-    // No session query until a prompt; only the context usage query, resumed on the transcript.
-    expect(calls.slice(before)).toEqual([expect.objectContaining({ resume: id, cwd: "/tmp" })]);
+    // No query until a prompt; the queued context usage query is dropped once the prompt starts the real one.
+    expect(calls.slice(before)).toEqual([]);
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
     const parts = events.map((e) => e.part);
@@ -100,6 +101,7 @@ describe("Session", () => {
     expect(calls.at(-1)).toMatchObject({ resume: id, cwd: "/tmp" });
     expect(calls.at(-1)).not.toHaveProperty("sessionId");
     await until(events, (e) => e.part.type === "turn_result");
+    expect(calls.slice(before)).toHaveLength(1);
     // The resumed query's first total includes turns of the earlier daemon run: no per-turn cost for it.
     expect(events.find((e) => e.part.type === "turn_result")!.part).not.toHaveProperty("costUsd", expect.anything());
   });
@@ -666,10 +668,10 @@ describe("Session rewind", () => {
 
 describe("Session context usage", () => {
   const usagePart = { type: "context_usage", id: "context_usage", usage: { totalTokens: 25815, maxTokens: 1000000, percentage: 3, categories: [
-    { name: "System tools", tokens: 5161 },
-    { name: "Messages", tokens: 20654 },
-    { name: "Autocompact buffer", tokens: 33000 },
-    { name: "Free space", tokens: 941185 },
+    { name: "System tools", tokens: 5161, kind: "used" },
+    { name: "Messages", tokens: 20654, kind: "used" },
+    { name: "Autocompact buffer", tokens: 33000, kind: "buffer" },
+    { name: "Free space", tokens: 941185, kind: "free" },
   ] } };
 
   it("logs a context_usage part after each turn, from the live query, without deferred categories", async () => {
@@ -718,6 +720,50 @@ describe("Session context usage", () => {
     expect(usageCalls.at(-1)!.options).toMatchObject({ resume: id, cwd: "/tmp", model: "haiku" });
     expect(usageCalls.at(-1)!.options).not.toHaveProperty("canUseTool");
     await vi.waitFor(() => expect(closed).toBe(closedBefore + 1));
+  });
+
+  it("restored sessions subscribed at once run their throwaway usage queries one at a time, each closed (FIX-LEAK)", async () => {
+    let alive = 0;
+    let maxAlive = 0;
+    let spawned = 0;
+    let closes = 0;
+    const slow = ({ prompt }: { prompt: AsyncIterable<unknown> }) => (
+      spawned++,
+      (maxAlive = Math.max(maxAlive, ++alive)),
+      Object.assign((async function* () { for await (const _ of prompt); })(), {
+        getContextUsage: () => new Promise((r) => setTimeout(() => r(fakeUsage), 5)),
+        close: () => (alive--, closes++),
+      })
+    );
+    const all = Array.from({ length: 5 }, () => Session.restore(randomUUID(), "/tmp", history, { query: slow as never }));
+    const got = all.map(() => [] as Event[]);
+    all.forEach((s, i) => s.subscribe(0, (e) => got[i]!.push(e)));
+    await vi.waitFor(() => expect(got.every((ev) => ev.some((e) => e.part.type === "context_usage"))).toBe(true));
+    expect(maxAlive).toBe(1);
+    expect(closes).toBe(5);
+  });
+
+  it("a queued throwaway usage query is dropped when the session got a real query meanwhile", async () => {
+    let spawnedThrowaway = 0;
+    let release!: () => void;
+    const blocker = ({ prompt }: { prompt: AsyncIterable<unknown> }) =>
+      Object.assign((async function* () { for await (const _ of prompt); })(), {
+        getContextUsage: () => new Promise((r) => (release = () => r(fakeUsage))),
+        close: () => {},
+      });
+    Session.restore(randomUUID(), "/tmp", history, { query: blocker as never });
+    const counting = (args: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) => {
+      if (!args.options?.canUseTool) spawnedThrowaway++;
+      return fakeQuery(args);
+    };
+    const s = Session.restore(randomUUID(), "/tmp", history, { query: counting as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hello");
+    await until(events, (e) => e.part.type === "context_usage");
+    release();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(spawnedThrowaway).toBe(0);
   });
 
   it("refreshes after a model switch: the window size can differ", async () => {

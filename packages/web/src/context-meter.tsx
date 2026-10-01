@@ -6,8 +6,6 @@ const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFracti
 const full = new Intl.NumberFormat("en");
 const share = (tokens: number, max: number) => `${((tokens / max) * 100).toFixed(1)}%`;
 
-// Claude Code /context: these fill the rest of the window; they are not in totalTokens.
-const UNUSED = new Set(["Autocompact buffer", "Free space"]);
 const COLORS = ["green", "orange", "cyan", "purple", "yellow", "pink", "blue", "red"].map((c) => `var(--avatar-${c})`);
 
 /** OpenCode ProgressCircle v2: 14px, stroke 1.5, from 12 o'clock. */
@@ -16,7 +14,7 @@ function Ring({ percent }: { percent: number }) {
   const c = 2 * Math.PI * r;
   return (
     <svg viewBox="0 0 14 14" className="size-3.5 shrink-0 -rotate-90" aria-hidden>
-      <circle cx="7" cy="7" r={r} fill="none" strokeWidth="1.5" className="stroke-border" />
+      <circle cx="7" cy="7" r={r} fill="none" strokeWidth="1.5" className="stroke-ring-track" />
       <circle
         cx="7"
         cy="7"
@@ -25,7 +23,7 @@ function Ring({ percent }: { percent: number }) {
         strokeWidth="1.5"
         strokeDasharray={c}
         strokeDashoffset={c * (1 - Math.min(percent, 100) / 100)}
-        className="stroke-foreground transition-[stroke-dashoffset] duration-350 ease-[cubic-bezier(0.65,0,0.35,1)] motion-reduce:transition-none"
+        className="stroke-ring-progress transition-[stroke-dashoffset] duration-350 ease-[cubic-bezier(0.65,0,0.35,1)] motion-reduce:transition-none"
       />
     </svg>
   );
@@ -34,7 +32,7 @@ function Ring({ percent }: { percent: number }) {
 export function ContextMeter({ usage }: { usage: ContextUsage }) {
   const { totalTokens, maxTokens, percentage, categories } = usage;
   const tokens = `${full.format(totalTokens)} / ${full.format(maxTokens)} tokens · ${percentage}%`;
-  const color = (i: number) => (UNUSED.has(categories[i]!.name) ? "var(--faint)" : COLORS[i % COLORS.length]);
+  const color = (i: number) => (categories[i]!.kind !== "used" ? "var(--faint)" : COLORS[i % COLORS.length]);
   return (
     <Popover.Root>
       <Popover.Trigger
@@ -57,8 +55,9 @@ export function ContextMeter({ usage }: { usage: ContextUsage }) {
             <Popover.Title className="font-medium">Context window</Popover.Title>
             <p className="mt-0.5 text-muted-foreground text-xs tabular-nums">{tokens}</p>
             <div data-testid="context-bar" className="mt-3 flex h-2 overflow-hidden rounded-full bg-secondary" aria-hidden>
+              {/* Buffer and free space fill the rest of the window; they are not in totalTokens. */}
               {categories.map((c, i) =>
-                UNUSED.has(c.name) ? null : <span key={c.name} title={c.name} style={{ width: share(c.tokens, maxTokens), background: color(i) }} />,
+                c.kind !== "used" ? null : <span key={c.name} title={c.name} style={{ width: share(c.tokens, maxTokens), background: color(i) }} />,
               )}
             </div>
             <ul className="mt-3 flex flex-col gap-1.5">

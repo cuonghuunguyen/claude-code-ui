@@ -156,8 +156,8 @@ describe("daemon", () => {
       await c.waitFor((m) => m.type === "event" && m.part.type === "session_state");
       const first = c.inbox.find((m) => m.type === "event") as { seq: number };
       expect(first.seq).toBe(1);
-      // An idle restored session spawns no SDK process until it is prompted.
-      expect(calls.filter((o) => o.resume === id)).toHaveLength(0);
+      // An idle restored session spawns no prompt query until it is prompted (only the throwaway usage query, serialized daemon-wide).
+      expect(calls.filter((o) => o.resume === id && o.canUseTool)).toHaveLength(0);
 
       await c.request({ type: "session.prompt", sessionId: id, text: "third" });
       expect(calls.filter((o) => o.resume === id && o.canUseTool)).toHaveLength(1);

@@ -35,11 +35,12 @@ export const fakeUsage = {
   percentage: 3,
   model: "claude-opus-5-5",
   categories: [
-    { name: "System tools", tokens: 5161, color: "inactive" },
-    { name: "MCP tools (deferred)", tokens: 22172, color: "inactive", isDeferred: true },
-    { name: "Messages", tokens: 20654, color: "purple" },
-    { name: "Autocompact buffer", tokens: 33000, color: "inactive" },
-    { name: "Free space", tokens: 941185, color: "promptBorder" },
+    { name: "System tools", tokens: 5161, color: "inactive", kind: "used" },
+    // Deferred by kind only: classify on kind, never on the English name or the optional isDeferred.
+    { name: "MCP tools", tokens: 22172, color: "inactive", kind: "deferred" },
+    { name: "Messages", tokens: 20654, color: "purple", kind: "used" },
+    { name: "Autocompact buffer", tokens: 33000, color: "inactive", kind: "buffer" },
+    { name: "Free space", tokens: 941185, color: "promptBorder", kind: "free" },
   ],
 };
 /** Options of the query each getContextUsage() call went to, and the call's own options. */

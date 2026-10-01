@@ -415,23 +415,34 @@ export class Session {
   /**
    * Logs a context_usage part from `getContextUsage()`. A restored session not yet resumed asks a throwaway query resumed
    * on its transcript (no prompt: the transcript stays unchanged) and closes it. "summary": no token-count requests.
+   * Throwaway queries run one at a time daemon-wide (a reload subscribes every restored tab at once, FIX-LEAK); a queued one
+   * is dropped when the session got a real query or a newer request meanwhile.
    */
   private async refreshUsage() {
     const request = ++this.usageRequest;
-    const own = this.query;
-    const q =
-      own ??
-      (this.opts.query ?? sdkQuery)({
+    if (this.query) return this.readUsage(this.query, request);
+    const run = throwawayTail.then(async () => {
+      if (this.query || request !== this.usageRequest) return;
+      const q = (this.opts.query ?? sdkQuery)({
         prompt: new InputQueue(),
         options: { resume: this.id, cwd: this.cwd, model: this.model === "default" ? undefined : this.model, settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env) },
       });
+      try {
+        await this.readUsage(q, request);
+      } finally {
+        q.close();
+      }
+    });
+    throwawayTail = run.catch(() => {});
+    return run;
+  }
+
+  private async readUsage(q: Query, request: number) {
     try {
       const u = await q.getContextUsage({ detail: "summary" });
       if (request === this.usageRequest) this.emit({ type: "context_usage", id: "context_usage", usage: contextUsage(u) });
     } catch (err) {
       console.error(`session ${this.id}: context usage failed:`, err);
-    } finally {
-      if (!own) q.close();
     }
   }
 
@@ -462,11 +473,14 @@ export function transcriptModel(history: SessionMessage[]): string | undefined {
   return model;
 }
 
+/** Tail of the daemon-wide queue of throwaway usage queries (refreshUsage()). */
+let throwawayTail: Promise<unknown> = Promise.resolve();
+
 const contextUsage = (u: SDKControlGetContextUsageResponse) => ({
   totalTokens: u.totalTokens,
   maxTokens: u.maxTokens,
   percentage: u.percentage,
-  categories: u.categories.filter((c) => !c.isDeferred).map(({ name, tokens }) => ({ name, tokens })),
+  categories: u.categories.flatMap(({ name, tokens, kind }) => (kind === "deferred" ? [] : [{ name, tokens, kind }])),
 });
 
 /** supportedModels() needs a query; this one gets no prompt and is closed right after the answer. */

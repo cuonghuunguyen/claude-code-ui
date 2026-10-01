@@ -13,10 +13,10 @@ const usage: ContextUsage = {
   maxTokens: 1000000,
   percentage: 3,
   categories: [
-    { name: "System tools", tokens: 5161 },
-    { name: "Messages", tokens: 20654 },
-    { name: "Autocompact buffer", tokens: 33000 },
-    { name: "Free space", tokens: 941185 },
+    { name: "System tools", tokens: 5161, kind: "used" },
+    { name: "Messages", tokens: 20654, kind: "used" },
+    { name: "Autocompact buffer", tokens: 33000, kind: "buffer" },
+    { name: "Free space", tokens: 941185, kind: "free" },
   ],
 };
 
@@ -48,6 +48,20 @@ it("click shows the per-category breakdown: tokens and share of the window, used
   expect(rows).toEqual(["System tools5,1610.5%", "Messages20,6542.1%", "Autocompact buffer33,0003.3%", "Free space941,18594.1%"]);
   // Buffer and free space are not used: no bar segment.
   expect([...pop.querySelectorAll('[data-testid="context-bar"] > span')].map((s) => s.getAttribute("title"))).toEqual(["System tools", "Messages"]);
+});
+
+it("bar classifies categories by SDK kind, not by English name", async () => {
+  const renamed = { ...usage, categories: [{ name: "Messages", tokens: 20654, kind: "used" as const }, { name: "Unused window", tokens: 941185, kind: "free" as const }] };
+  const { el } = await render(renamed);
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="context-meter"]')!.click());
+  expect([...document.querySelectorAll('[data-testid="context-bar"] > span')].map((s) => s.getAttribute("title"))).toEqual(["Messages"]);
+});
+
+it("ring draws track and progress with the OpenCode ring tokens", async () => {
+  const { el } = await render(usage);
+  const [track, progress] = el.querySelectorAll("circle");
+  expect(track!.getAttribute("class")).toContain("stroke-ring-track");
+  expect(progress!.getAttribute("class")).toContain("stroke-ring-progress");
 });
 
 it("follows a new usage (next turn, compaction)", async () => {
