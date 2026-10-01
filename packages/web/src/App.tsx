@@ -39,7 +39,7 @@ import { nextMode, PromptToolbar, type SendState } from "./toolbar.tsx";
 import { choose, matchCommands } from "./commands.ts";
 import { activeMention, insertAtCaret, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
-import { inProject, patchSession } from "./sessions.ts";
+import { inProject, patchSession, projectCwd } from "./sessions.ts";
 import { PlanMeter } from "./plan-meter.tsx";
 import { StatusBar } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
@@ -153,6 +153,8 @@ export function App() {
   const [removing, setRemoving] = useState<string>();
   // Keeps the name while the dialog fades out.
   const lastRemoving = useRef("");
+  // Set on Remove confirm, read by the dialog's final focus.
+  const removed = useRef<string | undefined>(undefined);
   if (removing) lastRemoving.current = removing;
   const paletteOpener = useRef<Element>(null);
   const client = useRef<Client>(undefined);
@@ -160,6 +162,8 @@ export function App() {
   viewsRef.current = views;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+  const listRef = useRef(list);
+  listRef.current = list;
   const requested = useRef(new Set<string>());
   /** Seq of each session's last subscribe reply: events up to it are a replay of known changes, not new ones. */
   const replayedTo = useRef<Record<string, number>>({});
@@ -169,6 +173,9 @@ export function App() {
   async function refreshList() {
     try {
       const { sessions, projects, permissionModes } = await client.current!.request<ListResult>({ type: "session.list" });
+      // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
+      const listed = new Set(sessions.map((s) => s.id));
+      closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
       setList(sessions);
       setProjects(projects);
       if (permissionModes) setNewModes(permissionModes);
@@ -358,6 +365,12 @@ export function App() {
     newSession(cwd);
   }
 
+  function closeTabs(gone: Set<string>) {
+    if (!gone.size) return;
+    setTabs((t) => t.filter((id) => !gone.has(id)));
+    if (gone.has(hashId() ?? "")) open(undefined), history.replaceState(null, "", location.pathname + location.search);
+  }
+
   /** Removes the project from the list (files and transcripts stay) and closes its session tabs. */
   async function removeProject(cwd: string) {
     setError(undefined);
@@ -365,9 +378,7 @@ export function App() {
       await client.current!.request({ type: "project.remove", cwd });
       // Gone at once; the list refresh below scans every transcript and can take seconds.
       setProjects((p) => p.filter((x) => x !== cwd));
-      const gone = new Set(list.filter(inProject(cwd)).map((s) => s.id));
-      setTabs((t) => t.filter((id) => !gone.has(id)));
-      if (activeId && gone.has(activeId)) open(undefined), history.replaceState(null, "", location.pathname + location.search);
+      closeTabs(new Set(list.filter(inProject(cwd)).map((s) => s.id)));
       if (draftCwd === cwd) setDraftCwd(undefined);
       await refreshList();
     } catch (e) {
@@ -577,8 +588,19 @@ export function App() {
         title="Remove project?"
         description={`“${projectName(lastRemoving.current)}” leaves the list. Its files and sessions stay on disk; open the folder again to bring it back.`}
         confirm="Remove"
-        onConfirm={() => (setRemoving(undefined), void removeProject(removing!))}
+        onConfirm={() => (setRemoving(undefined), (removed.current = removing), void removeProject(removing!))}
         onCancel={() => setRemoving(undefined)}
+        // The removed row's button is gone: the next project row, else the previous one, else the prompt box or Open project.
+        finalFocus={() => {
+          const cwd = removed.current;
+          removed.current = undefined;
+          if (cwd === undefined) return true;
+          const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="session-group"]')];
+          const at = rows.findIndex((r) => r.dataset.cwd === cwd);
+          const row = rows[at + 1] ?? rows[at - 1];
+          const prompt = [...document.querySelectorAll<HTMLElement>("textarea")].find((t) => t.offsetParent && !t.closest(`[data-cwd]`));
+          return row?.querySelector<HTMLElement>('[data-testid="group-toggle"]') ?? prompt ?? document.querySelector<HTMLElement>('[data-testid="open-project"]');
+        }}
         testId="remove-project"
       />
       <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">

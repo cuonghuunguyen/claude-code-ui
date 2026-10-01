@@ -136,6 +136,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   testId,
+  finalFocus,
 }: {
   open: boolean;
   title: string;
@@ -145,6 +146,8 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
   testId: string;
+  /** Where focus goes on close (Base UI finalFocus); default: the trigger. */
+  finalFocus?: () => HTMLElement | boolean | null;
 }) {
   return (
     <AlertDialog.Root open={open} onOpenChange={(o) => !o && onCancel()}>
@@ -153,6 +156,7 @@ export function ConfirmDialog({
         <AlertDialog.Popup
           className="-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 flex w-96 max-w-[calc(100vw-2rem)] flex-col gap-4 rounded-2xl bg-popover p-4 text-popover-foreground shadow-floating outline-none"
           onKeyDown={trapTab}
+          finalFocus={finalFocus}
           data-testid={`${testId}-dialog`}
         >
           <div className="flex flex-col gap-1">

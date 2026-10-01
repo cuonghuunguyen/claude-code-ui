@@ -34,11 +34,13 @@ const replies: Record<string, unknown> = {
   "session.rewindPreview": { filesChanged: [], insertions: 0, deletions: 0, conversation: true },
 };
 let emit: (e: unknown) => void = () => {};
+let sessionsChanged: (m: unknown) => void = () => {};
 const sent: { type: string }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
-  connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
+  connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void; onSessionsChanged?: (m: unknown) => void }) => {
     emit = opts.onEvent;
+    sessionsChanged = opts.onSessionsChanged ?? (() => {});
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return { request: async (m: { type: string }) => (sent.push(m), replies[m.type] ?? {}), onFsChanged: () => () => {}, close() {} };
   },
@@ -218,6 +220,37 @@ it("the palette on the new-session tab changes the draft's permission mode, and 
     expect(paletteRow("Bypass permissions")).toBeDefined();
     await act(async () => paletteRow("Plan mode")!.click());
     expect(el.querySelector('[data-testid="new-session-tab"] [data-testid="mode-select"]')?.textContent).toContain("Plan mode");
+  } finally {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+  }
+});
+
+it("after Remove project the focus moves to the next project row, not to the page", async () => {
+  const other: SessionListItem = { ...session, id: "22222222-2222-3333-4444-555555555555", cwd: "/p/other", title: "Other" };
+  replies["session.list"] = { sessions: [session, other], projects: ["/p/demo", "/p/other"] };
+  try {
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    await act(async () => el.querySelector<HTMLElement>('[data-cwd="/p/demo"] [data-testid="project-remove"]')!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-confirm"]')!.click());
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(document.activeElement).toBe(el.querySelector('[data-cwd="/p/other"] [data-testid="group-toggle"]'));
+  } finally {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+  }
+});
+
+it("a project removed by another client closes its open session tabs here", async () => {
+  const tab = () => el.querySelector(`[data-tab-id="${ID}"]`);
+  expect(tab()).not.toBeNull();
+  replies["session.list"] = { sessions: [], projects: [] };
+  try {
+    await act(async () => sessionsChanged({ type: "sessions.changed" }));
+    await act(async () => {});
+    expect(tab()).toBeNull();
+    expect(el.textContent).not.toContain("no longer exists");
   } finally {
     replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
   }
