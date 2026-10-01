@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { groupByCwd, inProject, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
+import { groupByCwd, inProject, loadCollapsed, patchSession, saveCollapsed, timeAgo } from "./sessions.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
   id,
@@ -14,6 +14,17 @@ const item = (id: string, cwd: string, lastActivity: number, title = id, archive
   title,
   lastActivity,
   archived,
+  transcript: true,
+});
+
+describe("patchSession", () => {
+  it("changes only the given session, so an archive shows at once instead of after the list refetch", () => {
+    const list = [item("a", "/p/x", 2), item("b", "/p/x", 1)];
+    const next = patchSession(list, "b", { archived: true });
+    expect(next.map((s) => s.archived)).toEqual([false, true]);
+    expect(next[0]).toBe(list[0]);
+    expect(groupByCwd(next).flatMap((g) => g.sessions.map((s) => s.id))).toEqual(["a"]);
+  });
 });
 
 describe("groupByCwd", () => {

@@ -9,8 +9,8 @@ import { cn } from "@/lib/utils";
 
 export type SessionAction = "rename" | "archive" | "unarchive" | "delete";
 
-/** `busy`: running or needs input; it must be stopped before it can be deleted. */
-export type ActionTarget = { title: string; archived: boolean; busy: boolean };
+/** `busy`: running or needs input; it must be stopped before it can be deleted. `transcript`: false before the first prompt, nothing to rename or archive. */
+export type ActionTarget = { title: string; archived: boolean; busy: boolean; transcript: boolean };
 
 const POPUP =
   "z-50 min-w-40 rounded-lg bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none origin-(--transform-origin) transition-[scale,opacity] duration-100 data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0 motion-reduce:transition-none";
@@ -22,10 +22,10 @@ function Items({ kind, target, onAction }: { kind: "menu" | "context"; target: A
   const Separator = kind === "menu" ? Menu.Separator : ContextMenu.Separator;
   return (
     <>
-      <Item className={ITEM} onClick={() => onAction("rename")} data-testid="action-rename">
+      <Item className={ITEM} disabled={!target.transcript} onClick={() => onAction("rename")} data-testid="action-rename">
         Rename
       </Item>
-      <Item className={ITEM} onClick={() => onAction(target.archived ? "unarchive" : "archive")} data-testid="action-archive">
+      <Item className={ITEM} disabled={!target.transcript} onClick={() => onAction(target.archived ? "unarchive" : "archive")} data-testid="action-archive">
         {target.archived ? "Unarchive" : "Archive"}
       </Item>
       <Separator className="-mx-1 my-1 h-px bg-border" />

@@ -153,6 +153,8 @@ export function createDaemon(opts: {
     },
   });
   const restoring = new Map<string, Promise<Session | undefined>>();
+  // Sessions whose delete is in progress (session.delete).
+  const deleting = new Set<string>();
   const history = { listSessions, getSessionInfo, getSessionMessages, renameSession, tagSession, deleteSession, ...opts.history };
   const projectsDir = opts.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
   const projects = opts.projects ?? createProjects();
@@ -209,11 +211,11 @@ export function createDaemon(opts: {
     for (const t of await transcripts()) {
       if (!t.cwd || !allowed(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title: t.summary, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title: t.summary, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
-      if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false });
+      if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false });
     const all = [...items.values()];
     // An opened project whose directory is gone or left the roots is not listed (its New session would fail).
     const known = projects.list(all).filter((cwd) => allowed(cwd));
@@ -223,6 +225,8 @@ export function createDaemon(opts: {
 
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
   function findSession(id: string): Promise<Session | undefined> {
+    // Its transcript still exists until the delete ends; a restore now would bring the session back.
+    if (deleting.has(id)) return Promise.resolve(undefined);
     const live = sessions.get(id);
     if (live) return Promise.resolve(live);
     // The ID becomes a transcript file name; only a UUID may reach the SDK.
@@ -458,7 +462,8 @@ export function createDaemon(opts: {
         case "session.rename":
         case "session.archive": {
           const title = msg.type === "session.rename" && typeof msg.title === "string" ? msg.title.trim() : "";
-          if (msg.type === "session.rename" && !title) return fail("bad_title", "title must be a non-empty string");
+          // 200: the web title input's maxLength.
+          if (msg.type === "session.rename" && (!title || title.length > 200)) return fail("bad_title", "title must be 1 to 200 characters");
           if (msg.type === "session.archive" && typeof msg.archived !== "boolean") return fail("bad_request", "archived must be a boolean");
           const at = await locate(msg.sessionId);
           if (!at) return fail("unknown_session", `no session ${msg.sessionId}`);
@@ -478,12 +483,15 @@ export function createDaemon(opts: {
           const state = at.live?.info().state;
           if (state === "running" || state === "needs_input") return fail("session_running", "stop the session before deleting it");
           // The CLI exits first: it writes session metadata on exit, which would recreate the transcript. A failed delete keeps the transcript.
+          deleting.add(msg.sessionId);
           sessions.delete(msg.sessionId);
-          await at.live?.close();
           try {
+            await at.live?.close();
             if (at.transcript) await history.deleteSession(msg.sessionId, { dir: at.cwd });
           } catch (e) {
             return fail("delete_failed", (e as Error).message);
+          } finally {
+            deleting.delete(msg.sessionId);
           }
           broadcast({ type: "sessions.changed", deleted: msg.sessionId });
           return reply({});

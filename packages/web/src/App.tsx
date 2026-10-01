@@ -35,7 +35,7 @@ import { nextMode, PromptToolbar, type SendState } from "./toolbar.tsx";
 import { choose, matchCommands } from "./commands.ts";
 import { activeMention, insertAtCaret, insertMention, mentionPath } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
-import { inProject } from "./sessions.ts";
+import { inProject, patchSession } from "./sessions.ts";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
@@ -361,7 +361,9 @@ export function App() {
       setError(undefined);
       if (a === "rename") return setRenaming({ id: sessionId, in: where });
       if (a === "delete") return setDeleting(sessionId);
-      client.current!.request({ type: "session.archive", sessionId, archived: a === "archive" }).catch((e: Error) => setError(e.message));
+      // Shown at once like a rename; a failed archive restores the list.
+      setList((l) => patchSession(l, sessionId, { archived: a === "archive" }));
+      client.current!.request({ type: "session.archive", sessionId, archived: a === "archive" }).catch((e: Error) => (setError(e.message), void refreshList()));
     };
   }
 
@@ -369,7 +371,7 @@ export function App() {
     setRenaming(undefined);
     if (!title) return;
     // Shown at once; a failed rename restores the list title.
-    setList((l) => l.map((s) => (s.id === sessionId ? { ...s, title } : s)));
+    setList((l) => patchSession(l, sessionId, { title }));
     client.current!.request({ type: "session.rename", sessionId, title }).catch((e: Error) => (setError(e.message), void refreshList()));
   }
 
@@ -426,7 +428,7 @@ export function App() {
               const s = sessionOf(id);
               if (id === NEW_TAB) return { title: "New session", unread: false };
               const item = list.find((l) => l.id === id);
-              return { title: item?.title || "Untitled", cwd: s?.cwd, state: views[id]?.state ?? s?.state, unread: unread.has(id), archived: item?.archived };
+              return { title: item?.title || "Untitled", cwd: s?.cwd, state: views[id]?.state ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
             }}
             renaming={renaming?.in === "tab" ? renaming.id : undefined}
             onAction={sessionAction("tab")}

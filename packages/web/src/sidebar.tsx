@@ -80,7 +80,7 @@ export function SessionList({
   return (
     <div className="flex min-h-0 flex-col gap-2">
       {header}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 max-md:gap-2">
         <label className="relative flex min-w-0 flex-1 items-center">
           <SearchIcon className="pointer-events-none absolute left-2 size-4 text-faint" aria-hidden />
           <input
@@ -146,7 +146,7 @@ export function SessionList({
                     const st = state(s);
                     const label = STATE_LABEL[st];
                     const isUnread = unread.has(s.id);
-                    const target = { title: s.title, archived: s.archived, busy: st === "running" || st === "needs_input" };
+                    const target = { title: s.title, archived: s.archived, busy: st === "running" || st === "needs_input", transcript: s.transcript };
                     const act = (a: SessionAction) => onAction(s.id, a);
                     if (renaming === s.id)
                       return (

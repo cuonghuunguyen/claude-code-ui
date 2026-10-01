@@ -485,8 +485,8 @@ describe("daemon", () => {
       const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
       const list = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string }[] } };
       expect(list.result.sessions).toMatchObject([
-        { id: created.result.session.id, cwd: webRoot, state: "idle", model: "default", title: "New session", lastActivity: expect.any(Number), archived: false },
-        { id: inside, cwd, state: "closed", model: "default", title: "fix the bug", lastActivity: 1000, archived: false },
+        { id: created.result.session.id, cwd: webRoot, state: "idle", model: "default", title: "New session", lastActivity: expect.any(Number), archived: false, transcript: false },
+        { id: inside, cwd, state: "closed", model: "default", title: "fix the bug", lastActivity: 1000, archived: false, transcript: true },
       ]);
 
       expect(await c.request({ type: "session.subscribe", sessionId: outside, sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
@@ -702,6 +702,7 @@ describe("daemon", () => {
       const listed = async () => ((await a.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string; archived: boolean }[] } }).result.sessions;
 
       expect(await a.request({ type: "session.rename", sessionId: id, title: "  " })).toMatchObject({ code: "bad_title" });
+      expect(await a.request({ type: "session.rename", sessionId: id, title: "x".repeat(201) })).toMatchObject({ code: "bad_title" });
       expect(await a.request({ type: "session.rename", sessionId: id, title: " Better name " })).toMatchObject({ type: "reply" });
       expect(mutations.at(-1)).toEqual(["rename", id, "Better name", { dir: cwd }]);
       await b.waitFor(() => changes().length === 1);
@@ -730,6 +731,44 @@ describe("daemon", () => {
       await b.waitFor((m) => m.type === "sessions.changed" && m.deleted === id);
       expect((await listed()).map((s) => s.id)).toEqual([live]);
       expect(await a.request({ type: "session.delete", sessionId: id })).toMatchObject({ code: "unknown_session" });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a subscribe while a delete is in progress does not restore the session from its not yet removed transcript", async () => {
+    const id = "5c2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const cwd = join(webRoot, "proj");
+    mkdirSync(cwd, { recursive: true });
+    let transcripts = [{ sessionId: id, summary: "fix the bug", lastModified: 1000, cwd }];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: permissionQuery as never,
+      history: {
+        listSessions: (async () => transcripts) as never,
+        getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,
+        getSessionMessages: (async () => history) as never,
+        deleteSession: (async () => {
+          await gate;
+          transcripts = [];
+        }) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const p = (d.address() as AddressInfo).port;
+    try {
+      const [a, b] = await Promise.all([client(p), client(p)]);
+      const deleted = a.request({ type: "session.delete", sessionId: id });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(await b.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
+      release();
+      expect(await deleted).toMatchObject({ type: "reply" });
+      const list = (await b.request({ type: "session.list" })) as { result: { sessions: unknown[] } };
+      expect(list.result.sessions).toEqual([]);
     } finally {
       d.close();
     }

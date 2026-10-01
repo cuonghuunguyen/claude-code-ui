@@ -19,6 +19,7 @@ const item = (id: string, cwd: string, title: string, minutesAgo: number, state:
   permissionModes: [],
   lastActivity: now - minutesAgo * 60_000,
   archived: false,
+  transcript: true,
 });
 // Interleaved working directories, as the daemon's newest-first list gives them.
 const LIST = [
@@ -192,4 +193,21 @@ it("the renaming row edits the title in place: Enter saves the trimmed title, Es
   expect(input.value).toBe("Old idea");
   await act(async () => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(onRenamed).toHaveBeenLastCalledWith("c", undefined);
+});
+
+it("below md the search box and the archived filter are 8px apart (touch-spacing)", async () => {
+  const { el } = await render();
+  expect(el.querySelector('[data-testid="archived-filter"]')!.parentElement!.className).toMatch(/\bmax-md:gap-2\b/);
+});
+
+it("a session with no transcript yet (never prompted) offers no Rename or Archive: the SDK has nothing to write to", async () => {
+  const { el, onAction } = await render({ list: [...LIST, { ...LIST[2]!, id: "n", title: "New session", transcript: false }] });
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="session-menu"][aria-label="Actions for New session"]')!.click());
+  for (const id of ["action-rename", "action-archive"]) {
+    const item = document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => item.click());
+  }
+  expect(onAction).not.toHaveBeenCalled();
+  expect(document.querySelector('[data-testid="action-delete"]')!.getAttribute("aria-disabled")).toBeNull();
 });

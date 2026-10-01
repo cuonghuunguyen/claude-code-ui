@@ -23,7 +23,8 @@ export type SessionInfo = {
 };
 /** A `session.list` entry: a transcript from `listSessions()` (terminal CLI sessions too) or a session of this daemon run. */
 /** `archived`: hidden from the list unless the archived filter is on (SDK session tag "archived"). */
-export type SessionListItem = SessionInfo & { title: string; lastActivity: number; archived: boolean };
+/** `transcript`: false until the first prompt; such a session cannot be renamed or archived (the SDK has no file to write to). */
+export type SessionListItem = SessionInfo & { title: string; lastActivity: number; archived: boolean; transcript: boolean };
 export type FsEntry = { name: string; path: string; isDir: boolean };
 
 /** Every client message carries a `reqId`; the daemon answers with a `reply` or an `error` with the same `reqId`. */

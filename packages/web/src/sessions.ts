@@ -28,6 +28,11 @@ export function groupByCwd(items: SessionListItem[], query = "", projects?: stri
 const projectCwd = (cwd: string) => cwd.replace(/(.)\/+$/, "$1");
 export const inProject = (cwd: string) => (s: SessionListItem) => projectCwd(s.cwd) === cwd;
 
+/** `list` with one session's fields replaced: an action shows at once, before the daemon's list refetch. */
+export function patchSession(list: SessionListItem[], id: string, patch: Partial<SessionListItem>) {
+  return list.map((s) => (s.id === id ? { ...s, ...patch } : s));
+}
+
 export function timeAgo(ms: number, now = Date.now()) {
   const m = Math.floor((now - ms) / 60_000);
   if (m < 1) return "now";

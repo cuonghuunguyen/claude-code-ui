@@ -171,3 +171,9 @@ it("double click on a tab title asks to rename; the renaming tab edits its title
   await act(async () => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
   expect(onRenamed).toHaveBeenCalledWith("d", "Newer");
 });
+
+it("a tab with no transcript yet does not rename on double click", async () => {
+  const { tab, onAction } = await render({ info: (id) => ({ ...INFO[id]!, transcript: false }) });
+  await act(async () => void tab("c").querySelector('[role="tab"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  expect(onAction).not.toHaveBeenCalled();
+});

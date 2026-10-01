@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { NEW_TAB, avatarColor, projectName, type AvatarColor } from "./tabs.ts";
 import { RenameInput, SessionContextMenu, type SessionAction } from "./session-actions.tsx";
 
-export type TabInfo = { title: string; cwd?: string; state?: SessionState; unread: boolean; archived?: boolean };
+export type TabInfo = { title: string; cwd?: string; state?: SessionState; unread: boolean; archived?: boolean; transcript?: boolean };
 type TabStatus = "new" | "running" | "needs_input" | "unread" | "idle";
 
 const status = (id: string, t: TabInfo): TabStatus =>
@@ -253,7 +253,7 @@ function Tab({
           )}
           onClick={() => onSelect(id)}
           // OpenCode: double click on the title renames.
-          onDoubleClick={() => session && onAction("rename")}
+          onDoubleClick={() => session && t.transcript !== false && onAction("rename")}
         >
           <TabIcon s={s} cwd={t.cwd} />
           <span className="truncate leading-4">{t.title}</span>
@@ -279,7 +279,7 @@ function Tab({
   if (!session) return tab;
   const busy = t.state === "running" || t.state === "needs_input";
   return (
-    <SessionContextMenu target={{ title: t.title, archived: !!t.archived, busy }} onAction={onAction}>
+    <SessionContextMenu target={{ title: t.title, archived: !!t.archived, busy, transcript: t.transcript !== false }} onAction={onAction}>
       {tab}
     </SessionContextMenu>
   );
