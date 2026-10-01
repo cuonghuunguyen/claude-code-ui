@@ -4,6 +4,7 @@ import {
   query as sdkQuery,
   type CanUseTool,
   type ModelInfo,
+  type Options,
   type PermissionResult,
   type PermissionUpdate,
   type Query,
@@ -435,34 +436,24 @@ export class Session {
 
   /**
    * Logs a context_usage part from `getContextUsage()`. A restored session not yet resumed asks a throwaway query resumed
-   * on its transcript and closes it; persistSession: false, else the CLI appends a cost-state line on close and the bumped mtime
-   * moves the session to the top of the list. "summary": no token-count requests.
-   * Throwaway queries run one at a time daemon-wide (a reload subscribes every restored tab at once, FIX-LEAK); a queued one
-   * is dropped when the session got a real query or a newer request meanwhile.
+   * on its transcript; persistSession: false, else the CLI
+   * appends a cost-state line on close and the bumped mtime moves the session to the top of the list. "summary": no
+   * token-count requests. A queued throwaway is dropped when the session got a real query or a newer request meanwhile.
+   * A failed or timed-out read is logged; the meter keeps its last value (none for a restored session).
    */
   private async refreshUsage() {
     const request = ++this.usageRequest;
-    if (this.query) return this.readUsage(this.query, request);
-    const run = throwawayTail.then(async () => {
-      if (this.query || request !== this.usageRequest) return;
-      const q = (this.opts.query ?? sdkQuery)({
-        prompt: new InputQueue(),
-        options: { resume: this.id, persistSession: false, cwd: this.cwd, model: this.model === "default" ? undefined : this.model, settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env) },
-      });
-      try {
-        await this.readUsage(q, request);
-      } finally {
-        q.close();
-      }
-    });
-    throwawayTail = run.catch(() => {});
-    return run;
-  }
-
-  private async readUsage(q: Query, request: number) {
-    try {
+    const read = async (q: Query) => {
       const u = await q.getContextUsage({ detail: "summary" });
       if (request === this.usageRequest) this.emit({ type: "context_usage", id: "context_usage", usage: contextUsage(u) });
+    };
+    try {
+      if (this.query) return await read(this.query);
+      await queued(async () => {
+        if (this.query || request !== this.usageRequest) return;
+        const model = this.model === "default" ? undefined : this.model;
+        await withQuery(read, this.opts.query, { resume: this.id, persistSession: false, cwd: this.cwd, model });
+      });
     } catch (err) {
       console.error(`session ${this.id}: context usage failed:`, err);
     }
@@ -495,8 +486,15 @@ export function transcriptModel(history: SessionMessage[]): string | undefined {
   return model;
 }
 
-/** Tail of the daemon-wide queue of throwaway usage queries (refreshUsage(), queuedQuery()). */
+/** Tail of the daemon-wide queue of throwaway queries: one throwaway CLI at a time (a reload subscribes every restored tab at once, FIX-LEAK). */
 let throwawayTail: Promise<unknown> = Promise.resolve();
+
+/** Runs `task` in the daemon-wide throwaway queue. */
+function queued<T>(task: () => Promise<T>): Promise<T> {
+  const run = throwawayTail.then(task);
+  throwawayTail = run.catch(() => {});
+  return run;
+}
 
 const contextUsage = (u: SDKControlGetContextUsageResponse) => ({
   totalTokens: u.totalTokens,
@@ -505,22 +503,30 @@ const contextUsage = (u: SDKControlGetContextUsageResponse) => ({
   categories: u.categories.flatMap(({ name, tokens, kind }) => (kind === "deferred" ? [] : [{ name, tokens, kind }])),
 });
 
-/** Control requests outside a session (supportedModels(), plan usage) need a query; this one gets no prompt and is closed right after the answer. */
-export async function withQuery<T>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery): Promise<T> {
-  const q = query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env) } });
+/** A throwaway CLI that does not answer within this time is closed (killed) and the request fails. */
+export const THROWAWAY_TIMEOUT_MS = 30_000;
+
+/**
+ * Control requests outside a live query (supportedModels(), plan usage, context usage, commands) need a query; this one
+ * gets no prompt and is closed right after the answer or after THROWAWAY_TIMEOUT_MS. disableAllHooks: viewing a session
+ * must not run the user's hooks (SessionStart fires on every CLI start, resume included; verified with SDK 0.3.285).
+ */
+export async function withQuery<T>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery, options: Options = {}): Promise<T> {
+  const q = query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env), settings: { disableAllHooks: true }, ...options } });
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer from the CLI within ${THROWAWAY_TIMEOUT_MS} ms`)), THROWAWAY_TIMEOUT_MS);
+  });
   try {
-    return await fn(q);
+    return await Promise.race([fn(q), timeout]);
   } finally {
+    clearTimeout(timer);
     q.close();
   }
 }
 
-/** withQuery() in the daemon-wide throwaway queue (refreshUsage()): one throwaway CLI at a time (FIX-LEAK). */
-export function queuedQuery<T>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery): Promise<T> {
-  const run = throwawayTail.then(() => withQuery(fn, query));
-  throwawayTail = run.catch(() => {});
-  return run;
-}
+/** withQuery() in the daemon-wide throwaway queue. */
+export const queuedQuery = <T,>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery): Promise<T> => queued(() => withQuery(fn, query));
 
 export const listModels = (query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> => withQuery((q) => q.supportedModels(), query);
 

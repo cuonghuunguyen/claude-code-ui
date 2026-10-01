@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Event } from "@claude-ui/protocol";
-import { queuedQuery, Session } from "../src/session.ts";
+import { queuedQuery, Session, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
 import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
@@ -747,7 +747,7 @@ describe("Session context usage", () => {
     s.subscribe(0, (e) => events.push(e));
     await until(events, (e) => e.part.type === "context_usage");
     expect(lastPart(events, "context_usage")).toEqual(usagePart);
-    expect(usageCalls.at(-1)!.options).toMatchObject({ resume: id, cwd: "/tmp", model: "haiku", persistSession: false });
+    expect(usageCalls.at(-1)!.options).toMatchObject({ resume: id, cwd: "/tmp", model: "haiku", persistSession: false, settings: { disableAllHooks: true } });
     expect(usageCalls.at(-1)!.options).not.toHaveProperty("canUseTool");
     await vi.waitFor(() => expect(closed).toBe(closedBefore + 1));
   });
@@ -811,6 +811,25 @@ describe("Session context usage", () => {
     release();
     await new Promise((r) => setTimeout(r, 10));
     expect(spawnedThrowaway).toBe(0);
+  });
+
+  it("a throwaway CLI that does not answer within the timeout is closed, the failure logged, and the queue moves on", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    let closes = 0;
+    const hung = ({ prompt }: { prompt: AsyncIterable<unknown> }) =>
+      Object.assign((async function* () { for await (const _ of prompt); })(), { getContextUsage: () => new Promise(() => {}), close: () => void closes++ });
+    try {
+      Session.restore(randomUUID(), "/tmp", history, { query: hung as never });
+      const next = queuedQuery(async () => "next", fakeQuery as never);
+      await vi.advanceTimersByTimeAsync(THROWAWAY_TIMEOUT_MS);
+      expect(closes).toBe(1);
+      expect(err).toHaveBeenCalledWith(expect.stringContaining("context usage failed"), expect.objectContaining({ message: expect.stringContaining("no answer") }));
+      expect(await next).toBe("next");
+    } finally {
+      vi.useRealTimers();
+      err.mockRestore();
+    }
   });
 
   it("refreshes after a model switch: the window size can differ", async () => {

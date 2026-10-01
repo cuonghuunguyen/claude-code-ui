@@ -7,6 +7,11 @@ const full = new Intl.NumberFormat("en");
 const share = (tokens: number, max: number) => `${((tokens / max) * 100).toFixed(1)}%`;
 
 const COLORS = [1, 2, 3, 4, 5, 6].map((i) => `var(--context-${i})`);
+// Per category name (Claude Code /context), so a category keeps its colour when another one is absent (no MCP row).
+const SLOTS: Record<string, number> = { Messages: 0, "System prompt": 1, "System tools": 2, "MCP tools": 3, "Memory files": 4, Skills: 5 };
+/** Colour of a category: its fixed slot, else one picked from its name; free space and buffer are faint. */
+const colorOf = ({ name, kind }: ContextUsage["categories"][number]) =>
+  kind !== "used" ? "var(--faint)" : COLORS[SLOTS[name] ?? [...name].reduce((h, ch) => h + ch.charCodeAt(0), 0) % COLORS.length];
 
 /** OpenCode ProgressCircle v2: 14px, stroke 1.5, from 12 o'clock. `progress`: the stroke class of the filled arc. */
 export function Ring({ percent, progress = "stroke-ring-progress" }: { percent: number; progress?: string }) {
@@ -33,7 +38,6 @@ export function Ring({ percent, progress = "stroke-ring-progress" }: { percent: 
 export function ContextPopup({ usage, side }: { usage: ContextUsage; side: "top" | "bottom" }) {
   const { totalTokens, maxTokens, percentage, categories } = usage;
   const tokens = `${full.format(totalTokens)} / ${full.format(maxTokens)} tokens · ${percentage}%`;
-  const color = (i: number) => (categories[i]!.kind !== "used" ? "var(--faint)" : COLORS[i % COLORS.length]);
   return (
   <Popover.Portal>
     <Popover.Positioner side={side} align="end" sideOffset={6} className="z-50">
@@ -45,14 +49,14 @@ export function ContextPopup({ usage, side }: { usage: ContextUsage; side: "top"
         <p className="mt-0.5 text-muted-foreground text-xs tabular-nums">{tokens}</p>
         <div data-testid="context-bar" className="mt-3 flex h-2 overflow-hidden rounded-full bg-secondary" aria-hidden>
           {/* Buffer and free space fill the rest of the window; they are not in totalTokens. */}
-          {categories.map((c, i) =>
-            c.kind !== "used" ? null : <span key={c.name} title={c.name} style={{ width: share(c.tokens, maxTokens), background: color(i) }} />,
+          {categories.map((c) =>
+            c.kind !== "used" ? null : <span key={c.name} title={c.name} style={{ width: share(c.tokens, maxTokens), background: colorOf(c) }} />,
           )}
         </div>
         <ul className="mt-3 flex flex-col gap-1.5">
-          {categories.map((c, i) => (
+          {categories.map((c) => (
             <li key={c.name} className="flex items-center gap-2 text-xs">
-              <span className="size-2 shrink-0 rounded-full" style={{ background: color(i) }} aria-hidden />
+              <span className="size-2 shrink-0 rounded-full" style={{ background: colorOf(c) }} aria-hidden />
               <span className="min-w-0 flex-1 truncate">{c.name}</span>
               <span className="tabular-nums">{full.format(c.tokens)}</span>
               <span className="w-12 text-right text-muted-foreground tabular-nums">{share(c.tokens, maxTokens)}</span>

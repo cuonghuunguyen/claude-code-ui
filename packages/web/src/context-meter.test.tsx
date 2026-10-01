@@ -57,6 +57,22 @@ it("bar classifies categories by SDK kind, not by English name", async () => {
   expect([...document.querySelectorAll('[data-testid="context-bar"] > span')].map((s) => s.getAttribute("title"))).toEqual(["Messages"]);
 });
 
+it("a category keeps its colour when another category is absent (colour by name, not list position)", async () => {
+  const colors = async (u: ContextUsage) => {
+    const { el } = await render(u);
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="context-meter"]')!.click());
+    const got = Object.fromEntries([...document.querySelectorAll<HTMLElement>('[data-testid="context-bar"] > span')].map((s) => [s.title, s.style.background]));
+    unmount();
+    return got;
+  };
+  const withMcp = { ...usage, categories: [{ name: "MCP tools", tokens: 900, kind: "used" as const }, ...usage.categories] };
+  const a = await colors(usage);
+  const b = await colors(withMcp);
+  expect(b["Messages"]).toBe(a["Messages"]);
+  expect(b["System tools"]).toBe(a["System tools"]);
+  expect(new Set(Object.values(b)).size).toBe(3);
+});
+
 it("ring draws track and progress with the OpenCode ring tokens", async () => {
   const { el } = await render(usage);
   const [track, progress] = el.querySelectorAll("circle");
