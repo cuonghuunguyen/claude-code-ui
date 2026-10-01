@@ -35,6 +35,22 @@ describe("groupByCwd", () => {
   });
 });
 
+describe("groupByCwd with projects", () => {
+  it("one group per project in the daemon's order, empty projects too; sessions outside the projects are dropped", () => {
+    const groups = groupByCwd([item("a", "/p/x", 30), item("b", "/p/gone", 20)], "", ["/p/new", "/p/x"]);
+    expect(groups.map((g) => [g.cwd, g.sessions.map((s) => s.id)])).toEqual([
+      ["/p/new", []],
+      ["/p/x", ["a"]],
+    ]);
+  });
+
+  it("a search keeps an empty project only when its name matches", () => {
+    const groups = (q: string) => groupByCwd([item("a", "/p/x", 30, "login")], q, ["/p/new", "/p/x"]).map((g) => g.cwd);
+    expect(groups("new")).toEqual(["/p/new"]);
+    expect(groups("login")).toEqual(["/p/x"]);
+  });
+});
+
 describe("collapsed groups", () => {
   afterEach(() => localStorage.clear());
   it("persist across reloads", () => {

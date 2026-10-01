@@ -12,6 +12,10 @@ _Avoid_: server, backend
 One SDK session in one working directory, identified by its session ID. The SDK transcript is its durable history. It may be driven by several `query()` runs over time (e.g. resumed after a daemon restart).
 _Avoid_: chat, conversation, thread
 
+**Project**:
+A working directory known to the daemon: the cwd of a listed session, or a directory opened with "Open project". New sessions start in a project. Removing one hides it from the list; files stay.
+_Avoid_: workspace, folder (folder = any directory in the folder browser)
+
 **Turn**:
 One user prompt and everything it causes, ending with a turn result or an interrupt. Waiting for a permission request is part of the running turn.
 _Avoid_: exchange, round

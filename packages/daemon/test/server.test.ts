@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { createProjects } from "../src/projects.ts";
 import { createDaemon } from "../src/server.ts";
 import { calls, fakeQuery, history, interruptQuery, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
 
@@ -579,6 +580,65 @@ describe("daemon", () => {
         [older, Date.parse("2026-10-01T10:00:05.000Z")],
         [noFile, 7_000],
       ]);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("project.open keeps a project with no sessions across a restart; project.remove hides it and its sessions", async () => {
+    const cwd = mkdtempSync(join(webRoot, "proj-"));
+    const opened = mkdtempSync(join(webRoot, "opened-"));
+    const file = join(mkdtempSync(join(tmpdir(), "cfg-")), "projects.json");
+    const transcripts = [{ sessionId: "5b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", summary: "old", lastModified: 1000, cwd }];
+    const start = async () => {
+      const d = createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        query: fakeQuery as never,
+        projects: createProjects({ file }),
+        history: { listSessions: (async () => transcripts) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+      });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      return { d, c: await client((d.address() as AddressInfo).port) };
+    };
+    const list = async (c: Awaited<ReturnType<typeof client>>) =>
+      ((await c.request({ type: "session.list" })) as { result: { projects: string[]; sessions: { id: string }[] } }).result;
+
+    const a = await start();
+    try {
+      expect(await a.c.request({ type: "project.open", cwd: opened })).toMatchObject({ result: { cwd: opened } });
+      expect(await a.c.request({ type: "project.open", cwd: "/etc" })).toMatchObject({ code: "cwd_not_allowed" });
+      expect(await a.c.request({ type: "project.open", cwd: join(webRoot, "index.html") })).toMatchObject({ code: "cwd_not_allowed" });
+      expect((await list(a.c)).projects).toEqual([opened, cwd]);
+    } finally {
+      a.d.close();
+    }
+    const b = await start();
+    try {
+      expect((await list(b.c)).projects).toEqual([opened, cwd]);
+      await b.c.request({ type: "project.remove", cwd });
+      expect(await list(b.c)).toEqual({ projects: [opened], sessions: [] });
+      expect(await b.c.request({ type: "project.remove", cwd: 7 })).toMatchObject({ code: "bad_cwd" });
+      // Files stay.
+      expect(statSync(cwd).isDirectory()).toBe(true);
+    } finally {
+      b.d.close();
+    }
+  });
+
+  it("session.list drops an opened project whose directory is gone or outside the roots", async () => {
+    const gone = mkdtempSync(join(webRoot, "gone-"));
+    const outside = mkdtempSync(join(tmpdir(), "outside-"));
+    const projects = createProjects();
+    projects.open(gone);
+    projects.open(outside);
+    rmSync(gone, { recursive: true });
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, projects, history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never } });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      expect(await c.request({ type: "session.list" })).toMatchObject({ result: { projects: [], sessions: [] } });
     } finally {
       d.close();
     }

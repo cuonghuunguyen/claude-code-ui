@@ -60,6 +60,10 @@ export type ClientMessage = { reqId: string } & (
   | { type: "question.respond"; requestId: string; answers: Record<string, string> }
   | { type: "models.list" }
   | { type: "session.list" }
+  /** Adds a directory inside the roots to the known projects (kept across daemon restarts). */
+  | { type: "project.open"; cwd: string }
+  /** Removes a project from the list; files and transcripts stay. */
+  | { type: "project.remove"; cwd: string }
   /** Without `path`: the allowlisted roots. */
   | { type: "fs.list"; path?: string }
   | { type: "session.rewindPreview"; sessionId: string; userMessageId: string }
@@ -119,7 +123,13 @@ export type ModelsResult = { models: ModelInfo[] };
 export const WS_PROTOCOL = "claude-ui";
 export const TOKEN_PROTOCOL_PREFIX = "token.";
 
-export type ListResult = { sessions: SessionListItem[] };
+/**
+ * `projects`: known project cwds, newest activity first: session cwds plus opened projects, minus removed ones.
+ * `sessions`: only sessions of those projects.
+ */
+export type ListResult = { sessions: SessionListItem[]; projects: string[] };
+/** `cwd`: the canonical path of the opened project. */
+export type ProjectOpenResult = { cwd: string };
 export type FsListResult = { entries: FsEntry[] };
 /** Dry run of a code rewind: files it would restore (empty = no code options); `conversation` false for the first prompt. */
 export type RewindPreview = { filesChanged: string[]; insertions: number; deletions: number; conversation: boolean };
