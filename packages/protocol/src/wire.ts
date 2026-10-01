@@ -172,3 +172,6 @@ export type TerminalCreateResult = { terminal: TerminalInfo };
 export type TerminalListResult = { terminals: TerminalInfo[] };
 /** `buffer`: the last output (capped), to replay into a fresh view. */
 export type TerminalAttachResult = { buffer: string };
+
+/** Larger `terminal.input` data (UTF-8 bytes) is refused (`too_large`); the panel sends a big paste in parts. */
+export const MAX_TERMINAL_INPUT_BYTES = 64 * 1024;

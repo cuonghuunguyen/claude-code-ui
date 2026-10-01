@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { EFFORTS, imageBlock, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
+import { EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, listSessions, renameSession, tagSession, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { createNotifier, type Push } from "./push.ts";
@@ -15,6 +15,9 @@ import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings
 import { createTerminals } from "./terminals.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
+
+/** ws maxPayload (default 100 MiB): a prompt with two images at MAX_UPLOAD_BYTES as base64, plus the JSON around them. */
+export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 
 /** Larger files are not opened in the editor. */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -299,7 +302,7 @@ export function createDaemon(opts: {
     createReadStream(file).pipe(res);
   });
 
-  const wss = new WebSocketServer({ noServer: true, handleProtocols: (offered) => (offered.has(WS_PROTOCOL) ? WS_PROTOCOL : false) });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, handleProtocols: (offered) => (offered.has(WS_PROTOCOL) ? WS_PROTOCOL : false) });
   http.on("upgrade", (req, socket, head) => {
     // Never put request headers in these responses: they carry the token.
     const reject = (status: string) => void socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
@@ -620,8 +623,10 @@ export function createDaemon(opts: {
           const cwd = allowed(msg.cwd);
           if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
           if (!isSize(msg.cols) || !isSize(msg.rows)) return fail("bad_size", "cols and rows must be integers from 1 to 1000");
+          const full = terminals.limit(ws);
+          if (full) return fail("too_many_terminals", full);
           try {
-            return reply({ terminal: terminals.create(cwd, msg.cols, msg.rows) });
+            return reply({ terminal: terminals.create(cwd, msg.cols, msg.rows, ws) });
           } catch (err) {
             return fail("spawn_failed", String(err));
           }
@@ -651,6 +656,7 @@ export function createDaemon(opts: {
           }
           if (msg.type === "terminal.input") {
             if (typeof msg.data !== "string") return fail("bad_input", "data must be a string");
+            if (Buffer.byteLength(msg.data) > MAX_TERMINAL_INPUT_BYTES) return fail("too_large", `terminal input larger than ${MAX_TERMINAL_INPUT_BYTES} bytes`);
             t.pty.write(msg.data);
           } else if (msg.type === "terminal.resize") {
             if (!isSize(msg.cols) || !isSize(msg.rows)) return fail("bad_size", "cols and rows must be integers from 1 to 1000");

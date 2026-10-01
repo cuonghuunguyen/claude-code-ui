@@ -674,7 +674,6 @@ export function App() {
                     data-testid="terminal-panel"
                   >
                     <TerminalPanel
-                      key={panelSession.cwd}
                       client={client.current!}
                       status={status}
                       cwd={panelSession.cwd}

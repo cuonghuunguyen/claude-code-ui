@@ -5,9 +5,10 @@ import { basename, join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
-import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { MAX_TERMINAL_INPUT_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createProjects } from "../src/projects.ts";
-import { createDaemon } from "../src/server.ts";
+import { createDaemon, MAX_FRAME_BYTES } from "../src/server.ts";
+import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, fakeQuery, planCalls, history, interruptQuery, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
@@ -321,6 +322,15 @@ describe("daemon", () => {
     expect(await (await client()).request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
   });
 
+  it("sets ws maxPayload to MAX_FRAME_BYTES, below the 100 MiB default", async () => {
+    const c = await client();
+    const closed = new Promise<number>((r) => c.ws.on("close", r));
+    const len = Buffer.alloc(8);
+    len.writeBigUInt64BE(BigInt(MAX_FRAME_BYTES + 1));
+    (c.ws as unknown as { _socket: import("node:net").Socket })._socket.write(Buffer.concat([Buffer.from([0x82, 0xff]), len, Buffer.from([1, 2, 3, 4])]));
+    expect(await closed).toBe(1009);
+  });
+
   it("rejects an empty or non-string model", async () => {
     const c = await client();
     expect(await c.request({ type: "session.create", cwd: webRoot, model: 5 })).toMatchObject({ code: "bad_model" });
@@ -407,6 +417,47 @@ describe("daemon", () => {
       expect(output(b.inbox, t.id)).not.toContain("gone-45");
       expect(((await b.request({ type: "terminal.attach", terminalId: t.id })) as { result: { buffer: string } }).result.buffer).toContain("gone-45");
       await b.request({ type: "terminal.close", terminalId: t.id });
+    });
+
+    it("caps terminals per connection and per daemon: too_many_terminals", async () => {
+      const cs = await Promise.all([client(), client(), client(), client(), client()]);
+      const ids: string[] = [];
+      for (const c of cs.slice(0, 4)) for (let i = 0; i < MAX_TERMINALS_PER_CLIENT; i++) ids.push((await create(c)).id);
+      expect(ids).toHaveLength(MAX_TERMINALS);
+      expect(await cs[0]!.request({ type: "terminal.create", cwd: webRoot, cols: 80, rows: 24 })).toMatchObject({ code: "too_many_terminals" });
+      expect(await cs[4]!.request({ type: "terminal.create", cwd: webRoot, cols: 80, rows: 24 })).toMatchObject({ code: "too_many_terminals" });
+      // A closed terminal frees its slot.
+      await cs[0]!.request({ type: "terminal.close", terminalId: ids.shift()! });
+      ids.push((await create(cs[0]!)).id);
+      for (const id of ids) await cs[0]!.request({ type: "terminal.close", terminalId: id });
+    });
+
+    it("rejects terminal.input above 64 KiB and a size above 1000", async () => {
+      const c = await client();
+      const t = await create(c);
+      expect(await c.request({ type: "terminal.input", terminalId: t.id, data: "x".repeat(MAX_TERMINAL_INPUT_BYTES + 1) })).toMatchObject({ code: "too_large" });
+      expect(await c.request({ type: "terminal.input", terminalId: t.id, data: "é".repeat(MAX_TERMINAL_INPUT_BYTES / 2 + 1) })).toMatchObject({ code: "too_large" });
+      expect(await c.request({ type: "terminal.input", terminalId: t.id, data: "x".repeat(MAX_TERMINAL_INPUT_BYTES) })).toMatchObject({ type: "reply" });
+      expect(await c.request({ type: "terminal.resize", terminalId: t.id, cols: 1001, rows: 24 })).toMatchObject({ code: "bad_size" });
+      expect(await c.request({ type: "terminal.create", cwd: webRoot, cols: 80, rows: 1001 })).toMatchObject({ code: "bad_size" });
+      await c.request({ type: "terminal.close", terminalId: t.id });
+    });
+
+    it("the shell env has no CLAUDE_UI_* and no daemon PORT, the rest of the user's env stays", async () => {
+      Object.assign(process.env, { CLAUDE_UI_ROOTS: "/secret-roots", PORT: "5999", GH33_KEEP: "kept-value" });
+      try {
+        const c = await client();
+        const t = await create(c);
+        await c.request({ type: "terminal.attach", terminalId: t.id });
+        await c.request({ type: "terminal.input", terminalId: t.id, data: "env | grep -E '^(CLAUDE_UI_|PORT=|GH33_)'; echo env-done\r" });
+        await c.waitFor(() => /\nenv-done/.test(output(c.inbox, t.id)));
+        const env = output(c.inbox, t.id);
+        expect(env).toContain("GH33_KEEP=kept-value");
+        expect(env).not.toMatch(/\n(CLAUDE_UI_\w*|PORT)=/);
+        await c.request({ type: "terminal.close", terminalId: t.id });
+      } finally {
+        for (const k of ["CLAUDE_UI_ROOTS", "PORT", "GH33_KEEP"]) delete process.env[k];
+      }
     });
   });
 

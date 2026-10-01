@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ConnectionStatus, TerminalMessage, connect } from "./client.ts";
 import { TerminalPanel } from "./terminal-panel.tsx";
+import { MAX_TERMINAL_INPUT_BYTES } from "@claude-ui/protocol";
 
 // xterm draws on a canvas jsdom lacks; the stub records what the panel does with it.
 const xterm = vi.hoisted(() => ({ all: [] as FakeTerm[] }));
@@ -17,10 +18,12 @@ type FakeTerm = {
   resize?: (s: { cols: number; rows: number }) => void;
   key?: (e: KeyboardEvent) => boolean;
   disposed: boolean;
+  parent?: HTMLElement;
+  focused: number;
 };
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
-    t: FakeTerm = { written: [], resets: 0, cols: 80, rows: 24, selection: "", disposed: false };
+    t: FakeTerm = { written: [], resets: 0, cols: 80, rows: 24, selection: "", disposed: false, focused: 0 };
     options = {};
     constructor() {
       xterm.all.push(this.t);
@@ -32,8 +35,12 @@ vi.mock("@xterm/xterm", () => ({
       return this.t.rows;
     }
     loadAddon() {}
-    open() {}
-    focus() {}
+    open(parent: HTMLElement) {
+      this.t.parent = parent;
+    }
+    focus() {
+      this.t.focused++;
+    }
     write(d: string) {
       this.t.written.push(d);
     }
@@ -80,14 +87,17 @@ afterEach(async () => {
 });
 
 /** Fake daemon: `terminals` per cwd, `buffers` replayed on attach. */
-function fakeClient(terminals: { id: string; title: string }[] = []) {
-  let n = terminals.length;
+/** `createError`: terminal.create fails with it, like the daemon's too_many_terminals. */
+function fakeClient(running: { id: string; title: string }[] = [], createError?: string) {
+  let n = running.length;
+  const terminals = running.map((t) => ({ ...t, cwd: "/p" }));
   const buffers: Record<string, string> = {};
-  const request = vi.fn(async (m: { type: string; terminalId?: string }) => {
-    if (m.type === "terminal.list") return { terminals: [...terminals] };
+  const request = vi.fn(async (m: { type: string; terminalId?: string; cwd?: string }) => {
+    if (m.type === "terminal.list") return { terminals: terminals.filter((t) => t.cwd === m.cwd).map(({ id, title }) => ({ id, title })) };
     if (m.type === "terminal.create") {
+      if (createError) throw new Error(createError);
       const t = { id: `t${++n}`, title: `Terminal ${n}` };
-      terminals.push(t);
+      terminals.push({ ...t, cwd: m.cwd! });
       return { terminal: t };
     }
     if (m.type === "terminal.attach") return { buffer: buffers[m.terminalId!] ?? "" };
@@ -178,4 +188,81 @@ it("detaches from the daemon when unmounted", async () => {
   await act(async () => root.render(null));
   expect(client.sent()).toContainEqual({ type: "terminal.detach", terminalId: "t1" });
   expect(xterm.all[0]!.disposed).toBe(true);
+});
+
+it("tabs: role=tab on the named, focusable button with roving tabindex; arrows move the selection and the focus", async () => {
+  const client = fakeClient([
+    { id: "t1", title: "Terminal 1" },
+    { id: "t2", title: "Terminal 2" },
+  ]);
+  await render(client);
+  await flush();
+  const tab = () => [...el.querySelectorAll<HTMLButtonElement>("[role=tab]")];
+  expect(tab().map((t) => [t.tagName, t.textContent, t.getAttribute("aria-selected"), t.tabIndex])).toEqual([
+    ["BUTTON", "Terminal 1", "true", 0],
+    ["BUTTON", "Terminal 2", "false", -1],
+  ]);
+  tab()[0]!.focus();
+  await act(async () => tab()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(tab().map((t) => t.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+  expect(document.activeElement).toBe(tab()[1]);
+  // Not taken by the newly shown shell.
+  expect(xterm.all[1]!.focused).toBe(0);
+  await act(async () => tab()[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(document.activeElement).toBe(tab()[0]);
+  await act(async () => tab()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+  expect(document.activeElement).toBe(tab()[1]);
+  // The tab button fills the tab (24px+ target, 44px on narrow screens).
+  expect(tab()[0]!.className).toMatch(/\bh-full\b/);
+  // A click on a tab gives its shell the focus, also while the focus is on a tab.
+  const before = xterm.all[0]!.focused;
+  await act(async () => tab()[0]!.click());
+  expect(xterm.all[0]!.focused).toBe(before + 1);
+});
+
+it("opens xterm into an unpadded box: FitAddon measures the parent, so padding there would add a cut-off column", async () => {
+  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+  await render(client);
+  await flush();
+  const target = xterm.all[0]!.parent!;
+  expect(target.className).not.toMatch(/\bp[xytrbl]?-/);
+  expect(target.parentElement!.className).toMatch(/\bpx-3\.5\b/);
+});
+
+it("switching to another project shows its terminals but spawns no shell; + does; a reconnect to an empty list spawns none", async () => {
+  const client = fakeClient();
+  await render(client);
+  await flush();
+  expect(client.sent().filter((m) => m.type === "terminal.create")).toHaveLength(1);
+  await act(async () => root.render(<TerminalPanel client={client} status="connected" cwd="/q" onEmpty={() => {}} />));
+  await flush();
+  expect(client.sent().filter((m) => m.type === "terminal.create")).toHaveLength(1);
+  expect(client.sent()).toContainEqual(expect.objectContaining({ type: "terminal.list", cwd: "/q" }));
+  await act(async () => root.render(<TerminalPanel client={client} status="reconnecting" cwd="/q" onEmpty={() => {}} />));
+  await act(async () => root.render(<TerminalPanel client={client} status="connected" cwd="/q" onEmpty={() => {}} />));
+  await flush();
+  expect(client.sent().filter((m) => m.type === "terminal.create")).toHaveLength(1);
+  await act(async () => (el.querySelector("[data-testid=terminal-new]") as HTMLButtonElement).click());
+  await flush();
+  expect(client.sent().filter((m) => m.type === "terminal.create").at(-1)).toMatchObject({ cwd: "/q" });
+});
+
+it("shows the daemon's too_many_terminals error", async () => {
+  const client = fakeClient([], "at most 8 terminals per browser tab; close one");
+  await render(client);
+  await flush();
+  expect(el.querySelector("[role=alert]")?.textContent).toBe("at most 8 terminals per browser tab; close one");
+});
+
+it("sends a paste above MAX_TERMINAL_INPUT_BYTES in parts, each within the limit, without splitting a surrogate pair", async () => {
+  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+  await render(client);
+  await flush();
+  const big = "a".repeat(Math.floor(MAX_TERMINAL_INPUT_BYTES / 3) - 1) + "😀" + "é".repeat(70_000);
+  await act(async () => xterm.all[0]!.data!(big));
+  const parts = client.sent().filter((m) => m.type === "terminal.input").map((m) => (m as unknown as { data: string }).data);
+  expect(parts.length).toBeGreaterThan(1);
+  expect(parts.join("")).toBe(big);
+  for (const p of parts) expect(new TextEncoder().encode(p).length).toBeLessThanOrEqual(MAX_TERMINAL_INPUT_BYTES);
+  expect(parts[0]!.at(-1)).toBe("a");
 });
