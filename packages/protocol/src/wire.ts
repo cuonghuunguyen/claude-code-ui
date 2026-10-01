@@ -103,6 +103,8 @@ export type SubscribeResult = { logEpoch: string; session: SessionInfo };
 /** session.setModel, session.setPermissionMode, session.setEffort. */
 export type SetModelResult = { session: SessionInfo };
 export type UploadResult = { path: string };
+/** fs.upload size cap; the client checks it before reading the file. */
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 /** permission.respond and question.respond. `settled`: false when the request was already settled (or unknown) and this answer was ignored. */
 export type RespondResult = { settled: boolean };
 export type ModelsResult = { models: ModelInfo[] };

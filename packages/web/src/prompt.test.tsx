@@ -125,6 +125,18 @@ it("attach: an image goes into the image strip, another file is uploaded and bec
   expect($("image-strip")!.querySelectorAll("img")).toHaveLength(1);
 });
 
+it("attach: a file above the upload limit is refused before it is read or uploaded", async () => {
+  const onUpload = vi.fn(async () => "/x");
+  const { $ } = await render({ onUpload });
+  const input = $("attach-input") as HTMLInputElement;
+  const big = new File(["x"], "big.bin");
+  Object.defineProperty(big, "size", { value: 20 * 1024 * 1024 + 1 });
+  Object.defineProperty(input, "files", { value: [big], configurable: true });
+  await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
+  await vi.waitFor(() => expect($("prompt-error")!.textContent).toBe("Attach failed: big.bin is larger than 20 MB"));
+  expect(onUpload).not.toHaveBeenCalled();
+});
+
 it("send button sends; while a turn runs with nothing typed it is a stop button", async () => {
   const onPrompt = vi.fn(async () => {});
   const onInterrupt = vi.fn();

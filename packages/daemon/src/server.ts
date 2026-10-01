@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { EFFORTS, imageBlock, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
+import { EFFORTS, imageBlock, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
 import { getSessionInfo, getSessionMessages, listSessions, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { createNotifier, type Push } from "./push.ts";
@@ -15,8 +15,6 @@ const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
 /** Larger files are not opened in the editor. */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
-/** Attach button uploads (fs.upload). */
-const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 // ponytail: stat polling, robust to atomic rename-writes and WSL; fs.watch per directory if many tabs make polling costly.
 const WATCH_INTERVAL_MS = 1000;
 
@@ -64,6 +62,8 @@ export function createDaemon(opts: {
   uploadDir?: string;
 }) {
   const logEpoch = randomUUID();
+  /** fs.upload parent: one private (0700, mkdtemp) folder per daemon, made on first upload. */
+  let uploadParent: string | undefined;
   const sessions = new Map<string, Session>();
   const restoring = new Map<string, Promise<Session | undefined>>();
   const history = opts.history ?? { listSessions, getSessionInfo, getSessionMessages };
@@ -188,6 +188,8 @@ export function createDaemon(opts: {
       watched.forEach((w) => unwatchFile(w.real, w.listener));
       watched.clear();
     };
+    // Without a listener a socket error (e.g. a frame above maxPayload) is thrown and the daemon exits; ws closes the socket itself.
+    ws.on("error", (err) => console.warn("ws:", err.message));
     ws.on("close", () => {
       unsubscribes.forEach((u) => u());
       unwatchAll();
@@ -270,9 +272,10 @@ export function createDaemon(opts: {
           if (buf.length > MAX_UPLOAD_BYTES) return fail("too_large", `larger than ${MAX_UPLOAD_BYTES} bytes: ${name}`);
           try {
             // One folder per upload keeps the original name, so Claude sees it.
-            const parent = opts.uploadDir ?? join(tmpdir(), "claude-ui-uploads");
-            mkdirSync(parent, { recursive: true, mode: 0o700 });
-            const file = join(mkdtempSync(join(parent, "u-")), name);
+            // ponytail: uploads are never removed (spec: temp folder, OS temp cleanup); delete on session end if disk use matters.
+            uploadParent ??= opts.uploadDir ?? mkdtempSync(join(tmpdir(), "claude-ui-"));
+            mkdirSync(uploadParent, { recursive: true, mode: 0o700 });
+            const file = join(mkdtempSync(join(uploadParent, "u-")), name);
             writeFileSync(file, buf, { mode: 0o600 });
             return reply({ path: file });
           } catch (err) {

@@ -21,6 +21,7 @@ import type {
   SubscribeResult,
   UploadResult,
 } from "@claude-ui/protocol";
+import { MAX_UPLOAD_BYTES } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
@@ -714,6 +715,9 @@ export function SessionPane({
   /** Images go with the prompt; other files are uploaded and become `@path` mentions. */
   const attach = async (files: Iterable<File>) => {
     const all = [...files];
+    // Checked before reading: a big file would be held in memory as base64 and could exceed the daemon's frame limit.
+    const big = all.find((f) => f.size > MAX_UPLOAD_BYTES);
+    if (big) return setSendError(`Attach failed: ${big.name} is larger than ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
     const others = all.filter((f) => !f.type.startsWith("image/"));
     const added = await readImages(all);
     setImages((i) => [...i, ...added]);

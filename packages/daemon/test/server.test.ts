@@ -238,6 +238,15 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
   });
 
+  it("survives a frame above ws maxPayload: that socket closes with 1009, the daemon keeps answering", async () => {
+    const c = await client();
+    const closed = new Promise<number>((r) => c.ws.on("close", r));
+    // Raw masked binary frame header claiming 256 MiB (> the 100 MiB default maxPayload); ws rejects it on the header.
+    (c.ws as unknown as { _socket: import("node:net").Socket })._socket.write(Buffer.from([0x82, 0xff, 0, 0, 0, 0, 0x10, 0, 0, 0, 1, 2, 3, 4]));
+    expect(await closed).toBe(1009);
+    expect(await (await client()).request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
+  });
+
   it("rejects an empty or non-string model", async () => {
     const c = await client();
     expect(await c.request({ type: "session.create", cwd: webRoot, model: 5 })).toMatchObject({ code: "bad_model" });
