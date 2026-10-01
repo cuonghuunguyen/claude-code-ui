@@ -34,6 +34,9 @@ vi.mock("@xterm/xterm", () => ({
     get rows() {
       return this.t.rows;
     }
+    get element() {
+      return this.t.parent;
+    }
     loadAddon() {}
     open(parent: HTMLElement) {
       this.t.parent = parent;
@@ -76,6 +79,8 @@ globalThis.ResizeObserver ??= class {
   unobserve() {}
   disconnect() {}
 } as never;
+// jsdom has no layout: an element is on screen unless it or an ancestor has the class "hidden" (display: none).
+Object.defineProperty(HTMLElement.prototype, "offsetParent", { get: function (this: HTMLElement) { return this.closest(".hidden") ? null : document.body; } });
 window.matchMedia = ((query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} })) as never;
 
 const el = document.createElement("div");
@@ -179,6 +184,11 @@ it("copies the selection with Ctrl+C (Ctrl+C without a selection goes to the she
   expect(key("c")).toBe(false);
   expect(key("C", { shiftKey: true })).toBe(false);
   expect(writeText).toHaveBeenCalledWith("hello");
+  // Ctrl+Shift+C without a selection: not sent to the shell, the clipboard keeps its text.
+  writeText.mockClear();
+  t.selection = "";
+  expect(key("C", { shiftKey: true })).toBe(false);
+  expect(writeText).not.toHaveBeenCalled();
   expect(key("v")).toBe(false);
   // Ctrl+` toggles the panel (App), not a NUL for the shell.
   expect(key("`")).toBe(false);
@@ -292,4 +302,31 @@ it("a click on the already selected tab gives its shell the focus", async () => 
   const before = xterm.all[0]!.focused;
   await act(async () => el.querySelector<HTMLButtonElement>("[role=tab]")!.click());
   expect(xterm.all[0]!.focused).toBe(before + 1);
+});
+
+
+it("after a reload, every terminal streams and the selected one is selected again", async () => {
+  localStorage.clear();
+  const running = [
+    { id: "t1", title: "Terminal 1" },
+    { id: "t2", title: "Terminal 2" },
+  ];
+  let client = fakeClient(running);
+  await render(client);
+  await flush();
+  await act(async () => el.querySelectorAll<HTMLButtonElement>("[role=tab]")[1]!.click());
+  // Reload: a new page, a new connection, new views.
+  await act(async () => root.render(null));
+  xterm.all = [];
+  client = fakeClient(running);
+  await render(client);
+  await flush();
+  expect([...el.querySelectorAll("[role=tab]")].map((t) => t.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+  expect(client.sent().filter((m) => m.type === "terminal.attach").map((m) => m.terminalId)).toEqual(["t1", "t2"]);
+  await act(async () => (client.emit({ type: "terminal.output", terminalId: "t1", data: "one" }), client.emit({ type: "terminal.output", terminalId: "t2", data: "two" })));
+  expect(xterm.all.map((t) => t.written)).toEqual([["one"], ["two"]]);
+  // xterm opens only on screen: opened in the hidden box, it measured no cell size and its viewport froze above the newest rows.
+  expect(xterm.all.map((t) => !!t.parent)).toEqual([false, true]);
+  await act(async () => el.querySelectorAll<HTMLButtonElement>("[role=tab]")[0]!.click());
+  expect(xterm.all.map((t) => !!t.parent)).toEqual([true, true]);
 });
