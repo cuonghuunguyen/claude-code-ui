@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Popover } from "@base-ui/react/popover";
 import type { GitStatus, PermissionMode, PlanUsage } from "@claude-ui/protocol";
 import { ContextPopup } from "./context-meter.tsx";
-import { PlanPopup } from "./plan-meter.tsx";
+import { PlanPopup, useNow } from "./plan-meter.tsx";
 import type { SessionView, ToolCall } from "./store.ts";
 import { Chooser, MODE_LABEL } from "./toolbar.tsx";
 
@@ -50,17 +50,6 @@ const MODE_ON: Record<PermissionMode, string> = {
 
 // ponytail: polls git every 5s while shown; a daemon-side watcher if many tabs or big repos make it slow.
 const GIT_POLL_MS = 5_000;
-
-function useNow(ms: number, on: boolean) {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    if (!on) return;
-    setNow(Date.now());
-    const t = setInterval(() => setNow(Date.now()), ms);
-    return () => clearInterval(t);
-  }, [ms, on]);
-  return now;
-}
 
 /** Changes of the cwd: on mount, at each session state change (turn end), and every GIT_POLL_MS for edits outside Claude. */
 function useGit(git: (() => Promise<GitStatus | null>) | undefined, state: string) {

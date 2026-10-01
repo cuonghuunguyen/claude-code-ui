@@ -1,4 +1,5 @@
 // Plan usage meter (Claude Code /usage): the headline window (the worst one when warning) as ring + percent in the titlebar; click shows every window with its reset time.
+import { useEffect, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { TriangleAlertIcon } from "lucide-react";
 import type { PlanUsage, PlanWindow } from "@claude-ui/protocol";
@@ -38,6 +39,21 @@ export function resetText(at: number, now = Date.now()) {
   return `Resets ${day}${time} (in ${duration(at - now)})`;
 }
 
+/** Date.now(), updated every `ms` while `on`: relative reset times count down. */
+export function useNow(ms: number, on: boolean) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!on) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(t);
+  }, [ms, on]);
+  return now;
+}
+
+/** "Limit reached" plus the window when the server named it. */
+const limitText = (u: PlanUsage) => `Limit reached${u.statusLimit ? `: ${u.statusLimit}` : ""}`;
+
 const lower = (s: string) => s[0]!.toLowerCase() + s.slice(1);
 
 const NAME: Record<PlanLevel, string> = { ok: "Plan usage", warning: "Plan usage warning", limit: "Plan usage limit reached" };
@@ -51,12 +67,14 @@ function headline(windows: PlanWindow[], level: PlanLevel) {
 /** Every window with its reset time; a Popover.Root child (titlebar meter, status bar). */
 export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bottom" }) {
   const limited = usage.status === "rejected";
+  // Mounted only while open: "in 2h 5m" stays current while it shows.
+  const now = useNow(15_000, true);
   return (
   <Popover.Portal>
     <Popover.Positioner side={side} align="end" sideOffset={6} className="z-50">
       <Popover.Popup
         data-testid="plan-usage"
-        className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-xl bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+        className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-xl bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none"
       >
         <div className="flex items-baseline justify-between gap-2">
           <Popover.Title className="font-medium">Plan usage</Popover.Title>
@@ -65,7 +83,7 @@ export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bo
         {limited && (
           <p data-testid="plan-limit" className="mt-2 flex items-start gap-1.5 text-destructive text-xs">
             <TriangleAlertIcon className="mt-px size-3.5 shrink-0" aria-hidden />
-            {`Limit reached.${usage.statusResetsAt ? ` ${resetText(usage.statusResetsAt)}` : ""}`}
+            {`${limitText(usage)}.${usage.statusResetsAt ? ` ${resetText(usage.statusResetsAt, now)}` : ""}`}
           </p>
         )}
         <ul className="mt-3 flex flex-col gap-3">
@@ -82,7 +100,7 @@ export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bo
                 <div className="h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden>
                   <div className={`h-full rounded-full ${FILL[l]}`} style={{ width: `${Math.min(w.percent, 100)}%` }} />
                 </div>
-                {w.resetsAt && <span className="text-muted-foreground tabular-nums">{resetText(w.resetsAt)}</span>}
+                {w.resetsAt && <span className="text-muted-foreground tabular-nums">{resetText(w.resetsAt, now)}</span>}
               </li>
             );
           })}
@@ -98,7 +116,7 @@ export function PlanMeter({ usage }: { usage: PlanUsage }) {
   const head = headline(usage.windows, level);
   const limited = usage.status === "rejected";
   const summary = limited
-    ? `Plan usage: limit reached${usage.statusResetsAt ? `, ${lower(resetText(usage.statusResetsAt))}` : ""}`
+    ? `Plan usage: ${lower(limitText(usage))}${usage.statusResetsAt ? `, ${lower(resetText(usage.statusResetsAt))}` : ""}`
     : `${NAME[level]}: ${head ? `${head.label} ${head.percent}%${head.resetsAt ? `, ${lower(resetText(head.resetsAt))}` : ""}` : "no windows"}`;
   return (
     <Popover.Root>

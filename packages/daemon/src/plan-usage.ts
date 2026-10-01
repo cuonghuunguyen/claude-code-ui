@@ -21,6 +21,15 @@ const label = (r: Row) => {
 // ponytail: a server still on the old window right at its reset is not retried; the next turn or stale connect read fixes it.
 /** A read at a reset time waits this long, so the server has rolled the window over. */
 const RESET_GRACE_MS = 10_000;
+/** Longest setTimeout delay (2^31-1 ms, 24.8 days); Node runs a longer one after 1 ms. A later reset re-arms on each fire. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+// Window labels of a rate_limit_event's rateLimitType (SDK 0.3.285), for "Limit reached: …".
+const LIMIT_LABELS: Record<string, string> = {
+  five_hour: LABELS.session!,
+  seven_day: LABELS.weekly_all!,
+  seven_day_opus: "Current week (Opus)",
+  seven_day_sonnet: "Current week (Sonnet)",
+};
 const ms = (iso: string | null) => (iso ? new Date(iso).getTime() : null);
 
 /** Null when plan limits do not apply (API key, Bedrock, Vertex); undefined when they apply but the CLI could not fetch them. */
@@ -53,7 +62,7 @@ export function planUsage(r: SDKControlGetUsageResponse): PlanUsage | null | und
  */
 export function createPlanTracker({ onChange, read = async () => {} }: { onChange: (u: PlanUsage | null) => void; read?: () => Promise<void> }) {
   let usage: PlanUsage | null | undefined;
-  let status: Pick<PlanUsage, "status" | "statusResetsAt"> = { status: "allowed" };
+  let status: Pick<PlanUsage, "status" | "statusResetsAt" | "statusLimit"> = { status: "allowed" };
   let statusRead = 0;
   let expiry: NodeJS.Timeout | undefined;
   let request = 0;
@@ -68,12 +77,15 @@ export function createPlanTracker({ onChange, read = async () => {} }: { onChang
     const now = Date.now();
     const at = Math.min(...[status.statusResetsAt, ...(usage?.windows.map((w) => w.resetsAt) ?? [])].filter((t): t is number => !!t && t > now));
     if (at === Infinity) return;
+    const delay = at - now + RESET_GRACE_MS;
     expiry = setTimeout(() => {
+      // Not there yet (delay clamped): wait the rest.
+      if (delay > MAX_TIMER_MS) return arm();
       if (status.statusResetsAt && status.statusResetsAt <= Date.now()) setStatus({ status: "allowed" });
       if (usage) onChange(current()!);
       arm();
       void reread();
-    }, at - now + RESET_GRACE_MS).unref();
+    }, Math.min(delay, MAX_TIMER_MS)).unref();
   }
   function setStatus(s: typeof status) {
     status = s;
@@ -105,7 +117,12 @@ export function createPlanTracker({ onChange, read = async () => {} }: { onChang
     /** Ms since the last read started (Infinity before the first). */
     age: () => (readAt ? Date.now() - readAt : Infinity),
     rateLimit(info: SDKRateLimitInfo, q: Query) {
-      setStatus(info.status === "allowed" ? { status: "allowed" } : { status: info.status, ...(info.resetsAt ? { statusResetsAt: info.resetsAt * 1000 } : {}) });
+      const limit = info.rateLimitType && (LIMIT_LABELS[info.rateLimitType] ?? info.rateLimitType);
+      setStatus(
+        info.status === "allowed"
+          ? { status: "allowed" }
+          : { status: info.status, ...(info.resetsAt ? { statusResetsAt: info.resetsAt * 1000 } : {}), ...(limit ? { statusLimit: limit } : {}) },
+      );
       statusRead = request + 1;
       if (usage) onChange(current()!);
       return refresh(q);

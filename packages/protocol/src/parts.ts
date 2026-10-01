@@ -43,8 +43,9 @@ export type PlanWindow = { kind: string; label: string; percent: number; resetsA
 /**
  * Claude subscription limits, account-wide. `plan`: subscription type (pro, max, team, enterprise).
  * `status`: last `rate_limit_event`; allowed_warning = near a limit, rejected = a limit is hit, until `statusResetsAt` (ms).
+ * `statusLimit`: label of the window that status is about (e.g. "Current week (Opus)"), when the event names it.
  */
-export type PlanUsage = { plan: string | null; windows: PlanWindow[]; status: "allowed" | "allowed_warning" | "rejected"; statusResetsAt?: number };
+export type PlanUsage = { plan: string | null; windows: PlanWindow[]; status: "allowed" | "allowed_warning" | "rejected"; statusResetsAt?: number; statusLimit?: string };
 
 /** A slash command or skill; invoked by sending `/name args` as prompt text. */
 export type SlashCommand = { name: string; description: string; argumentHint: string; aliases?: string[] };
