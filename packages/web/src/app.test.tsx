@@ -25,7 +25,7 @@ window.matchMedia = ((query: string) => ({
 const ID = "11111111-2222-3333-4444-555555555555";
 const session: SessionListItem = { id: ID, cwd: "/p/demo", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: ["default"], title: "Demo", lastActivity: 0 };
 const replies: Record<string, unknown> = {
-  "session.list": { sessions: [session] },
+  "session.list": { sessions: [session], projects: ["/p/demo"] },
   "session.subscribe": { logEpoch: "e1", session },
   "models.list": { models: [] },
   "fs.list": { entries: [] },
