@@ -1374,6 +1374,7 @@ function PromptBox({
         hasInput={!disabled && (!!text.trim() || images.length > 0)}
         onSend={() => send()}
         onStop={() => onInterrupt?.()}
+        onFocusLost={() => input.current?.focus()}
       />
     </div>
     </div>

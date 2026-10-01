@@ -1,6 +1,6 @@
 // Prompt box toolbar (OpenCode prompt input v2): attach, model, effort, permission mode; context meter, send / stop on the right.
-import { useRef, type ReactNode } from "react";
-import { ArrowUpIcon, BrainIcon, FilePenIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldIcon, SquareIcon } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { ArrowUpIcon, BrainIcon, FilePenIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
 import type { ContextUsage, Effort, ModelInfo, PermissionMode } from "@claude-ui/protocol";
 import { ContextMeter } from "./context-meter.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -82,6 +82,8 @@ export function PromptToolbar(props: {
   hasInput: boolean;
   onSend: () => void;
   onStop: () => void;
+  /** The focused send button became disabled (stopped or sent from the keyboard, disconnected): focus goes back to the prompt box. */
+  onFocusLost: () => void;
 }) {
   const file = useRef<HTMLInputElement>(null);
   // Keep the current value selectable while the list loads or if it is not in the list.
@@ -146,7 +148,7 @@ export function PromptToolbar(props: {
         )}
       </div>
       {props.usage && <ContextMeter usage={props.usage} />}
-      <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onStop={props.onStop} />
+      <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onStop={props.onStop} onFocusLost={props.onFocusLost} />
     </div>
   );
 }
@@ -154,10 +156,25 @@ export function PromptToolbar(props: {
 export type SendState = "idle" | "running" | "needs_input" | "disconnected";
 
 const SEND_BASE =
-  "relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md shadow-sm focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11";
+  "relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-linear-to-b from-white/20 to-transparent shadow-button-contrast focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11";
 
 /** OpenCode send/stop button plus the session state: spinner while running, warning color while Claude waits for an answer. */
-function SendButton({ state, hasInput, onSend, onStop }: { state: SendState; hasInput: boolean; onSend: () => void; onStop: () => void }) {
+function SendButton({ state, hasInput, onSend, onStop, onFocusLost }: { state: SendState; hasInput: boolean; onSend: () => void; onStop: () => void; onFocusLost: () => void }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const disabled = state === "disconnected" || (state === "idle" && !hasInput);
+  // Chrome blurs a focused button the moment it is disabled, inside React's commit: React drops the event (native listener) and the
+  // prompt box's callback ref is detached until the commit ends (microtask). Firefox and jsdom keep focus on the disabled button (layout effect).
+  const lost = useRef(onFocusLost);
+  lost.current = onFocusLost;
+  useEffect(() => {
+    const b = ref.current!;
+    const out = (e: FocusEvent) => b.disabled && !e.relatedTarget && queueMicrotask(() => lost.current());
+    b.addEventListener("focusout", out);
+    return () => b.removeEventListener("focusout", out);
+  }, []);
+  useLayoutEffect(() => {
+    if (disabled && document.activeElement === ref.current) lost.current();
+  }, [disabled]);
   const busy = state === "running" || state === "needs_input";
   const steer = busy && hasInput;
   const [label, key] =
@@ -166,7 +183,7 @@ function SendButton({ state, hasInput, onSend, onStop }: { state: SendState; has
       : state === "idle"
         ? ["Send", " (Enter)"]
         : [`${state === "running" ? "Claude is working" : "Claude needs your input"}. ${steer ? "Steer" : "Stop"}`, steer ? " (Enter)" : " (Esc)"];
-  const Icon = busy && !steer ? SquareIcon : ArrowUpIcon;
+  const Icon = state === "disconnected" ? WifiOffIcon : busy && !steer ? SquareIcon : ArrowUpIcon;
   return (
     <button
       type="button"
@@ -174,7 +191,8 @@ function SendButton({ state, hasInput, onSend, onStop }: { state: SendState; has
       title={label + key}
       data-state={state}
       data-testid={busy && !steer ? "toolbar-stop" : "send"}
-      disabled={state === "disconnected" || (state === "idle" && !hasInput)}
+      ref={ref}
+      disabled={disabled}
       className={`${SEND_BASE} ${state === "needs_input" ? "bg-warning text-background motion-safe:animate-pulse" : "bg-primary text-primary-foreground"}`}
       onClick={steer || state === "idle" ? onSend : onStop}
     >
