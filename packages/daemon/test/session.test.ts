@@ -706,6 +706,18 @@ describe("Session context usage", () => {
     await until(events, (e) => events.filter((x) => x.part.type === "context_usage").length === 2);
   });
 
+  it("reports the turn's rate_limit_event and refreshes plan usage on the session's query after each turn", async () => {
+    const plan = { refresh: vi.fn(async (_q: unknown) => {}), rateLimit: vi.fn(async (_info: unknown, _q: unknown) => {}) };
+    const s = new Session("/tmp", { query: fakeQuery as never, plan: plan as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hello");
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(plan.rateLimit).toHaveBeenCalledWith(expect.objectContaining({ status: "allowed", rateLimitType: "five_hour" }), expect.objectContaining({ usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: expect.any(Function) }));
+    expect(plan.refresh).toHaveBeenCalledTimes(1);
+    expect(plan.refresh.mock.calls[0]![0]).toBe(plan.rateLimit.mock.calls[0]![1]);
+  });
+
   it("refreshes after a compaction boundary, before the turn ends", async () => {
     let release!: () => void;
     const compacting = ({ prompt, options }: { prompt: AsyncIterable<unknown>; options: object }) =>

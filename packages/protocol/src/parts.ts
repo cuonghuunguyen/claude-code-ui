@@ -35,6 +35,17 @@ export type TokenUsage = {
  */
 export type ContextUsage = { totalTokens: number; maxTokens: number; percentage: number; categories: { name: string; tokens: number; kind: "used" | "free" | "buffer" }[] };
 
+/**
+ * One Claude Code `/usage` plan window as the server sends it (`kind` e.g. session, weekly_all, weekly_scoped; `label` made from kind and scope).
+ * `percent` 0-100; `resetsAt` ms; `severity` the server's grade (normal, warning, critical); `active` the server's headline window.
+ */
+export type PlanWindow = { kind: string; label: string; percent: number; resetsAt: number | null; severity: string; active: boolean };
+/**
+ * Claude subscription limits, account-wide. `plan`: subscription type (pro, max, team, enterprise).
+ * `status`: last `rate_limit_event`; allowed_warning = near a limit, rejected = a limit is hit, until `statusResetsAt` (ms).
+ */
+export type PlanUsage = { plan: string | null; windows: PlanWindow[]; status: "allowed" | "allowed_warning" | "rejected"; statusResetsAt?: number };
+
 /** A slash command or skill; invoked by sending `/name args` as prompt text. */
 export type SlashCommand = { name: string; description: string; argumentHint: string; aliases?: string[] };
 

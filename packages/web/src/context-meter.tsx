@@ -8,8 +8,8 @@ const share = (tokens: number, max: number) => `${((tokens / max) * 100).toFixed
 
 const COLORS = [1, 2, 3, 4, 5, 6].map((i) => `var(--context-${i})`);
 
-/** OpenCode ProgressCircle v2: 14px, stroke 1.5, from 12 o'clock. */
-function Ring({ percent }: { percent: number }) {
+/** OpenCode ProgressCircle v2: 14px, stroke 1.5, from 12 o'clock. `progress`: the stroke class of the filled arc. */
+export function Ring({ percent, progress = "stroke-ring-progress" }: { percent: number; progress?: string }) {
   const r = 6.25;
   const c = 2 * Math.PI * r;
   return (
@@ -23,7 +23,7 @@ function Ring({ percent }: { percent: number }) {
         strokeWidth="1.5"
         strokeDasharray={c}
         strokeDashoffset={c * (1 - Math.min(percent, 100) / 100)}
-        className="stroke-ring-progress transition-[stroke-dashoffset] duration-350 ease-[cubic-bezier(0.65,0,0.35,1)] motion-reduce:transition-none"
+        className={`${progress} transition-[stroke-dashoffset] duration-350 ease-[cubic-bezier(0.65,0,0.35,1)] motion-reduce:transition-none`}
       />
     </svg>
   );

@@ -8,7 +8,7 @@ import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon } from "../src/server.ts";
-import { calls, fakeQuery, history, interruptQuery, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
+import { calls, fakeQuery, planCalls, history, interruptQuery, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
@@ -73,6 +73,24 @@ function client(p = port) {
 }
 
 describe("daemon", () => {
+  it("sends plan usage to every connection: read on connect, cached for the next one, again after each turn", async () => {
+    const a = await client();
+    const first = (await a.waitFor((m) => m.type === "plan_usage")) as Extract<ServerMessage, { type: "plan_usage" }>;
+    expect(first.usage).toMatchObject({ plan: "team", status: "allowed", windows: [{ kind: "session", percent: 55 }, { kind: "weekly_all" }, { label: "Current week (Fable)" }] });
+    const before = planCalls.length;
+    const b = await client();
+    await b.waitFor((m) => m.type === "plan_usage");
+    expect(planCalls.length).toBe(before);
+    const created = (await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+    const id = created.result.session.id;
+    await a.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+    await a.request({ type: "session.prompt", sessionId: id, text: "hi" });
+    await b.waitFor(() => b.inbox.filter((m) => m.type === "plan_usage").length >= 2);
+    expect(planCalls.at(-1)).toMatchObject({ sessionId: id });
+    a.ws.close();
+    b.ws.close();
+  });
+
   it("binds to 127.0.0.1 and serves the web app", async () => {
     expect(address).toBe("127.0.0.1");
     expect(await (await fetch(`http://127.0.0.1:${port}/`)).text()).toBe("<h1>app</h1>");

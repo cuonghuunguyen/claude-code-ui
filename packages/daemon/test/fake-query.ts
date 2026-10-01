@@ -46,6 +46,27 @@ export const fakeUsage = {
 /** Options of the query each getContextUsage() call went to, and the call's own options. */
 export const usageCalls: { options: Options; opts?: object }[] = [];
 
+/** usage_EXPERIMENTAL...() answer, shaped like the real one (trimmed; probe in development-docs/GH-26/probe.log). */
+export const fakePlanUsage = {
+  session: { total_cost_usd: 0, total_api_duration_ms: 0, total_duration_ms: 1, total_lines_added: 0, total_lines_removed: 0, model_usage: {} },
+  subscription_type: "team",
+  rate_limits_available: true,
+  rate_limits: {
+    five_hour: { utilization: 55, resets_at: "2026-10-01T11:40:00.938490+00:00" },
+    seven_day: { utilization: 44, resets_at: "2026-10-03T17:00:00.938512+00:00" },
+    seven_day_opus: null,
+    seven_day_sonnet: null,
+    // Untyped in SDK 0.3.285's get_usage reply, present in the real one (typed on SDKUsageReport).
+    limits: [
+      { kind: "session", group: "session", percent: 55, severity: "normal", resets_at: "2026-10-01T11:40:00.938490+00:00", scope: null, is_active: true },
+      { kind: "weekly_all", group: "weekly", percent: 44, severity: "normal", resets_at: "2026-10-03T17:00:00.938512+00:00", scope: null, is_active: false },
+      { kind: "weekly_scoped", group: "weekly", percent: 2, severity: "normal", resets_at: "2026-10-03T16:59:59.938700+00:00", scope: { model: { id: null, display_name: "Fable" }, surface: null }, is_active: false },
+    ],
+  },
+};
+/** Options of the query each usage_EXPERIMENTAL...() call went to. */
+export const planCalls: Options[] = [];
+
 export const fakeCommands = [{ name: "review", description: "Review a PR", argumentHint: "<pr>" }];
 
 export function fakeQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
@@ -64,6 +85,7 @@ export function fakeQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMe
     supportedModels: async () => models,
     supportedCommands: async () => fakeCommands,
     getContextUsage: async (opts?: object) => (usageCalls.push({ options: options ?? {}, opts }), fakeUsage),
+    usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => (planCalls.push(options ?? {}), fakePlanUsage),
     async rewindFiles(id: string, o?: { dryRun?: boolean }) {
       rewinds.push({ id, ...o });
       return { canRewind: true, filesChanged: checkpointFiles.files, insertions: 1, deletions: 1 };

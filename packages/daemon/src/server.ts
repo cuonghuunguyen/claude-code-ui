@@ -10,7 +10,8 @@ import { deleteSession, getSessionInfo, getSessionMessages, listSessions, rename
 import { searchFiles } from "./search.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
-import { listModels, Session, transcriptModel, type SessionSettings } from "./session.ts";
+import { createPlanTracker } from "./plan-usage.ts";
+import { listModels, Session, transcriptModel, withQuery, type SessionSettings } from "./session.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
@@ -18,6 +19,9 @@ const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 // ponytail: stat polling, robust to atomic rename-writes and WSL; fs.watch per directory if many tabs make polling costly.
 const WATCH_INTERVAL_MS = 1000;
+
+/** A new connection gets a fresh plan usage read when the last one is older (reset times pass without a turn). */
+const PLAN_STALE_MS = 5 * 60_000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -136,9 +140,12 @@ export function createDaemon(opts: {
   const sessions = new Map<string, Session>();
   // ponytail: entries are never removed and the whole file is rewritten per change; prune by transcript if it grows.
   const settings: Record<string, SessionSettings> = readJson(opts.settingsFile) ?? {};
+  // Account-wide, so not a session event: every connection gets each change.
+  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }) });
   /** Options of every session: settings changes are saved under its ID. */
   const sessionOpts = (id: () => string, initial: Partial<SessionSettings>) => ({
     ...initial,
+    plan,
     allowBypass: opts.allowBypass,
     uploadDir: uploadParent,
     query: opts.query,
@@ -304,6 +311,9 @@ export function createDaemon(opts: {
 
   wss.on("connection", (ws) => {
     connections.add(ws);
+    const usage = plan.current();
+    if (usage !== undefined) send(ws, { type: "plan_usage", usage });
+    if (plan.age() > PLAN_STALE_MS) void withQuery(plan.refresh, opts.query).catch((err) => console.error("plan usage failed:", err));
     const unsubscribes = new Map<string, () => void>();
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();

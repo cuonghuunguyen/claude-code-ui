@@ -28,6 +28,7 @@ import {
   type SessionInfo,
   type SessionState,
 } from "@claude-ui/protocol";
+import type { PlanTracker } from "./plan-usage.ts";
 
 type Listener = (e: Event) => void;
 // Claude Code's wording, so Claude reads the feedback as the user's instruction rather than as tool output.
@@ -48,6 +49,8 @@ type SessionOpts = Partial<SessionSettings> & {
   uploadDir?: string;
   query?: typeof sdkQuery;
   onSettings?: (s: SessionSettings) => void;
+  /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */
+  plan?: Pick<PlanTracker, "refresh" | "rateLimit">;
 };
 
 // ExitPlanMode comes without suggestions; Claude Code's "Yes, and auto-accept edits" (verified: the CLI then runs in acceptEdits).
@@ -396,7 +399,7 @@ export class Session {
     return true;
   }
 
-  private async drive(q: AsyncIterable<SDKMessage>) {
+  private async drive(q: Query) {
     const generation = this.generation;
     try {
       for await (const m of q) {
@@ -411,7 +414,11 @@ export class Session {
         // The CLI changes the mode itself too (plan approved, "all edits this session"); init and status carry it.
         if (m.type === "system" && (m.subtype === "init" || m.subtype === "status") && m.permissionMode) this.setMode(m.permissionMode);
         for (const part of this.adapter.convert(m)) this.emit(part);
-        if (m.type === "result") this.setState("idle");
+        if (m.type === "rate_limit_event") void this.opts.plan?.rateLimit(m.rate_limit_info, q);
+        if (m.type === "result") {
+          this.setState("idle");
+          void this.opts.plan?.refresh(q);
+        }
         if (m.type === "result" || (m.type === "system" && m.subtype === "compact_boundary")) void this.refreshUsage();
       }
       if (generation === this.generation) this.setState("closed");
@@ -498,15 +505,17 @@ const contextUsage = (u: SDKControlGetContextUsageResponse) => ({
   categories: u.categories.flatMap(({ name, tokens, kind }) => (kind === "deferred" ? [] : [{ name, tokens, kind }])),
 });
 
-/** supportedModels() needs a query; this one gets no prompt and is closed right after the answer. */
-export async function listModels(query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> {
+/** Control requests outside a session (supportedModels(), plan usage) need a query; this one gets no prompt and is closed right after the answer. */
+export async function withQuery<T>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery): Promise<T> {
   const q = query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env) } });
   try {
-    return await q.supportedModels();
+    return await fn(q);
   } finally {
     q.close();
   }
 }
+
+export const listModels = (query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> => withQuery((q) => q.supportedModels(), query);
 
 function withoutApiKeys(env: NodeJS.ProcessEnv) {
   const { ANTHROPIC_API_KEY: _key, ANTHROPIC_AUTH_TOKEN: _token, ...rest } = env;
