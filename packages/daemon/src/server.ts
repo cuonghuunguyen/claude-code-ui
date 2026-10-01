@@ -62,8 +62,12 @@ export function createDaemon(opts: {
   uploadDir?: string;
 }) {
   const logEpoch = randomUUID();
-  /** fs.upload parent: one private (0700, mkdtemp) folder per daemon, made on first upload. */
-  let uploadParent: string | undefined;
+  /**
+   * fs.upload parent: one private (0700, mkdtemp) folder per daemon. Made up front: every session gets it as an
+   * additional directory, so Claude reads an attachment without asking.
+   */
+  const uploadParent = opts.uploadDir ?? mkdtempSync(join(tmpdir(), "claude-ui-"));
+  mkdirSync(uploadParent, { recursive: true, mode: 0o700 });
   const sessions = new Map<string, Session>();
   const restoring = new Map<string, Promise<Session | undefined>>();
   const history = opts.history ?? { listSessions, getSessionInfo, getSessionMessages };
@@ -132,7 +136,7 @@ export function createDaemon(opts: {
         // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
         const used = transcriptModel(messages);
         const model = used && ((await modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
-        return track(Session.restore(id, info.cwd, messages, { model, allowBypass: opts.allowBypass, query: opts.query }));
+        return track(Session.restore(id, info.cwd, messages, { model, allowBypass: opts.allowBypass, uploadDir: uploadParent, query: opts.query }));
       })()
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
         .finally(() => restoring.delete(id));
@@ -215,7 +219,7 @@ export function createDaemon(opts: {
           if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          const s = track(new Session(cwd, { model: msg.model, allowBypass: opts.allowBypass, query: opts.query }));
+          const s = track(new Session(cwd, { model: msg.model, allowBypass: opts.allowBypass, uploadDir: uploadParent, query: opts.query }));
           return reply({ session: s.info() });
         }
         case "session.subscribe": {
@@ -273,8 +277,6 @@ export function createDaemon(opts: {
           try {
             // One folder per upload keeps the original name, so Claude sees it.
             // ponytail: uploads are never removed (spec: temp folder, OS temp cleanup); delete on session end if disk use matters.
-            uploadParent ??= opts.uploadDir ?? mkdtempSync(join(tmpdir(), "claude-ui-"));
-            mkdirSync(uploadParent, { recursive: true, mode: 0o700 });
             const file = join(mkdtempSync(join(uploadParent, "u-")), name);
             writeFileSync(file, buf, { mode: 0o600 });
             return reply({ path: file });

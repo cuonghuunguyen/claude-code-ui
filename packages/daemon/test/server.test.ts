@@ -238,6 +238,16 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
   });
 
+  it("sessions get the upload folder as an additional directory, so Claude reads an attachment without a permission request", async () => {
+    // A prompt with an image is a block array; the CLI does not expand @path there and Claude calls Read on the upload.
+    const c = await client();
+    const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+    const up = (await c.request({ type: "fs.upload", name: "notes.txt", data: Buffer.from("hi").toString("base64") })) as { result: { path: string } };
+    const dirs = calls.find((o) => o.sessionId === created.result.session.id)!.additionalDirectories!;
+    expect(dirs).toHaveLength(1);
+    expect(up.result.path.startsWith(`${dirs[0]}/`)).toBe(true);
+  });
+
   it("survives a frame above ws maxPayload: that socket closes with 1009, the daemon keeps answering", async () => {
     const c = await client();
     const closed = new Promise<number>((r) => c.ws.on("close", r));

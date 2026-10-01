@@ -39,7 +39,8 @@ type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number;
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
 /** `allowBypass`: daemon config enables bypassPermissions (docs/spec.md "Security"). */
-type SessionOpts = { model?: string; allowBypass?: boolean; query?: typeof sdkQuery };
+/** `uploadDir`: the fs.upload folder, readable by Claude without a permission request. */
+type SessionOpts = { model?: string; allowBypass?: boolean; uploadDir?: string; query?: typeof sdkQuery };
 
 // ExitPlanMode comes without suggestions; Claude Code's "Yes, and auto-accept edits" (verified: the CLI then runs in acceptEdits).
 const ACCEPT_EDITS: PermissionUpdate = { type: "setMode", mode: "acceptEdits", destination: "session" };
@@ -112,6 +113,7 @@ export class Session {
         // Checkpoints: file backups per user message, and the user message UUIDs echoed back.
         enableFileCheckpointing: true,
         cwd: this.cwd,
+        additionalDirectories: this.opts.uploadDir ? [this.opts.uploadDir] : undefined,
         model: this.model === "default" ? undefined : this.model,
         permissionMode: this.permissionMode,
         allowDangerouslySkipPermissions: !!this.opts.allowBypass,

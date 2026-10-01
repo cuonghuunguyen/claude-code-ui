@@ -68,7 +68,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | client → daemon | `session.setModel {sessionId, model}` | Switch model (`setModel()`) |
 | client → daemon | `session.setPermissionMode {sessionId, mode}` | `default`, `acceptEdits`, `plan`, `bypassPermissions` (`setPermissionMode()`) |
 | client → daemon | `session.setEffort {sessionId, effort}` | Thinking effort or `default` (`applyFlagSettings({effortLevel})`) |
-| client → daemon | `fs.upload {name, data}` | Attach a file that is not a png, jpeg, gif or webp image (svg, bmp, heic, text, ...): stored in a temp folder, reply `{path}` for an `@path` mention |
+| client → daemon | `fs.upload {name, data}` | Attach a file that is not a png, jpeg, gif or webp image (svg, bmp, heic, text, ...): stored in a temp folder (one per daemon, an additional directory of every session, so Claude reads it without a permission request), reply `{path}` for an `@path` mention |
 | client → daemon | `session.rewind {sessionId, userMessageId, mode}` | `mode`: `code`, `conversation`, `both` |
 | client → daemon | `session.rewindPreview {sessionId, userMessageId}` | `rewindFiles` dry run: `filesChanged[]`, `insertions`, `deletions`, `conversation` |
 | client → daemon | `permission.respond {requestId, decision, ruleIndex?, updatedInput?, message?}` | Answer a permission request |
