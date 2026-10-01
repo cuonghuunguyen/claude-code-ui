@@ -43,11 +43,12 @@ const fileItems = (paths: string[], open: (path: string) => void): PaletteItem[]
     .map((p) => ({ id: `file:${p}`, group: "Files", title: p, path: p, run: () => open(p) }));
 
 /**
+ * The list is the one the palette opened with: a row does not vanish under the cursor when, e.g., the turn ends (Stop).
  * `start` opens a page directly, e.g. Ctrl+' opens the model page. Choosing an item runs it after the palette closes.
  * `files`: with a shown session a query also searches its files (`fs.search`), like OpenCode's session palette.
  */
 export function CommandPalette({
-  items,
+  items: openedWith,
   start,
   files,
   onClose,
@@ -57,6 +58,7 @@ export function CommandPalette({
   files?: { search: (query: string) => Promise<string[]>; open: (path: string) => void };
   onClose: () => void;
 }) {
+  const [items] = useState(openedWith);
   const initial = items.find((i) => i.id === start);
   const [page, setPage] = useState(initial && "page" in initial ? initial.page : undefined);
   const [query, setQuery] = useState("");
@@ -124,7 +126,7 @@ export function CommandPalette({
         onMouseDown={(e) => e.target !== input.current && e.preventDefault()}
       >
         <div className="p-1.5">
-          <label className="flex h-9 items-center gap-2 rounded-md bg-secondary/60 pl-3 pr-2 focus-within:bg-secondary focus-within:ring-2 focus-within:ring-ring/50 hover:bg-secondary">
+          <label className="flex h-9 items-center gap-2 rounded-md bg-secondary/60 pl-3 pr-2 focus-within:bg-secondary hover:bg-secondary">
             <SearchIcon className="size-4 shrink-0 text-faint" aria-hidden />
             <input
               ref={input}
@@ -148,7 +150,7 @@ export function CommandPalette({
             No results
           </p>
         ) : (
-          <div ref={listRef} id="palette-list" role="listbox" aria-label={page?.placeholder ?? "Commands"} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1.5 pt-1.5 pb-2">
+          <div ref={listRef} id="palette-list" role="listbox" aria-label={page?.placeholder ?? "Commands"} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1.5 pt-1.5 pb-2 leading-4 [scrollbar-width:none]">
             {groups.map((g) => (
               <div key={g} role="group" aria-label={g} className="flex flex-col gap-px">
                 <div role="presentation" className="my-1.5 px-3 text-muted-foreground">
@@ -210,12 +212,12 @@ export function CommandPalette({
   );
 }
 
-/** OpenCode KeybindV2 chips: one 14px chip per key, 11px uppercase. Hidden on touch screens, which have no keyboard. */
+/** OpenCode KeybindV2 chips: one 14px chip per key (no padding, 2px apart), 11px uppercase. Hidden on touch screens, which have no keyboard. */
 function Keybind({ spec }: { spec: string }) {
   return (
     <kbd className="flex shrink-0 gap-0.5 font-sans pointer-coarse:hidden" data-testid="keybind">
       {keyLabels(spec).map((k) => (
-        <span key={k} className="grid h-3.5 min-w-3.5 place-items-center rounded-xs bg-kbd px-0.5 font-medium text-[11px] text-muted-foreground uppercase leading-none">
+        <span key={k} className="grid h-3.5 min-w-3.5 place-items-center rounded-xs bg-kbd font-medium text-[11px] text-muted-foreground uppercase leading-none">
           {k}
         </span>
       ))}

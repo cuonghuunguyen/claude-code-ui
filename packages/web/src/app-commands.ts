@@ -31,7 +31,8 @@ export type CommandContext = {
   toggleSidebar: () => void;
   toggleSidePanel: () => void;
   toggleTerminal: () => void;
-  focusPrompt: () => void;
+  /** `id`: the tab just selected; default the shown one. */
+  focusPrompt: (id?: string) => void;
   setModel: (model: string) => void;
   setEffort: (effort: Effort) => void;
   setMode: (mode: PermissionMode) => void;
@@ -47,19 +48,21 @@ export function appCommands(c: CommandContext): PaletteItem[] {
   const s = c.session;
   const at = c.activeId ? c.tabs.indexOf(c.activeId) : -1;
   const step = (d: number) => c.tabs[(at + d + c.tabs.length) % c.tabs.length]!;
+  // The prompt box that had focus is hidden with its tab; focus goes to the shown tab's prompt.
+  const go = (id: string) => (c.selectTab(id), c.focusPrompt(id));
   const efforts = s ? effortOptions(c.models, s.model) : [];
   const cmd = (id: string, title: string, run: () => void, keys?: string): PaletteItem => ({ id, group: "Commands", title, keys, run });
   const page = (id: string, title: string, placeholder: string, items: PaletteItem[], keys?: string): PaletteItem => ({ id, group: "Commands", title, keys, page: { placeholder, items } });
   const items: (PaletteItem | false | undefined)[] = [
     cmd("session.new", "New session", c.newSession, KEYS.newSession),
     c.canQuickOpen && cmd("file.open", "Open file", c.quickOpen, KEYS.quickOpen),
-    c.tabs.length > 1 && cmd("tab.next", "Next tab", () => c.selectTab(step(1)), KEYS.nextTab),
-    c.tabs.length > 1 && cmd("tab.prev", "Previous tab", () => c.selectTab(step(-1)), KEYS.prevTab),
+    c.tabs.length > 1 && cmd("tab.next", "Next tab", () => go(step(1)), KEYS.nextTab),
+    c.tabs.length > 1 && cmd("tab.prev", "Previous tab", () => go(step(-1)), KEYS.prevTab),
     at >= 0 && cmd("tab.close", "Close tab", () => c.closeTab(c.activeId!), KEYS.closeTab),
     cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar, KEYS.sidebar),
     s && !s.draft && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel, KEYS.sidePanel),
     s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal, KEYS.terminal),
-    s && cmd("prompt.focus", "Focus prompt", c.focusPrompt, KEYS.focusPrompt),
+    s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt(), KEYS.focusPrompt),
     s &&
       c.models.length > 0 &&
       page(
@@ -111,7 +114,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         // OpenCode's palette: "Just now", "2m ago".
         meta: ((t) => (t === "now" ? "Just now" : `${t} ago`))(timeAgo(x.lastActivity)),
         searchOnly: i >= RECENT_SESSIONS,
-        run: () => c.selectTab(x.id),
+        run: () => go(x.id),
       })),
   ];
   return items.filter((i): i is PaletteItem => !!i);

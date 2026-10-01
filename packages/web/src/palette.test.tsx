@@ -168,3 +168,14 @@ it("closes cleanly where scrollIntoView returns a Promise (current Chromium): no
   expect(errors).toEqual([]);
   scroll.mockRestore();
 });
+
+it("keeps the list it opened with: Stop stays when the turn ends while the palette is open", async () => {
+  const stop = vi.fn();
+  const items: PaletteItem[] = [ITEMS[0]!, { id: "stop", group: "Commands", title: "Stop", keys: "escape", run: stop }];
+  const { rows, type, key, onClose } = await render(undefined, items);
+  await type("Stop");
+  await act(async () => root!.render(<CommandPalette items={[ITEMS[0]!]} onClose={onClose} />));
+  expect(rows().map((r) => r.textContent)).toEqual(["StopEsc"]);
+  await key("Enter");
+  expect(stop).toHaveBeenCalled();
+});

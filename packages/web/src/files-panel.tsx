@@ -2,13 +2,15 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { basicSetup, EditorView } from "codemirror";
 import { Compartment, type EditorState } from "@codemirror/state";
-import { keymap } from "@codemirror/view";
+import { keymap, type KeyBinding } from "@codemirror/view";
+import { selectLine } from "@codemirror/commands";
 import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import type { FsEntry, FsListResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
 import { ChevronDownIcon, ChevronRightIcon, RotateCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { connect, ConnectionStatus } from "./client.ts";
+import { matchesKey } from "./shortcuts.ts";
 import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -304,6 +306,16 @@ function TreeDir({
   );
 }
 
+/** Keys the editor owns: handled here, so the app's shortcuts (defaultPrevented) leave them alone. */
+export const editorKeys = ({ onSave, onSend }: { onSave: () => void; onSend: (state: EditorState) => void }): KeyBinding[] => [
+  // Not key: "Mod-s": CodeMirror drops Shift for a letter key, so Ctrl+Shift+S typed as "s" (Caps Lock) would save instead of New session.
+  { any: (_, e) => matchesKey("mod+s", e) && (e.preventDefault(), onSave(), true) },
+  // VS Code's Ctrl+L, also on Linux and Windows (CodeMirror has Alt-L there); without it Ctrl+L would be the app's Focus prompt.
+  { key: "Mod-l", preventDefault: true, run: selectLine },
+  // Claude Code's shortcut for inserting an @-mention of the selection.
+  { key: "Alt-k", preventDefault: true, run: (v) => (onSend(v.state), true) },
+];
+
 /** Uncontrolled CodeMirror view: `doc` replaces the content only when it is not what the editor itself reported. */
 function CodeEditor({
   path,
@@ -334,11 +346,7 @@ function CodeEditor({
       extensions: [
         basicSetup,
         lineBreaks(doc),
-        keymap.of([
-          { key: "Mod-s", preventDefault: true, run: () => (cb.current.onSave(), true) },
-          // Claude Code's shortcut for inserting an @-mention of the selection.
-          { key: "Alt-k", preventDefault: true, run: (v) => (cb.current.onSend(v.state), true) },
-        ]),
+        keymap.of(editorKeys({ onSave: () => cb.current.onSave(), onSend: (s) => cb.current.onSend(s) })),
         language.of([]),
         EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { fontFamily: "var(--font-mono, monospace)" } }),
         EditorView.updateListener.of((u) => {

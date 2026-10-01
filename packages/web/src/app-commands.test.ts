@@ -64,6 +64,14 @@ it("next / previous tab wrap around the tab order", () => {
   expect(c.selectTab).toHaveBeenLastCalledWith("b");
 });
 
+it("a tab switch from a shortcut or the palette puts focus in the new tab's prompt", () => {
+  for (const id of ["tab.next", "tab.prev", "session:a"]) {
+    const c = ctx();
+    run(c, id);
+    expect(c.focusPrompt, id).toHaveBeenCalledWith(vi.mocked(c.selectTab).mock.calls[0]![0]);
+  }
+});
+
 it("model, effort and mode pages mark the current value and set the chosen one", () => {
   const c = ctx();
   const items = appCommands(c);

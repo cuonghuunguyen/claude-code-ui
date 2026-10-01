@@ -528,11 +528,12 @@ export function App() {
     // lg: the side panel breakpoint; below it the session and the files share one pane.
     toggleSidePanel: () => (wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
     toggleTerminal: () => (wide(1024) ? setTerminalOpen((v) => !v) : setPane(pane === "terminal" ? "session" : "terminal")),
-    focusPrompt: () => {
-      if (draftShown) return newPrompt.current?.focus();
-      showSession();
-      // After the pane shows: only the visible session's prompt box has a layout box.
-      requestAnimationFrame(() => [...document.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"]')].find((el) => el.offsetParent)?.focus());
+    // `id`: the tab just selected, which this render does not show yet.
+    focusPrompt: (id = activeId) => {
+      if (id !== NEW_TAB) showSession();
+      // After the render: only the shown tab's prompt box has a layout box.
+      const prompts = () => [...document.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"], textarea[aria-label="First prompt"]')];
+      requestAnimationFrame(() => (id === NEW_TAB ? newPrompt.current : prompts().find((el) => el.offsetParent))?.focus());
     },
     setModel: (model) => (draftShown ? setDraft((d) => ({ ...d, model })) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
     setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
