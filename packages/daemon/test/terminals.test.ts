@@ -1,6 +1,8 @@
+import { closeSync, fstatSync, mkdtempSync, openSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createTerminals, PAUSE_BYTES, trimScrollback } from "../src/terminals.ts";
+import { createTerminals, MAX_PENDING_INPUT_BYTES, PAUSE_BYTES, trimScrollback } from "../src/terminals.ts";
 
 describe("terminal scrollback trim", () => {
   it("cuts after a line break, so the replay never starts inside an escape sequence", () => {
@@ -36,4 +38,47 @@ describe("terminal backpressure", () => {
     await vi.waitFor(() => expect(got).toContain("again"));
     terms.close(t);
   });
+});
+
+// node-pty 1.1.0 retried queued input on the PTY fd after the shell exit closed it, into whatever reused that fd number.
+it("never writes queued input into a file that reuses the fd of a closed terminal", { timeout: 30_000 }, async () => {
+  const terminals = createTerminals();
+  const t = terminals.get(terminals.create(tmpdir(), 80, 24, {}).id)!;
+  const fd = (t.pty as unknown as { fd: number }).fd;
+  const { ino } = fstatSync(fd);
+  await new Promise<void>((r) => t.pty.onData(() => r()));
+  // The shell does not read while `sleep` runs: the kernel buffer fills and the rest stays queued.
+  terminals.write(t, "sleep 30\r");
+  for (let i = 0; i < 8; i++) terminals.write(t, "x".repeat(64 * 1024));
+  const exited = new Promise((r) => t.pty.onExit(r));
+  const file = join(mkdtempSync(join(tmpdir(), "fd-reuse-")), "victim");
+  let grabbed: number | undefined;
+  // Take the fd number in the same turn it is freed, before any retry can write to it.
+  const grab = () => {
+    try {
+      if (fstatSync(fd).ino === ino) return void setImmediate(grab);
+    } catch {
+      grabbed = openSync(file, "w");
+    }
+  };
+  terminals.close(t);
+  grab();
+  await exited;
+  await new Promise((r) => setTimeout(r, 500));
+  expect(grabbed).toBe(fd);
+  closeSync(grabbed!);
+  expect(readFileSync(file, "utf8")).toBe("");
+});
+
+it("refuses input while MAX_PENDING_INPUT_BYTES wait for the shell to read", { timeout: 30_000 }, async () => {
+  const terminals = createTerminals();
+  const t = terminals.get(terminals.create(tmpdir(), 80, 24, {}).id)!;
+  await new Promise<void>((r) => t.pty.onData(() => r()));
+  terminals.write(t, "sleep 30\r");
+  const chunk = "x".repeat(64 * 1024);
+  for (let i = 0; i < MAX_PENDING_INPUT_BYTES / chunk.length; i++) expect(terminals.write(t, chunk)).toBe(true);
+  expect(terminals.write(t, chunk)).toBe(false);
+  const exited = new Promise((r) => t.pty.onExit(r));
+  terminals.close(t);
+  await exited;
 });

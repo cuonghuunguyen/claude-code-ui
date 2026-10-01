@@ -754,10 +754,10 @@ export function createDaemon(opts: {
           if (msg.type === "terminal.input") {
             if (typeof msg.data !== "string") return fail("bad_input", "data must be a string");
             if (Buffer.byteLength(msg.data) > MAX_TERMINAL_INPUT_BYTES) return fail("too_large", `terminal input larger than ${MAX_TERMINAL_INPUT_BYTES} bytes`);
-            t.pty.write(msg.data);
+            if (!terminals.write(t, msg.data)) return fail("input_backlog", "the shell has not read the earlier input yet; send again later");
           } else if (msg.type === "terminal.resize") {
             if (!isSize(msg.cols) || !isSize(msg.rows)) return fail("bad_size", "cols and rows must be integers from 1 to 1000");
-            t.pty.resize(msg.cols, msg.rows);
+            terminals.resize(t, msg.cols, msg.rows);
           } else terminals.close(t);
           return reply({});
         }
