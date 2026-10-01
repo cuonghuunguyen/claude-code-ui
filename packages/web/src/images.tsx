@@ -1,10 +1,10 @@
 // Prompt images: read pasted/dropped files as data URLs, show them as thumbnails.
-import { imageBlock } from "@claude-ui/protocol";
+import { imageBlock, isPromptImage } from "@claude-ui/protocol";
 import { XIcon } from "lucide-react";
 
 /** Data URLs of the files the API accepts as images (png, jpeg, gif, webp); other files are skipped. */
 export async function readImages(files: Iterable<File>): Promise<string[]> {
-  const urls = await Promise.all([...files].filter((f) => f.type.startsWith("image/")).map(readDataUrl));
+  const urls = await Promise.all([...files].filter((f) => isPromptImage(f.type)).map(readDataUrl));
   return urls.filter((u) => imageBlock(u));
 }
 

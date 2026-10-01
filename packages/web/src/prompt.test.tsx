@@ -132,6 +132,21 @@ it("attach: an image goes into the image strip, another file is uploaded and bec
   expect($("image-strip")!.querySelectorAll("img")).toHaveLength(1);
 });
 
+it("attach: an image type the API does not take (svg, bmp, heic) is uploaded as @path, not dropped", async () => {
+  const onUpload = vi.fn(async (f: File) => `/u/${f.name}`);
+  const { $, box } = await render({ onUpload });
+  const input = $("attach-input") as HTMLInputElement;
+  const files = [
+    new File(["<svg/>"], "logo.svg", { type: "image/svg+xml" }),
+    new File(["BM"], "scan.bmp", { type: "image/bmp" }),
+    new File(["x"], "photo.heic", { type: "image/heic" }),
+  ];
+  Object.defineProperty(input, "files", { value: files, configurable: true });
+  await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
+  await vi.waitFor(() => expect(box.value).toBe("@/u/logo.svg @/u/scan.bmp @/u/photo.heic "));
+  expect($("image-strip")).toBeNull();
+});
+
 it("attach: a file above the upload limit is refused before it is read or uploaded", async () => {
   const onUpload = vi.fn(async () => "/x");
   const { $ } = await render({ onUpload });
