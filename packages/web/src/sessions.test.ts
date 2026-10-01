@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { groupByCwd, inProject, loadCollapsed, patchSession, saveCollapsed, timeAgo } from "./sessions.ts";
+import { byDay, groupByCwd, inProject, loadCollapsed, patchSession, saveCollapsed, timeAgo } from "./sessions.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
   id,
@@ -104,4 +104,21 @@ describe("timeAgo", () => {
 it("inProject matches a session cwd with a trailing slash, like its group (Remove closes its tab)", () => {
   expect(inProject("/p/x")(item("a", "/p/x/", 1))).toBe(true);
   expect(inProject("/p/x")(item("b", "/p/xy", 1))).toBe(false);
+});
+
+describe("byDay", () => {
+  const now = new Date(2026, 9, 1, 9).getTime();
+  const at = (d: number, h: number) => new Date(2026, 9, d, h).getTime();
+  const titles = (s: SessionListItem[]) => byDay(s, now).map((g) => [g.title, g.sessions.map((x) => x.id)]);
+  it("splits newest-first sessions into Today, Yesterday and Older by calendar day, as OpenCode", () => {
+    expect(titles([item("a", "/p", at(1, 0)), item("b", "/p", at(0, 23)), item("c", "/p", at(0, 1)), item("d", "/p", at(-10, 12))])).toEqual([
+      ["Today", ["a"]],
+      ["Yesterday", ["b", "c"]],
+      ["Older", ["d"]],
+    ]);
+  });
+  it("drops empty days and names a lone older group Recent sessions", () => {
+    expect(titles([item("a", "/p", at(1, 8))])).toEqual([["Today", ["a"]]]);
+    expect(titles([item("d", "/p", at(-10, 12))])).toEqual([["Recent sessions", ["d"]]]);
+  });
 });
