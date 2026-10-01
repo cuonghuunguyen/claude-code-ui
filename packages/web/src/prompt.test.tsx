@@ -6,6 +6,7 @@ import type { ModelInfo } from "@claude-ui/protocol";
 import { SessionPane } from "./App.tsx";
 import { emptySession, type SessionView } from "./store.ts";
 import { effortOptions, nextMode } from "./toolbar.tsx";
+import { QuestionPanel } from "./question.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -141,4 +142,26 @@ it("nextMode wraps around; effortOptions lists the model's levels after default"
   expect(nextMode(["default", "acceptEdits", "plan", "bypassPermissions"], "plan")).toBe("bypassPermissions");
   expect(effortOptions(models, "default")).toEqual(["default", "low", "medium", "high", "max"]);
   expect(effortOptions(models, "haiku")).toEqual([]);
+});
+
+it("question dock pages through the questions: Next, Back, Submit sends every answer", async () => {
+  const onAnswer = vi.fn();
+  const q = { header: "H", options: [{ label: "npm", description: "" }, { label: "pnpm", description: "" }], multiSelect: false };
+  const part = { type: "question" as const, id: "q1", requestId: "q1", toolUseId: "t1", settled: false, questions: [{ ...q, question: "A?" }, { ...q, question: "B?", multiSelect: true }] };
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  await act(async () => root.render(<QuestionPanel part={part} onAnswer={onAnswer} />));
+  unmount = () => (root.unmount(), el.remove());
+  const button = (t: string) => [...el.querySelectorAll("button")].find((b) => b.textContent === t)!;
+  const option = (t: string) => [...el.querySelectorAll("label")].find((l) => l.textContent?.startsWith(t))!.querySelector("input")!;
+  await act(async () => option("pnpm").click());
+  await act(async () => button("Next").click());
+  expect(el.textContent).toContain("2 of 2 questions");
+  await act(async () => button("Back").click());
+  expect(option("pnpm").checked).toBe(true);
+  await act(async () => button("Next").click());
+  await act(async () => option("npm").click());
+  await act(async () => button("Submit").click());
+  expect(onAnswer).toHaveBeenCalledWith({ "A?": "pnpm", "B?": "npm" });
 });

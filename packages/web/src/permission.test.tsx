@@ -38,20 +38,22 @@ describe("PermissionPanel", () => {
     expect(html).not.toContain("&quot;plan&quot;");
   });
 
-  it("offers Yes / Yes, and don't ask again for <rule> / No with feedback", () => {
+  it("is an OpenCode dock: Permission required, the SDK title, rule patterns; tray Deny · Allow always · Allow once; No with feedback", () => {
     const dir: PermissionUpdate = { type: "addDirectories", directories: ["/work"], destination: "session" };
     const html = renderToStaticMarkup(<PermissionPanel part={request({ title: "Claude wants to run npm test", suggestions: [bash, dir] })} onRespond={() => {}} />);
+    expect(html).toContain("Permission required");
     expect(html).toContain("Claude wants to run npm test");
     expect(html).toContain("npm test");
-    expect(html).toContain(">Yes<");
-    expect(html).toContain("Yes, and don&#x27;t ask again for <code");
+    expect(html).toContain("don&#x27;t ask again for <code");
     expect(html).toContain("Bash(npm test:*), /work");
-    expect(html.match(/ask again/g)).toHaveLength(1);
+    expect(html.match(/<button[^>]*>([^<]*)<\/button>/g)!.map((b) => b.replace(/<[^>]+>/g, ""))).toEqual(["Deny", "Allow always", "Allow once"]);
     expect(html).toContain("No, and tell Claude what to do differently");
   });
 
-  it("offers no don't-ask-again option without suggestions", () => {
-    expect(renderToStaticMarkup(<PermissionPanel part={request({ suggestions: [] })} onRespond={() => {}} />)).not.toContain("ask again");
+  it("offers no Allow always without suggestions", () => {
+    const html = renderToStaticMarkup(<PermissionPanel part={request({ suggestions: [] })} onRespond={() => {}} />);
+    expect(html).not.toContain("Allow always");
+    expect(html).not.toContain("ask again");
   });
 });
 

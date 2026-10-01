@@ -1,6 +1,7 @@
 // Permission panel (replaces the prompt box) and its timeline marker (docs/spec.md "Permission bridge").
 import { useState, type FormEvent } from "react";
 import type { PermissionUpdate } from "@claude-ui/protocol";
+import { ListTodoIcon, TriangleAlertIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import type { PermissionRequest } from "./store.ts";
@@ -54,6 +55,11 @@ const planOf = (part: PermissionRequest) => {
   return typeof plan === "string" ? plan : undefined;
 };
 
+/** Dock tray (OpenCode DockTray): actions right-aligned under the dock body. */
+export const DOCK = "flex flex-col overflow-hidden rounded-xl border bg-card text-sm shadow-sm";
+export const TRAY = "flex flex-wrap items-center justify-end gap-2 border-t bg-muted px-2 py-2";
+
+/** OpenCode permission dock: header, hint, content, rule patterns; tray Deny · Allow always · Allow once. */
 export function PermissionPanel({ part, onRespond }: { part: PermissionRequest; onRespond: (a: PermissionAnswer) => void }) {
   const [feedback, setFeedback] = useState("");
   const [draft, setDraft] = useState(() => proposed(part));
@@ -63,56 +69,62 @@ export function PermissionPanel({ part, onRespond }: { part: PermissionRequest; 
     e.preventDefault();
     onRespond({ decision: "deny", message: feedback.trim() || undefined });
   };
+  const noLabel = plan !== undefined ? "No, keep planning: tell Claude what to change" : "No, and tell Claude what to do differently";
   return (
-    <section className="flex flex-col gap-2 rounded-lg border border-warning/50 p-3 text-sm" data-testid="permission-panel" aria-label="Permission request">
-      <p className="font-medium">{plan !== undefined ? "Ready to code? Claude has written up a plan" : (part.title ?? `Claude wants to use ${part.tool}`)}</p>
-      {plan !== undefined ? (
-        <div className="max-h-80 overflow-auto rounded bg-muted p-3" data-testid="plan">
-          <MessageResponse>{plan}</MessageResponse>
-        </div>
-      ) : draft === undefined ? (
-        <pre className="max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-xs">{inputText(part.input)}</pre>
-      ) : (
-        <>
-          <div className="max-h-64 overflow-auto">
-            <InputDiff tool={part.tool} input={updatedInput ?? part.input} />
+    <form onSubmit={deny} className={DOCK} data-testid="permission-panel" aria-label="Permission request">
+      <div className="flex flex-col gap-3 p-3">
+        <p className="flex items-center gap-2 font-medium">
+          {plan !== undefined ? <ListTodoIcon className="size-4 shrink-0 text-muted-foreground" /> : <TriangleAlertIcon className="size-4 shrink-0 text-warning" />}
+          {plan !== undefined ? "Ready to code? Claude has written up a plan" : "Permission required"}
+        </p>
+        {plan === undefined && <p className="text-muted-foreground">{part.title ?? `Claude wants to use ${part.tool}`}</p>}
+        {plan !== undefined ? (
+          <div className="max-h-80 overflow-auto rounded-md bg-muted p-3" data-testid="plan">
+            <MessageResponse>{plan}</MessageResponse>
           </div>
-          <textarea
-            className="max-h-48 min-h-20 rounded-md border bg-transparent p-2 font-mono text-xs"
-            aria-label="Proposed new content"
-            spellCheck={false}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-          />
-        </>
-      )}
-      <Button className="justify-start" variant="outline" onClick={() => onRespond({ decision: "allow", updatedInput })}>
-        {plan !== undefined ? "Yes, manually approve edits" : "Yes"}
-      </Button>
-      {/* Like Claude Code: one option that applies every SDK suggestion (e.g. the Bash rule plus its directory). */}
-      {part.suggestions.length > 0 && (
-        <Button className="justify-start" variant="outline" onClick={() => onRespond({ decision: "allow_always", updatedInput })}>
-          {plan !== undefined ? (
-            "Yes, and auto-accept edits"
-          ) : (
-            <span className="truncate">
-              Yes, and don&apos;t ask again for <code className="font-mono">{part.suggestions.map(ruleLabel).join(", ")}</code>
-            </span>
-          )}
-        </Button>
-      )}
-      <form onSubmit={deny} className="flex gap-2">
+        ) : draft === undefined ? (
+          <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 font-mono text-xs">{inputText(part.input)}</pre>
+        ) : (
+          <>
+            <div className="max-h-64 overflow-auto">
+              <InputDiff tool={part.tool} input={updatedInput ?? part.input} />
+            </div>
+            <textarea
+              className="max-h-48 min-h-20 rounded-md border bg-transparent p-2 font-mono text-xs"
+              aria-label="Proposed new content"
+              spellCheck={false}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+          </>
+        )}
+        {/* Like Claude Code: "Allow always" applies every SDK suggestion (e.g. the Bash rule plus its directory). */}
+        {plan === undefined && part.suggestions.length > 0 && (
+          <p className="text-muted-foreground text-xs" data-testid="permission-rules">
+            Allow always: don&apos;t ask again for <code className="font-mono">{part.suggestions.map(ruleLabel).join(", ")}</code>
+          </p>
+        )}
         <input
-          className="min-w-0 flex-1 rounded-md border bg-transparent px-2 py-1.5"
-          placeholder={plan !== undefined ? "No, keep planning: tell Claude what to change" : "No, and tell Claude what to do differently"}
-          aria-label={plan !== undefined ? "No, keep planning: tell Claude what to change" : "No, and tell Claude what to do differently"}
+          className="min-w-0 rounded-md border bg-transparent px-2 py-1.5 pointer-coarse:text-base"
+          placeholder={noLabel}
+          aria-label={noLabel}
           value={feedback}
           onChange={(e) => setFeedback(e.target.value)}
         />
-        <Button type="submit" variant="outline">
-          No
+      </div>
+      <div className={TRAY}>
+        <Button type="submit" variant="ghost">
+          {plan !== undefined ? "No, keep planning" : "Deny"}
         </Button>
-      </form>
-    </section>
+        {part.suggestions.length > 0 && (
+          <Button type="button" variant="outline" onClick={() => onRespond({ decision: "allow_always", updatedInput })}>
+            {plan !== undefined ? "Yes, and auto-accept edits" : "Allow always"}
+          </Button>
+        )}
+        <Button type="button" onClick={() => onRespond({ decision: "allow", updatedInput })}>
+          {plan !== undefined ? "Yes, manually approve edits" : "Allow once"}
+        </Button>
+      </div>
+    </form>
   );
 }

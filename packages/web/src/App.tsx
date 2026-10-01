@@ -847,7 +847,7 @@ export function SessionPane({
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} />
         ) : question ? (
-          <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} />
+          <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} onDismiss={onInterrupt} />
         ) : (
           <>
             {sendError && (

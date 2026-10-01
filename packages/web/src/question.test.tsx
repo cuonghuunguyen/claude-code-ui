@@ -38,13 +38,13 @@ describe("answerText", () => {
 });
 
 describe("QuestionPanel", () => {
-  it("shows each question with its choices plus Other free text; radios for single, checkboxes for multi select", () => {
-    const html = renderToStaticMarkup(<QuestionPanel part={request()} onAnswer={() => {}} />);
-    for (const t of ["Manager", "Which package manager?", "Features", "Which features?", "npm", "Default", "pnpm", "Faster"]) expect(html).toContain(t);
+  it("is an OpenCode dock: one question per page with option cards plus a free answer; radios for single select", () => {
+    const html = renderToStaticMarkup(<QuestionPanel part={request()} onAnswer={() => {}} onDismiss={() => {}} />);
+    for (const t of ["Manager", "1 of 2 questions", "Which package manager?", "Select one answer", "npm", "Default", "pnpm", "Faster", "Type your own answer"]) expect(html).toContain(t);
+    expect(html).not.toContain("Which features?");
     expect(html.match(/type="radio"/g)).toHaveLength(3);
-    expect(html.match(/type="checkbox"/g)).toHaveLength(3);
-    expect(html.match(/>Other</g)).toHaveLength(2);
-    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled/);
+    expect(html).toContain(">Dismiss<");
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled[^>]*>Next</);
   });
 });
 
