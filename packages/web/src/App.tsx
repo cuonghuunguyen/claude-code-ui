@@ -47,6 +47,8 @@ import { ContextGroup, CwdContext, SubagentGroup, ToolCard } from "./tool-card.t
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { relPath } from "./tools.ts";
 import { FilesPanel } from "./files-panel.tsx";
+import { ChangesPanel } from "./changes-panel.tsx";
+import { sessionChanges } from "./changes.ts";
 import { QuickOpen, isQuickOpenKey, quickOpenLabel } from "./quick-open.tsx";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { NEW_TAB, avatarColors, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
@@ -393,6 +395,8 @@ export function App() {
   const lastShown = useRef<SessionInfo>(undefined);
   if (shown) lastShown.current = shown;
   const panelSession = shown ?? lastShown.current;
+  const panelView = panelSession && views[panelSession.id];
+  const changedPaths = useMemo(() => (panelView ? sessionChanges(panelView).map((c) => c.path) : []), [panelView?.parts]);
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
   const upload = async (file: File) => {
@@ -500,7 +504,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files"]} value={pane} onChange={setPane} />
+                  <PaneTabs panes={["session", "changes", "files"]} value={pane} onChange={setPane} changes={changedPaths.length} />
                 </div>
               )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
@@ -554,7 +558,7 @@ export function App() {
                   data-testid="side-panel"
                 >
                   <div className="hidden border-b px-2 py-1 lg:flex">
-                    <PaneTabs panes={["changes", "files"]} value={pane === "changes" ? "changes" : "files"} onChange={setPane} />
+                    <PaneTabs panes={["changes", "files"]} value={pane === "changes" ? "changes" : "files"} onChange={setPane} changes={changedPaths.length} />
                   </div>
                   <div className={`min-h-0 flex-1 flex-col ${pane === "changes" ? "hidden" : "flex"}`}>
                     <FilesPanel
@@ -564,9 +568,18 @@ export function App() {
                       onSend={(mention) => (setInsert(mention), setPane("session"))}
                       openPath={openFile}
                       onOpened={() => setOpenFile(undefined)}
+                      watch={changedPaths}
                     />
                   </div>
-                  {pane === "changes" && <p className="m-auto p-4 text-muted-foreground">No changes view yet.</p>}
+                  {pane === "changes" && views[panelSession.id] && (
+                    <ChangesPanel
+                      key={panelSession.id}
+                      client={client.current!}
+                      view={views[panelSession.id]!}
+                      cwd={panelSession.cwd}
+                      onOpen={(path) => (setOpenFile(path), setPane("files"))}
+                    />
+                  )}
                 </section>
               )}
               {/* Mounted while the tab is open: hidden, it keeps its draft; replaced by the created session, it starts empty next time. */}
@@ -624,7 +637,8 @@ export function App() {
 
 type Pane = "session" | "changes" | "files";
 
-function PaneTabs({ panes, value, onChange }: { panes: Pane[]; value: Pane; onChange: (p: Pane) => void }) {
+/** `changes`: the changed file count, shown on the changes tab like OpenCode's "Files Changed N". */
+export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[]; value: Pane; onChange: (p: Pane) => void; changes?: number }) {
   return (
     <div className="flex gap-1" role="tablist" aria-label="Panes">
       {panes.map((p) => (
@@ -638,6 +652,7 @@ function PaneTabs({ panes, value, onChange }: { panes: Pane[]; value: Pane; onCh
           data-testid={`pane-${p}`}
         >
           {p}
+          {p === "changes" && changes > 0 && <span className="text-muted-foreground tabular-nums">{changes}</span>}
         </Button>
       ))}
     </div>

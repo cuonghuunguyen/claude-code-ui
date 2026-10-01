@@ -68,6 +68,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   const denied = new Set<string>();
   // Subagents running in the background: their tool_result is a placeholder, task_notification ends them.
   const background = new Set<string>();
+  // Paths whose original file was already sent: the changes tab needs only the first one.
+  const originals = new Set<string>();
   // total_cost_usd is cumulative per query; a turn's cost is the difference to the previous result. Undefined = unknown.
   // ponytail: the first turn after a daemon restart shows no cost; the CLI saves the resumed total only in the transcript's cost-state.
   let costTotal: number | undefined = opts.resumed ? undefined : 0;
@@ -179,7 +181,15 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
             Array.isArray(b.content) && b.content.every((c) => c.type === "text")
               ? b.content.map((c) => c.text).join("\n")
               : b.content;
-          parts.push({ type: "tool_result", id: `${b.tool_use_id}:result`, toolUseId: b.tool_use_id, output, isError });
+          const result: Part = { type: "tool_result", id: `${b.tool_use_id}:result`, toolUseId: b.tool_use_id, output, isError };
+          const call = calls.get(b.tool_use_id);
+          const path = call?.type === "tool_call" ? (call.input as { file_path?: unknown }).file_path : undefined;
+          const original = (m.tool_use_result as { originalFile?: unknown } | undefined)?.originalFile;
+          if (typeof path === "string" && (typeof original === "string" || original === null) && !originals.has(path)) {
+            originals.add(path);
+            result.original = original;
+          }
+          parts.push(result);
           if (!background.has(b.tool_use_id))
             parts.push(...setStatus(b.tool_use_id, denied.has(b.tool_use_id) ? "denied" : isError ? "error" : "done"));
           return false;

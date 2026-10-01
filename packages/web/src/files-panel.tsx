@@ -18,6 +18,7 @@ const baseName = (path: string) => path.split("/").at(-1) ?? path;
 /**
  * Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. `onSend` gets an `@path#lines` mention.
  * `openPath` (quick open) opens that file in a tab, then `onOpened` clears it.
+ * `watch`: more paths for this connection's fs.watch list (fs.watch replaces it), e.g. the changes tab's files.
  */
 export function FilesPanel({
   client,
@@ -26,6 +27,7 @@ export function FilesPanel({
   onSend,
   openPath,
   onOpened,
+  watch = [],
 }: {
   client: Client;
   status: ConnectionStatus;
@@ -33,6 +35,7 @@ export function FilesPanel({
   onSend: (mention: string) => void;
   openPath?: string;
   onOpened?: () => void;
+  watch?: string[];
 }) {
   const [tabs, setTabs] = useState<Record<string, Tab>>({});
   const [activePath, setActivePath] = useState<string>();
@@ -101,7 +104,8 @@ export function FilesPanel({
   }, [dirty]);
 
   const paths = Object.keys(tabs);
-  const watchKey = paths.join("\n");
+  const watchPaths = [...new Set([...paths, ...watch])];
+  const watchKey = watchPaths.join("\n");
   const watchedRef = useRef(new Set<string>());
   useEffect(() => {
     if (status !== "connected") return void watchedRef.current.clear();
@@ -109,11 +113,11 @@ export function FilesPanel({
     const added = paths.filter((p) => !watchedRef.current.has(p));
     watchedRef.current = new Set(paths);
     client
-      .request({ type: "fs.watch", paths })
+      .request({ type: "fs.watch", paths: watchPaths })
       .then(() => added.forEach((p) => void refresh(p)))
       .catch(() => {});
   }, [status, watchKey]);
-  useEffect(() => client.onFsChanged((m) => void refresh(m.path)), [client]);
+  useEffect(() => client.onFsChanged((m) => void (tabsRef.current[m.path] && refresh(m.path))), [client]);
 
   const shown = paths.filter((p) => inDir(p, cwd));
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
