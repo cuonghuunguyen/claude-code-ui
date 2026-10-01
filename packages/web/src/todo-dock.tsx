@@ -6,12 +6,17 @@ import { Task, TaskItem, TaskTrigger } from "@/components/ai-elements/task";
 import { CollapsibleContent } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
-/** OpenCode shows the dock only while the session works or waits for an answer, and hides it once all items are done. */
-export const showTodoDock = (state: SessionState, items: TodoItem[]) =>
-  (state === "running" || state === "needs_input") && items.some((i) => i.status !== "completed");
+/**
+ * OpenCode shows the dock only while the session works or waits for an answer, and hides it once all items are done.
+ * `blocked` = a permission or question panel is open: OpenCode hides the whole composer region then, dock included.
+ */
+export const showTodoDock = (state: SessionState, items: TodoItem[], blocked: boolean) =>
+  !blocked && (state === "running" || state === "needs_input") && items.some((i) => i.status !== "completed");
 
 // An in-progress item shows its active form (Claude Code spinner text).
 const label = (i: TodoItem) => (i.status === "in_progress" ? (i.activeForm ?? i.content) : i.content);
+// Screen-reader status; the mark is aria-hidden and strikethrough is not announced.
+const statusText = { completed: "Completed", in_progress: "In progress", pending: "Pending" } as const;
 
 function Mark({ status }: { status: TodoItem["status"] }) {
   return (
@@ -33,7 +38,7 @@ function Mark({ status }: { status: TodoItem["status"] }) {
 export function TodoDock({ items, className }: { items: TodoItem[]; className?: string }) {
   const [open, setOpen] = useState(true);
   const done = items.filter((i) => i.status === "completed").length;
-  const active = items.find((i) => i.status === "in_progress") ?? items.find((i) => i.status === "pending") ?? items.at(-1);
+  const active = items.find((i) => i.status === "in_progress") ?? items.find((i) => i.status === "pending");
   return (
     <Task
       open={open}
@@ -60,7 +65,7 @@ export function TodoDock({ items, className }: { items: TodoItem[]; className?: 
         />
       </TaskTrigger>
       <CollapsibleContent>
-        <div role="list" className="flex max-h-42 flex-col gap-1.5 overflow-y-auto px-4 pb-3 text-sm">
+        <div role="list" className="flex max-h-42 flex-col gap-1.5 overflow-y-auto px-4 pb-3 text-[14px]/[1.3]">
           {items.map((item, i) => (
             <TaskItem
               key={i}
@@ -72,7 +77,10 @@ export function TodoDock({ items, className }: { items: TodoItem[]; className?: 
               )}
             >
               <Mark status={item.status} />
-              <span className="min-w-0">{label(item)}</span>
+              <span className="min-w-0">
+                <span className="sr-only">{statusText[item.status]}: </span>
+                {label(item)}
+              </span>
             </TaskItem>
           ))}
         </div>

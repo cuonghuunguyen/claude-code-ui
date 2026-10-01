@@ -186,8 +186,15 @@ it("TodoWrite: the timeline card stays collapsed, the dock above the prompt show
   expect(cards().map(expanded)).toEqual([false]);
   expect(dock()?.textContent).toContain("1 of 2 todos completed");
   // Directly above the prompt box, which covers its bottom 36px (OpenCode prompt lift).
+  // The lift sits on the prompt box, so an image strip or send error between them stays outside the dock.
   expect(dock()?.nextElementSibling?.querySelector("textarea")).not.toBeNull();
-  expect(dock()!.className).toContain("-mb-11 pb-9");
+  expect(dock()!.className).toContain("pb-9");
+  expect(dock()!.className).not.toContain("-mb-");
+  expect(el.querySelector('[data-testid="prompt-box"]')!.className).toContain("-mt-11");
+  // A permission panel replaces the prompt box: the dock hides with it (OpenCode showComposer).
+  await render(view([running, ...todos("t1", false), permission("t9")]));
+  expect(el.querySelector('[data-testid="permission-panel"]')).not.toBeNull();
+  expect(dock()).toBeNull();
   // A second TodoWrite replaces the list: all done hides the dock; its card is collapsed too.
   await render(view([running, ...todos("t1", false), ...todos("t2", true)]));
   expect(cards().map(expanded)).toEqual([false, false]);

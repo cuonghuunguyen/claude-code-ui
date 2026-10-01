@@ -21,6 +21,7 @@ import type {
   SetModelResult,
   SlashCommand,
   SubscribeResult,
+  TodoItem,
   UploadResult,
 } from "@claude-ui/protocol";
 import { isPromptImage, MAX_UPLOAD_BYTES, PERMISSION_MODES } from "@claude-ui/protocol";
@@ -897,8 +898,6 @@ export function SessionPane({
       <div
         className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4"
       >
-        {/* The prompt box covers the dock's bottom 36px (OpenCode prompt lift); a permission or question panel does not. */}
-        {showTodoDock(view.state, view.todos) && <TodoDock items={view.todos} className={permission || question ? undefined : "-mb-11 pb-9"} />}
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} />
         ) : question ? (
@@ -925,6 +924,7 @@ export function SessionPane({
               state={connected ? (turnRunning ? (view.state as "running" | "needs_input") : "idle") : "disconnected"}
               onInterrupt={onInterrupt}
               usage={view.contextUsage}
+              todos={showTodoDock(view.state, view.todos, false) ? view.todos : undefined}
               label="Prompt"
               placeholder={turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
             />
@@ -956,6 +956,7 @@ function PromptBox({
   state = "idle",
   onInterrupt,
   usage,
+  todos,
   label,
   placeholder,
   autoFocus,
@@ -987,6 +988,8 @@ function PromptBox({
   onInterrupt?: () => void;
   /** Context window meter; none = hidden. */
   usage?: ContextUsage;
+  /** Todo dock above the box; none = hidden. */
+  todos?: TodoItem[];
   label: string;
   placeholder: string;
   autoFocus?: boolean;
@@ -1000,6 +1003,8 @@ function PromptBox({
   const [caret, setCaret] = useState(0);
   const [found, setFound] = useState<{ query: string; paths: string[] }>();
   const [sendError, setSendError] = useState<string>();
+  // The prompt box covers the dock's bottom 36px (OpenCode prompt lift), only when it directly follows the dock.
+  const lift = !!todos && !sendError && !images.length;
   const input = useRef<HTMLTextAreaElement>(null);
   const matches = dismissed ? undefined : matchCommands(commands, text);
   const mention = dismissed || matches ? undefined : activeMention(text, caret);
@@ -1119,6 +1124,7 @@ function PromptBox({
 
   return (
     <div className="relative flex flex-col gap-2" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    {todos && <TodoDock items={todos} className={lift ? "pb-9" : undefined} />}
     {sendError && (
       <p className="text-destructive text-sm" role="alert" data-testid="prompt-error">
         {sendError}
@@ -1178,7 +1184,10 @@ function PromptBox({
         ))}
       </ul>
     )}
-    <div className="relative flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50" data-testid="prompt-box">
+    <div
+      className={`relative flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50 ${lift ? "-mt-11" : ""}`}
+      data-testid="prompt-box"
+    >
       <textarea
         role="combobox"
         aria-expanded={pickerOpen}

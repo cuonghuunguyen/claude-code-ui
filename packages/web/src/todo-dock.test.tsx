@@ -26,10 +26,11 @@ describe("TodoDock", () => {
     expect(toggle().textContent).toContain("1 of 3 todos completed");
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
     const rows = [...el.querySelectorAll<HTMLElement>("[role=listitem]")];
+    // Status is announced as text, not only by the aria-hidden mark and strikethrough.
     expect(rows.map((r) => [r.dataset.status, r.textContent])).toEqual([
-      ["completed", "Inspect"],
-      ["in_progress", "Changing b"],
-      ["pending", "Test"],
+      ["completed", "Completed: Inspect"],
+      ["in_progress", "In progress: Changing b"],
+      ["pending", "Pending: Test"],
     ]);
   });
 
@@ -62,12 +63,15 @@ describe("TodoDock", () => {
 });
 
 describe("showTodoDock", () => {
-  it("only while the turn is live, with a list that is not all done (OpenCode)", () => {
+  it("only while the turn is live and not blocked, with a list that is not all done (OpenCode)", () => {
     const done: TodoItem[] = [{ content: "a", status: "completed" }];
-    expect(showTodoDock("running", items)).toBe(true);
-    expect(showTodoDock("needs_input", items)).toBe(true);
-    expect(showTodoDock("idle", items)).toBe(false);
-    expect(showTodoDock("running", [])).toBe(false);
-    expect(showTodoDock("running", done)).toBe(false);
+    expect(showTodoDock("running", items, false)).toBe(true);
+    expect(showTodoDock("needs_input", items, false)).toBe(true);
+    // A permission or question panel is open: OpenCode hides the composer region, dock included.
+    expect(showTodoDock("needs_input", items, true)).toBe(false);
+    expect(showTodoDock("running", items, true)).toBe(false);
+    expect(showTodoDock("idle", items, false)).toBe(false);
+    expect(showTodoDock("running", [], false)).toBe(false);
+    expect(showTodoDock("running", done, false)).toBe(false);
   });
 });
