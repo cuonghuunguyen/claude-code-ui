@@ -68,9 +68,12 @@ function client(p = port) {
     ws.send(JSON.stringify({ ...msg, reqId }));
     return waitFor((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId);
   };
-  return new Promise<{ ws: WebSocket; request: typeof request; waitFor: typeof waitFor; inbox: ServerMessage[] }>((r) =>
-    ws.on("open", () => r({ ws, request, waitFor, inbox })),
-  );
+  // A rejected upgrade (ws "error": Unexpected server response) or no answer fails the caller instead of hanging it.
+  return new Promise<{ ws: WebSocket; request: typeof request; waitFor: typeof waitFor; inbox: ServerMessage[] }>((resolve, reject) => {
+    const t = setTimeout(() => (ws.terminate(), reject(new Error("WebSocket open timed out"))), 5_000);
+    ws.once("error", (e) => (clearTimeout(t), reject(e)));
+    ws.once("open", () => (clearTimeout(t), resolve({ ws, request, waitFor, inbox })));
+  });
 }
 
 describe("daemon", () => {
@@ -361,17 +364,21 @@ describe("daemon", () => {
     process.env.SHELL = "/bin/sh";
     const output = (inbox: ServerMessage[], terminalId: string) =>
       inbox.map((m) => (m.type === "terminal.output" && m.terminalId === terminalId ? m.data : "")).join("");
-    const opened: string[] = [];
+    const opened: { c: Awaited<ReturnType<typeof client>>; id: string }[] = [];
     const create = async (c: Awaited<ReturnType<typeof client>>, cwd = webRoot) => {
       const t = ((await c.request({ type: "terminal.create", cwd, cols: 80, rows: 24 })) as { result: { terminal: { id: string; title: string } } }).result.terminal;
-      opened.push(t.id);
+      opened.push({ c, id: t.id });
       return t;
     };
     // Shells outlive their connection: one left by a failed test counts against MAX_TERMINALS and takes the next test's "Terminal 1".
+    // Closes over a connection the test opened: no new socket here, see the 64 KiB test.
     afterEach(async () => {
-      const c = await client();
-      for (const id of opened.splice(0)) await c.request({ type: "terminal.close", terminalId: id });
-      c.ws.close();
+      const left = opened.splice(0);
+      if (!left.length) return;
+      const live = left.find(({ c }) => c.ws.readyState === WebSocket.OPEN)?.c;
+      const c = live ?? (await client());
+      for (const { id } of left) await c.request({ type: "terminal.close", terminalId: id });
+      if (!live) c.ws.close();
     });
 
     it("opens a shell in a cwd inside the roots only", async () => {
@@ -448,7 +455,13 @@ describe("daemon", () => {
       const t = await create(c);
       expect(await c.request({ type: "terminal.input", terminalId: t.id, data: "x".repeat(MAX_TERMINAL_INPUT_BYTES + 1) })).toMatchObject({ code: "too_large" });
       expect(await c.request({ type: "terminal.input", terminalId: t.id, data: "é".repeat(MAX_TERMINAL_INPUT_BYTES / 2 + 1) })).toMatchObject({ code: "too_large" });
-      expect(await c.request({ type: "terminal.input", terminalId: t.id, data: "x".repeat(MAX_TERMINAL_INPUT_BYTES) })).toMatchObject({ type: "reply" });
+      // Input the shell consumes (comment lines), drained before close: node-pty 1.1.0 retries a write that got EAGAIN on its fd
+      // even after the PTY closed, so input still queued then lands on whichever socket reuses that fd number (seen as a 400 upgrade).
+      const line = `#${"x".repeat(1022)}\r`;
+      await c.request({ type: "terminal.attach", terminalId: t.id });
+      expect(await c.request({ type: "terminal.input", terminalId: t.id, data: line.repeat(MAX_TERMINAL_INPUT_BYTES / line.length) })).toMatchObject({ type: "reply" });
+      await c.request({ type: "terminal.input", terminalId: t.id, data: "echo drained-$((40+6))\r" });
+      await c.waitFor(() => output(c.inbox, t.id).includes("drained-46"));
       expect(await c.request({ type: "terminal.resize", terminalId: t.id, cols: 1001, rows: 24 })).toMatchObject({ code: "bad_size" });
       expect(await c.request({ type: "terminal.create", cwd: webRoot, cols: 80, rows: 1001 })).toMatchObject({ code: "bad_size" });
       await c.request({ type: "terminal.close", terminalId: t.id });
