@@ -1010,6 +1010,7 @@ export function SessionPane({
                 modes={session.permissionModes}
                 onMode={onMode}
                 onAttach={(f) => void attach(f)}
+                usage={view.contextUsage}
                 state={connected ? (turnRunning ? (view.state as "running" | "needs_input") : "idle") : "disconnected"}
                 hasInput={!!text.trim() || images.length > 0}
                 onSend={() => send()}

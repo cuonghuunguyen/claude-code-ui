@@ -1,5 +1,5 @@
 // Per-session client store keyed by part id; events apply idempotently by seq (docs/spec.md "Client state").
-import type { Effort, Event, Part, PermissionMode, SessionState, SlashCommand, SubscribeResult, TodoItem } from "@claude-ui/protocol";
+import type { ContextUsage, Effort, Event, Part, PermissionMode, SessionState, SlashCommand, SubscribeResult, TodoItem } from "@claude-ui/protocol";
 import { CONTEXT_TOOLS } from "./tools.ts";
 
 export type ToolCall = Extract<Part, { type: "tool_call" }>;
@@ -21,6 +21,8 @@ export type SessionView = {
   /** Seq of the subscribe reply: replayed changes up to it are older than the reply's values. */
   settingsSeq: number;
   commands: SlashCommand[];
+  /** Latest context_usage; undefined until the daemon reports it. */
+  contextUsage?: ContextUsage;
   /** Latest todo list (todo_update); pinned above the prompt box while a turn runs. */
   todos: TodoItem[];
   order: string[];
@@ -43,6 +45,7 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   if (part.type === "session_permission_mode") return { ...s, lastSeq: e.seq, permissionMode: part.mode };
   if (part.type === "session_effort") return { ...s, lastSeq: e.seq, effort: part.effort };
   if (part.type === "commands") return { ...s, lastSeq: e.seq, commands: part.commands };
+  if (part.type === "context_usage") return { ...s, lastSeq: e.seq, contextUsage: part.usage };
   if (part.type === "rewind") {
     const at = s.order.indexOf(part.userMessageId);
     if (at < 0) return { ...s, lastSeq: e.seq };

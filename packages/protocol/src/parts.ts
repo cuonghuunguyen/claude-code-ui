@@ -29,6 +29,12 @@ export type TokenUsage = {
   cacheCreationTokens: number;
 };
 
+/**
+ * Claude Code `/context` numbers (`getContextUsage()`): `totalTokens` of the `maxTokens` window, `percentage` rounded.
+ * `categories`: what fills the window, deferred ones (not loaded) left out; `kind` `buffer` (autocompact reserve) and `free` are not in `totalTokens`.
+ */
+export type ContextUsage = { totalTokens: number; maxTokens: number; percentage: number; categories: { name: string; tokens: number; kind: "used" | "free" | "buffer" }[] };
+
 /** A slash command or skill; invoked by sending `/name args` as prompt text. */
 export type SlashCommand = { name: string; description: string; argumentHint: string; aliases?: string[] };
 
@@ -79,6 +85,8 @@ export type Part = { parentId?: string } & (
   | { type: "commands"; id: "commands"; commands: SlashCommand[] }
   /** `costUsd`: this turn's cost; absent when unknown (first turn after a daemon restart). */
   | { type: "turn_result"; id: string; durationMs: number; costUsd?: number; usage: TokenUsage; isError: boolean }
+  /** Context window usage, after each turn and each compaction; a restored session gets it before its first prompt. */
+  | { type: "context_usage"; id: "context_usage"; usage: ContextUsage }
   /** Latest TodoWrite list of the main agent; `id` = `<toolUseId>:todos`. */
   | { type: "todo_update"; id: string; items: TodoItem[] }
   /** An Agent/Task call; `id` = `toolUseId`, its `tool_result` is `<toolUseId>:result`, child parts have `parentId` = `id`. */

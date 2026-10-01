@@ -156,11 +156,11 @@ describe("daemon", () => {
       await c.waitFor((m) => m.type === "event" && m.part.type === "session_state");
       const first = c.inbox.find((m) => m.type === "event") as { seq: number };
       expect(first.seq).toBe(1);
-      // An idle restored session spawns no SDK process until it is prompted.
-      expect(calls.filter((o) => o.resume === id)).toHaveLength(0);
+      // An idle restored session spawns no prompt query until it is prompted (only the throwaway usage query, serialized daemon-wide).
+      expect(calls.filter((o) => o.resume === id && o.canUseTool)).toHaveLength(0);
 
       await c.request({ type: "session.prompt", sessionId: id, text: "third" });
-      expect(calls.filter((o) => o.resume === id)).toHaveLength(1);
+      expect(calls.filter((o) => o.resume === id && o.canUseTool)).toHaveLength(1);
       await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
 
       expect(await c.request({ type: "session.subscribe", sessionId: "../../etc/passwd", sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
@@ -491,7 +491,7 @@ describe("daemon", () => {
       expect(await c.request({ type: "session.subscribe", sessionId: outside, sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
       await c.request({ type: "session.subscribe", sessionId: inside, sinceSeq: 0 });
       await c.request({ type: "session.prompt", sessionId: inside, text: "go on" });
-      expect(calls.filter((o) => o.resume === inside)).toHaveLength(1);
+      expect(calls.filter((o) => o.resume === inside && o.canUseTool)).toHaveLength(1);
       const again = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; state: string }[] } };
       // State now comes from the live session, not "closed".
       expect(["running", "idle"]).toContain(again.result.sessions.find((s) => s.id === inside)?.state);

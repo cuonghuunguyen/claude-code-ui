@@ -7,6 +7,7 @@ import {
   type PermissionResult,
   type PermissionUpdate,
   type Query,
+  type SDKControlGetContextUsageResponse,
   type SDKMessage,
   type SDKUserMessage,
   type SessionMessage,
@@ -81,6 +82,8 @@ export class Session {
   private rewinding = false;
   /** Pending permission requests and questions by requestId (docs/spec.md "Permission bridge", "Questions"). */
   private readonly pending = new Map<string, { part: PermissionPart | QuestionPart; resolve: (r: PermissionResult) => void }>();
+  /** Bumped per refreshUsage(): an older answer that arrives later is dropped. */
+  private usageRequest = 0;
 
   constructor(
     readonly cwd: string,
@@ -106,6 +109,7 @@ export class Session {
       if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
     }
     this.setState("idle");
+    void this.refreshUsage();
   }
 
   /** Rebuilds a session from its SDK transcript (`getSessionMessages()`); a prompt resumes it with the same ID. */
@@ -200,6 +204,8 @@ export class Session {
     this.model = model;
     this.emit({ type: "session_model", id: "session_model", model });
     this.settingsChanged();
+    // The window size can differ per model.
+    void this.refreshUsage();
   }
 
   /** Applies from the next turn on; before the query runs it becomes the start option. */
@@ -392,6 +398,7 @@ export class Session {
         if (m.type === "system" && (m.subtype === "init" || m.subtype === "status") && m.permissionMode) this.setMode(m.permissionMode);
         for (const part of this.adapter.convert(m)) this.emit(part);
         if (m.type === "result") this.setState("idle");
+        if (m.type === "result" || (m.type === "system" && m.subtype === "compact_boundary")) void this.refreshUsage();
       }
       if (generation === this.generation) this.setState("closed");
     } catch (err) {
@@ -402,6 +409,41 @@ export class Session {
     } finally {
       // Nothing waits for these answers any more.
       for (const id of [...this.pending.keys()]) this.cancel(id, "Session ended");
+    }
+  }
+
+  /**
+   * Logs a context_usage part from `getContextUsage()`. A restored session not yet resumed asks a throwaway query resumed
+   * on its transcript and closes it; persistSession: false, else the CLI appends a cost-state line on close and the bumped mtime
+   * moves the session to the top of the list. "summary": no token-count requests.
+   * Throwaway queries run one at a time daemon-wide (a reload subscribes every restored tab at once, FIX-LEAK); a queued one
+   * is dropped when the session got a real query or a newer request meanwhile.
+   */
+  private async refreshUsage() {
+    const request = ++this.usageRequest;
+    if (this.query) return this.readUsage(this.query, request);
+    const run = throwawayTail.then(async () => {
+      if (this.query || request !== this.usageRequest) return;
+      const q = (this.opts.query ?? sdkQuery)({
+        prompt: new InputQueue(),
+        options: { resume: this.id, persistSession: false, cwd: this.cwd, model: this.model === "default" ? undefined : this.model, settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env) },
+      });
+      try {
+        await this.readUsage(q, request);
+      } finally {
+        q.close();
+      }
+    });
+    throwawayTail = run.catch(() => {});
+    return run;
+  }
+
+  private async readUsage(q: Query, request: number) {
+    try {
+      const u = await q.getContextUsage({ detail: "summary" });
+      if (request === this.usageRequest) this.emit({ type: "context_usage", id: "context_usage", usage: contextUsage(u) });
+    } catch (err) {
+      console.error(`session ${this.id}: context usage failed:`, err);
     }
   }
 
@@ -431,6 +473,16 @@ export function transcriptModel(history: SessionMessage[]): string | undefined {
   }
   return model;
 }
+
+/** Tail of the daemon-wide queue of throwaway usage queries (refreshUsage()). */
+let throwawayTail: Promise<unknown> = Promise.resolve();
+
+const contextUsage = (u: SDKControlGetContextUsageResponse) => ({
+  totalTokens: u.totalTokens,
+  maxTokens: u.maxTokens,
+  percentage: u.percentage,
+  categories: u.categories.flatMap(({ name, tokens, kind }) => (kind === "deferred" ? [] : [{ name, tokens, kind }])),
+});
 
 /** supportedModels() needs a query; this one gets no prompt and is closed right after the answer. */
 export async function listModels(query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> {
