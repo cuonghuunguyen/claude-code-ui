@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { ArrowUpIcon, BrainIcon, FilePenIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
 import type { ContextUsage, Effort, ModelInfo, PermissionMode } from "@claude-ui/protocol";
 import { ContextMeter } from "./context-meter.tsx";
+import type { Totals } from "./status-bar.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /** Claude Code's names for the modes; `short` fits the toolbar on a phone. */
@@ -87,6 +88,8 @@ export function PromptToolbar(props: {
   onAttach: (files: File[]) => void;
   /** Context window meter left of send; hidden until the session reports its usage. */
   usage?: ContextUsage;
+  /** Session token totals for the context breakdown. */
+  stats?: Totals;
   /** What the send button shows: the session state, or `disconnected` while the daemon is unreachable. */
   state: SendState;
   /** Text or images are in the prompt box: idle it sends, during a turn it steers. */
@@ -158,7 +161,7 @@ export function PromptToolbar(props: {
           />
         )}
       </div>
-      {props.usage && <ContextMeter usage={props.usage} />}
+      {props.usage && <ContextMeter usage={props.usage} stats={props.stats} />}
       <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onStop={props.onStop} onFocusLost={props.onFocusLost} />
     </div>
   );
@@ -203,7 +206,7 @@ function SendButton({ state, hasInput, onSend, onStop, onFocusLost }: { state: S
       data-testid={busy && !steer ? "toolbar-stop" : "send"}
       ref={ref}
       disabled={disabled}
-      className={`${SEND_BASE} ${state === "needs_input" ? "bg-warning text-background motion-safe:animate-pulse" : "bg-primary text-primary-foreground"}`}
+      className={`${SEND_BASE} ${state === "needs_input" ? "bg-warning text-background motion-safe:animate-pulse" : "bg-send text-primary-foreground"}`}
       onClick={steer || state === "idle" ? onSend : onStop}
     >
       {state === "running" && <LoaderCircleIcon aria-hidden className="absolute size-5.5 animate-spin opacity-60 motion-reduce:animate-none pointer-coarse:size-8" />}

@@ -215,7 +215,7 @@ function Keybind({ spec }: { spec: string }) {
   return (
     <kbd className="flex shrink-0 gap-0.5 font-sans pointer-coarse:hidden" data-testid="keybind">
       {keyLabels(spec).map((k) => (
-        <span key={k} className="grid h-3.5 min-w-3.5 place-items-center rounded-xs bg-muted px-0.5 font-medium text-[11px] text-muted-foreground uppercase leading-none">
+        <span key={k} className="grid h-3.5 min-w-3.5 place-items-center rounded-xs bg-kbd px-0.5 font-medium text-[11px] text-muted-foreground uppercase leading-none">
           {k}
         </span>
       ))}

@@ -31,16 +31,38 @@ const replies: Record<string, unknown> = {
   "fs.list": { entries: [] },
   "fs.search": { paths: [] },
   "fs.read": { content: "x", mtime: 1 },
+  "terminal.list": { terminals: [{ id: "t1", title: "Terminal 1" }] },
+  "terminal.attach": { buffer: "" },
   "session.rewindPreview": { filesChanged: [], insertions: 0, deletions: 0, conversation: true },
 };
+// xterm needs a canvas; the panel only has to mount.
+vi.mock("@xterm/xterm", () => ({
+  Terminal: class {
+    options = {};
+    cols = 80;
+    rows = 24;
+    loadAddon() {}
+    open() {}
+    focus() {}
+    write() {}
+    reset() {}
+    onData() {}
+    onResize() {}
+    attachCustomKeyEventHandler() {}
+    dispose() {}
+  },
+}));
+vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 let emit: (e: unknown) => void = () => {};
+let sessionsChanged: (m: unknown) => void = () => {};
 const sent: { type: string }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
-  connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
+  connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void; onSessionsChanged?: (m: unknown) => void }) => {
     emit = opts.onEvent;
+    sessionsChanged = opts.onSessionsChanged ?? (() => {});
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
-    return { request: async (m: { type: string }) => (sent.push(m), replies[m.type] ?? {}), onFsChanged: () => () => {}, close() {} };
+    return { request: async (m: { type: string }) => (sent.push(m), replies[m.type] ?? {}), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
   },
 }));
 const { App } = await import("./App.tsx");
@@ -183,4 +205,115 @@ it("Remove project asks first; Cancel keeps it, Remove sends project.remove", as
   await remove();
   await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-confirm"]')!.click());
   expect(removeSent()).toEqual([{ type: "project.remove", cwd: "/p/demo" }]);
+});
+
+const openNewTab = async () => {
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="project-new-session"]')!.click());
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+};
+const newPrompt = () => el.querySelector<HTMLElement>('[data-testid="new-session-tab"] textarea');
+const paletteRow = (title: string) => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith(title));
+
+it("Ctrl+L on the new-session tab focuses its first prompt", async () => {
+  await openNewTab();
+  (document.activeElement as HTMLElement).blur();
+  await press({ key: "l", code: "KeyL", ctrlKey: true });
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(newPrompt());
+});
+
+it("the palette on the new-session tab changes the draft's permission mode, and offers Bypass when the daemon allows it", async () => {
+  replies["session.list"] = { sessions: [session], projects: ["/p/demo"], permissionModes: ["default", "acceptEdits", "plan", "bypassPermissions"] };
+  try {
+    // Mounted again, so the first session.list brings the daemon's modes.
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    await openNewTab();
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    expect(paletteRow("Focus prompt")).toBeDefined();
+    // No side panel or terminal on the new-session tab.
+    expect(paletteRow("Toggle side panel")).toBeUndefined();
+    expect(paletteRow("Toggle terminal")).toBeUndefined();
+    await act(async () => paletteRow("Change permission mode")!.click());
+    expect(paletteRow("Bypass permissions")).toBeDefined();
+    await act(async () => paletteRow("Plan mode")!.click());
+    expect(el.querySelector('[data-testid="new-session-tab"] [data-testid="mode-select"]')?.textContent).toContain("Plan mode");
+  } finally {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+  }
+});
+
+it("after Remove project the focus moves to the next project row, not to the page", async () => {
+  const other: SessionListItem = { ...session, id: "22222222-2222-3333-4444-555555555555", cwd: "/p/other", title: "Other" };
+  replies["session.list"] = { sessions: [session, other], projects: ["/p/demo", "/p/other"] };
+  try {
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    await act(async () => el.querySelector<HTMLElement>('[data-cwd="/p/demo"] [data-testid="project-remove"]')!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-confirm"]')!.click());
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(document.activeElement).toBe(el.querySelector('[data-cwd="/p/other"] [data-testid="group-toggle"]'));
+  } finally {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+  }
+});
+
+it("Remove project of a middle row focuses the row below it, whether the reply lands before or after the dialog closes", async () => {
+  const at = (cwd: string, n: number): SessionListItem => ({ ...session, id: `2222222${n}-2222-3333-4444-555555555555`, cwd, title: cwd });
+  replies["session.list"] = { sessions: [session, at("/p/mid", 1), at("/p/low", 2)], projects: ["/p/demo", "/p/mid", "/p/low"] };
+  try {
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    const order = [...el.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].map((r) => r.dataset.cwd);
+    const [, mid, below] = order;
+    // The daemon's list after the remove arrives before the dialog's close finishes.
+    replies["session.list"] = { sessions: [session, at("/p/mid", 1), at("/p/low", 2)].filter((s) => s.cwd !== mid), projects: order.filter((c) => c !== mid) as string[] };
+    await act(async () => el.querySelector<HTMLElement>(`[data-cwd="${mid}"] [data-testid="project-remove"]`)!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-confirm"]')!.click());
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(el.querySelector(`[data-cwd="${mid}"]`)).toBeNull();
+    expect(document.activeElement).toBe(el.querySelector(`[data-cwd="${below}"] [data-testid="group-toggle"]`));
+  } finally {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+  }
+});
+
+it("a project removed by another client closes its open session tabs here", async () => {
+  const tab = () => el.querySelector(`[data-tab-id="${ID}"]`);
+  expect(tab()).not.toBeNull();
+  replies["session.list"] = { sessions: [], projects: [] };
+  try {
+    await act(async () => sessionsChanged({ type: "sessions.changed" }));
+    await act(async () => {});
+    expect(tab()).toBeNull();
+    expect(el.textContent).not.toContain("no longer exists");
+  } finally {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+  }
+});
+
+it("xterm is code split: App loads the terminal panel lazily", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { URL: NodeURL } = await import("node:url");
+  const src = readFileSync(new NodeURL("./App.tsx", import.meta.url), "utf8");
+  expect(src).not.toMatch(/^import .* from "\.\/terminal-panel\.tsx";/m);
+  expect(src).toMatch(/lazy\(\(\) => import\("\.\/terminal-panel\.tsx"\)/);
+});
+
+it("the terminal panel stays open across a reload", async () => {
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
+  expect(el.querySelector('[data-testid="terminal-toggle"]')!.getAttribute("aria-pressed")).toBe("true");
+  act(() => root.unmount());
+  root = createRoot(el);
+  await act(async () => root.render(<App />));
+  await act(async () => {});
+  expect(el.querySelector('[data-testid="terminal-toggle"]')!.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
+  localStorage.clear();
 });

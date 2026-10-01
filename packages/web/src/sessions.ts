@@ -25,7 +25,7 @@ export function groupByCwd(items: SessionListItem[], query = "", projects?: stri
 }
 
 /** "/p/x/" and "/p/x" are one project (as in the daemon). */
-const projectCwd = (cwd: string) => cwd.replace(/(.)\/+$/, "$1");
+export const projectCwd = (cwd: string) => cwd.replace(/(.)\/+$/, "$1");
 export const inProject = (cwd: string) => (s: SessionListItem) => projectCwd(s.cwd) === cwd;
 
 /** `list` with one session's fields replaced: an action shows at once, before the daemon's list refetch. */

@@ -284,3 +284,12 @@ it("sends a paste above MAX_TERMINAL_INPUT_BYTES in parts, each within the limit
   for (const p of parts) expect(new TextEncoder().encode(p).length).toBeLessThanOrEqual(MAX_TERMINAL_INPUT_BYTES);
   expect(parts[0]!.at(-1)).toBe("a");
 });
+
+it("a click on the already selected tab gives its shell the focus", async () => {
+  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+  await render(client);
+  await flush();
+  const before = xterm.all[0]!.focused;
+  await act(async () => el.querySelector<HTMLButtonElement>("[role=tab]")!.click());
+  expect(xterm.all[0]!.focused).toBe(before + 1);
+});

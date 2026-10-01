@@ -18,17 +18,25 @@ export function countdown(ms: number) {
   return d ? `${d}d ${h}hr ${m % 60}m` : h ? `${h}hr ${m % 60}m` : `${m % 60}m`;
 }
 
+/** `input`: uncached input + cache writes (status line In); `uncached`, `cacheWrite`, `cost` (sum of the known turn costs; `costPartial` when some turn has none): the context breakdown. */
+export type Totals = { input: number; output: number; cached: number; uncached: number; cacheWrite: number; cost?: number; costPartial?: boolean };
+
 /** Token totals of the session's turn results; undefined before the first one (also a restored transcript, which has none). */
 export function totals(v: SessionView) {
-  let t: { input: number; output: number; cached: number } | undefined;
+  let t: Totals | undefined;
   for (const id of v.order) {
     const p = v.parts.get(id)!;
     if (p.type !== "turn_result") continue;
-    t ??= { input: 0, output: 0, cached: 0 };
+    t ??= { input: 0, output: 0, cached: 0, uncached: 0, cacheWrite: 0 };
     t.input += p.usage.inputTokens + p.usage.cacheCreationTokens;
     t.output += p.usage.outputTokens;
     t.cached += p.usage.cacheReadTokens;
+    t.uncached += p.usage.inputTokens;
+    t.cacheWrite += p.usage.cacheCreationTokens;
+    if (p.costUsd !== undefined) t.cost = (t.cost ?? 0) + p.costUsd;
+    else t.costPartial = true;
   }
+  if (t?.cost === undefined) delete t?.costPartial;
   return t;
 }
 
@@ -115,7 +123,7 @@ export function StatusBar(props: {
   const weekly = plan?.windows.find((w) => w.kind === "weekly_all");
   const now = useNow(15_000, !!(session?.resetsAt || weekly?.resetsAt));
   const git = useGit(props.git, view.state);
-  const ctxPopup = usage && <ContextPopup usage={usage} side="top" />;
+  const ctxPopup = usage && <ContextPopup usage={usage} side="top" stats={sum} />;
   const planPopup = plan && <PlanPopup usage={plan} side="top" />;
   const modes = props.modes.includes(props.mode) ? props.modes : [props.mode, ...props.modes];
   return (

@@ -31,6 +31,8 @@ export function TerminalPanel({ client, status, cwd, onEmpty }: { client: Client
   const spawn = useRef(true);
   // A tab selected with a click (or a new terminal) focuses its shell; one selected with the arrow keys keeps the focus.
   const focusShell = useRef(true);
+  // Bumped by a click on the tab already selected: its shell takes the focus again.
+  const [focusTick, setFocusTick] = useState(0);
 
   const create = async () => {
     setError(undefined);
@@ -106,7 +108,7 @@ export function TerminalPanel({ client, status, cwd, onEmpty }: { client: Client
                 aria-selected={t.id === activeId}
                 tabIndex={t.id === focusable ? 0 : -1}
                 className="h-full cursor-pointer whitespace-nowrap rounded-md pl-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                onClick={() => ((focusShell.current = true), setActiveId(t.id))}
+                onClick={() => ((focusShell.current = true), setActiveId(t.id), setFocusTick((n) => n + 1))}
                 data-testid="terminal-tab"
               >
                 {t.title}
@@ -134,7 +136,7 @@ export function TerminalPanel({ client, status, cwd, onEmpty }: { client: Client
         </p>
       )}
       {terminals.map((t) => (
-        <TerminalView key={t.id} client={client} status={status} id={t.id} active={t.id === activeId} focusShell={focusShell} onInputError={setError} />
+        <TerminalView key={t.id} client={client} status={status} id={t.id} active={t.id === activeId} focusShell={focusShell} focusTick={focusTick} onInputError={setError} />
       ))}
     </div>
   );
@@ -147,6 +149,7 @@ function TerminalView({
   id,
   active,
   focusShell,
+  focusTick,
   onInputError,
 }: {
   client: Client;
@@ -154,6 +157,7 @@ function TerminalView({
   id: string;
   active: boolean;
   focusShell: RefObject<boolean>;
+  focusTick: number;
   onInputError: (message: string | undefined) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -227,7 +231,7 @@ function TerminalView({
     if (!active || !v) return;
     v.fit.fit();
     if (focusShell.current) v.t.focus();
-  }, [active]);
+  }, [active, focusTick]);
 
   useEffect(() => {
     const css = getComputedStyle(document.documentElement);

@@ -13,8 +13,23 @@ import { cn } from "@/lib/utils";
 export const showTodoDock = (state: SessionState, items: TodoItem[], blocked: boolean) =>
   !blocked && (state === "running" || state === "needs_input") && items.some((i) => i.status !== "completed");
 
-// An in-progress item shows its active form (Claude Code spinner text).
-const label = (i: TodoItem) => (i.status === "in_progress" ? (i.activeForm ?? i.content) : i.content);
+// Collapsed or not, kept per browser across reloads.
+const COLLAPSED_KEY = "claude-ui.todoDockCollapsed";
+const loadOpen = () => {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) !== "1";
+  } catch {
+    return true;
+  }
+};
+const saveOpen = (open: boolean) => {
+  try {
+    if (open) localStorage.removeItem(COLLAPSED_KEY);
+    else localStorage.setItem(COLLAPSED_KEY, "1");
+  } catch {
+    // Storage blocked: the state lasts until the page reloads.
+  }
+};
 // Screen-reader status; the mark is aria-hidden and strikethrough is not announced.
 const statusText = { completed: "Completed", in_progress: "In progress", pending: "Pending" } as const;
 
@@ -36,13 +51,13 @@ function Mark({ status }: { status: TodoItem["status"] }) {
 }
 
 export function TodoDock({ items, className }: { items: TodoItem[]; className?: string }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(loadOpen);
   const done = items.filter((i) => i.status === "completed").length;
   const active = items.find((i) => i.status === "in_progress") ?? items.find((i) => i.status === "pending");
   return (
     <Task
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(o) => (setOpen(o), saveOpen(o))}
       data-testid="todo-dock"
       className={cn("w-full overflow-hidden rounded-xl border-[0.5px] bg-muted", className)}
     >
@@ -52,7 +67,7 @@ export function TodoDock({ items, className }: { items: TodoItem[]; className?: 
         </span>
         {!open && active && (
           <span data-testid="todo-preview" className="ml-1 min-w-0 flex-1 truncate text-muted-foreground">
-            {label(active)}
+            {active.content}
           </span>
         )}
         <ChevronDownIcon
@@ -79,7 +94,7 @@ export function TodoDock({ items, className }: { items: TodoItem[]; className?: 
               <Mark status={item.status} />
               <span className="min-w-0">
                 <span className="sr-only">{statusText[item.status]}: </span>
-                {label(item)}
+                {item.content}
               </span>
             </TaskItem>
           ))}

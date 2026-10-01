@@ -10,7 +10,7 @@ import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 const el = document.createElement("div");
 document.body.append(el);
 const root = createRoot(el);
-afterEach(() => act(() => root.render(<></>)));
+afterEach(() => (act(() => root.render(<></>)), localStorage.clear()));
 
 const items: TodoItem[] = [
   { content: "Inspect", status: "completed" },
@@ -21,7 +21,7 @@ const render = (todos: TodoItem[]) => act(async () => root.render(<TodoDock item
 const toggle = () => el.querySelector<HTMLButtonElement>('[data-testid="todo-dock"] button')!;
 
 describe("TodoDock", () => {
-  it("shows progress, each item, and the active form of the in-progress item", async () => {
+  it("shows progress and each item by its content, the in-progress one too (OpenCode)", async () => {
     await render(items);
     expect(toggle().textContent).toContain("1 of 3 todos completed");
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
@@ -29,7 +29,7 @@ describe("TodoDock", () => {
     // Status is announced as text, not only by the aria-hidden mark and strikethrough.
     expect(rows.map((r) => [r.dataset.status, r.textContent])).toEqual([
       ["completed", "Completed: Inspect"],
-      ["in_progress", "In progress: Changing b"],
+      ["in_progress", "In progress: Change b"],
       ["pending", "Pending: Test"],
     ]);
     // Item text 14px / 130% on the row itself (TaskItem's text-sm must not win); dock radius 10px (OpenCode rounded-xl).
@@ -43,7 +43,7 @@ describe("TodoDock", () => {
     await act(async () => toggle().click());
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
     expect(el.querySelector("[role=listitem]")).toBeNull();
-    expect(el.querySelector('[data-testid="todo-preview"]')?.textContent).toBe("Changing b");
+    expect(el.querySelector('[data-testid="todo-preview"]')?.textContent).toBe("Change b");
     // Chevron down while open, up while collapsed (OpenCode).
     expect(toggle().querySelector("svg")!.getAttribute("class")).toContain("rotate-180");
     await act(async () => toggle().click());
@@ -61,7 +61,19 @@ describe("TodoDock", () => {
     ]);
     expect(toggle().textContent).toContain("2 of 3 todos completed");
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
-    expect(el.querySelector('[data-testid="todo-preview"]')?.textContent).toBe("Testing");
+    expect(el.querySelector('[data-testid="todo-preview"]')?.textContent).toBe("Test");
+  });
+
+  it("keeps the collapsed state across a reload (per browser)", async () => {
+    await render(items);
+    await act(async () => toggle().click());
+    act(() => root.render(<></>));
+    await render(items);
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    await act(async () => toggle().click());
+    act(() => root.render(<></>));
+    await render(items);
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
   });
 });
 

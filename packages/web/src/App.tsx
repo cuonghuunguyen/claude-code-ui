@@ -1,4 +1,4 @@
-import { Activity, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type RefObject } from "react";
+import { Activity, lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type RefObject } from "react";
 import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SquareTerminalIcon, SunIcon } from "lucide-react";
 import type {
   ContextUsage,
@@ -39,9 +39,9 @@ import { nextMode, PromptToolbar, type SendState } from "./toolbar.tsx";
 import { choose, matchCommands } from "./commands.ts";
 import { activeMention, insertAtCaret, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
-import { inProject, patchSession } from "./sessions.ts";
+import { inProject, patchSession, projectCwd } from "./sessions.ts";
 import { PlanMeter } from "./plan-meter.tsx";
-import { StatusBar } from "./status-bar.tsx";
+import { StatusBar, totals, type Totals } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
@@ -54,7 +54,6 @@ import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { relPath } from "./tools.ts";
 import { FilesPanel } from "./files-panel.tsx";
 import { ChangesPanel } from "./changes-panel.tsx";
-import { TerminalPanel } from "./terminal-panel.tsx";
 import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
@@ -71,6 +70,24 @@ type Client = ReturnType<typeof connect>;
 // The active tab lives in the URL hash, so a reload reopens it.
 const hashTab = () => tabFromHash(location.hash);
 const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-raised";
+// xterm (~300 KB) loads with the first opened terminal panel, not with the app.
+const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ default: m.TerminalPanel })));
+const TERMINAL_KEY = "claude-ui.terminalOpen";
+const loadFlag = (key: string) => {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+};
+const saveFlag = (key: string, on: boolean) => {
+  try {
+    if (on) localStorage.setItem(key, "1");
+    else localStorage.removeItem(key);
+  } catch {
+    // Storage blocked: the state lasts until the page reloads.
+  }
+};
 const hashId = () => (hashTab() === NEW_TAB ? undefined : hashTab());
 
 const pageFocused = () => document.visibilityState === "visible" && document.hasFocus();
@@ -95,6 +112,10 @@ export function App() {
   const [projects, setProjects] = useState<string[]>([]);
   // Project the new-session tab starts in.
   const [draftCwd, setDraftCwd] = useState<string>();
+  // The new-session tab's model, mode and effort: here, not in the tab, so the palette can change them too.
+  const [draft, setDraft] = useState<StartOptions>(NEW_DRAFT);
+  // Modes a new session may start in (session.list): bypassPermissions only when the daemon enables it.
+  const [newModes, setNewModes] = useState<PermissionMode[]>(NEW_SESSION_MODES);
   const [openingProject, setOpeningProject] = useState(false);
   const newPrompt = useRef<HTMLTextAreaElement>(null);
   const [views, setViews] = useState<Record<string, SessionView>>({});
@@ -104,6 +125,9 @@ export function App() {
     const h = hashTab();
     return h ? openTab(loadTabs(), h) : loadTabs();
   });
+  // A closed or replaced new-session tab starts with the defaults next time.
+  const draftOpen = tabs.includes(NEW_TAB);
+  useEffect(() => void (!draftOpen && setDraft(NEW_DRAFT)), [draftOpen]);
   const [theme, setTheme] = useState<ThemePref>(loadPref);
   const [error, setError] = useState<string>();
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
@@ -131,7 +155,9 @@ export function App() {
   // A user message whose rewind panel the palette asked for, waiting for its SessionPane.
   const [rewindTo, setRewindTo] = useState<string>();
   // Wide screens: the terminal panel below the side panel (Toggle terminal); narrow screens show it as the "terminal" pane.
-  const [terminalOpen, setTerminalOpen] = useState(false);
+  // Kept per browser across reloads; the daemon's shells outlive the page.
+  const [terminalOpen, setTerminalOpen] = useState(() => loadFlag(TERMINAL_KEY));
+  useEffect(() => saveFlag(TERMINAL_KEY, terminalOpen), [terminalOpen]);
   // A mention from "Send selection to Claude", waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
@@ -146,6 +172,8 @@ export function App() {
   const [removing, setRemoving] = useState<string>();
   // Keeps the name while the dialog fades out.
   const lastRemoving = useRef("");
+  // Set on Remove confirm, read by the dialog's final focus.
+  const removed = useRef<{ next?: string }>(undefined);
   if (removing) lastRemoving.current = removing;
   const paletteOpener = useRef<Element>(null);
   const client = useRef<Client>(undefined);
@@ -153,6 +181,8 @@ export function App() {
   viewsRef.current = views;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+  const listRef = useRef(list);
+  listRef.current = list;
   const requested = useRef(new Set<string>());
   /** Seq of each session's last subscribe reply: events up to it are a replay of known changes, not new ones. */
   const replayedTo = useRef<Record<string, number>>({});
@@ -161,9 +191,13 @@ export function App() {
 
   async function refreshList() {
     try {
-      const { sessions, projects } = await client.current!.request<ListResult>({ type: "session.list" });
+      const { sessions, projects, permissionModes } = await client.current!.request<ListResult>({ type: "session.list" });
+      // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
+      const listed = new Set(sessions.map((s) => s.id));
+      closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
       setList(sessions);
       setProjects(projects);
+      if (permissionModes) setNewModes(permissionModes);
       if (restored.current) {
         for (const id of staleTabs(restored.current, new Set(sessions.map((s) => s.id)))) forget(id);
         restored.current = undefined;
@@ -350,6 +384,12 @@ export function App() {
     newSession(cwd);
   }
 
+  function closeTabs(gone: Set<string>) {
+    if (!gone.size) return;
+    setTabs((t) => t.filter((id) => !gone.has(id)));
+    if (gone.has(hashId() ?? "")) open(undefined), history.replaceState(null, "", location.pathname + location.search);
+  }
+
   /** Removes the project from the list (files and transcripts stay) and closes its session tabs. */
   async function removeProject(cwd: string) {
     setError(undefined);
@@ -357,9 +397,7 @@ export function App() {
       await client.current!.request({ type: "project.remove", cwd });
       // Gone at once; the list refresh below scans every transcript and can take seconds.
       setProjects((p) => p.filter((x) => x !== cwd));
-      const gone = new Set(list.filter(inProject(cwd)).map((s) => s.id));
-      setTabs((t) => t.filter((id) => !gone.has(id)));
-      if (activeId && gone.has(activeId)) open(undefined), history.replaceState(null, "", location.pathname + location.search);
+      closeTabs(new Set(list.filter(inProject(cwd)).map((s) => s.id)));
       if (draftCwd === cwd) setDraftCwd(undefined);
       await refreshList();
     } catch (e) {
@@ -432,6 +470,9 @@ export function App() {
   const panelSession = shown ?? lastShown.current;
   const panelView = panelSession && views[panelSession.id];
   const changedPaths = useMemo(() => (panelView ? sessionChanges(panelView).map((c) => c.path) : []), [panelView?.parts]);
+  // The pane tab counts the files the changes panel lists (a file created and deleted again is not listed).
+  const [listedChanges, setListedChanges] = useState<{ id: string; n: number }>();
+  const changeCount = listedChanges && listedChanges.id === panelSession?.id ? listedChanges.n : changedPaths.length;
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
   const upload = async (file: File) => {
@@ -461,11 +502,14 @@ export function App() {
     setPane("files");
     setPanel(true);
   };
+  const draftShown = activeId === NEW_TAB && tabs.includes(NEW_TAB);
   const commands = appCommands({
     tabs,
     activeId,
     sessions: list,
-    session: shown && {
+    session: draftShown
+      ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: newModes, running: false, prompts: [], draft: true }
+      : shown && {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
       mode: view?.permissionMode ?? shown.permissionMode,
@@ -485,13 +529,14 @@ export function App() {
     toggleSidePanel: () => (wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
     toggleTerminal: () => (wide(1024) ? setTerminalOpen((v) => !v) : setPane(pane === "terminal" ? "session" : "terminal")),
     focusPrompt: () => {
+      if (draftShown) return newPrompt.current?.focus();
       showSession();
       // After the pane shows: only the visible session's prompt box has a layout box.
       requestAnimationFrame(() => [...document.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"]')].find((el) => el.offsetParent)?.focus());
     },
-    setModel: (model) => configure({ type: "session.setModel", sessionId: shown!.id, model }),
-    setEffort: (effort) => configure({ type: "session.setEffort", sessionId: shown!.id, effort }),
-    setMode: (mode) => configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode }),
+    setModel: (model) => (draftShown ? setDraft((d) => ({ ...d, model })) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
+    setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
+    setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
   });
@@ -562,8 +607,24 @@ export function App() {
         title="Remove project?"
         description={`“${projectName(lastRemoving.current)}” leaves the list. Its files and sessions stay on disk; open the folder again to bring it back.`}
         confirm="Remove"
-        onConfirm={() => (setRemoving(undefined), void removeProject(removing!))}
+        onConfirm={() => {
+          // The row below (else above) is taken now: once project.remove answers, the removed row may be gone.
+          const cwds = [...document.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].map((r) => r.dataset.cwd);
+          const at = cwds.indexOf(removing);
+          removed.current = { next: cwds[at + 1] ?? cwds[at - 1] };
+          setRemoving(undefined);
+          void removeProject(removing!);
+        }}
         onCancel={() => setRemoving(undefined)}
+        // The removed row's button is gone: the next project row, else the previous one, else the prompt box or Open project.
+        finalFocus={() => {
+          const target = removed.current;
+          removed.current = undefined;
+          if (target === undefined) return true;
+          const row = [...document.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].find((r) => target.next !== undefined && r.dataset.cwd === target.next);
+          const prompt = [...document.querySelectorAll<HTMLElement>("textarea")].find((t) => t.offsetParent && !t.closest(`[data-cwd]`));
+          return row?.querySelector<HTMLElement>('[data-testid="group-toggle"]') ?? prompt ?? document.querySelector<HTMLElement>('[data-testid="open-project"]');
+        }}
         testId="remove-project"
       />
       <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
@@ -610,7 +671,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", "terminal"]} value={pane} onChange={setPane} changes={changedPaths.length} />
+                  <PaneTabs panes={["session", "changes", "files", "terminal"]} value={pane} onChange={setPane} changes={changeCount} />
                 </div>
               )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
@@ -672,7 +733,7 @@ export function App() {
                 >
                 <section className={`${card} flex-1 ${pane === "terminal" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`} data-testid="side-panel">
                   <div className="hidden items-center border-b px-2 py-1 lg:flex">
-                    <PaneTabs panes={["changes", "files"]} value={pane === "changes" ? "changes" : "files"} onChange={setPane} changes={changedPaths.length} />
+                    <PaneTabs panes={["changes", "files"]} value={pane === "changes" ? "changes" : "files"} onChange={setPane} changes={changeCount} />
                     <IconButton className="ml-auto" label="Toggle terminal (Ctrl+`)" pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle">
                       <SquareTerminalIcon />
                     </IconButton>
@@ -688,9 +749,11 @@ export function App() {
                       watch={changedPaths}
                     />
                   </div>
-                  {pane === "changes" && views[panelSession.id] && (
+                  {views[panelSession.id] && (
                     <ChangesPanel
                       key={panelSession.id}
+                      hidden={pane !== "changes"}
+                      onCount={(n) => setListedChanges({ id: panelSession.id, n })}
                       client={client.current!}
                       view={views[panelSession.id]!}
                       cwd={panelSession.cwd}
@@ -704,12 +767,14 @@ export function App() {
                     className={`${card} ${pane === "terminal" ? "flex-1" : "max-lg:hidden"} ${!terminalOpen ? "lg:hidden" : panel ? "lg:h-70 lg:flex-none" : "lg:flex-1"}`}
                     data-testid="terminal-panel"
                   >
-                    <TerminalPanel
-                      client={client.current!}
-                      status={status}
-                      cwd={panelSession.cwd}
-                      onEmpty={() => (setTerminalOpen(false), pane === "terminal" && setPane("session"))}
-                    />
+                    <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading terminal…</p>}>
+                      <TerminalPanel
+                        client={client.current!}
+                        status={status}
+                        cwd={panelSession.cwd}
+                        onEmpty={() => (setTerminalOpen(false), pane === "terminal" && setPane("session"))}
+                      />
+                    </Suspense>
                   </section>
                 )}
                 </div>
@@ -722,11 +787,15 @@ export function App() {
                   cwd={draftCwd && projects.includes(draftCwd) ? draftCwd : projects[0]}
                   onCwd={setDraftCwd}
                   models={models}
+                  draft={draft}
+                  onDraft={setDraft}
+                  modes={newModes}
                   onOpenProject={() => setOpeningProject(true)}
                   onUpload={upload}
                   onSearch={search}
                   onStart={createSession}
                   inputRef={newPrompt}
+                  connected={status === "connected"}
                 />
               )}
               {activeId !== NEW_TAB && !shown && (
@@ -886,26 +955,32 @@ export function NewSession({
   cwd,
   onCwd,
   models,
+  draft,
+  onDraft,
+  modes,
   onOpenProject,
   onUpload,
   onSearch,
   onStart,
   inputRef,
+  connected = true,
 }: {
   projects: string[];
   cwd?: string;
   onCwd: (cwd: string) => void;
   models: ModelInfo[];
+  draft: StartOptions;
+  onDraft: (d: StartOptions) => void;
+  modes: PermissionMode[];
   onOpenProject: () => void;
   onUpload: (file: File) => Promise<string>;
   onSearch: (cwd: string) => (query: string) => Promise<string[]>;
   /** Rejects when the session was not created; the prompt box keeps the draft. */
   onStart: (cwd: string, opts: StartOptions, text: string, images: string[]) => Promise<void>;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
+  connected?: boolean;
 }) {
-  const [model, setModel] = useState("default");
-  const [mode, setMode] = useState<PermissionMode>("default");
-  const [effort, setEffort] = useState<Effort>("default");
+  const { model, mode, effort } = draft;
   const OPEN = "\0open";
 
   return (
@@ -916,16 +991,16 @@ export function NewSession({
           commands={[]}
           models={models}
           model={model}
-          onModel={setModel}
+          onModel={(m) => onDraft({ ...draft, model: m })}
           effort={effort}
-          onEffort={setEffort}
+          onEffort={(e) => onDraft({ ...draft, effort: e })}
           mode={mode}
-          // ponytail: bypassPermissions is not offered before the session exists (the daemon's allowBypass is per session info).
-          modes={NEW_SESSION_MODES}
-          onMode={setMode}
+          modes={modes}
+          onMode={(m) => onDraft({ ...draft, mode: m })}
           onUpload={onUpload}
           onSearch={cwd ? onSearch(cwd) : async () => []}
           onPrompt={(text, images) => (cwd ? onStart(cwd, { model, mode, effort }, text, images) : Promise.reject(new Error("no project")))}
+          state={connected ? "idle" : "disconnected"}
           label="First prompt"
           placeholder={cwd ? `Ask Claude in ${projectName(cwd)}…` : "Open a project to start"}
           autoFocus
@@ -968,6 +1043,7 @@ export function NewSession({
 
 export type StartOptions = { model: string; mode: PermissionMode; effort: Effort };
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
+const NEW_DRAFT: StartOptions = { model: "default", mode: "default", effort: "default" };
 
 export function SessionPane({
   scrollKey,
@@ -1143,6 +1219,7 @@ export function SessionPane({
               state={connected ? (turnRunning ? (view.state as "running" | "needs_input") : "idle") : "disconnected"}
               onInterrupt={onInterrupt}
               usage={view.contextUsage}
+              stats={totals(view)}
               todos={showTodoDock(view.state, view.todos, false) ? view.todos : undefined}
               label="Prompt"
               placeholder={turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
@@ -1184,6 +1261,7 @@ function PromptBox({
   state = "idle",
   onInterrupt,
   usage,
+  stats,
   todos,
   label,
   placeholder,
@@ -1216,6 +1294,7 @@ function PromptBox({
   onInterrupt?: () => void;
   /** Context window meter; none = hidden. */
   usage?: ContextUsage;
+  stats?: Totals;
   /** Todo dock above the box; none = hidden. */
   todos?: TodoItem[];
   label: string;
@@ -1247,7 +1326,8 @@ function PromptBox({
       .then((p) => current && setFound({ query: mention.query, paths: p }))
       .catch(() => current && setFound({ query: mention.query, paths: [] }));
     return () => void (current = false);
-  }, [mention?.query]);
+    // Again on reconnect: a search while offline rejects at once.
+  }, [mention?.query, state === "disconnected"]);
   // Keeps the caret after an inserted mention (a controlled textarea moves it to the end).
   useLayoutEffect(() => void input.current?.setSelectionRange(caret, caret), [text]);
   const edit = (t: string, c = t.length) => {
@@ -1289,7 +1369,7 @@ function PromptBox({
       const r = insertMention(text, mention!, paths[i]!);
       return edit(r.text, r.caret);
     }
-    const r = choose(matches[i]!);
+    const r = choose(matches[i]!, text);
     "send" in r ? send(r.send) : edit(r.text);
   };
   /** Images go with the prompt; other files are uploaded and become `@path` mentions. */
@@ -1447,11 +1527,13 @@ function PromptBox({
         onMode={onMode}
         onAttach={(f) => void attach(f)}
         usage={usage}
+        stats={stats}
         state={state}
         hasInput={!disabled && (!!text.trim() || images.length > 0)}
         onSend={() => send()}
         onStop={() => onInterrupt?.()}
-        onFocusLost={() => input.current?.focus()}
+        // Not on touch screens: focusing the prompt box there opens the soft keyboard (OpenCode leaves focus on the page).
+        onFocusLost={() => !window.matchMedia?.("(pointer: coarse)").matches && input.current?.focus()}
       />
     </div>
     </div>

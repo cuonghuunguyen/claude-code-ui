@@ -318,7 +318,11 @@ export function createDaemon(opts: {
     // An opened project whose directory is gone or left the roots is not listed (its New session would fail).
     const open = projects.list(listed).filter((cwd) => allowed(cwd));
     const shown = new Set(open);
-    return { projects: open, sessions: listed.filter((s) => shown.has(trim(s.cwd))).sort((a, b) => b.lastActivity - a.lastActivity) };
+    return {
+      projects: open,
+      sessions: listed.filter((s) => shown.has(trim(s.cwd))).sort((a, b) => b.lastActivity - a.lastActivity),
+      permissionModes: PERMISSION_MODES.filter((m) => m !== "bypassPermissions" || opts.allowBypass),
+    };
   }
 
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */

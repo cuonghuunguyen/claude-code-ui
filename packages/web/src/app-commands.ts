@@ -19,6 +19,8 @@ export type CommandContext = {
     running: boolean;
     /** User prompts, oldest first: the rewind targets. */
     prompts: { id: string; text: string }[];
+    /** The new-session tab's draft: no side panel or terminal yet. */
+    draft?: boolean;
   };
   models: ModelInfo[];
   canQuickOpen: boolean;
@@ -55,8 +57,8 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.tabs.length > 1 && cmd("tab.prev", "Previous tab", () => c.selectTab(step(-1)), KEYS.prevTab),
     at >= 0 && cmd("tab.close", "Close tab", () => c.closeTab(c.activeId!), KEYS.closeTab),
     cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar, KEYS.sidebar),
-    s && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel, KEYS.sidePanel),
-    s && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal, KEYS.terminal),
+    s && !s.draft && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel, KEYS.sidePanel),
+    s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal, KEYS.terminal),
     s && cmd("prompt.focus", "Focus prompt", c.focusPrompt, KEYS.focusPrompt),
     s &&
       c.models.length > 0 &&
