@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeMention, insertAtCaret, insertMention } from "./mentions.ts";
+import { activeMention, insertAtCaret, insertMention, splitUploads } from "./mentions.ts";
 
 describe("activeMention", () => {
   it("is the @word that ends at the caret, at the start or after whitespace", () => {
@@ -33,5 +33,21 @@ describe("insertAtCaret", () => {
     expect(insertAtCaret("fix ", 4, "@a.ts")).toEqual({ text: "fix @a.ts ", caret: 10 });
     expect(insertAtCaret("line\n", 5, "@a.ts")).toEqual({ text: "line\n@a.ts ", caret: 11 });
     expect(insertAtCaret("fix\nthis", 3, "@a.ts")).toEqual({ text: "fix @a.ts\nthis", caret: 9 });
+  });
+});
+
+describe("splitUploads", () => {
+  it("takes attached files (upload paths) out of the text, keeping other mentions", () => {
+    expect(splitUploads('read @/tmp/claude-ui-Ab12Cd/u-Xy34Ef/notes.txt and @"/t/u-Zz99Qq/my notes.md" @src/a.ts')).toEqual({
+      text: "read and @src/a.ts",
+      files: [
+        { path: "/tmp/claude-ui-Ab12Cd/u-Xy34Ef/notes.txt", name: "notes.txt" },
+        { path: "/t/u-Zz99Qq/my notes.md", name: "my notes.md" },
+      ],
+    });
+  });
+
+  it("leaves text without uploads as it is", () => {
+    expect(splitUploads("see @src/u-main.ts  me@/x/u-abcdef/y")).toEqual({ text: "see @src/u-main.ts  me@/x/u-abcdef/y", files: [] });
   });
 });
