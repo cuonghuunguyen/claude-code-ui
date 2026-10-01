@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Part } from "@claude-ui/protocol";
 import { applyEvent, emptySession, timeline } from "./store.ts";
-import { editFiles, toolSummary } from "./tools.ts";
+import { editFiles, filePath, toolSummary } from "./tools.ts";
 
 const call = (id: string, tool: string, input: unknown = {}): Part => ({
   type: "tool_call",
@@ -100,5 +100,18 @@ describe("toolSummary", () => {
     expect(toolSummary({ other: 1, name: "x" })).toBe("x");
     expect(toolSummary({})).toBe("");
     expect(toolSummary("raw")).toBe("");
+  });
+});
+
+describe("filePath", () => {
+  it("splits a path inside cwd into file name and relative directory", () => {
+    expect(filePath("/w/src/lib/a.ts", "/w")).toEqual({ name: "a.ts", dir: "src/lib" });
+    expect(filePath("/w/a.ts", "/w/")).toEqual({ name: "a.ts", dir: "" });
+  });
+
+  it("keeps the absolute directory for a path outside cwd, or without cwd", () => {
+    expect(filePath("/etc/hosts", "/w")).toEqual({ name: "hosts", dir: "/etc" });
+    expect(filePath("/wx/a.ts", "/w")).toEqual({ name: "a.ts", dir: "/wx" });
+    expect(filePath("/a.ts", "")).toEqual({ name: "a.ts", dir: "/" });
   });
 });

@@ -29,10 +29,12 @@ export type ToolPart = ToolUIPart | DynamicToolUIPart;
 
 export type ToolHeaderProps = {
   title?: string;
-  /** One-line summary of the input, shown after the tool name. */
-  summary?: string;
+  /** One-line summary of the input, shown after the tool name; a string is truncated at the end. */
+  summary?: ReactNode;
   /** Shown before the status, e.g. diff stats. */
   meta?: ReactNode;
+  /** Native tooltip of the whole row, e.g. the full file path. */
+  tooltip?: string;
   className?: string;
 } & (
   | { type: ToolUIPart["type"]; state: ToolUIPart["state"]; toolName?: never }
@@ -72,12 +74,25 @@ export const ToolStatusMark = ({ state }: { state: ToolPart["state"] }) => (
   </span>
 );
 
+/** Row trigger classes: 32px rows like OpenCode, 44px on touch screens. */
+export const toolRowClass =
+  "group/row flex min-h-8 w-full cursor-pointer items-center gap-2 rounded-md text-left text-sm hover:bg-muted/50 pointer-coarse:min-h-11";
+
+/** Shown on hover, keyboard focus, while open, and always on touch screens (OpenCode chevron on hover). */
+export const ToolChevron = () => (
+  <ChevronDownIcon
+    aria-hidden
+    className="size-4 text-muted-foreground opacity-0 transition-[opacity,transform] group-hover/row:opacity-100 group-focus-visible/row:opacity-100 in-data-panel-open:rotate-180 in-data-panel-open:opacity-100 pointer-coarse:opacity-100 motion-reduce:transition-none"
+  />
+);
+
 /** Borderless row: tool name, muted summary, meta, status, chevron (OpenCode basic-tool trigger). */
 export const ToolHeader = ({
   className,
   title,
   summary,
   meta,
+  tooltip,
   type,
   state,
   toolName,
@@ -88,18 +103,16 @@ export const ToolHeader = ({
 
   return (
     <CollapsibleTrigger
-      className={cn(
-        "flex min-h-6 w-full cursor-pointer items-center gap-2 rounded-md text-left text-sm hover:bg-muted/50",
-        className
-      )}
+      className={cn(toolRowClass, className)}
+      title={tooltip}
       {...props}
     >
       <span className="shrink-0 font-medium">{title ?? derivedName}</span>
-      {summary && <span className="min-w-0 truncate text-muted-foreground">{summary}</span>}
+      {typeof summary === "string" ? summary && <span className="min-w-0 truncate text-muted-foreground">{summary}</span> : summary}
       <span className="ml-auto flex shrink-0 items-center gap-2">
         {meta}
         <ToolStatusMark state={state} />
-        <ChevronDownIcon className="size-4 text-muted-foreground transition-transform in-data-panel-open:rotate-180 motion-reduce:transition-none" />
+        <ToolChevron />
       </span>
     </CollapsibleTrigger>
   );

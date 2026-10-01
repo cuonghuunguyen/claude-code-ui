@@ -4,16 +4,16 @@ import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { useDark } from "./theme.ts";
 import type { ToolUIPart } from "ai";
-import { useMemo, useState, type ReactNode } from "react";
-import { CheckCircle2Icon, ChevronDownIcon, CircleDotIcon, CircleIcon, ListTodoIcon } from "lucide-react";
+import { createContext, use, useMemo, useState, type ReactNode } from "react";
+import { CheckCircle2Icon, CircleDotIcon, CircleIcon, ListTodoIcon } from "lucide-react";
 import { Task, TaskContent, TaskItem, TaskTrigger } from "@/components/ai-elements/task";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark } from "@/components/ai-elements/tool";
+import { Tool, ToolChevron, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark, toolRowClass } from "@/components/ai-elements/tool";
 import { CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
-import { diffStats, editFiles, readRange, toolSummary } from "./tools.ts";
+import { diffStats, editFiles, filePath, readRange, relPath, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 
@@ -32,8 +32,10 @@ const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {
   diffStyle: "unified",
   theme: { light: "pierre-light", dark: "pierre-dark" },
   overflow: "wrap",
-  disableFileHeader: true,
 };
+
+/** The session cwd: card headers and diff headers show file paths relative to it. */
+export const CwdContext = createContext("");
 
 // ponytail: ids of cards the user expanded, kept outside React so a remount (a Read merging into a context group,
 // a tab switch) keeps the state; never pruned, only expanded ids land here.
@@ -54,6 +56,7 @@ function useExpanded(id: string, force = false) {
 export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: ToolResult; awaiting?: boolean }) {
   const range = call.tool === "Read" ? readRange(call.input, result?.output) : "";
   const stats = useMemo(() => diffStats(call.tool, call.input), [call.tool, call.input]);
+  const path = field(call.input, "file_path") || field(call.input, "notebook_path");
   return (
     <Tool data-testid="tool-card" data-status={call.status} {...useExpanded(call.id, awaiting)}>
       <ToolHeader
@@ -62,7 +65,8 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
         state={awaiting ? "approval-requested" : STATE[call.status]}
         // Next to the tool name, which is never truncated like the summary.
         title={call.editedByUser ? `${call.tool} · edited by you` : undefined}
-        summary={[toolSummary(call.input), range].filter(Boolean).join(" · ")}
+        summary={path ? <FileSummary path={path} range={range} /> : toolSummary(call.input)}
+        tooltip={path || undefined}
         meta={
           stats && (
             <span data-testid="diff-stats" className="font-mono text-xs">
@@ -84,11 +88,34 @@ const field = (input: unknown, key: string) => {
   return typeof v === "string" ? v : "";
 };
 
+/** File name, then its directory relative to cwd; a narrow row cuts the directory from the left first, then the name; the range stays. */
+function FileSummary({ path, range }: { path: string; range: string }) {
+  const { name, dir } = filePath(path, use(CwdContext));
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+      <span data-testid="file-name" className="min-w-0 truncate">
+        {name}
+      </span>
+      {dir && (
+        <span data-testid="file-dir" className="min-w-0 shrink-[1000] truncate [direction:rtl]">
+          <bdi>{dir}</bdi>
+        </span>
+      )}
+      {range && (
+        <span data-testid="read-range" className="shrink-0">
+          · {range}
+        </span>
+      )}
+    </span>
+  );
+}
+
 /** Card body by tool type; tools without a purpose-built body get the generic JSON view. */
 export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult }) {
-  const output = result && <Lines text={text(result.output)} error={result.isError} ansi={call.tool === "Bash"} />;
+  const output = result && <Lines text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} />;
   switch (call.tool) {
     case "Bash":
+      // OpenCode shell anatomy: `$ command` and the output as plain text in one bordered box.
       return (
         <div className="max-h-60 space-y-2 overflow-auto rounded-md border p-3">
           <pre data-testid="bash-command" className="whitespace-pre-wrap font-mono text-xs">
@@ -151,7 +178,14 @@ function EditDiff({ call, result }: { call: ToolCall; result?: ToolResult }) {
 
 /** The Edit/Write diff of a tool input; `fallback` while the input is incomplete. Also used by the permission panel. */
 export function InputDiff({ tool, input, fallback }: { tool: string; input: unknown; fallback?: ReactNode }) {
-  const files = useMemo(() => editFiles(tool, input), [tool, input]);
+  const cwd = use(CwdContext);
+  const files = useMemo(() => {
+    const f = editFiles(tool, input);
+    if (!f) return undefined;
+    // File header (icon, path, +N -N) like OpenCode's diff card; the path relative to cwd.
+    const name = relPath(f.newFile.name, cwd);
+    return { oldFile: { ...f.oldFile, name }, newFile: { ...f.newFile, name } };
+  }, [tool, input, cwd]);
   const dark = useDark();
   const options = useMemo(() => ({ ...DIFF_OPTIONS, themeType: dark ? ("dark" as const) : ("light" as const) }), [dark]);
   if (!files) return fallback;
@@ -164,8 +198,8 @@ export function InputDiff({ tool, input, fallback }: { tool: string; input: unkn
 
 const MAX_LINES = 20;
 
-/** Monospace output, cut to MAX_LINES lines until expanded. */
-function Lines({ text, error, ansi }: { text: string; error: boolean; ansi: boolean }) {
+/** Monospace output, cut to MAX_LINES lines until expanded. `plain`: Bash output, ANSI colors and no box of its own. */
+function Lines({ text, error, plain = false }: { text: string; error: boolean; plain?: boolean }) {
   const [all, setAll] = useState(false);
   const lines = text.replace(/\n$/, "").split("\n");
   const shown = all ? lines.join("\n") : lines.slice(0, MAX_LINES).join("\n");
@@ -173,11 +207,13 @@ function Lines({ text, error, ansi }: { text: string; error: boolean; ansi: bool
     <div>
       <pre
         className={cn(
-          "overflow-x-auto whitespace-pre rounded-md p-2 font-mono text-xs",
-          error ? "bg-destructive/10 text-destructive" : "bg-muted/50",
+          "overflow-x-auto whitespace-pre font-mono text-xs",
+          error && "text-destructive",
+          !plain && "rounded-md p-2",
+          !plain && (error ? "bg-destructive/10" : "bg-muted/50"),
         )}
       >
-        {ansi
+        {plain
           ? parseAnsi(shown).map((seg, i) => (
               <span key={i} style={seg.style}>
                 {seg.text}
@@ -212,12 +248,12 @@ export function ContextGroup({
   const counts = [count(reads, "read", "reads"), count(calls.length - reads, "search", "searches")].filter(Boolean).join(", ");
   return (
     <Tool data-testid="context-group" {...useExpanded(`context:${calls[0]!.id}`, calls.some(awaiting))}>
-      <CollapsibleTrigger className="flex min-h-6 w-full cursor-pointer items-center gap-2 rounded-md text-left text-sm hover:bg-muted/50">
+      <CollapsibleTrigger className={toolRowClass}>
         {busy ? <Shimmer as="span" className="font-medium">Exploring</Shimmer> : <span className="font-medium">Explored</span>}
         <span className="truncate text-muted-foreground">{counts}</span>
         <span className="ml-auto flex shrink-0 items-center gap-2">
           {failed && <ToolStatusMark state="output-error" />}
-          <ChevronDownIcon className="size-4 text-muted-foreground transition-transform in-data-panel-open:rotate-180 motion-reduce:transition-none" />
+          <ToolChevron />
         </span>
       </CollapsibleTrigger>
       <ToolContent className="space-y-1 pl-3">

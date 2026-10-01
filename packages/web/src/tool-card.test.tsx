@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ToolCall } from "./store.ts";
-import { ContextGroup, SubagentGroup, TodoList, ToolBody, ToolCard } from "./tool-card.tsx";
+import { ContextGroup, CwdContext, SubagentGroup, TodoList, ToolBody, ToolCard } from "./tool-card.tsx";
 
 const call = (status: ToolCall["status"], tool = "Bash"): ToolCall => ({
   type: "tool_call",
@@ -56,6 +56,11 @@ describe("Bash card", () => {
     expect(html).not.toContain("Parameters");
   });
 
+  it("is one bordered box: command and output as plain text, no inner box", () => {
+    const html = renderToStaticMarkup(<ToolBody call={done("Bash", { command: "ls" })} result={result("file")} />);
+    expect(html).not.toContain("bg-muted");
+  });
+
   it("collapses output after 20 lines with an expand button", () => {
     const out = Array.from({ length: 25 }, (_, i) => `line${i + 1}`).join("\n");
     const html = renderToStaticMarkup(<ToolBody call={done("Bash", { command: "seq 25" })} result={result(out)} />);
@@ -75,8 +80,35 @@ describe("Bash card", () => {
 describe("Read card", () => {
   it("header shows the file path and the line range read, while collapsed", () => {
     const html = renderToStaticMarkup(<ToolCard call={done("Read", { file_path: "/w/a.ts", offset: 10, limit: 5 })} />);
-    expect(html).toContain("/w/a.ts · lines 10–14");
+    expect(html).toContain("a.ts");
+    expect(html).toContain("lines 10–14");
     expect(html).not.toContain('data-testid="read-path"');
+  });
+
+  it("header shows the file name, then the directory relative to cwd; the full path in a tooltip", () => {
+    const html = renderToStaticMarkup(
+      <CwdContext value="/w">
+        <ToolCard call={done("Read", { file_path: "/w/src/lib/a.ts" })} />
+      </CwdContext>,
+    );
+    // Tooltip on the whole row trigger, not only on the summary.
+    expect(html).toMatch(/<button[^>]*title="\/w\/src\/lib\/a.ts"/);
+    expect(html).toMatch(/data-testid="file-name"[^>]*>a.ts</);
+    // The directory, not the name, is cut when the row is narrow: right-to-left ellipsis.
+    expect(html).toMatch(/data-testid="file-dir" class="[^"]*\[direction:rtl\][^"]*"><bdi>src\/lib<\/bdi>/);
+    expect(html).not.toMatch(/>\/w\/src/);
+  });
+
+  it("a narrow row cuts the directory first, then the name; the range stays visible", () => {
+    const html = renderToStaticMarkup(
+      <CwdContext value="/w">
+        <ToolCard call={done("Read", { file_path: "/w/src/a.ts", offset: 1, limit: 2 })} />
+      </CwdContext>,
+    );
+    expect(html).toMatch(/data-testid="file-name" class="[^"]*min-w-0 truncate/);
+    expect(html).toMatch(/data-testid="file-dir" class="[^"]*shrink-\[1000\]/);
+    // The range does not shrink, so it is never clipped.
+    expect(html).toMatch(/<\/bdi><\/span><span data-testid="read-range" class="shrink-0[^"]*">· lines 1–2</);
   });
 
   it("body shows the file path, range and content", () => {

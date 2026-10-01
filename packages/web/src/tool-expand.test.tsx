@@ -147,3 +147,23 @@ it("the Explored row has a chevron like every other row", async () => {
   await render(view([call("r3", "Read", { file_path: "/p/a.ts" }), call("r4", "Read", { file_path: "/p/b.ts" })]));
   expect(el.querySelector('[data-testid="context-group"] button svg.lucide-chevron-down')).not.toBeNull();
 });
+
+it("timeline rhythm like OpenCode: 12px between tool rows, text 24px further down, 24px between turns", async () => {
+  await render(
+    view([
+      { type: "user_text", id: "u1", text: "go", images: [] },
+      call("b7", "Bash", { command: "ls" }),
+      call("b8", "Bash", { command: "pwd" }),
+      { type: "assistant_text", id: "a1", text: "done", streaming: false },
+      { type: "user_text", id: "u2", text: "again", images: [] },
+    ]),
+  );
+  // ConversationContent gap-3 (12px) between all rows; tool rows add no margin.
+  expect(el.querySelector('[data-testid="tool-card"]')!.parentElement!.className).toContain("gap-3");
+  expect(cards()[1]!.className).not.toMatch(/\bmt-/);
+  // Text part: 12px gap + 24px margin (message-part.css text part margin-top).
+  expect(el.querySelector('[data-testid="assistant-text"]')!.className).toMatch(/\bmt-6\b/);
+  // Turn gap: 12px gap + 12px margin = 24px (TurnGap h-6); the first prompt has no top margin.
+  const users = [...el.querySelectorAll<HTMLElement>('[data-testid="user-message"]')];
+  expect(users.map((u) => u.className.match(/\S*mt-3\b/)?.[0])).toEqual(["not-first:mt-3", "not-first:mt-3"]);
+});
