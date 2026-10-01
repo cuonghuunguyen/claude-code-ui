@@ -233,6 +233,35 @@ it("send button follows the session state: label, tooltip, spinner, needs input,
   expect(button().disabled).toBe(false);
 });
 
+it("focus moves from the send button to the prompt box when the button becomes disabled (keyboard stop, send)", async () => {
+  const { $, box, rerender } = await render({}, { ...emptySession(), state: "running" });
+  $("toolbar-stop")!.focus();
+  await rerender({ view: { ...emptySession(), state: "idle" } });
+  expect(document.activeElement).toBe(box);
+  await type(box, "hi");
+  $("send")!.focus();
+  await rerender({ connected: false });
+  expect(document.activeElement).toBe(box);
+  // Chrome blurs the button as soon as it is disabled, before React's effects run.
+  await rerender({ connected: true });
+  const send = $("send") as HTMLButtonElement;
+  send.focus();
+  send.disabled = true;
+  await act(async () => void send.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(document.activeElement).toBe(box);
+});
+
+it("send button: OpenCode contrast gradient and elevation; disconnected shows an offline icon", async () => {
+  const { $, rerender } = await render();
+  const button = () => $("prompt-toolbar")!.querySelector<HTMLButtonElement>("button[data-state]")!;
+  expect(button().className).toContain("shadow-button-contrast");
+  expect(button().className).toContain("bg-linear-to-b");
+  expect(button().querySelector(".lucide-wifi-off")).toBeNull();
+  await rerender({ connected: false });
+  expect(button().querySelector(".lucide-wifi-off")).not.toBeNull();
+  expect(button().querySelector(".lucide-arrow-up")).toBeNull();
+});
+
 it("nextMode wraps around; effortOptions lists the model's levels after default", () => {
   expect(nextMode(["default", "acceptEdits", "plan"], "plan")).toBe("default");
   expect(nextMode(["default", "acceptEdits", "plan", "bypassPermissions"], "plan")).toBe("bypassPermissions");

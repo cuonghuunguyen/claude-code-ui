@@ -55,6 +55,7 @@
     --radius-2xl: 12px;
     --shadow-raised: var(--elevation-raised);
     --shadow-floating: var(--elevation-floating);
+    --shadow-button-contrast: var(--elevation-button-contrast);
 }
 
 /* In-progress todo dot (OpenCode --animate-pulse-scale). */
@@ -101,6 +102,7 @@
     --overlay: #00000066;
     --elevation-raised: 0 2px 4px #0000000a, 0 1px 2px -1px #00000014, 0 0 0 0.5px #0000001f;
     --elevation-floating: 0 8px 16px #0000000a, 0 4px 8px #00000014, 0 0 0 0.5px #0000001f;
+    --elevation-button-contrast: 0 1px 1.5px #00000033, 0 0 0 0.5px #3a3a3a, inset 0 1px 2px #ffffff24, inset 0 -1px 2px #0000000f;
     /* Project avatars: bg / letter; dark letters where white fails 4.5:1. */
     --avatar-orange: #ee7330; --avatar-orange-fg: #161616;
     --avatar-yellow: #e7af36; --avatar-yellow-fg: #161616;
@@ -144,6 +146,7 @@
     --overlay: #000000a3;
     --elevation-raised: 0 2px 4px #0000004d, 0 1px 2px #0000004d, 0 0 0 0.5px #ffffff29, 0 -0.5px 0 #ffffff0f;
     --elevation-floating: 0 8px 16px #0000004d, 0 4px 8px #0000004d, 0 0 0 0.5px #ffffff29, 0 -0.5px 0 #ffffff0f;
+    --elevation-button-contrast: 0 1px 2px #00000066, 0 0 0 0.5px #ffffff66, 0 -0.5px 0 #ffffff4d;
     --avatar-orange: #723d22; --avatar-orange-fg: #ffffff;
     --avatar-yellow: #68552b; --avatar-yellow-fg: #ffffff;
     --avatar-cyan: #005a6e; --avatar-cyan-fg: #ffffff;
