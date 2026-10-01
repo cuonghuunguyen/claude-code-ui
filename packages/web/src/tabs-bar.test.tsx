@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { TabsBar, type TabInfo } from "./tabs-bar.tsx";
-import { NEW_TAB } from "./tabs.ts";
+import { NEW_TAB, closeTab, moveTab } from "./tabs.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -128,6 +128,104 @@ it("Delete on a focused tab closes it", async () => {
   expect(onClose).toHaveBeenCalledWith("b");
 });
 
+/** TabsBar wired to real tab state, as App does. */
+async function renderLive(initial = ["a", "b", "c"], initialActive = "b") {
+  function Live() {
+    const [s, set] = useState({ tabs: initial, active: initialActive as string | undefined });
+    return (
+      <TabsBar
+        tabs={s.tabs}
+        activeId={s.active}
+        info={(id) => INFO[id]!}
+        onSelect={(active) => set((v) => ({ ...v, active }))}
+        onClose={(id) => set((v) => closeTab(v.tabs, id, v.active))}
+        onMove={(from, to) => set((v) => ({ ...v, tabs: moveTab(v.tabs, from, to) }))}
+        onNew={() => {}}
+        onAction={() => {}}
+        onRenamed={() => {}}
+      />
+    );
+  }
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root!.render(<Live />));
+  const btn = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"] [role="tab"]`)!;
+  const order = () => [...el.querySelectorAll<HTMLElement>("[data-tab-id]")].map((t) => t.dataset.tabId);
+  const key = (id: string, init: KeyboardEventInit) => act(async () => void btn(id).dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init })));
+  return { el, btn, order, key };
+}
+
+it("after Delete closes the focused tab, focus moves to the tab that becomes active", async () => {
+  const { el, btn, key } = await renderLive();
+  btn("b").focus();
+  await key("b", { key: "Delete" });
+  expect(document.activeElement).toBe(btn("c"));
+  await key("c", { key: "Delete" });
+  expect(document.activeElement).toBe(btn("a"));
+  await key("a", { key: "Delete" });
+  expect(document.activeElement).toBe(el.querySelector('[data-testid="tab-new"]'));
+});
+
+it("Alt+Shift+Arrow and Ctrl+Shift+PageUp/PageDown move the focused tab; focus stays on it (WCAG 2.5.7)", async () => {
+  const { btn, order, key } = await renderLive();
+  btn("b").focus();
+  await key("b", { key: "ArrowLeft", altKey: true, shiftKey: true });
+  expect(order()).toEqual(["b", "a", "c"]);
+  expect(document.activeElement).toBe(btn("b"));
+  await key("b", { key: "ArrowLeft", altKey: true, shiftKey: true });
+  expect(order()).toEqual(["b", "a", "c"]);
+  await key("b", { key: "PageDown", ctrlKey: true, shiftKey: true });
+  expect(order()).toEqual(["a", "b", "c"]);
+  await key("b", { key: "ArrowRight", altKey: true, shiftKey: true });
+  expect(order()).toEqual(["a", "c", "b"]);
+  expect(document.activeElement).toBe(btn("b"));
+  await key("b", { key: "PageUp", ctrlKey: true, shiftKey: true });
+  expect(order()).toEqual(["a", "b", "c"]);
+});
+
+it("the tab context menu moves the tab left / right and closes it", async () => {
+  const { el, btn, order } = await renderLive();
+  const menu = async (id: string, item: string) => {
+    await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(items.map((i) => i.textContent).slice(0, 3)).toEqual(["Move left", "Move right", "Close tab"]);
+    await act(async () => items.find((i) => i.textContent === item)!.click());
+  };
+  await menu("b", "Move right");
+  expect(order()).toEqual(["a", "c", "b"]);
+  expect(document.activeElement).toBe(btn("b"));
+  await menu("b", "Move left");
+  expect(order()).toEqual(["a", "b", "c"]);
+  await menu("a", "Close tab");
+  expect(order()).toEqual(["b", "c"]);
+  expect(document.activeElement).toBe(btn("b"));
+  await menu("b", "Close tab");
+  expect(order()).toEqual(["c"]);
+  expect(document.activeElement).toBe(btn("c"));
+});
+
+it("Escape on the tab context menu returns focus to that tab", async () => {
+  const { el, btn } = await renderLive();
+  for (const id of ["b", "c"]) {
+    btn("b").focus();
+    await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    await act(async () => void (document.activeElement ?? document).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => {});
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(btn(id));
+  }
+});
+
+it("first and last tab: the move items that do nothing are disabled", async () => {
+  const { el } = await renderLive();
+  await act(async () => void el.querySelector('[data-tab-id="a"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 })));
+  const disabled = (t: string) => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === t)!.getAttribute("aria-disabled");
+  expect(disabled("Move left")).toBe("true");
+  expect(disabled("Move right")).not.toBe("true");
+});
+
 it("inactive tab titles use muted-foreground (4.5:1 in light and dark)", async () => {
   const { tab } = await render();
   expect(tab("a").querySelector('[role="tab"]')!.className).toMatch(/\btext-muted-foreground\b/);
@@ -144,16 +242,18 @@ it("the Home button left of the tabs toggles the sessions sidebar", async () => 
   expect(onHome).toHaveBeenCalled();
 });
 
-it("right click on a session tab opens the session menu; Delete is disabled while it runs; the new-session tab has none", async () => {
+it("right click on a session tab opens the session menu; Delete is disabled while it runs; the new-session tab has only the tab items", async () => {
   const { tab, onAction } = await render();
   const menu = async (id: string) => {
     await act(async () => void tab(id).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
     return document.querySelector<HTMLElement>('[role="menu"]');
   };
-  expect((await menu("c"))!.textContent).toBe("RenameArchiveDelete…");
+  expect((await menu("c"))!.textContent).toBe("Move leftMove rightClose tabRenameArchiveDelete…");
   await act(async () => document.querySelector<HTMLElement>('[data-testid="action-archive"]')!.click());
   expect(onAction).toHaveBeenLastCalledWith("c", "archive");
   expect((await menu("a"))!.querySelector('[data-testid="action-delete"]')!.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect((await menu(NEW_TAB))!.textContent).toBe("Move leftMove rightClose tab");
   await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
 });
 

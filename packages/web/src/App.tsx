@@ -425,7 +425,7 @@ export function App() {
   return (
     <AvatarColors value={colors}>
     <div className="flex h-dvh flex-col bg-background text-foreground">
-      <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3" data-testid="titlebar">
+      <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3 md:pl-4" data-testid="titlebar">
         <IconButton className="md:hidden" label="Sessions" onClick={() => setDrawer(true)} testId="open-drawer">
           <MenuIcon />
         </IconButton>
