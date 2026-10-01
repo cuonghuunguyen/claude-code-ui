@@ -13,8 +13,11 @@ describe("fuzzyRank", () => {
     expect(fuzzyRank(paths, "rdme")).toEqual(["README.md"]);
   });
 
-  it("puts file name matches before path matches before scattered matches", () => {
-    expect(fuzzyRank(paths, "auth")).toEqual(["docs/author.md", "src/auth/AuthService.ts", "src/a/u/t/h.ts"]);
+  it("ranks like OpenCode (fuzzysort): contiguous and word-start matches first", () => {
+    const shop = ["src/server/notes-untracked.ts", "README.md", "docs/spec.md", "src/client/app.tsx", "src/client/searchbox.tsx", "src/server/search.ts", "src/server/session.ts"];
+    expect(fuzzyRank(shop, "srvses")).toEqual(["src/server/session.ts", "src/server/search.ts", "src/server/notes-untracked.ts"]);
+    expect(fuzzyRank(shop, "search")).toEqual(["src/server/search.ts", "src/client/searchbox.tsx"]);
+    expect(fuzzyRank(shop, "cltapp")).toEqual(["src/client/app.tsx"]);
   });
 
   it("lists shallow paths first for an empty query", () => {
@@ -36,7 +39,7 @@ describe("searchFiles", () => {
   symlinkSync(outside, join(dir, "linked"));
 
   it("returns paths relative to the directory, folders with a trailing slash", () => {
-    expect(searchFiles(dir, "main")).toEqual(["src/deep/main.ts", ".env.main"]);
+    expect(searchFiles(dir, "main").sort()).toEqual([".env.main", "src/deep/main.ts"]);
     expect(searchFiles(dir, "deep")).toEqual(["src/deep/", "src/deep/main.ts"]);
   });
 

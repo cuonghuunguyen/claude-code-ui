@@ -1,6 +1,8 @@
 // Quick open (Ctrl+P / Cmd+P): fuzzy file search over the session's project through `fs.search`, like OpenCode's file dialog.
 import { useEffect, useRef, useState } from "react";
-import { AtSignIcon, FileIcon, SearchIcon } from "lucide-react";
+import { AtSignIcon, SearchIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { FileIcon } from "./file-icon.tsx";
 
 /** Ctrl+P or Cmd+P, without Shift or Alt. */
 export const isQuickOpenKey = (e: globalThis.KeyboardEvent) =>
@@ -9,13 +11,16 @@ export const isQuickOpenKey = (e: globalThis.KeyboardEvent) =>
 const mod = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
 export const quickOpenLabel = `Search files (${mod}P)`;
 
-/** Paths are relative to the session cwd, best first. Enter opens the active file; Ctrl/Cmd+Enter or a row's @ button inserts `@path`. */
+/** Paths are relative to the session cwd, best first. Enter opens the active file; Ctrl/Cmd+Enter or a row's @ button inserts `@path`.
+ * Not `connected`, it says so and searches once the daemon is back; a failed search offers Retry (button or Enter). */
 export function QuickOpen({
+  connected,
   onSearch,
   onOpen,
   onMention,
   onClose,
 }: {
+  connected: boolean;
   onSearch: (query: string) => Promise<string[]>;
   onOpen: (path: string) => void;
   onMention: (path: string) => void;
@@ -24,18 +29,22 @@ export function QuickOpen({
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<{ query: string; paths: string[]; error?: string }>();
   const [active, setActive] = useState(0);
+  const [attempt, setAttempt] = useState(0);
+  const retry = () => (setFound(undefined), setAttempt((n) => n + 1));
   const input = useRef<HTMLInputElement>(null);
   // Folders are for @-mentions; quick open opens files.
   const paths = found?.paths.filter((p) => !p.endsWith("/")) ?? [];
 
   useEffect(() => input.current?.focus(), []);
   useEffect(() => {
+    if (!connected) return setFound({ query, paths: [], error: "Not connected to the daemon. Search resumes when it reconnects." });
     let current = true;
     onSearch(query)
       .then((p) => current && (setFound({ query, paths: p }), setActive(0)))
-      .catch((err: Error) => current && setFound({ query, paths: [], error: err.message }));
+      .catch((err: Error) => current && setFound({ query, paths: [], error: `Search failed: ${err.message}` }));
     return () => void (current = false);
-  }, [query]);
+  }, [query, connected, attempt]);
+  const canRetry = connected && !!found?.error;
 
   // Window capture: the dialog owns these keys wherever focus is (a click on the title or empty space moves it to body),
   // so Esc never reaches SessionPane's interrupt listener while quick open is shown.
@@ -46,7 +55,7 @@ export function QuickOpen({
     const keys: Record<string, () => void> = {
       ArrowDown: () => n && setActive((i) => (i + 1) % n),
       ArrowUp: () => n && setActive((i) => (i - 1 + n) % n),
-      Enter: () => pick && (e.ctrlKey || e.metaKey ? onMention(pick) : onOpen(pick)),
+      Enter: () => (pick ? (e.ctrlKey || e.metaKey ? onMention(pick) : onOpen(pick)) : canRetry && retry()),
       Escape: onClose,
       Tab: () => {}, // the search box is the only focus stop
     };
@@ -76,7 +85,7 @@ export function QuickOpen({
         onMouseDown={(e) => e.target !== input.current && e.preventDefault()}
       >
         <div className="p-1.5">
-          <label className="flex h-9 items-center gap-2 rounded-md bg-secondary/60 pl-3 pr-2 focus-within:bg-secondary focus-within:ring-2 focus-within:ring-ring/50 hover:bg-secondary">
+          <label className="flex h-9 items-center gap-2 rounded-md bg-secondary/60 pl-3 pr-2 focus-within:bg-secondary hover:bg-secondary">
             <SearchIcon className="size-4 shrink-0 text-faint" aria-hidden />
             <input
               ref={input}
@@ -96,12 +105,17 @@ export function QuickOpen({
           </label>
         </div>
         {!found || !paths.length ? (
-          <p className="grid min-h-30 flex-1 place-items-center text-muted-foreground" role="status">
-            {found ? found.error ?? "No files found" : "Searching…"}
-          </p>
+          <div className="flex min-h-30 flex-1 flex-col items-center justify-center gap-2 px-3 text-center text-muted-foreground" role="status">
+            <p>{found ? (found.error ?? "No files found") : "Searching…"}</p>
+            {canRetry && (
+              <Button variant="outline" size="sm" className="pointer-coarse:h-11" onClick={retry}>
+                Retry
+              </Button>
+            )}
+          </div>
         ) : (
           <ul id="quick-open-list" role="listbox" aria-labelledby="quick-open-group" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-1.5 pt-1.5 pb-2">
-            <li id="quick-open-group" role="presentation" className="my-1.5 shrink-0 px-3 text-muted-foreground">
+            <li id="quick-open-group" role="presentation" className="my-1.5 shrink-0 px-3 leading-4 font-normal text-muted-foreground">
               Files
             </li>
             {paths.map((p, i) => {
@@ -121,8 +135,8 @@ export function QuickOpen({
                   onMouseMove={() => i !== active && setActive(i)}
                   onClick={() => onOpen(p)}
                 >
-                  <FileIcon className="size-4 shrink-0 text-faint" aria-hidden />
-                  <span className="flex min-w-0 flex-1">
+                  <FileIcon path={p} className="size-4 shrink-0" />
+                  <span className="flex min-w-0 flex-1 leading-4 font-normal">
                     <span className="truncate text-muted-foreground">{p.slice(0, slash + 1)}</span>
                     <span className="shrink-0 font-medium">{p.slice(slash + 1)}</span>
                   </span>

@@ -90,13 +90,23 @@ export function connect(opts: {
   }
   dial();
 
-  /** Waits for a connection; rejects if it drops before the reply. */
-  async function request<T>(msg: Request): Promise<T> {
+  async function send<T>(msg: Request, reqId: string, expired = () => false): Promise<T> {
     await ready;
+    if (expired()) throw new Error("timed out");
     if (ws.readyState !== WebSocket.OPEN) throw new Error("disconnected");
-    const reqId = crypto.randomUUID();
     ws.send(JSON.stringify({ ...msg, reqId }));
     return new Promise<T>((resolve, reject) => pending.set(reqId, { resolve: resolve as (r: unknown) => void, reject }));
+  }
+
+  /** Waits for a connection; rejects if it drops before the reply, or with "timed out" after `timeoutMs` (waiting for the connection included). */
+  function request<T>(msg: Request, { timeoutMs }: { timeoutMs?: number } = {}): Promise<T> {
+    const reqId = crypto.randomUUID();
+    if (!timeoutMs) return send<T>(msg, reqId);
+    let t: ReturnType<typeof setTimeout>;
+    let expired = false;
+    const timeout = new Promise<never>((_, reject) => (t = setTimeout(() => (expired = true, pending.delete(reqId), reject(new Error("timed out"))), timeoutMs)));
+    // A request that timed out waiting for the connection is not sent on reconnect.
+    return Promise.race([send<T>(msg, reqId, () => expired), timeout]).finally(() => clearTimeout(t));
   }
 
   return {

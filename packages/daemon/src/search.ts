@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import fuzzysort from "fuzzysort";
 
 const SKIP = new Set([".git", "node_modules"]);
 // ponytail: lists the tree on every request, capped; cache per cwd if big repos feel slow.
@@ -56,30 +57,12 @@ function gitFiles(dir: string): string[] {
   return [...out];
 }
 
-const isSubsequence = (q: string, s: string) => {
-  let i = 0;
-  for (const ch of s) if (ch === q[i]) i++;
-  return i === q.length;
-};
+const depth = (p: string) => p.replace(/\/$/, "").split("/").length;
 
-/** Case-insensitive subsequence matches: file name prefix, then file name, then path substring, then scattered; shallow and short first. */
+/** fuzzysort, as OpenCode's file search: case-insensitive, contiguous and word-start matches first. An empty query lists shallow and short paths first. */
 export function fuzzyRank(paths: string[], query: string): string[] {
-  const q = query.toLowerCase();
-  const scored: { p: string; key: number[] }[] = [];
-  for (const p of paths) {
-    const lower = p.toLowerCase();
-    if (!isSubsequence(q, lower)) continue;
-    const name = lower.replace(/\/$/, "").split("/").pop()!;
-    const tier = name.startsWith(q) ? 0 : name.includes(q) ? 1 : lower.includes(q) ? 2 : 3;
-    scored.push({ p, key: [tier, p.replace(/\/$/, "").split("/").length, p.length] });
-  }
-  const cmp = (a: number[], b: number[]) => a.findIndex((x, i) => x !== b[i]);
-  return scored
-    .sort((a, b) => {
-      const i = cmp(a.key, b.key);
-      return i < 0 ? a.p.localeCompare(b.p) : a.key[i]! - b.key[i]!;
-    })
-    .map((s) => s.p);
+  if (query) return fuzzysort.go(query, paths).map((r) => r.target);
+  return [...paths].sort((a, b) => depth(a) - depth(b) || a.length - b.length || a.localeCompare(b));
 }
 
 /** Respects .gitignore inside a git work tree; a folder git lists nothing for (not a repo, or ignored as a whole) is walked. */
