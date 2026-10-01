@@ -523,15 +523,15 @@ export function App() {
                       watch={changedPaths}
                     />
                   </div>
-                    {pane === "changes" && views[panelSession.id] && (
-                      <ChangesPanel
-                        key={panelSession.id}
-                        client={client.current!}
-                        view={views[panelSession.id]!}
-                        cwd={panelSession.cwd}
-                        onOpen={(path) => (setOpenFile(path), setPane("files"))}
-                      />
-                    )}
+                  {pane === "changes" && views[panelSession.id] && (
+                    <ChangesPanel
+                      key={panelSession.id}
+                      client={client.current!}
+                      view={views[panelSession.id]!}
+                      cwd={panelSession.cwd}
+                      onOpen={(path) => (setOpenFile(path), setPane("files"))}
+                    />
+                  )}
                 </section>
               )}
               {/* Mounted while the tab is open: hidden, it keeps its draft; replaced by the created session, it starts empty next time. */}

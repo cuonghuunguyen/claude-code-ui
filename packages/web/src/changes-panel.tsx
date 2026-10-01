@@ -10,6 +10,7 @@ import { baseline, callStats, fileStats, sessionChanges, type FileChange, type S
 import type { SessionView } from "./store.ts";
 import { useDark } from "./theme.ts";
 import { DIFF_OPTIONS, InputDiff } from "./tool-card.tsx";
+import { inDir } from "./files.ts";
 import { filePath, relPath } from "./tools.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -140,7 +141,7 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
             <li key={path}>
               <button
                 className={cn(
-                  "flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left hover:bg-accent lg:min-h-7",
+                  "flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset lg:min-h-7",
                   r === active && "bg-secondary",
                 )}
                 aria-current={r === active}
@@ -205,9 +206,12 @@ function FileDiff({ row, cwd, style, onOpen }: { row: Row; cwd: string; style: D
           {relPath(path, cwd)}
         </span>
         {row.stats && <StatsText stats={row.stats} />}
-        <Button size="sm" variant="ghost" className="max-md:h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
-          <SquareArrowOutUpRightIcon /> Open in editor
-        </Button>
+        {/* The files pane shows only tabs inside cwd, so a file outside it has no Open in editor (OpenCode lists only project files). */}
+        {inDir(path, cwd) && (
+          <Button size="sm" variant="ghost" className="max-md:h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
+            <SquareArrowOutUpRightIcon /> Open in editor
+          </Button>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2 text-xs">
         {row.error && <p className="p-2 text-destructive">{row.error}</p>}

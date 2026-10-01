@@ -167,6 +167,14 @@ it("each file has one header: path relative to cwd, +N -N, Open in editor; the l
   expect(diff.options!.disableFileHeader).toBe(true);
 });
 
+it("a file outside the session cwd has no Open in editor (the files pane shows only tabs inside cwd); the header keeps the absolute path", async () => {
+  const client = fakeClient({ "/q/b.ts": "b = 2\n" });
+  await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "/q/b.ts", "b = 1", "b = 2"), original("e1", "b = 1\n")])} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  expect(el.querySelector("[data-testid=open-in-editor]")).toBeNull();
+  expect(el.querySelector("[data-testid=file-diff-header]")!.textContent).toBe("M/q/b.ts+1-1");
+});
+
 it("shows Loading until the first diff is drawn", async () => {
   const client = fakeClient({ "/p/a.ts": "a = 2\n" });
   await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "/p/a.ts", "a = 1", "a = 2"), original("e1", "a = 1\n")])} cwd="/p" onOpen={() => {}} />));
