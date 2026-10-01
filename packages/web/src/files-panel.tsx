@@ -15,17 +15,24 @@ type Client = ReturnType<typeof connect>;
 
 const baseName = (path: string) => path.split("/").at(-1) ?? path;
 
-/** Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. `onSend` gets an `@path#lines` mention. */
+/**
+ * Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. `onSend` gets an `@path#lines` mention.
+ * `openPath` (quick open) opens that file in a tab, then `onOpened` clears it.
+ */
 export function FilesPanel({
   client,
   status,
   cwd,
   onSend,
+  openPath,
+  onOpened,
 }: {
   client: Client;
   status: ConnectionStatus;
   cwd: string;
   onSend: (mention: string) => void;
+  openPath?: string;
+  onOpened?: () => void;
 }) {
   const [tabs, setTabs] = useState<Record<string, Tab>>({});
   const [activePath, setActivePath] = useState<string>();
@@ -58,6 +65,12 @@ export function FilesPanel({
     }
     setActivePath(path);
   }
+
+  useEffect(() => {
+    if (!openPath) return;
+    void open(openPath);
+    onOpened?.();
+  }, [openPath]);
 
   async function save(path: string, overwrite = false) {
     const t = tabsRef.current[path];
