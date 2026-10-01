@@ -86,8 +86,9 @@ export function PromptToolbar(props: {
   const modes = props.modes.includes(props.mode) ? props.modes : [props.mode, ...props.modes];
   const Mode = MODE_LABEL[props.mode].Icon;
   return (
-    <div className="flex h-11 items-center gap-1 px-2 pointer-coarse:h-13" data-testid="prompt-toolbar">
-      <div className="flex min-w-0 flex-1 items-center gap-1 pointer-coarse:gap-2">
+    <div className="flex items-end gap-1 px-2 py-2 pointer-coarse:py-1" data-testid="prompt-toolbar">
+      {/* flex-wrap: on a narrow screen a chooser moves to the next row at its full width; nothing shrinks away the model name. */}
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 pointer-coarse:gap-2">
         <button
           type="button"
           aria-label="Add images and files"

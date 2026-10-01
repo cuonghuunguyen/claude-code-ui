@@ -83,6 +83,15 @@ it("the header holds no model chooser; the prompt toolbar shows model, effort an
   expect($("effort-select")!.textContent).toContain("High");
 });
 
+it("narrow screen: the toolbar choosers wrap to a second row instead of shrinking the model name away", async () => {
+  // jsdom has no layout; flex-wrap breaks lines at each item's content width, so a chooser never shrinks while others share its row.
+  const { $ } = await render();
+  const choosers = $("session-model")!.parentElement!;
+  expect(choosers.className.split(" ")).toContain("flex-wrap");
+  expect(choosers.contains($("mode-select")) && choosers.contains($("effort-select"))).toBe(true);
+  expect($("prompt-toolbar")!.className).not.toMatch(/(^| )h-\d/);
+});
+
 it("hides the effort chooser for a model without effort support", async () => {
   const { $ } = await render({ session: { id: "s1", cwd: "/tmp", state: "idle", model: "haiku", permissionMode: "default", effort: "default", permissionModes: ["default"] } });
   expect($("session-model")!.textContent).toContain("Haiku 4.5");
