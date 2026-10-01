@@ -154,6 +154,8 @@ export function App() {
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const requested = useRef(new Set<string>());
+  /** Seq of each session's last subscribe reply: events up to it are a replay of known changes, not new ones. */
+  const replayedTo = useRef<Record<string, number>>({});
   // Tabs restored from storage, checked against the first session list: a stale one would show "Untitled".
   const restored = useRef<string[] | undefined>(tabs);
 
@@ -187,6 +189,7 @@ export function App() {
         logEpoch: view?.logEpoch,
       });
       // Runs before the replayed events: the reply precedes them on the socket and this continuation is a microtask.
+      replayedTo.current[sessionId] = r.seq;
       setViews((v) => ({ ...v, [sessionId]: withSubscribe(v[sessionId] ?? emptySession(), r) }));
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
     } catch (e) {
@@ -238,8 +241,9 @@ export function App() {
     const c = connect({
       onEvent: (e: Event) => {
         setViews((v) => ({ ...v, [e.sessionId]: applyEvent(v[e.sessionId] ?? emptySession(), e) }));
-        // New titles and last activity come from the transcript; refresh when a session changes state.
-        if (e.part.type === "session_state") void refreshList();
+        // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
+        // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
+        if (e.part.type === "session_state" && e.seq > (replayedTo.current[e.sessionId] ?? 0)) void refreshList();
       },
       onSessionsChanged: (m) => {
         if (m.deleted) forget(m.deleted, true);

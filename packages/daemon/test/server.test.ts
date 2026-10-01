@@ -275,14 +275,18 @@ describe("daemon", () => {
     expect(calls.length).toBe(before + 1);
   });
 
-  it("creates a session with a model and switches it with session.setModel", async () => {
+  it("creates a session with a model and switches it with session.setModel; its CLI starts on the first prompt", async () => {
     const c = await client();
     const created = await c.request({ type: "session.create", cwd: webRoot, model: "haiku" });
     const session = (created as { result: { session: { id: string; model: string } } }).result.session;
     expect(session.model).toBe("haiku");
     const r = await c.request({ type: "session.setModel", sessionId: session.id, model: "default" });
     expect(r).toMatchObject({ type: "reply", result: { session: { id: session.id, model: "default" } } });
-    expect(setModelCalls.at(-1)).toBe("default");
+    expect(calls.some((o) => o.sessionId === session.id)).toBe(false);
+    await c.request({ type: "session.prompt", sessionId: session.id, text: "hi" });
+    expect(calls.find((o) => o.sessionId === session.id)).toMatchObject({ model: undefined });
+    await c.request({ type: "session.setModel", sessionId: session.id, model: "haiku" });
+    expect(setModelCalls.at(-1)).toBe("haiku");
   });
 
   it("switches permission mode and effort; rejects unknown values and bypass when not enabled", async () => {
@@ -311,6 +315,7 @@ describe("daemon", () => {
     const c = await client();
     const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
     const up = (await c.request({ type: "fs.upload", name: "notes.txt", data: Buffer.from("hi").toString("base64") })) as { result: { path: string } };
+    await c.request({ type: "session.prompt", sessionId: created.result.session.id, text: "read it" });
     const dirs = calls.find((o) => o.sessionId === created.result.session.id)!.additionalDirectories!;
     expect(dirs).toHaveLength(1);
     expect(up.result.path.startsWith(`${dirs[0]}/`)).toBe(true);

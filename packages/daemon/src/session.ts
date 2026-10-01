@@ -90,6 +90,8 @@ export class Session {
   private readonly pending = new Map<string, { part: PermissionPart | QuestionPart; resolve: (r: PermissionResult) => void }>();
   /** Bumped per refreshUsage(): an older answer that arrives later is dropped. */
   private usageRequest = 0;
+  /** False until the first start(): the first query creates the transcript (sessionId), every later one resumes it. */
+  private started: boolean;
 
   constructor(
     readonly cwd: string,
@@ -101,8 +103,10 @@ export class Session {
     this.permissionMode = opts.permissionMode ?? "default";
     this.effort = opts.effort ?? "default";
     this.adapter = createAdapter({ resumed: !!restored });
+    this.started = !!restored;
+    // The CLI starts on the first prompt; until then a throwaway query lists the commands for the / menu.
     if (!restored) {
-      this.start({ sessionId: this.id });
+      void this.loadCommands();
       return;
     }
     // ADR 0001: after a daemon restart the SDK transcript is the history; the query resumes on the first prompt.
@@ -123,11 +127,11 @@ export class Session {
     return new Session(cwd, opts, { id, history });
   }
 
-  private start(ids: { sessionId: string } | { resume: string }) {
+  private start() {
     const q = (this.query = (this.opts.query ?? sdkQuery)({
       prompt: this.input,
       options: {
-        ...ids,
+        ...(this.started ? { resume: this.id } : { sessionId: this.id }),
         resumeSessionAt: this.resumeAt,
         // Checkpoints: file backups per user message, and the user message UUIDs echoed back.
         enableFileCheckpointing: true,
@@ -150,6 +154,7 @@ export class Session {
       },
     }));
     this.resumeAt = undefined;
+    this.started = true;
     this.driving = this.drive(q);
     // Later changes arrive as system/commands_changed through drive().
     q.supportedCommands().then(
@@ -208,7 +213,7 @@ export class Session {
     this.checkpoints.set(uuid, this.lastAssistant);
     this.emit({ type: "user_text", id: uuid, text, images });
     this.setState(this.pending.size ? "needs_input" : "running");
-    if (!this.query) this.start({ resume: this.id });
+    if (!this.query) this.start();
     const content = images.length
       ? [...(text ? [{ type: "text" as const, text }] : []), ...images.map((i) => imageBlock(i)!)]
       : text;
@@ -317,7 +322,7 @@ export class Session {
     if (this.rewinding) throw new Error("session is rewinding");
     if (this.state !== "idle") throw new Error("session is running: interrupt the turn first");
     if (!this.checkpoints.has(userMessageId)) throw new Error(`unknown user message ${userMessageId}`);
-    return this.query ?? this.start({ resume: this.id });
+    return this.query ?? this.start();
   }
 
   /** Rules already saved never reach this callback. No timeout: the promise waits for respond() or the SDK's abort. */
@@ -435,8 +440,8 @@ export class Session {
   }
 
   /**
-   * Logs a context_usage part from `getContextUsage()`. A restored session not yet resumed asks a throwaway query resumed
-   * on its transcript; persistSession: false, else the CLI
+   * Logs a context_usage part from `getContextUsage()`. A session without a query (restored, or after a conversation rewind)
+   * asks a throwaway query resumed on its transcript, at the rewind's fork point if any; persistSession: false, else the CLI
    * appends a cost-state line on close and the bumped mtime moves the session to the top of the list. "summary": no
    * token-count requests. A queued throwaway is dropped when the session got a real query or a newer request meanwhile.
    * A failed or timed-out read is logged; the meter keeps its last value (none for a restored session).
@@ -452,10 +457,22 @@ export class Session {
       await queued(async () => {
         if (this.query || request !== this.usageRequest) return;
         const model = this.model === "default" ? undefined : this.model;
-        await withQuery(read, this.opts.query, { resume: this.id, persistSession: false, cwd: this.cwd, model });
+        // A new session before its first prompt has no transcript: the window of a fresh conversation.
+        const at = this.started ? { resume: this.id, resumeSessionAt: this.resumeAt } : {};
+        await withQuery(read, this.opts.query, { ...at, persistSession: false, cwd: this.cwd, model });
       });
     } catch (err) {
       console.error(`session ${this.id}: context usage failed:`, err);
+    }
+  }
+
+  /** Commands and skills of a new session before its first prompt (the CLI's start lists them once it runs). */
+  private async loadCommands() {
+    try {
+      const list = await queued(async () => (this.query ? undefined : withQuery((q) => q.supportedCommands(), this.opts.query, { cwd: this.cwd, persistSession: false })));
+      if (list && !this.query) this.adapter.commands(list).forEach((p) => this.emit(p));
+    } catch (err) {
+      console.error(`session ${this.id}: supportedCommands failed:`, err);
     }
   }
 
