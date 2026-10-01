@@ -494,6 +494,12 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: 42 })).toMatchObject({ code: "bad_query" });
   });
 
+  it("answers git.status for a cwd inside the roots only", async () => {
+    const c = await client();
+    expect(await c.request({ type: "git.status", cwd: webRoot })).toMatchObject({ result: { status: null } });
+    expect(await c.request({ type: "git.status", cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+  });
+
   it("does not offer a symlink whose real path is outside the roots as an @-mention", async () => {
     symlinkSync(mkdtempSync(join(tmpdir(), "outside-")), join(webRoot, "linkedout"));
     symlinkSync(join(webRoot, "proj"), join(webRoot, "linkedin"));

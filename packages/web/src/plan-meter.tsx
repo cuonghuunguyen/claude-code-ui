@@ -48,6 +48,51 @@ function headline(windows: PlanWindow[], level: PlanLevel) {
   return worst.reduce((a, w) => (w.percent > a.percent ? w : a), worst[0]!) ?? windows.find((w) => w.active) ?? windows[0];
 }
 
+/** Every window with its reset time; a Popover.Root child (titlebar meter, status bar). */
+export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bottom" }) {
+  const limited = usage.status === "rejected";
+  return (
+  <Popover.Portal>
+    <Popover.Positioner side={side} align="end" sideOffset={6} className="z-50">
+      <Popover.Popup
+        data-testid="plan-usage"
+        className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-xl bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <Popover.Title className="font-medium">Plan usage</Popover.Title>
+          {usage.plan && <span className="text-muted-foreground text-xs">{`${usage.plan[0]!.toUpperCase()}${usage.plan.slice(1)} plan`}</span>}
+        </div>
+        {limited && (
+          <p data-testid="plan-limit" className="mt-2 flex items-start gap-1.5 text-destructive text-xs">
+            <TriangleAlertIcon className="mt-px size-3.5 shrink-0" aria-hidden />
+            {`Limit reached.${usage.statusResetsAt ? ` ${resetText(usage.statusResetsAt)}` : ""}`}
+          </p>
+        )}
+        <ul className="mt-3 flex flex-col gap-3">
+          {usage.windows.map((w) => {
+            const l = windowLevel(w);
+            return (
+              <li key={`${w.kind}:${w.label}`} data-testid="plan-window" data-level={l} className="flex flex-col gap-1 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate">{w.label}</span>
+                  {/* The server can grade a low percent as warning: not color only. */}
+                  {l !== "ok" && <TriangleAlertIcon role="img" aria-label={l === "limit" ? "limit reached" : "warning"} className={`size-3 shrink-0 ${TEXT[l]}`} />}
+                  <span className={`tabular-nums ${TEXT[l]}`}>{`${w.percent}%`}</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden>
+                  <div className={`h-full rounded-full ${FILL[l]}`} style={{ width: `${Math.min(w.percent, 100)}%` }} />
+                </div>
+                {w.resetsAt && <span className="text-muted-foreground tabular-nums">{resetText(w.resetsAt)}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      </Popover.Popup>
+    </Popover.Positioner>
+  </Popover.Portal>
+  );
+}
+
 export function PlanMeter({ usage }: { usage: PlanUsage }) {
   const level = planLevel(usage);
   const head = headline(usage.windows, level);
@@ -72,44 +117,7 @@ export function PlanMeter({ usage }: { usage: PlanUsage }) {
         )}
         {head ? `${head.percent}%` : "–"}
       </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner side="bottom" align="end" sideOffset={6} className="z-50">
-          <Popover.Popup
-            data-testid="plan-usage"
-            className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-xl bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
-          >
-            <div className="flex items-baseline justify-between gap-2">
-              <Popover.Title className="font-medium">Plan usage</Popover.Title>
-              {usage.plan && <span className="text-muted-foreground text-xs">{`${usage.plan[0]!.toUpperCase()}${usage.plan.slice(1)} plan`}</span>}
-            </div>
-            {limited && (
-              <p data-testid="plan-limit" className="mt-2 flex items-start gap-1.5 text-destructive text-xs">
-                <TriangleAlertIcon className="mt-px size-3.5 shrink-0" aria-hidden />
-                {`Limit reached.${usage.statusResetsAt ? ` ${resetText(usage.statusResetsAt)}` : ""}`}
-              </p>
-            )}
-            <ul className="mt-3 flex flex-col gap-3">
-              {usage.windows.map((w) => {
-                const l = windowLevel(w);
-                return (
-                  <li key={`${w.kind}:${w.label}`} data-testid="plan-window" data-level={l} className="flex flex-col gap-1 text-xs">
-                    <div className="flex items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate">{w.label}</span>
-                      {/* The server can grade a low percent as warning: not color only. */}
-                      {l !== "ok" && <TriangleAlertIcon role="img" aria-label={l === "limit" ? "limit reached" : "warning"} className={`size-3 shrink-0 ${TEXT[l]}`} />}
-                      <span className={`tabular-nums ${TEXT[l]}`}>{`${w.percent}%`}</span>
-                    </div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden>
-                      <div className={`h-full rounded-full ${FILL[l]}`} style={{ width: `${Math.min(w.percent, 100)}%` }} />
-                    </div>
-                    {w.resetsAt && <span className="text-muted-foreground tabular-nums">{resetText(w.resetsAt)}</span>}
-                  </li>
-                );
-              })}
-            </ul>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
+      <PlanPopup usage={usage} side="bottom" />
     </Popover.Root>
   );
 }

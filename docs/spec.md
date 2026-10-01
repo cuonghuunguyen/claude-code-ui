@@ -85,6 +85,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | client → daemon | `session.archive {sessionId, archived}` | SDK session tag `archived` (`tagSession()`); hidden from the list unless the archived filter is on; the SDK keeps one tag per session, so archive replaces a CLI `/tag` and unarchive clears it |
 | client → daemon | `session.delete {sessionId}` | Removes the transcript (`deleteSession()`) after the CLI exited; refused while `running` or `needs_input` |
 | client → daemon | `fs.list` / `fs.read` / `fs.write` / `fs.search` | File tree, editor, @-mention autocomplete |
+| client → daemon | `git.status {cwd}` | Status bar: branch (short hash when detached) and lines added/removed in tracked files against HEAD; `status` null outside a git work tree |
 | client → daemon | `fs.watch {paths}` | Replace this connection's watched files (stat polling, 1 s) |
 | client → daemon | `terminal.create {cwd, cols, rows}` / `terminal.list {cwd}` | Start `$SHELL` in a PTY (node-pty) in a cwd inside the roots ("Terminal N", smallest free N per cwd); at most 8 running per creating connection and 32 per daemon (`too_many_terminals`); cols/rows 1–1000 / the terminals running in a cwd |
 | client → daemon | `terminal.attach` / `terminal.detach` / `terminal.input {data}` / `terminal.resize {cols, rows}` / `terminal.close` `{terminalId}` | Attach replies the scrollback (last 256K chars), then streams output to this connection; `data` at most 64 KiB UTF-8 (`too_large`; the panel sends a bigger paste in parts); close kills the shell |
@@ -217,6 +218,7 @@ React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 - Toolbar inside the box (OpenCode): attach (`+`, native file picker), permission mode, model, effort (only for a model with `supportsEffort`), send / stop. Shift+Tab cycles the permission mode like Claude Code.
 - Attached non-image files are uploaded (`fs.upload`) and sent as `@<upload path>` mentions; the user message shows each one as a file card (name, type) instead of the path (path shape `…/u-XXXXXX/<name>`).
 - Plan mode with Haiku: Claude Code runs plan-mode turns of a `haiku` session on the default Sonnet ("haiku plan upgrade", like `opusplan`); the toolbar keeps showing the chosen model, the turn's transcript records the model that ran.
+- Status bar under the prompt box (Claude Code status line), fields hidden without data: `Model`, `Ctx` (context tokens), git branch and `(+added,-removed)` (`git.status` on mount, at each session state change and every 5 s while visible), `In` (uncached input + cache writes) / `Out` / `Cached` (cache reads), summed over the session's `turn_result` parts, `Ctx Used` %, plan `Session` % + `Reset`, `Weekly` % + `Weekly Reset` (countdown, from `plan_usage` windows `session` / `weekly_all`), permission mode as "… on" (not in default mode), `N shell(s)` (running `Bash` calls with `run_in_background`). Tokens as k/M, percents one decimal. Ctx fields open the context breakdown, plan fields the plan usage popover, the mode its chooser, shells the list. Below `sm` only model, ctx used, session and shells stay.
 
 ### Editor
 

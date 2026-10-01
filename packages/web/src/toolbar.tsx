@@ -29,9 +29,9 @@ export function effortOptions(models: ModelInfo[], model: string): Effort[] {
 // OpenCode ghost-muted ButtonV2: 28px (44px on touch screens), padding 0 11px, 13px/20px weight 440, focus outline 2px offset 2px.
 // Focus outline uses --info (3:1 on every surface; OpenCode's #7698fd is 2.8:1 on white). `!`: SelectTrigger's data-[size] height has higher specificity.
 const FOCUS = "outline-none focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info";
-const GHOST = `h-7! cursor-pointer gap-1.5 rounded-md border-0 bg-transparent px-[11px] text-muted-foreground text-sm font-normal tracking-[-0.04px] hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground pointer-coarse:h-11! dark:bg-transparent ${FOCUS}`;
+export const GHOST = `h-7! cursor-pointer gap-1.5 rounded-md border-0 bg-transparent px-[11px] text-muted-foreground text-sm font-normal tracking-[-0.04px] hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground pointer-coarse:h-11! dark:bg-transparent ${FOCUS}`;
 
-function Chooser<T extends string>({
+export function Chooser<T extends string>({
   label,
   value,
   items,
@@ -48,9 +48,12 @@ function Chooser<T extends string>({
   testId: string;
   className?: string;
 }) {
+  const current = items.find((i) => i.value === value);
+  // The name starts with the visible text (WCAG 2.5.3 Label in Name), then says what the control sets.
+  const visible = typeof current?.trigger === "string" ? current.trigger : (current?.label ?? value);
   return (
     <Select items={items} value={value} onValueChange={(v) => v !== null && v !== value && onChange(v as T)}>
-      <SelectTrigger aria-label={label} title={`${label}: ${items.find((i) => i.value === value)?.label ?? value}`} data-testid={testId} className={`${GHOST} min-w-0 ${className}`}>
+      <SelectTrigger aria-label={`${visible}, ${label}`} title={`${label}: ${current?.label ?? value}`} data-testid={testId} className={`${GHOST} min-w-0 ${className}`}>
         {icon}
         <SelectValue className="truncate">{(v: T) => items.find((i) => i.value === v)?.trigger ?? items.find((i) => i.value === v)?.label ?? v}</SelectValue>
       </SelectTrigger>
