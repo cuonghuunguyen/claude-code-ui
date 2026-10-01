@@ -57,7 +57,7 @@ const planOf = (part: PermissionRequest) => {
 
 /** Dock tray (OpenCode DockTray): actions right-aligned under the dock body. */
 export const DOCK = "flex flex-col overflow-hidden rounded-xl border bg-card text-sm shadow-sm";
-export const TRAY = "flex flex-wrap items-center justify-end gap-2 border-t bg-muted px-2 py-2";
+export const TRAY = "flex flex-wrap items-center justify-end gap-2 border-t bg-muted px-2 py-2 pointer-coarse:[&_button]:h-11";
 
 /** OpenCode permission dock: header, hint, content, rule patterns; tray Deny · Allow always · Allow once. */
 export function PermissionPanel({ part, onRespond }: { part: PermissionRequest; onRespond: (a: PermissionAnswer) => void }) {

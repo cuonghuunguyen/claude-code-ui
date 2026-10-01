@@ -746,7 +746,8 @@ export function SessionPane({
     // Claude Code: Shift+Tab cycles the permission mode.
     if (e.key === "Tab" && e.shiftKey) {
       e.preventDefault();
-      return onMode(nextMode(session.permissionModes, mode));
+      const next = nextMode(session.permissionModes, mode);
+      return next !== mode && onMode(next);
     }
     if (pickerOpen) {
       const n = rows;

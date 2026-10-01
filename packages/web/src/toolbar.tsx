@@ -25,9 +25,9 @@ export function effortOptions(models: ModelInfo[], model: string): Effort[] {
   return m?.supportsEffort && m.supportedEffortLevels?.length ? ["default", ...m.supportedEffortLevels] : [];
 }
 
-// OpenCode ghost-muted control: 28px desktop, 40px on touch screens.
+// OpenCode ghost-muted control: 28px desktop, 44px on touch screens. `!`: SelectTrigger's data-[size] height has higher specificity.
 const GHOST =
-  "h-7 cursor-pointer rounded-md border-0 bg-transparent px-2 text-muted-foreground text-xs hover:bg-accent hover:text-foreground focus-visible:ring-2 pointer-coarse:h-10 dark:bg-transparent";
+  "h-7! cursor-pointer rounded-md border-0 bg-transparent px-2 text-muted-foreground text-xs hover:bg-accent hover:text-foreground focus-visible:ring-2 pointer-coarse:h-11! dark:bg-transparent";
 
 function Chooser<T extends string>({
   label,
@@ -48,7 +48,7 @@ function Chooser<T extends string>({
 }) {
   return (
     <Select items={items} value={value} onValueChange={(v) => v !== null && v !== value && onChange(v as T)}>
-      <SelectTrigger aria-label={label} title={label} data-testid={testId} className={`${GHOST} min-w-0 ${className}`}>
+      <SelectTrigger aria-label={label} title={`${label}: ${items.find((i) => i.value === value)?.label ?? value}`} data-testid={testId} className={`${GHOST} min-w-0 ${className}`}>
         {icon}
         <SelectValue className="truncate">{(v: T) => items.find((i) => i.value === v)?.trigger ?? items.find((i) => i.value === v)?.label ?? v}</SelectValue>
       </SelectTrigger>
@@ -93,7 +93,7 @@ export function PromptToolbar(props: {
           aria-label="Add images and files"
           title="Add images and files"
           data-testid="attach"
-          className={`${GHOST} flex shrink-0 items-center justify-center px-0 pointer-coarse:w-10 w-7`}
+          className={`${GHOST} flex shrink-0 items-center justify-center px-0 pointer-coarse:w-11 w-7`}
           onClick={() => file.current?.click()}
         >
           <PlusIcon className="size-4" />
@@ -126,7 +126,7 @@ export function PromptToolbar(props: {
           value={props.model}
           onChange={props.onModel}
           items={models.map((m) => ({ value: m.value, label: m.displayName, description: m.description }))}
-          className="max-w-44"
+          className="max-w-55"
         />
         {efforts.length > 0 && (
           <Chooser
@@ -146,7 +146,7 @@ export function PromptToolbar(props: {
           aria-label="Stop"
           title="Stop (Esc)"
           data-testid="toolbar-stop"
-          className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:size-10"
+          className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:size-11"
           onClick={props.onStop}
         >
           <SquareIcon className="size-3.5 fill-current" />
@@ -158,7 +158,7 @@ export function PromptToolbar(props: {
           title="Send (Enter)"
           data-testid="send"
           disabled={!props.canSend}
-          className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-10"
+          className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11"
           onClick={props.onSend}
         >
           <ArrowUpIcon className="size-4" />

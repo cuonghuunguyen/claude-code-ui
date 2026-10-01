@@ -101,6 +101,13 @@ it("Shift+Tab cycles the permission mode like Claude Code, also while the picker
   expect(onMode).toHaveBeenLastCalledWith("default");
 });
 
+it("Shift+Tab sends nothing when no other mode is known", async () => {
+  const onMode = vi.fn();
+  const { box } = await render({ onMode, session: { id: "s1", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [] } });
+  await key(box, { key: "Tab", shiftKey: true });
+  expect(onMode).not.toHaveBeenCalled();
+});
+
 it("choosing in a toolbar chooser reports the new value", async () => {
   const onEffort = vi.fn();
   const { $ } = await render({ onEffort });

@@ -87,7 +87,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 
 1. The SDK calls `canUseTool(tool, input, {suggestions})`. Rules already saved (Claude Code rules in `.claude/settings*.json`) never reach the callback.
 2. The daemon logs a `permission_request` part with the SDK's suggested rules and sets state `needs_input`.
-3. Options shown: **Yes** / **Yes, and don't ask again for `<suggested rule>`** / **No, and tell Claude what to do differently**. Rules are chosen by the SDK, not the user. Bash rules are saved to `.claude/settings.local.json` (via `updatedPermissions`), Edit rules last for the session, as in Claude Code.
+3. Options shown (OpenCode dock): **Allow once** / **Allow always** (only with SDK suggestions; the dock lists the rule patterns) / **Deny**, with a feedback field that tells Claude what to do differently. Rules are chosen by the SDK, not the user. Bash rules are saved to `.claude/settings.local.json` (via `updatedPermissions`), Edit rules last for the session, as in Claude Code.
 4. Edit/Write requests show a diff; the user may change the proposed content before accepting (`updatedInput`).
 5. The first answer settles the request; a settlement event tells every client. Later answers are ignored.
 6. No timeout: a request waits until someone answers.
