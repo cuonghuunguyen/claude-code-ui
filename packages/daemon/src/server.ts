@@ -1,5 +1,5 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
-import { closeSync, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { closeSync, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { createServer, type IncomingMessage } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -16,6 +16,9 @@ import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings
 import { createTerminals } from "./terminals.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
+
+/** sessions.json keeps the settings of this many sessions (most recently changed). */
+export const MAX_SETTINGS = 1000;
 
 /** ws maxPayload (default 100 MiB): a prompt with two images at MAX_UPLOAD_BYTES as base64, plus the JSON around them. */
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
@@ -71,14 +74,44 @@ const TAIL_BYTES = 256 * 1024;
 /** Transcript path → last message time for the file version (mtime, size) it was read from. */
 const lastMessageCache = new Map<string, { version: string; at: number | undefined }>();
 
+// ponytail: the SDK's project folder name for cwds up to 200 chars; longer ones get a hash suffix and are not found.
+const transcriptFile = (projectsDir: string, cwd: string, sessionId: string) => join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
+
+/**
+ * Permission mode of the last prompt and effort of the last reply in a session's raw transcript (getSessionMessages() drops
+ * both fields): the restore fallback when sessions.json has no entry. Absent fields stay undefined.
+ */
+function transcriptSettings(projectsDir: string, cwd: string, sessionId: string): { permissionMode?: unknown; effort?: unknown } {
+  let lines: string[];
+  try {
+    lines = readFileSync(transcriptFile(projectsDir, cwd, sessionId), "utf8").split("\n");
+  } catch {
+    return {};
+  }
+  const found: { permissionMode?: unknown; effort?: unknown } = {};
+  for (let i = lines.length - 1; i >= 0 && (found.permissionMode === undefined || found.effort === undefined); i--) {
+    const line = lines[i]!;
+    if (!line.includes('"permissionMode"') && !line.includes('"effort"')) continue;
+    try {
+      const e = JSON.parse(line) as { type?: string; isSidechain?: boolean; permissionMode?: unknown; effort?: unknown };
+      if (e.isSidechain) continue;
+      if (e.type === "user" && found.permissionMode === undefined) found.permissionMode = e.permissionMode;
+      if (e.type === "assistant" && found.effort === undefined) found.effort = e.effort;
+    } catch {
+      // A line cut by a concurrent write.
+    }
+  }
+  return found;
+}
+
 /**
  * Time of the last user or assistant entry in a session's transcript, read from its end. Not the file mtime: on exit
  * the CLI appends metadata (`last-prompt`, `cost-state`), so every live session looks just used after a daemon restart.
  * Undefined when the file or such an entry is not found (e.g. the entry is further back than `TAIL_BYTES`).
  */
 function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
-  // ponytail: the SDK's project folder name for cwds up to 200 chars; longer ones get a hash suffix and fall back to mtime.
-  const file = join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
+  // Not found (long cwd): the list falls back to the file mtime.
+  const file = transcriptFile(projectsDir, cwd, sessionId);
   let fd: number | undefined;
   try {
     fd = openSync(file, "r");
@@ -143,8 +176,21 @@ export function createDaemon(opts: {
   const uploadParent = opts.uploadDir ?? mkdtempSync(join(tmpdir(), "claude-ui-"));
   mkdirSync(uploadParent, { recursive: true, mode: 0o700 });
   const sessions = new Map<string, Session>();
-  // ponytail: entries are never removed and the whole file is rewritten per change; prune by transcript if it grows.
+  // Insertion order = last change order: the oldest entries go first past MAX_SETTINGS.
   const settings: Record<string, SessionSettings> = readJson(opts.settingsFile) ?? {};
+  /** Rewrites sessions.json atomically (tmp + rename): a crash mid-write keeps the previous file. */
+  const saveSettings = () => {
+    if (!opts.settingsFile) return;
+    const ids = Object.keys(settings);
+    for (const id of ids.slice(0, Math.max(0, ids.length - MAX_SETTINGS))) delete settings[id];
+    const tmp = `${opts.settingsFile}.${process.pid}.tmp`;
+    try {
+      writeFileSync(tmp, JSON.stringify(settings), { mode: 0o600 });
+      renameSync(tmp, opts.settingsFile);
+    } catch (err) {
+      console.error("saving session settings failed:", err);
+    }
+  };
   // Account-wide, so not a session event: every connection gets each change.
   const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query) });
   /** Options of every session: settings changes are saved under its ID. */
@@ -155,13 +201,9 @@ export function createDaemon(opts: {
     uploadDir: uploadParent,
     query: opts.query,
     onSettings: (s: SessionSettings) => {
-      if (!opts.settingsFile) return;
+      delete settings[id()];
       settings[id()] = s;
-      try {
-        writeFileSync(opts.settingsFile, JSON.stringify(settings), { mode: 0o600 });
-      } catch (err) {
-        console.error("saving session settings failed:", err);
-      }
+      saveSettings();
     },
   });
   const restoring = new Map<string, Promise<Session | undefined>>();
@@ -221,7 +263,12 @@ export function createDaemon(opts: {
 
   async function list(): Promise<ListResult> {
     const items = new Map<string, SessionListItem>();
-    for (const t of await transcripts()) {
+    const all = await transcripts();
+    // Entries of sessions deleted outside this daemon (CLI, file removed): no transcript and not live.
+    const known = new Set(all.map((t) => t.sessionId));
+    const stale = Object.keys(settings).filter((id) => !known.has(id) && !sessions.has(id));
+    if (stale.length) stale.forEach((id) => delete settings[id]), saveSettings();
+    for (const t of all) {
       if (!t.cwd || !allowed(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
       items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title: t.summary, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true });
@@ -229,11 +276,11 @@ export function createDaemon(opts: {
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
       if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false });
-    const all = [...items.values()];
+    const listed = [...items.values()];
     // An opened project whose directory is gone or left the roots is not listed (its New session would fail).
-    const known = projects.list(all).filter((cwd) => allowed(cwd));
-    const shown = new Set(known);
-    return { projects: known, sessions: all.filter((s) => shown.has(trim(s.cwd))).sort((a, b) => b.lastActivity - a.lastActivity) };
+    const open = projects.list(listed).filter((cwd) => allowed(cwd));
+    const shown = new Set(open);
+    return { projects: open, sessions: listed.filter((s) => shown.has(trim(s.cwd))).sort((a, b) => b.lastActivity - a.lastActivity) };
   }
 
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
@@ -252,12 +299,13 @@ export function createDaemon(opts: {
         const messages = await history.getSessionMessages(id, { dir: info.cwd });
         // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
         const used = transcriptModel(messages);
-        const saved = settings[id];
+        // No entry (sessions.json lost, a session of the terminal CLI): mode and effort the transcript last recorded.
+        const saved = settings[id] ?? { model: undefined, ...transcriptSettings(projectsDir, info.cwd, id) };
         const model = isModel(saved?.model) ? saved.model : used && ((await modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
         // A mode the daemon does not enable now (bypass without CLAUDE_UI_ALLOW_BYPASS) falls back to the default.
         const modes = PERMISSION_MODES.filter((m) => m !== "bypassPermissions" || opts.allowBypass);
-        const permissionMode = saved && modes.includes(saved.permissionMode) ? saved.permissionMode : undefined;
-        const effort = saved && EFFORTS.includes(saved.effort) ? saved.effort : undefined;
+        const permissionMode = modes.includes(saved.permissionMode as never) ? (saved.permissionMode as SessionSettings["permissionMode"]) : undefined;
+        const effort = EFFORTS.includes(saved.effort as never) ? (saved.effort as SessionSettings["effort"]) : undefined;
         return track(Session.restore(id, info.cwd, messages, sessionOpts(() => id, { model, permissionMode, effort })));
       })()
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
@@ -517,6 +565,7 @@ export function createDaemon(opts: {
           } finally {
             deleting.delete(msg.sessionId);
           }
+          if (settings[msg.sessionId]) delete settings[msg.sessionId], saveSettings();
           broadcast({ type: "sessions.changed", deleted: msg.sessionId });
           return reply({});
         }
