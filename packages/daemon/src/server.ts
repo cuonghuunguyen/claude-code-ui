@@ -108,9 +108,18 @@ export function createDaemon(opts: {
     return s;
   }
 
+  // listSessions() reads every transcript under ~/.claude/projects (hundreds of MB): one scan at a time.
+  // Requests during a scan share one queued scan, so a reply is never older than its request.
+  let scan: ReturnType<typeof listSessions> | undefined;
+  let nextScan: ReturnType<typeof listSessions> | undefined;
+  function transcripts(): ReturnType<typeof listSessions> {
+    if (!scan) return (scan = history.listSessions().finally(() => (scan = undefined)));
+    return (nextScan ??= scan.catch(() => {}).then(() => ((nextScan = undefined), transcripts())));
+  }
+
   async function list(): Promise<SessionListItem[]> {
     const items = new Map<string, SessionListItem>();
-    for (const t of await history.listSessions()) {
+    for (const t of await transcripts()) {
       if (!t.cwd || !allowed(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
       items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title: t.summary, lastActivity: t.lastModified });

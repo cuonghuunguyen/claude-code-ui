@@ -156,6 +156,8 @@ describe("daemon", () => {
       await c.waitFor((m) => m.type === "event" && m.part.type === "session_state");
       const first = c.inbox.find((m) => m.type === "event") as { seq: number };
       expect(first.seq).toBe(1);
+      // An idle restored session spawns no SDK process until it is prompted.
+      expect(calls.filter((o) => o.resume === id)).toHaveLength(0);
 
       await c.request({ type: "session.prompt", sessionId: id, text: "third" });
       expect(calls.filter((o) => o.resume === id)).toHaveLength(1);
@@ -450,6 +452,51 @@ describe("daemon", () => {
       const again = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; state: string }[] } };
       // State now comes from the live session, not "closed".
       expect(["running", "idle"]).toContain(again.result.sessions.find((s) => s.id === inside)?.state);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a burst of session.list requests runs one transcript scan at a time: one running, one queued for the rest", async () => {
+    // A reload replays every subscribed session's state events and the web app re-lists on each (FIX-LEAK):
+    // concurrent full scans of ~/.claude/projects took the daemon out of heap.
+    let scans = 0;
+    let running = 0;
+    let maxRunning = 0;
+    const release: (() => void)[] = [];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => {
+          scans++;
+          maxRunning = Math.max(maxRunning, ++running);
+          await new Promise<void>((r) => release.push(r));
+          running--;
+          return [{ sessionId: "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", summary: `scan ${scans}`, lastModified: 1, cwd: webRoot }];
+        }) as never,
+        getSessionInfo: (async () => undefined) as never,
+        getSessionMessages: (async () => []) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const first = c.request({ type: "session.list" });
+      await vi.waitFor(() => expect(scans).toBe(1));
+      const burst = Array.from({ length: 10 }, () => c.request({ type: "session.list" }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(scans).toBe(1);
+      release.shift()!();
+      await vi.waitFor(() => expect(scans).toBe(2));
+      release.shift()!();
+      const titles = (r: unknown) => (r as { result: { sessions: { title: string }[] } }).result.sessions.map((s) => s.title);
+      expect(titles(await first)).toEqual(["scan 1"]);
+      // Requests that arrived during scan 1 get scan 2: no reply is older than its request.
+      for (const r of await Promise.all(burst)) expect(titles(r)).toEqual(["scan 2"]);
+      expect({ scans, maxRunning }).toEqual({ scans: 2, maxRunning: 1 });
     } finally {
       d.close();
     }
