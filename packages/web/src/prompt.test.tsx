@@ -270,3 +270,16 @@ it("the context meter sits in the prompt box toolbar once the session reports it
   const { $: $2 } = await render({}, view);
   expect($2("prompt-toolbar")!.contains($2("context-meter"))).toBe(true);
 });
+
+it("the rewind panel scrolls into view once when it opens, not again on each keystroke in the prompt box", async () => {
+  const view = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "user_text", id: "u1", text: "hello", images: [] } });
+  const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+  const { $, box } = await render({ rewindTo: "u1" }, view);
+  expect($("rewind-panel")).not.toBeNull();
+  const opened = scroll.mock.contexts.filter((c) => c === $("rewind-panel")).length;
+  expect(opened).toBe(1);
+  await type(box, "a");
+  await type(box, "ab");
+  expect(scroll.mock.contexts.filter((c) => c === $("rewind-panel")).length).toBe(1);
+  scroll.mockRestore();
+});

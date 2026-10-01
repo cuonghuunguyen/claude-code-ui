@@ -428,6 +428,8 @@ export function App() {
     if (restoreFocus && quickOpener.current instanceof HTMLElement) quickOpener.current.focus();
   };
   const wide = (px: number) => window.matchMedia(`(min-width: ${px}px)`).matches;
+  // Below lg the session and the side panel share one pane; from lg on the session always shows and "pane" picks the side panel tab.
+  const showSession = () => !wide(1024) && setPane("session");
   const commands = appCommands({
     tabs,
     activeId,
@@ -451,14 +453,14 @@ export function App() {
     // lg: the side panel breakpoint; below it the session and the files share one pane.
     toggleSidePanel: () => (wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
     focusPrompt: () => {
-      setPane("session");
+      showSession();
       // After the pane shows: only the visible session's prompt box has a layout box.
       requestAnimationFrame(() => [...document.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"]')].find((el) => el.offsetParent)?.focus());
     },
     setModel: (model) => configure({ type: "session.setModel", sessionId: shown!.id, model }),
     setEffort: (effort) => configure({ type: "session.setEffort", sessionId: shown!.id, effort }),
     setMode: (mode) => configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode }),
-    rewind: (id) => (setRewindTo(id), setPane("session")),
+    rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
   });
   // App shortcuts. Each has Ctrl, Cmd or Alt, so it also fires in the prompt box; an open dialog (quick open, palette) owns the keyboard.
@@ -1419,6 +1421,9 @@ function RewindPanel(props: {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   useEffect(() => void props.preview().then(setPreview, (e: Error) => setError(e.message)), []);
+  // Once, on open: opened from the palette, the message can be far up the timeline.
+  const self = useRef<HTMLDivElement>(null);
+  useEffect(() => self.current?.scrollIntoView?.({ block: "nearest" }), []);
   const run = async (mode: RewindMode) => {
     setBusy(true);
     setError(undefined);
@@ -1435,8 +1440,7 @@ function RewindPanel(props: {
     <div
       className="ml-auto flex w-full max-w-md flex-col gap-2 rounded-lg border p-3 text-sm"
       data-testid="rewind-panel"
-      // Opened from the palette, the message can be far up the timeline.
-      ref={(el) => void el?.scrollIntoView?.({ block: "nearest" })}
+      ref={self}
     >
       {!preview && !error && <p className="text-muted-foreground">Checking file changes…</p>}
       {preview && preview.filesChanged.length > 0 && (
