@@ -160,6 +160,9 @@ describe("ToolCard edits", () => {
     );
     expect(html).toContain("/p/a.ts");
     expect(html).toMatch(/data-testid="diff-stats"[^>]*><span[^>]*>\+2<\/span><span[^>]*>-1<\/span>/);
+    // Theme tokens at 4.5:1 or more in light and dark; raw green-600 is 3.2:1 on white.
+    expect(html).toMatch(/class="text-success">\+2</);
+    expect(html).toMatch(/class="ml-1 text-destructive">-1</);
     expect(html).not.toContain("edit-diff");
   });
 

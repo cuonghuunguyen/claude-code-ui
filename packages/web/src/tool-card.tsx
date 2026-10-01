@@ -66,8 +66,8 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
         meta={
           stats && (
             <span data-testid="diff-stats" className="font-mono text-xs">
-              <span className="text-green-600">+{stats.added}</span>
-              <span className="ml-1 text-red-600">-{stats.removed}</span>
+              <span className="text-success">+{stats.added}</span>
+              <span className="ml-1 text-destructive">-{stats.removed}</span>
             </span>
           )
         }
