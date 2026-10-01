@@ -13,6 +13,24 @@ const until = (events: Event[], pred: (e: Event) => boolean) =>
 const lastPart = (events: Event[], id: string) => events.filter((e) => e.part.id === id).at(-1)!.part;
 
 describe("Session", () => {
+  it("close() resolves once the SDK message loop ended: the CLI writes the transcript until it exits", async () => {
+    let exited = false;
+    let exit!: () => void;
+    const query = () =>
+      Object.assign(
+        (async function* () {
+          await new Promise<void>((r) => (exit = r));
+          exited = true;
+        })(),
+        { supportedCommands: async () => [], close: () => void setTimeout(() => exit(), 30) },
+      );
+    const s = new Session("/repo", { query: query as never });
+    await s.close();
+    expect(exited).toBe(true);
+    // A restored session that never started a query has nothing to wait for.
+    await Session.restore(randomUUID(), "/repo", history, { query: query as never }).close();
+  });
+
   it("has a UUID before the first prompt and passes it to the SDK as sessionId", () => {
     const s = new Session("/tmp", { query: fakeQuery as never });
     expect(s.id).toMatch(/^[0-9a-f-]{36}$/);

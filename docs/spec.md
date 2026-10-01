@@ -81,6 +81,9 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | client → daemon | `question.respond {requestId, answers}` | Answer a question |
 | client → daemon | `session.list` / `session.close` / `models.list` | Lists and management; `session.list` also returns the known projects |
 | client → daemon | `project.open {cwd}` / `project.remove {cwd}` | Add a directory inside the roots to the known projects / remove one from the list |
+| client → daemon | `session.rename {sessionId, title}` | SDK custom title (`renameSession()`); the terminal CLI shows it too |
+| client → daemon | `session.archive {sessionId, archived}` | SDK session tag `archived` (`tagSession()`); hidden from the list unless the archived filter is on; the SDK keeps one tag per session, so archive replaces a CLI `/tag` and unarchive clears it |
+| client → daemon | `session.delete {sessionId}` | Removes the transcript (`deleteSession()`) after the CLI exited; refused while `running` or `needs_input` |
 | client → daemon | `fs.list` / `fs.read` / `fs.write` / `fs.search` | File tree, editor, @-mention autocomplete |
 | client → daemon | `fs.watch {paths}` | Replace this connection's watched files (stat polling, 1 s) |
 | client → daemon | `push.key` | The daemon's VAPID public key, for `PushManager.subscribe()` |
@@ -89,6 +92,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | daemon → client | `event {sessionId, seq, part}` | One normalized part |
 | daemon → client | `error {code, message}` | Protocol or session error |
 | daemon → client | `fs.changed {path, mtime}` | A watched file changed on disk; not a session event |
+| daemon → client | `sessions.changed {deleted?}` | To every connection after a rename, archive or delete: refetch the list |
 
 ### Permission bridge (same behavior as Claude Code)
 

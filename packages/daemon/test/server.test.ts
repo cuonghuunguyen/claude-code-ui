@@ -485,8 +485,8 @@ describe("daemon", () => {
       const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
       const list = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string }[] } };
       expect(list.result.sessions).toMatchObject([
-        { id: created.result.session.id, cwd: webRoot, state: "idle", model: "default", title: "New session", lastActivity: expect.any(Number) },
-        { id: inside, cwd, state: "closed", model: "default", title: "fix the bug", lastActivity: 1000 },
+        { id: created.result.session.id, cwd: webRoot, state: "idle", model: "default", title: "New session", lastActivity: expect.any(Number), archived: false, transcript: false },
+        { id: inside, cwd, state: "closed", model: "default", title: "fix the bug", lastActivity: 1000, archived: false, transcript: true },
       ]);
 
       expect(await c.request({ type: "session.subscribe", sessionId: outside, sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
@@ -656,6 +656,161 @@ describe("daemon", () => {
     try {
       const c = await client((d.address() as AddressInfo).port);
       expect(await c.request({ type: "session.list" })).toMatchObject({ result: { projects: [], sessions: [] } });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("rename, archive and delete change the SDK transcript and tell every connected client; a running session cannot be deleted", async () => {
+    const id = "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const cwd = join(webRoot, "proj");
+    mkdirSync(cwd, { recursive: true });
+    let transcripts: { sessionId: string; summary: string; lastModified: number; cwd: string; tag?: string }[] = [
+      { sessionId: id, summary: "fix the bug", lastModified: 1000, cwd },
+    ];
+    const mutations: unknown[][] = [];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: permissionQuery as never,
+      history: {
+        listSessions: (async () => transcripts) as never,
+        getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,
+        getSessionMessages: (async () => history) as never,
+        renameSession: (async (sid: string, title: string, o: object) => {
+          mutations.push(["rename", sid, title, o]);
+          const t = transcripts.find((t) => t.sessionId === sid);
+          if (!t) throw new Error(`Session ${sid} not found`);
+          t.summary = title;
+        }) as never,
+        tagSession: (async (sid: string, tag: string | null) => {
+          mutations.push(["tag", sid, tag]);
+          transcripts.find((t) => t.sessionId === sid)!.tag = tag ?? undefined;
+        }) as never,
+        deleteSession: (async (sid: string, o: object) => {
+          mutations.push(["delete", sid, o]);
+          transcripts = transcripts.filter((t) => t.sessionId !== sid);
+        }) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const p = (d.address() as AddressInfo).port;
+    try {
+      const [a, b] = await Promise.all([client(p), client(p)]);
+      const changes = () => b.inbox.filter((m) => m.type === "sessions.changed");
+      const listed = async () => ((await a.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string; archived: boolean }[] } }).result.sessions;
+
+      expect(await a.request({ type: "session.rename", sessionId: id, title: "  " })).toMatchObject({ code: "bad_title" });
+      expect(await a.request({ type: "session.rename", sessionId: id, title: "x".repeat(201) })).toMatchObject({ code: "bad_title" });
+      expect(await a.request({ type: "session.rename", sessionId: id, title: " Better name " })).toMatchObject({ type: "reply" });
+      expect(mutations.at(-1)).toEqual(["rename", id, "Better name", { dir: cwd }]);
+      await b.waitFor(() => changes().length === 1);
+      expect((await listed())[0]).toMatchObject({ id, title: "Better name", archived: false });
+
+      await a.request({ type: "session.archive", sessionId: id, archived: true });
+      expect(mutations.at(-1)).toEqual(["tag", id, "archived"]);
+      expect((await listed())[0]).toMatchObject({ archived: true });
+      await a.request({ type: "session.archive", sessionId: id, archived: false });
+      expect(mutations.at(-1)).toEqual(["tag", id, null]);
+      expect((await listed())[0]).toMatchObject({ archived: false });
+      await b.waitFor(() => changes().length === 3);
+
+      // A live session with a pending permission request is not deleted.
+      const created = (await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+      const live = created.result.session.id;
+      await a.request({ type: "session.subscribe", sessionId: live, sinceSeq: 0 });
+      await a.request({ type: "session.prompt", sessionId: live, text: "run tests" });
+      await a.waitFor((m) => m.type === "event" && m.part.type === "permission_request");
+      expect(await a.request({ type: "session.delete", sessionId: live })).toMatchObject({ code: "session_running" });
+      // Never prompted into a transcript (fake history): it has nothing to rename.
+      expect(await a.request({ type: "session.rename", sessionId: live, title: "x" })).toMatchObject({ code: "rename_failed" });
+
+      expect(await a.request({ type: "session.delete", sessionId: id })).toMatchObject({ type: "reply" });
+      expect(mutations.at(-1)).toEqual(["delete", id, { dir: cwd }]);
+      await b.waitFor((m) => m.type === "sessions.changed" && m.deleted === id);
+      expect((await listed()).map((s) => s.id)).toEqual([live]);
+      expect(await a.request({ type: "session.delete", sessionId: id })).toMatchObject({ code: "unknown_session" });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a subscribe while a delete is in progress does not restore the session from its not yet removed transcript", async () => {
+    const id = "5c2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const cwd = join(webRoot, "proj");
+    mkdirSync(cwd, { recursive: true });
+    let transcripts = [{ sessionId: id, summary: "fix the bug", lastModified: 1000, cwd }];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: permissionQuery as never,
+      history: {
+        listSessions: (async () => transcripts) as never,
+        getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,
+        getSessionMessages: (async () => history) as never,
+        deleteSession: (async () => {
+          await gate;
+          transcripts = [];
+        }) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const p = (d.address() as AddressInfo).port;
+    try {
+      const [a, b] = await Promise.all([client(p), client(p)]);
+      const deleted = a.request({ type: "session.delete", sessionId: id });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(await b.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
+      release();
+      expect(await deleted).toMatchObject({ type: "reply" });
+      const list = (await b.request({ type: "session.list" })) as { result: { sessions: unknown[] } };
+      expect(list.result.sessions).toEqual([]);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a delete while a restore of the same session is in flight waits for it; the session does not come back", async () => {
+    const id = "6c2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const cwd = join(webRoot, "proj");
+    mkdirSync(cwd, { recursive: true });
+    let transcripts = [{ sessionId: id, summary: "fix the bug", lastModified: 1000, cwd }];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: permissionQuery as never,
+      history: {
+        listSessions: (async () => transcripts) as never,
+        getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,
+        getSessionMessages: (async () => {
+          await gate;
+          return history;
+        }) as never,
+        deleteSession: (async () => {
+          transcripts = [];
+        }) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const p = (d.address() as AddressInfo).port;
+    try {
+      const [a, b] = await Promise.all([client(p), client(p)]);
+      const subscribed = b.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await new Promise((r) => setTimeout(r, 20));
+      const deleted = a.request({ type: "session.delete", sessionId: id });
+      await new Promise((r) => setTimeout(r, 20));
+      release();
+      expect(await deleted).toMatchObject({ type: "reply" });
+      await subscribed;
+      const list = (await b.request({ type: "session.list" })) as { result: { sessions: unknown[] } };
+      expect(list.result.sessions).toEqual([]);
     } finally {
       d.close();
     }

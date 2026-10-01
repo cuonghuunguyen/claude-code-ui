@@ -4,13 +4,14 @@ import { projectName } from "./tabs.ts";
 
 /**
  * One group per working directory whatever the input order; groups and sessions newest first.
- * A query keeps sessions whose title or project name contains it.
- * With `projects` (the daemon's known projects): one group per project in that order, empty ones too; other sessions are dropped.
+ * A query keeps sessions whose title or project name contains it. Archived sessions show only with `archived`, and then only they.
+ * With `projects` (the daemon's known projects): one group per project in that order, empty ones too (not with `archived`); other sessions are dropped.
  */
-export function groupByCwd(items: SessionListItem[], query = "", projects?: string[]) {
+export function groupByCwd(items: SessionListItem[], query = "", projects?: string[], archived = false) {
   const q = query.trim().toLowerCase();
-  const groups = new Map<string, SessionListItem[]>(projects?.map((p) => [p, []]));
+  const groups = new Map<string, SessionListItem[]>(archived ? [] : projects?.map((p) => [p, []]));
   for (const s of [...items].sort((a, b) => b.lastActivity - a.lastActivity)) {
+    if (s.archived !== archived) continue;
     const cwd = projectCwd(s.cwd);
     if (projects && !projects.includes(cwd)) continue;
     if (q && !s.title.toLowerCase().includes(q) && !projectName(cwd).toLowerCase().includes(q)) continue;
@@ -26,6 +27,11 @@ export function groupByCwd(items: SessionListItem[], query = "", projects?: stri
 /** "/p/x/" and "/p/x" are one project (as in the daemon). */
 const projectCwd = (cwd: string) => cwd.replace(/(.)\/+$/, "$1");
 export const inProject = (cwd: string) => (s: SessionListItem) => projectCwd(s.cwd) === cwd;
+
+/** `list` with one session's fields replaced: an action shows at once, before the daemon's list refetch. */
+export function patchSession(list: SessionListItem[], id: string, patch: Partial<SessionListItem>) {
+  return list.map((s) => (s.id === id ? { ...s, ...patch } : s));
+}
 
 export function timeAgo(ms: number, now = Date.now()) {
   const m = Math.floor((now - ms) / 60_000);

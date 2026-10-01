@@ -6,7 +6,7 @@ import { basename, extname, isAbsolute, join, relative, resolve, sep } from "nod
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { EFFORTS, imageBlock, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
-import { getSessionInfo, getSessionMessages, listSessions, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
+import { deleteSession, getSessionInfo, getSessionMessages, listSessions, renameSession, tagSession, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
@@ -33,7 +33,17 @@ const MIME: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
-type History = { listSessions: typeof listSessions; getSessionInfo: typeof getSessionInfo; getSessionMessages: typeof getSessionMessages };
+type History = {
+  listSessions: typeof listSessions;
+  getSessionInfo: typeof getSessionInfo;
+  getSessionMessages: typeof getSessionMessages;
+  renameSession?: typeof renameSession;
+  tagSession?: typeof tagSession;
+  deleteSession?: typeof deleteSession;
+};
+
+/** SDK session tag that marks an archived session (no archive flag of its own; ADR 0001: no store of ours). */
+const ARCHIVED_TAG = "archived";
 
 // ponytail: loopback only; add the remote-access hostname here once that is decided (ADR 0003).
 const LOCAL_HOSTNAMES = new Set(["127.0.0.1", "localhost"]);
@@ -143,9 +153,13 @@ export function createDaemon(opts: {
     },
   });
   const restoring = new Map<string, Promise<Session | undefined>>();
-  const history = opts.history ?? { listSessions, getSessionInfo, getSessionMessages };
+  // Sessions whose delete is in progress (session.delete).
+  const deleting = new Set<string>();
+  const history = { listSessions, getSessionInfo, getSessionMessages, renameSession, tagSession, deleteSession, ...opts.history };
   const projectsDir = opts.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
   const projects = opts.projects ?? createProjects();
+  const connections = new Set<WebSocket>();
+  const broadcast = (m: ServerMessage) => connections.forEach((ws) => send(ws, m));
   const root = resolve(opts.webRoot);
   // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
   let models: ReturnType<typeof listModels> | undefined;
@@ -197,11 +211,11 @@ export function createDaemon(opts: {
     for (const t of await transcripts()) {
       if (!t.cwd || !allowed(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title: t.summary, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title: t.summary, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
-      if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt });
+      if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false });
     const all = [...items.values()];
     // An opened project whose directory is gone or left the roots is not listed (its New session would fail).
     const known = projects.list(all).filter((cwd) => allowed(cwd));
@@ -211,6 +225,8 @@ export function createDaemon(opts: {
 
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
   function findSession(id: string): Promise<Session | undefined> {
+    // Its transcript still exists until the delete ends; a restore now would bring the session back.
+    if (deleting.has(id)) return Promise.resolve(undefined);
     const live = sessions.get(id);
     if (live) return Promise.resolve(live);
     // The ID becomes a transcript file name; only a UUID may reach the SDK.
@@ -236,6 +252,15 @@ export function createDaemon(opts: {
       restoring.set(id, p);
     }
     return p;
+  }
+
+  /** Working directory and transcript of a listed session (live or inside the roots); undefined when unknown. */
+  async function locate(id: string) {
+    const live = sessions.get(id);
+    if (!live && (typeof id !== "string" || !UUID.test(id))) return undefined;
+    const info = await history.getSessionInfo(id).catch(() => undefined);
+    const cwd = live?.cwd ?? (info?.cwd && allowed(info.cwd));
+    return cwd ? { cwd, live, transcript: !!info } : undefined;
   }
 
   const digest = (t: string) => createHash("sha256").update(t).digest();
@@ -278,6 +303,7 @@ export function createDaemon(opts: {
   });
 
   wss.on("connection", (ws) => {
+    connections.add(ws);
     const unsubscribes = new Map<string, () => void>();
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();
@@ -288,6 +314,7 @@ export function createDaemon(opts: {
     // Without a listener a socket error (e.g. a frame above maxPayload) is thrown and the daemon exits; ws closes the socket itself.
     ws.on("error", (err) => console.warn("ws:", err.message));
     ws.on("close", () => {
+      connections.delete(ws);
       unsubscribes.forEach((u) => u());
       unwatchAll();
       focused.delete(ws);
@@ -432,6 +459,45 @@ export function createDaemon(opts: {
             return fail("fs_error", String(err));
           }
           return reply({});
+        case "session.rename":
+        case "session.archive": {
+          const title = msg.type === "session.rename" && typeof msg.title === "string" ? msg.title.trim() : "";
+          // 200: the web title input's maxLength.
+          if (msg.type === "session.rename" && (!title || title.length > 200)) return fail("bad_title", "title must be 1 to 200 characters");
+          if (msg.type === "session.archive" && typeof msg.archived !== "boolean") return fail("bad_request", "archived must be a boolean");
+          const at = await locate(msg.sessionId);
+          if (!at) return fail("unknown_session", `no session ${msg.sessionId}`);
+          try {
+            if (msg.type === "session.rename") await history.renameSession(msg.sessionId, title, { dir: at.cwd });
+            else await history.tagSession(msg.sessionId, msg.archived ? ARCHIVED_TAG : null, { dir: at.cwd });
+          } catch (e) {
+            // A session with no prompt yet has no transcript to write to.
+            return fail(`${msg.type.slice("session.".length)}_failed`, (e as Error).message);
+          }
+          broadcast({ type: "sessions.changed" });
+          return reply({});
+        }
+        case "session.delete": {
+          // A restore already in flight would put the session back after the delete; let it finish, then close it below.
+          await restoring.get(msg.sessionId);
+          const at = await locate(msg.sessionId);
+          if (!at) return fail("unknown_session", `no session ${msg.sessionId}`);
+          const state = at.live?.info().state;
+          if (state === "running" || state === "needs_input") return fail("session_running", "stop the session before deleting it");
+          // The CLI exits first: it writes session metadata on exit, which would recreate the transcript. A failed delete keeps the transcript.
+          deleting.add(msg.sessionId);
+          sessions.delete(msg.sessionId);
+          try {
+            await at.live?.close();
+            if (at.transcript) await history.deleteSession(msg.sessionId, { dir: at.cwd });
+          } catch (e) {
+            return fail("delete_failed", (e as Error).message);
+          } finally {
+            deleting.delete(msg.sessionId);
+          }
+          broadcast({ type: "sessions.changed", deleted: msg.sessionId });
+          return reply({});
+        }
         case "fs.list": {
           if (msg.path === undefined)
             return reply({ entries: roots.map((r): FsEntry => ({ name: r, path: r, isDir: true })) });

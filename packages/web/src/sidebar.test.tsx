@@ -18,6 +18,8 @@ const item = (id: string, cwd: string, title: string, minutesAgo: number, state:
   effort: "default",
   permissionModes: [],
   lastActivity: now - minutesAgo * 60_000,
+  archived: false,
+  transcript: true,
 });
 // Interleaved working directories, as the daemon's newest-first list gives them.
 const LIST = [
@@ -33,7 +35,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-async function render(projects = ["/home/u/web", "/home/u/api"]) {
+async function render(props: { list?: SessionListItem[]; renaming?: string; projects?: string[] } = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -41,11 +43,13 @@ async function render(projects = ["/home/u/web", "/home/u/api"]) {
   const onNew = vi.fn();
   const onRemove = vi.fn();
   const onOpenProject = vi.fn();
+  const onAction = vi.fn();
+  const onRenamed = vi.fn();
   await act(async () =>
     root!.render(
       <SessionList
-        list={LIST}
-        projects={projects}
+        list={props.list ?? LIST}
+        projects={props.projects ?? ["/home/u/web", "/home/u/api"]}
         state={(s) => s.state}
         unread={new Set(["c"])}
         activeId="a"
@@ -53,6 +57,9 @@ async function render(projects = ["/home/u/web", "/home/u/api"]) {
         onNew={onNew}
         onRemove={onRemove}
         onOpenProject={onOpenProject}
+        renaming={props.renaming}
+        onAction={onAction}
+        onRenamed={onRenamed}
       />,
     ),
   );
@@ -67,7 +74,7 @@ async function render(projects = ["/home/u/web", "/home/u/api"]) {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
   };
-  return { el, groups, rows, toggle, search, onOpen, onNew, onRemove, onOpenProject };
+  return { el, groups, rows, toggle, search, onOpen, onNew, onRemove, onOpenProject, onAction, onRenamed };
 }
 
 it("one group per working directory with the project name as header and the full path only as tooltip", async () => {
@@ -117,7 +124,7 @@ it("search filters by session title and project name, also inside collapsed grou
 });
 
 it("a known project with no sessions still has a group; its New session and Remove act on that project", async () => {
-  const { el, groups, onNew, onRemove, onOpenProject } = await render(["/home/u/empty", "/home/u/web", "/home/u/api"]);
+  const { el, groups, onNew, onRemove, onOpenProject } = await render({ projects: ["/home/u/empty", "/home/u/web", "/home/u/api"] });
   expect(groups().map((g) => g.dataset.cwd)).toEqual(["/home/u/empty", "/home/u/web", "/home/u/api"]);
   expect(groups()[0]!.textContent).toContain("No sessions yet");
   const action = (cwd: string, id: string) => el.querySelector<HTMLElement>(`[data-cwd="${cwd}"] [data-testid="${id}"]`)!;
@@ -133,7 +140,7 @@ it("a known project with no sessions still has a group; its New session and Remo
 });
 
 it("with no projects it offers Open project", async () => {
-  const { el, onOpenProject } = await render([]);
+  const { el, onOpenProject } = await render({ projects: [] });
   expect(el.textContent).toContain("No projects yet");
   await act(async () => el.querySelector<HTMLElement>('[data-testid="open-project"]')!.click());
   expect(onOpenProject).toHaveBeenCalled();
@@ -146,4 +153,85 @@ it("project actions and Open project are visible and 44px on touch screens of an
   expect(actions.className).toContain("pointer-coarse:opacity-100");
   for (const id of ["project-new-session", "project-remove", "open-project"])
     expect(el.querySelector<HTMLElement>(`[data-testid="${id}"]`)!.className).toContain("pointer-coarse:size-11");
+});
+
+it("archived sessions are hidden; the archived filter shows only them and offers Unarchive", async () => {
+  const { el, rows, onAction } = await render({ list: [...LIST, { ...LIST[2]!, id: "z", title: "Shelved", archived: true }] });
+  expect(rows().map((r) => r.textContent)).not.toContainEqual(expect.stringContaining("Shelved"));
+  const filter = el.querySelector<HTMLElement>('[data-testid="archived-filter"]')!;
+  await act(async () => filter.click());
+  expect(filter.getAttribute("aria-pressed")).toBe("true");
+  expect(rows().map((r) => r.getAttribute("aria-label"))).toEqual(["Shelved"]);
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="session-menu"]')!.click());
+  const archive = document.querySelector<HTMLElement>('[data-testid="action-archive"]')!;
+  expect(archive.textContent).toBe("Unarchive");
+  await act(async () => archive.click());
+  expect(onAction).toHaveBeenLastCalledWith("z", "unarchive");
+});
+
+it("each row has an actions menu: Rename, Archive, Delete; Delete is disabled while the session runs or needs input", async () => {
+  const { el, onAction } = await render();
+  const menuOf = (title: string) => el.querySelector<HTMLElement>(`[data-testid="session-menu"][aria-label="Actions for ${title}"]`)!;
+  await act(async () => menuOf("Old idea").click());
+  expect(document.querySelector('[role="menu"]')!.textContent).toBe("RenameArchiveDelete…");
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="action-delete"]')!.click());
+  expect(onAction).toHaveBeenLastCalledWith("c", "delete");
+  for (const title of ["Fix login", "Docs pass"]) {
+    await act(async () => menuOf(title).click());
+    const del = [...document.querySelectorAll<HTMLElement>('[data-testid="action-delete"]')].at(-1)!;
+    expect(del.getAttribute("aria-disabled")).toBe("true");
+    expect(del.textContent).toBe("Delete… (stop it first)");
+    await act(async () => del.click());
+    expect(onAction).not.toHaveBeenCalledWith(expect.anything(), "delete", expect.anything());
+    expect(onAction).toHaveBeenCalledTimes(1);
+  }
+});
+
+it("the renaming row edits the title in place: Enter saves the trimmed title, Escape cancels", async () => {
+  const { el, onRenamed } = await render({ renaming: "c" });
+  const input = el.querySelector<HTMLInputElement>('[data-testid="rename-input"]')!;
+  expect(input.value).toBe("Old idea");
+  await act(async () => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(onRenamed).toHaveBeenLastCalledWith("c", undefined);
+});
+
+it("below md the search box and the archived filter are 8px apart (touch-spacing)", async () => {
+  const { el } = await render();
+  expect(el.querySelector('[data-testid="archived-filter"]')!.parentElement!.className).toMatch(/\bmax-md:gap-2\b/);
+});
+
+it("a session with no transcript yet (never prompted) offers no Rename or Archive: the SDK has nothing to write to", async () => {
+  const { el, onAction } = await render({ list: [...LIST, { ...LIST[2]!, id: "n", title: "New session", transcript: false }] });
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="session-menu"][aria-label="Actions for New session"]')!.click());
+  for (const id of ["action-rename", "action-archive"]) {
+    const item = document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => item.click());
+  }
+  expect(onAction).not.toHaveBeenCalled();
+  expect(document.querySelector('[data-testid="action-delete"]')!.getAttribute("aria-disabled")).toBeNull();
+});
+
+it("rows, the … trigger, the archived filter and the menu items show the pointer cursor; a disabled item shows not-allowed", async () => {
+  const { el, rows } = await render();
+  const pointer = (e: Element) => expect(e.className).toMatch(/(^|\s)cursor-pointer(\s|$)/);
+  pointer(rows()[0]!);
+  pointer(el.querySelector('[data-testid="archived-filter"]')!);
+  const trigger = el.querySelector<HTMLElement>('[data-testid="session-menu"][aria-label="Actions for Fix login"]')!;
+  pointer(trigger);
+  await act(async () => trigger.click());
+  for (const id of ["action-rename", "action-archive", "action-delete"]) {
+    const item = document.querySelector(`[data-testid="${id}"]`)!;
+    pointer(item);
+    expect(item.className).not.toMatch(/\bcursor-default\b/);
+  }
+  // Delete is disabled: Fix login is running.
+  expect(document.querySelector('[data-testid="action-delete"]')!.className).toMatch(/\bdata-disabled:cursor-not-allowed\b/);
+});
+
+it("the archived filter shows an \"Archived sessions\" caption above the list, so the mode is visible", async () => {
+  const { el } = await render({ list: [...LIST, { ...LIST[2]!, id: "z", title: "Shelved", archived: true }] });
+  expect(el.querySelector('[data-testid="archived-caption"]')).toBeNull();
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="archived-filter"]')!.click());
+  expect(el.querySelector('[data-testid="archived-caption"]')!.textContent).toBe("Archived sessions");
 });

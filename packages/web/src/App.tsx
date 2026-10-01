@@ -35,7 +35,7 @@ import { nextMode, PromptToolbar, type SendState } from "./toolbar.tsx";
 import { choose, matchCommands } from "./commands.ts";
 import { activeMention, insertAtCaret, insertMention, mentionPath } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
-import { inProject } from "./sessions.ts";
+import { inProject, patchSession } from "./sessions.ts";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
@@ -51,6 +51,7 @@ import { QuickOpen, isQuickOpenKey, quickOpenLabel } from "./quick-open.tsx";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { NEW_TAB, avatarColors, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar } from "./tabs-bar.tsx";
+import { DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -115,9 +116,15 @@ export function App() {
   const [quickOpen, setQuickOpen] = useState(false);
   const [openFile, setOpenFile] = useState<string>();
   const quickOpener = useRef<Element>(null);
+  // Title editor: in the sidebar row or in the tab the Rename action came from.
+  const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab" }>();
+  // Session waiting for the delete confirmation.
+  const [deleting, setDeleting] = useState<string>();
   const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
   const requested = useRef(new Set<string>());
   // Tabs restored from storage, checked against the first session list: a stale one would show "Untitled".
   const restored = useRef<string[] | undefined>(tabs);
@@ -161,7 +168,8 @@ export function App() {
     }
   }
 
-  function forget(sessionId: string) {
+  /** `deleted`: removed on purpose (this or another tab), so no "no longer exists" error. */
+  function forget(sessionId: string, deleted = false) {
     const without = <T,>(r: Record<string, T>) => Object.fromEntries(Object.entries(r).filter(([id]) => id !== sessionId));
     setViews(without);
     setInfos(without);
@@ -169,9 +177,12 @@ export function App() {
     setList((l) => l.filter((s) => s.id !== sessionId));
     setTabs((t) => t.filter((id) => id !== sessionId));
     if (hashId() === sessionId) {
+      // Deleted like a closed tab: its neighbour becomes active.
+      const next = deleted ? closeTab(tabsRef.current, sessionId, sessionId).active : undefined;
+      if (next) return open(next);
       setActiveId(undefined);
       history.replaceState(null, "", location.pathname + location.search);
-      setError("That session no longer exists in the daemon.");
+      if (!deleted) setError("That session no longer exists in the daemon.");
     }
   }
 
@@ -201,6 +212,10 @@ export function App() {
         setViews((v) => ({ ...v, [e.sessionId]: applyEvent(v[e.sessionId] ?? emptySession(), e) }));
         // New titles and last activity come from the transcript; refresh when a session changes state.
         if (e.part.type === "session_state") void refreshList();
+      },
+      onSessionsChanged: (m) => {
+        if (m.deleted) forget(m.deleted, true);
+        void refreshList();
       },
       onOpen: () => {
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
@@ -345,6 +360,31 @@ export function App() {
     }
   }
 
+  /** Rename, archive and delete; the daemon's `sessions.changed` then updates every tab, this one too. */
+  function sessionAction(where: "list" | "tab") {
+    return (sessionId: string, a: SessionAction) => {
+      setError(undefined);
+      if (a === "rename") return setRenaming({ id: sessionId, in: where });
+      if (a === "delete") return setDeleting(sessionId);
+      // Shown at once like a rename; a failed archive restores the list.
+      setList((l) => patchSession(l, sessionId, { archived: a === "archive" }));
+      client.current!.request({ type: "session.archive", sessionId, archived: a === "archive" }).catch((e: Error) => (setError(e.message), void refreshList()));
+    };
+  }
+
+  function renamed(sessionId: string, title: string | undefined) {
+    setRenaming(undefined);
+    if (!title) return;
+    // Shown at once; a failed rename restores the list title.
+    setList((l) => patchSession(l, sessionId, { title }));
+    client.current!.request({ type: "session.rename", sessionId, title }).catch((e: Error) => (setError(e.message), void refreshList()));
+  }
+
+  function deleteSession(sessionId: string) {
+    setDeleting(undefined);
+    client.current!.request({ type: "session.delete", sessionId }).catch((e: Error) => setError(e.message));
+  }
+
   const sessionOf = (id: string): SessionInfo | undefined => infos[id] ?? list.find((s) => s.id === id);
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   const view = activeId ? views[activeId] : undefined;
@@ -392,8 +432,12 @@ export function App() {
             info={(id) => {
               const s = sessionOf(id);
               if (id === NEW_TAB) return { title: "New session", unread: false };
-              return { title: list.find((l) => l.id === id)?.title || "Untitled", cwd: s?.cwd, state: views[id]?.state ?? s?.state, unread: unread.has(id) };
+              const item = list.find((l) => l.id === id);
+              return { title: item?.title || "Untitled", cwd: s?.cwd, state: views[id]?.state ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
             }}
+            renaming={renaming?.in === "tab" ? renaming.id : undefined}
+            onAction={sessionAction("tab")}
+            onRenamed={renamed}
             onSelect={open}
             onClose={close}
             onMove={(from, to) => setTabs((t) => moveTab(t, from, to))}
@@ -411,6 +455,7 @@ export function App() {
           <ThemeIcon />
         </IconButton>
       </header>
+      <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? "Untitled")} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
       <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
         {drawer && <div className="fixed inset-0 z-30 bg-overlay md:hidden" onClick={() => setDrawer(false)} aria-hidden />}
         <aside
@@ -437,6 +482,9 @@ export function App() {
               onNew={newSession}
               onRemove={removeProject}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}
+              renaming={renaming?.in === "list" ? renaming.id : undefined}
+              onAction={sessionAction("list")}
+              onRenamed={renamed}
             />
           )}
         </aside>
