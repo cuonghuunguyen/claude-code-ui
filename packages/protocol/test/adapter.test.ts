@@ -189,8 +189,15 @@ describe("adapter on known SDK noise", () => {
       { type: "system", subtype: "task_started", uuid: "t1", task_id: "b1", description: "sleep 1" },
       { type: "system", subtype: "task_notification", uuid: "t2", task_id: "b1", status: "completed", output_file: "", summary: "" },
       { type: "tool_progress", uuid: "p1", tool_use_id: "x", tool_name: "Bash", parent_tool_use_id: null, elapsed_time_seconds: 3 },
+      { type: "system", subtype: "background_tasks_changed", uuid: "b2", tasks: [] },
     ];
     expect(run(noise)).toEqual([]);
+  });
+
+  it("drops the empty result of the CLI's task-notification turn (no tokens, no error); no 0-token turn footer", () => {
+    const result = (uuid: string, input_tokens: number, output_tokens: number, total_cost_usd: number) =>
+      ({ type: "result", subtype: "success", uuid, session_id: "x", is_error: false, duration_ms: 200, total_cost_usd, usage: { input_tokens, output_tokens }, permission_denials: [] });
+    expect(run([result("r1", 3, 5, 0.1), result("empty", 0, 0, 0.1), result("r2", 3, 5, 0.2)]).map((p) => p.id)).toEqual(["r1", "r2"]);
   });
 
   it("drops the CLI's echo of a model switch; the session_model part shows it", () => {

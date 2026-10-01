@@ -1,5 +1,5 @@
 // Status bar under the prompt box (Claude Code status line): model, context, git, tokens, plan limits, permission mode, background shells.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Popover } from "@base-ui/react/popover";
 import type { GitStatus, PermissionMode, PlanUsage } from "@claude-ui/protocol";
 import { ContextPopup } from "./context-meter.tsx";
@@ -83,10 +83,11 @@ function useGit(git: (() => Promise<GitStatus | null>) | undefined, state: strin
 // Below sm only the fields in Claude Code's priority (model, ctx used, session) and the clickable shells stay.
 const WIDE = "max-sm:hidden";
 const TRIGGER =
-  "cursor-pointer rounded-md px-1 -mx-1 outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-accent data-popup-open:text-foreground pointer-coarse:min-h-11";
+  "cursor-pointer rounded-md px-1 -mx-1 outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-accent data-popup-open:text-foreground min-h-6 pointer-coarse:min-h-11";
 
 function Field({ field, children, wide = true, popup, label }: { field: string; children: ReactNode; wide?: boolean; popup?: ReactNode; label?: string }) {
   const cls = wide ? WIDE : "";
+  const id = useId();
   if (!popup)
     return (
       <span data-field={field} className={`flex items-center ${cls}`}>
@@ -95,9 +96,13 @@ function Field({ field, children, wide = true, popup, label }: { field: string; 
     );
   return (
     <Popover.Root>
-      <Popover.Trigger data-field={field} aria-label={label} className={`flex items-center ${TRIGGER} ${cls}`}>
+      {/* The visible text stays the accessible name (WCAG 2.5.3); the label only describes the click. */}
+      <Popover.Trigger data-field={field} aria-describedby={id} className={`flex items-center ${TRIGGER} ${cls}`}>
         {children}
       </Popover.Trigger>
+      <span id={id} hidden>
+        {label}
+      </span>
       {popup}
     </Popover.Root>
   );
@@ -170,7 +175,7 @@ export function StatusBar(props: {
             value={props.mode}
             onChange={props.onMode}
             items={modes.map((m) => ({ value: m, label: MODE_LABEL[m].label, trigger: MODE_ON[m] }))}
-            className="h-auto! px-1! py-0! -mx-1 max-sm:hidden pointer-coarse:min-h-11 [&>svg:last-child]:hidden"
+            className="h-auto! min-h-6 px-1! py-0! -mx-1 max-sm:hidden pointer-coarse:min-h-11 [&>svg:last-child]:hidden"
           />
         </span>
       )}

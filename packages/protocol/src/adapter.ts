@@ -22,6 +22,7 @@ const IGNORED = new Set([
   "system:thinking_tokens",
   "system:task_progress",
   "system:task_updated",
+  "system:background_tasks_changed",
   "system:hook_started",
   "system:hook_progress",
   "system:hook_response",
@@ -210,10 +211,13 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
         // A lower total: the CLI started over (a resume without a saved total, /clear).
         const costUsd = costTotal === undefined ? undefined : total >= costTotal ? total - costTotal : total;
         costTotal = total;
+        const u = m.usage;
+        // The CLI's own turn after a background task notification ends with a result of no tokens: no footer for it.
+        const empty = !m.is_error && costUsd === 0 && !u.input_tokens && !u.output_tokens && !u.cache_read_input_tokens && !u.cache_creation_input_tokens;
         return [
           ...(m.permission_denials ?? []).flatMap((d) => deny(d.tool_use_id)),
           // An aborted turn has its turn_interrupted instead.
-          ...(ABORTED.has(m.terminal_reason ?? "") ? [] : [{
+          ...(ABORTED.has(m.terminal_reason ?? "") || empty ? [] : [{
             type: "turn_result",
             id: m.uuid,
             durationMs: m.duration_ms,

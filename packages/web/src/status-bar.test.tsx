@@ -140,3 +140,19 @@ it("narrow screens keep model, ctx used and session percent; the rest is hidden 
   const narrow = [...el.querySelectorAll("[data-field]")].filter((f) => !f.className.includes("max-sm:hidden")).map((f) => f.getAttribute("data-field"));
   expect(narrow).toEqual(["model", "ctx-used", "session"]);
 });
+
+it("clickable fields keep the visible text as accessible name (WCAG 2.5.3) and are at least 24px high (WCAG 2.5.8)", async () => {
+  const v = view({ type: "context_usage", id: "context_usage", usage }, bash("a", { command: "sleep 9", run_in_background: true }, "running"));
+  const { el } = await render({ view: v, plan, mode: "plan" });
+  const triggers = [...el.querySelectorAll<HTMLElement>("button")];
+  expect(triggers.length).toBe(8);
+  for (const t of triggers) expect(t.className).toContain("min-h-6");
+  expect(triggers.filter((t) => t.hasAttribute("aria-label")).map((t) => t.getAttribute("aria-label"))).toEqual(["plan mode on, Permission mode"]);
+  const describe = (field: string) => {
+    const t = el.querySelector(`[data-field="${field}"]`)!;
+    return document.getElementById(t.getAttribute("aria-describedby")!)?.textContent;
+  };
+  expect(describe("ctx-used")).toBe("Context window, show breakdown");
+  expect(describe("weekly")).toBe("Plan usage, show details");
+  expect(describe("shells")).toBe("Background shells, show list");
+});
