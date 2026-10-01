@@ -3,7 +3,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelInfo } from "@claude-ui/protocol";
-import { NewSession, startSession } from "./App.tsx";
+import { NewSession, NewSessionTab, startSession } from "./App.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -88,4 +88,21 @@ it("a first prompt that fails after session.create rejects (the draft stays); th
   expect(sent).toEqual(["session.setModel", "session.prompt"]);
   expect(s).toMatchObject({ id: "s1", model: "opus" });
   expect(created.current).toBeUndefined();
+});
+
+it("switching to another tab and back keeps the new-session draft and the chosen mode (each tab keeps its draft prompt)", async () => {
+  const props = { projects: ["/p/a"], cwd: "/p/a", onCwd: () => {}, models, onOpenProject: () => {}, onUpload: async () => "", onSearch: () => async () => [], onStart: async () => {} };
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  unmount = () => (root.unmount(), el.remove());
+  const show = (active: boolean) => act(async () => root.render(<NewSessionTab active={active} {...props} />));
+  await show(true);
+  const input = el.querySelector("textarea")!;
+  await type(input, "draft text");
+  await key(input, { key: "Tab", shiftKey: true });
+  await show(false);
+  await show(true);
+  expect(el.querySelector("textarea")!.value).toBe("draft text");
+  expect(el.querySelector('[data-testid="mode-select"]')?.textContent).toContain("Edit automatically");
 });

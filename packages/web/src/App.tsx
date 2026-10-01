@@ -1,4 +1,4 @@
-import { Activity, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent, type RefObject } from "react";
+import { Activity, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type RefObject } from "react";
 import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SunIcon } from "lucide-react";
 import type {
   ContextUsage,
@@ -55,6 +55,7 @@ type Client = ReturnType<typeof connect>;
 
 // The active tab lives in the URL hash, so a reload reopens it.
 const hashTab = () => tabFromHash(location.hash);
+const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-raised";
 const hashId = () => (hashTab() === NEW_TAB ? undefined : hashTab());
 
 const pageFocused = () => document.visibilityState === "visible" && document.hasFocus();
@@ -351,7 +352,6 @@ export function App() {
   if (shown) lastShown.current = shown;
   const panelSession = shown ?? lastShown.current;
   const colors = useMemo(() => avatarColors(projects), [projects]);
-  const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-raised";
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
   const upload = async (file: File) => {
     const data = (await readDataUrl(file)).replace(/^data:[^,]*,/, "");
@@ -519,26 +519,25 @@ export function App() {
                   {pane === "changes" && <p className="m-auto p-4 text-muted-foreground">No changes view yet.</p>}
                 </section>
               )}
-              {activeId === NEW_TAB ? (
-                <div className={`${card} flex-1 items-center justify-center p-4`} data-testid="new-session-tab">
-                  <NewSession
-                    projects={projects}
-                    cwd={draftCwd && projects.includes(draftCwd) ? draftCwd : projects[0]}
-                    onCwd={setDraftCwd}
-                    models={models}
-                    onOpenProject={() => setOpeningProject(true)}
-                    onUpload={upload}
-                    onSearch={search}
-                    onStart={createSession}
-                    inputRef={newPrompt}
-                  />
+              {/* Mounted while the tab is open: hidden, it keeps its draft; replaced by the created session, it starts empty next time. */}
+              {tabs.includes(NEW_TAB) && (
+                <NewSessionTab
+                  active={activeId === NEW_TAB}
+                  projects={projects}
+                  cwd={draftCwd && projects.includes(draftCwd) ? draftCwd : projects[0]}
+                  onCwd={setDraftCwd}
+                  models={models}
+                  onOpenProject={() => setOpeningProject(true)}
+                  onUpload={upload}
+                  onSearch={search}
+                  onStart={createSession}
+                  inputRef={newPrompt}
+                />
+              )}
+              {activeId !== NEW_TAB && !shown && (
+                <div className={`${card} flex-1`}>
+                  <div className="m-auto text-muted-foreground">Open or create a session to start.</div>
                 </div>
-              ) : (
-                !shown && (
-                  <div className={`${card} flex-1`}>
-                    <div className="m-auto text-muted-foreground">Open or create a session to start.</div>
-                  </div>
-                )
               )}
             </>
           )}
@@ -662,6 +661,17 @@ export async function startSession(
   await request({ type: "session.prompt", sessionId: session.id, text, images });
   created.current = undefined;
   return session;
+}
+
+/** The new-session tab's card. Hidden, not unmounted, while another tab is active: it keeps its draft, images, model, mode and effort. */
+export function NewSessionTab({ active, ...props }: { active: boolean } & ComponentProps<typeof NewSession>) {
+  return (
+    <Activity mode={active ? "visible" : "hidden"}>
+      <div className={`${card} flex-1 items-center justify-center p-4`} data-testid="new-session-tab">
+        <NewSession {...props} />
+      </div>
+    </Activity>
+  );
 }
 
 /** New-session tab (OpenCode empty state): prompt box, model, and the project chip; the first prompt creates the session. */
