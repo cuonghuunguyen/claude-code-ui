@@ -109,7 +109,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 - Invoked by sending `/name args` as prompt text.
 - Models from `supportedModels()`; switch with `setModel()` mid-session.
 - Permission mode and effort: start options of the query; while it runs `setPermissionMode()` / `applyFlagSettings({effortLevel})`, applied from the next turn. The CLI changes the mode itself too (plan approved, "all edits this session"); `system/init` and `system/status` carry it, and the daemon logs every change as a `session_permission_mode` part. Effort changes log `session_effort`. Both reset to `default` after a daemon restart.
-- `ExitPlanMode` arrives through `canUseTool` without suggestions; the daemon adds `setMode acceptEdits` so the panel offers Claude Code's "Yes, and auto-accept edits" next to "Yes, manually approve edits" and "No, keep planning".
+- `ExitPlanMode` arrives through `canUseTool` without suggestions; the daemon adds `setMode acceptEdits` so the panel offers Claude Code's "Yes, and auto-accept edits" next to "Yes, manually approve edits" and "No, keep planning". Each "Yes" sends its mode as `setMode` (auto-accept → `acceptEdits`, manually approve → `default`); without it the CLI restores the mode active before plan mode.
 
 ### Checkpoints and rewind (same modes as Claude Code `/rewind`)
 

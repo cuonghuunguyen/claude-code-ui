@@ -358,6 +358,57 @@ describe("Session questions", () => {
     await vi.waitFor(() => expect(permissionResults.at(-1)).toMatchObject({ behavior: "allow", updatedPermissions: [{ type: "setMode", mode: "acceptEdits" }] }));
   });
 
+  // Review round 2: the CLI restores the mode active before plan mode unless told otherwise, so each answer names its mode.
+  describe.each([
+    ["the mode menu", ["plan"], []],
+    ["Shift+Tab (via acceptEdits)", ["acceptEdits", "plan"], []],
+    ["the CLI (system/status)", [], [{ type: "system", subtype: "status", status: null, permissionMode: "plan", uuid: randomUUID(), session_id: "x" }]],
+  ] as const)("ExitPlanMode after plan mode entered from %s", (_, modes, msgs) => {
+    const planExit = async () => {
+      const query = ({ prompt, options }: { prompt: AsyncIterable<unknown>; options: { canUseTool: Function } }) =>
+        Object.assign(
+          (async function* () {
+            for await (const _ of prompt) {
+              yield* msgs;
+              permissionResults.push(await options.canUseTool("ExitPlanMode", { plan: "p" }, { signal: new AbortController().signal, toolUseID: "t1", requestId: "r" }));
+            }
+          })(),
+          { supportedCommands: async () => [], setPermissionMode: async () => {} },
+        );
+      const s = new Session("/tmp", { query: query as never });
+      const events: Event[] = [];
+      s.subscribe(0, (e) => events.push(e));
+      for (const m of modes) await s.setPermissionMode(m);
+      s.prompt("go");
+      await until(events, (e) => e.part.type === "permission_request");
+      expect(s.info().permissionMode).toBe("plan");
+      const req = events.find((e) => e.part.type === "permission_request")!.part as Extract<Event["part"], { type: "permission_request" }>;
+      const results = permissionResults.length;
+      return { s, req, result: () => vi.waitFor(() => (expect(permissionResults.length).toBeGreaterThan(results), permissionResults.at(-1)!)) };
+    };
+    const setMode = (mode: string) => ({ updatedPermissions: [{ type: "setMode", mode, destination: "session" }] });
+
+    it("'Yes, manually approve edits' sets default", async () => {
+      const { s, req, result } = await planExit();
+      s.respond(req.requestId, { decision: "allow" });
+      expect(await result()).toMatchObject({ behavior: "allow", ...setMode("default") });
+    });
+    it("'Yes, and auto-accept edits' sets acceptEdits", async () => {
+      const { s, req, result } = await planExit();
+      s.respond(req.requestId, { decision: "allow_always" });
+      expect(await result()).toMatchObject({ behavior: "allow", ...setMode("acceptEdits") });
+    });
+    it("'No, keep planning' (with or without feedback) changes no mode", async () => {
+      for (const message of [undefined, "smaller steps"]) {
+        const { s, req, result } = await planExit();
+        s.respond(req.requestId, { decision: "deny", message });
+        const r = await result();
+        expect(r).toMatchObject({ behavior: "deny" });
+        expect(r).not.toHaveProperty("updatedPermissions");
+      }
+    });
+  });
+
   it("AskUserQuestion through canUseTool logs a question part and sets needs_input", async () => {
     const { s, events, q } = await ask();
     expect(q).toMatchObject({ requestId: q.id, questions: askInput.questions, settled: false });

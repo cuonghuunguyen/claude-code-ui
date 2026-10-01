@@ -43,6 +43,8 @@ type SessionOpts = { model?: string; allowBypass?: boolean; query?: typeof sdkQu
 
 // ExitPlanMode comes without suggestions; Claude Code's "Yes, and auto-accept edits" (verified: the CLI then runs in acceptEdits).
 const ACCEPT_EDITS: PermissionUpdate = { type: "setMode", mode: "acceptEdits", destination: "session" };
+// Plain allow must name its mode too: without one the CLI restores the mode active before plan mode (acceptEdits after Shift+Tab).
+const MANUAL_EDITS: PermissionUpdate = { type: "setMode", mode: "default", destination: "session" };
 
 export class Session {
   readonly id: string;
@@ -310,13 +312,20 @@ export class Session {
         text ? { behavior: "deny", message: `${REJECTED} To tell you how to proceed, the user said:\n${text}` } : { behavior: "deny", message: REJECTED, interrupt: true },
       );
     }
-    const updatedPermissions = ruleIndex === undefined ? suggestions : suggestions.slice(ruleIndex, ruleIndex + 1);
+    const updatedPermissions =
+      req.part.tool === "ExitPlanMode"
+        ? [decision === "allow_always" ? ACCEPT_EDITS : MANUAL_EDITS]
+        : decision === "allow_always"
+          ? ruleIndex === undefined
+            ? suggestions
+            : suggestions.slice(ruleIndex, ruleIndex + 1)
+          : undefined;
     // Edit before accept: the timeline shows what runs, not Claude's proposal.
     if (updatedInput) for (const part of this.adapter.edit(toolUseId, updatedInput)) this.emit(part);
     return this.settle(
       requestId,
       { decision, ...(updatedInput ? { input: updatedInput, editedByUser: true } : {}) },
-      { behavior: "allow", updatedInput: updatedInput ?? (input as Record<string, unknown>), ...(decision === "allow_always" ? { updatedPermissions } : {}) },
+      { behavior: "allow", updatedInput: updatedInput ?? (input as Record<string, unknown>), ...(updatedPermissions ? { updatedPermissions } : {}) },
     );
   }
 
