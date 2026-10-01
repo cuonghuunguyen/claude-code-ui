@@ -58,6 +58,14 @@ it("warns past the threshold or on the server's grade, with an icon (not color o
   expect(meter(el).querySelector('[data-testid="plan-warning-icon"]')).not.toBeNull();
 });
 
+it("warning caused by another window: the trigger shows that window and its label names the warning", async () => {
+  const el = await render({ ...usage, windows: [{ ...usage.windows[0]!, percent: 72 }, { ...usage.windows[1]!, percent: 86 }] });
+  expect(meter(el).dataset.level).toBe("warning");
+  expect(meter(el).textContent).toBe("86%");
+  expect(meter(el).getAttribute("aria-label")).toMatch(/^Plan usage warning: Current week \(all models\) 86%, resets .*, show details$/);
+  expect(meter(el).title).toMatch(/^Plan usage warning: Current week \(all models\) 86%/);
+});
+
 it("limit hit: a window at 100% or a rejected rate_limit_event, shown with its reset time", async () => {
   expect(planLevel({ ...usage, windows: [{ ...usage.windows[1]!, percent: 100 }] })).toBe("limit");
   const el = await render({ ...usage, status: "rejected", statusResetsAt: now + 65 * 60_000 + 30_000 });

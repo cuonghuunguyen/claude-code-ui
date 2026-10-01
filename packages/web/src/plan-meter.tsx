@@ -1,4 +1,4 @@
-// Plan usage meter (Claude Code /usage): the headline window as ring + percent in the titlebar; click shows every window with its reset time.
+// Plan usage meter (Claude Code /usage): the headline window (the worst one when warning) as ring + percent in the titlebar; click shows every window with its reset time.
 import { Popover } from "@base-ui/react/popover";
 import { TriangleAlertIcon } from "lucide-react";
 import type { PlanUsage, PlanWindow } from "@claude-ui/protocol";
@@ -40,20 +40,26 @@ export function resetText(at: number, now = Date.now()) {
 
 const lower = (s: string) => s[0]!.toLowerCase() + s.slice(1);
 
+const NAME: Record<PlanLevel, string> = { ok: "Plan usage", warning: "Plan usage warning", limit: "Plan usage limit reached" };
+
+/** The server's headline window; in a warning or limit state the highest window in that state, so the number matches the icon. */
+function headline(windows: PlanWindow[], level: PlanLevel) {
+  const worst = level === "ok" ? [] : windows.filter((w) => windowLevel(w) === level);
+  return worst.reduce((a, w) => (w.percent > a.percent ? w : a), worst[0]!) ?? windows.find((w) => w.active) ?? windows[0];
+}
+
 export function PlanMeter({ usage }: { usage: PlanUsage }) {
   const level = planLevel(usage);
-  const head = usage.windows.find((w) => w.active) ?? usage.windows[0];
+  const head = headline(usage.windows, level);
   const limited = usage.status === "rejected";
   const summary = limited
-    ? `limit reached${usage.statusResetsAt ? `, ${lower(resetText(usage.statusResetsAt))}` : ""}`
-    : head
-      ? `${head.label} ${head.percent}%${head.resetsAt ? `, ${lower(resetText(head.resetsAt))}` : ""}`
-      : "no windows";
+    ? `Plan usage: limit reached${usage.statusResetsAt ? `, ${lower(resetText(usage.statusResetsAt))}` : ""}`
+    : `${NAME[level]}: ${head ? `${head.label} ${head.percent}%${head.resetsAt ? `, ${lower(resetText(head.resetsAt))}` : ""}` : "no windows"}`;
   return (
     <Popover.Root>
       <Popover.Trigger
-        aria-label={`Plan usage: ${summary}, show details`}
-        title={`Plan usage: ${summary}`}
+        aria-label={`${summary}, show details`}
+        title={summary}
         data-testid="plan-meter"
         data-level={level}
         className={`flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs tabular-nums outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-accent pointer-coarse:h-11 ${level === "ok" ? "text-muted-foreground hover:text-foreground data-popup-open:text-foreground" : TEXT[level]}`}
@@ -86,9 +92,11 @@ export function PlanMeter({ usage }: { usage: PlanUsage }) {
               {usage.windows.map((w) => {
                 const l = windowLevel(w);
                 return (
-                  <li key={w.label} data-testid="plan-window" data-level={l} className="flex flex-col gap-1 text-xs">
+                  <li key={`${w.kind}:${w.label}`} data-testid="plan-window" data-level={l} className="flex flex-col gap-1 text-xs">
                     <div className="flex items-center gap-2">
                       <span className="min-w-0 flex-1 truncate">{w.label}</span>
+                      {/* The server can grade a low percent as warning: not color only. */}
+                      {l !== "ok" && <TriangleAlertIcon role="img" aria-label={l === "limit" ? "limit reached" : "warning"} className={`size-3 shrink-0 ${TEXT[l]}`} />}
                       <span className={`tabular-nums ${TEXT[l]}`}>{`${w.percent}%`}</span>
                     </div>
                     <div className="h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden>

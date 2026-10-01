@@ -19,11 +19,14 @@ describe("plan usage", () => {
   });
 
   it("falls back to the typed windows when the response has no rows", () => {
-    const u = planUsage({ ...fakePlanUsage, rate_limits: { ...fakePlanUsage.rate_limits, limits: null } } as never);
+    const u = planUsage({ ...fakePlanUsage, rate_limits: { ...fakePlanUsage.rate_limits, limits: null, seven_day_opus: { utilization: 7, resets_at: null } } } as never);
     expect(u!.windows.map((w) => [w.label, w.percent])).toEqual([
       ["Current session", 55],
       ["Current week (all models)", 44],
+      ["Current week (Opus)", 7],
     ]);
+    const scoped = planUsage({ ...fakePlanUsage, rate_limits: { ...fakePlanUsage.rate_limits, limits: null, model_scoped: [{ display_name: "Fable", utilization: 2, resets_at: null }] } } as never);
+    expect(scoped!.windows.at(-1)).toMatchObject({ kind: "weekly_scoped", label: "Current week (Fable)", percent: 2 });
   });
 
   it("is null without plan limits (API key, Bedrock, Vertex)", () => {
@@ -49,6 +52,29 @@ describe("plan usage", () => {
     await t.rateLimit({ status: "allowed" }, fast as never);
     expect(t.current()).toMatchObject({ status: "allowed" });
     expect(t.current()!.statusResetsAt).toBeUndefined();
+  });
+
+  it("a rejected status ends at its reset time, also without a new turn; one without a reset time ends on the next read", async () => {
+    vi.useFakeTimers({ now: at("2026-10-01T10:00:00Z") });
+    try {
+      const seen: (PlanUsage | null)[] = [];
+      const t = createPlanTracker({ onChange: (u) => seen.push(u) });
+      const q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => fakePlanUsage };
+      await t.rateLimit({ status: "rejected", resetsAt: at("2026-10-01T11:00:00Z") / 1000, rateLimitType: "five_hour" }, q as never);
+      expect(t.current()).toMatchObject({ status: "rejected" });
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(seen.at(-1)).toMatchObject({ status: "allowed" });
+      expect(seen.at(-1)!.statusResetsAt).toBeUndefined();
+      await t.refresh(q as never);
+      expect(t.current()).toMatchObject({ status: "allowed" });
+
+      await t.rateLimit({ status: "rejected", rateLimitType: "five_hour" }, q as never);
+      expect(t.current()).toMatchObject({ status: "rejected" });
+      await t.refresh(q as never);
+      expect(t.current()).toMatchObject({ status: "allowed" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a failed read keeps the last value", async () => {

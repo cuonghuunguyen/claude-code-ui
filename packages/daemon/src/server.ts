@@ -11,7 +11,7 @@ import { searchFiles } from "./search.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { createPlanTracker } from "./plan-usage.ts";
-import { listModels, Session, transcriptModel, withQuery, type SessionSettings } from "./session.ts";
+import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings } from "./session.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
@@ -313,7 +313,7 @@ export function createDaemon(opts: {
     connections.add(ws);
     const usage = plan.current();
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
-    if (plan.age() > PLAN_STALE_MS) void withQuery(plan.refresh, opts.query).catch((err) => console.error("plan usage failed:", err));
+    if (plan.age() > PLAN_STALE_MS) void queuedQuery(plan.refresh, opts.query).catch((err) => console.error("plan usage failed:", err));
     const unsubscribes = new Map<string, () => void>();
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();

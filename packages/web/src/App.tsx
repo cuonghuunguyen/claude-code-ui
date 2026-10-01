@@ -524,16 +524,17 @@ export function App() {
             onHome={() => setSidebar((v) => !v)}
           />
         )}
-        <div className="ml-auto" />
-        {plan && status !== "unauthorized" && <PlanMeter usage={plan} />}
-        {canQuickOpen && (
-          <IconButton label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button">
-            <SearchIcon />
+        <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:gap-2">
+          {plan && status !== "unauthorized" && <PlanMeter usage={plan} />}
+          {canQuickOpen && (
+            <IconButton label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button">
+              <SearchIcon />
+            </IconButton>
+          )}
+          <IconButton label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
+            <ThemeIcon />
           </IconButton>
-        )}
-        <IconButton label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
-          <ThemeIcon />
-        </IconButton>
+        </div>
       </header>
       <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? "Untitled")} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
       <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">

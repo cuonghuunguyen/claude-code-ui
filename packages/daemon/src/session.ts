@@ -495,7 +495,7 @@ export function transcriptModel(history: SessionMessage[]): string | undefined {
   return model;
 }
 
-/** Tail of the daemon-wide queue of throwaway usage queries (refreshUsage()). */
+/** Tail of the daemon-wide queue of throwaway usage queries (refreshUsage(), queuedQuery()). */
 let throwawayTail: Promise<unknown> = Promise.resolve();
 
 const contextUsage = (u: SDKControlGetContextUsageResponse) => ({
@@ -513,6 +513,13 @@ export async function withQuery<T>(fn: (q: Query) => Promise<T>, query: typeof s
   } finally {
     q.close();
   }
+}
+
+/** withQuery() in the daemon-wide throwaway queue (refreshUsage()): one throwaway CLI at a time (FIX-LEAK). */
+export function queuedQuery<T>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery): Promise<T> {
+  const run = throwawayTail.then(() => withQuery(fn, query));
+  throwawayTail = run.catch(() => {});
+  return run;
 }
 
 export const listModels = (query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> => withQuery((q) => q.supportedModels(), query);
