@@ -1253,7 +1253,8 @@ function PromptBox({
     // Checked before reading: a big file would be held in memory as base64 and could exceed the daemon's frame limit.
     const big = all.find((f) => f.size > MAX_UPLOAD_BYTES);
     if (big) return setSendError(`Attach failed: ${big.name} is larger than ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
-    setSendError(undefined);
+    // Only an earlier attach error is stale now; a send error stays until the next send.
+    setSendError((e) => (e?.startsWith("Attach failed") ? undefined : e));
     const others = all.filter((f) => !isPromptImage(f.type));
     const added = await readImages(all);
     setImages((i) => [...i, ...added]);

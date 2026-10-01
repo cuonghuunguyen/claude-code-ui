@@ -56,13 +56,13 @@ function Chooser<T extends string>({
       </SelectTrigger>
       {/* OpenCode menu-v2: 2px padding, radius 6; item 28px (44px on touch), padding 0 12px, radius 4; selected item weight 530 in the accent colour.
           `data-[selected]`: Base UI sets data-selected="", shadcn's data-selected: variant needs "true". */}
-      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="w-auto min-w-44 rounded-md p-0.5 shadow-floating ring-0">
+      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="w-auto min-w-44 rounded-md p-0.5 shadow-floating! ring-0">
         {items.map((i) => (
           <SelectItem
             key={i.value}
             value={i.value}
             title={i.description}
-            className="h-7 gap-2 rounded-sm py-0 pr-8 pl-3 font-normal pointer-coarse:h-11 data-[selected]:font-medium data-[selected]:**:text-info!"
+            className="h-7 cursor-pointer gap-2 rounded-sm py-0 pr-8 pl-3 font-normal pointer-coarse:h-11 data-[selected]:font-medium data-[selected]:**:text-info!"
           >
             {i.label}
           </SelectItem>

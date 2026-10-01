@@ -47,6 +47,13 @@ describe("splitUploads", () => {
     });
   });
 
+  it("takes out an attached file followed by a newline", () => {
+    expect(splitUploads("secret word in @/tmp/claude-ui-E8LKGI/u-DRFNWD/notes.txt\nThanks.")).toEqual({
+      text: "secret word in \nThanks.",
+      files: [{ path: "/tmp/claude-ui-E8LKGI/u-DRFNWD/notes.txt", name: "notes.txt" }],
+    });
+  });
+
   it("leaves text without uploads as it is", () => {
     expect(splitUploads("see @src/u-main.ts  me@/x/u-abcdef/y")).toEqual({ text: "see @src/u-main.ts  me@/x/u-abcdef/y", files: [] });
   });
