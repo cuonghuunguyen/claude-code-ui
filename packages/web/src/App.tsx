@@ -435,6 +435,7 @@ export function App() {
                           onRespond={respond}
                           onSearch={search(s.cwd)}
                           onAnswer={answer}
+                          connected={status === "connected"}
                         />
                       </Activity>
                     );
@@ -678,6 +679,7 @@ export function SessionPane({
   onRewind,
   onRespond,
   onAnswer,
+  connected,
 }: {
   scrollKey: number;
   insert?: string;
@@ -698,6 +700,8 @@ export function SessionPane({
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
   onAnswer: (requestId: string, answers: Record<string, string>) => void;
+  /** The daemon is reachable; otherwise the send button is disabled. */
+  connected: boolean;
 }) {
   const permission = pendingPermission(view);
   const question = pendingQuestion(view);
@@ -1005,8 +1009,8 @@ export function SessionPane({
                 modes={session.permissionModes}
                 onMode={onMode}
                 onAttach={(f) => void attach(f)}
-                stop={turnRunning && !text.trim() && !images.length}
-                canSend={!!text.trim() || images.length > 0}
+                state={connected ? (turnRunning ? (view.state as "running" | "needs_input") : "idle") : "disconnected"}
+                hasInput={!!text.trim() || images.length > 0}
                 onSend={() => send()}
                 onStop={onInterrupt}
               />

@@ -45,6 +45,7 @@ async function render(over: Partial<ComponentProps<typeof SessionPane>> = {}, vi
     onRewind: async () => {},
     onRespond: noop,
     onAnswer: noop,
+    connected: true,
     ...over,
   };
   await act(async () => root.render(<SessionPane {...props} />));
@@ -178,6 +179,45 @@ it("send button sends; while a turn runs with nothing typed it is a stop button"
   expect($("toolbar-stop")).toBeNull();
   await act(async () => $("send")!.click());
   expect(onPrompt).toHaveBeenCalledWith("steer", []);
+});
+
+it("send button follows the session state: label, tooltip, spinner, needs input, disconnected", async () => {
+  const onInterrupt = vi.fn();
+  const { $, box, rerender } = await render({ onInterrupt });
+  const button = () => $("prompt-toolbar")!.querySelector<HTMLButtonElement>("button[data-state]")!;
+  expect(button().dataset.state).toBe("idle");
+  expect(button().getAttribute("aria-label")).toBe("Send");
+  expect(button().disabled).toBe(true);
+  expect(button().querySelector(".animate-spin")).toBeNull();
+
+  await rerender({ view: { ...emptySession(), state: "running" } });
+  expect(button().dataset.state).toBe("running");
+  expect(button().getAttribute("aria-label")).toBe("Claude is working. Stop");
+  expect(button().title).toBe("Claude is working. Stop (Esc)");
+  const spin = button().querySelector("svg.animate-spin")!;
+  expect(spin.getAttribute("class")).toContain("motion-reduce:animate-none");
+  await type(box, "steer");
+  expect(button().getAttribute("aria-label")).toBe("Claude is working. Steer");
+  expect(button().querySelector("svg.animate-spin")).not.toBeNull();
+  await type(box, "");
+
+  await rerender({ view: { ...emptySession(), state: "needs_input" } });
+  expect(button().dataset.state).toBe("needs_input");
+  expect(button().getAttribute("aria-label")).toBe("Claude needs your input. Stop");
+  expect(button().className).toContain("bg-warning");
+  expect(button().className).toContain("motion-safe:animate-pulse");
+  await act(async () => button().click());
+  expect(onInterrupt).toHaveBeenCalledTimes(1);
+
+  await rerender({ connected: false, view: { ...emptySession(), state: "running" } });
+  await type(box, "hi");
+  expect(button().dataset.state).toBe("disconnected");
+  expect(button().getAttribute("aria-label")).toBe("Disconnected from the daemon");
+  expect(button().disabled).toBe(true);
+
+  await rerender({ connected: true, view: { ...emptySession(), state: "idle" } });
+  expect(button().dataset.state).toBe("idle");
+  expect(button().disabled).toBe(false);
 });
 
 it("nextMode wraps around; effortOptions lists the model's levels after default", () => {
