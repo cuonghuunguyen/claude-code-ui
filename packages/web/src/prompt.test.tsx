@@ -291,3 +291,14 @@ it("the rewind panel scrolls into view once when it opens, not again on each key
   expect(errors).toEqual([]);
   scroll.mockRestore();
 });
+
+it("the rewind panel leaves stick-to-bottom when it opens, so the timeline growing does not scroll it out of view", async () => {
+  const view = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "user_text", id: "u1", text: "hello", images: [] } });
+  const { el, $, rerender } = await render({}, view);
+  // The "scroll to bottom" button shows only when the timeline does not stick to the bottom.
+  const scrollButton = () => el.querySelector("button.rounded-full");
+  expect(scrollButton()).toBeNull();
+  await rerender({ rewindTo: "u1" });
+  expect($("rewind-panel")).not.toBeNull();
+  expect(scrollButton()).not.toBeNull();
+});

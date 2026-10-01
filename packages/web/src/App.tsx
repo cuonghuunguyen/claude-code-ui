@@ -26,6 +26,7 @@ import type {
 } from "@claude-ui/protocol";
 import { isPromptImage, MAX_UPLOAD_BYTES, PERMISSION_MODES } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
+import { useStickToBottomContext } from "use-stick-to-bottom";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
@@ -1424,8 +1425,13 @@ function RewindPanel(props: {
   const [busy, setBusy] = useState(false);
   useEffect(() => void props.preview().then(setPreview, (e: Error) => setError(e.message)), []);
   // Once, on open: opened from the palette, the message can be far up the timeline.
+  // Leave stick-to-bottom first, or the timeline growing (preview loaded) scrolls back to the bottom.
   const self = useRef<HTMLDivElement>(null);
-  useEffect(() => void self.current?.scrollIntoView?.({ block: "nearest" }), []);
+  const { stopScroll } = useStickToBottomContext();
+  useEffect(() => {
+    stopScroll();
+    self.current?.scrollIntoView?.({ block: "nearest" });
+  }, []);
   const run = async (mode: RewindMode) => {
     setBusy(true);
     setError(undefined);
