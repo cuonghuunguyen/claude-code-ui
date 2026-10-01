@@ -1,6 +1,6 @@
 // Prompt box toolbar (OpenCode prompt input v2): attach, model, effort, permission mode; send / stop on the right.
 import { useRef, type ReactNode } from "react";
-import { ArrowUpIcon, BrainIcon, FilePenIcon, ListTodoIcon, PlusIcon, ShieldAlertIcon, ShieldIcon, SquareIcon } from "lucide-react";
+import { ArrowUpIcon, BrainIcon, FilePenIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldIcon, SquareIcon } from "lucide-react";
 import type { Effort, ModelInfo, PermissionMode } from "@claude-ui/protocol";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -73,9 +73,10 @@ export function PromptToolbar(props: {
   modes: PermissionMode[];
   onMode: (mode: PermissionMode) => void;
   onAttach: (files: File[]) => void;
-  /** A turn runs and nothing is typed: the button stops the turn instead of sending. */
-  stop: boolean;
-  canSend: boolean;
+  /** What the send button shows: the session state, or `disconnected` while the daemon is unreachable. */
+  state: SendState;
+  /** Text or images are in the prompt box: idle it sends, during a turn it steers. */
+  hasInput: boolean;
   onSend: () => void;
   onStop: () => void;
 }) {
@@ -141,30 +142,44 @@ export function PromptToolbar(props: {
           />
         )}
       </div>
-      {props.stop ? (
-        <button
-          type="button"
-          aria-label="Stop"
-          title="Stop (Esc)"
-          data-testid="toolbar-stop"
-          className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:size-11"
-          onClick={props.onStop}
-        >
-          <SquareIcon className="size-3.5 fill-current" />
-        </button>
-      ) : (
-        <button
-          type="button"
-          aria-label="Send"
-          title="Send (Enter)"
-          data-testid="send"
-          disabled={!props.canSend}
-          className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11"
-          onClick={props.onSend}
-        >
-          <ArrowUpIcon className="size-4" />
-        </button>
-      )}
+      <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onStop={props.onStop} />
     </div>
+  );
+}
+
+export type SendState = "idle" | "running" | "needs_input" | "disconnected";
+
+const SEND_BASE =
+  "relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md shadow-sm focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11";
+
+/** OpenCode send/stop button plus the session state: spinner while running, warning color while Claude waits for an answer. */
+function SendButton({ state, hasInput, onSend, onStop }: { state: SendState; hasInput: boolean; onSend: () => void; onStop: () => void }) {
+  const busy = state === "running" || state === "needs_input";
+  const steer = busy && hasInput;
+  const [label, key] =
+    state === "disconnected"
+      ? ["Disconnected from the daemon", ""]
+      : state === "idle"
+        ? ["Send", " (Enter)"]
+        : [`${state === "running" ? "Claude is working" : "Claude needs your input"}. ${steer ? "Steer" : "Stop"}`, steer ? " (Enter)" : " (Esc)"];
+  const Icon = busy && !steer ? SquareIcon : ArrowUpIcon;
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label + key}
+      data-state={state}
+      data-testid={busy && !steer ? "toolbar-stop" : "send"}
+      disabled={state === "disconnected" || (state === "idle" && !hasInput)}
+      className={`${SEND_BASE} ${state === "needs_input" ? "bg-warning text-background motion-safe:animate-pulse" : "bg-primary text-primary-foreground"}`}
+      onClick={steer || state === "idle" ? onSend : onStop}
+    >
+      {state === "running" && <LoaderCircleIcon aria-hidden className="absolute size-5.5 animate-spin opacity-60 motion-reduce:animate-none pointer-coarse:size-8" />}
+      {state === "needs_input" && !steer ? (
+        <MessageCircleQuestionIcon aria-hidden className="size-4" />
+      ) : (
+        <Icon aria-hidden className={Icon === SquareIcon ? "size-2.5 fill-current" : state === "running" ? "size-3" : "size-4"} />
+      )}
+    </button>
   );
 }

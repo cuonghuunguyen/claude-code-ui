@@ -46,6 +46,7 @@ const render = (v: SessionView) =>
       <SessionPane
         scrollKey={0}
         onInserted={noop}
+        connected
         session={{ id: "s1", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [] }}
         view={v}
         models={[]}
