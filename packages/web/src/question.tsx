@@ -24,7 +24,7 @@ export function QuestionPanel({ part, onAnswer }: { part: QuestionRequest; onAns
     onAnswer(Object.fromEntries(part.questions.map((q, i) => [q.question, answers[i]!])));
   };
   return (
-    <form onSubmit={submit} className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto rounded-lg border border-sky-500/50 p-3 text-sm" data-testid="question-panel" aria-label="Question">
+    <form onSubmit={submit} className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto rounded-lg border border-info/50 p-3 text-sm" data-testid="question-panel" aria-label="Question">
       {part.questions.map((q, i) => {
         const c = choices[i]!;
         const type = q.multiSelect ? "checkbox" : "radio";
@@ -75,9 +75,9 @@ export function QuestionPanel({ part, onAnswer }: { part: QuestionRequest; onAns
 
 export function QuestionMarker({ part }: { part: QuestionRequest }) {
   const [label, Icon, className] = !part.settled
-    ? ["Waiting for an answer", CircleHelpIcon, "text-sky-600"]
+    ? ["Waiting for an answer", CircleHelpIcon, "text-info"]
     : part.answers
-      ? [part.questions.map((q) => `${q.header}: ${part.answers![q.question] ?? ""}`).join(" · "), CircleCheckIcon, "text-green-600"]
+      ? [part.questions.map((q) => `${q.header}: ${part.answers![q.question] ?? ""}`).join(" · "), CircleCheckIcon, "text-success"]
       : ["Cancelled", CircleXIcon, "text-muted-foreground"];
   return (
     <div className="flex items-center gap-2 text-muted-foreground text-xs" data-testid="question-marker" data-settled={part.settled}>

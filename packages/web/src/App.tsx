@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
-import { CheckIcon, CopyIcon, RotateCcwIcon, SquareIcon } from "lucide-react";
+import { Activity, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { CheckIcon, CopyIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SquareIcon, SunIcon } from "lucide-react";
 import type {
   CreateResult,
   Event,
@@ -36,6 +36,9 @@ import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, SubagentGroup, TodoList, ToolCard } from "./tool-card.tsx";
 import { FilesPanel } from "./files-panel.tsx";
+import { NEW_TAB, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs, staleTabs } from "./tabs.ts";
+import { IconButton, ProjectAvatar, TabsBar } from "./tabs-bar.tsx";
+import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -59,21 +62,29 @@ function usePageFocused() {
 export function App() {
   const [list, setList] = useState<SessionListItem[]>([]);
   const [views, setViews] = useState<Record<string, SessionView>>({});
+  // Active tab: a session id or NEW_TAB.
   const [activeId, setActiveId] = useState(hashId);
+  const [tabs, setTabs] = useState(() => {
+    const h = hashId();
+    return h ? openTab(loadTabs(), h) : loadTabs();
+  });
+  const [theme, setTheme] = useState<ThemePref>(loadPref);
   const [error, setError] = useState<string>();
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
   const [drawer, setDrawer] = useState(false);
-  const [picking, setPicking] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
   // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
   const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
   const [pushOn, setPushOn] = useState(false);
-  // Bumped by a notification click: remounts the conversation, which starts scrolled to the bottom.
-  const [scrollKey, setScrollKey] = useState(0);
+  // Per session, bumped by a notification click: remounts its conversation, which starts scrolled to the bottom.
+  const [scrollKeys, setScrollKeys] = useState<Record<string, number>>({});
   const focused = usePageFocused();
   // Narrow screens show one pane; wide screens show the session plus a side panel with changes or files.
-  const [pane, setPane] = useState<Pane>("session");
+  // Per session tab, so switching tabs keeps each one's pane.
+  const [panes, setPanes] = useState<Record<string, Pane>>({});
+  const pane = (activeId && panes[activeId]) || "session";
+  const setPane = (p: Pane) => activeId && setPanes((x) => ({ ...x, [activeId]: p }));
   const [panelWidth, setPanelWidth] = useState(480);
   // A mention from "Send selection to Claude", waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
@@ -81,11 +92,17 @@ export function App() {
   const viewsRef = useRef(views);
   viewsRef.current = views;
   const requested = useRef(new Set<string>());
+  // Tabs restored from storage, checked against the first session list: a stale one would show "Untitled".
+  const restored = useRef<string[] | undefined>(tabs);
 
   async function refreshList() {
     try {
       const { sessions } = await client.current!.request<ListResult>({ type: "session.list" });
       setList(sessions);
+      if (restored.current) {
+        for (const id of staleTabs(restored.current, new Set(sessions.map((s) => s.id)))) forget(id);
+        restored.current = undefined;
+      }
       // Live sessions are followed so their unread markers update without opening them.
       // ponytail: replays every live session's log into this tab; follow state only if that gets heavy.
       for (const s of sessions)
@@ -122,6 +139,7 @@ export function App() {
     setInfos(without);
     requested.current.delete(sessionId);
     setList((l) => l.filter((s) => s.id !== sessionId));
+    setTabs((t) => t.filter((id) => id !== sessionId));
     if (hashId() === sessionId) {
       setActiveId(undefined);
       history.replaceState(null, "", location.pathname + location.search);
@@ -129,12 +147,24 @@ export function App() {
     }
   }
 
-  function open(id: string) {
+  /** Opens or focuses a tab; `undefined` shows no tab. Only a session tab goes into the URL hash. */
+  function open(id: string | undefined) {
     setError(undefined);
     setActiveId(id);
     setDrawer(false);
-    history.replaceState(null, "", `#${encodeURIComponent(id)}`);
-    if (!viewsRef.current[id]) void subscribe(id);
+    if (!id) return;
+    setTabs((t) => openTab(t, id));
+    history.replaceState(null, "", id === NEW_TAB ? location.pathname + location.search : `#${encodeURIComponent(id)}`);
+    if (id !== NEW_TAB && !viewsRef.current[id]) void subscribe(id);
+  }
+
+  /** Closes the tab only: the session keeps running and stays in the sidebar. */
+  function close(id: string) {
+    const r = closeTab(tabs, id, activeId);
+    setTabs(r.tabs);
+    if (r.active === activeId) return;
+    open(r.active);
+    if (!r.active) history.replaceState(null, "", location.pathname + location.search);
   }
 
   useEffect(() => {
@@ -168,8 +198,9 @@ export function App() {
     // Notification click (sw.js): open the session at the bottom.
     const onWorkerMessage = (e: MessageEvent) => {
       if (e.data?.type !== "open" || typeof e.data.sessionId !== "string") return;
-      open(e.data.sessionId);
-      setScrollKey((k) => k + 1);
+      const id: string = e.data.sessionId;
+      open(id);
+      setScrollKeys((k) => ({ ...k, [id]: (k[id] ?? 0) + 1 }));
     };
     navigator.serviceWorker?.addEventListener("message", onWorkerMessage);
     return () => {
@@ -182,7 +213,7 @@ export function App() {
   // The daemon suppresses pushes for the session a focused, visible tab shows; resent after every reconnect.
   useEffect(() => {
     if (status !== "connected") return;
-    const sessionId = focused ? activeId : undefined;
+    const sessionId = focused && activeId !== NEW_TAB ? activeId : undefined;
     client.current!.request(sessionId ? { type: "push.focus", sessionId } : { type: "push.focus" }).catch(() => {});
   }, [status, focused, activeId]);
 
@@ -193,6 +224,9 @@ export function App() {
     setSeen(next);
     saveSeen(next);
   }, [focused, activeId, activeView?.lastSeq]);
+
+  useEffect(() => saveTabs(tabs), [tabs]);
+  useEffect(() => applyTheme(theme), [theme]);
 
   const unread = new Set(list.filter((s) => views[s.id] && isUnread(views[s.id]!, seen[s.id])).map((s) => s.id));
   useEffect(() => void (document.title = tabTitle(unread.size)), [unread.size]);
@@ -213,7 +247,7 @@ export function App() {
     try {
       const { session } = await client.current!.request<CreateResult>({ type: "session.create", cwd, model });
       setInfos((i) => ({ ...i, [session.id]: session }));
-      setPicking(false);
+      setTabs((t) => replaceTab(t, NEW_TAB, session.id));
       open(session.id);
       await refreshList();
     } catch (e) {
@@ -250,106 +284,153 @@ export function App() {
     }
   }
 
-  const active = activeId ? (infos[activeId] ?? list.find((s) => s.id === activeId)) : undefined;
+  const sessionOf = (id: string): SessionInfo | undefined => infos[id] ?? list.find((s) => s.id === id);
+  const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   const view = activeId ? views[activeId] : undefined;
+  const shown = active && view ? active : undefined;
+  // The side panel stays mounted while the new-session tab or no tab shows, so its open files survive.
+  const lastShown = useRef<SessionInfo>(undefined);
+  if (shown) lastShown.current = shown;
+  const panelSession = shown ?? lastShown.current;
+  const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-raised";
+  const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
 
   return (
-    <div className="flex h-dvh bg-background text-foreground">
-      {drawer && <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={() => setDrawer(false)} aria-hidden />}
-      <aside
-        data-testid="sidebar"
-        className={`fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col gap-3 border-r bg-background p-3 transition-transform md:static md:translate-x-0 ${drawer ? "translate-x-0" : "-translate-x-full"}`}
-      >
-        <ConnectionBadge status={status} />
-        <label
-          className="flex items-center gap-2 text-sm"
-          title={pushSupported() ? "Push notification when a session needs input or finishes" : "Push needs HTTPS or localhost and a browser with Web Push"}
+    <div className="flex h-dvh flex-col bg-background text-foreground">
+      <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3" data-testid="titlebar">
+        <IconButton className="md:hidden" label="Sessions" onClick={() => setDrawer(true)} testId="open-drawer">
+          <MenuIcon />
+        </IconButton>
+        {status !== "unauthorized" && (
+          <TabsBar
+            tabs={tabs}
+            activeId={activeId}
+            info={(id) => {
+              const s = sessionOf(id);
+              if (id === NEW_TAB) return { title: "New session", unread: false };
+              return { title: list.find((l) => l.id === id)?.title || "Untitled", cwd: s?.cwd, state: views[id]?.state ?? s?.state, unread: unread.has(id) };
+            }}
+            onSelect={open}
+            onClose={close}
+            onMove={(from, to) => setTabs((t) => moveTab(t, from, to))}
+            onNew={() => open(NEW_TAB)}
+          />
+        )}
+        <IconButton className="ml-auto" label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
+          <ThemeIcon />
+        </IconButton>
+      </header>
+      <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
+        {drawer && <div className="fixed inset-0 z-30 bg-overlay md:hidden" onClick={() => setDrawer(false)} aria-hidden />}
+        <aside
+          data-testid="sidebar"
+          className={`fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col gap-3 bg-card p-3 shadow-floating transition-transform md:static md:translate-x-0 md:bg-transparent md:p-1 md:shadow-none ${drawer ? "translate-x-0" : "-translate-x-full"}`}
         >
-          <input type="checkbox" checked={pushOn} disabled={!pushSupported()} onChange={togglePush} data-testid="push-toggle" />
-          Notifications
-        </label>
-        {picking ? (
-          <DirPicker client={client.current!} models={models} onPick={createSession} onCancel={() => setPicking(false)} />
-        ) : (
-          <Button onClick={() => (setError(undefined), setPicking(true))}>New session</Button>
-        )}
-        {error && <p className="text-destructive text-sm">{error}</p>}
-        {status !== "unauthorized" && <SessionList list={list} views={views} unread={unread} activeId={activeId} onOpen={open} />}
-      </aside>
-      <main className="flex min-w-0 flex-1 flex-col lg:flex-row">
-        {status === "unauthorized" ? (
-          // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
-          <div className="m-auto max-w-sm p-4 text-center text-sm" role="alert" data-testid="pairing-needed">
-            The daemon rejected this browser: it is not paired. Open the pairing URL the daemon printed (…/#token=…).
-          </div>
-        ) : active && view ? (
-          <>
-            <div className="flex items-center gap-1 border-b px-2 py-1 lg:hidden">
-              {pane !== "session" && <MenuButton onClick={() => setDrawer(true)} />}
-              <PaneTabs panes={["session", "changes", "files"]} value={pane} onChange={setPane} />
-            </div>
-            <div className={`min-h-0 min-w-0 flex-1 flex-col ${pane === "session" ? "flex" : "hidden lg:flex"}`}>
-              <SessionPane
-                key={active.id}
-                scrollKey={scrollKey}
-                insert={insert}
-                onInserted={() => setInsert(undefined)}
-                session={active}
-                view={view}
-                models={models}
-                onMenu={() => setDrawer(true)}
-                onModel={(model) => setModel(active.id, model)}
-                onPrompt={(text, images) =>
-                  // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
-                  status === "connected"
-                    ? client.current!.request({ type: "session.prompt", sessionId: active.id, text, images })
-                    : Promise.reject(new Error(`the daemon is ${status}`))
-                }
-                onInterrupt={() =>
-                  client.current!.request({ type: "session.interrupt", sessionId: active.id }).catch((e) => setError((e as Error).message))
-                }
-                onRewindPreview={(userMessageId) =>
-                  client.current!.request<RewindPreview>({ type: "session.rewindPreview", sessionId: active.id, userMessageId })
-                }
-                onRewind={(userMessageId, mode) =>
-                  client.current!.request({ type: "session.rewind", sessionId: active.id, userMessageId, mode })
-                }
-                onRespond={respond}
-                onSearch={(query) =>
-                  client.current!.request<FsSearchResult>({ type: "fs.search", cwd: active.cwd, query }).then((r) => r.paths)
-                }
-                onAnswer={answer}
-              />
-            </div>
-            <PanelResizer width={panelWidth} onResize={setPanelWidth} />
-            <section
-              className={`min-h-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${pane === "session" ? "hidden lg:flex" : "flex"}`}
-              style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
-              data-testid="side-panel"
-            >
-              <div className="hidden border-b px-2 py-1 lg:flex">
-                <PaneTabs panes={["changes", "files"]} value={pane === "changes" ? "changes" : "files"} onChange={setPane} />
+          <ConnectionBadge status={status} />
+          <label
+            className="flex items-center gap-2"
+            title={pushSupported() ? "Push notification when a session needs input or finishes" : "Push needs HTTPS or localhost and a browser with Web Push"}
+          >
+            <input type="checkbox" checked={pushOn} disabled={!pushSupported()} onChange={togglePush} data-testid="push-toggle" />
+            Notifications
+          </label>
+          <Button onClick={() => open(NEW_TAB)}>New session</Button>
+          {error && <p className="text-destructive">{error}</p>}
+          {status !== "unauthorized" && <SessionList list={list} views={views} unread={unread} activeId={activeId} onOpen={open} />}
+        </aside>
+        <main className="flex min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-0">
+          {status === "unauthorized" ? (
+            // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
+            <div className={`${card} flex-1`}>
+              <div className="m-auto max-w-sm p-4 text-center" role="alert" data-testid="pairing-needed">
+                The daemon rejected this browser: it is not paired. Open the pairing URL the daemon printed (…/#token=…).
               </div>
-              <div className={`min-h-0 flex-1 flex-col ${pane === "changes" ? "hidden" : "flex"}`}>
-                <FilesPanel
-                  client={client.current!}
-                  status={status}
-                  cwd={active.cwd}
-                  onSend={(mention) => (setInsert(mention), setPane("session"))}
-                />
+            </div>
+          ) : (
+            <>
+              {shown && (
+                <div className="flex items-center gap-1 lg:hidden">
+                  <PaneTabs panes={["session", "changes", "files"]} value={pane} onChange={setPane} />
+                </div>
+              )}
+              {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
+              <div className={`${card} flex-1 ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}>
+                {tabs.map((id) => {
+                  const s = id === NEW_TAB ? undefined : sessionOf(id);
+                  const v = views[id];
+                  if (!s || !v) return null;
+                  return (
+                    <Activity key={id} mode={id === activeId ? "visible" : "hidden"}>
+                      <SessionPane
+                        scrollKey={scrollKeys[id] ?? 0}
+                        insert={id === activeId ? insert : undefined}
+                        onInserted={() => setInsert(undefined)}
+                        session={s}
+                        view={v}
+                        models={models}
+                        onModel={(model) => setModel(s.id, model)}
+                        onPrompt={(text, images) =>
+                          // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
+                          status === "connected"
+                            ? client.current!.request({ type: "session.prompt", sessionId: s.id, text, images })
+                            : Promise.reject(new Error(`the daemon is ${status}`))
+                        }
+                        onInterrupt={() =>
+                          client.current!.request({ type: "session.interrupt", sessionId: s.id }).catch((e) => setError((e as Error).message))
+                        }
+                        onRewindPreview={(userMessageId) =>
+                          client.current!.request<RewindPreview>({ type: "session.rewindPreview", sessionId: s.id, userMessageId })
+                        }
+                        onRewind={(userMessageId, mode) =>
+                          client.current!.request({ type: "session.rewind", sessionId: s.id, userMessageId, mode })
+                        }
+                        onRespond={respond}
+                        onSearch={(query) => client.current!.request<FsSearchResult>({ type: "fs.search", cwd: s.cwd, query }).then((r) => r.paths)}
+                        onAnswer={answer}
+                      />
+                    </Activity>
+                  );
+                })}
               </div>
-              {pane === "changes" && <p className="m-auto p-4 text-muted-foreground text-sm">No changes view yet.</p>}
-            </section>
-          </>
-        ) : (
-          <>
-            <header className="flex items-center border-b px-4 py-2 md:hidden">
-              <MenuButton onClick={() => setDrawer(true)} />
-            </header>
-            <div className="m-auto text-muted-foreground text-sm">Open or create a session to start.</div>
-          </>
-        )}
-      </main>
+              {shown && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
+              {panelSession && (
+                <section
+                  className={`${card} flex-1 lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""}`}
+                  style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
+                  data-testid="side-panel"
+                >
+                  <div className="hidden border-b px-2 py-1 lg:flex">
+                    <PaneTabs panes={["changes", "files"]} value={pane === "changes" ? "changes" : "files"} onChange={setPane} />
+                  </div>
+                  <div className={`min-h-0 flex-1 flex-col ${pane === "changes" ? "hidden" : "flex"}`}>
+                    <FilesPanel
+                      client={client.current!}
+                      status={status}
+                      cwd={panelSession.cwd}
+                      onSend={(mention) => (setInsert(mention), setPane("session"))}
+                    />
+                  </div>
+                  {pane === "changes" && <p className="m-auto p-4 text-muted-foreground">No changes view yet.</p>}
+                </section>
+              )}
+              {activeId === NEW_TAB ? (
+                <div className={`${card} flex-1 items-center justify-center p-4`} data-testid="new-session-tab">
+                  <div className="flex w-full max-w-md flex-col gap-3">
+                    <h1 className="font-medium text-base">New session</h1>
+                    <DirPicker client={client.current!} models={models} onPick={createSession} onCancel={() => close(NEW_TAB)} />
+                  </div>
+                </div>
+              ) : (
+                !shown && (
+                  <div className={`${card} flex-1`}>
+                    <div className="m-auto text-muted-foreground">Open or create a session to start.</div>
+                  </div>
+                )
+              )}
+            </>
+          )}
+        </main>
+      </div>
     </div>
   );
 }
@@ -398,8 +479,8 @@ function PanelResizer({ width, onResize }: { width: number; onResize: (w: number
 }
 
 const STATUS_STYLE: Record<ConnectionStatus, string> = {
-  connected: "bg-green-500",
-  reconnecting: "bg-amber-500 animate-pulse",
+  connected: "bg-success",
+  reconnecting: "bg-warning animate-pulse motion-reduce:animate-none",
   offline: "bg-destructive",
   unauthorized: "bg-destructive",
 };
@@ -410,14 +491,6 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
       <span className={`size-2 rounded-full ${STATUS_STYLE[status]}`} aria-hidden />
       {status === "unauthorized" ? "not paired" : status}
     </div>
-  );
-}
-
-function MenuButton({ onClick }: { onClick: () => void }) {
-  return (
-    <Button variant="ghost" size="sm" className="md:hidden" onClick={onClick} aria-label="Sessions" data-testid="open-drawer">
-      ☰
-    </Button>
   );
 }
 
@@ -452,7 +525,7 @@ function SessionList({
                   onClick={() => onOpen(s.id)}
                   title={`${s.title}\n${s.cwd}`}
                 >
-                  {unread.has(s.id) && <span className="size-2 shrink-0 rounded-full bg-blue-500" data-testid="unread-marker" aria-label="unread" />}
+                  {unread.has(s.id) && <span className="size-2 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-label="unread" />}
                   <span className={`min-w-0 flex-1 truncate ${unread.has(s.id) ? "font-semibold" : ""}`}>{s.title}</span>
                   <StateBadge state={views[s.id]?.state ?? s.state} />
                   <span className="text-muted-foreground text-xs">{timeAgo(s.lastActivity)}</span>
@@ -468,15 +541,15 @@ function SessionList({
 
 const STATE_STYLE: Record<SessionInfo["state"], string> = {
   idle: "bg-muted text-muted-foreground",
-  running: "bg-blue-500/15 text-blue-600",
-  needs_input: "bg-amber-500/15 text-amber-600",
-  error: "bg-destructive/15 text-destructive",
+  running: "bg-secondary text-info",
+  needs_input: "bg-secondary text-warning",
+  error: "bg-secondary text-destructive",
   closed: "text-muted-foreground",
 };
 
 function StateBadge({ state }: { state: SessionInfo["state"] }) {
   return (
-    <span className={`rounded px-1.5 py-0.5 text-[10px] ${STATE_STYLE[state]}`} data-testid="state-badge">
+    <span className={`rounded-sm px-1.5 py-0.5 font-medium text-xs ${STATE_STYLE[state]}`} data-testid="state-badge">
       {state.replace("_", " ")}
     </span>
   );
@@ -586,7 +659,6 @@ export function SessionPane({
   onModel,
   onPrompt,
   onSearch,
-  onMenu,
   onInterrupt,
   onRewindPreview,
   onRewind,
@@ -603,7 +675,6 @@ export function SessionPane({
   /** Rejects when the prompt was not taken; the prompt box then gets the text back. */
   onPrompt: (text: string, images: string[]) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
-  onMenu: () => void;
   onInterrupt: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
@@ -718,9 +789,14 @@ export function SessionPane({
 
   return (
     <>
-      <header className="flex items-center gap-3 border-b px-4 py-2 text-sm">
-        <MenuButton onClick={onMenu} />
-        <span className="truncate font-mono">{session.cwd}</span>
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+        <ProjectAvatar cwd={session.cwd} />
+        <span className="shrink-0 font-medium" title={session.cwd} data-testid="session-project">
+          {projectName(session.cwd)}
+        </span>
+        <span className="hidden min-w-0 truncate text-muted-foreground sm:inline" title={session.cwd}>
+          {session.cwd}
+        </span>
         <ModelSelect
           aria-label="Model"
           data-testid="session-model"
@@ -740,7 +816,7 @@ export function SessionPane({
         )}
       </header>
       <Conversation key={scrollKey} className="flex-1">
-        <ConversationContent className="mx-auto w-full max-w-3xl">
+        <ConversationContent className="timeline mx-auto w-full max-w-[800px] 2xl:max-w-[1000px]">
           {timeline(view).map((item) =>
             item.kind === "context" ? (
               <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />

@@ -52,7 +52,6 @@ const render = (v: SessionView) =>
         onModel={noop}
         onPrompt={async () => {}}
         onSearch={async () => []}
-        onMenu={noop}
         onInterrupt={noop}
         onRewindPreview={async () => ({ filesChanged: [], insertions: 0, deletions: 0, conversation: false })}
         onRewind={async () => {}}
