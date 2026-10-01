@@ -262,6 +262,28 @@ it("after Remove project the focus moves to the next project row, not to the pag
   }
 });
 
+it("Remove project of a middle row focuses the row below it, whether the reply lands before or after the dialog closes", async () => {
+  const at = (cwd: string, n: number): SessionListItem => ({ ...session, id: `2222222${n}-2222-3333-4444-555555555555`, cwd, title: cwd });
+  replies["session.list"] = { sessions: [session, at("/p/mid", 1), at("/p/low", 2)], projects: ["/p/demo", "/p/mid", "/p/low"] };
+  try {
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    const order = [...el.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].map((r) => r.dataset.cwd);
+    const [, mid, below] = order;
+    // The daemon's list after the remove arrives before the dialog's close finishes.
+    replies["session.list"] = { sessions: [session, at("/p/mid", 1), at("/p/low", 2)].filter((s) => s.cwd !== mid), projects: order.filter((c) => c !== mid) as string[] };
+    await act(async () => el.querySelector<HTMLElement>(`[data-cwd="${mid}"] [data-testid="project-remove"]`)!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-confirm"]')!.click());
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(el.querySelector(`[data-cwd="${mid}"]`)).toBeNull();
+    expect(document.activeElement).toBe(el.querySelector(`[data-cwd="${below}"] [data-testid="group-toggle"]`));
+  } finally {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+  }
+});
+
 it("a project removed by another client closes its open session tabs here", async () => {
   const tab = () => el.querySelector(`[data-tab-id="${ID}"]`);
   expect(tab()).not.toBeNull();

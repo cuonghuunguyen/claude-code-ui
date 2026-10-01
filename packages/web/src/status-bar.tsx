@@ -18,8 +18,8 @@ export function countdown(ms: number) {
   return d ? `${d}d ${h}hr ${m % 60}m` : h ? `${h}hr ${m % 60}m` : `${m % 60}m`;
 }
 
-/** `input`: uncached input + cache writes (status line In); `uncached`, `cacheWrite`, `cost` (sum of the known turn costs): the context breakdown. */
-export type Totals = { input: number; output: number; cached: number; uncached: number; cacheWrite: number; cost?: number };
+/** `input`: uncached input + cache writes (status line In); `uncached`, `cacheWrite`, `cost` (sum of the known turn costs; `costPartial` when some turn has none): the context breakdown. */
+export type Totals = { input: number; output: number; cached: number; uncached: number; cacheWrite: number; cost?: number; costPartial?: boolean };
 
 /** Token totals of the session's turn results; undefined before the first one (also a restored transcript, which has none). */
 export function totals(v: SessionView) {
@@ -34,7 +34,9 @@ export function totals(v: SessionView) {
     t.uncached += p.usage.inputTokens;
     t.cacheWrite += p.usage.cacheCreationTokens;
     if (p.costUsd !== undefined) t.cost = (t.cost ?? 0) + p.costUsd;
+    else t.costPartial = true;
   }
+  if (t?.cost === undefined) delete t?.costPartial;
   return t;
 }
 

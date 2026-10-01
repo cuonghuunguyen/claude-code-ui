@@ -173,7 +173,7 @@ export function App() {
   // Keeps the name while the dialog fades out.
   const lastRemoving = useRef("");
   // Set on Remove confirm, read by the dialog's final focus.
-  const removed = useRef<string | undefined>(undefined);
+  const removed = useRef<{ next?: string }>(undefined);
   if (removing) lastRemoving.current = removing;
   const paletteOpener = useRef<Element>(null);
   const client = useRef<Client>(undefined);
@@ -607,16 +607,21 @@ export function App() {
         title="Remove project?"
         description={`“${projectName(lastRemoving.current)}” leaves the list. Its files and sessions stay on disk; open the folder again to bring it back.`}
         confirm="Remove"
-        onConfirm={() => (setRemoving(undefined), (removed.current = removing), void removeProject(removing!))}
+        onConfirm={() => {
+          // The row below (else above) is taken now: once project.remove answers, the removed row may be gone.
+          const cwds = [...document.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].map((r) => r.dataset.cwd);
+          const at = cwds.indexOf(removing);
+          removed.current = { next: cwds[at + 1] ?? cwds[at - 1] };
+          setRemoving(undefined);
+          void removeProject(removing!);
+        }}
         onCancel={() => setRemoving(undefined)}
         // The removed row's button is gone: the next project row, else the previous one, else the prompt box or Open project.
         finalFocus={() => {
-          const cwd = removed.current;
+          const target = removed.current;
           removed.current = undefined;
-          if (cwd === undefined) return true;
-          const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="session-group"]')];
-          const at = rows.findIndex((r) => r.dataset.cwd === cwd);
-          const row = rows[at + 1] ?? rows[at - 1];
+          if (target === undefined) return true;
+          const row = [...document.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].find((r) => target.next !== undefined && r.dataset.cwd === target.next);
           const prompt = [...document.querySelectorAll<HTMLElement>("textarea")].find((t) => t.offsetParent && !t.closest(`[data-cwd]`));
           return row?.querySelector<HTMLElement>('[data-testid="group-toggle"]') ?? prompt ?? document.querySelector<HTMLElement>('[data-testid="open-project"]');
         }}

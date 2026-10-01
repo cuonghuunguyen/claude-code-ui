@@ -49,6 +49,9 @@ it("also keeps uncached input, cache writes and the known cost for the context b
   expect(totals(view(paid("r1", 0.1), paid("r2", 0.025)))).toEqual({ input: 300, output: 40, cached: 2000, uncached: 200, cacheWrite: 100, cost: 0.125 });
   // No turn with a known cost (restored after a daemon restart): no cost.
   expect(totals(view(paid("r1")))!.cost).toBeUndefined();
+  expect(totals(view(paid("r1")))!.costPartial).toBeUndefined();
+  // Some turns without a cost: the sum is marked partial.
+  expect(totals(view(paid("r1", 0.1), paid("r2")))).toMatchObject({ cost: 0.1, costPartial: true });
 });
 
 it("lists running background Bash calls only", () => {

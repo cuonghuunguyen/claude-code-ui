@@ -107,6 +107,9 @@ it("the breakdown shows OpenCode's Context tab stats (input, output, cache read/
   const stat = [...pop.querySelectorAll('[data-testid="context-stats"] > div')].map((d) => d.textContent);
   expect(stat).toEqual(["Input tokens1,200", "Output tokens300", "Cache tokens (read/write)5,000 / 50", "Total cost$0.12"]);
   expect(pop.querySelector("li")!.className).toContain("text-[12px]");
+  // A sum that misses some turns' cost says it is a lower bound.
+  await act(async () => root.render(<ContextMeter usage={usage} stats={{ ...stats, costPartial: true }} />));
+  expect([...pop.querySelectorAll('[data-testid="context-stats"] > div')].at(-1)!.textContent).toBe("Total cost≥ $0.12");
 });
 
 it("hover or focus shows OpenCode's context tooltip: tokens used / max, usage, cost (the narrow toolbar shows only the ring and percent)", async () => {

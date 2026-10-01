@@ -70,7 +70,8 @@ function fakeClient(files: Record<string, string>) {
 }
 
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
-const rows = () => [...el.querySelectorAll("[data-testid=changed-file]")].map((b) => b.textContent);
+// Each row by its accessible name: kind, path relative to cwd, stats.
+const rows = () => [...el.querySelectorAll("[data-testid=changed-file]")].map((b) => b.getAttribute("aria-label"));
 
 it("lists changed files with whole-file +N -N and opens the selected one in the editor", async () => {
   const disk = { "/p/src/a.ts": "a = 2\nb\n", "/p/b.ts": "x = 9\n" };
@@ -80,7 +81,7 @@ it("lists changed files with whole-file +N -N and opens the selected one in the 
   await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={onOpen} />));
   await flush();
   expect(el.textContent).toContain("2 Changed files");
-  expect(rows()).toEqual(["Ma.tssrc+1-1", "Mb.ts+1-1"]);
+  expect(rows()).toEqual(["Modified src/a.ts, +1 -1", "Modified b.ts, +1 -1"]);
   expect(el.querySelector("[data-testid=changed-file]")!.getAttribute("aria-current")).toBe("true");
 
   await act(async () => (el.querySelectorAll<HTMLButtonElement>("[data-testid=changed-file]")[1]!.click(), undefined));
@@ -95,13 +96,13 @@ it("re-reads the files when Claude changes one more time (live)", async () => {
   const first = [edit("e1", "/p/a.ts", "a = 1", "a = 2")];
   await act(async () => root.render(<ChangesPanel client={client} view={view(first)} cwd="/p" onOpen={() => {}} />));
   await flush();
-  expect(rows()).toEqual(["Ma.ts+1-1"]);
+  expect(rows()).toEqual(["Modified a.ts, +1 -1"]);
 
   disk["/p/a.ts"] = "a = 2\nc\n";
   const next = [...first, edit("e2", "/p/a.ts", "a = 2", "a = 2\nc")];
   await act(async () => root.render(<ChangesPanel client={client} view={view(next)} cwd="/p" onOpen={() => {}} />));
   await flush();
-  expect(rows()).toEqual(["Ma.ts+2-1"]);
+  expect(rows()).toEqual(["Modified a.ts, +2 -1"]);
 });
 
 it("re-reads a listed file changed outside the session (fs.changed)", async () => {
@@ -112,10 +113,10 @@ it("re-reads a listed file changed outside the session (fs.changed)", async () =
   disk["/p/a.ts"] = "a = 2\nbash\n";
   client.changed("/p/other.ts");
   await flush();
-  expect(rows()).toEqual(["Ma.ts+1-1"]);
+  expect(rows()).toEqual(["Modified a.ts, +1 -1"]);
   client.changed("/p/a.ts");
   await flush();
-  expect(rows()).toEqual(["Ma.ts+2-1"]);
+  expect(rows()).toEqual(["Modified a.ts, +2 -1"]);
 });
 
 it("desktop defaults to split; the unified/split choice is kept per browser across remounts", async () => {
@@ -133,16 +134,78 @@ it("desktop defaults to split; the unified/split choice is kept per browser acro
   expect([pressed("unified"), pressed("split")]).toEqual(["true", "false"]);
 });
 
-it("below md the diff is unified without a toggle, and the actions are at least 8px apart", async () => {
+it("below md: an accordion of the files (icon, folder/name, kind, stats), each diff unified under its row; Expand all / Collapse all; no filter, no ←/→", async () => {
   narrow = true;
   localStorage.setItem("claude-ui.diffStyle", "split");
-  await act(async () =>
-    root.render(<ChangesPanel client={fakeClient({ "/p/a.ts": "a = 2\n" })} view={view([edit("e1", "/p/a.ts", "a = 1", "a = 2")])} cwd="/p" onOpen={() => {}} />),
-  );
+  const write = (id: string, file_path: string): Part => ({ type: "tool_call", id, toolUseId: id, tool: "Write", input: { file_path, content: "n\n" }, status: "done" });
+  const created: Part = { type: "tool_result", id: "w1:result", toolUseId: "w1", output: "ok", isError: false, original: null };
+  const client = fakeClient({ "/p/src/u.js": "n\n", "/p/README.md": "a = 2\n" });
+  const parts = [write("w1", "/p/src/u.js"), created, edit("e1", "/p/README.md", "a = 1", "a = 2")];
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
   await flush();
+  const buttons = () => [...el.querySelectorAll<HTMLButtonElement>("[data-testid=changed-file]")];
+  expect(buttons().map((b) => b.textContent)).toEqual(["README.md+1-1", "src/u.jsAdded+1-0"]);
+  expect(buttons().map((b) => b.querySelector("svg[data-icon]")?.getAttribute("data-icon"))).toEqual(["Readme", "Javascript"]);
+  expect(el.querySelector("[data-testid=file-diff]")).toBeNull();
+  expect(el.querySelector("[data-testid=changes-filter]")).toBeNull();
+  expect(el.querySelector("button[aria-label='Next file']")).toBeNull();
   expect(el.querySelector("[data-testid=diff-split]")).toBeNull();
+  const key = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+  await act(async () => void document.body.dispatchEvent(key));
+  expect(key.defaultPrevented).toBe(false);
+
+  await act(async () => buttons()[1]!.click());
+  expect(buttons().map((b) => b.getAttribute("aria-expanded"))).toEqual(["false", "true"]);
+  expect(el.querySelectorAll("[data-testid=file-diff]")).toHaveLength(1);
   expect(el.querySelector("[data-testid=file-diff]")!.getAttribute("data-diff-style")).toBe("unified");
+  const all = () => el.querySelector<HTMLButtonElement>("[data-testid=expand-all]")!;
+  expect(all().textContent!.trim()).toBe("Expand all");
+  await act(async () => all().click());
+  expect(el.querySelectorAll("[data-testid=file-diff]")).toHaveLength(2);
+  expect(all().textContent!.trim()).toBe("Collapse all");
+  await act(async () => all().click());
+  expect(el.querySelectorAll("[data-testid=file-diff]")).toHaveLength(0);
   expect(el.querySelector("[data-testid=changes-actions]")!.className).toContain("max-md:gap-2");
+});
+
+it("wide: a folder tree like OpenCode's review sidebar (folders first, file-type icons; A/D, M only in the diff header); a folder collapses", async () => {
+  const client = fakeClient({ "/p/src/a.ts": "a = 2\n", "/p/src/lib/b.ts": "b = 2\n", "/p/README.md": "r = 2\n" });
+  const parts = [edit("e1", "/p/README.md", "r = 1", "r = 2"), edit("e2", "/p/src/lib/b.ts", "b = 1", "b = 2"), edit("e3", "/p/src/a.ts", "a = 1", "a = 2")];
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  const tree = () => [...el.querySelectorAll("ul[aria-label='Changed files'] button")].map((b) => `${b.getAttribute("style")}|${b.textContent}`);
+  expect(tree()).toEqual(["padding-left: 8px;|src", "padding-left: 24px;|lib", "padding-left: 40px;|b.ts", "padding-left: 24px;|a.ts", "padding-left: 8px;|README.md"]);
+  expect([...el.querySelectorAll("[data-testid=changed-file] svg[data-icon]")].map((i) => i.getAttribute("data-icon"))).toEqual(["Typescript", "Typescript", "Readme"]);
+  // The first file in the tree is selected; ← / → follow the tree order.
+  expect(el.querySelector("[data-testid=file-diff-header]")!.textContent).toContain("src/lib/b.ts");
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=changed-folder]")!.click());
+  expect(tree()).toEqual(["padding-left: 8px;|src", "padding-left: 8px;|README.md"]);
+  expect(el.querySelector("[data-testid=changed-folder]")!.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("leaves ← / → alone while the file list is not on screen (side panel closed, new-session tab: display none)", async () => {
+  const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
+  const parts = [edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")];
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  // jsdom has no layout: stub what a browser answers for an element under display: none.
+  const visible = vi.fn(() => false);
+  Object.defineProperty(HTMLElement.prototype, "checkVisibility", { value: visible, configurable: true });
+  const key = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+  await act(async () => void document.body.dispatchEvent(key));
+  expect(key.defaultPrevented).toBe(false);
+  expect(el.querySelector("[data-testid=file-diff-header]")!.textContent).toContain("a.ts");
+  visible.mockReturnValue(true);
+  await act(async () => void document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })));
+  expect(el.querySelector("[data-testid=file-diff-header]")!.textContent).toContain("b.ts");
+  delete (HTMLElement.prototype as { checkVisibility?: unknown }).checkVisibility;
+});
+
+it("the header total is left out when no file has stats (one deleted file with an unknown before)", async () => {
+  await act(async () => root.render(<ChangesPanel client={fakeClient({})} view={view([edit("e1", "/p/gone.ts", "x", "y")])} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-panel] > div")!.textContent).toMatch(/^1 Changed file1\/1/);
+  expect(el.querySelectorAll("[data-testid=change-stats]")).toHaveLength(0);
 });
 
 it("shows an empty state without changes", async () => {
@@ -192,11 +255,12 @@ it("badges each file A (created), D (deleted) or M, like OpenCode's file list", 
   const parts = [write("w1", "/p/new.ts"), created, edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/gone.ts", "x", "y"), original("e2", "x\n")];
   await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
   await flush();
-  expect(rows()).toEqual(["Anew.ts+1-0", "Ma.ts+1-1", "Dgone.ts+0-1"]);
-  expect(el.querySelector("[data-testid=change-badge]")!.getAttribute("title")).toBe("Added");
+  expect(rows()).toEqual(["Modified a.ts, +1 -1", "Deleted gone.ts, +0 -1", "Added new.ts, +1 -0"]);
+  // The tree marks A and D; the M of the selected file is in its diff header.
+  expect([...el.querySelectorAll("[data-testid=changed-file] [data-testid=change-badge]")].map((b) => b.getAttribute("title"))).toEqual(["Deleted", "Added"]);
   const badges = [...el.querySelectorAll("[data-testid=change-badge]")];
   // Colors as OpenCode's change badge: added success, deleted danger, modified info.
-  expect(badges.map((b) => b.className.match(/text-(success|destructive|info|warning)/)?.[1])).toEqual(["success", "info", "destructive", "success"]);
+  expect(badges.map((b) => b.className.match(/text-(success|destructive|info|warning)/)?.[1])).toEqual(["destructive", "success", "info"]);
 });
 
 it("without a known before, says so without blaming a restored session (a live rewind lands here too) and shows each edit", async () => {
@@ -211,7 +275,7 @@ it("badges an existing empty file M (original \"\"), not A", async () => {
   const client = fakeClient({ "/p/e.ts": "x\n" });
   await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "/p/e.ts", "", "x\n"), original("e1", "")])} cwd="/p" onOpen={() => {}} />));
   await flush();
-  expect(rows()).toEqual(["Me.ts+1-0"]);
+  expect(rows()).toEqual(["Modified e.ts, +1 -0"]);
 });
 
 it("says a file with zero net change has no changes instead of an empty diff", async () => {
@@ -236,7 +300,7 @@ it("does not re-parse the diffs while Claude streams text", async () => {
     await act(async () => root.render(<ChangesPanel client={client} view={v} cwd="/p" onOpen={() => {}} />));
   }
   expect(parsed.n).toBe(before);
-  expect(rows()).toEqual(["Ma.ts+1-1", "Mb.ts+1-1"]);
+  expect(rows()).toEqual(["Modified a.ts, +1 -1", "Modified b.ts, +1 -1"]);
 });
 
 it("names each row by kind, relative path and stats for screen readers", async () => {
@@ -254,7 +318,7 @@ it("hides a file the session created and deleted again (live original null, or a
   const parts = [write("w1", "/p/tmp1.ts"), writeResult("w1", { original: null }), write("w2", "/p/tmp2.ts"), writeResult("w2", {}), edit("e1", "/p/a.ts", "a = 1", "a = 2")];
   await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
   await flush();
-  expect(rows()).toEqual(["Ma.ts+1-1"]);
+  expect(rows()).toEqual(["Modified a.ts, +1 -1"]);
   expect(el.textContent).toContain("1 Changed file");
 });
 
@@ -262,7 +326,7 @@ it("a deleted file without a known before (restored transcript) shows the D badg
   const client = fakeClient({});
   await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "/p/gone.ts", "x", "y")])} cwd="/p" onOpen={() => {}} />));
   await flush();
-  expect(rows()).toEqual(["Dgone.ts"]);
+  expect(rows()).toEqual(["Deleted gone.ts"]);
   expect(el.querySelector("[data-testid=changed-file]")!.getAttribute("aria-label")).toBe("Deleted gone.ts");
   expect(el.querySelector("[data-testid=file-diff]")!.textContent).toContain("each edit is shown");
 });
@@ -279,7 +343,7 @@ it("filters the file list by path, like OpenCode's Filter files", async () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
   await type("SRC");
-  expect(rows()).toEqual(["Ma.tssrc+1-1"]);
+  expect(rows()).toEqual(["Modified src/a.ts, +1 -1"]);
   await type("zzz");
   expect(rows()).toEqual([]);
   expect(el.textContent).toContain("No files match");

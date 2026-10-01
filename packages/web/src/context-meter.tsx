@@ -37,6 +37,9 @@ export function Ring({ percent, progress = "stroke-ring-progress" }: { percent: 
   );
 }
 
+/** A sum that misses some turns' cost is a lower bound: "≥ $0.12". */
+const costText = (t: Totals) => (t.cost === undefined ? "—" : `${t.costPartial ? "≥ " : ""}${usd.format(t.cost)}`);
+
 /** The breakdown popup; a Popover.Root child (context meter, status bar). */
 /** `stats`: the session's token totals, shown like OpenCode's Context tab stats; none before the first turn result. */
 export function ContextPopup({ usage, side, stats }: { usage: ContextUsage; side: "top" | "bottom"; stats?: Totals }) {
@@ -59,7 +62,7 @@ export function ContextPopup({ usage, side, stats }: { usage: ContextUsage; side
                 ["Input tokens", full.format(stats.uncached)],
                 ["Output tokens", full.format(stats.output)],
                 ["Cache tokens (read/write)", `${full.format(stats.cached)} / ${full.format(stats.cacheWrite)}`],
-                ["Total cost", stats.cost === undefined ? "—" : usd.format(stats.cost)],
+                ["Total cost", costText(stats)],
               ] as const
             ).map(([label, value]) => (
               <div key={label} className="flex flex-col gap-0.5">
@@ -97,7 +100,7 @@ export function ContextMeter({ usage, stats }: { usage: ContextUsage; stats?: To
   const rows: [string, string][] = [
     ["Tokens", `${full.format(totalTokens)} / ${full.format(maxTokens)}`],
     ["Usage", `${percentage}%`],
-    ...(stats?.cost === undefined ? [] : [["Cost", usd.format(stats.cost)] as [string, string]]),
+    ...(stats?.cost === undefined ? [] : [["Cost", costText(stats)] as [string, string]]),
   ];
   return (
     <Popover.Root>
