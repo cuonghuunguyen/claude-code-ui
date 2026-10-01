@@ -88,6 +88,14 @@ it("an open dialog owns the keyboard: Ctrl+K does nothing while quick open shows
   expect(document.querySelector('[data-testid="palette"]')).toBeNull();
 });
 
+it("an open dialog owns the keyboard: Ctrl+K does nothing while the Open project dialog shows", async () => {
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="open-project"]')!.click());
+  await act(async () => {});
+  expect(document.querySelector('[data-testid="open-project-dialog"]')).not.toBeNull();
+  await press({ key: "k", code: "KeyK", ctrlKey: true });
+  expect(document.querySelector('[data-testid="palette"]')).toBeNull();
+});
+
 it("a key the editor already handled (defaultPrevented) runs no shortcut", async () => {
   const e = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "k", code: "KeyK", ctrlKey: true });
   e.preventDefault();
