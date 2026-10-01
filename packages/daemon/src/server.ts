@@ -1,6 +1,6 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
-import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
-import { tmpdir } from "node:os";
+import { closeSync, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { createServer, type IncomingMessage } from "node:http";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
@@ -46,10 +46,58 @@ function real(path: string) {
   }
 }
 
+/** Bytes read from a transcript's end to find its last message; more than a few large tool results. */
+const TAIL_BYTES = 256 * 1024;
+/** Transcript path → last message time for the file version (mtime, size) it was read from. */
+const lastMessageCache = new Map<string, { version: string; at: number | undefined }>();
+
+/**
+ * Time of the last user or assistant entry in a session's transcript, read from its end. Not the file mtime: on exit
+ * the CLI appends metadata (`last-prompt`, `cost-state`), so every live session looks just used after a daemon restart.
+ * Undefined when the file or such an entry is not found (e.g. the entry is further back than `TAIL_BYTES`).
+ */
+function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
+  // ponytail: the SDK's project folder name for cwds up to 200 chars; longer ones get a hash suffix and fall back to mtime.
+  const file = join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(file, "r");
+    const { size, mtimeMs } = fstatSync(fd);
+    const version = `${mtimeMs}:${size}`;
+    const cached = lastMessageCache.get(file);
+    if (cached?.version === version) return cached.at;
+    let at: number | undefined;
+    const buf = Buffer.alloc(Math.min(size, TAIL_BYTES));
+    readSync(fd, buf, 0, buf.length, size - buf.length);
+    const lines = buf.toString("utf8").split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('"timestamp"')) continue;
+      try {
+        const e = JSON.parse(lines[i]) as { type?: string; timestamp?: string };
+        const t = (e.type === "user" || e.type === "assistant") && Date.parse(e.timestamp ?? "");
+        if (t) {
+          at = t;
+          break;
+        }
+      } catch {
+        // The first line of the tail is cut.
+      }
+    }
+    lastMessageCache.set(file, { version, at });
+    return at;
+  } catch {
+    // No transcript at that path.
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  return undefined;
+}
+
 /**
  * `roots`: allowlisted directories for session cwds, the session list and the directory picker (docs/spec.md "Security").
  * `push`: Web Push sender; without it push.* requests fail. `allowBypass`: sessions may switch to bypassPermissions.
  * `uploadDir`: parent of the fs.upload folders (default: the OS temp dir).
+ * `projectsDir`: the SDK's transcript folder (default: `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`).
  */
 export function createDaemon(opts: {
   webRoot: string;
@@ -60,6 +108,7 @@ export function createDaemon(opts: {
   push?: Push;
   allowBypass?: boolean;
   uploadDir?: string;
+  projectsDir?: string;
 }) {
   const logEpoch = randomUUID();
   /**
@@ -71,6 +120,7 @@ export function createDaemon(opts: {
   const sessions = new Map<string, Session>();
   const restoring = new Map<string, Promise<Session | undefined>>();
   const history = opts.history ?? { listSessions, getSessionInfo, getSessionMessages };
+  const projectsDir = opts.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
   const root = resolve(opts.webRoot);
   // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
   let models: ReturnType<typeof listModels> | undefined;
@@ -122,7 +172,7 @@ export function createDaemon(opts: {
     for (const t of await transcripts()) {
       if (!t.cwd || !allowed(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title: t.summary, lastActivity: t.lastModified });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title: t.summary, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())

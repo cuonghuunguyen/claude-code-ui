@@ -88,7 +88,7 @@ export function SessionList({
                           data-testid="session-item"
                           data-state={st}
                           className={cn(
-                            "flex h-8 w-full items-center gap-2 rounded-md pr-1.5 pl-7 text-left text-sm outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11",
+                            "flex h-10 w-full items-center gap-2 rounded-md pr-1.5 pl-7 text-left text-sm outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11",
                             s.id === activeId ? "bg-secondary text-foreground" : "text-muted-foreground",
                           )}
                           aria-current={s.id === activeId ? "page" : undefined}
@@ -96,7 +96,7 @@ export function SessionList({
                           onClick={() => onOpen(s.id)}
                           title={label ? `${s.title} (${label})` : s.title}
                         >
-                          <span className={cn("min-w-0 flex-1 truncate", isUnread && "font-semibold text-foreground")}>{s.title}</span>
+                          <span className={cn("min-w-0 flex-1 truncate font-medium", isUnread && "text-foreground")}>{s.title}</span>
                           {isUnread && <span className="size-1.5 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-hidden />}
                           <StateIcon state={st} />
                           <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{timeAgo(s.lastActivity)}</span>
