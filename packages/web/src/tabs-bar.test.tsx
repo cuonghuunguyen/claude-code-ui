@@ -128,9 +128,9 @@ it("Delete on a focused tab closes it", async () => {
   expect(onClose).toHaveBeenCalledWith("b");
 });
 
-it("inactive tab titles use the faint oc-2 text color", async () => {
+it("inactive tab titles use muted-foreground (4.5:1 in light and dark)", async () => {
   const { tab } = await render();
-  expect(tab("a").querySelector('[role="tab"]')!.className).toMatch(/\btext-faint\b/);
+  expect(tab("a").querySelector('[role="tab"]')!.className).toMatch(/\btext-muted-foreground\b/);
   expect(tab("c").querySelector('[role="tab"]')!.className).toMatch(/\btext-foreground\b/);
 });
 

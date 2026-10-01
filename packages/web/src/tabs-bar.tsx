@@ -216,7 +216,7 @@ function Tab({
         aria-label={STATUS_LABEL[s] ? `${t.title}, ${STATUS_LABEL[s]}` : undefined}
         className={cn(
           "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-          active ? "text-foreground" : "text-faint",
+          active ? "text-foreground" : "text-muted-foreground",
         )}
         onClick={() => onSelect(id)}
       >
