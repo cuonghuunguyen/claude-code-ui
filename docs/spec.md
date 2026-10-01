@@ -53,7 +53,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 
 - Every event has a per-session, monotonically increasing `seq`. The log is in memory only.
 - History before the daemon started is rebuilt from `getSessionMessages()` through the adapter.
-- Each daemon start has a `logEpoch`. `session.subscribe {sessionId, sinceSeq, logEpoch}`: same epoch → replay after `sinceSeq`; different epoch → client clears its store and gets a full replay.
+- Each daemon start has a `logEpoch`. `session.subscribe {sessionId, sinceSeq, logEpoch}`: same epoch → replay after `sinceSeq`; different epoch → client clears its store and gets a full replay. The reply carries the current `SessionInfo` and its `seq`: replayed model/mode/effort changes up to that `seq` are older and do not override it.
 - Clients drop events with `seq` ≤ the last applied one.
 - State changes, permission requests, questions and their settlement are all logged events, so replay alone restores the full view.
 
@@ -108,7 +108,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 - A restored session has no query before its first prompt, so its picker is empty until then.
 - Invoked by sending `/name args` as prompt text.
 - Models from `supportedModels()`; switch with `setModel()` mid-session.
-- Permission mode and effort: start options of the query; while it runs `setPermissionMode()` / `applyFlagSettings({effortLevel})`, applied from the next turn. The CLI changes the mode itself too (plan approved, "all edits this session"); `system/init` and `system/status` carry it, and the daemon logs every change as a `session_permission_mode` part. Effort changes log `session_effort`. Both reset to `default` after a daemon restart.
+- Permission mode and effort: start options of the query; while it runs `setPermissionMode()` / `applyFlagSettings({effortLevel})`, applied from the next turn. The CLI changes the mode itself too (plan approved, "all edits this session"); `system/init` and `system/status` carry it, and the daemon logs every change as a `session_permission_mode` part. Effort changes log `session_effort`. The daemon saves each session's model, mode and effort in `sessions.json` in its config dir; a session restored after a restart shows and resumes with them (a mode not enabled now falls back to `default`).
 - `ExitPlanMode` arrives through `canUseTool` without suggestions; the daemon adds `setMode acceptEdits` so the panel offers Claude Code's "Yes, and auto-accept edits" next to "Yes, manually approve edits" and "No, keep planning". Each "Yes" sends its mode as `setMode` (auto-accept → `acceptEdits`, manually approve → `default`); without it the CLI restores the mode active before plan mode.
 
 ### Checkpoints and rewind (same modes as Claude Code `/rewind`)

@@ -9,7 +9,7 @@ import { EFFORTS, imageBlock, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL
 import { getSessionInfo, getSessionMessages, listSessions, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { createNotifier, type Push } from "./push.ts";
-import { listModels, Session, transcriptModel } from "./session.ts";
+import { listModels, Session, transcriptModel, type SessionSettings } from "./session.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
@@ -98,6 +98,8 @@ function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
  * `push`: Web Push sender; without it push.* requests fail. `allowBypass`: sessions may switch to bypassPermissions.
  * `uploadDir`: parent of the fs.upload folders (default: the OS temp dir).
  * `projectsDir`: the SDK's transcript folder (default: `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`).
+ * `settingsFile`: JSON file keeping each session's model, permission mode and effort for a restore after a restart
+ * (the SDK transcript has mode and effort only per prompt); none = not kept.
  */
 export function createDaemon(opts: {
   webRoot: string;
@@ -109,6 +111,7 @@ export function createDaemon(opts: {
   allowBypass?: boolean;
   uploadDir?: string;
   projectsDir?: string;
+  settingsFile?: string;
 }) {
   const logEpoch = randomUUID();
   /**
@@ -118,6 +121,24 @@ export function createDaemon(opts: {
   const uploadParent = opts.uploadDir ?? mkdtempSync(join(tmpdir(), "claude-ui-"));
   mkdirSync(uploadParent, { recursive: true, mode: 0o700 });
   const sessions = new Map<string, Session>();
+  // ponytail: entries are never removed and the whole file is rewritten per change; prune by transcript if it grows.
+  const settings: Record<string, SessionSettings> = readJson(opts.settingsFile) ?? {};
+  /** Options of every session: settings changes are saved under its ID. */
+  const sessionOpts = (id: () => string, initial: Partial<SessionSettings>) => ({
+    ...initial,
+    allowBypass: opts.allowBypass,
+    uploadDir: uploadParent,
+    query: opts.query,
+    onSettings: (s: SessionSettings) => {
+      if (!opts.settingsFile) return;
+      settings[id()] = s;
+      try {
+        writeFileSync(opts.settingsFile, JSON.stringify(settings), { mode: 0o600 });
+      } catch (err) {
+        console.error("saving session settings failed:", err);
+      }
+    },
+  });
   const restoring = new Map<string, Promise<Session | undefined>>();
   const history = opts.history ?? { listSessions, getSessionInfo, getSessionMessages };
   const projectsDir = opts.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
@@ -194,8 +215,13 @@ export function createDaemon(opts: {
         const messages = await history.getSessionMessages(id, { dir: info.cwd });
         // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
         const used = transcriptModel(messages);
-        const model = used && ((await modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
-        return track(Session.restore(id, info.cwd, messages, { model, allowBypass: opts.allowBypass, uploadDir: uploadParent, query: opts.query }));
+        const saved = settings[id];
+        const model = isModel(saved?.model) ? saved.model : used && ((await modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
+        // A mode the daemon does not enable now (bypass without CLAUDE_UI_ALLOW_BYPASS) falls back to the default.
+        const modes = PERMISSION_MODES.filter((m) => m !== "bypassPermissions" || opts.allowBypass);
+        const permissionMode = saved && modes.includes(saved.permissionMode) ? saved.permissionMode : undefined;
+        const effort = saved && EFFORTS.includes(saved.effort) ? saved.effort : undefined;
+        return track(Session.restore(id, info.cwd, messages, sessionOpts(() => id, { model, permissionMode, effort })));
       })()
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
         .finally(() => restoring.delete(id));
@@ -278,7 +304,7 @@ export function createDaemon(opts: {
           if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          const s = track(new Session(cwd, { model: msg.model, allowBypass: opts.allowBypass, uploadDir: uploadParent, query: opts.query }));
+          const s: Session = track(new Session(cwd, sessionOpts(() => s.id, { model: msg.model })));
           return reply({ session: s.info() });
         }
         case "session.subscribe": {
@@ -287,7 +313,7 @@ export function createDaemon(opts: {
           unsubscribes.get(s.id)?.();
           // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
           const since = msg.logEpoch === logEpoch ? msg.sinceSeq : 0;
-          reply({ logEpoch, session: s.info() });
+          reply({ logEpoch, seq: s.seq(), session: s.info() });
           unsubscribes.set(s.id, s.subscribe(since, (e) => send(ws, e)));
           return;
         }
@@ -484,6 +510,16 @@ export function createDaemon(opts: {
   });
 
   return http;
+}
+
+function readJson<T>(file: string | undefined): T | undefined {
+  if (!file || !existsSync(file)) return undefined;
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch (err) {
+    console.error(`ignoring unreadable ${file}:`, err);
+    return undefined;
+  }
 }
 
 const isModel = (m: unknown): m is string => typeof m === "string" && m.trim() !== "";

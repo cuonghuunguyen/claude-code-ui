@@ -1,5 +1,5 @@
 // Per-session client store keyed by part id; events apply idempotently by seq (docs/spec.md "Client state").
-import type { Effort, Event, Part, PermissionMode, SessionState, SlashCommand, TodoItem } from "@claude-ui/protocol";
+import type { Effort, Event, Part, PermissionMode, SessionState, SlashCommand, SubscribeResult, TodoItem } from "@claude-ui/protocol";
 import { CONTEXT_TOOLS } from "./tools.ts";
 
 export type ToolCall = Extract<Part, { type: "tool_call" }>;
@@ -14,11 +14,12 @@ export type SessionView = {
   state: SessionState;
   /** Seq of the last "needs input" or "finished" (idle or error after work): what makes a session unread. 0 = none. */
   attentionSeq: number;
-  /** Latest model from a session_model part; undefined until the model was switched. */
+  /** Model, mode and effort: from the subscribe reply, then from later session_model / _permission_mode / _effort parts. */
   model?: string;
-  /** Latest session_permission_mode / session_effort; undefined until changed (SessionInfo has the start value). */
   permissionMode?: PermissionMode;
   effort?: Effort;
+  /** Seq of the subscribe reply: replayed changes up to it are older than the reply's values. */
+  settingsSeq: number;
   commands: SlashCommand[];
   /** Latest todo list (todo_update); pinned above the prompt box while a turn runs. */
   todos: TodoItem[];
@@ -26,7 +27,7 @@ export type SessionView = {
   parts: Map<string, Part>;
 };
 
-export const emptySession = (): SessionView => ({ lastSeq: 0, state: "idle", attentionSeq: 0, commands: [], todos: [], order: [], parts: new Map() });
+export const emptySession = (): SessionView => ({ lastSeq: 0, settingsSeq: 0, state: "idle", attentionSeq: 0, commands: [], todos: [], order: [], parts: new Map() });
 
 export function applyEvent(s: SessionView, e: Event): SessionView {
   if (e.seq <= s.lastSeq) return s;
@@ -36,6 +37,8 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
     const attention = part.state === "needs_input" || (busy && (part.state === "idle" || part.state === "error"));
     return { ...s, lastSeq: e.seq, state: part.state, attentionSeq: attention ? e.seq : s.attentionSeq };
   }
+  if ((part.type === "session_model" || part.type === "session_permission_mode" || part.type === "session_effort") && e.seq <= s.settingsSeq)
+    return { ...s, lastSeq: e.seq };
   if (part.type === "session_model") return { ...s, lastSeq: e.seq, model: part.model };
   if (part.type === "session_permission_mode") return { ...s, lastSeq: e.seq, permissionMode: part.mode };
   if (part.type === "session_effort") return { ...s, lastSeq: e.seq, effort: part.effort };
@@ -53,9 +56,15 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   return { ...s, lastSeq: e.seq, order, parts };
 }
 
-/** Call with the `session.subscribe` reply before its events: a different logEpoch empties the view for the full replay. */
-export const withEpoch = (s: SessionView, logEpoch: string): SessionView =>
-  s.logEpoch === logEpoch ? s : { ...emptySession(), logEpoch };
+/**
+ * Call with the `session.subscribe` reply before its events: a different logEpoch empties the view for the full replay.
+ * The reply's model, mode and effort are current; the replay must not override them with older values (e.g. a long log
+ * replays an old plan mode for seconds).
+ */
+export function withSubscribe(s: SessionView, { logEpoch, seq, session }: SubscribeResult): SessionView {
+  const view = s.logEpoch === logEpoch ? s : { ...emptySession(), logEpoch };
+  return { ...view, model: session.model, permissionMode: session.permissionMode, effort: session.effort, settingsSeq: seq };
+}
 
 const HIDDEN = new Set<Part["type"]>(["tool_result", "thinking", "permission_request"]);
 

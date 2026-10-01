@@ -201,6 +201,49 @@ describe("daemon", () => {
     expect(await restart(history)).toEqual({ model: "default", resumedWith: undefined });
   });
 
+  it("a restored session keeps its model, effort and permission mode across a restart: header and resumed query agree", async () => {
+    const settingsFile = join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json");
+    const start = async (allowBypass = false) => {
+      const d = createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        query: fakeQuery as never,
+        settingsFile,
+        allowBypass,
+        history: {
+          listSessions: (async () => []) as never,
+          getSessionInfo: (async (sid: string) => ({ sessionId: sid, cwd: webRoot })) as never,
+          getSessionMessages: (async () => history) as never,
+        },
+      });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      return { d, c: await client((d.address() as AddressInfo).port) };
+    };
+    const first = await start(true);
+    const id = ((await first.c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+    await first.c.request({ type: "session.setModel", sessionId: id, model: "haiku" });
+    await first.c.request({ type: "session.setEffort", sessionId: id, effort: "high" });
+    await first.c.request({ type: "session.setPermissionMode", sessionId: id, mode: "acceptEdits" });
+    first.d.close();
+
+    const second = await start();
+    const sub = (await second.c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })) as { result: { seq: number; session: object } };
+    expect(sub.result.session).toMatchObject({ model: "haiku", effort: "high", permissionMode: "acceptEdits" });
+    expect(sub.result.seq).toBeGreaterThan(0);
+    await second.c.request({ type: "session.prompt", sessionId: id, text: "go" });
+    expect(calls.at(-1)).toMatchObject({ resume: id, model: "haiku", effort: "high", permissionMode: "acceptEdits" });
+    // A mode the daemon no longer enables is not restored.
+    await second.c.request({ type: "session.setPermissionMode", sessionId: id, mode: "plan" });
+    second.d.close();
+    const saved = JSON.parse(readFileSync(settingsFile, "utf8"));
+    writeFileSync(settingsFile, JSON.stringify({ ...saved, [id]: { ...saved[id], permissionMode: "bypassPermissions" } }));
+    const third = await start();
+    const again = (await third.c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })) as { result: { session: object } };
+    expect(again.result.session).toMatchObject({ model: "haiku", effort: "high", permissionMode: "default" });
+    third.d.close();
+  });
+
   it("lists models from supportedModels() and caches them", async () => {
     const c = await client();
     const before = calls.length;

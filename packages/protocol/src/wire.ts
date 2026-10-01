@@ -98,8 +98,11 @@ export type ServerMessage =
   | { type: "error"; reqId?: string; code: string; message: string };
 
 export type CreateResult = { session: SessionInfo };
-/** `logEpoch` differs from the one the client sent: its store belongs to an earlier daemon run and the events are a full replay. */
-export type SubscribeResult = { logEpoch: string; session: SessionInfo };
+/**
+ * `logEpoch` differs from the one the client sent: its store belongs to an earlier daemon run and the events are a full replay.
+ * `seq`: the last event seq when `session` was read; the replayed events up to it are older than `session`.
+ */
+export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo };
 /** session.setModel, session.setPermissionMode, session.setEffort. */
 export type SetModelResult = { session: SessionInfo };
 export type UploadResult = { path: string };

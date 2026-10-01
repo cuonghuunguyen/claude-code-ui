@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Event, SessionState } from "@claude-ui/protocol";
-import { applyEvent, emptySession, withEpoch } from "./store.ts";
+import { applyEvent, emptySession, withSubscribe } from "./store.ts";
 import { isUnread, seenNow, tabTitle } from "./unread.ts";
 
 const state = (seq: number, s: SessionState): Event => ({ type: "event", sessionId: "s", seq, part: { type: "session_state", id: "session_state", state: s } });
-const run = (...states: SessionState[]) => states.reduce((v, s, i) => applyEvent(v, state(i + 1, s)), withEpoch(emptySession(), "e1"));
+const run = (...states: SessionState[]) => states.reduce((v, s, i) => applyEvent(v, state(i + 1, s)), withSubscribe(emptySession(), { logEpoch: "e1", seq: 0, session: { id: "s", cwd: "/", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [] } }));
 
 describe("unread", () => {
   it("a session is unread after it needs input or finishes (an error counts) until it is seen", () => {
