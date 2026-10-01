@@ -141,7 +141,7 @@ export function createDaemon(opts: {
   // ponytail: entries are never removed and the whole file is rewritten per change; prune by transcript if it grows.
   const settings: Record<string, SessionSettings> = readJson(opts.settingsFile) ?? {};
   // Account-wide, so not a session event: every connection gets each change.
-  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }) });
+  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query) });
   /** Options of every session: settings changes are saved under its ID. */
   const sessionOpts = (id: () => string, initial: Partial<SessionSettings>) => ({
     ...initial,
@@ -313,7 +313,7 @@ export function createDaemon(opts: {
     connections.add(ws);
     const usage = plan.current();
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
-    if (plan.age() > PLAN_STALE_MS) void queuedQuery(plan.refresh, opts.query).catch((err) => console.error("plan usage failed:", err));
+    if (plan.age() > PLAN_STALE_MS) void plan.reread();
     const unsubscribes = new Map<string, () => void>();
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();

@@ -62,7 +62,7 @@ describe("plan usage", () => {
       const q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => fakePlanUsage };
       await t.rateLimit({ status: "rejected", resetsAt: at("2026-10-01T11:00:00Z") / 1000, rateLimitType: "five_hour" }, q as never);
       expect(t.current()).toMatchObject({ status: "rejected" });
-      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      await vi.advanceTimersByTimeAsync(61 * 60_000);
       expect(seen.at(-1)).toMatchObject({ status: "allowed" });
       expect(seen.at(-1)!.statusResetsAt).toBeUndefined();
       await t.refresh(q as never);
@@ -75,6 +75,53 @@ describe("plan usage", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reads again at the earliest reset time, also without a turn: a window at 100% drops back after its reset", async () => {
+    vi.useFakeTimers({ now: at("2026-10-01T10:00:00Z") });
+    try {
+      const seen: (PlanUsage | null)[] = [];
+      const full = structuredClone(fakePlanUsage);
+      full.rate_limits.limits[0]!.percent = 100;
+      full.rate_limits.limits[0]!.resets_at = "2026-10-01T11:00:00Z";
+      const fresh = structuredClone(fakePlanUsage);
+      fresh.rate_limits.limits[0]!.percent = 0;
+      const answers = [full, fresh];
+      const q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn(async () => answers.shift() ?? fresh) };
+      const t = createPlanTracker({ onChange: (u) => seen.push(u), read: () => t.refresh(q as never) });
+      await t.rateLimit({ status: "rejected", resetsAt: at("2026-10-01T11:00:00Z") / 1000, rateLimitType: "five_hour" }, q as never);
+      expect(seen.at(-1)).toMatchObject({ status: "rejected" });
+      expect(seen.at(-1)!.windows[0]!.percent).toBe(100);
+      await vi.advanceTimersByTimeAsync(61 * 60_000);
+      expect(q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET).toHaveBeenCalledTimes(2);
+      expect(seen.at(-1)).toMatchObject({ status: "allowed" });
+      expect(seen.at(-1)!.windows[0]!.percent).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces rereads: a burst while one is pending starts one read", async () => {
+    let release!: () => void;
+    const read = vi.fn(() => new Promise<void>((r) => (release = r)));
+    const t = createPlanTracker({ onChange: () => {}, read });
+    const a = t.reread();
+    t.reread();
+    t.reread();
+    release();
+    await a;
+    expect(read).toHaveBeenCalledTimes(1);
+    void t.reread();
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the last value when plan limits apply but the CLI returned none", async () => {
+    const seen: (PlanUsage | null)[] = [];
+    const t = createPlanTracker({ onChange: (u) => seen.push(u) });
+    await t.refresh({ usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => fakePlanUsage } as never);
+    await t.refresh({ usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({ ...fakePlanUsage, rate_limits: null }) } as never);
+    expect(seen).toHaveLength(1);
+    expect(t.current()).toMatchObject({ plan: "team" });
   });
 
   it("a failed read keeps the last value", async () => {

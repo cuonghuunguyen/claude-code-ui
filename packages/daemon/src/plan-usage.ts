@@ -18,12 +18,16 @@ const label = (r: Row) => {
   const scope = r.scope?.model?.display_name ?? r.scope?.surface?.display_name;
   return LABELS[r.kind] ?? (scope ? `Current week (${scope})` : r.kind);
 };
+// ponytail: a server still on the old window right at its reset is not retried; the next turn or stale connect read fixes it.
+/** A read at a reset time waits this long, so the server has rolled the window over. */
+const RESET_GRACE_MS = 10_000;
 const ms = (iso: string | null) => (iso ? new Date(iso).getTime() : null);
 
-/** Null when plan limits do not apply (API key, Bedrock, Vertex) or the CLI could not fetch them. */
-export function planUsage(r: SDKControlGetUsageResponse): PlanUsage | null {
+/** Null when plan limits do not apply (API key, Bedrock, Vertex); undefined when they apply but the CLI could not fetch them. */
+export function planUsage(r: SDKControlGetUsageResponse): PlanUsage | null | undefined {
   const limits = r.rate_limits;
-  if (!r.rate_limits_available || !limits) return null;
+  if (!r.rate_limits_available) return null;
+  if (!limits) return undefined;
   let rows = (limits as { limits?: Row[] | null }).limits;
   // A server without rows: the typed windows, graded by nobody. model_scoped replaces the older per-model fields.
   type Window = { utilization: number | null; resets_at: string | null } | null | undefined;
@@ -37,28 +41,43 @@ export function planUsage(r: SDKControlGetUsageResponse): PlanUsage | null {
         ? []
         : [{ kind, percent: w.utilization, resets_at: w.resets_at, severity: "normal", is_active: kind === "session", scope: name ? { model: { display_name: name } } : null }],
   );
-  const windows: PlanWindow[] = rows.map((row) => ({ kind: row.kind, label: label(row), percent: row.percent, resetsAt: ms(row.resets_at), severity: row.severity, active: row.is_active }));
+  const windows: PlanWindow[] = rows.map((row) => ({ kind: row.kind, label: label(row), percent: Math.round(row.percent), resetsAt: ms(row.resets_at), severity: row.severity, active: row.is_active }));
   return { plan: r.subscription_type, windows, status: "allowed" };
 }
 
 /**
  * Latest plan usage of the account. `refresh()` after each turn on the session's query; `rateLimit()` on each
  * `rate_limit_event` (its status shows at once, then a refresh). The status ends at its reset time; one without a
- * reset time ends on the next read after its own. An older answer arriving later is dropped.
+ * reset time ends on the next read after its own. At the earliest reset time (status or window) `read` runs, so an
+ * idle page leaves the limit too. An older answer arriving later is dropped.
  */
-export function createPlanTracker({ onChange }: { onChange: (u: PlanUsage | null) => void }) {
+export function createPlanTracker({ onChange, read = async () => {} }: { onChange: (u: PlanUsage | null) => void; read?: () => Promise<void> }) {
   let usage: PlanUsage | null | undefined;
   let status: Pick<PlanUsage, "status" | "statusResetsAt"> = { status: "allowed" };
   let statusRead = 0;
   let expiry: NodeJS.Timeout | undefined;
   let request = 0;
   let readAt = 0;
+  let pending: Promise<void> | undefined;
   const current = () => (usage ? { ...usage, ...status } : usage);
+  /** One read at a time: a burst of callers shares it. */
+  const reread = () => (pending ??= read().catch((err) => console.error("plan usage failed:", err)).finally(() => (pending = undefined)));
+  // The CLI sends rate_limit_event and usage only during a turn: nothing else ends a limit while idle.
+  function arm() {
+    clearTimeout(expiry);
+    const now = Date.now();
+    const at = Math.min(...[status.statusResetsAt, ...(usage?.windows.map((w) => w.resetsAt) ?? [])].filter((t): t is number => !!t && t > now));
+    if (at === Infinity) return;
+    expiry = setTimeout(() => {
+      if (status.statusResetsAt && status.statusResetsAt <= Date.now()) setStatus({ status: "allowed" });
+      if (usage) onChange(current()!);
+      arm();
+      void reread();
+    }, at - now + RESET_GRACE_MS).unref();
+  }
   function setStatus(s: typeof status) {
     status = s;
-    clearTimeout(expiry);
-    // The CLI sends rate_limit_event only during a turn: nothing else ends a limit while idle.
-    if (s.statusResetsAt) expiry = setTimeout(() => (setStatus({ status: "allowed" }), usage && onChange(current()!)), s.statusResetsAt - Date.now()).unref();
+    arm();
   }
 
   async function refresh(q: Query) {
@@ -67,8 +86,11 @@ export function createPlanTracker({ onChange }: { onChange: (u: PlanUsage | null
     try {
       const r = await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true });
       if (n !== request) return;
-      usage = planUsage(r);
+      const u = planUsage(r);
+      if (u === undefined) return;
+      usage = u;
       if (n > statusRead && !status.statusResetsAt) setStatus({ status: "allowed" });
+      arm();
       onChange(current()!);
     } catch (err) {
       console.error("plan usage failed:", err);
@@ -79,6 +101,7 @@ export function createPlanTracker({ onChange }: { onChange: (u: PlanUsage | null
     /** Undefined until the first answer. */
     current,
     refresh,
+    reread,
     /** Ms since the last read started (Infinity before the first). */
     age: () => (readAt ? Date.now() - readAt : Infinity),
     rateLimit(info: SDKRateLimitInfo, q: Query) {
