@@ -1,8 +1,8 @@
 // Changes tab (docs/spec.md "Layout"): files changed in the session, each with its diff, like OpenCode's review panel.
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { FsReadResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
-import { Columns2Icon, FileDiffIcon, RotateCwIcon, Rows2Icon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, Columns2Icon, FileDiffIcon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { connect, RequestError } from "./client.ts";
@@ -51,7 +51,22 @@ const useNarrow = () => useSyncExternalStore(onNarrowChange, () => narrowQuery()
  * Re-reads the files whenever a call changes one, so the diffs follow Claude live, and on `fs.changed` (Bash or outside edits).
  * The files panel owns this connection's fs.watch list; App adds the changed files to it.
  */
-export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; view: SessionView; cwd: string; onOpen: (path: string) => void }) {
+/** `hidden`: mounted behind another pane, only to report `onCount` (the listed files) for the pane tab. */
+export function ChangesPanel({
+  client,
+  view,
+  cwd,
+  onOpen,
+  hidden,
+  onCount,
+}: {
+  client: Client;
+  view: SessionView;
+  cwd: string;
+  onOpen: (path: string) => void;
+  hidden?: boolean;
+  onCount?: (n: number) => void;
+}) {
   const fresh = useMemo(() => sessionChanges(view), [view.parts]);
   // Same calls and results per path: the previous list, so streamed text does not re-parse every diff.
   const key = fresh.map((c) => `${c.path}\n${c.calls.length}\n${c.results.filter(Boolean).length}`).join("\n");
@@ -78,21 +93,48 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
 
   const rows = useMemo(
     () =>
-      changes.map((change): Row => {
+      changes.flatMap((change): Row[] => {
         const d = disk[change.path];
-        if (d?.content === undefined) return { change, error: d?.error, stats: callStats(change), kind: "M" };
+        if (d?.content === undefined) return [{ change, error: d?.error, stats: callStats(change), kind: "M" }];
         const before = baseline(d.content, change);
         // Added: the file did not exist (original null), or a restored transcript's Write created it. An existing empty file is M.
-        const kind = d.deleted ? "D" : change.original === null || (change.original === undefined && before === "") ? "A" : "M";
-        return before === undefined
-          ? { change, after: d.content, stats: callStats(change), kind }
-          : { change, before, after: d.content, stats: fileStats(before, d.content, change.path), kind };
+        const created = change.original === null || (change.original === undefined && before === "");
+        // Created and deleted again: no net change, so no row (OpenCode's before/after list has none).
+        if (d.deleted && created) return [];
+        const kind = d.deleted ? "D" : created ? "A" : "M";
+        // A deleted file with an unknown before has no net stats; the per-call sums would not count the deletion.
+        if (before === undefined) return [{ change, after: d.content, stats: d.deleted ? undefined : callStats(change), kind }];
+        return [{ change, before, after: d.content, stats: fileStats(before, d.content, change.path), kind }];
       }),
     [changes, disk],
   );
   const total = rows.reduce((t, r) => ({ added: t.added + (r.stats?.added ?? 0), removed: t.removed + (r.stats?.removed ?? 0) }), { added: 0, removed: 0 });
-  const active = rows.find((r) => r.change.path === selected) ?? rows[0];
+  const [filter, setFilter] = useState("");
+  const q = filter.trim().toLowerCase();
+  const shown = q ? rows.filter((r) => relPath(r.change.path, cwd).toLowerCase().includes(q)) : rows;
+  const active = shown.find((r) => r.change.path === selected) ?? shown[0];
+  const index = active ? shown.indexOf(active) : -1;
+  // Previous/next file like OpenCode's review toolbar: cycles the listed files, also on ←/→ while focus is not in a text field.
+  const cycle = (step: number) => shown.length && setSelected(shown[(index + step + shown.length) % shown.length]!.change.path);
+  const cycleRef = useRef(cycle);
+  cycleRef.current = cycle;
+  const shownRef = useRef(!hidden);
+  shownRef.current = !hidden;
+  useEffect(() => onCount?.(rows.length), [rows.length]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!shownRef.current || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+      const t = e.target;
+      // Text fields keep their caret keys; widgets with their own arrow keys (tabs, the panel resizer, menus) keep theirs.
+      if (t instanceof HTMLElement && (t.isContentEditable || t.closest("input, textarea, select, [role=tab], [role=separator], [role=menu], [role=listbox], [role=radiogroup]"))) return;
+      e.preventDefault();
+      cycleRef.current(e.key === "ArrowLeft" ? -1 : 1);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
+  if (hidden) return null;
   if (!rows.length)
     return (
       <div className="m-auto flex flex-col items-center gap-2 p-4 text-muted-foreground" data-testid="changes-empty">
@@ -109,6 +151,17 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
         </span>
         <StatsText stats={total} />
         <div className="ml-auto flex items-center gap-1 max-md:gap-2" data-testid="changes-actions">
+          {shown.length > 0 && (
+            <span className="font-mono text-muted-foreground text-xs" data-testid="file-position">
+              {index + 1}/{shown.length}
+            </span>
+          )}
+          <Button size="icon-sm" variant="ghost" className="max-md:size-11" disabled={!shown.length} onClick={() => cycle(-1)} title="Previous file (←)" aria-label="Previous file">
+            <ArrowLeftIcon />
+          </Button>
+          <Button size="icon-sm" variant="ghost" className="max-md:size-11" disabled={!shown.length} onClick={() => cycle(1)} title="Next file (→)" aria-label="Next file">
+            <ArrowRightIcon />
+          </Button>
           <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
             <RotateCwIcon />
           </Button>
@@ -133,35 +186,55 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
           )}
         </div>
       </div>
-      <ul className="max-h-[35%] shrink-0 overflow-auto border-b p-1" aria-label="Changed files">
-        {rows.map((r) => {
-          const path = r.change.path;
-          const { name, dir } = filePath(path, cwd);
-          return (
-            <li key={path}>
-              <button
-                className={cn(
-                  "flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset lg:min-h-7",
-                  r === active && "bg-secondary",
-                )}
-                aria-current={r === active}
-                title={path}
-                aria-label={`${KIND_TITLE[r.kind]} ${relPath(path, cwd)}${r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`}
-                onClick={() => setSelected(path)}
-                data-testid="changed-file"
-              >
-                <KindBadge kind={r.kind} />
-                <span className="min-w-0 flex-1 truncate">
-                  {name}
-                  {dir && <span className="ml-2 text-muted-foreground">{dir}</span>}
-                </span>
-                {r.stats && <StatsText stats={r.stats} />}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-      {active && <FileDiff key={active.change.path} row={active} cwd={cwd} style={style} onOpen={onOpen} />}
+      {/* OpenCode's review file sidebar (240px) beside the diff once the panel is wide enough; above it in a narrow panel. */}
+      <div className="@container flex min-h-0 flex-1 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col @2xl:flex-row">
+          <div className="flex max-h-[35%] shrink-0 flex-col border-b @2xl:max-h-none @2xl:w-60 @2xl:border-r @2xl:border-b-0">
+            <label className="relative flex items-center px-2 pt-2 pb-1">
+              <SearchIcon className="pointer-events-none absolute left-4 size-4 text-faint" aria-hidden />
+              <input
+                type="search"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter files"
+                aria-label="Filter files"
+                className="h-8 w-full rounded-md bg-secondary/60 pr-2 pl-8 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11"
+                data-testid="changes-filter"
+              />
+            </label>
+            {!shown.length && <p className="px-3 py-2 text-muted-foreground">No files match.</p>}
+            <ul className="min-h-0 overflow-auto p-1" aria-label="Changed files">
+              {shown.map((r) => {
+                const path = r.change.path;
+                const { name, dir } = filePath(path, cwd);
+                return (
+                  <li key={path}>
+                    <button
+                      className={cn(
+                        "flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset lg:min-h-7",
+                        r === active && "bg-secondary",
+                      )}
+                      aria-current={r === active}
+                      title={path}
+                      aria-label={`${KIND_TITLE[r.kind]} ${relPath(path, cwd)}${r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`}
+                      onClick={() => setSelected(path)}
+                      data-testid="changed-file"
+                    >
+                      <KindBadge kind={r.kind} />
+                      <span className="min-w-0 flex-1 truncate">
+                        {name}
+                        {dir && <span className="ml-2 text-muted-foreground">{dir}</span>}
+                      </span>
+                      {r.stats && <StatsText stats={r.stats} />}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+          {active && <FileDiff key={active.change.path} row={active} cwd={cwd} style={style} onOpen={onOpen} />}
+        </div>
+      </div>
     </div>
   );
 }

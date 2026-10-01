@@ -432,6 +432,9 @@ export function App() {
   const panelSession = shown ?? lastShown.current;
   const panelView = panelSession && views[panelSession.id];
   const changedPaths = useMemo(() => (panelView ? sessionChanges(panelView).map((c) => c.path) : []), [panelView?.parts]);
+  // The pane tab counts the files the changes panel lists (a file created and deleted again is not listed).
+  const [listedChanges, setListedChanges] = useState<{ id: string; n: number }>();
+  const changeCount = listedChanges && listedChanges.id === panelSession?.id ? listedChanges.n : changedPaths.length;
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
   const upload = async (file: File) => {
@@ -610,7 +613,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", "terminal"]} value={pane} onChange={setPane} changes={changedPaths.length} />
+                  <PaneTabs panes={["session", "changes", "files", "terminal"]} value={pane} onChange={setPane} changes={changeCount} />
                 </div>
               )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
@@ -672,7 +675,7 @@ export function App() {
                 >
                 <section className={`${card} flex-1 ${pane === "terminal" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`} data-testid="side-panel">
                   <div className="hidden items-center border-b px-2 py-1 lg:flex">
-                    <PaneTabs panes={["changes", "files"]} value={pane === "changes" ? "changes" : "files"} onChange={setPane} changes={changedPaths.length} />
+                    <PaneTabs panes={["changes", "files"]} value={pane === "changes" ? "changes" : "files"} onChange={setPane} changes={changeCount} />
                     <IconButton className="ml-auto" label="Toggle terminal (Ctrl+`)" pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle">
                       <SquareTerminalIcon />
                     </IconButton>
@@ -688,9 +691,11 @@ export function App() {
                       watch={changedPaths}
                     />
                   </div>
-                  {pane === "changes" && views[panelSession.id] && (
+                  {views[panelSession.id] && (
                     <ChangesPanel
                       key={panelSession.id}
+                      hidden={pane !== "changes"}
+                      onCount={(n) => setListedChanges({ id: panelSession.id, n })}
                       client={client.current!}
                       view={views[panelSession.id]!}
                       cwd={panelSession.cwd}

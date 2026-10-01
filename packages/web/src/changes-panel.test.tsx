@@ -245,3 +245,76 @@ it("names each row by kind, relative path and stats for screen readers", async (
   await flush();
   expect(el.querySelector("[data-testid=changed-file]")!.getAttribute("aria-label")).toBe("Modified src/a.ts, +1 -1");
 });
+
+const write = (id: string, file_path: string): Part => ({ type: "tool_call", id, toolUseId: id, tool: "Write", input: { file_path, content: "n\n" }, status: "done" });
+const writeResult = (id: string, extra: object): Part => ({ type: "tool_result", id: `${id}:result`, toolUseId: id, output: "File created successfully at: x", isError: false, ...extra });
+
+it("hides a file the session created and deleted again (live original null, or a restored created Write)", async () => {
+  const client = fakeClient({ "/p/a.ts": "a = 2\n" });
+  const parts = [write("w1", "/p/tmp1.ts"), writeResult("w1", { original: null }), write("w2", "/p/tmp2.ts"), writeResult("w2", {}), edit("e1", "/p/a.ts", "a = 1", "a = 2")];
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  expect(rows()).toEqual(["Ma.ts+1-1"]);
+  expect(el.textContent).toContain("1 Changed file");
+});
+
+it("a deleted file without a known before (restored transcript) shows the D badge without per-call stats", async () => {
+  const client = fakeClient({});
+  await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "/p/gone.ts", "x", "y")])} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  expect(rows()).toEqual(["Dgone.ts"]);
+  expect(el.querySelector("[data-testid=changed-file]")!.getAttribute("aria-label")).toBe("Deleted gone.ts");
+  expect(el.querySelector("[data-testid=file-diff]")!.textContent).toContain("each edit is shown");
+});
+
+it("filters the file list by path, like OpenCode's Filter files", async () => {
+  const client = fakeClient({ "/p/src/a.ts": "a = 2\n", "/p/b.ts": "x = 9\n" });
+  const parts = [edit("e1", "/p/src/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "x = 1", "x = 9")];
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  const input = el.querySelector<HTMLInputElement>("input[aria-label='Filter files']")!;
+  const type = (v: string) =>
+    act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  await type("SRC");
+  expect(rows()).toEqual(["Ma.tssrc+1-1"]);
+  await type("zzz");
+  expect(rows()).toEqual([]);
+  expect(el.textContent).toContain("No files match");
+});
+
+it("previous/next buttons and the arrow keys cycle the selected file, not while typing", async () => {
+  const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "x = 9\n", "/p/c.ts": "c = 9\n" });
+  const parts = [edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "x = 1", "x = 9"), edit("e3", "/p/c.ts", "c = 1", "c = 9")];
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  const current = () => el.querySelector("[data-testid=file-diff-header]")!.textContent;
+  const click = (label: string) => act(async () => el.querySelector<HTMLButtonElement>(`button[aria-label='${label}']`)!.click());
+  expect(current()).toContain("a.ts");
+  await click("Next file");
+  expect(current()).toContain("b.ts");
+  await click("Previous file");
+  await click("Previous file");
+  expect(current()).toContain("c.ts");
+  expect(el.textContent).toContain("3/3");
+  await act(async () => void document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(current()).toContain("a.ts");
+  const input = el.querySelector<HTMLInputElement>("input[aria-label='Filter files']")!;
+  await act(async () => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(current()).toContain("a.ts");
+});
+
+it("reports the listed file count to the pane tab (a created and deleted file is not counted); hidden it renders nothing and leaves the arrow keys alone", async () => {
+  const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
+  const onCount = vi.fn();
+  const parts = [write("w1", "/p/tmp.ts"), writeResult("w1", { original: null }), edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")];
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} hidden onCount={onCount} />));
+  await flush();
+  expect(onCount).toHaveBeenLastCalledWith(2);
+  expect(el.querySelector("[data-testid=changes-panel]")).toBeNull();
+  const key = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+  await act(async () => void document.body.dispatchEvent(key));
+  expect(key.defaultPrevented).toBe(false);
+});
