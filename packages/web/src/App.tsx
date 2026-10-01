@@ -748,7 +748,7 @@ export function SessionPane({
               <div key={item.part.id} className="group flex flex-col gap-1" data-testid="user-message">
                 <PartView part={item.part} view={view} />
                 {/* Shown on hover or keyboard focus (OpenCode user bubble). */}
-                <MessageActions className="ml-auto opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+                <MessageActions className="ml-auto opacity-0 transition-opacity motion-reduce:transition-none group-focus-within:opacity-100 group-hover:opacity-100">
                   <CopyAction text={item.part.text} />
                   {/* No tooltip prop: its trigger renders a button around this button. */}
                   <MessageAction
