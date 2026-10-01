@@ -4,16 +4,33 @@ import { spawn, type IPty } from "node-pty";
 import type { TerminalInfo } from "@claude-ui/protocol";
 
 /** Scrollback replayed on attach, in UTF-16 units. */
-// ponytail: the cut can split an escape sequence, so a replay may start with a few garbled chars; cut at a line break if it shows.
 const BUFFER_CHARS = 256 * 1024;
+/** A connection with more unsent output than this pauses the shell (backpressure) until it is down to RESUME_BYTES. */
+export const PAUSE_BYTES = 1024 * 1024;
+const RESUME_BYTES = 128 * 1024;
+const DRAIN_POLL_MS = 50;
+
+/**
+ * The last `max` chars of `buf`, cut where no escape sequence or surrogate pair can be split: after the first line
+ * break of the kept part, else before its first ESC.
+ */
+export function trimScrollback(buf: string, max = BUFFER_CHARS) {
+  if (buf.length <= max) return buf;
+  const from = buf.length - max;
+  const nl = buf.indexOf("\n", from);
+  if (nl >= 0) return buf.slice(nl + 1);
+  const esc = buf.indexOf("\x1b", from);
+  return esc >= 0 ? buf.slice(esc) : buf.slice(from);
+}
 
 /** Shells outlive their connection, so a client loop could otherwise pile them up until the daemon stops. */
 export const MAX_TERMINALS = 32;
 /** Running terminals created by one connection. */
 export const MAX_TERMINALS_PER_CLIENT = 8;
 
-type Listener = { output: (data: string) => void; exit: (exitCode: number) => void };
-type Terminal = TerminalInfo & { cwd: string; owner: object; pty: IPty; buffer: string; listeners: Set<Listener> };
+/** `backlog`: bytes the listener's connection has not sent yet (ws bufferedAmount). */
+type Listener = { output: (data: string) => void; exit: (exitCode: number) => void; backlog?: () => number };
+type Terminal = TerminalInfo & { cwd: string; owner: object; pty: IPty; buffer: string; listeners: Set<Listener>; paused?: NodeJS.Timeout };
 
 /** The daemon's own settings (PORT, CLAUDE_UI_*) stay out of the shell: `npm start` there must not bind the daemon's port. The rest is the user's env, like a VS Code terminal. */
 const shellEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "PORT" && !k.startsWith("CLAUDE_UI_"))) as Record<string, string>;
@@ -35,11 +52,22 @@ export function createTerminals() {
       env: { ...shellEnv(), TERM: "xterm-256color", COLORTERM: "truecolor" } as Record<string, string>,
     });
     const t: Terminal = { id: randomUUID(), title: `Terminal ${n}`, cwd, owner, pty, buffer: "", listeners: new Set() };
+    const backlog = () => Math.max(0, ...[...t.listeners].map((l) => l.backlog?.() ?? 0));
     pty.onData((data) => {
-      t.buffer = (t.buffer + data).slice(-BUFFER_CHARS);
+      t.buffer = trimScrollback(t.buffer + data);
       t.listeners.forEach((l) => l.output(data));
+      // A slow connection: stop reading the shell's output (it blocks on a full PTY) until the socket drained.
+      if (t.paused || backlog() <= PAUSE_BYTES) return;
+      pty.pause();
+      t.paused = setInterval(() => {
+        if (backlog() > RESUME_BYTES) return;
+        clearInterval(t.paused);
+        t.paused = undefined;
+        pty.resume();
+      }, DRAIN_POLL_MS);
     });
     pty.onExit(({ exitCode }) => {
+      clearInterval(t.paused);
       terminals.delete(t.id);
       t.listeners.forEach((l) => l.exit(exitCode));
     });

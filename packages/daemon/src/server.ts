@@ -706,6 +706,7 @@ export function createDaemon(opts: {
           if (msg.type === "terminal.attach") {
             const { buffer, detach } = terminals.attach(t, {
               output: (data) => send(ws, { type: "terminal.output", terminalId: t.id, data }),
+              backlog: () => ws.bufferedAmount,
               exit: (exitCode) => (attached.delete(t.id), send(ws, { type: "terminal.exit", terminalId: t.id, exitCode })),
             });
             attached.get(t.id)?.();
