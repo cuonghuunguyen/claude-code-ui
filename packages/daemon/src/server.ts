@@ -467,6 +467,8 @@ export function createDaemon(opts: {
           } catch (err) {
             return fail("fs_error", String(err));
           }
+          // Other connected clients refresh their project list.
+          broadcast({ type: "sessions.changed" });
           return reply({ cwd });
         }
         case "project.remove":
@@ -476,6 +478,7 @@ export function createDaemon(opts: {
           } catch (err) {
             return fail("fs_error", String(err));
           }
+          broadcast({ type: "sessions.changed" });
           return reply({});
         case "session.rename":
         case "session.archive": {

@@ -781,7 +781,10 @@ describe("daemon", () => {
 
     const a = await start();
     try {
+      // Another connected client hears of the change and refreshes its list.
+      const other = await client((a.d.address() as AddressInfo).port);
       expect(await a.c.request({ type: "project.open", cwd: opened })).toMatchObject({ result: { cwd: opened } });
+      await other.waitFor((m) => m.type === "sessions.changed");
       expect(await a.c.request({ type: "project.open", cwd: "/etc" })).toMatchObject({ code: "cwd_not_allowed" });
       expect(await a.c.request({ type: "project.open", cwd: join(webRoot, "index.html") })).toMatchObject({ code: "cwd_not_allowed" });
       expect((await list(a.c)).projects).toEqual([opened, cwd]);
@@ -791,7 +794,9 @@ describe("daemon", () => {
     const b = await start();
     try {
       expect((await list(b.c)).projects).toEqual([opened, cwd]);
+      const other = await client((b.d.address() as AddressInfo).port);
       await b.c.request({ type: "project.remove", cwd });
+      await other.waitFor((m) => m.type === "sessions.changed");
       expect(await list(b.c)).toEqual({ projects: [opened], sessions: [] });
       expect(await b.c.request({ type: "project.remove", cwd: 7 })).toMatchObject({ code: "bad_cwd" });
       // Files stay.

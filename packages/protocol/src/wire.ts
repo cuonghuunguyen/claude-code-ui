@@ -120,7 +120,7 @@ export type ServerMessage =
   | { type: "reply"; reqId: string; result: unknown }
   /** A watched file changed on disk; `path` as given in `fs.watch`, `mtime` 0 when it was deleted. */
   | { type: "fs.changed"; path: string; mtime: number }
-  /** Sent to every connection after a rename, archive or delete: refetch `session.list`. `deleted`: drop that session. */
+  /** Sent to every connection after a rename, archive, delete, project open or project remove: refetch `session.list`. `deleted`: drop that session. */
   | { type: "sessions.changed"; deleted?: string }
   /** Plan usage, not a session event: on connect and on each change. `usage` null: no plan limits (API key, Bedrock, Vertex). */
   | { type: "plan_usage"; usage: PlanUsage | null }

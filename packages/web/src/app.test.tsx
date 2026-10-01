@@ -34,12 +34,13 @@ const replies: Record<string, unknown> = {
   "session.rewindPreview": { filesChanged: [], insertions: 0, deletions: 0, conversation: true },
 };
 let emit: (e: unknown) => void = () => {};
+const sent: { type: string }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
   connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
     emit = opts.onEvent;
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
-    return { request: async (m: { type: string }) => replies[m.type] ?? {}, onFsChanged: () => () => {}, close() {} };
+    return { request: async (m: { type: string }) => (sent.push(m), replies[m.type] ?? {}), onFsChanged: () => () => {}, close() {} };
   },
 }));
 const { App } = await import("./App.tsx");
@@ -130,4 +131,30 @@ it("a file found by the palette opens in the files panel", async () => {
   expect(document.querySelector('[data-testid="palette"]')).toBeNull();
   expect(sideTab()).toMatch(/files/i);
   replies["fs.search"] = { paths: [] };
+});
+
+it("New session in a project focuses the first prompt, also when the new-session tab is already open", async () => {
+  const pencil = () => el.querySelector<HTMLElement>('[data-testid="project-new-session"]')!;
+  const prompt = () => el.querySelector<HTMLElement>('[data-testid="new-session-tab"] textarea');
+  for (let i = 0; i < 2; i++) {
+    pencil().focus();
+    await act(async () => pencil().click());
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(document.activeElement).toBe(prompt());
+  }
+});
+
+it("Remove project asks first; Cancel keeps it, Remove sends project.remove", async () => {
+  const removeSent = () => sent.filter((m) => m.type === "project.remove");
+  const remove = () => act(async () => el.querySelector<HTMLElement>('[data-testid="project-remove"]')!.click());
+  sent.length = 0;
+  await remove();
+  const dialog = () => document.querySelector('[data-testid="remove-project-dialog"]');
+  expect(dialog()?.textContent).toContain("Remove project?");
+  expect(dialog()?.textContent).toContain("“demo” leaves the list. Its files and sessions stay on disk; open the folder again to bring it back.");
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-cancel"]')!.click());
+  expect(removeSent()).toEqual([]);
+  await remove();
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-confirm"]')!.click());
+  expect(removeSent()).toEqual([{ type: "project.remove", cwd: "/p/demo" }]);
 });
