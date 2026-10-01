@@ -1,0 +1,16 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - tablist "Open sessions"
+      - button "New session" [ref=e6]
+    - 'button "Theme: system (click to change)" [ref=e8]'
+  - generic [ref=e11]:
+    - complementary [ref=e12]:
+      - status [ref=e13]: connected
+      - generic "Push notification when a session needs input or finishes" [ref=e15]:
+        - checkbox "Notifications" [ref=e16]
+        - text: Notifications
+      - button "New session" [ref=e17]
+      - paragraph [ref=e18]: No sessions in the allowlisted roots.
+    - main [ref=e19]:
+      - generic [ref=e20]: Open or create a session to start.

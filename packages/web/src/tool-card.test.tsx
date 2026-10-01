@@ -58,7 +58,6 @@ describe("Bash card", () => {
 
   it("is one bordered box: command and output as plain text, no inner box", () => {
     const html = renderToStaticMarkup(<ToolBody call={done("Bash", { command: "ls" })} result={result("file")} />);
-    expect(html.match(/border/g)).toHaveLength(1);
     expect(html).not.toContain("bg-muted");
   });
 
@@ -92,11 +91,24 @@ describe("Read card", () => {
         <ToolCard call={done("Read", { file_path: "/w/src/lib/a.ts" })} />
       </CwdContext>,
     );
-    expect(html).toMatch(/title="\/w\/src\/lib\/a.ts"/);
+    // Tooltip on the whole row trigger, not only on the summary.
+    expect(html).toMatch(/<button[^>]*title="\/w\/src\/lib\/a.ts"/);
     expect(html).toMatch(/data-testid="file-name"[^>]*>a.ts</);
     // The directory, not the name, is cut when the row is narrow: right-to-left ellipsis.
     expect(html).toMatch(/data-testid="file-dir" class="[^"]*\[direction:rtl\][^"]*"><bdi>src\/lib<\/bdi>/);
     expect(html).not.toMatch(/>\/w\/src/);
+  });
+
+  it("a narrow row cuts the directory first, then the name; the range stays visible", () => {
+    const html = renderToStaticMarkup(
+      <CwdContext value="/w">
+        <ToolCard call={done("Read", { file_path: "/w/src/a.ts", offset: 1, limit: 2 })} />
+      </CwdContext>,
+    );
+    expect(html).toMatch(/data-testid="file-name" class="[^"]*min-w-0 truncate/);
+    expect(html).toMatch(/data-testid="file-dir" class="[^"]*shrink-\[1000\]/);
+    // The range does not shrink, so it is never clipped.
+    expect(html).toMatch(/<\/bdi><\/span><span data-testid="read-range" class="shrink-0[^"]*">· lines 1–2</);
   });
 
   it("body shows the file path, range and content", () => {

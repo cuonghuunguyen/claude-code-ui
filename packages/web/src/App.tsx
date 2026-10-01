@@ -35,6 +35,7 @@ import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, TodoList, ToolCard } from "./tool-card.tsx";
+import { relPath } from "./tools.ts";
 import { FilesPanel } from "./files-panel.tsx";
 import { NEW_TAB, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs, staleTabs } from "./tabs.ts";
 import { IconButton, ProjectAvatar, TabsBar } from "./tabs-bar.tsx";
@@ -760,7 +761,8 @@ export function SessionPane({
             item.kind === "context" ? (
               <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
             ) : item.part.type === "user_text" ? (
-              <div key={item.part.id} className="group flex flex-col gap-1" data-testid="user-message">
+              // 12px timeline gap + 12px = OpenCode 24px turn gap.
+              <div key={item.part.id} className="group flex flex-col gap-1 not-first:mt-3" data-testid="user-message">
                 <PartView part={item.part} view={view} />
                 {/* Shown on hover or keyboard focus (OpenCode user bubble). */}
                 <MessageActions className="ml-auto opacity-0 transition-opacity motion-reduce:transition-none group-focus-within:opacity-100 group-hover:opacity-100">
@@ -958,7 +960,6 @@ function RewindPanel(props: {
     }
   };
   const options = preview ? rewindOptions(preview) : [];
-  const rel = (f: string) => (f.startsWith(props.cwd + "/") ? f.slice(props.cwd.length + 1) : f);
 
   return (
     <div className="ml-auto flex w-full max-w-md flex-col gap-2 rounded-lg border p-3 text-sm" data-testid="rewind-panel">
@@ -971,7 +972,7 @@ function RewindPanel(props: {
           <ul className="font-mono text-xs" data-testid="rewind-files">
             {preview.filesChanged.map((f) => (
               <li key={f} className="truncate" title={f}>
-                {rel(f)}
+                {relPath(f, props.cwd)}
               </li>
             ))}
           </ul>
@@ -1047,7 +1048,8 @@ function AssistantText({ text, streaming }: { text: string; streaming: boolean }
   const shown = useSmoothText(text, streaming);
   const revealing = streaming || shown.length < text.length;
   return (
-    <Message from="assistant" data-testid="assistant-text">
+    // OpenCode text part margin-top 24px, on top of the 12px timeline gap.
+    <Message from="assistant" className="mt-6" data-testid="assistant-text">
       <MessageContent>
         <MessageResponse mode={revealing ? "streaming" : "static"} isAnimating={revealing}>
           {shown}

@@ -66,6 +66,7 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
         // Next to the tool name, which is never truncated like the summary.
         title={call.editedByUser ? `${call.tool} · edited by you` : undefined}
         summary={path ? <FileSummary path={path} range={range} /> : toolSummary(call.input)}
+        tooltip={path || undefined}
         meta={
           stats && (
             <span data-testid="diff-stats" className="font-mono text-xs">
@@ -87,20 +88,24 @@ const field = (input: unknown, key: string) => {
   return typeof v === "string" ? v : "";
 };
 
-/** File name, then its directory relative to cwd; a narrow row cuts the directory from the left, the name last. Full path on hover. */
+/** File name, then its directory relative to cwd; a narrow row cuts the directory from the left first, then the name; the range stays. */
 function FileSummary({ path, range }: { path: string; range: string }) {
   const { name, dir } = filePath(path, use(CwdContext));
   return (
-    <span className="flex min-w-0 items-center gap-1.5 overflow-hidden text-muted-foreground" title={path}>
-      <span data-testid="file-name" className="max-w-full shrink-0 truncate">
+    <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+      <span data-testid="file-name" className="min-w-0 truncate">
         {name}
       </span>
       {dir && (
-        <span data-testid="file-dir" className="min-w-0 truncate [direction:rtl]">
+        <span data-testid="file-dir" className="min-w-0 shrink-[1000] truncate [direction:rtl]">
           <bdi>{dir}</bdi>
         </span>
       )}
-      {range && <span className="shrink-0">· {range}</span>}
+      {range && (
+        <span data-testid="read-range" className="shrink-0">
+          · {range}
+        </span>
+      )}
     </span>
   );
 }

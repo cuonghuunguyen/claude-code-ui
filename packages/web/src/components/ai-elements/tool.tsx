@@ -33,6 +33,8 @@ export type ToolHeaderProps = {
   summary?: ReactNode;
   /** Shown before the status, e.g. diff stats. */
   meta?: ReactNode;
+  /** Native tooltip of the whole row, e.g. the full file path. */
+  tooltip?: string;
   className?: string;
 } & (
   | { type: ToolUIPart["type"]; state: ToolUIPart["state"]; toolName?: never }
@@ -90,6 +92,7 @@ export const ToolHeader = ({
   title,
   summary,
   meta,
+  tooltip,
   type,
   state,
   toolName,
@@ -101,6 +104,7 @@ export const ToolHeader = ({
   return (
     <CollapsibleTrigger
       className={cn(toolRowClass, className)}
+      title={tooltip}
       {...props}
     >
       <span className="shrink-0 font-medium">{title ?? derivedName}</span>
