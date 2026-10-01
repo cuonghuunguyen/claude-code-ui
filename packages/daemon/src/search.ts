@@ -59,14 +59,33 @@ function gitFiles(dir: string): string[] {
 
 const depth = (p: string) => p.replace(/\/$/, "").split("/").length;
 
+/**
+ * Prepared fuzzysort targets of the last searched folders, current paths only. Passing string targets to fuzzysort.go would fill its global
+ * cache with every path ever searched for the daemon's lifetime (~37 MB per 20 000 paths); preparing is what makes a repeat search fast.
+ */
+const PREPARED_DIRS = 2;
+const prepared = new Map<string, Map<string, Fuzzysort.Prepared>>();
+
+/** Total prepared targets kept (tests). */
+export const preparedCount = () => [...prepared.values()].reduce((n, m) => n + m.size, 0);
+
+function targets(dir: string, paths: string[]) {
+  const old = prepared.get(dir);
+  const next = new Map(paths.map((p) => [p, old?.get(p) ?? fuzzysort.prepare(p)]));
+  prepared.delete(dir);
+  prepared.set(dir, next);
+  for (const d of prepared.keys()) if (prepared.size > PREPARED_DIRS) prepared.delete(d);
+  return [...next.values()];
+}
+
 /** fuzzysort, as OpenCode's file search: case-insensitive, contiguous and word-start matches first. An empty query lists shallow and short paths first. */
-export function fuzzyRank(paths: string[], query: string): string[] {
-  if (query) return fuzzysort.go(query, paths).map((r) => r.target);
+export function fuzzyRank(paths: string[], query: string, dir?: string): string[] {
+  if (query) return fuzzysort.go(query, dir ? targets(dir, paths) : paths.map((p) => fuzzysort.prepare(p))).map((r) => r.target);
   return [...paths].sort((a, b) => depth(a) - depth(b) || a.length - b.length || a.localeCompare(b));
 }
 
 /** Respects .gitignore inside a git work tree; a folder git lists nothing for (not a repo, or ignored as a whole) is walked. */
 export function searchFiles(dir: string, query: string, limit = 50) {
   const files = gitFiles(dir);
-  return fuzzyRank(files.length ? files : walk(dir), query).slice(0, limit);
+  return fuzzyRank(files.length ? files : walk(dir), query, dir).slice(0, limit);
 }

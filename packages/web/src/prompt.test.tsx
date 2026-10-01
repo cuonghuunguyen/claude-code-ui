@@ -366,3 +366,14 @@ it("the rewind panel leaves stick-to-bottom when it opens, so the timeline growi
   expect($("rewind-panel")).not.toBeNull();
   expect(scrollButton()).not.toBeNull();
 });
+
+it("the @-mention picker searches again once the daemon reconnects", async () => {
+  let online = false;
+  const onSearch = vi.fn(async () => (online ? ["docs/spec.md"] : Promise.reject(new Error("the daemon is reconnecting"))));
+  const { el, box, rerender } = await render({ connected: false, onSearch });
+  await type(box, "@sp");
+  expect(el.querySelector('[data-testid="mention-picker"]')).toBeNull();
+  online = true;
+  await rerender({ connected: true });
+  expect(el.querySelector('[data-testid="mention-picker"]')?.textContent).toContain("spec.md");
+});

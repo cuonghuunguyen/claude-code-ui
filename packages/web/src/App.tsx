@@ -747,6 +747,7 @@ export function App() {
                   onSearch={search}
                   onStart={createSession}
                   inputRef={newPrompt}
+                  connected={status === "connected"}
                 />
               )}
               {activeId !== NEW_TAB && !shown && (
@@ -914,6 +915,7 @@ export function NewSession({
   onSearch,
   onStart,
   inputRef,
+  connected = true,
 }: {
   projects: string[];
   cwd?: string;
@@ -928,6 +930,7 @@ export function NewSession({
   /** Rejects when the session was not created; the prompt box keeps the draft. */
   onStart: (cwd: string, opts: StartOptions, text: string, images: string[]) => Promise<void>;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
+  connected?: boolean;
 }) {
   const { model, mode, effort } = draft;
   const OPEN = "\0open";
@@ -949,6 +952,7 @@ export function NewSession({
           onUpload={onUpload}
           onSearch={cwd ? onSearch(cwd) : async () => []}
           onPrompt={(text, images) => (cwd ? onStart(cwd, { model, mode, effort }, text, images) : Promise.reject(new Error("no project")))}
+          state={connected ? "idle" : "disconnected"}
           label="First prompt"
           placeholder={cwd ? `Ask Claude in ${projectName(cwd)}…` : "Open a project to start"}
           autoFocus
@@ -1271,7 +1275,8 @@ function PromptBox({
       .then((p) => current && setFound({ query: mention.query, paths: p }))
       .catch(() => current && setFound({ query: mention.query, paths: [] }));
     return () => void (current = false);
-  }, [mention?.query]);
+    // Again on reconnect: a search while offline rejects at once.
+  }, [mention?.query, state === "disconnected"]);
   // Keeps the caret after an inserted mention (a controlled textarea moves it to the end).
   useLayoutEffect(() => void input.current?.setSelectionRange(caret, caret), [text]);
   const edit = (t: string, c = t.length) => {

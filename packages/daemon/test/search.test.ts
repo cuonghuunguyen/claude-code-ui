@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { fuzzyRank, searchFiles } from "../src/search.ts";
+import { fuzzyRank, preparedCount, searchFiles } from "../src/search.ts";
 
 describe("fuzzyRank", () => {
   const paths = ["src/auth/AuthService.ts", "docs/author.md", "src/app.ts", "src/a/u/t/h.ts", "README.md"];
@@ -73,5 +73,21 @@ describe("searchFiles in a git repository", () => {
 
   it("searched from a subfolder, paths stay relative to it", () => {
     expect(searchFiles(join(dir, "src"), "main")).toEqual(["main.ts"]);
+  });
+});
+
+describe("prepared search targets", () => {
+  it("are kept for the last two searched folders and only for their current paths (bounded, no global fuzzysort cache)", () => {
+    const dirs = [0, 1, 2].map(() => mkdtempSync(join(tmpdir(), "search-cache-")));
+    for (const d of dirs) writeFileSync(join(d, "a.ts"), "");
+    writeFileSync(join(dirs[0]!, "gone.ts"), "");
+    searchFiles(dirs[0]!, "a");
+    searchFiles(dirs[1]!, "a");
+    expect(preparedCount()).toBe(3);
+    searchFiles(dirs[2]!, "a");
+    expect(preparedCount()).toBe(2);
+    rmSync(join(dirs[0]!, "gone.ts"));
+    searchFiles(dirs[0]!, "a");
+    expect(preparedCount()).toBe(2);
   });
 });

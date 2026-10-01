@@ -116,3 +116,14 @@ it("switching to another tab and back keeps the new-session draft and the chosen
   expect(el.querySelector("textarea")!.value).toBe("draft text");
   expect(el.querySelector('[data-testid="mode-select"]')?.textContent).toContain("Edit automatically");
 });
+
+it("the @-mention picker of the first prompt searches again once the daemon reconnects", async () => {
+  let online = false;
+  const onSearch = () => async () => (online ? ["docs/spec.md"] : Promise.reject(new Error("the daemon is reconnecting")));
+  const { el, box, rerender } = await render({ connected: false, onSearch });
+  await type(box, "@sp");
+  expect(el.querySelector('[data-testid="mention-picker"]')).toBeNull();
+  online = true;
+  await rerender({ connected: true });
+  expect(el.querySelector('[data-testid="mention-picker"]')?.textContent).toContain("spec.md");
+});
