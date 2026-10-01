@@ -709,7 +709,7 @@ describe("Session context usage", () => {
     release();
   });
 
-  it("a restored session gets its usage before the first prompt from a closed throwaway query on its model", async () => {
+  it("a restored session gets its usage before the first prompt from a closed throwaway query on its model that does not write the transcript", async () => {
     const id = randomUUID();
     const closedBefore = closed;
     const s = Session.restore(id, "/tmp", history, { model: "haiku", query: fakeQuery as never });
@@ -717,7 +717,7 @@ describe("Session context usage", () => {
     s.subscribe(0, (e) => events.push(e));
     await until(events, (e) => e.part.type === "context_usage");
     expect(lastPart(events, "context_usage")).toEqual(usagePart);
-    expect(usageCalls.at(-1)!.options).toMatchObject({ resume: id, cwd: "/tmp", model: "haiku" });
+    expect(usageCalls.at(-1)!.options).toMatchObject({ resume: id, cwd: "/tmp", model: "haiku", persistSession: false });
     expect(usageCalls.at(-1)!.options).not.toHaveProperty("canUseTool");
     await vi.waitFor(() => expect(closed).toBe(closedBefore + 1));
   });

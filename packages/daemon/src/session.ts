@@ -414,7 +414,8 @@ export class Session {
 
   /**
    * Logs a context_usage part from `getContextUsage()`. A restored session not yet resumed asks a throwaway query resumed
-   * on its transcript (no prompt: the transcript stays unchanged) and closes it. "summary": no token-count requests.
+   * on its transcript and closes it; persistSession: false, else the CLI appends a cost-state line on close and the bumped mtime
+   * moves the session to the top of the list. "summary": no token-count requests.
    * Throwaway queries run one at a time daemon-wide (a reload subscribes every restored tab at once, FIX-LEAK); a queued one
    * is dropped when the session got a real query or a newer request meanwhile.
    */
@@ -425,7 +426,7 @@ export class Session {
       if (this.query || request !== this.usageRequest) return;
       const q = (this.opts.query ?? sdkQuery)({
         prompt: new InputQueue(),
-        options: { resume: this.id, cwd: this.cwd, model: this.model === "default" ? undefined : this.model, settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env) },
+        options: { resume: this.id, persistSession: false, cwd: this.cwd, model: this.model === "default" ? undefined : this.model, settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env) },
       });
       try {
         await this.readUsage(q, request);

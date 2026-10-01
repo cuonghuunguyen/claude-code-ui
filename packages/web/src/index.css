@@ -74,6 +74,8 @@
     /* Context ring (OpenCode ProgressCircle v2): track bg-layer-04, progress icon-base. */
     --ring-track: #dbdbdb;
     --ring-progress: #3a3a3a;
+    /* Context breakdown categories: OpenCode syntax tokens (v2 primitive, keyword, type; v1 string, primitive, info), 3:1 on popover and bar track. */
+    --context-1: #034cff; --context-2: #a753ae; --context-3: #006656; --context-4: #fb4804; --context-5: #8a6f00; --context-6: #0092a8;
     --secondary: #f2f2f2;
     --secondary-foreground: #161616;
     --accent: #0000000a;
@@ -115,6 +117,7 @@
     --faint: #808080;
     --ring-track: #5c5c5c;
     --ring-progress: #dbdbdb;
+    --context-1: #8cb0ff; --context-2: #edb2f1; --context-3: #00ceb9; --context-4: #fab283; --context-5: #fcd53a; --context-6: #35c02d;
     --secondary: #2e2e2e;
     --secondary-foreground: #fafafa;
     --accent: #ffffff0f;

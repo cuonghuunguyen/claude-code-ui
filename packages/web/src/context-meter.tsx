@@ -6,7 +6,7 @@ const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFracti
 const full = new Intl.NumberFormat("en");
 const share = (tokens: number, max: number) => `${((tokens / max) * 100).toFixed(1)}%`;
 
-const COLORS = ["green", "orange", "cyan", "purple", "yellow", "pink", "blue", "red"].map((c) => `var(--avatar-${c})`);
+const COLORS = [1, 2, 3, 4, 5, 6].map((i) => `var(--context-${i})`);
 
 /** OpenCode ProgressCircle v2: 14px, stroke 1.5, from 12 o'clock. */
 function Ring({ percent }: { percent: number }) {
