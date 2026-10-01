@@ -1,6 +1,7 @@
 // Permission panel (replaces the prompt box) and its timeline marker (docs/spec.md "Permission bridge").
 import { useState, type FormEvent } from "react";
 import type { PermissionUpdate } from "@claude-ui/protocol";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import type { PermissionRequest } from "./store.ts";
 import { InputDiff } from "./tool-card.tsx";
@@ -47,18 +48,29 @@ const inputText = (input: unknown) => {
   return typeof command === "string" ? command : JSON.stringify(input, null, 2);
 };
 
+/** ExitPlanMode's plan (markdown), shown with Claude Code's plan approval options. */
+const planOf = (part: PermissionRequest) => {
+  const plan = part.tool === "ExitPlanMode" ? (part.input as { plan?: unknown } | null)?.plan : undefined;
+  return typeof plan === "string" ? plan : undefined;
+};
+
 export function PermissionPanel({ part, onRespond }: { part: PermissionRequest; onRespond: (a: PermissionAnswer) => void }) {
   const [feedback, setFeedback] = useState("");
   const [draft, setDraft] = useState(() => proposed(part));
   const updatedInput = draft === undefined ? undefined : editedInput(part, draft);
+  const plan = planOf(part);
   const deny = (e: FormEvent) => {
     e.preventDefault();
     onRespond({ decision: "deny", message: feedback.trim() || undefined });
   };
   return (
     <section className="flex flex-col gap-2 rounded-lg border border-warning/50 p-3 text-sm" data-testid="permission-panel" aria-label="Permission request">
-      <p className="font-medium">{part.title ?? `Claude wants to use ${part.tool}`}</p>
-      {draft === undefined ? (
+      <p className="font-medium">{plan !== undefined ? "Ready to code? Claude has written up a plan" : (part.title ?? `Claude wants to use ${part.tool}`)}</p>
+      {plan !== undefined ? (
+        <div className="max-h-80 overflow-auto rounded bg-muted p-3" data-testid="plan">
+          <MessageResponse>{plan}</MessageResponse>
+        </div>
+      ) : draft === undefined ? (
         <pre className="max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-xs">{inputText(part.input)}</pre>
       ) : (
         <>
@@ -75,21 +87,25 @@ export function PermissionPanel({ part, onRespond }: { part: PermissionRequest; 
         </>
       )}
       <Button className="justify-start" variant="outline" onClick={() => onRespond({ decision: "allow", updatedInput })}>
-        Yes
+        {plan !== undefined ? "Yes, manually approve edits" : "Yes"}
       </Button>
       {/* Like Claude Code: one option that applies every SDK suggestion (e.g. the Bash rule plus its directory). */}
       {part.suggestions.length > 0 && (
         <Button className="justify-start" variant="outline" onClick={() => onRespond({ decision: "allow_always", updatedInput })}>
-          <span className="truncate">
-            Yes, and don&apos;t ask again for <code className="font-mono">{part.suggestions.map(ruleLabel).join(", ")}</code>
-          </span>
+          {plan !== undefined ? (
+            "Yes, and auto-accept edits"
+          ) : (
+            <span className="truncate">
+              Yes, and don&apos;t ask again for <code className="font-mono">{part.suggestions.map(ruleLabel).join(", ")}</code>
+            </span>
+          )}
         </Button>
       )}
       <form onSubmit={deny} className="flex gap-2">
         <input
           className="min-w-0 flex-1 rounded-md border bg-transparent px-2 py-1.5"
-          placeholder="No, and tell Claude what to do differently"
-          aria-label="No, and tell Claude what to do differently"
+          placeholder={plan !== undefined ? "No, keep planning: tell Claude what to change" : "No, and tell Claude what to do differently"}
+          aria-label={plan !== undefined ? "No, keep planning: tell Claude what to change" : "No, and tell Claude what to do differently"}
           value={feedback}
           onChange={(e) => setFeedback(e.target.value)}
         />

@@ -17,7 +17,6 @@ A browser UI for running Claude coding agents on a machine you control. A local 
 
 **Non-goals for v1**
 
-- Plan mode toggle.
 - Multi-user or team hosting.
 - Replacing the agent loop; the SDK owns tools, context and model calls.
 
@@ -67,6 +66,9 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | client → daemon | `session.prompt {sessionId, text, images?}` | Send a user message; while a turn runs it steers the turn |
 | client → daemon | `session.interrupt {sessionId}` | Stop the running turn |
 | client → daemon | `session.setModel {sessionId, model}` | Switch model (`setModel()`) |
+| client → daemon | `session.setPermissionMode {sessionId, mode}` | `default`, `acceptEdits`, `plan`, `bypassPermissions` (`setPermissionMode()`) |
+| client → daemon | `session.setEffort {sessionId, effort}` | Thinking effort or `default` (`applyFlagSettings({effortLevel})`) |
+| client → daemon | `fs.upload {name, data}` | Attach a non-image file: stored in a temp folder, reply `{path}` for an `@path` mention |
 | client → daemon | `session.rewind {sessionId, userMessageId, mode}` | `mode`: `code`, `conversation`, `both` |
 | client → daemon | `session.rewindPreview {sessionId, userMessageId}` | `rewindFiles` dry run: `filesChanged[]`, `insertions`, `deletions`, `conversation` |
 | client → daemon | `permission.respond {requestId, decision, ruleIndex?, updatedInput?, message?}` | Answer a permission request |
@@ -106,6 +108,8 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 - A restored session has no query before its first prompt, so its picker is empty until then.
 - Invoked by sending `/name args` as prompt text.
 - Models from `supportedModels()`; switch with `setModel()` mid-session.
+- Permission mode and effort: start options of the query; while it runs `setPermissionMode()` / `applyFlagSettings({effortLevel})`, applied from the next turn. The CLI changes the mode itself too (plan approved, "all edits this session"); `system/init` and `system/status` carry it, and the daemon logs every change as a `session_permission_mode` part. Effort changes log `session_effort`. Both reset to `default` after a daemon restart.
+- `ExitPlanMode` arrives through `canUseTool` without suggestions; the daemon adds `setMode acceptEdits` so the panel offers Claude Code's "Yes, and auto-accept edits" next to "Yes, manually approve edits" and "No, keep planning".
 
 ### Checkpoints and rewind (same modes as Claude Code `/rewind`)
 
@@ -169,7 +173,7 @@ React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 
 - Titlebar tabs: each open session is a tab (project avatar, title, close; running / needs-input / unread indicator), plus one "New session" tab (directory picker and model choice) opened by `+`. Closing a tab does not stop the session. Middle click closes, drag reorders, overflow scrolls; open tabs and their order persist per browser. Each tab keeps its scroll position, draft prompt and side panel pane. Narrow screens: one switcher instead of the strip.
 - Sidebar: session list grouped by working directory, with state badge and unread marker. Clicking a session opens or focuses its tab; "New session" opens the new-session tab.
-- Session view: timeline, prompt box at the bottom, header with project avatar, name and cwd, model switcher, state, stop button.
+- Session view: timeline, prompt box at the bottom, header with project avatar, name and cwd, state, stop button. The model chooser is in the prompt box toolbar.
 - Side panel (resizable): file tree + editor tabs, and a changes/diff tab.
 - Narrow screens: sidebar becomes a drawer; a tab switch replaces the side panel ("session" / "changes" / "files").
 
@@ -191,6 +195,7 @@ React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 - `@` opens file autocomplete (`fs.search`); the SDK expands `@path`.
 - Image paste and drop.
 - Selection from the editor can be sent as context.
+- Toolbar inside the box (OpenCode): attach (`+`, native file picker), permission mode, model, effort (only for a model with `supportsEffort`), send / stop. Shift+Tab cycles the permission mode like Claude Code.
 
 ### Editor
 
@@ -231,7 +236,7 @@ The daemon can run arbitrary shell commands; treat it as a remote shell.
 - Token auth on every WebSocket connection; pairing by a printed URL or QR code containing the token. A browser cannot read the status of a rejected upgrade, so after a failed dial the web app asks `GET /auth` (`Authorization: Bearer <token>`, 204 or 401); on 401 it stops redialing and tells the user to open the pairing URL.
 - Origin check on WebSocket upgrade.
 - Working directory allowlist for sessions, file tree, editor writes and session list.
-- Default permission mode asks; bypass modes off unless enabled in daemon config.
+- Default permission mode asks; bypass modes off unless enabled in daemon config (`CLAUDE_UI_ALLOW_BYPASS=1`).
 - Credentials: the owner's subscription login stays in the daemon's environment, never sent to the browser.
 - No secrets in logs.
 
@@ -245,7 +250,7 @@ Work is split into GitHub issues along a dependency graph, so independent pieces
 
 **v1 is done when**: a session keeps running with the tab closed, the phone reconnects and shows every message once, a permission request can be answered from either of two open tabs, and the phone gets a push when a session needs input.
 
-**Deferred**: plan mode toggle; multi-user.
+**Deferred**: multi-user.
 
 ### Open questions
 

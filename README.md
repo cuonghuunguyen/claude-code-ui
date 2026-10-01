@@ -20,6 +20,7 @@ Requires Node 22+ and a `claude login` session (no API key needed, ADR 0002).
 npm install
 npm start          # builds the web app, starts the daemon on http://127.0.0.1:4280
 PORT=5000 npm start
+CLAUDE_UI_ALLOW_BYPASS=1 npm start   # offer the "Bypass permissions" mode (off by default)
 ```
 
 Dev mode with hot reload: `npm run dev` (daemon on 4280, Vite on http://127.0.0.1:5173 proxying `/ws`).

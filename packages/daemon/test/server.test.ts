@@ -12,7 +12,7 @@ import { calls, fakeQuery, history, interruptQuery, models, permissionQuery, que
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
-const http = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token });
+const http = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, uploadDir: join(mkdtempSync(join(tmpdir(), "up-")), "claude-ui-uploads") });
 await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
 const { address, port } = http.address() as AddressInfo;
 afterAll(() => void http.close());
@@ -217,6 +217,27 @@ describe("daemon", () => {
     expect(setModelCalls.at(-1)).toBe("default");
   });
 
+  it("switches permission mode and effort; rejects unknown values and bypass when not enabled", async () => {
+    const c = await client();
+    const created = await c.request({ type: "session.create", cwd: webRoot });
+    const id = (created as { result: { session: { id: string } } }).result.session.id;
+    expect(await c.request({ type: "session.setPermissionMode", sessionId: id, mode: "plan" })).toMatchObject({ result: { session: { permissionMode: "plan" } } });
+    expect(await c.request({ type: "session.setEffort", sessionId: id, effort: "max" })).toMatchObject({ result: { session: { effort: "max" } } });
+    expect(await c.request({ type: "session.setPermissionMode", sessionId: id, mode: "yolo" })).toMatchObject({ code: "bad_mode" });
+    expect(await c.request({ type: "session.setEffort", sessionId: id, effort: "huge" })).toMatchObject({ code: "bad_effort" });
+    expect(await c.request({ type: "session.setPermissionMode", sessionId: id, mode: "bypassPermissions" })).toMatchObject({ code: "set_failed" });
+    const sub = await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+    expect(sub).toMatchObject({ result: { session: { permissionMode: "plan", effort: "max", permissionModes: ["default", "acceptEdits", "plan"] } } });
+  });
+
+  it("stores an uploaded file under its own name in a fresh folder and replies the path", async () => {
+    const c = await client();
+    const r = (await c.request({ type: "fs.upload", name: "../notes.txt", data: Buffer.from("hi").toString("base64") })) as { result: { path: string } };
+    expect(r.result.path).toMatch(/claude-ui-uploads\/u-[^/]+\/notes\.txt$/);
+    expect(readFileSync(r.result.path, "utf8")).toBe("hi");
+    expect(await c.request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
+  });
+
   it("rejects an empty or non-string model", async () => {
     const c = await client();
     expect(await c.request({ type: "session.create", cwd: webRoot, model: 5 })).toMatchObject({ code: "bad_model" });
@@ -398,7 +419,7 @@ describe("daemon", () => {
       const c = await client((d.address() as AddressInfo).port);
       const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
       const list = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string }[] } };
-      expect(list.result.sessions).toEqual([
+      expect(list.result.sessions).toMatchObject([
         { id: created.result.session.id, cwd: webRoot, state: "idle", model: "default", title: "New session", lastActivity: expect.any(Number) },
         { id: inside, cwd, state: "closed", model: "default", title: "fix the bug", lastActivity: 1000 },
       ]);

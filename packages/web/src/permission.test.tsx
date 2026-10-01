@@ -27,6 +27,17 @@ describe("ruleLabel", () => {
 });
 
 describe("PermissionPanel", () => {
+  it("ExitPlanMode shows the plan as markdown with Claude Code's plan approval options", () => {
+    const accept: PermissionUpdate = { type: "setMode", mode: "acceptEdits", destination: "session" };
+    const html = renderToStaticMarkup(<PermissionPanel part={request({ tool: "ExitPlanMode", input: { plan: "## Plan\n\n1. edit **a.txt**" }, suggestions: [accept] })} onRespond={() => {}} />);
+    expect(html).toContain("Claude has written up a plan");
+    expect(html).toMatch(/<h2[^>]*>Plan<\/h2>/);
+    expect(html).toContain("Yes, and auto-accept edits");
+    expect(html).toContain("Yes, manually approve edits");
+    expect(html).toContain("No, keep planning");
+    expect(html).not.toContain("&quot;plan&quot;");
+  });
+
   it("offers Yes / Yes, and don't ask again for <rule> / No with feedback", () => {
     const dir: PermissionUpdate = { type: "addDirectories", directories: ["/work"], destination: "session" };
     const html = renderToStaticMarkup(<PermissionPanel part={request({ title: "Claude wants to run npm test", suggestions: [bash, dir] })} onRespond={() => {}} />);

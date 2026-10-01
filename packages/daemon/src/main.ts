@@ -13,7 +13,10 @@ const token = loadToken();
 // Allowlisted roots, separated like PATH. Default: the home directory.
 const roots = (process.env.CLAUDE_UI_ROOTS ?? homedir()).split(delimiter).filter(Boolean);
 
-createDaemon({ webRoot, token, roots, push: createPush() }).listen(port, HOST, async () => {
+// docs/spec.md "Security": bypass permissions mode stays off unless enabled here.
+const allowBypass = process.env.CLAUDE_UI_ALLOW_BYPASS === "1";
+
+createDaemon({ webRoot, token, roots, push: createPush(), allowBypass }).listen(port, HOST, async () => {
   const url = pairingUrl(HOST, port, token);
   // The pairing URL is the one place the token is printed; keep it out of every other log line.
   console.log(`claude-ui daemon on http://${HOST}:${port}, roots: ${roots.join(delimiter)}\nPair a browser: open ${url}\n${await QRCode.toString(url, { type: "terminal", small: true })}`);

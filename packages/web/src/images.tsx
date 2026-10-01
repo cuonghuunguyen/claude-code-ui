@@ -4,19 +4,17 @@ import { XIcon } from "lucide-react";
 
 /** Data URLs of the files the API accepts as images (png, jpeg, gif, webp); other files are skipped. */
 export async function readImages(files: Iterable<File>): Promise<string[]> {
-  const urls = await Promise.all(
-    [...files].filter((f) => f.type.startsWith("image/")).map(
-      (f) =>
-        new Promise<string>((resolve, reject) => {
-          const r = new FileReader();
-          r.onload = () => resolve(r.result as string);
-          r.onerror = () => reject(r.error);
-          r.readAsDataURL(f);
-        }),
-    ),
-  );
+  const urls = await Promise.all([...files].filter((f) => f.type.startsWith("image/")).map(readDataUrl));
   return urls.filter((u) => imageBlock(u));
 }
+
+export const readDataUrl = (f: File) =>
+  new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(f);
+  });
 
 export function ImageStrip({ images, onRemove }: { images: string[]; onRemove?: (index: number) => void }) {
   if (!images.length) return null;

@@ -1,10 +1,11 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
-import { createReadStream, existsSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { tmpdir } from "node:os";
 import { createServer, type IncomingMessage } from "node:http";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { imageBlock, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
+import { EFFORTS, imageBlock, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
 import { getSessionInfo, getSessionMessages, listSessions, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { createNotifier, type Push } from "./push.ts";
@@ -14,6 +15,8 @@ const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
 /** Larger files are not opened in the editor. */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
+/** Attach button uploads (fs.upload). */
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 // ponytail: stat polling, robust to atomic rename-writes and WSL; fs.watch per directory if many tabs make polling costly.
 const WATCH_INTERVAL_MS = 1000;
 
@@ -47,9 +50,19 @@ function real(path: string) {
 
 /**
  * `roots`: allowlisted directories for session cwds, the session list and the directory picker (docs/spec.md "Security").
- * `push`: Web Push sender; without it push.* requests fail.
+ * `push`: Web Push sender; without it push.* requests fail. `allowBypass`: sessions may switch to bypassPermissions.
+ * `uploadDir`: parent of the fs.upload folders (default: the OS temp dir).
  */
-export function createDaemon(opts: { webRoot: string; token: string; roots: string[]; query?: typeof sdkQuery; history?: History; push?: Push }) {
+export function createDaemon(opts: {
+  webRoot: string;
+  token: string;
+  roots: string[];
+  query?: typeof sdkQuery;
+  history?: History;
+  push?: Push;
+  allowBypass?: boolean;
+  uploadDir?: string;
+}) {
   const logEpoch = randomUUID();
   const sessions = new Map<string, Session>();
   const restoring = new Map<string, Promise<Session | undefined>>();
@@ -95,9 +108,8 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
     const items = new Map<string, SessionListItem>();
     for (const t of await history.listSessions()) {
       if (!t.cwd || !allowed(t.cwd)) continue;
-      const live = sessions.get(t.sessionId)?.info();
-      const state = live?.state ?? "closed";
-      items.set(t.sessionId, { id: t.sessionId, cwd: t.cwd, state, model: live?.model ?? "default", title: t.summary, lastActivity: t.lastModified });
+      const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title: t.summary, lastActivity: t.lastModified });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
@@ -120,7 +132,7 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
         // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
         const used = transcriptModel(messages);
         const model = used && ((await modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
-        return track(Session.restore(id, info.cwd, messages, { model, query: opts.query }));
+        return track(Session.restore(id, info.cwd, messages, { model, allowBypass: opts.allowBypass, query: opts.query }));
       })()
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
         .finally(() => restoring.delete(id));
@@ -201,7 +213,7 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
           if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          const s = track(new Session(cwd, { model: msg.model, query: opts.query }));
+          const s = track(new Session(cwd, { model: msg.model, allowBypass: opts.allowBypass, query: opts.query }));
           return reply({ session: s.info() });
         }
         case "session.subscribe": {
@@ -236,6 +248,36 @@ export function createDaemon(opts: { webRoot: string; token: string; roots: stri
             return fail("set_model_failed", (e as Error).message);
           }
           return reply({ session: s.info() });
+        }
+        case "session.setPermissionMode":
+        case "session.setEffort": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (msg.type === "session.setPermissionMode" && !PERMISSION_MODES.includes(msg.mode)) return fail("bad_mode", `unknown permission mode ${msg.mode}`);
+          if (msg.type === "session.setEffort" && !EFFORTS.includes(msg.effort)) return fail("bad_effort", `unknown effort ${msg.effort}`);
+          try {
+            await (msg.type === "session.setPermissionMode" ? s.setPermissionMode(msg.mode) : s.setEffort(msg.effort));
+          } catch (e) {
+            return fail("set_failed", (e as Error).message);
+          }
+          return reply({ session: s.info() });
+        }
+        case "fs.upload": {
+          if (typeof msg.data !== "string" || typeof msg.name !== "string") return fail("bad_upload", "name and data (base64) required");
+          // basename: the name must not climb out of the upload folder.
+          const name = basename(msg.name).replace(/^\.+/, "") || "file";
+          const buf = Buffer.from(msg.data, "base64");
+          if (buf.length > MAX_UPLOAD_BYTES) return fail("too_large", `larger than ${MAX_UPLOAD_BYTES} bytes: ${name}`);
+          try {
+            // One folder per upload keeps the original name, so Claude sees it.
+            const parent = opts.uploadDir ?? join(tmpdir(), "claude-ui-uploads");
+            mkdirSync(parent, { recursive: true, mode: 0o700 });
+            const file = join(mkdtempSync(join(parent, "u-")), name);
+            writeFileSync(file, buf, { mode: 0o600 });
+            return reply({ path: file });
+          } catch (err) {
+            return fail("fs_error", String(err));
+          }
         }
         case "session.interrupt": {
           const s = await find(msg.sessionId);

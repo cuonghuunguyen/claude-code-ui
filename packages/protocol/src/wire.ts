@@ -1,11 +1,26 @@
 // WebSocket wire protocol (docs/spec.md "Wire protocol"). JSON, one message per frame.
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
-import type { Part, SessionState } from "./parts.ts";
+import type { Effort, Part, PermissionMode, SessionState } from "./parts.ts";
 
 export type { ModelInfo };
 
-/** `model` is a `ModelInfo.value` from models.list; "default" = the SDK default model. */
-export type SessionInfo = { id: string; cwd: string; state: SessionState; model: string };
+/** Modes the permission mode chooser offers, in Claude Code's Shift+Tab order; bypass only when the daemon config enables it. */
+export const PERMISSION_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
+export const EFFORTS: Effort[] = ["default", "low", "medium", "high", "xhigh", "max"];
+
+/**
+ * `model` is a `ModelInfo.value` from models.list; "default" = the SDK default model. `effort`: "default" = the model's default.
+ * `permissionModes`: the modes this session can switch to (PERMISSION_MODES, without bypassPermissions unless enabled).
+ */
+export type SessionInfo = {
+  id: string;
+  cwd: string;
+  state: SessionState;
+  model: string;
+  permissionMode: PermissionMode;
+  effort: Effort;
+  permissionModes: PermissionMode[];
+};
 /** A `session.list` entry: a transcript from `listSessions()` (terminal CLI sessions too) or a session of this daemon run. */
 export type SessionListItem = SessionInfo & { title: string; lastActivity: number };
 export type FsEntry = { name: string; path: string; isDir: boolean };
@@ -17,6 +32,15 @@ export type ClientMessage = { reqId: string } & (
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   | { type: "session.setModel"; sessionId: string; model: string }
+  /** Applies from the next turn on (`setPermissionMode()`); the session's start option before its query runs. */
+  | { type: "session.setPermissionMode"; sessionId: string; mode: PermissionMode }
+  /** Applies from the next turn on (`applyFlagSettings({effortLevel})`); the `effort` start option before the query runs. */
+  | { type: "session.setEffort"; sessionId: string; effort: Effort }
+  /**
+   * Attach button, non-image file: the daemon stores it in a temp folder (a browser cannot tell a file's path)
+   * and replies its absolute path, which the prompt gets as an `@path` mention. `data`: base64 content.
+   */
+  | { type: "fs.upload"; name: string; data: string }
   /** Stops the running turn; a no-op while idle. */
   | { type: "session.interrupt"; sessionId: string }
   /**
@@ -76,7 +100,9 @@ export type ServerMessage =
 export type CreateResult = { session: SessionInfo };
 /** `logEpoch` differs from the one the client sent: its store belongs to an earlier daemon run and the events are a full replay. */
 export type SubscribeResult = { logEpoch: string; session: SessionInfo };
+/** session.setModel, session.setPermissionMode, session.setEffort. */
 export type SetModelResult = { session: SessionInfo };
+export type UploadResult = { path: string };
 /** permission.respond and question.respond. `settled`: false when the request was already settled (or unknown) and this answer was ignored. */
 export type RespondResult = { settled: boolean };
 export type ModelsResult = { models: ModelInfo[] };

@@ -16,6 +16,8 @@ for (const m of lines) {
 
 export const calls: Options[] = [];
 export const setModelCalls: (string | undefined)[] = [];
+/** setPermissionMode() and applyFlagSettings() calls. */
+export const controlCalls: unknown[] = [];
 export const models: ModelInfo[] = [
   { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "" },
   { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", description: "" },
@@ -39,6 +41,8 @@ export function fakeQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMe
   })();
   return Object.assign(q, {
     setModel: async (m?: string) => void setModelCalls.push(m),
+    setPermissionMode: async (mode: string) => void controlCalls.push({ setPermissionMode: mode }),
+    applyFlagSettings: async (settings: object) => void controlCalls.push({ applyFlagSettings: settings }),
     supportedModels: async () => models,
     supportedCommands: async () => fakeCommands,
     async rewindFiles(id: string, o?: { dryRun?: boolean }) {

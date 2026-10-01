@@ -5,6 +5,7 @@ import {
   type CanUseTool,
   type ModelInfo,
   type PermissionResult,
+  type PermissionUpdate,
   type Query,
   type SDKMessage,
   type SDKUserMessage,
@@ -14,8 +15,11 @@ import {
 import {
   createAdapter,
   imageBlock,
+  PERMISSION_MODES,
+  type Effort,
   type Event,
   type Part,
+  type PermissionMode,
   type PermissionDecision,
   type Question,
   type RewindMode,
@@ -34,7 +38,11 @@ type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number;
 // Claude Code's sources: "local" (.claude/settings.local.json) holds the rules "don't ask again" saves.
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
-type SessionOpts = { model?: string; query?: typeof sdkQuery };
+/** `allowBypass`: daemon config enables bypassPermissions (docs/spec.md "Security"). */
+type SessionOpts = { model?: string; allowBypass?: boolean; query?: typeof sdkQuery };
+
+// ExitPlanMode comes without suggestions; Claude Code's "Yes, and auto-accept edits" (verified: the CLI then runs in acceptEdits).
+const ACCEPT_EDITS: PermissionUpdate = { type: "setMode", mode: "acceptEdits", destination: "session" };
 
 export class Session {
   readonly id: string;
@@ -46,6 +54,8 @@ export class Session {
   private input = new InputQueue();
   private query?: Query;
   private model: string;
+  private permissionMode: PermissionMode = "default";
+  private effort: Effort = "default";
   private readonly adapter: ReturnType<typeof createAdapter>;
   /** Bumped when a conversation rewind drops the query; the old drive loop then stops logging. */
   private generation = 0;
@@ -101,6 +111,9 @@ export class Session {
         enableFileCheckpointing: true,
         cwd: this.cwd,
         model: this.model === "default" ? undefined : this.model,
+        permissionMode: this.permissionMode,
+        allowDangerouslySkipPermissions: !!this.opts.allowBypass,
+        effort: this.effort === "default" ? undefined : this.effort,
         includePartialMessages: true,
         settingSources: SETTING_SOURCES,
         // Thinking text is omitted by default; summaries feed the thinking parts.
@@ -124,7 +137,15 @@ export class Session {
   }
 
   info(): SessionInfo {
-    return { id: this.id, cwd: this.cwd, state: this.state, model: this.model };
+    return {
+      id: this.id,
+      cwd: this.cwd,
+      state: this.state,
+      model: this.model,
+      permissionMode: this.permissionMode,
+      effort: this.effort,
+      permissionModes: PERMISSION_MODES.filter((m) => m !== "bypassPermissions" || this.opts.allowBypass),
+    };
   }
 
   /** Replays events with seq > sinceSeq, then follows. Returns an unsubscribe function. */
@@ -160,6 +181,28 @@ export class Session {
     await this.query?.setModel(model);
     this.model = model;
     this.emit({ type: "session_model", id: "session_model", model });
+  }
+
+  /** Applies from the next turn on; before the query runs it becomes the start option. */
+  async setPermissionMode(mode: PermissionMode) {
+    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
+    if (!this.info().permissionModes.includes(mode)) throw new Error(`permission mode ${mode} is not enabled`);
+    await this.query?.setPermissionMode(mode);
+    this.setMode(mode);
+  }
+
+  /** Applies from the next turn on; "default" goes back to the model's default effort. */
+  async setEffort(effort: Effort) {
+    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
+    await this.query?.applyFlagSettings({ effortLevel: effort === "default" ? null : effort });
+    this.effort = effort;
+    this.emit({ type: "session_effort", id: "session_effort", effort });
+  }
+
+  private setMode(mode: PermissionMode) {
+    if (mode === this.permissionMode) return;
+    this.permissionMode = mode;
+    this.emit({ type: "session_permission_mode", id: "session_permission_mode", mode });
   }
 
   /**
@@ -243,7 +286,7 @@ export class Session {
               tool,
               input,
               ...(title ? { title } : {}),
-              suggestions,
+              suggestions: tool === "ExitPlanMode" && !suggestions.length ? [ACCEPT_EDITS] : suggestions,
               settled: false,
             };
       this.pending.set(requestId, { part, resolve });
@@ -313,6 +356,8 @@ export class Session {
           continue;
         }
         if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
+        // The CLI changes the mode itself too (plan approved, "all edits this session"); init and status carry it.
+        if (m.type === "system" && (m.subtype === "init" || m.subtype === "status") && m.permissionMode) this.setMode(m.permissionMode);
         for (const part of this.adapter.convert(m)) this.emit(part);
         if (m.type === "result") this.setState("idle");
       }
