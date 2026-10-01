@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Event } from "@claude-ui/protocol";
-import { Session } from "../src/session.ts";
+import { queuedQuery, Session } from "../src/session.ts";
 import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
@@ -706,6 +706,18 @@ describe("Session context usage", () => {
     await until(events, (e) => events.filter((x) => x.part.type === "context_usage").length === 2);
   });
 
+  it("reports the turn's rate_limit_event and refreshes plan usage on the session's query after each turn", async () => {
+    const plan = { refresh: vi.fn(async (_q: unknown) => {}), rateLimit: vi.fn(async (_info: unknown, _q: unknown) => {}) };
+    const s = new Session("/tmp", { query: fakeQuery as never, plan: plan as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hello");
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(plan.rateLimit).toHaveBeenCalledWith(expect.objectContaining({ status: "allowed", rateLimitType: "five_hour" }), expect.objectContaining({ usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: expect.any(Function) }));
+    expect(plan.refresh).toHaveBeenCalledTimes(1);
+    expect(plan.refresh.mock.calls[0]![0]).toBe(plan.rateLimit.mock.calls[0]![1]);
+  });
+
   it("refreshes after a compaction boundary, before the turn ends", async () => {
     let release!: () => void;
     const compacting = ({ prompt, options }: { prompt: AsyncIterable<unknown>; options: object }) =>
@@ -759,6 +771,23 @@ describe("Session context usage", () => {
     await vi.waitFor(() => expect(got.every((ev) => ev.some((e) => e.part.type === "context_usage"))).toBe(true));
     expect(maxAlive).toBe(1);
     expect(closes).toBe(5);
+  });
+
+  it("the plan usage throwaway waits in the same queue as the context usage ones (one CLI at a time)", async () => {
+    let alive = 0;
+    let maxAlive = 0;
+    const slow = ({ prompt }: { prompt: AsyncIterable<unknown> }) => (
+      (maxAlive = Math.max(maxAlive, ++alive)),
+      Object.assign((async function* () { for await (const _ of prompt); })(), {
+        getContextUsage: () => new Promise((r) => setTimeout(() => r(fakeUsage), 5)),
+        close: () => void alive--,
+      })
+    );
+    const events: Event[] = [];
+    Session.restore(randomUUID(), "/tmp", history, { query: slow as never }).subscribe(0, (e) => events.push(e));
+    expect(await queuedQuery(async () => "plan", slow as never)).toBe("plan");
+    await until(events, (e) => e.part.type === "context_usage");
+    expect(maxAlive).toBe(1);
   });
 
   it("a queued throwaway usage query is dropped when the session got a real query meanwhile", async () => {

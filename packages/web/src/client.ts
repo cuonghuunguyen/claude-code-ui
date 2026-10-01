@@ -1,6 +1,6 @@
 // One WebSocket per tab, reconnected with backoff. Requests resolve on the reply with the same reqId; events go to onEvent.
 // onOpen runs after every (re)connect, so the caller resubscribes there with its last seq and logEpoch.
-import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type Event, type ServerMessage } from "@claude-ui/protocol";
+import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type Event, type PlanUsage, type ServerMessage } from "@claude-ui/protocol";
 import { takeToken } from "./pairing.ts";
 
 export type Request = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M, "reqId"> : never) : never;
@@ -25,6 +25,8 @@ export function connect(opts: {
   onEvent: (e: Event) => void;
   /** Another tab (or this one) renamed, archived or deleted a session. */
   onSessionsChanged?: (m: Extract<ServerMessage, { type: "sessions.changed" }>) => void;
+  /** Account plan usage, on connect and on each change; null = no plan limits. */
+  onPlanUsage?: (u: PlanUsage | null) => void;
   onOpen?: () => void;
   onStatus?: (s: ConnectionStatus) => void;
 }) {
@@ -64,6 +66,7 @@ export function connect(opts: {
       if (m.type === "event") return opts.onEvent(m);
       if (m.type === "fs.changed") return fsListeners.forEach((l) => l(m));
       if (m.type === "sessions.changed") return opts.onSessionsChanged?.(m);
+      if (m.type === "plan_usage") return opts.onPlanUsage?.(m.usage);
       const p = m.reqId ? pending.get(m.reqId) : undefined;
       if (!p) return console.error("daemon error", m);
       pending.delete(m.reqId!);

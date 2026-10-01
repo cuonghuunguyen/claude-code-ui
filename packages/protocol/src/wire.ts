@@ -1,6 +1,6 @@
 // WebSocket wire protocol (docs/spec.md "Wire protocol"). JSON, one message per frame.
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
-import type { Effort, Part, PermissionMode, SessionState } from "./parts.ts";
+import type { Effort, Part, PermissionMode, PlanUsage, SessionState } from "./parts.ts";
 
 export type { ModelInfo };
 
@@ -110,6 +110,8 @@ export type ServerMessage =
   | { type: "fs.changed"; path: string; mtime: number }
   /** Sent to every connection after a rename, archive or delete: refetch `session.list`. `deleted`: drop that session. */
   | { type: "sessions.changed"; deleted?: string }
+  /** Plan usage, not a session event: on connect and on each change. `usage` null: no plan limits (API key, Bedrock, Vertex). */
+  | { type: "plan_usage"; usage: PlanUsage | null }
   | { type: "error"; reqId?: string; code: string; message: string };
 
 export type CreateResult = { session: SessionInfo };

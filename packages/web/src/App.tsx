@@ -17,6 +17,7 @@ import type {
   RewindPreview,
   RespondResult,
   SessionInfo,
+  PlanUsage,
   SessionListItem,
   SetModelResult,
   SlashCommand,
@@ -37,6 +38,7 @@ import { choose, matchCommands } from "./commands.ts";
 import { activeMention, insertAtCaret, insertMention, mentionPath } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
 import { inProject, patchSession } from "./sessions.ts";
+import { PlanMeter } from "./plan-meter.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
@@ -83,6 +85,8 @@ function usePageFocused() {
 
 export function App() {
   const [list, setList] = useState<SessionListItem[]>([]);
+  // Account-wide plan limits; null (API key, Bedrock, Vertex) or not yet known hides the meter.
+  const [plan, setPlan] = useState<PlanUsage | null>(null);
   // Known project cwds from the daemon, newest first.
   const [projects, setProjects] = useState<string[]>([]);
   // Project the new-session tab starts in.
@@ -230,6 +234,7 @@ export function App() {
         if (m.deleted) forget(m.deleted, true);
         void refreshList();
       },
+      onPlanUsage: setPlan,
       onOpen: () => {
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
         c.request<ModelsResult>({ type: "models.list" }).then(
@@ -519,14 +524,17 @@ export function App() {
             onHome={() => setSidebar((v) => !v)}
           />
         )}
-        {canQuickOpen && (
-          <IconButton className="ml-auto" label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button">
-            <SearchIcon />
+        <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:gap-2">
+          {plan && status !== "unauthorized" && <PlanMeter usage={plan} />}
+          {canQuickOpen && (
+            <IconButton label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button">
+              <SearchIcon />
+            </IconButton>
+          )}
+          <IconButton label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
+            <ThemeIcon />
           </IconButton>
-        )}
-        <IconButton className={canQuickOpen ? "" : "ml-auto"} label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
-          <ThemeIcon />
-        </IconButton>
+        </div>
       </header>
       <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? "Untitled")} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
       <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
