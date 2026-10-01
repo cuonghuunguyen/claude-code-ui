@@ -23,7 +23,7 @@ export type SessionView = {
   commands: SlashCommand[];
   /** Latest context_usage; undefined until the daemon reports it. */
   contextUsage?: ContextUsage;
-  /** Latest todo list (todo_update); pinned above the prompt box while a turn runs. */
+  /** Latest todo list (todo_update) of the live turn; cleared on idle, error and rewind. */
   todos: TodoItem[];
   order: string[];
   parts: Map<string, Part>;
@@ -37,7 +37,9 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   if (part.type === "session_state") {
     const busy = s.state === "running" || s.state === "needs_input";
     const attention = part.state === "needs_input" || (busy && (part.state === "idle" || part.state === "error"));
-    return { ...s, lastSeq: e.seq, state: part.state, attentionSeq: attention ? e.seq : s.attentionSeq };
+    // Not live: drop the list, so a later turn without TodoWrite shows no stale one (OpenCode todoState "clear").
+    const todos = part.state === "idle" || part.state === "error" ? [] : s.todos;
+    return { ...s, lastSeq: e.seq, state: part.state, attentionSeq: attention ? e.seq : s.attentionSeq, todos };
   }
   if ((part.type === "session_model" || part.type === "session_permission_mode" || part.type === "session_effort") && e.seq <= s.settingsSeq)
     return { ...s, lastSeq: e.seq };
@@ -51,7 +53,7 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
     if (at < 0) return { ...s, lastSeq: e.seq };
     const parts = new Map(s.parts);
     for (const id of s.order.slice(at)) parts.delete(id);
-    return { ...s, lastSeq: e.seq, order: s.order.slice(0, at), parts };
+    return { ...s, lastSeq: e.seq, order: s.order.slice(0, at), parts, todos: [] };
   }
   if (part.type === "todo_update") return { ...s, lastSeq: e.seq, todos: part.items };
   const parts = new Map(s.parts).set(part.id, part);

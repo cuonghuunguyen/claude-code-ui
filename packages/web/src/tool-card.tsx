@@ -1,12 +1,10 @@
 // Tool cards, context groups and thinking blocks (docs/spec.md "Message model", "Session view UX").
-import type { Part, TodoItem, ToolStatus } from "@claude-ui/protocol";
+import type { Part, ToolStatus } from "@claude-ui/protocol";
 import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { useDark } from "./theme.ts";
 import type { ToolUIPart } from "ai";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { CheckCircle2Icon, CircleDotIcon, CircleIcon, ListTodoIcon } from "lucide-react";
-import { Task, TaskContent, TaskItem, TaskTrigger } from "@/components/ai-elements/task";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolChevron, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark, toolRowClass } from "@/components/ai-elements/tool";
@@ -297,40 +295,5 @@ export function SubagentGroup({ part, result, awaiting, children }: { part: Suba
         )}
       </ToolContent>
     </Tool>
-  );
-}
-
-const TODO_ICONS: Record<TodoItem["status"], ReactNode> = {
-  completed: <CheckCircle2Icon className="size-4 shrink-0 text-success" />,
-  in_progress: <CircleDotIcon className="size-4 shrink-0 animate-pulse text-foreground" />,
-  pending: <CircleIcon className="size-4 shrink-0" />,
-};
-
-/** The pinned todo list (TodoWrite); an in-progress item shows its active form. */
-export function TodoList({ items }: { items: TodoItem[] }) {
-  const done = items.filter((i) => i.status === "completed").length;
-  return (
-    <Task className="rounded-lg border bg-background p-3" data-testid="todo-list">
-      <TaskTrigger title="Todos">
-        <div className="flex w-full cursor-pointer items-center gap-2 text-muted-foreground text-sm hover:text-foreground">
-          <ListTodoIcon className="size-4" />
-          <span>
-            Todos {done}/{items.length}
-          </span>
-        </div>
-      </TaskTrigger>
-      <TaskContent>
-        {items.map((item, i) => (
-          <TaskItem
-            key={i}
-            data-status={item.status}
-            className={`flex items-center gap-2 ${item.status === "completed" ? "line-through" : item.status === "in_progress" ? "text-foreground" : ""}`}
-          >
-            {TODO_ICONS[item.status]}
-            {item.status === "in_progress" ? (item.activeForm ?? item.content) : item.content}
-          </TaskItem>
-        ))}
-      </TaskContent>
-    </Task>
   );
 }

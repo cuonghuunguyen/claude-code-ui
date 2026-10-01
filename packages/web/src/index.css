@@ -56,6 +56,13 @@
     --shadow-floating: var(--elevation-floating);
 }
 
+/* In-progress todo dot (OpenCode --animate-pulse-scale). */
+@keyframes pulse-scale {
+    50% {
+        transform: scale(0.6666667);
+    }
+}
+
 /*
  * OpenCode oc-2 tokens on shadcn names (development reference: opencode-parity/reference.md A3).
  * Deviations for WCAG 4.5:1 text contrast (theme.test.ts): light success/warning are darker; --faint (3.95:1) is for icons only; inactive tab titles use --muted-foreground (OpenCode uses text-faint, below 4.5:1 in light).

@@ -171,3 +171,38 @@ it("timeline rhythm like OpenCode: 12px between tool rows, text 24px further dow
   const users = [...el.querySelectorAll<HTMLElement>('[data-testid="user-message"]')];
   expect(users.map((u) => u.className.match(/\S*mt-3\b/)?.[0])).toEqual(["not-first:mt-3", "not-first:mt-3"]);
 });
+
+it("TodoWrite: the timeline card stays collapsed, the dock above the prompt shows the latest list while the turn runs", async () => {
+  const todos = (id: string, done: boolean): Part[] => {
+    const items = [
+      { content: "Inspect", status: "completed" as const },
+      { content: "Test", status: done ? ("completed" as const) : ("in_progress" as const), activeForm: "Testing" },
+    ];
+    return [call(id, "TodoWrite", { todos: items }), { type: "todo_update", id: `${id}:todos`, items }];
+  };
+  const running: Part = { type: "session_state", id: "st", state: "running" };
+  const dock = () => el.querySelector<HTMLElement>('[data-testid="todo-dock"]');
+  await render(view([running, ...todos("t1", false)]));
+  expect(cards().map(expanded)).toEqual([false]);
+  expect(dock()?.textContent).toContain("1 of 2 todos completed");
+  // Directly above the prompt box, which covers its bottom 36px (OpenCode prompt lift).
+  // The lift sits on the prompt box, so an image strip or send error between them stays outside the dock.
+  expect(dock()?.nextElementSibling?.querySelector("textarea")).not.toBeNull();
+  expect(dock()!.className).toContain("pb-9");
+  expect(dock()!.className).not.toContain("-mb-");
+  expect(el.querySelector('[data-testid="prompt-box"]')!.className).toContain("-mt-11");
+  // A permission panel replaces the prompt box: the dock hides with it (OpenCode showComposer).
+  await render(view([running, ...todos("t1", false), permission("t9")]));
+  expect(el.querySelector('[data-testid="permission-panel"]')).not.toBeNull();
+  expect(dock()).toBeNull();
+  // A second TodoWrite replaces the list: all done hides the dock; its card is collapsed too.
+  await render(view([running, ...todos("t1", false), ...todos("t2", true)]));
+  expect(cards().map(expanded)).toEqual([false, false]);
+  expect(dock()).toBeNull();
+  // Idle with open items: hidden (OpenCode shows the dock only while live).
+  await render(view([running, ...todos("t1", false), { type: "session_state", id: "st", state: "idle" }]));
+  expect(dock()).toBeNull();
+  // The next turn calls no TodoWrite: the old list stays gone (OpenCode todoState "clear").
+  await render(view([running, ...todos("t1", false), { type: "session_state", id: "st", state: "idle" }, running]));
+  expect(dock()).toBeNull();
+});

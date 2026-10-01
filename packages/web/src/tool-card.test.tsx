@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ToolCall } from "./store.ts";
-import { ContextGroup, CwdContext, SubagentGroup, TodoList, ToolBody, ToolCard } from "./tool-card.tsx";
+import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard } from "./tool-card.tsx";
 
 const call = (status: ToolCall["status"], tool = "Bash"): ToolCall => ({
   type: "tool_call",
@@ -262,20 +262,3 @@ describe("SubagentGroup", () => {
   });
 });
 
-describe("TodoList", () => {
-  it("shows progress, each item, and the active form of the in-progress item", () => {
-    const html = renderToStaticMarkup(
-      <TodoList
-        items={[
-          { content: "Inspect", status: "completed" },
-          { content: "Change b", status: "in_progress", activeForm: "Changing b" },
-          { content: "Test", status: "pending" },
-        ]}
-      />,
-    );
-    expect(html).toContain("Todos 1/3");
-    expect(html).toContain("Changing b");
-    expect(html).not.toContain("Change b<");
-    expect(html.match(/data-status="(\w+)"/g)).toEqual(['data-status="completed"', 'data-status="in_progress"', 'data-status="pending"']);
-  });
-});
