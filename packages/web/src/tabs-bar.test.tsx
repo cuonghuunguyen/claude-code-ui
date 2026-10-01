@@ -102,3 +102,44 @@ it("below md the titlebar controls have a 44px hit area and 8px gaps (touch-targ
   expect(el.querySelector('[data-testid="tab-switcher"]')!.parentElement!.className).toMatch(/\bmax-md:h-11\b/);
   expect(el.firstElementChild!.className).toMatch(/\bmax-md:gap-2\b/);
 });
+
+it("arrow keys, Home and End move focus and selection between tabs; only the active tab is in the Tab order", async () => {
+  const { tab, onSelect } = await render();
+  const btn = (id: string) => tab(id).querySelector<HTMLElement>('[role="tab"]')!;
+  expect(["a", "b", "c", "d", NEW_TAB].map((id) => btn(id).tabIndex)).toEqual([-1, -1, 0, -1, -1]);
+  expect(tab("c").querySelector<HTMLElement>('[data-testid="tab-close"]')!.tabIndex).toBe(-1);
+  const key = (id: string, k: string) => act(async () => void btn(id).dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
+  await key("c", "ArrowRight");
+  expect(onSelect).toHaveBeenLastCalledWith("d");
+  expect(document.activeElement).toBe(btn("d"));
+  await key("c", "ArrowLeft");
+  expect(onSelect).toHaveBeenLastCalledWith("b");
+  await key("a", "ArrowLeft");
+  expect(onSelect).toHaveBeenLastCalledWith(NEW_TAB);
+  await key("c", "Home");
+  expect(onSelect).toHaveBeenLastCalledWith("a");
+  await key("c", "End");
+  expect(onSelect).toHaveBeenLastCalledWith(NEW_TAB);
+});
+
+it("Delete on a focused tab closes it", async () => {
+  const { tab, onClose } = await render();
+  await act(async () => void tab("b").querySelector('[role="tab"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true })));
+  expect(onClose).toHaveBeenCalledWith("b");
+});
+
+it("inactive tab titles use the faint oc-2 text color", async () => {
+  const { tab } = await render();
+  expect(tab("a").querySelector('[role="tab"]')!.className).toMatch(/\btext-faint\b/);
+  expect(tab("c").querySelector('[role="tab"]')!.className).toMatch(/\btext-foreground\b/);
+});
+
+it("the Home button left of the tabs toggles the sessions sidebar", async () => {
+  const onHome = vi.fn();
+  const { el } = await render({ onHome, home: true });
+  const home = el.querySelector<HTMLElement>('[data-testid="tab-home"]')!;
+  expect(home.getAttribute("aria-pressed")).toBe("true");
+  expect(home.compareDocumentPosition(el.querySelector('[data-testid="tab-strip"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await act(async () => home.click());
+  expect(onHome).toHaveBeenCalled();
+});

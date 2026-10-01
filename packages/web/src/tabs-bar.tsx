@@ -1,10 +1,10 @@
 // Titlebar tabs (OpenCode titlebar-tab-strip): avatar + title + close; middle click closes, drag reorders, overflow scrolls.
 // Below md the strip collapses into a switcher (native select over the active tab).
-import { useEffect, useRef, type CSSProperties, type DragEvent } from "react";
-import { ChevronDownIcon, CircleAlertIcon, LoaderCircleIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
+import { createContext, use, useEffect, useRef, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
+import { ChevronDownIcon, CircleAlertIcon, Grid2x2PlusIcon, LoaderCircleIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn } from "@/lib/utils";
-import { NEW_TAB, avatarColor, projectName } from "./tabs.ts";
+import { NEW_TAB, avatarColor, projectName, type AvatarColor } from "./tabs.ts";
 
 export type TabInfo = { title: string; cwd?: string; state?: SessionState; unread: boolean };
 type TabStatus = "new" | "running" | "needs_input" | "unread" | "idle";
@@ -14,9 +14,12 @@ const status = (id: string, t: TabInfo): TabStatus =>
 
 const STATUS_LABEL: Record<TabStatus, string> = { new: "", running: "running", needs_input: "needs input", unread: "unread", idle: "" };
 
+/** Avatar colors of the known projects (avatarColors), so no two of them look the same. */
+export const AvatarColors = createContext(new Map<string, AvatarColor>());
+
 /** 16px project initial on the project's color (OpenCode project-avatar-v2). */
 export function ProjectAvatar({ cwd, unread }: { cwd: string; unread?: boolean }) {
-  const c = avatarColor(cwd);
+  const c = avatarColor(cwd, use(AvatarColors));
   return (
     <span
       className="relative grid size-4 shrink-0 place-items-center rounded-sm bg-(--av) font-medium text-(--av-fg) text-[11px] leading-none tabular-nums shadow-[inset_0_0_0_0.5px_var(--border)]"
@@ -48,6 +51,8 @@ export function TabsBar({
   onClose,
   onMove,
   onNew,
+  home,
+  onHome,
 }: {
   tabs: string[];
   activeId?: string;
@@ -56,17 +61,47 @@ export function TabsBar({
   onClose: (id: string) => void;
   onMove: (from: string, to: string) => void;
   onNew: () => void;
+  /** Home button (OpenCode grid-plus, md and up): pressed while the sessions sidebar shows. */
+  home?: boolean;
+  onHome?: () => void;
 }) {
   const strip = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const el = strip.current?.querySelector('[aria-selected="true"]');
-    el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    const el = strip.current;
+    const reveal = () => el?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    reveal();
+    // The strip narrows on a window resize or sidebar toggle: keep the active tab in view.
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(reveal);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [activeId, tabs.length]);
   const active = activeId ? info(activeId) : undefined;
+  // Only one tab is in the Tab order; arrows, Home and End move between tabs (WAI-ARIA tabs, automatic activation). Delete closes.
+  const focusable = activeId && tabs.includes(activeId) ? activeId : tabs[0];
+  const onKeyDown = (e: KeyboardEvent) => {
+    const target = e.target as HTMLElement;
+    const id = target.closest<HTMLElement>("[data-tab-id]")?.dataset.tabId;
+    const at = id ? tabs.indexOf(id) : -1;
+    if (at < 0 || target.getAttribute("role") !== "tab") return;
+    if (e.key === "Delete") return onClose(id!);
+    const n = tabs.length;
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1 + n, Home: 0, End: n - 1 }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    const next = tabs[to % n]!;
+    onSelect(next);
+    strip.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(next)}"] [role="tab"]`)?.focus();
+  };
 
   return (
     // Below md: 44px hit areas, 8px apart (touch-target-size, touch-spacing).
     <div className="flex min-w-0 flex-1 items-center gap-1.5 max-md:gap-2">
+      {onHome && (
+        <IconButton className="w-9! max-md:hidden" label="Home" onClick={onHome} pressed={home} testId="tab-home">
+          <Grid2x2PlusIcon />
+        </IconButton>
+      )}
       <div
         ref={strip}
         role="tablist"
@@ -75,9 +110,10 @@ export function TabsBar({
         data-testid="tab-strip"
         // A vertical wheel scrolls the strip sideways, like a browser tab strip.
         onWheel={(e) => !e.deltaX && (e.currentTarget.scrollLeft += e.deltaY)}
+        onKeyDown={onKeyDown}
       >
         {tabs.map((id) => (
-          <Tab key={id} id={id} t={info(id)} active={id === activeId} onSelect={onSelect} onClose={onClose} onMove={onMove} />
+          <Tab key={id} id={id} t={info(id)} active={id === activeId} focusable={id === focusable} onSelect={onSelect} onClose={onClose} onMove={onMove} />
         ))}
       </div>
       {tabs.length > 0 && (
@@ -128,6 +164,7 @@ function Tab({
   id,
   t,
   active,
+  focusable,
   onSelect,
   onClose,
   onMove,
@@ -135,6 +172,7 @@ function Tab({
   id: string;
   t: TabInfo;
   active: boolean;
+  focusable: boolean;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onMove: (from: string, to: string) => void;
@@ -174,10 +212,11 @@ function Tab({
       <button
         role="tab"
         aria-selected={active}
+        tabIndex={focusable ? 0 : -1}
         aria-label={STATUS_LABEL[s] ? `${t.title}, ${STATUS_LABEL[s]}` : undefined}
         className={cn(
-          "flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-          active ? "text-foreground" : "text-muted-foreground",
+          "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+          active ? "text-foreground" : "text-faint",
         )}
         onClick={() => onSelect(id)}
       >
@@ -186,8 +225,10 @@ function Tab({
       </button>
       <button
         aria-label={`Close ${t.title}`}
+        // Out of the Tab order (roving tabindex); Delete on the tab closes it.
+        tabIndex={-1}
         className={cn(
-          "absolute top-0.5 right-0.5 grid size-6 place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover:opacity-100",
+          "absolute top-0.5 right-0.5 grid size-6 cursor-pointer place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover:opacity-100",
           active ? "opacity-100" : "opacity-0",
         )}
         onClick={() => onClose(id)}
@@ -220,7 +261,7 @@ export function IconButton({
       title={label}
       aria-pressed={pressed}
       className={cn(
-        "grid size-7 shrink-0 place-items-center max-md:size-11 rounded-md text-faint outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-secondary aria-pressed:text-foreground [&_svg]:size-4",
+        "grid size-7 shrink-0 cursor-pointer place-items-center max-md:size-11 rounded-md text-faint outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-secondary aria-pressed:text-foreground [&_svg]:size-4",
         className,
       )}
       onClick={onClick}
