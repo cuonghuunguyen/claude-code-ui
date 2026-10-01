@@ -123,6 +123,8 @@ export function App() {
   const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
   const requested = useRef(new Set<string>());
   // Tabs restored from storage, checked against the first session list: a stale one would show "Untitled".
   const restored = useRef<string[] | undefined>(tabs);
@@ -175,6 +177,9 @@ export function App() {
     setList((l) => l.filter((s) => s.id !== sessionId));
     setTabs((t) => t.filter((id) => id !== sessionId));
     if (hashId() === sessionId) {
+      // Deleted like a closed tab: its neighbour becomes active.
+      const next = deleted ? closeTab(tabsRef.current, sessionId, sessionId).active : undefined;
+      if (next) return open(next);
       setActiveId(undefined);
       history.replaceState(null, "", location.pathname + location.search);
       if (!deleted) setError("That session no longer exists in the daemon.");

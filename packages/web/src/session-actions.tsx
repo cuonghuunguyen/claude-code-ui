@@ -15,7 +15,7 @@ export type ActionTarget = { title: string; archived: boolean; busy: boolean; tr
 const POPUP =
   "z-50 min-w-40 rounded-lg bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none origin-(--transform-origin) transition-[scale,opacity] duration-100 data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0 motion-reduce:transition-none";
 const ITEM =
-  "flex h-8 cursor-default select-none items-center rounded-md px-2 outline-none data-disabled:text-muted-foreground data-highlighted:bg-secondary max-md:h-11";
+  "flex h-8 cursor-pointer select-none items-center rounded-md px-2 outline-none data-disabled:cursor-not-allowed data-disabled:text-muted-foreground data-highlighted:bg-secondary max-md:h-11";
 
 function Items({ kind, target, onAction }: { kind: "menu" | "context"; target: ActionTarget; onAction: (a: SessionAction) => void }) {
   const Item = kind === "menu" ? Menu.Item : ContextMenu.Item;
@@ -44,7 +44,7 @@ export function SessionMenu({ target, onAction, className }: { target: ActionTar
         aria-label={`Actions for ${target.title}`}
         title="Actions"
         className={cn(
-          "grid size-6 shrink-0 place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11 [&_svg]:size-4",
+          "grid size-6 shrink-0 cursor-pointer place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11 [&_svg]:size-4",
           className,
         )}
         data-testid="session-menu"
@@ -116,7 +116,7 @@ export function DeleteDialog({ title, onConfirm, onCancel }: { title?: string; o
       <AlertDialog.Portal>
         <AlertDialog.Backdrop className="fixed inset-0 z-50 bg-overlay transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0 motion-reduce:transition-none" />
         <AlertDialog.Popup
-          className="-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 flex w-96 max-w-[calc(100vw-2rem)] flex-col gap-4 rounded-xl bg-popover p-4 text-popover-foreground shadow-floating outline-none"
+          className="-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 flex w-96 max-w-[calc(100vw-2rem)] flex-col gap-4 rounded-2xl bg-popover p-4 text-popover-foreground shadow-floating outline-none"
           data-testid="delete-dialog"
         >
           <div className="flex flex-col gap-1">
@@ -126,10 +126,10 @@ export function DeleteDialog({ title, onConfirm, onCancel }: { title?: string; o
             </AlertDialog.Description>
           </div>
           <div className="flex justify-end gap-2">
-            <AlertDialog.Close render={<Button variant="ghost" className="max-md:h-11" />} data-testid="delete-cancel">
+            <AlertDialog.Close render={<Button variant="ghost" className="cursor-pointer max-md:h-11" />} data-testid="delete-cancel">
               Cancel
             </AlertDialog.Close>
-            <Button variant="destructive" className="max-md:h-11" onClick={onConfirm} data-testid="delete-confirm">
+            <Button variant="destructive" className="cursor-pointer max-md:h-11" onClick={onConfirm} data-testid="delete-confirm">
               Delete
             </Button>
           </div>

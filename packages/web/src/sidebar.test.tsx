@@ -211,3 +211,27 @@ it("a session with no transcript yet (never prompted) offers no Rename or Archiv
   expect(onAction).not.toHaveBeenCalled();
   expect(document.querySelector('[data-testid="action-delete"]')!.getAttribute("aria-disabled")).toBeNull();
 });
+
+it("rows, the … trigger, the archived filter and the menu items show the pointer cursor; a disabled item shows not-allowed", async () => {
+  const { el, rows } = await render();
+  const pointer = (e: Element) => expect(e.className).toMatch(/(^|\s)cursor-pointer(\s|$)/);
+  pointer(rows()[0]!);
+  pointer(el.querySelector('[data-testid="archived-filter"]')!);
+  const trigger = el.querySelector<HTMLElement>('[data-testid="session-menu"][aria-label="Actions for Fix login"]')!;
+  pointer(trigger);
+  await act(async () => trigger.click());
+  for (const id of ["action-rename", "action-archive", "action-delete"]) {
+    const item = document.querySelector(`[data-testid="${id}"]`)!;
+    pointer(item);
+    expect(item.className).not.toMatch(/\bcursor-default\b/);
+  }
+  // Delete is disabled: Fix login is running.
+  expect(document.querySelector('[data-testid="action-delete"]')!.className).toMatch(/\bdata-disabled:cursor-not-allowed\b/);
+});
+
+it("the archived filter shows an \"Archived sessions\" caption above the list, so the mode is visible", async () => {
+  const { el } = await render({ list: [...LIST, { ...LIST[2]!, id: "z", title: "Shelved", archived: true }] });
+  expect(el.querySelector('[data-testid="archived-caption"]')).toBeNull();
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="archived-filter"]')!.click());
+  expect(el.querySelector('[data-testid="archived-caption"]')!.textContent).toBe("Archived sessions");
+});

@@ -103,6 +103,11 @@ export function SessionList({
         </IconButton>
       </div>
       <nav className="-mx-1 flex min-h-0 flex-col gap-2 overflow-y-auto px-1" aria-label="Sessions" data-testid="session-list">
+        {archived && !!groups.length && (
+          <p className="px-1.5 text-muted-foreground text-xs" data-testid="archived-caption">
+            Archived sessions
+          </p>
+        )}
         {!groups.length && (
           <p className="px-1.5 text-muted-foreground text-sm">
             {query.trim()
@@ -161,7 +166,7 @@ export function SessionList({
                             data-testid="session-item"
                             data-state={st}
                             className={cn(
-                              "flex h-10 w-full items-center gap-2 rounded-md pr-8 max-md:pr-12 pl-7 text-left text-sm outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11",
+                              "flex h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-8 max-md:pr-12 pl-7 text-left text-sm outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11",
                               s.id === activeId ? "bg-secondary text-foreground" : "text-muted-foreground",
                             )}
                             aria-current={s.id === activeId ? "page" : undefined}
