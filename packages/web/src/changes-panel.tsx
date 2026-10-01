@@ -14,8 +14,12 @@ import { DIFF_OPTIONS, InputDiff } from "./tool-card.tsx";
 type Client = ReturnType<typeof connect>;
 type DiffStyle = "unified" | "split";
 /** Disk content of a changed file: "" once deleted. */
-type Disk = { content?: string; error?: string };
-type Row = { change: FileChange; before?: string; after?: string; error?: string; stats?: Stats };
+type Disk = { content?: string; deleted?: boolean; error?: string };
+/** `kind`: OpenCode's file badge, A(dded) / D(eleted) / M(odified). */
+type Row = { change: FileChange; before?: string; after?: string; error?: string; stats?: Stats; kind: Kind };
+type Kind = "A" | "D" | "M";
+const KIND_TITLE = { A: "Added", D: "Deleted", M: "Modified" } as const;
+const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-warning" } as const;
 
 const baseName = (path: string) => path.split("/").at(-1) ?? path;
 const relative = (path: string, cwd: string) => (path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path);
@@ -65,7 +69,7 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
       client
         .request<FsReadResult>({ type: "fs.read", path })
         .then((r): Disk => ({ content: r.content }))
-        .catch((e: RequestError): Disk => (/ENOENT/.test(e.message) ? { content: "" } : { error: e.message }))
+        .catch((e: RequestError): Disk => (/ENOENT/.test(e.message) ? { content: "", deleted: true } : { error: e.message }))
         .then((d) => live && setDisk((x) => ({ ...x, [path]: d })));
     return () => void (live = false);
   }, [key, reload]);
@@ -75,11 +79,12 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
     () =>
       changes.map((change): Row => {
         const d = disk[change.path];
-        if (d?.content === undefined) return { change, error: d?.error, stats: callStats(change) };
+        if (d?.content === undefined) return { change, error: d?.error, stats: callStats(change), kind: "M" };
         const before = baseline(d.content, change);
+        const kind = d.deleted ? "D" : before === "" ? "A" : "M";
         return before === undefined
-          ? { change, after: d.content, stats: callStats(change) }
-          : { change, before, after: d.content, stats: fileStats(before, d.content, change.path) };
+          ? { change, after: d.content, stats: callStats(change), kind }
+          : { change, before, after: d.content, stats: fileStats(before, d.content, change.path), kind };
       }),
     [changes, disk],
   );
@@ -143,6 +148,7 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
                 onClick={() => setSelected(path)}
                 data-testid="changed-file"
               >
+                <KindBadge kind={r.kind} />
                 <span className="min-w-0 flex-1 truncate">
                   {baseName(path)}
                   {dir && <span className="ml-2 text-muted-foreground">{dir.replace(/\/$/, "")}</span>}
@@ -153,7 +159,7 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
           );
         })}
       </ul>
-      {active && <FileDiff row={active} cwd={cwd} style={style} onOpen={onOpen} />}
+      {active && <FileDiff key={active.change.path} row={active} cwd={cwd} style={style} onOpen={onOpen} />}
     </div>
   );
 }
@@ -167,35 +173,56 @@ function StatsText({ stats }: { stats: Stats }) {
   );
 }
 
+function KindBadge({ kind }: { kind: Kind }) {
+  return (
+    <span className={cn("w-3 shrink-0 font-mono font-medium text-xs", KIND_COLOR[kind])} title={KIND_TITLE[kind]} data-testid="change-badge">
+      {kind}
+    </span>
+  );
+}
+
 function FileDiff({ row, cwd, style, onOpen }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void }) {
   const { path } = row.change;
   const dark = useDark();
-  const options = useMemo(() => ({ ...DIFF_OPTIONS, diffStyle: style, themeType: dark ? ("dark" as const) : ("light" as const) }), [style, dark]);
+  // Drawn once the highlighter is loaded (seconds on a first load): until then a loading line.
+  const [drawn, setDrawn] = useState(false);
+  // One header per file, like OpenCode's (file header off in the library): the panel's own, with the relative path.
+  const options = useMemo(
+    () => ({ ...DIFF_OPTIONS, diffStyle: style, themeType: dark ? ("dark" as const) : ("light" as const), disableFileHeader: true, onPostRender: () => setDrawn(true) }),
+    [style, dark],
+  );
   const files = useMemo(
     () => (row.before === undefined || row.after === undefined ? undefined : { old: { name: path, contents: row.before }, new: { name: path, contents: row.after } }),
     [path, row.before, row.after],
   );
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="file-diff" data-diff-style={style}>
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3 max-md:h-14">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3 max-md:h-14" data-testid="file-diff-header">
+        <KindBadge kind={row.kind} />
         <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground text-xs" title={path}>
           {relative(path, cwd)}
         </span>
+        {row.stats && <StatsText stats={row.stats} />}
         <Button size="sm" variant="ghost" className="max-md:h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
           <SquareArrowOutUpRightIcon /> Open in editor
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2 text-xs">
         {row.error && <p className="p-2 text-destructive">{row.error}</p>}
+        {!row.error && (row.after === undefined || (files && !drawn)) && (
+          <p className="p-2 text-muted-foreground" data-testid="diff-loading">
+            Loading diff…
+          </p>
+        )}
         {files ? (
           <MultiFileDiff oldFile={files.old} newFile={files.new} options={options} />
         ) : (
           !row.error &&
           row.after !== undefined && (
             <div className="flex flex-col gap-2">
-              <p className="text-muted-foreground">The file before this session is unknown (restored session): each edit is shown.</p>
+              <p className="text-muted-foreground">The file before this session is unknown: each edit is shown.</p>
               {row.change.calls.map((c) => (
-                <InputDiff key={c.id} tool={c.tool} input={c.input} diffStyle={style} />
+                <InputDiff key={c.id} tool={c.tool} input={c.input} diffStyle={style} fileHeader={false} />
               ))}
             </div>
           )

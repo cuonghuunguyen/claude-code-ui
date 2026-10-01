@@ -190,11 +190,14 @@ export function InputDiff({
   input,
   fallback,
   diffStyle = "unified",
+  fileHeader = true,
 }: {
   tool: string;
   input: unknown;
   fallback?: ReactNode;
   diffStyle?: "unified" | "split";
+  /** False under a header of the caller's own (changes tab). */
+  fileHeader?: boolean;
 }) {
   const cwd = use(CwdContext);
   const files = useMemo(() => {
@@ -205,7 +208,10 @@ export function InputDiff({
     return { oldFile: { ...f.oldFile, name }, newFile: { ...f.newFile, name } };
   }, [tool, input, cwd]);
   const dark = useDark();
-  const options = useMemo(() => ({ ...DIFF_OPTIONS, diffStyle, themeType: dark ? ("dark" as const) : ("light" as const) }), [dark, diffStyle]);
+  const options = useMemo(
+    () => ({ ...DIFF_OPTIONS, diffStyle, themeType: dark ? ("dark" as const) : ("light" as const), disableFileHeader: !fileHeader }),
+    [dark, diffStyle, fileHeader],
+  );
   if (!files) return fallback;
   return (
     <div className="overflow-hidden rounded-md border text-xs" data-testid="edit-diff">

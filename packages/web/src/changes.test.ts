@@ -66,8 +66,8 @@ describe("baseline", () => {
   });
 
   it("undoes the edits backwards from the disk content without an original", () => {
-    const c = changes([call("e1", "Edit", edit("/f", "b = 2", "b = 3")), call("e2", "Edit", edit("/f", "a = 1", "a = $&")), call("e3", "Edit", edit("/f", "q", "r", true))]);
-    expect(baseline("a = $&\nb = 3\nr r\n", c)).toBe("a = 1\nb = 2\nq q\n");
+    const c = changes([call("e1", "Edit", edit("/f", "b = 2", "b = 3")), call("e2", "Edit", edit("/f", "a = 1", "a = $&")), call("e3", "Edit", edit("/f", "q", "r", false))]);
+    expect(baseline("a = $&\nb = 3\nr\n", c)).toBe("a = 1\nb = 2\nq\n");
   });
 
   it("is empty for a created file, undefined when undoing is ambiguous", () => {
@@ -76,6 +76,15 @@ describe("baseline", () => {
     expect(baseline("y y\n", changes([call("e1", "Edit", edit("/f", "x", "y"))]))).toBeUndefined();
     expect(baseline("a\n", changes([call("e1", "Edit", edit("/f", "gone\n", ""))]))).toBeUndefined();
     expect(baseline("edited elsewhere\n", changes([call("e1", "Edit", edit("/f", "x", "y"))]))).toBeUndefined();
+    // Overlapping matches: "ab" with b → aa is "aaa"; "aa" sits at 0 and 1, undoing at 0 would give "ba".
+    expect(baseline("aaa", changes([call("e1", "Edit", edit("/f", "b", "aa"))]))).toBeUndefined();
+    // A Write after the first call: the file before it is unknown.
+    expect(baseline("n\n", changes([call("e1", "Edit", edit("/f", "x", "y")), call("w1", "Write", { file_path: "/f", content: "n\n" }), result("w1", "File created successfully at: /f")]))).toBeUndefined();
+  });
+
+  it("is undefined for a replace_all edit: the disk cannot tell the replaced text from the same text that was there before", () => {
+    // File "y\nx\n", Edit x → y replace_all, disk "y\ny\n": undoing every y would give "x\nx\n", not the true "y\nx\n".
+    expect(baseline("y\ny\n", changes([call("e1", "Edit", edit("/f", "x", "y", true))]))).toBeUndefined();
   });
 });
 

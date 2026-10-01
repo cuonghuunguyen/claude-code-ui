@@ -29,11 +29,16 @@ export function sessionChanges(s: SessionView): FileChange[] {
   return [...byPath.values()];
 }
 
-const count = (text: string, part: string) => text.split(part).length - 1;
+/** Whether `part` occurs exactly once in `text`, overlapping matches counted. */
+const once = (text: string, part: string) => {
+  const i = text.indexOf(part);
+  return i >= 0 && text.indexOf(part, i + 1) < 0;
+};
 
 /**
  * The file before the session's changes: the daemon's original, else the calls undone backwards from `after` (the disk).
- * Undefined when that is ambiguous: an Edit whose new text is empty or not found exactly once, a Write over an existing file.
+ * Undefined when that is ambiguous: a replace_all Edit (its new text may also have been there before), an Edit whose new text is empty or not
+ * found exactly once, a Write that is not the creation of the file by the first call.
  * ponytail: a restored transcript has no originals, so such files show the per-call diffs instead.
  */
 export function baseline(after: string, c: FileChange): string | undefined {
@@ -48,10 +53,8 @@ export function baseline(after: string, c: FileChange): string | undefined {
       return i === 0 && typeof out === "string" && /created successfully/i.test(out) ? "" : undefined;
     }
     const { old_string: from, new_string: to } = input;
-    if (typeof from !== "string" || typeof to !== "string" || !to) return undefined;
-    if (input.replace_all === true) text = text.split(to).join(from);
-    else if (count(text, to) === 1) text = text.replace(to, () => from);
-    else return undefined;
+    if (typeof from !== "string" || typeof to !== "string" || !to || input.replace_all === true || !once(text, to)) return undefined;
+    text = text.replace(to, () => from);
   }
   return text;
 }
