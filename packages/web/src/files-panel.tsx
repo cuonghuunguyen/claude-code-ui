@@ -6,6 +6,7 @@ import { keymap } from "@codemirror/view";
 import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import type { FsEntry, FsListResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
+import { ChevronDownIcon, ChevronRightIcon, RotateCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { connect, ConnectionStatus } from "./client.ts";
 import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
@@ -114,7 +115,7 @@ export function FilesPanel({
           aria-expanded={showTree}
           data-testid="toggle-tree"
         >
-          {showTree ? "▾" : "▸"} Files
+          {showTree ? <ChevronDownIcon /> : <ChevronRightIcon />} Files
         </Button>
         <Button
           size="xs"
@@ -122,8 +123,9 @@ export function FilesPanel({
           className="ml-auto"
           onClick={() => setTreeKey((k) => k + 1)}
           title="Reload the file tree"
+          aria-label="Reload the file tree"
         >
-          ↻
+          <RotateCwIcon />
         </Button>
       </div>
       {showTree && (
@@ -152,7 +154,7 @@ export function FilesPanel({
                 <button className="py-1.5" onClick={() => setActivePath(p)}>
                   {baseName(p)}
                   {isDirty(t) && <span aria-label="unsaved"> ●</span>}
-                  {t.conflict && <span className="text-amber-600"> !</span>}
+                  {t.conflict && <span className="text-warning"> !</span>}
                 </button>
                 <button
                   className="px-1.5 py-1.5 text-muted-foreground hover:text-foreground"
@@ -170,7 +172,7 @@ export function FilesPanel({
         <div className="flex min-h-0 flex-1 flex-col">
           {active.conflict && (
             <div
-              className="flex flex-wrap items-center gap-2 border-b bg-amber-500/10 px-2 py-1.5 text-xs"
+              className="flex flex-wrap items-center gap-2 border-b bg-warning/10 px-2 py-1.5 text-xs"
               role="alert"
               data-testid="editor-conflict"
             >
@@ -263,14 +265,18 @@ function TreeDir({
       {entries.map((e) => (
         <li key={e.path}>
           <button
-            className={`w-full truncate py-1 pr-2 text-left hover:bg-muted ${e.path === activePath ? "bg-muted" : ""}`}
+            className={`flex w-full items-center gap-1 py-1 pr-2 text-left hover:bg-muted ${e.path === activePath ? "bg-muted" : ""}`}
             style={pad}
             data-testid="tree-entry"
             aria-expanded={e.isDir ? !!expanded[e.path] : undefined}
             onClick={() => (e.isDir ? setExpanded((x) => ({ ...x, [e.path]: !x[e.path] })) : onOpen(e.path))}
           >
-            {e.isDir ? (expanded[e.path] ? "▾ " : "▸ ") : "  "}
-            {e.name}
+            {e.isDir ? (
+              expanded[e.path] ? <ChevronDownIcon className="size-3.5 shrink-0 text-faint" /> : <ChevronRightIcon className="size-3.5 shrink-0 text-faint" />
+            ) : (
+              <span className="size-3.5 shrink-0" />
+            )}
+            <span className="truncate">{e.name}</span>
           </button>
           {e.isDir && expanded[e.path] && (
             <TreeDir client={client} path={e.path} depth={depth + 1} activePath={activePath} onOpen={onOpen} />

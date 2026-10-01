@@ -1,34 +1,34 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
 
 /* Streamdown (AI Elements MessageResponse) ships Tailwind classes in its dist. */
 @source "../../../node_modules/streamdown/dist/*.js";
 
+/* Dark = `.dark` on <html>, set by theme.ts (system / light / dark). */
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+    /* OpenCode chrome: Inter 13px/440, emphasis 530, small 11px; timeline 14px/160% system sans. */
     --font-heading: var(--font-sans);
-    --font-sans: 'Geist Variable', sans-serif;
-    --color-sidebar-ring: var(--sidebar-ring);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar: var(--sidebar);
-    --color-chart-5: var(--chart-5);
-    --color-chart-4: var(--chart-4);
-    --color-chart-3: var(--chart-3);
-    --color-chart-2: var(--chart-2);
-    --color-chart-1: var(--chart-1);
+    --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+    --font-timeline: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --text-sm: 13px;
+    --text-sm--line-height: 20px;
+    --text-xs: 11px;
+    --text-xs--line-height: 16px;
+    --font-weight-normal: 440;
+    --font-weight-medium: 530;
+    --font-weight-semibold: 530;
     --color-ring: var(--ring);
     --color-input: var(--input);
     --color-border: var(--border);
     --color-destructive: var(--destructive);
     --color-success: var(--success);
+    --color-warning: var(--warning);
+    --color-info: var(--info);
+    --color-faint: var(--faint);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);
@@ -43,84 +43,96 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
-    --radius-sm: calc(var(--radius) * 0.6);
-    --radius-md: calc(var(--radius) * 0.8);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) * 1.4);
-    --radius-2xl: calc(var(--radius) * 1.8);
-    --radius-3xl: calc(var(--radius) * 2.2);
-    --radius-4xl: calc(var(--radius) * 2.6);
+    --color-overlay: var(--overlay);
+    /* 4 small control, 6 control/row, 8, 10 panel/prompt, 12 dialog/dock (OpenCode tw.css:59-63). */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 10px;
+    --radius-2xl: 12px;
+    --shadow-raised: var(--elevation-raised);
+    --shadow-floating: var(--elevation-floating);
 }
 
+/*
+ * OpenCode oc-2 tokens on shadcn names (development reference: opencode-parity/reference.md A3).
+ * Deviations for WCAG 4.5:1 text contrast (theme.test.ts): light success/warning are darker; --faint is for icons only.
+ */
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --success: oklch(0.527 0.154 150.069);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --radius: 0.375rem;
+    --background: #fafafa;
+    --card: #ffffff;
+    --popover: #ffffff;
+    --foreground: #161616;
+    --card-foreground: #161616;
+    --popover-foreground: #161616;
+    --muted: #fafafa;
+    --muted-foreground: #5c5c5c;
+    --faint: #808080;
+    --secondary: #f2f2f2;
+    --secondary-foreground: #161616;
+    --accent: #0000000a;
+    --accent-foreground: #161616;
+    --primary: #242424;
+    --primary-foreground: #ffffff;
+    --destructive: #b82d35;
+    --success: #167a3b;
+    --warning: #8a6100;
+    --info: #2c47c8;
+    --border: #0000001a;
+    --input: #0000001a;
+    --ring: #7698fd;
+    --overlay: #00000066;
+    --elevation-raised: 0 2px 4px #0000000a, 0 1px 2px -1px #00000014, 0 0 0 0.5px #0000001f;
+    --elevation-floating: 0 8px 16px #0000000a, 0 4px 8px #00000014, 0 0 0 0.5px #0000001f;
+    /* Project avatars: bg / letter; dark letters where white fails 4.5:1. */
+    --avatar-orange: #ee7330; --avatar-orange-fg: #161616;
+    --avatar-yellow: #e7af36; --avatar-yellow-fg: #161616;
+    --avatar-cyan: #0096b8; --avatar-cyan-fg: #161616;
+    --avatar-green: #2eaf5a; --avatar-green-fg: #161616;
+    --avatar-red: #d92e3c; --avatar-red-fg: #ffffff;
+    --avatar-pink: #e4429e; --avatar-pink-fg: #161616;
+    --avatar-blue: #3250df; --avatar-blue-fg: #ffffff;
+    --avatar-purple: #623be2; --avatar-purple-fg: #ffffff;
+    --avatar-gray: #5c5c5c; --avatar-gray-fg: #ffffff;
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --success: oklch(0.792 0.209 151.711);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    color-scheme: dark;
+    --background: #080808;
+    --card: #161616;
+    --popover: #161616;
+    --foreground: #fafafa;
+    --card-foreground: #fafafa;
+    --popover-foreground: #fafafa;
+    --muted: #242424;
+    --muted-foreground: #aeaeae;
+    --faint: #808080;
+    --secondary: #2e2e2e;
+    --secondary-foreground: #fafafa;
+    --accent: #ffffff0f;
+    --accent-foreground: #fafafa;
+    --primary: #5c5c5c;
+    --primary-foreground: #ffffff;
+    --destructive: #f17471;
+    --success: #6bd586;
+    --warning: #f2cf76;
+    --info: #7698fd;
+    --border: #ffffff1a;
+    --input: #ffffff1a;
+    --ring: #7698fd;
+    --overlay: #000000a3;
+    --elevation-raised: 0 2px 4px #0000004d, 0 1px 2px #0000004d, 0 0 0 0.5px #ffffff29, 0 -0.5px 0 #ffffff0f;
+    --elevation-floating: 0 8px 16px #0000004d, 0 4px 8px #0000004d, 0 0 0 0.5px #ffffff29, 0 -0.5px 0 #ffffff0f;
+    --avatar-orange: #723d22; --avatar-orange-fg: #ffffff;
+    --avatar-yellow: #68552b; --avatar-yellow-fg: #ffffff;
+    --avatar-cyan: #005a6e; --avatar-cyan-fg: #ffffff;
+    --avatar-green: #196130; --avatar-green-fg: #ffffff;
+    --avatar-red: #7a1f23; --avatar-red-fg: #ffffff;
+    --avatar-pink: #8c2d61; --avatar-pink-fg: #ffffff;
+    --avatar-blue: #263fa9; --avatar-blue-fg: #ffffff;
+    --avatar-purple: #361f83; --avatar-purple-fg: #ffffff;
+    --avatar-gray: #5c5c5c; --avatar-gray-fg: #ffffff;
 }
 
 @layer base {
@@ -128,9 +140,17 @@
     @apply border-border outline-ring/50;
     }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground text-sm;
+    letter-spacing: -0.04px;
     }
   html {
     @apply font-sans;
     }
+}
+
+/* Session timeline text (OpenCode markdown.css): system sans 14px / 160%. */
+.timeline {
+  font-family: var(--font-timeline);
+  font-size: 14px;
+  line-height: 1.6;
 }

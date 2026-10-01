@@ -55,13 +55,13 @@ const statusLabels: Record<ToolPart["state"], string> = {
 
 // Icon-only while in progress or done; outcomes that need attention also show their label.
 const statusIcons: Record<ToolPart["state"], ReactNode> = {
-  "approval-requested": <ShieldAlertIcon className="size-4 text-amber-600" />,
+  "approval-requested": <ShieldAlertIcon className="size-4 text-warning" />,
   "approval-responded": <CheckIcon className="size-4 text-muted-foreground" />,
   "input-available": <LoaderCircleIcon className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" />,
   "input-streaming": <LoaderCircleIcon className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" />,
-  "output-available": <CheckIcon className="size-4 text-green-600" />,
-  "output-denied": <XCircleIcon className="size-4 text-orange-600" />,
-  "output-error": <XCircleIcon className="size-4 text-red-600" />,
+  "output-available": <CheckIcon className="size-4 text-success" />,
+  "output-denied": <XCircleIcon className="size-4 text-warning" />,
+  "output-error": <XCircleIcon className="size-4 text-destructive" />,
 };
 const labelled = new Set<ToolPart["state"]>(["approval-requested", "output-denied", "output-error"]);
 

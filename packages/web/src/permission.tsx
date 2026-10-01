@@ -56,7 +56,7 @@ export function PermissionPanel({ part, onRespond }: { part: PermissionRequest; 
     onRespond({ decision: "deny", message: feedback.trim() || undefined });
   };
   return (
-    <section className="flex flex-col gap-2 rounded-lg border border-amber-500/50 p-3 text-sm" data-testid="permission-panel" aria-label="Permission request">
+    <section className="flex flex-col gap-2 rounded-lg border border-warning/50 p-3 text-sm" data-testid="permission-panel" aria-label="Permission request">
       <p className="font-medium">{part.title ?? `Claude wants to use ${part.tool}`}</p>
       {draft === undefined ? (
         <pre className="max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-xs">{inputText(part.input)}</pre>

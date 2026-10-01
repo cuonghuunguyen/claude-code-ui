@@ -29,7 +29,6 @@ it("a failed prompt goes back into the prompt box and shows the error in the pan
         onModel={noop}
         onPrompt={onPrompt}
         onSearch={async () => []}
-        onMenu={noop}
         onInterrupt={noop}
         onRewindPreview={async () => ({ filesChanged: [], insertions: 0, deletions: 0, conversation: false })}
         onRewind={async () => {}}

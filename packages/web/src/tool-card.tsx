@@ -2,6 +2,7 @@
 import type { Part, TodoItem, ToolStatus } from "@claude-ui/protocol";
 import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
+import { useDark } from "./theme.ts";
 import type { ToolUIPart } from "ai";
 import { useMemo, useState, type ReactNode } from "react";
 import { CheckCircle2Icon, ChevronDownIcon, CircleDotIcon, CircleIcon, ListTodoIcon } from "lucide-react";
@@ -26,11 +27,10 @@ const STATE: Record<ToolStatus, ToolUIPart["state"]> = {
 
 const text = (output: unknown) => (typeof output === "string" ? output : JSON.stringify(output, null, 2));
 
-// ponytail: light only, like the app (nothing sets `.dark` yet); pass themeType "dark" when a theme toggle lands.
+// themeType follows the app theme (`.dark` on <html>), not the OS: "system" would ignore the theme toggle.
 const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {
   diffStyle: "unified",
   theme: { light: "pierre-light", dark: "pierre-dark" },
-  themeType: "light",
   overflow: "wrap",
   disableFileHeader: true,
 };
@@ -152,10 +152,12 @@ function EditDiff({ call, result }: { call: ToolCall; result?: ToolResult }) {
 /** The Edit/Write diff of a tool input; `fallback` while the input is incomplete. Also used by the permission panel. */
 export function InputDiff({ tool, input, fallback }: { tool: string; input: unknown; fallback?: ReactNode }) {
   const files = useMemo(() => editFiles(tool, input), [tool, input]);
+  const dark = useDark();
+  const options = useMemo(() => ({ ...DIFF_OPTIONS, themeType: dark ? ("dark" as const) : ("light" as const) }), [dark]);
   if (!files) return fallback;
   return (
     <div className="overflow-hidden rounded-md border text-xs" data-testid="edit-diff">
-      <MultiFileDiff oldFile={files.oldFile} newFile={files.newFile} options={DIFF_OPTIONS} />
+      <MultiFileDiff oldFile={files.oldFile} newFile={files.newFile} options={options} />
     </div>
   );
 }
@@ -253,7 +255,7 @@ export function SubagentGroup({ part, result, awaiting, children }: { part: Suba
 }
 
 const TODO_ICONS: Record<TodoItem["status"], ReactNode> = {
-  completed: <CheckCircle2Icon className="size-4 shrink-0 text-green-600" />,
+  completed: <CheckCircle2Icon className="size-4 shrink-0 text-success" />,
   in_progress: <CircleDotIcon className="size-4 shrink-0 animate-pulse text-foreground" />,
   pending: <CircleIcon className="size-4 shrink-0" />,
 };
