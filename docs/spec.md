@@ -46,7 +46,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 - A live session is one long-lived `query()` in streaming input mode (required for `canUseTool`, `interrupt()`, images, `setModel()`). After a daemon restart, a session is resumed by a new `query({resume})` with the same ID.
 - `settingSources: ['user', 'project']`, so CLAUDE.md, commands, skills and permission rules load like in Claude Code.
 - States: `idle`, `running`, `needs_input` (permission request or question pending), `error`, `closed`.
-- Session list = `listSessions()` filtered to cwds inside the allowlisted roots. Includes sessions started in the terminal CLI; they can be resumed.
+- Session list = `listSessions()` filtered to cwds inside the allowlisted roots. Includes sessions started in the terminal CLI; they can be resumed. One scan at a time; the last result is reused while no transcript file changed (each `listSessions()` call grows the daemon RSS by ~3-4 MB natively, SDK 0.3.285). The web app re-lists on a live `session_state` change, not on replayed ones.
 - No protection when the terminal CLI and the daemon drive the same session at once (same as OpenCode).
 
 ### Projects

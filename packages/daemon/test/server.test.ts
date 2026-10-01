@@ -822,6 +822,39 @@ describe("daemon", () => {
     }
   });
 
+  it("reuses the last transcript scan while no transcript file changed (listSessions() leaks RSS per call)", async () => {
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const dir = join(projectsDir, "-p");
+    mkdirSync(dir);
+    const file = join(dir, "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b.jsonl");
+    writeFileSync(file, "{}\n");
+    let scans = 0;
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      projectsDir,
+      listCache: true,
+      history: { listSessions: (async () => (scans++, [])) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.list" });
+      await c.request({ type: "session.list" });
+      expect(scans).toBe(1);
+      writeFileSync(file, "{}\n{}\n");
+      await c.request({ type: "session.list" });
+      expect(scans).toBe(2);
+      writeFileSync(join(dir, "5b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b.jsonl"), "{}\n");
+      await c.request({ type: "session.list" });
+      expect(scans).toBe(3);
+    } finally {
+      d.close();
+    }
+  });
+
   it("lists by the last message time in the transcript, not the file mtime that metadata appended on CLI exit bumps", async () => {
     const [older, newer, noFile] = ["4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", "5b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", "6b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b"];
     const cwd = join(webRoot, "my proj");

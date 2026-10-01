@@ -104,6 +104,29 @@ function transcriptSettings(projectsDir: string, cwd: string, sessionId: string)
   return found;
 }
 
+/** Names, sizes and mtimes of every transcript under `projectsDir`; undefined when it cannot be read. */
+function transcriptStamp(projectsDir: string) {
+  try {
+    const parts: string[] = [];
+    for (const dir of readdirSync(projectsDir, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      const path = join(projectsDir, dir.name);
+      for (const f of readdirSync(path)) {
+        if (!f.endsWith(".jsonl")) continue;
+        try {
+          const st = statSync(join(path, f));
+          parts.push(`${dir.name}/${f}:${st.size}:${st.mtimeMs}`);
+        } catch {
+          // Deleted meanwhile.
+        }
+      }
+    }
+    return parts.join("\n");
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Time of the last user or assistant entry in a session's transcript, read from its end. Not the file mtime: on exit
  * the CLI appends metadata (`last-prompt`, `cost-state`), so every live session looks just used after a daemon restart.
@@ -154,6 +177,8 @@ function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
  * `settingsFile`: JSON file keeping each session's model, permission mode and effort for a restore after a restart
  * (the SDK transcript has mode and effort only per prompt); none = not kept.
  * `projects`: known projects store; in memory when omitted.
+ * `listCache`: reuse the last transcript scan while no transcript file under `projectsDir` changed (default: on with the
+ * SDK's own listSessions()).
  */
 export function createDaemon(opts: {
   webRoot: string;
@@ -167,6 +192,7 @@ export function createDaemon(opts: {
   projectsDir?: string;
   settingsFile?: string;
   projects?: Projects;
+  listCache?: boolean;
 }) {
   const logEpoch = randomUUID();
   /**
@@ -254,10 +280,22 @@ export function createDaemon(opts: {
 
   // listSessions() reads every transcript under ~/.claude/projects (hundreds of MB): one scan at a time.
   // Requests during a scan share one queued scan, so a reply is never older than its request.
+  // Each listSessions() call also grows the daemon RSS by ~4 MB that it never returns (SDK 0.3.285, heap flat; probe in
+  // development-docs/FIX-C/ls-probe.log): while no transcript changed (names, sizes, mtimes), the last result is reused.
   let scan: ReturnType<typeof listSessions> | undefined;
   let nextScan: ReturnType<typeof listSessions> | undefined;
+  let lastScan: { stamp: string; result: Awaited<ReturnType<typeof listSessions>> } | undefined;
+  const listCache = opts.listCache ?? !opts.history?.listSessions;
   function transcripts(): ReturnType<typeof listSessions> {
-    if (!scan) return (scan = history.listSessions().finally(() => (scan = undefined)));
+    if (!scan) {
+      // Taken before the scan: a file written during it changes the next stamp.
+      const stamp = listCache ? transcriptStamp(projectsDir) : undefined;
+      if (stamp !== undefined && lastScan?.stamp === stamp) return Promise.resolve(lastScan.result);
+      return (scan = history
+        .listSessions()
+        .then((result) => ((lastScan = stamp === undefined ? undefined : { stamp, result }), result))
+        .finally(() => (scan = undefined)));
+    }
     return (nextScan ??= scan.catch(() => {}).then(() => ((nextScan = undefined), transcripts())));
   }
 
