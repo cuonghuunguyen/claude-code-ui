@@ -1,4 +1,4 @@
-import { Activity, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type RefObject } from "react";
+import { Activity, lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type RefObject } from "react";
 import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SquareTerminalIcon, SunIcon } from "lucide-react";
 import type {
   ContextUsage,
@@ -54,7 +54,6 @@ import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { relPath } from "./tools.ts";
 import { FilesPanel } from "./files-panel.tsx";
 import { ChangesPanel } from "./changes-panel.tsx";
-import { TerminalPanel } from "./terminal-panel.tsx";
 import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
@@ -71,6 +70,24 @@ type Client = ReturnType<typeof connect>;
 // The active tab lives in the URL hash, so a reload reopens it.
 const hashTab = () => tabFromHash(location.hash);
 const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-raised";
+// xterm (~300 KB) loads with the first opened terminal panel, not with the app.
+const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ default: m.TerminalPanel })));
+const TERMINAL_KEY = "claude-ui.terminalOpen";
+const loadFlag = (key: string) => {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+};
+const saveFlag = (key: string, on: boolean) => {
+  try {
+    if (on) localStorage.setItem(key, "1");
+    else localStorage.removeItem(key);
+  } catch {
+    // Storage blocked: the state lasts until the page reloads.
+  }
+};
 const hashId = () => (hashTab() === NEW_TAB ? undefined : hashTab());
 
 const pageFocused = () => document.visibilityState === "visible" && document.hasFocus();
@@ -138,7 +155,9 @@ export function App() {
   // A user message whose rewind panel the palette asked for, waiting for its SessionPane.
   const [rewindTo, setRewindTo] = useState<string>();
   // Wide screens: the terminal panel below the side panel (Toggle terminal); narrow screens show it as the "terminal" pane.
-  const [terminalOpen, setTerminalOpen] = useState(false);
+  // Kept per browser across reloads; the daemon's shells outlive the page.
+  const [terminalOpen, setTerminalOpen] = useState(() => loadFlag(TERMINAL_KEY));
+  useEffect(() => saveFlag(TERMINAL_KEY, terminalOpen), [terminalOpen]);
   // A mention from "Send selection to Claude", waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
@@ -743,12 +762,14 @@ export function App() {
                     className={`${card} ${pane === "terminal" ? "flex-1" : "max-lg:hidden"} ${!terminalOpen ? "lg:hidden" : panel ? "lg:h-70 lg:flex-none" : "lg:flex-1"}`}
                     data-testid="terminal-panel"
                   >
-                    <TerminalPanel
-                      client={client.current!}
-                      status={status}
-                      cwd={panelSession.cwd}
-                      onEmpty={() => (setTerminalOpen(false), pane === "terminal" && setPane("session"))}
-                    />
+                    <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading terminal…</p>}>
+                      <TerminalPanel
+                        client={client.current!}
+                        status={status}
+                        cwd={panelSession.cwd}
+                        onEmpty={() => (setTerminalOpen(false), pane === "terminal" && setPane("session"))}
+                      />
+                    </Suspense>
                   </section>
                 )}
                 </div>

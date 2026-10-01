@@ -31,8 +31,28 @@ const replies: Record<string, unknown> = {
   "fs.list": { entries: [] },
   "fs.search": { paths: [] },
   "fs.read": { content: "x", mtime: 1 },
+  "terminal.list": { terminals: [{ id: "t1", title: "Terminal 1" }] },
+  "terminal.attach": { buffer: "" },
   "session.rewindPreview": { filesChanged: [], insertions: 0, deletions: 0, conversation: true },
 };
+// xterm needs a canvas; the panel only has to mount.
+vi.mock("@xterm/xterm", () => ({
+  Terminal: class {
+    options = {};
+    cols = 80;
+    rows = 24;
+    loadAddon() {}
+    open() {}
+    focus() {}
+    write() {}
+    reset() {}
+    onData() {}
+    onResize() {}
+    attachCustomKeyEventHandler() {}
+    dispose() {}
+  },
+}));
+vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 let emit: (e: unknown) => void = () => {};
 let sessionsChanged: (m: unknown) => void = () => {};
 const sent: { type: string }[] = [];
@@ -42,7 +62,7 @@ vi.mock("./client.ts", async (orig) => ({
     emit = opts.onEvent;
     sessionsChanged = opts.onSessionsChanged ?? (() => {});
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
-    return { request: async (m: { type: string }) => (sent.push(m), replies[m.type] ?? {}), onFsChanged: () => () => {}, close() {} };
+    return { request: async (m: { type: string }) => (sent.push(m), replies[m.type] ?? {}), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
   },
 }));
 const { App } = await import("./App.tsx");
@@ -254,4 +274,24 @@ it("a project removed by another client closes its open session tabs here", asyn
   } finally {
     replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
   }
+});
+
+it("xterm is code split: App loads the terminal panel lazily", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { URL: NodeURL } = await import("node:url");
+  const src = readFileSync(new NodeURL("./App.tsx", import.meta.url), "utf8");
+  expect(src).not.toMatch(/^import .* from "\.\/terminal-panel\.tsx";/m);
+  expect(src).toMatch(/lazy\(\(\) => import\("\.\/terminal-panel\.tsx"\)/);
+});
+
+it("the terminal panel stays open across a reload", async () => {
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
+  expect(el.querySelector('[data-testid="terminal-toggle"]')!.getAttribute("aria-pressed")).toBe("true");
+  act(() => root.unmount());
+  root = createRoot(el);
+  await act(async () => root.render(<App />));
+  await act(async () => {});
+  expect(el.querySelector('[data-testid="terminal-toggle"]')!.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
+  localStorage.clear();
 });
