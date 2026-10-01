@@ -46,6 +46,15 @@ describe("sessionChanges", () => {
     const s = view([call("e1", "Edit", edit("/p/b.ts", "x", "y")), result("e1", "ok", "x\n"), call("w1", "Write", { file_path: "/p/n.ts", content: "" }), result("w1", "ok", null)]);
     expect(sessionChanges(s).map((c) => c.original)).toEqual(["x\n", null]);
   });
+
+  it("ignores a later call's original: after a daemon restart the first new edit's original is the file after the earlier edits", () => {
+    // e1 restored from the transcript (no original), e2 live after the restart: its original already contains e1.
+    const c = sessionChanges(view([call("e1", "Edit", edit("/f", "a = 1", "a = 2")), call("e2", "Edit", edit("/f", "b = 1", "b = 2")), result("e2", "ok", "a = 2\nb = 1\n")]))[0]!;
+    expect(c.original).toBeUndefined();
+    const before = baseline("a = 2\nb = 2\n", c)!;
+    expect(before).toBe("a = 1\nb = 1\n");
+    expect(fileStats(before, "a = 2\nb = 2\n", "f")).toEqual({ added: 2, removed: 2 });
+  });
 });
 
 describe("baseline", () => {

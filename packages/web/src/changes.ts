@@ -20,7 +20,9 @@ export function sessionChanges(s: SessionView): FileChange[] {
     const result = s.parts.get(`${p.toolUseId}:result`);
     const c = byPath.get(path) ?? { path, calls: [], results: [] };
     if (!byPath.has(path)) byPath.set(path, c);
-    if (result?.type === "tool_result" && "original" in result) c.original = result.original;
+    // Only the first call's original is the file before the session: the daemon sends one per path per query, so after a restart a later call's
+    // original already holds the earlier edits.
+    if (!c.calls.length && result?.type === "tool_result" && "original" in result) c.original = result.original;
     c.calls.push(p);
     c.results.push(result);
   }

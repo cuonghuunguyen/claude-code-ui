@@ -1,5 +1,5 @@
 // Changes tab (docs/spec.md "Layout"): files changed in the session, each with its diff, like OpenCode's review panel.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { FsReadResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { Columns2Icon, FileDiffIcon, RotateCwIcon, Rows2Icon, SquareArrowOutUpRightIcon } from "lucide-react";
@@ -20,16 +20,43 @@ type Row = { change: FileChange; before?: string; after?: string; error?: string
 const baseName = (path: string) => path.split("/").at(-1) ?? path;
 const relative = (path: string, cwd: string) => (path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path);
 
+// Diff style like OpenCode's review panel: split by default, the choice kept per browser; below md always unified.
+const STYLE_KEY = "claude-ui.diffStyle";
+function loadStyle(): DiffStyle {
+  try {
+    return localStorage.getItem(STYLE_KEY) === "unified" ? "unified" : "split";
+  } catch {
+    return "split";
+  }
+}
+function saveStyle(s: DiffStyle) {
+  try {
+    localStorage.setItem(STYLE_KEY, s);
+  } catch {
+    // Storage blocked: the choice lasts while the panel is open.
+  }
+}
+const narrowQuery = () => matchMedia("(max-width: 767.98px)");
+const onNarrowChange = (cb: () => void) => {
+  const mq = narrowQuery();
+  mq.addEventListener("change", cb);
+  return () => mq.removeEventListener("change", cb);
+};
+const useNarrow = () => useSyncExternalStore(onNarrowChange, () => narrowQuery().matches);
+
 /**
- * Re-reads the files whenever a call changes one, so the diffs follow Claude live.
- * ponytail: no fs.watch (the files panel owns this connection's watch list); a change made outside the session shows after ↻.
+ * Re-reads the files whenever a call changes one, so the diffs follow Claude live, and on `fs.changed` (Bash or outside edits).
+ * The files panel owns this connection's fs.watch list; App adds the changed files to it.
  */
 export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; view: SessionView; cwd: string; onOpen: (path: string) => void }) {
   const changes = useMemo(() => sessionChanges(view), [view.parts]);
   const [disk, setDisk] = useState<Record<string, Disk>>({});
   const [reload, setReload] = useState(0);
   const [selected, setSelected] = useState<string>();
-  const [style, setStyle] = useState<DiffStyle>("unified");
+  const [chosen, setChosen] = useState(loadStyle);
+  const narrow = useNarrow();
+  const style: DiffStyle = narrow ? "unified" : chosen;
+  const choose = (s: DiffStyle) => (setChosen(s), saveStyle(s));
 
   const key = changes.map((c) => `${c.path}\n${c.calls.length}`).join("\n");
   useEffect(() => {
@@ -42,6 +69,7 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
         .then((d) => live && setDisk((x) => ({ ...x, [path]: d })));
     return () => void (live = false);
   }, [key, reload]);
+  useEffect(() => client.onFsChanged((m) => changes.some((c) => c.path === m.path) && setReload((n) => n + 1)), [client, key]);
 
   const rows = useMemo(
     () =>
@@ -73,28 +101,29 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
           {rows.length} Changed {rows.length === 1 ? "file" : "files"}
         </span>
         <StatsText stats={total} />
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1 max-md:gap-2" data-testid="changes-actions">
           <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
             <RotateCwIcon />
           </Button>
-          <div className="flex rounded-md bg-secondary p-0.5" role="radiogroup" aria-label="Diff view">
-            {(["unified", "split"] as const).map((s) => (
-              <Button
-                key={s}
-                size="icon-sm"
-                variant="ghost"
-                role="radio"
-                aria-checked={style === s}
-                aria-label={s === "unified" ? "Unified diff" : "Split diff"}
-                title={s === "unified" ? "Unified diff" : "Split diff"}
-                className={cn("max-md:size-11", style === s && "bg-card shadow-xs hover:bg-card")}
-                onClick={() => setStyle(s)}
-                data-testid={`diff-${s}`}
-              >
-                {s === "unified" ? <Rows2Icon /> : <Columns2Icon />}
-              </Button>
-            ))}
-          </div>
+          {!narrow && (
+            <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Diff view">
+              {(["unified", "split"] as const).map((s) => (
+                <Button
+                  key={s}
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-pressed={style === s}
+                  aria-label={s === "unified" ? "Unified diff" : "Split diff"}
+                  title={s === "unified" ? "Unified diff" : "Split diff"}
+                  className={cn(style === s && "bg-card shadow-xs hover:bg-card")}
+                  onClick={() => choose(s)}
+                  data-testid={`diff-${s}`}
+                >
+                  {s === "unified" ? <Rows2Icon /> : <Columns2Icon />}
+                </Button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
       <ul className="max-h-[35%] shrink-0 overflow-auto border-b p-1" aria-label="Changed files">
@@ -147,7 +176,7 @@ function FileDiff({ row, cwd, style, onOpen }: { row: Row; cwd: string; style: D
     [path, row.before, row.after],
   );
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="file-diff">
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="file-diff" data-diff-style={style}>
       <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3 max-md:h-14">
         <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground text-xs" title={path}>
           {relative(path, cwd)}
