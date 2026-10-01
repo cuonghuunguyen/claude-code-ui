@@ -33,12 +33,29 @@ afterEach(() => {
   localStorage.clear();
 });
 
-async function render() {
+async function render(projects = ["/home/u/web", "/home/u/api"]) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
   const onOpen = vi.fn();
-  await act(async () => root!.render(<SessionList list={LIST} state={(s) => s.state} unread={new Set(["c"])} activeId="a" onOpen={onOpen} />));
+  const onNew = vi.fn();
+  const onRemove = vi.fn();
+  const onOpenProject = vi.fn();
+  await act(async () =>
+    root!.render(
+      <SessionList
+        list={LIST}
+        projects={projects}
+        state={(s) => s.state}
+        unread={new Set(["c"])}
+        activeId="a"
+        onOpen={onOpen}
+        onNew={onNew}
+        onRemove={onRemove}
+        onOpenProject={onOpenProject}
+      />,
+    ),
+  );
   const groups = () => [...el.querySelectorAll<HTMLElement>('[data-testid="session-group"]')];
   const rows = () => [...el.querySelectorAll<HTMLElement>('[data-testid="session-item"]')];
   const toggle = (cwd: string) => el.querySelector<HTMLElement>(`[data-cwd="${cwd}"] [data-testid="group-toggle"]`)!;
@@ -50,7 +67,7 @@ async function render() {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
   };
-  return { el, groups, rows, toggle, search, onOpen };
+  return { el, groups, rows, toggle, search, onOpen, onNew, onRemove, onOpenProject };
 }
 
 it("one group per working directory with the project name as header and the full path only as tooltip", async () => {
@@ -97,4 +114,36 @@ it("search filters by session title and project name, also inside collapsed grou
   expect(el.textContent).toContain('No session title or project matches "nothing"');
   await search("");
   expect(rows()).toHaveLength(2);
+});
+
+it("a known project with no sessions still has a group; its New session and Remove act on that project", async () => {
+  const { el, groups, onNew, onRemove, onOpenProject } = await render(["/home/u/empty", "/home/u/web", "/home/u/api"]);
+  expect(groups().map((g) => g.dataset.cwd)).toEqual(["/home/u/empty", "/home/u/web", "/home/u/api"]);
+  expect(groups()[0]!.textContent).toContain("No sessions yet");
+  const action = (cwd: string, id: string) => el.querySelector<HTMLElement>(`[data-cwd="${cwd}"] [data-testid="${id}"]`)!;
+  expect(action("/home/u/empty", "project-new-session").getAttribute("aria-label")).toBe("New session in empty");
+  await act(async () => action("/home/u/empty", "project-new-session").click());
+  expect(onNew).toHaveBeenCalledWith("/home/u/empty");
+  await act(async () => action("/home/u/api", "project-remove").click());
+  expect(onRemove).toHaveBeenCalledWith("/home/u/api");
+  // The action does not toggle the group.
+  expect(el.querySelector('[data-cwd="/home/u/api"] [data-testid="group-toggle"]')!.getAttribute("aria-expanded")).toBe("true");
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="open-project"]')!.click());
+  expect(onOpenProject).toHaveBeenCalled();
+});
+
+it("with no projects it offers Open project", async () => {
+  const { el, onOpenProject } = await render([]);
+  expect(el.textContent).toContain("No projects yet");
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="open-project"]')!.click());
+  expect(onOpenProject).toHaveBeenCalled();
+});
+
+it("project actions and Open project are visible and 44px on touch screens of any width (no hover there)", async () => {
+  const { el } = await render();
+  // jsdom has no media queries: the classes are the contract (same convention as quick-open, toolbar).
+  const actions = el.querySelector<HTMLElement>('[data-cwd="/home/u/web"] [data-testid="project-new-session"]')!.parentElement!;
+  expect(actions.className).toContain("pointer-coarse:opacity-100");
+  for (const id of ["project-new-session", "project-remove", "open-project"])
+    expect(el.querySelector<HTMLElement>(`[data-testid="${id}"]`)!.className).toContain("pointer-coarse:size-11");
 });

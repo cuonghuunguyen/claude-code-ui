@@ -1,11 +1,11 @@
-// Sidebar session list (docs/spec.md "Layout"): one collapsible group per project, search by title or project name.
+// Sidebar session list (docs/spec.md "Layout"): one collapsible group per known project, search by title or project name.
 import { useState } from "react";
-import { ChevronRightIcon, CircleAlertIcon, LoaderCircleIcon, SearchIcon } from "lucide-react";
+import { ChevronRightIcon, CircleAlertIcon, FolderPlusIcon, LoaderCircleIcon, SearchIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionListItem, SessionState } from "@claude-ui/protocol";
 import { cn } from "@/lib/utils";
 import { groupByCwd, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
-import { ProjectAvatar } from "./tabs-bar.tsx";
+import { IconButton, ProjectAvatar } from "./tabs-bar.tsx";
 
 /** Only states that need attention get an indicator; idle, error and closed rows stay plain. */
 function StateIcon({ state }: { state: SessionState }) {
@@ -18,17 +18,28 @@ const STATE_LABEL: Partial<Record<SessionState, string>> = { running: "running",
 
 export function SessionList({
   list,
+  projects,
   state,
   unread,
   activeId,
   onOpen,
+  onNew,
+  onRemove,
+  onOpenProject,
 }: {
   list: SessionListItem[];
+  /** Known project cwds from the daemon, newest first; a project with no session still gets a group. */
+  projects: string[];
   /** Live state of a session, falling back to its list state. */
   state: (s: SessionListItem) => SessionState;
   unread: Set<string>;
   activeId?: string;
   onOpen: (id: string) => void;
+  /** New session in this project, without a directory picker. */
+  onNew: (cwd: string) => void;
+  /** Removes the project from the list; files stay. */
+  onRemove: (cwd: string) => void;
+  onOpenProject: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(loadCollapsed);
@@ -40,10 +51,25 @@ export function SessionList({
       return next;
     });
 
-  if (!list.length) return <p className="text-muted-foreground text-sm">No sessions in the allowlisted roots.</p>;
-  const groups = groupByCwd(list, query);
+  const groups = groupByCwd(list, query, projects);
+  const header = (
+    <div className="flex h-7 items-center pl-1.5">
+      <h2 className="flex-1 font-medium text-muted-foreground text-sm">Projects</h2>
+      <IconButton label="Open project" onClick={onOpenProject} testId="open-project">
+        <FolderPlusIcon />
+      </IconButton>
+    </div>
+  );
+  if (!projects.length)
+    return (
+      <div className="flex flex-col gap-2">
+        {header}
+        <p className="px-1.5 text-muted-foreground text-sm">No projects yet. Open a project folder to start a session in it.</p>
+      </div>
+    );
   return (
     <div className="flex min-h-0 flex-col gap-2">
+      {header}
       <label className="relative flex items-center">
         <SearchIcon className="pointer-events-none absolute left-2 size-4 text-faint" aria-hidden />
         <input
@@ -63,9 +89,9 @@ export function SessionList({
           const open = !!query.trim() || !collapsed.has(g.cwd);
           return (
             <section key={g.cwd} data-testid="session-group" data-cwd={g.cwd}>
-              <h2>
+              <h3 className="group/project relative">
                 <button
-                  className="flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
+                  className="flex h-7 w-full items-center gap-2 rounded-md pr-16 pl-1.5 text-left max-md:pr-26 pointer-coarse:pr-26 text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
                   aria-expanded={open}
                   onClick={() => toggle(g.cwd)}
                   title={g.cwd}
@@ -75,8 +101,18 @@ export function SessionList({
                   <span className="min-w-0 flex-1 truncate font-medium">{projectName(g.cwd)}</span>
                   <ChevronRightIcon className={cn("size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden />
                 </button>
-              </h2>
-              {open && (
+                {/* OpenCode project row actions: shown on hover or focus; always on touch screens (no hover there), any width. */}
+                <span className="absolute inset-y-0 right-0.5 flex items-center gap-0.5 opacity-100 transition-opacity group-focus-within/project:opacity-100 group-hover/project:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100">
+                  <IconButton label={`New session in ${projectName(g.cwd)}`} onClick={() => onNew(g.cwd)} testId="project-new-session" className="size-6">
+                    <SquarePenIcon />
+                  </IconButton>
+                  <IconButton label={`Remove ${projectName(g.cwd)} from the list (files stay)`} onClick={() => onRemove(g.cwd)} testId="project-remove" className="size-6">
+                    <XIcon />
+                  </IconButton>
+                </span>
+              </h3>
+              {open && !g.sessions.length && <p className="py-1 pl-7 text-muted-foreground text-sm">No sessions yet</p>}
+              {open && g.sessions.length > 0 && (
                 <ul className="mt-0.5 flex flex-col gap-0.5">
                   {g.sessions.map((s) => {
                     const st = state(s);

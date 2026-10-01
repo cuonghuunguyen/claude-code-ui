@@ -5,19 +5,27 @@ import { projectName } from "./tabs.ts";
 /**
  * One group per working directory whatever the input order; groups and sessions newest first.
  * A query keeps sessions whose title or project name contains it.
+ * With `projects` (the daemon's known projects): one group per project in that order, empty ones too; other sessions are dropped.
  */
-export function groupByCwd(items: SessionListItem[], query = "") {
+export function groupByCwd(items: SessionListItem[], query = "", projects?: string[]) {
   const q = query.trim().toLowerCase();
-  const groups = new Map<string, SessionListItem[]>();
+  const groups = new Map<string, SessionListItem[]>(projects?.map((p) => [p, []]));
   for (const s of [...items].sort((a, b) => b.lastActivity - a.lastActivity)) {
-    const cwd = s.cwd.replace(/(.)\/+$/, "$1");
+    const cwd = projectCwd(s.cwd);
+    if (projects && !projects.includes(cwd)) continue;
     if (q && !s.title.toLowerCase().includes(q) && !projectName(cwd).toLowerCase().includes(q)) continue;
     const g = groups.get(cwd);
     if (g) g.push(s);
     else groups.set(cwd, [s]);
   }
-  return [...groups].map(([cwd, sessions]) => ({ cwd, sessions }));
+  return [...groups]
+    .filter(([cwd, sessions]) => sessions.length || !q || projectName(cwd).toLowerCase().includes(q))
+    .map(([cwd, sessions]) => ({ cwd, sessions }));
 }
+
+/** "/p/x/" and "/p/x" are one project (as in the daemon). */
+const projectCwd = (cwd: string) => cwd.replace(/(.)\/+$/, "$1");
+export const inProject = (cwd: string) => (s: SessionListItem) => projectCwd(s.cwd) === cwd;
 
 export function timeAgo(ms: number, now = Date.now()) {
   const m = Math.floor((now - ms) / 60_000);

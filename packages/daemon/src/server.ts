@@ -5,10 +5,11 @@ import { createServer, type IncomingMessage } from "node:http";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { EFFORTS, imageBlock, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
+import { EFFORTS, imageBlock, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
 import { getSessionInfo, getSessionMessages, listSessions, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { createNotifier, type Push } from "./push.ts";
+import { createProjects, trim, type Projects } from "./projects.ts";
 import { listModels, Session, transcriptModel, type SessionSettings } from "./session.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
@@ -100,6 +101,7 @@ function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
  * `projectsDir`: the SDK's transcript folder (default: `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`).
  * `settingsFile`: JSON file keeping each session's model, permission mode and effort for a restore after a restart
  * (the SDK transcript has mode and effort only per prompt); none = not kept.
+ * `projects`: known projects store; in memory when omitted.
  */
 export function createDaemon(opts: {
   webRoot: string;
@@ -112,6 +114,7 @@ export function createDaemon(opts: {
   uploadDir?: string;
   projectsDir?: string;
   settingsFile?: string;
+  projects?: Projects;
 }) {
   const logEpoch = randomUUID();
   /**
@@ -142,6 +145,7 @@ export function createDaemon(opts: {
   const restoring = new Map<string, Promise<Session | undefined>>();
   const history = opts.history ?? { listSessions, getSessionInfo, getSessionMessages };
   const projectsDir = opts.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+  const projects = opts.projects ?? createProjects();
   const root = resolve(opts.webRoot);
   // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
   let models: ReturnType<typeof listModels> | undefined;
@@ -188,7 +192,7 @@ export function createDaemon(opts: {
     return (nextScan ??= scan.catch(() => {}).then(() => ((nextScan = undefined), transcripts())));
   }
 
-  async function list(): Promise<SessionListItem[]> {
+  async function list(): Promise<ListResult> {
     const items = new Map<string, SessionListItem>();
     for (const t of await transcripts()) {
       if (!t.cwd || !allowed(t.cwd)) continue;
@@ -198,7 +202,11 @@ export function createDaemon(opts: {
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
       if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt });
-    return [...items.values()].sort((a, b) => b.lastActivity - a.lastActivity);
+    const all = [...items.values()];
+    // An opened project whose directory is gone or left the roots is not listed (its New session would fail).
+    const known = projects.list(all).filter((cwd) => allowed(cwd));
+    const shown = new Set(known);
+    return { projects: known, sessions: all.filter((s) => shown.has(trim(s.cwd))).sort((a, b) => b.lastActivity - a.lastActivity) };
   }
 
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
@@ -405,7 +413,25 @@ export function createDaemon(opts: {
           }
         }
         case "session.list":
-          return reply({ sessions: await list() });
+          return reply(await list());
+        case "project.open": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
+          try {
+            projects.open(cwd);
+          } catch (err) {
+            return fail("fs_error", String(err));
+          }
+          return reply({ cwd });
+        }
+        case "project.remove":
+          if (typeof msg.cwd !== "string" || !isAbsolute(msg.cwd)) return fail("bad_cwd", "cwd must be an absolute path");
+          try {
+            projects.remove(msg.cwd);
+          } catch (err) {
+            return fail("fs_error", String(err));
+          }
+          return reply({});
         case "fs.list": {
           if (msg.path === undefined)
             return reply({ entries: roots.map((r): FsEntry => ({ name: r, path: r, isDir: true })) });

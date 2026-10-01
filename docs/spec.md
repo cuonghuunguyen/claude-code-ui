@@ -49,6 +49,12 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 - Session list = `listSessions()` filtered to cwds inside the allowlisted roots. Includes sessions started in the terminal CLI; they can be resumed.
 - No protection when the terminal CLI and the daemon drive the same session at once (same as OpenCode).
 
+### Projects
+
+- Known projects = session cwds plus directories opened in the web app ("Open project"), newest activity first. `session.list` returns them with the sessions of those projects.
+- Opened and removed projects are kept in `projects.json` in the daemon config dir, so an opened project with no sessions survives a restart. Session data stays in the transcripts (ADR 0001).
+- Removing a project hides it and its sessions from the list; files and transcripts stay. A session newer than the removal shows it again.
+
 ### Event log and sequence numbers
 
 - Every event has a per-session, monotonically increasing `seq`. The log is in memory only.
@@ -73,7 +79,8 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | client → daemon | `session.rewindPreview {sessionId, userMessageId}` | `rewindFiles` dry run: `filesChanged[]`, `insertions`, `deletions`, `conversation` |
 | client → daemon | `permission.respond {requestId, decision, ruleIndex?, updatedInput?, message?}` | Answer a permission request |
 | client → daemon | `question.respond {requestId, answers}` | Answer a question |
-| client → daemon | `session.list` / `session.close` / `models.list` | Lists and management |
+| client → daemon | `session.list` / `session.close` / `models.list` | Lists and management; `session.list` also returns the known projects |
+| client → daemon | `project.open {cwd}` / `project.remove {cwd}` | Add a directory inside the roots to the known projects / remove one from the list |
 | client → daemon | `fs.list` / `fs.read` / `fs.write` / `fs.search` | File tree, editor, @-mention autocomplete |
 | client → daemon | `fs.watch {paths}` | Replace this connection's watched files (stat polling, 1 s) |
 | client → daemon | `push.key` | The daemon's VAPID public key, for `PushManager.subscribe()` |
@@ -173,8 +180,8 @@ React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 
 - Theme: OpenCode oc-2 tokens, light and dark (follows the OS, or forced from the titlebar toggle); text/background token pairs reach WCAG 4.5:1.
 
-- Titlebar tabs: each open session is a tab (project avatar, title, close; running / needs-input / unread indicator), plus one "New session" tab (directory picker and model choice) opened by `+`. Closing a tab does not stop the session. Middle click closes, drag reorders, overflow scrolls; open tabs, their order and the active tab (also "New session", URL hash `#new`) persist per browser. Arrow keys, Home and End move between tabs (one Tab stop), Delete closes. A Home button left of the tabs shows or hides the sidebar on wide screens. Each tab keeps its scroll position, draft prompt and side panel pane. Narrow screens: one switcher instead of the strip.
-- Sidebar: session list grouped by working directory, with state badge and unread marker. Project avatar colors differ between known projects (up to 9). Clicking a session opens or focuses its tab; "New session" opens the new-session tab.
+- Titlebar tabs: each open session is a tab (project avatar, title, close; running / needs-input / unread indicator), plus one "New session" tab opened by `+`: the session prompt box (same toolbar: attach, permission mode, model, effort) and a project chip (known projects, "Open project…"), starting in the active tab's project; the first prompt creates the session. Closing a tab does not stop the session. Middle click closes, drag reorders, overflow scrolls; open tabs, their order and the active tab (also "New session", URL hash `#new`) persist per browser. Arrow keys, Home and End move between tabs (one Tab stop), Delete closes. A Home button left of the tabs shows or hides the sidebar on wide screens. Each tab keeps its scroll position, draft prompt and side panel pane. Narrow screens: one switcher instead of the strip.
+- Sidebar: one group per known project (also with no sessions), with state badge and unread marker. Project avatar colors differ between known projects (up to 9). Clicking a session opens or focuses its tab. Each project group has "New session" (the new-session tab in that project, no picker) and "Remove"; the "Projects" header has "Open project": a folder browser inside the allowlisted roots with type-ahead.
 - Session view: timeline, prompt box at the bottom, header with project avatar, name and cwd, state, stop button. The model chooser is in the prompt box toolbar.
 - Side panel (resizable): file tree + editor tabs, and a changes/diff tab.
 - Narrow screens: sidebar becomes a drawer; a tab switch replaces the side panel ("session" / "changes" / "files").
