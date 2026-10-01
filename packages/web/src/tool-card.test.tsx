@@ -137,6 +137,15 @@ describe("Grep/Glob card", () => {
   });
 });
 
+describe("ExitPlanMode", () => {
+  it("shows the plan as markdown, not the JSON parameters", () => {
+    const html = renderToStaticMarkup(<ToolBody call={done("ExitPlanMode", { plan: "# Plan\n\n- step **one**" })} result={result("ok")} />);
+    expect(html).toContain('data-testid="plan"');
+    expect(html).toContain('data-streamdown="strong">one<');
+    expect(html).not.toContain("Parameters");
+  });
+});
+
 describe("other tools", () => {
   it("fall back to the generic JSON card", () => {
     const html = renderToStaticMarkup(<ToolBody call={done("WebFetch", { url: "https://x" })} result={result("page")} />);

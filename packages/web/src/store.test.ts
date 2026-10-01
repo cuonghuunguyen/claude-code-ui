@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Event, Part } from "@claude-ui/protocol";
-import { applyEvent, emptySession, withEpoch, type SessionView } from "./store.ts";
+import { applyEvent, emptySession, withSubscribe, type SessionView } from "./store.ts";
+import type { SessionInfo } from "@claude-ui/protocol";
 
 const ev = (seq: number, part: Part): Event => ({ type: "event", sessionId: "s", seq, part });
 const text = (id: string, t: string, streaming = true): Part => ({ type: "assistant_text", id, text: t, streaming });
@@ -74,19 +75,30 @@ describe("applyEvent", () => {
   });
 });
 
-describe("withEpoch", () => {
+describe("withSubscribe", () => {
   const filled = (): SessionView => ({ ...[ev(1, text("a", "x")), ev(2, text("b", "y"))].reduce(applyEvent, emptySession()), logEpoch: "e1" });
+  const info: SessionInfo = { id: "s", cwd: "/", state: "idle", model: "sonnet", permissionMode: "acceptEdits", effort: "high", permissionModes: [] };
 
-  it("keeps the view for the same epoch", () => {
+  it("keeps the timeline for the same epoch", () => {
     const s = filled();
-    expect(withEpoch(s, "e1")).toBe(s);
+    expect(withSubscribe(s, { logEpoch: "e1", seq: 2, session: info })).toMatchObject({ order: s.order, lastSeq: 2 });
   });
 
   it("clears the view on a new epoch so the full replay from seq 1 applies", () => {
-    let s = withEpoch(filled(), "e2");
+    let s = withSubscribe(filled(), { logEpoch: "e2", seq: 0, session: info });
     expect(s).toMatchObject({ logEpoch: "e2", lastSeq: 0, order: [] });
     s = applyEvent(s, ev(1, text("h", "history")));
     expect(s.order).toEqual(["h"]);
+  });
+
+  it("the reply's model, mode and effort win over older changes the replay brings; later changes apply", () => {
+    let s = withSubscribe(emptySession(), { logEpoch: "e1", seq: 3, session: info });
+    s = applyEvent(s, ev(1, { type: "session_permission_mode", id: "session_permission_mode", mode: "plan" }));
+    s = applyEvent(s, ev(2, { type: "session_model", id: "session_model", model: "haiku" }));
+    s = applyEvent(s, ev(3, { type: "session_effort", id: "session_effort", effort: "low" }));
+    expect(s).toMatchObject({ model: "sonnet", permissionMode: "acceptEdits", effort: "high", lastSeq: 3 });
+    s = applyEvent(s, ev(4, { type: "session_permission_mode", id: "session_permission_mode", mode: "default" }));
+    expect(s.permissionMode).toBe("default");
   });
 });
 

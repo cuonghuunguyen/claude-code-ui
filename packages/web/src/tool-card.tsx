@@ -7,6 +7,7 @@ import type { ToolUIPart } from "ai";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
 import { CheckCircle2Icon, CircleDotIcon, CircleIcon, ListTodoIcon } from "lucide-react";
 import { Task, TaskContent, TaskItem, TaskTrigger } from "@/components/ai-elements/task";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolChevron, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark, toolRowClass } from "@/components/ai-elements/tool";
 import { CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -151,19 +152,28 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
     case "Edit":
     case "Write":
       return <EditDiff call={call} result={result} />;
-    default:
+    case "ExitPlanMode": {
+      // The plan as the approval panel shows it; the JSON view until the input has streamed in.
+      const plan = field(call.input, "plan");
+      if (!plan) break;
       return (
-        <>
-          <ToolInput input={call.input} />
-          {result && (
-            <ToolOutput
-              output={result.isError ? undefined : result.output}
-              errorText={result.isError ? text(result.output) : undefined}
-            />
-          )}
-        </>
+        <div className="space-y-2">
+          <div className="max-h-80 overflow-auto rounded-md border p-3" data-testid="plan">
+            <MessageResponse>{plan}</MessageResponse>
+          </div>
+          {result?.isError && <ToolOutput output={undefined} errorText={text(result.output)} />}
+        </div>
       );
+    }
   }
+  return (
+    <>
+      <ToolInput input={call.input} />
+      {result && (
+        <ToolOutput output={result.isError ? undefined : result.output} errorText={result.isError ? text(result.output) : undefined} />
+      )}
+    </>
+  );
 }
 
 /** Unified diff built from the Edit/Write input; the JSON parameters until the input has streamed in. The result text only on error. */

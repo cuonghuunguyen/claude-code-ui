@@ -40,7 +40,14 @@ const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
 /** `allowBypass`: daemon config enables bypassPermissions (docs/spec.md "Security"). */
 /** `uploadDir`: the fs.upload folder, readable by Claude without a permission request. */
-type SessionOpts = { model?: string; allowBypass?: boolean; uploadDir?: string; query?: typeof sdkQuery };
+export type SessionSettings = Pick<SessionInfo, "model" | "permissionMode" | "effort">;
+/** `onSettings`: called after model, permission mode or effort changed (the daemon persists them for a restore). */
+type SessionOpts = Partial<SessionSettings> & {
+  allowBypass?: boolean;
+  uploadDir?: string;
+  query?: typeof sdkQuery;
+  onSettings?: (s: SessionSettings) => void;
+};
 
 // ExitPlanMode comes without suggestions; Claude Code's "Yes, and auto-accept edits" (verified: the CLI then runs in acceptEdits).
 const ACCEPT_EDITS: PermissionUpdate = { type: "setMode", mode: "acceptEdits", destination: "session" };
@@ -57,8 +64,8 @@ export class Session {
   private input = new InputQueue();
   private query?: Query;
   private model: string;
-  private permissionMode: PermissionMode = "default";
-  private effort: Effort = "default";
+  private permissionMode: PermissionMode;
+  private effort: Effort;
   private readonly adapter: ReturnType<typeof createAdapter>;
   /** Bumped when a conversation rewind drops the query; the old drive loop then stops logging. */
   private generation = 0;
@@ -82,6 +89,8 @@ export class Session {
   ) {
     this.id = restored?.id ?? randomUUID();
     this.model = opts.model ?? "default";
+    this.permissionMode = opts.permissionMode ?? "default";
+    this.effort = opts.effort ?? "default";
     this.adapter = createAdapter({ resumed: !!restored });
     if (!restored) {
       this.start({ sessionId: this.id });
@@ -152,6 +161,11 @@ export class Session {
     };
   }
 
+  /** Seq of the last logged event. */
+  seq() {
+    return this.log.length;
+  }
+
   /** Replays events with seq > sinceSeq, then follows. Returns an unsubscribe function. */
   subscribe(sinceSeq: number, listener: Listener): () => void {
     for (const e of this.log) if (e.seq > sinceSeq) listener(e);
@@ -185,6 +199,7 @@ export class Session {
     await this.query?.setModel(model);
     this.model = model;
     this.emit({ type: "session_model", id: "session_model", model });
+    this.settingsChanged();
   }
 
   /** Applies from the next turn on; before the query runs it becomes the start option. */
@@ -201,12 +216,18 @@ export class Session {
     await this.query?.applyFlagSettings({ effortLevel: effort === "default" ? null : effort });
     this.effort = effort;
     this.emit({ type: "session_effort", id: "session_effort", effort });
+    this.settingsChanged();
   }
 
   private setMode(mode: PermissionMode) {
     if (mode === this.permissionMode) return;
     this.permissionMode = mode;
     this.emit({ type: "session_permission_mode", id: "session_permission_mode", mode });
+    this.settingsChanged();
+  }
+
+  private settingsChanged() {
+    this.opts.onSettings?.({ model: this.model, permissionMode: this.permissionMode, effort: this.effort });
   }
 
   /**

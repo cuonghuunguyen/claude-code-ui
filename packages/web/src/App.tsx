@@ -38,7 +38,7 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
+import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withSubscribe, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, TodoList, ToolCard } from "./tool-card.tsx";
 import { relPath } from "./tools.ts";
 import { FilesPanel } from "./files-panel.tsx";
@@ -138,7 +138,7 @@ export function App() {
         logEpoch: view?.logEpoch,
       });
       // Runs before the replayed events: the reply precedes them on the socket and this continuation is a microtask.
-      setViews((v) => ({ ...v, [sessionId]: withEpoch(v[sessionId] ?? emptySession(), r.logEpoch) }));
+      setViews((v) => ({ ...v, [sessionId]: withSubscribe(v[sessionId] ?? emptySession(), r) }));
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
     } catch (e) {
       // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
@@ -189,15 +189,16 @@ export function App() {
         if (e.part.type === "session_state") void refreshList();
       },
       onOpen: () => {
+        // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
+        c.request<ModelsResult>({ type: "models.list" }).then(
+          (r) => setModels(r.models),
+          (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
+        );
         void refreshList();
         const ids = new Set(Object.keys(viewsRef.current));
         const h = hashId();
         if (h) ids.add(h);
         ids.forEach((id) => void subscribe(id));
-        c.request<ModelsResult>({ type: "models.list" }).then(
-          (r) => setModels(r.models),
-          (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
-        );
         void pushSubscription().then((sub) => {
           setPushOn(!!sub);
           if (sub) sendSubscription(c, sub).catch(() => {});
