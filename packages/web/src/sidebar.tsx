@@ -3,7 +3,7 @@ import { useState } from "react";
 import { ArchiveIcon, ChevronRightIcon, CircleAlertIcon, FolderPlusIcon, LoaderCircleIcon, SearchIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionListItem, SessionState } from "@claude-ui/protocol";
 import { cn } from "@/lib/utils";
-import { groupByCwd, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
+import { byDay, groupByCwd, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
 import { IconButton, ProjectAvatar } from "./tabs-bar.tsx";
 import { RenameInput, SessionContextMenu, SessionMenu, type SessionAction } from "./session-actions.tsx";
@@ -145,51 +145,58 @@ export function SessionList({
                 </span>
               </h3>
               {open && !g.sessions.length && <p className="py-1 pl-7 text-muted-foreground text-sm">No sessions yet</p>}
-              {open && g.sessions.length > 0 && (
-                <ul className="mt-0.5 flex flex-col gap-0.5">
-                  {g.sessions.map((s) => {
-                    const st = state(s);
-                    const label = STATE_LABEL[st];
-                    const isUnread = unread.has(s.id);
-                    const target = { title: s.title, archived: s.archived, busy: st === "running" || st === "needs_input", transcript: s.transcript };
-                    const act = (a: SessionAction) => onAction(s.id, a);
-                    if (renaming === s.id)
-                      return (
-                        <li key={s.id} className="flex h-8 items-center pr-1.5 pl-7 max-md:h-11">
-                          <RenameInput title={s.title} onDone={(t) => onRenamed(s.id, t)} />
-                        </li>
-                      );
-                    return (
-                      <SessionContextMenu key={s.id} target={target} onAction={act}>
-                        <li className="group relative">
-                          <button
-                            data-testid="session-item"
-                            data-state={st}
-                            className={cn(
-                              "flex h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-8 max-md:pr-12 pl-7 text-left text-sm outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11",
-                              s.id === activeId ? "bg-secondary text-foreground" : "text-muted-foreground",
-                            )}
-                            aria-current={s.id === activeId ? "page" : undefined}
-                            aria-label={[s.title, label, isUnread && "unread"].filter(Boolean).join(", ")}
-                            onClick={() => onOpen(s.id)}
-                            title={label ? `${s.title} (${label})` : s.title}
-                          >
-                            <span className={cn("min-w-0 flex-1 truncate font-medium", isUnread && "text-foreground")}>{s.title}</span>
-                            {isUnread && <span className="size-1.5 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-hidden />}
-                            <StateIcon state={st} />
-                            <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{timeAgo(s.lastActivity)}</span>
-                          </button>
-                          <SessionMenu
-                            target={target}
-                            onAction={act}
-                            className="-translate-y-1/2 absolute top-1/2 right-1 opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-popup-open:opacity-100 pointer-coarse:opacity-100"
-                          />
-                        </li>
-                      </SessionContextMenu>
-                    );
-                  })}
-                </ul>
-              )}
+              {open &&
+                byDay(g.sessions).map((day) => (
+                  <div key={day.title}>
+                    {/* OpenCode Home day label: 28px, muted, weight 440, aligned with the row titles. */}
+                    <h4 className="flex h-7 items-center pl-7 font-normal text-muted-foreground text-sm" data-testid="day-header">
+                      {day.title}
+                    </h4>
+                    <ul className="flex flex-col gap-0.5">
+                      {day.sessions.map((s) => {
+                        const st = state(s);
+                        const label = STATE_LABEL[st];
+                        const isUnread = unread.has(s.id);
+                        const target = { title: s.title, archived: s.archived, busy: st === "running" || st === "needs_input", transcript: s.transcript };
+                        const act = (a: SessionAction) => onAction(s.id, a);
+                        if (renaming === s.id)
+                          return (
+                            <li key={s.id} className="flex h-8 items-center pr-1.5 pl-7 max-md:h-11">
+                              <RenameInput title={s.title} onDone={(t) => onRenamed(s.id, t)} />
+                            </li>
+                          );
+                        return (
+                          <SessionContextMenu key={s.id} target={target} onAction={act}>
+                            <li className="group relative">
+                              <button
+                                data-testid="session-item"
+                                data-state={st}
+                                className={cn(
+                                  "flex h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-8 max-md:pr-12 pl-7 text-left text-sm outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11",
+                                  s.id === activeId && "bg-secondary",
+                                )}
+                                aria-current={s.id === activeId ? "page" : undefined}
+                                aria-label={[s.title, label, isUnread && "unread"].filter(Boolean).join(", ")}
+                                onClick={() => onOpen(s.id)}
+                                title={label ? `${s.title} (${label})` : s.title}
+                              >
+                                <span className="min-w-0 flex-1 truncate font-medium text-foreground">{s.title}</span>
+                                {isUnread && <span className="size-1.5 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-hidden />}
+                                <StateIcon state={st} />
+                                <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{timeAgo(s.lastActivity)}</span>
+                              </button>
+                              <SessionMenu
+                                target={target}
+                                onAction={act}
+                                className="-translate-y-1/2 absolute top-1/2 right-1 opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-popup-open:opacity-100 pointer-coarse:opacity-100"
+                              />
+                            </li>
+                          </SessionContextMenu>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ))}
             </section>
           );
         })}

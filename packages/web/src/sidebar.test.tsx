@@ -235,3 +235,16 @@ it("the archived filter shows an \"Archived sessions\" caption above the list, s
   await act(async () => el.querySelector<HTMLElement>('[data-testid="archived-filter"]')!.click());
   expect(el.querySelector('[data-testid="archived-caption"]')!.textContent).toBe("Archived sessions");
 });
+
+it("each project splits its sessions under OpenCode's day headers", async () => {
+  const { groups } = await render({ list: [item("a", "/home/u/web", "New", 0), item("b", "/home/u/web", "Old", 4 * 1440), item("c", "/home/u/api", "Older", 5 * 1440)] });
+  const days = (g: HTMLElement) => [...g.querySelectorAll('[data-testid="day-header"]')].map((h) => h.textContent);
+  expect(groups().map(days)).toEqual([["Today", "Older"], ["Recent sessions"]]);
+});
+
+it("read titles use the base text colour like OpenCode, not the muted one", async () => {
+  const { rows } = await render();
+  const title = rows()[3]!.querySelector("span")!;
+  expect(title.className).toContain("text-foreground");
+  expect(rows()[3]!.className).not.toContain("text-muted-foreground");
+});

@@ -33,6 +33,22 @@ export function patchSession(list: SessionListItem[], id: string, patch: Partial
   return list.map((s) => (s.id === id ? { ...s, ...patch } : s));
 }
 
+/** Newest-first sessions split by calendar day of last activity, as OpenCode's Home list: Today, Yesterday, Older (Recent sessions when alone); empty days dropped. */
+export function byDay(sessions: SessionListItem[], now = Date.now()) {
+  const day = (ms: number) => new Date(ms).toDateString();
+  const today = day(now);
+  const yesterday = day(new Date(now).setDate(new Date(now).getDate() - 1));
+  const groups: Record<"Today" | "Yesterday" | "Older", SessionListItem[]> = { Today: [], Yesterday: [], Older: [] };
+  for (const s of sessions) {
+    const d = day(s.lastActivity);
+    groups[d === today ? "Today" : d === yesterday ? "Yesterday" : "Older"].push(s);
+  }
+  const lone = !groups.Today.length && !groups.Yesterday.length;
+  return Object.entries(groups)
+    .filter(([, list]) => list.length)
+    .map(([title, list]) => ({ title: lone ? "Recent sessions" : title, sessions: list }));
+}
+
 export function timeAgo(ms: number, now = Date.now()) {
   const m = Math.floor((now - ms) / 60_000);
   if (m < 1) return "now";
