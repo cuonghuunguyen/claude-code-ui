@@ -47,6 +47,7 @@ import { ContextGroup, CwdContext, SubagentGroup, ToolCard } from "./tool-card.t
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { relPath } from "./tools.ts";
 import { FilesPanel } from "./files-panel.tsx";
+import { ChangesPanel } from "./changes-panel.tsx";
 import { QuickOpen, isQuickOpenKey, quickOpenLabel } from "./quick-open.tsx";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { NEW_TAB, avatarColors, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
@@ -518,7 +519,15 @@ export function App() {
                       onOpened={() => setOpenFile(undefined)}
                     />
                   </div>
-                  {pane === "changes" && <p className="m-auto p-4 text-muted-foreground">No changes view yet.</p>}
+                    {pane === "changes" && views[panelSession.id] && (
+                      <ChangesPanel
+                        key={panelSession.id}
+                        client={client.current!}
+                        view={views[panelSession.id]!}
+                        cwd={panelSession.cwd}
+                        onOpen={(path) => (setOpenFile(path), setPane("files"))}
+                      />
+                    )}
                 </section>
               )}
               {/* Mounted while the tab is open: hidden, it keeps its draft; replaced by the created session, it starts empty next time. */}

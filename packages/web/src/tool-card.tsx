@@ -27,7 +27,7 @@ const STATE: Record<ToolStatus, ToolUIPart["state"]> = {
 const text = (output: unknown) => (typeof output === "string" ? output : JSON.stringify(output, null, 2));
 
 // themeType follows the app theme (`.dark` on <html>), not the OS: "system" would ignore the theme toggle.
-const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {
+export const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {
   diffStyle: "unified",
   theme: { light: "pierre-light", dark: "pierre-dark" },
   overflow: "wrap",
@@ -185,7 +185,17 @@ function EditDiff({ call, result }: { call: ToolCall; result?: ToolResult }) {
 }
 
 /** The Edit/Write diff of a tool input; `fallback` while the input is incomplete. Also used by the permission panel. */
-export function InputDiff({ tool, input, fallback }: { tool: string; input: unknown; fallback?: ReactNode }) {
+export function InputDiff({
+  tool,
+  input,
+  fallback,
+  diffStyle = "unified",
+}: {
+  tool: string;
+  input: unknown;
+  fallback?: ReactNode;
+  diffStyle?: "unified" | "split";
+}) {
   const cwd = use(CwdContext);
   const files = useMemo(() => {
     const f = editFiles(tool, input);
@@ -195,7 +205,7 @@ export function InputDiff({ tool, input, fallback }: { tool: string; input: unkn
     return { oldFile: { ...f.oldFile, name }, newFile: { ...f.newFile, name } };
   }, [tool, input, cwd]);
   const dark = useDark();
-  const options = useMemo(() => ({ ...DIFF_OPTIONS, themeType: dark ? ("dark" as const) : ("light" as const) }), [dark]);
+  const options = useMemo(() => ({ ...DIFF_OPTIONS, diffStyle, themeType: dark ? ("dark" as const) : ("light" as const) }), [dark, diffStyle]);
   if (!files) return fallback;
   return (
     <div className="overflow-hidden rounded-md border text-xs" data-testid="edit-diff">

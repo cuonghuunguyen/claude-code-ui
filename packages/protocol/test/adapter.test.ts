@@ -337,6 +337,33 @@ describe("adapter on recorded edit/todo/subagent session", () => {
   it("drops task lifecycle messages instead of emitting raw parts", () => {
     expect(parts.filter((p) => p.type === "raw")).toEqual([]);
   });
+
+  it("puts the file before the first Edit/Write of a path on its tool_result: null for a created file", () => {
+    const tool = new Map(parts.flatMap((p) => (p.type === "tool_call" ? [[p.toolUseId, p.tool] as const] : [])));
+    const originals = parts.flatMap((p) => (p.type === "tool_result" && "original" in p ? [[tool.get(p.toolUseId), p.original] as const] : []));
+    expect(originals).toEqual([
+      ["Edit", "const a = 1;\nconst b = 2;\nexport { a, b };\n"],
+      ["Write", null],
+    ]);
+  });
+});
+
+describe("adapter original file", () => {
+  const edit = (id: string, file: string) => ({
+    type: "assistant",
+    message: { id: `m${id}`, content: [{ type: "tool_use", id, name: "Edit", input: { file_path: file, old_string: "a", new_string: "b" } }] },
+  });
+  const result = (id: string, originalFile: string) => ({
+    type: "user",
+    parent_tool_use_id: null,
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] },
+    tool_use_result: { filePath: "/x", originalFile },
+  });
+
+  it("is kept only for the first change of a path", () => {
+    const parts = run([edit("e1", "/x"), result("e1", "a"), edit("e2", "/x"), result("e2", "b")]);
+    expect(parts.filter((p) => p.type === "tool_result").map((p) => ("original" in p ? p.original : "none"))).toEqual(["a", "none"]);
+  });
 });
 
 describe("adapter on a background subagent", () => {

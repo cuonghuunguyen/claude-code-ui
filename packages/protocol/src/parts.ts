@@ -48,8 +48,11 @@ export type Part = { parentId?: string } & (
   | { type: "thinking"; id: string; text: string; streaming: boolean }
   /** `id` = `toolUseId`; re-emitted on every status change. `editedByUser`: `input` is the user's edit of Claude's input, accepted in the permission panel. */
   | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus; editedByUser?: boolean }
-  /** `id` = `<toolUseId>:result`. */
-  | { type: "tool_result"; id: string; toolUseId: string; output: unknown; isError: boolean }
+  /**
+   * `id` = `<toolUseId>:result`. `original`: the file before this call, on the first Edit/Write of a path in a live
+   * query (null = the call created it); absent in a restored transcript, which does not keep it.
+   */
+  | { type: "tool_result"; id: string; toolUseId: string; output: unknown; isError: boolean; original?: string | null }
   /**
    * `id` = `requestId`; re-emitted once settled. `suggestions` are the SDK's rules for "don't ask again";
    * `title` is the SDK's prompt sentence when it sends one.
