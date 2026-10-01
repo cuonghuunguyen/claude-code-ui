@@ -171,8 +171,8 @@ React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 
 - Theme: OpenCode oc-2 tokens, light and dark (follows the OS, or forced from the titlebar toggle); text/background token pairs reach WCAG 4.5:1.
 
-- Titlebar tabs: each open session is a tab (project avatar, title, close; running / needs-input / unread indicator), plus one "New session" tab (directory picker and model choice) opened by `+`. Closing a tab does not stop the session. Middle click closes, drag reorders, overflow scrolls; open tabs and their order persist per browser. Each tab keeps its scroll position, draft prompt and side panel pane. Narrow screens: one switcher instead of the strip.
-- Sidebar: session list grouped by working directory, with state badge and unread marker. Clicking a session opens or focuses its tab; "New session" opens the new-session tab.
+- Titlebar tabs: each open session is a tab (project avatar, title, close; running / needs-input / unread indicator), plus one "New session" tab (directory picker and model choice) opened by `+`. Closing a tab does not stop the session. Middle click closes, drag reorders, overflow scrolls; open tabs, their order and the active tab (also "New session", URL hash `#new`) persist per browser. Arrow keys, Home and End move between tabs (one Tab stop), Delete closes. A Home button left of the tabs shows or hides the sidebar on wide screens. Each tab keeps its scroll position, draft prompt and side panel pane. Narrow screens: one switcher instead of the strip.
+- Sidebar: session list grouped by working directory, with state badge and unread marker. Project avatar colors differ between known projects (up to 9). Clicking a session opens or focuses its tab; "New session" opens the new-session tab.
 - Session view: timeline, prompt box at the bottom, header with project avatar, name and cwd, state, stop button. The model chooser is in the prompt box toolbar.
 - Side panel (resizable): file tree + editor tabs, and a changes/diff tab.
 - Narrow screens: sidebar becomes a drawer; a tab switch replaces the side panel ("session" / "changes" / "files").

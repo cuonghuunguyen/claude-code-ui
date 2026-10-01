@@ -30,14 +30,34 @@ export function replaceTab(tabs: string[], old: string, id: string) {
 /** Session tabs the daemon does not list, e.g. never prompted before a daemon restart. */
 export const staleTabs = (tabs: string[], known: Set<string>) => tabs.filter((id) => id !== NEW_TAB && !known.has(id));
 
-/** Project avatar color (OpenCode project-avatar-v2 palette), stable per working directory. */
+/** Project avatar color (OpenCode project-avatar-v2 palette). */
 export const AVATAR_COLORS = ["orange", "yellow", "cyan", "green", "red", "pink", "blue", "purple", "gray"] as const;
+export type AvatarColor = (typeof AVATAR_COLORS)[number];
 
-export function avatarColor(cwd: string) {
+function hashSlot(cwd: string) {
   let h = 0;
   for (const c of cwd) h = (h * 31 + c.charCodeAt(0)) | 0;
-  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length]!;
+  return Math.abs(h) % AVATAR_COLORS.length;
 }
+
+/** Distinct colors for up to 9 known projects (OpenCode picks an unused one): each takes its hashed color or the next free one. */
+export function avatarColors(cwds: Iterable<string>) {
+  const colors = new Map<string, AvatarColor>();
+  const used = new Set<number>();
+  for (const cwd of [...new Set(cwds)].sort()) {
+    let i = hashSlot(cwd);
+    for (let k = 0; k < AVATAR_COLORS.length && used.has(i); k++) i = (i + 1) % AVATAR_COLORS.length;
+    used.add(i);
+    colors.set(cwd, AVATAR_COLORS[i]!);
+  }
+  return colors;
+}
+
+export const avatarColor = (cwd: string, known?: Map<string, AvatarColor>) => known?.get(cwd) ?? AVATAR_COLORS[hashSlot(cwd)]!;
+
+// The active tab lives in the URL hash, so a reload reopens it: a session id, or "#new" for the new-session tab.
+export const tabHash = (id: string) => `#${encodeURIComponent(id)}`;
+export const tabFromHash = (hash: string) => (hash === tabHash(NEW_TAB) ? NEW_TAB : /^#[0-9a-f-]{36}$/i.exec(hash)?.[0].slice(1));
 
 export const projectName = (cwd: string) => cwd.split("/").filter(Boolean).at(-1) ?? cwd;
 

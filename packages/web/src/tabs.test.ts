@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { NEW_TAB, avatarColor, closeTab, loadTabs, moveTab, openTab, staleTabs, replaceTab, saveTabs } from "./tabs.ts";
+import { NEW_TAB, avatarColor, avatarColors, closeTab, loadTabs, moveTab, openTab, staleTabs, replaceTab, saveTabs, tabFromHash, tabHash } from "./tabs.ts";
 
 describe("tabs", () => {
   it("restored tabs the daemon does not list are stale; the new-session tab always stays", () => {
@@ -41,7 +41,25 @@ describe("tabs", () => {
 
   it("the avatar color is stable per project", () => {
     expect(avatarColor("/home/u/proj")).toBe(avatarColor("/home/u/proj"));
-    expect(new Set(["/a", "/b", "/c", "/d", "/e", "/f"].map(avatarColor)).size).toBeGreaterThan(1);
+    expect(new Set(["/a", "/b", "/c", "/d", "/e", "/f"].map((c) => avatarColor(c))).size).toBeGreaterThan(1);
+  });
+
+  it("known projects get distinct avatar colors, stable for the same set", () => {
+    const root = "/home/u/tester-root/";
+    const cwds = ["webapp", "api-server", "docs-site"].map((n) => root + n);
+    const colors = avatarColors([...cwds, cwds[0]!]);
+    expect(new Set(cwds.map((c) => avatarColor(c, colors))).size).toBe(3);
+    expect(avatarColors([...cwds].reverse())).toEqual(colors);
+    const nine = Array.from({ length: 9 }, (_, i) => `/p/${i}`);
+    expect(new Set(nine.map((c) => avatarColor(c, avatarColors(nine)))).size).toBe(9);
+  });
+
+  it("the URL hash keeps the active tab, also the new-session tab", () => {
+    const id = "0b5e6f1c-1111-4222-8333-444455556666";
+    expect(tabFromHash(tabHash(id))).toBe(id);
+    expect(tabFromHash(tabHash(NEW_TAB))).toBe(NEW_TAB);
+    expect(tabFromHash("")).toBeUndefined();
+    expect(tabFromHash("#token=abc")).toBeUndefined();
   });
 });
 
