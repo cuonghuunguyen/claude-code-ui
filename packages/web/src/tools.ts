@@ -16,6 +16,19 @@ export function toolSummary(input: unknown): string {
   return typeof value === "string" ? (value.split("\n")[0] ?? "") : "";
 }
 
+/** `path` relative to `cwd` when inside it, else unchanged. */
+export function relPath(path: string, cwd: string) {
+  const root = cwd.replace(/\/$/, "");
+  return root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
+}
+
+/** File name and directory for a card header; the directory relative to `cwd` when the file is inside it. */
+export function filePath(path: string, cwd: string) {
+  const rel = relPath(path, cwd);
+  const i = rel.lastIndexOf("/");
+  return { name: rel.slice(i + 1), dir: i < 0 ? "" : rel.slice(0, i) || "/" };
+}
+
 /** Line range of a Read call, from the numbered result lines if any, else from offset/limit. */
 export function readRange(input: unknown, output?: unknown): string {
   const nums = typeof output === "string" ? [...output.matchAll(/^\s*(\d+)[\t→]/gm)].map((m) => Number(m[1])) : [];

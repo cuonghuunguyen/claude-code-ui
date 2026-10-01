@@ -34,7 +34,7 @@ import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./un
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
-import { ContextGroup, SubagentGroup, TodoList, ToolCard } from "./tool-card.tsx";
+import { ContextGroup, CwdContext, SubagentGroup, TodoList, ToolCard } from "./tool-card.tsx";
 import { FilesPanel } from "./files-panel.tsx";
 import { NEW_TAB, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs, staleTabs } from "./tabs.ts";
 import { IconButton, ProjectAvatar, TabsBar } from "./tabs-bar.tsx";
@@ -727,7 +727,7 @@ export function SessionPane({
   };
 
   return (
-    <>
+    <CwdContext value={session.cwd}>
       <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
         <ProjectAvatar cwd={session.cwd} />
         <span className="shrink-0 font-medium" title={session.cwd} data-testid="session-project">
@@ -899,7 +899,7 @@ export function SessionPane({
           </>
         )}
       </div>
-    </>
+    </CwdContext>
   );
 }
 
