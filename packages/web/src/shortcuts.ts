@@ -14,6 +14,7 @@ export const KEYS = {
   quickOpen: "mod+p",
   sidebar: "mod+b",
   sidePanel: "mod+shift+r",
+  terminal: "ctrl+`",
   focusPrompt: "ctrl+l",
   model: "mod+'",
 } as const;

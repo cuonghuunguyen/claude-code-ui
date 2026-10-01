@@ -5,15 +5,19 @@ import { createServer, type IncomingMessage } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { EFFORTS, imageBlock, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
+import { EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, listSessions, renameSession, tagSession, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { createPlanTracker } from "./plan-usage.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings } from "./session.ts";
+import { createTerminals } from "./terminals.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
+
+/** ws maxPayload (default 100 MiB): a prompt with two images at MAX_UPLOAD_BYTES as base64, plus the JSON around them. */
+export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 
 /** Larger files are not opened in the editor. */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -166,6 +170,7 @@ export function createDaemon(opts: {
   const projectsDir = opts.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
   const projects = opts.projects ?? createProjects();
   const connections = new Set<WebSocket>();
+  const terminals = createTerminals();
   const broadcast = (m: ServerMessage) => connections.forEach((ws) => send(ws, m));
   const root = resolve(opts.webRoot);
   // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
@@ -297,7 +302,7 @@ export function createDaemon(opts: {
     createReadStream(file).pipe(res);
   });
 
-  const wss = new WebSocketServer({ noServer: true, handleProtocols: (offered) => (offered.has(WS_PROTOCOL) ? WS_PROTOCOL : false) });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, handleProtocols: (offered) => (offered.has(WS_PROTOCOL) ? WS_PROTOCOL : false) });
   http.on("upgrade", (req, socket, head) => {
     // Never put request headers in these responses: they carry the token.
     const reject = (status: string) => void socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
@@ -317,6 +322,8 @@ export function createDaemon(opts: {
     const unsubscribes = new Map<string, () => void>();
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();
+    // Attached terminals: ID → detach.
+    const attached = new Map<string, () => void>();
     const unwatchAll = () => {
       watched.forEach((w) => unwatchFile(w.real, w.listener));
       watched.clear();
@@ -327,6 +334,7 @@ export function createDaemon(opts: {
       connections.delete(ws);
       unsubscribes.forEach((u) => u());
       unwatchAll();
+      attached.forEach((d) => d());
       focused.delete(ws);
     });
     ws.on("message", async (data) => {
@@ -611,6 +619,51 @@ export function createDaemon(opts: {
           }
           return reply({ watching: [...watched.keys()] });
         }
+        case "terminal.create": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
+          if (!isSize(msg.cols) || !isSize(msg.rows)) return fail("bad_size", "cols and rows must be integers from 1 to 1000");
+          const full = terminals.limit(ws);
+          if (full) return fail("too_many_terminals", full);
+          try {
+            return reply({ terminal: terminals.create(cwd, msg.cols, msg.rows, ws) });
+          } catch (err) {
+            return fail("spawn_failed", String(err));
+          }
+        }
+        case "terminal.list": {
+          const cwd = allowed(msg.cwd);
+          return reply({ terminals: cwd ? terminals.list(cwd) : [] });
+        }
+        case "terminal.detach":
+          attached.get(msg.terminalId)?.();
+          attached.delete(msg.terminalId);
+          return reply({});
+        case "terminal.attach":
+        case "terminal.input":
+        case "terminal.resize":
+        case "terminal.close": {
+          const t = terminals.get(msg.terminalId);
+          if (!t) return fail("unknown_terminal", `no terminal ${msg.terminalId}`);
+          if (msg.type === "terminal.attach") {
+            const { buffer, detach } = terminals.attach(t, {
+              output: (data) => send(ws, { type: "terminal.output", terminalId: t.id, data }),
+              exit: (exitCode) => (attached.delete(t.id), send(ws, { type: "terminal.exit", terminalId: t.id, exitCode })),
+            });
+            attached.get(t.id)?.();
+            attached.set(t.id, detach);
+            return reply({ buffer });
+          }
+          if (msg.type === "terminal.input") {
+            if (typeof msg.data !== "string") return fail("bad_input", "data must be a string");
+            if (Buffer.byteLength(msg.data) > MAX_TERMINAL_INPUT_BYTES) return fail("too_large", `terminal input larger than ${MAX_TERMINAL_INPUT_BYTES} bytes`);
+            t.pty.write(msg.data);
+          } else if (msg.type === "terminal.resize") {
+            if (!isSize(msg.cols) || !isSize(msg.rows)) return fail("bad_size", "cols and rows must be integers from 1 to 1000");
+            t.pty.resize(msg.cols, msg.rows);
+          } else terminals.close(t);
+          return reply({});
+        }
         default:
           return fail("unknown_type", `unknown message type ${(msg as { type?: string }).type}`);
       }
@@ -629,6 +682,8 @@ function readJson<T>(file: string | undefined): T | undefined {
     return undefined;
   }
 }
+
+const isSize = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 1000;
 
 const isModel = (m: unknown): m is string => typeof m === "string" && m.trim() !== "";
 

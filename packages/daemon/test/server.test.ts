@@ -1,13 +1,14 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
-import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { MAX_TERMINAL_INPUT_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createProjects } from "../src/projects.ts";
-import { createDaemon } from "../src/server.ts";
+import { createDaemon, MAX_FRAME_BYTES } from "../src/server.ts";
+import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, fakeQuery, planCalls, history, interruptQuery, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
@@ -321,6 +322,15 @@ describe("daemon", () => {
     expect(await (await client()).request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
   });
 
+  it("sets ws maxPayload to MAX_FRAME_BYTES, below the 100 MiB default", async () => {
+    const c = await client();
+    const closed = new Promise<number>((r) => c.ws.on("close", r));
+    const len = Buffer.alloc(8);
+    len.writeBigUInt64BE(BigInt(MAX_FRAME_BYTES + 1));
+    (c.ws as unknown as { _socket: import("node:net").Socket })._socket.write(Buffer.concat([Buffer.from([0x82, 0xff]), len, Buffer.from([1, 2, 3, 4])]));
+    expect(await closed).toBe(1009);
+  });
+
   it("rejects an empty or non-string model", async () => {
     const c = await client();
     expect(await c.request({ type: "session.create", cwd: webRoot, model: 5 })).toMatchObject({ code: "bad_model" });
@@ -344,6 +354,111 @@ describe("daemon", () => {
     const c = await client();
     expect(await c.request({ type: "session.create", cwd: tmpdir() })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
     expect(await c.request({ type: "session.create", cwd: join(webRoot, "..", "..") })).toMatchObject({ code: "cwd_not_allowed" });
+  });
+
+  describe("terminals", () => {
+    process.env.SHELL = "/bin/sh";
+    const output = (inbox: ServerMessage[], terminalId: string) =>
+      inbox.map((m) => (m.type === "terminal.output" && m.terminalId === terminalId ? m.data : "")).join("");
+    const create = async (c: Awaited<ReturnType<typeof client>>, cwd = webRoot) =>
+      ((await c.request({ type: "terminal.create", cwd, cols: 80, rows: 24 })) as { result: { terminal: { id: string; title: string } } }).result.terminal;
+
+    it("opens a shell in a cwd inside the roots only", async () => {
+      const c = await client();
+      expect(await c.request({ type: "terminal.create", cwd: tmpdir(), cols: 80, rows: 24 })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+      expect(await c.request({ type: "terminal.create", cwd: "relative", cols: 80, rows: 24 })).toMatchObject({ code: "cwd_not_allowed" });
+      expect(await c.request({ type: "terminal.create", cwd: webRoot, cols: 0, rows: 24 })).toMatchObject({ code: "bad_size" });
+      const t = await create(c);
+      await c.request({ type: "terminal.attach", terminalId: t.id });
+      await c.request({ type: "terminal.input", terminalId: t.id, data: "pwd\r" });
+      await c.waitFor(() => output(c.inbox, t.id).includes(`\n${realpathSync(webRoot)}`));
+      await c.request({ type: "terminal.close", terminalId: t.id });
+    });
+
+    it("numbers terminals per cwd, lists them, resizes, and drops one whose shell exits", async () => {
+      const c = await client();
+      const a = await create(c);
+      const b = await create(c);
+      expect([a.title, b.title]).toEqual(["Terminal 1", "Terminal 2"]);
+      expect(await c.request({ type: "terminal.list", cwd: webRoot })).toMatchObject({ result: { terminals: [a, b] } });
+      await c.request({ type: "terminal.attach", terminalId: b.id });
+      expect(await c.request({ type: "terminal.resize", terminalId: b.id, cols: 100, rows: 30 })).toMatchObject({ type: "reply" });
+      await c.request({ type: "terminal.input", terminalId: b.id, data: "stty size\r" });
+      await c.waitFor(() => output(c.inbox, b.id).includes("30 100"));
+      await c.request({ type: "terminal.input", terminalId: b.id, data: "exit\r" });
+      await c.waitFor((m) => m.type === "terminal.exit" && m.terminalId === b.id);
+      await c.request({ type: "terminal.close", terminalId: a.id });
+      expect(await c.request({ type: "terminal.list", cwd: webRoot })).toMatchObject({ result: { terminals: [] } });
+      expect(await c.request({ type: "terminal.input", terminalId: a.id, data: "x" })).toMatchObject({ code: "unknown_terminal" });
+    });
+
+    it("keeps running after the connection drops; a new connection gets the scrollback, then live output", async () => {
+      const a = await client();
+      const t = await create(a);
+      await a.request({ type: "terminal.attach", terminalId: t.id });
+      await a.request({ type: "terminal.input", terminalId: t.id, data: "echo before-$((40+2))\r" });
+      await a.waitFor(() => output(a.inbox, t.id).includes("before-42"));
+      a.ws.close();
+      const b = await client();
+      const r = (await b.request({ type: "terminal.attach", terminalId: t.id })) as { result: { buffer: string } };
+      expect(r.result.buffer).toContain("before-42");
+      await b.request({ type: "terminal.input", terminalId: t.id, data: "echo after-$((40+3))\r" });
+      await b.waitFor(() => output(b.inbox, t.id).includes("after-43"));
+      // Attached once: a second attach on the same connection does not double the output.
+      await b.request({ type: "terminal.attach", terminalId: t.id });
+      await b.request({ type: "terminal.input", terminalId: t.id, data: "echo once-$((40+4))\r" });
+      await b.waitFor(() => output(b.inbox, t.id).includes("once-44"));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(output(b.inbox, t.id).split("once-44").length).toBe(2);
+      // Detached: the shell keeps running, its output no longer comes here.
+      await b.request({ type: "terminal.detach", terminalId: t.id });
+      await b.request({ type: "terminal.input", terminalId: t.id, data: "echo gone-$((40+5))\r" });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(output(b.inbox, t.id)).not.toContain("gone-45");
+      expect(((await b.request({ type: "terminal.attach", terminalId: t.id })) as { result: { buffer: string } }).result.buffer).toContain("gone-45");
+      await b.request({ type: "terminal.close", terminalId: t.id });
+    });
+
+    it("caps terminals per connection and per daemon: too_many_terminals", async () => {
+      const cs = await Promise.all([client(), client(), client(), client(), client()]);
+      const ids: string[] = [];
+      for (const c of cs.slice(0, 4)) for (let i = 0; i < MAX_TERMINALS_PER_CLIENT; i++) ids.push((await create(c)).id);
+      expect(ids).toHaveLength(MAX_TERMINALS);
+      expect(await cs[0]!.request({ type: "terminal.create", cwd: webRoot, cols: 80, rows: 24 })).toMatchObject({ code: "too_many_terminals" });
+      expect(await cs[4]!.request({ type: "terminal.create", cwd: webRoot, cols: 80, rows: 24 })).toMatchObject({ code: "too_many_terminals" });
+      // A closed terminal frees its slot.
+      await cs[0]!.request({ type: "terminal.close", terminalId: ids.shift()! });
+      ids.push((await create(cs[0]!)).id);
+      for (const id of ids) await cs[0]!.request({ type: "terminal.close", terminalId: id });
+    });
+
+    it("rejects terminal.input above 64 KiB and a size above 1000", async () => {
+      const c = await client();
+      const t = await create(c);
+      expect(await c.request({ type: "terminal.input", terminalId: t.id, data: "x".repeat(MAX_TERMINAL_INPUT_BYTES + 1) })).toMatchObject({ code: "too_large" });
+      expect(await c.request({ type: "terminal.input", terminalId: t.id, data: "é".repeat(MAX_TERMINAL_INPUT_BYTES / 2 + 1) })).toMatchObject({ code: "too_large" });
+      expect(await c.request({ type: "terminal.input", terminalId: t.id, data: "x".repeat(MAX_TERMINAL_INPUT_BYTES) })).toMatchObject({ type: "reply" });
+      expect(await c.request({ type: "terminal.resize", terminalId: t.id, cols: 1001, rows: 24 })).toMatchObject({ code: "bad_size" });
+      expect(await c.request({ type: "terminal.create", cwd: webRoot, cols: 80, rows: 1001 })).toMatchObject({ code: "bad_size" });
+      await c.request({ type: "terminal.close", terminalId: t.id });
+    });
+
+    it("the shell env has no CLAUDE_UI_* and no daemon PORT, the rest of the user's env stays", async () => {
+      Object.assign(process.env, { CLAUDE_UI_ROOTS: "/secret-roots", PORT: "5999", GH33_KEEP: "kept-value" });
+      try {
+        const c = await client();
+        const t = await create(c);
+        await c.request({ type: "terminal.attach", terminalId: t.id });
+        await c.request({ type: "terminal.input", terminalId: t.id, data: "env | grep -E '^(CLAUDE_UI_|PORT=|GH33_)'; echo env-done\r" });
+        await c.waitFor(() => /\nenv-done/.test(output(c.inbox, t.id)));
+        const env = output(c.inbox, t.id);
+        expect(env).toContain("GH33_KEEP=kept-value");
+        expect(env).not.toMatch(/\n(CLAUDE_UI_\w*|PORT)=/);
+        await c.request({ type: "terminal.close", terminalId: t.id });
+      } finally {
+        for (const k of ["CLAUDE_UI_ROOTS", "PORT", "GH33_KEEP"]) delete process.env[k];
+      }
+    });
   });
 
   it("runs several sessions at the same time, each with its own event log", async () => {

@@ -28,6 +28,7 @@ export type CommandContext = {
   quickOpen: () => void;
   toggleSidebar: () => void;
   toggleSidePanel: () => void;
+  toggleTerminal: () => void;
   focusPrompt: () => void;
   setModel: (model: string) => void;
   setEffort: (effort: Effort) => void;
@@ -55,6 +56,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     at >= 0 && cmd("tab.close", "Close tab", () => c.closeTab(c.activeId!), KEYS.closeTab),
     cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar, KEYS.sidebar),
     s && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel, KEYS.sidePanel),
+    s && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal, KEYS.terminal),
     s && cmd("prompt.focus", "Focus prompt", c.focusPrompt, KEYS.focusPrompt),
     s &&
       c.models.length > 0 &&

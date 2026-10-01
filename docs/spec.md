@@ -86,6 +86,8 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | client → daemon | `session.delete {sessionId}` | Removes the transcript (`deleteSession()`) after the CLI exited; refused while `running` or `needs_input` |
 | client → daemon | `fs.list` / `fs.read` / `fs.write` / `fs.search` | File tree, editor, @-mention autocomplete |
 | client → daemon | `fs.watch {paths}` | Replace this connection's watched files (stat polling, 1 s) |
+| client → daemon | `terminal.create {cwd, cols, rows}` / `terminal.list {cwd}` | Start `$SHELL` in a PTY (node-pty) in a cwd inside the roots ("Terminal N", smallest free N per cwd); at most 8 running per creating connection and 32 per daemon (`too_many_terminals`); cols/rows 1–1000 / the terminals running in a cwd |
+| client → daemon | `terminal.attach` / `terminal.detach` / `terminal.input {data}` / `terminal.resize {cols, rows}` / `terminal.close` `{terminalId}` | Attach replies the scrollback (last 256K chars), then streams output to this connection; `data` at most 64 KiB UTF-8 (`too_large`; the panel sends a bigger paste in parts); close kills the shell |
 | client → daemon | `push.key` | The daemon's VAPID public key, for `PushManager.subscribe()` |
 | client → daemon | `push.subscribe {subscription}` | Register a Web Push subscription |
 | client → daemon | `push.focus {sessionId?}` | The session this tab shows while focused and visible; none otherwise |
@@ -94,6 +96,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | daemon → client | `fs.changed {path, mtime}` | A watched file changed on disk; not a session event |
 | daemon → client | `sessions.changed {deleted?}` | To every connection after a rename, archive or delete: refetch the list |
 | daemon → client | `plan_usage {usage}` | Plan usage (account-wide, not a session event): on connect and on each change; `usage` null without plan limits |
+| daemon → client | `terminal.output {terminalId, data}` / `terminal.exit {terminalId, exitCode}` | Output of an attached terminal / its shell ended (the terminal is gone) |
 
 ### Permission bridge (same behavior as Claude Code)
 
@@ -190,6 +193,7 @@ React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 - Sidebar: one group per known project (also with no sessions), with state badge and unread marker; inside a project, sessions sit under day headers as in OpenCode Home: "Today", "Yesterday", "Older" (only "Recent sessions" when nothing is from today or yesterday). Project avatar colors differ between known projects (up to 9). Clicking a session opens or focuses its tab. Each project group has "New session" (the new-session tab in that project, no picker) and "Remove"; the "Projects" header has "Open project": a folder browser inside the allowlisted roots with type-ahead.
 - Session view: timeline, prompt box at the bottom, header with project avatar, name and cwd, state, stop button. The model chooser is in the prompt box toolbar.
 - Side panel (resizable): file tree + editor tabs, and a changes/diff tab: files changed by the session's Edit/Write calls with an A/D/M badge and `+N -N`, the selected file's diff (file before the session vs disk; one header per file: badge, path relative to cwd, `+N -N`, the library's file header off; "Loading diff…" until drawn), unified/split toggle (split by default, the choice kept per browser; narrow screens always unified), "Open in editor"; the tab shows the changed file count; outside or Bash changes to a listed file show live (fs.watch). Without `original` (restored transcript) the before is the calls undone from the disk; if that is ambiguous (a replace_all Edit, an Edit's new text not found exactly once, a Write other than the first call creating the file), each call's diff is shown.
+- Terminal panel (OpenCode terminal panel): below the side panel on wide screens (280px, toggled by Ctrl+` or the terminal button in the side panel header), the "terminal" pane on narrow screens. Tabs "Terminal N" with close, `+` for another; xterm.js. Terminals belong to the project (cwd), run in the daemon and survive reconnects and page reloads while the daemon runs (a daemon restart ends them); opening the panel (Ctrl+`, the terminal button, the "terminal" pane) with none running starts one; switching to another project with the panel open, or a reconnect after a daemon restart, starts none (`+` does); closing the last one hides the panel. Copy: Ctrl+Shift+C, Cmd+C, or Ctrl+C over a selection (without one Ctrl+C goes to the shell); paste: Ctrl+V / Cmd+V / Ctrl+Shift+V (browser paste). Input typed while disconnected is dropped.
 - Narrow screens: sidebar becomes a drawer; a tab switch replaces the side panel ("session" / "changes" / "files").
 
 ### Session view UX (from OpenCode)
@@ -250,7 +254,7 @@ The daemon can run arbitrary shell commands; treat it as a remote shell.
 - Remote access and HTTPS: to be decided; no external hosting services (ADR 0003).
 - Token auth on every WebSocket connection; pairing by a printed URL or QR code containing the token. A browser cannot read the status of a rejected upgrade, so after a failed dial the web app asks `GET /auth` (`Authorization: Bearer <token>`, 204 or 401); on 401 it stops redialing and tells the user to open the pairing URL.
 - Origin check on WebSocket upgrade.
-- Working directory allowlist for sessions, file tree, editor writes and session list.
+- Working directory allowlist for sessions, file tree, editor writes, session list and terminals (a terminal is a remote shell: only over the authenticated, origin-checked WebSocket, cwd inside the roots). The shell gets the user's environment like a VS Code terminal (an `ANTHROPIC_API_KEY` or credentials file the user has are visible to it) minus the daemon's own settings (`PORT`, `CLAUDE_UI_*`). WebSocket frames above 64 MiB close the socket (ws `maxPayload`).
 - Default permission mode asks; bypass modes off unless enabled in daemon config (`CLAUDE_UI_ALLOW_BYPASS=1`).
 - Credentials: the owner's subscription login stays in the daemon's environment, never sent to the browser.
 - No secrets in logs.
