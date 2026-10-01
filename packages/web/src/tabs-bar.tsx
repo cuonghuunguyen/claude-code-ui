@@ -1,11 +1,13 @@
 // Titlebar tabs (OpenCode titlebar-tab-strip): avatar + title + close; middle click closes, drag reorders, overflow scrolls.
+// Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
 // Below md the strip collapses into a switcher (native select over the active tab).
 import { createContext, use, useEffect, useRef, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
+import { ContextMenu } from "@base-ui/react/context-menu";
 import { ChevronDownIcon, CircleAlertIcon, Grid2x2PlusIcon, LoaderCircleIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn } from "@/lib/utils";
-import { NEW_TAB, avatarColor, projectName, type AvatarColor } from "./tabs.ts";
-import { RenameInput, SessionContextMenu, type SessionAction } from "./session-actions.tsx";
+import { NEW_TAB, avatarColor, closeTab, projectName, type AvatarColor } from "./tabs.ts";
+import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
 export type TabInfo = { title: string; cwd?: string; state?: SessionState; unread: boolean; archived?: boolean; transcript?: boolean };
 type TabStatus = "new" | "running" | "needs_input" | "unread" | "idle";
@@ -65,7 +67,7 @@ export function TabsBar({
   onClose: (id: string) => void;
   onMove: (from: string, to: string) => void;
   onNew: () => void;
-  /** Home button (OpenCode grid-plus, md and up): pressed while the sessions sidebar shows. */
+  /** Home button (OpenCode grid-plus, md and up): aria-pressed while the sessions sidebar shows; no pressed fill, as OpenCode fills it only on its Home page. */
   home?: boolean;
   onHome?: () => void;
   /** Session tab that shows the title editor. */
@@ -74,6 +76,25 @@ export function TabsBar({
   onRenamed: (id: string, title: string | undefined) => void;
 }) {
   const strip = useRef<HTMLDivElement>(null);
+  const newButton = useRef<HTMLButtonElement>(null);
+  // Tab to focus once the parent applied a keyboard close or move; none left → the New session button.
+  const refocus = useRef<{ id?: string }>(undefined);
+  useEffect(() => {
+    const r = refocus.current;
+    refocus.current = undefined;
+    if (!r) return;
+    (r.id ? strip.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(r.id)}"] [role="tab"]`) : newButton.current)?.focus();
+  }, [tabs]);
+  const closeKeepFocus = (id: string) => {
+    refocus.current = { id: closeTab(tabs, id, activeId ?? id).active };
+    onClose(id);
+  };
+  const moveBy = (id: string, by: -1 | 1) => {
+    const to = tabs[tabs.indexOf(id) + by];
+    if (!to) return;
+    refocus.current = { id };
+    onMove(id, to);
+  };
   useEffect(() => {
     const el = strip.current;
     const reveal = () => el?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
@@ -92,7 +113,13 @@ export function TabsBar({
     const id = target.closest<HTMLElement>("[data-tab-id]")?.dataset.tabId;
     const at = id ? tabs.indexOf(id) : -1;
     if (at < 0 || target.getAttribute("role") !== "tab") return;
-    if (e.key === "Delete") return onClose(id!);
+    if (e.key === "Delete") return closeKeepFocus(id!);
+    const by =
+      e.altKey && e.shiftKey ? { ArrowLeft: -1, ArrowRight: 1 }[e.key] : e.ctrlKey && e.shiftKey ? { PageUp: -1, PageDown: 1 }[e.key] : undefined;
+    if (by) {
+      e.preventDefault();
+      return moveBy(id!, by as -1 | 1);
+    }
     const n = tabs.length;
     const to = { ArrowRight: at + 1, ArrowLeft: at - 1 + n, Home: 0, End: n - 1 }[e.key];
     if (to === undefined) return;
@@ -106,7 +133,7 @@ export function TabsBar({
     // Below md: 44px hit areas, 8px apart (touch-target-size, touch-spacing).
     <div className="flex min-w-0 flex-1 items-center gap-1.5 max-md:gap-2">
       {onHome && (
-        <IconButton className="w-9! max-md:hidden" label="Home" onClick={onHome} pressed={home} testId="tab-home">
+        <IconButton className="w-9! max-md:hidden aria-pressed:bg-transparent aria-pressed:text-faint aria-pressed:hover:bg-accent aria-pressed:hover:text-foreground" label="Home" onClick={onHome} pressed={home} testId="tab-home">
           <Grid2x2PlusIcon />
         </IconButton>
       )}
@@ -120,16 +147,20 @@ export function TabsBar({
         onWheel={(e) => !e.deltaX && (e.currentTarget.scrollLeft += e.deltaY)}
         onKeyDown={onKeyDown}
       >
-        {tabs.map((id) => (
+        {tabs.map((id, i) => (
           <Tab
             key={id}
             id={id}
             t={info(id)}
             active={id === activeId}
             focusable={id === focusable}
+            first={i === 0}
+            last={i === tabs.length - 1}
             onSelect={onSelect}
             onClose={onClose}
             onMove={onMove}
+            onMenuMove={(by) => moveBy(id, by)}
+            onMenuClose={() => closeKeepFocus(id)}
             renaming={renaming === id}
             onAction={(a) => onAction(id, a)}
             onRenamed={(title) => onRenamed(id, title)}
@@ -173,7 +204,7 @@ export function TabsBar({
           <XIcon />
         </IconButton>
       )}
-      <IconButton label="New session" onClick={onNew} testId="tab-new">
+      <IconButton label="New session" onClick={onNew} testId="tab-new" ref={newButton}>
         <PlusIcon />
       </IconButton>
     </div>
@@ -185,9 +216,13 @@ function Tab({
   t,
   active,
   focusable,
+  first,
+  last,
   onSelect,
   onClose,
   onMove,
+  onMenuMove,
+  onMenuClose,
   renaming,
   onAction,
   onRenamed,
@@ -196,9 +231,13 @@ function Tab({
   t: TabInfo;
   active: boolean;
   focusable: boolean;
+  first: boolean;
+  last: boolean;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onMove: (from: string, to: string) => void;
+  onMenuMove: (by: -1 | 1) => void;
+  onMenuClose: () => void;
   renaming: boolean;
   onAction: (a: SessionAction) => void;
   onRenamed: (title: string | undefined) => void;
@@ -210,78 +249,102 @@ function Tab({
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
   };
-  const tab = (
-    <div
-      className={cn(
-        "group relative flex h-7 w-56 min-w-24 max-w-56 shrink items-center rounded-md transition-colors",
-        active ? "bg-secondary" : "hover:bg-secondary/70",
-      )}
-      draggable={!renaming}
-      onDragStart={(e) => {
-        e.dataTransfer.setData(DRAG_TYPE, id);
-        e.dataTransfer.effectAllowed = "move";
-      }}
-      onDragOver={dragOver}
-      onDrop={(e) => {
-        const from = e.dataTransfer.getData(DRAG_TYPE);
-        if (!from) return;
-        e.preventDefault();
-        onMove(from, id);
-      }}
-      // Middle click closes; its mousedown would start autoscroll.
-      onMouseDown={(e) => e.button === 1 && e.preventDefault()}
-      onAuxClick={(e) => e.button === 1 && onClose(id)}
-      data-testid="tab"
-      data-tab-id={id}
-      data-state={s}
-      title={[STATUS_LABEL[s] ? `${t.title} (${STATUS_LABEL[s]})` : t.title, t.cwd].filter(Boolean).join("\n")}
-    >
-      {renaming ? (
-        <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
-          <TabIcon s={s} cwd={t.cwd} />
-          <RenameInput title={t.title} onDone={onRenamed} />
-        </div>
-      ) : (
-        <button
-          role="tab"
-          aria-selected={active}
-          tabIndex={focusable ? 0 : -1}
-          aria-label={STATUS_LABEL[s] ? `${t.title}, ${STATUS_LABEL[s]}` : undefined}
-          className={cn(
-            "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-            active ? "text-foreground" : "text-muted-foreground",
-          )}
-          onClick={() => onSelect(id)}
-          // OpenCode: double click on the title renames.
-          onDoubleClick={() => session && t.transcript !== false && onAction("rename")}
-        >
-          <TabIcon s={s} cwd={t.cwd} />
-          <span className="truncate leading-4">{t.title}</span>
-        </button>
-      )}
-      {!renaming && (
-        <button
-          aria-label={`Close ${t.title}`}
-          // Out of the Tab order (roving tabindex); Delete on the tab closes it.
-          tabIndex={-1}
-          className={cn(
-            "absolute top-0.5 right-0.5 grid size-6 cursor-pointer place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover:opacity-100",
-            active ? "opacity-100" : "opacity-0",
-          )}
-          onClick={() => onClose(id)}
-          data-testid="tab-close"
-        >
-          <XIcon className="size-3.5" />
-        </button>
-      )}
-    </div>
-  );
-  if (!session) return tab;
-  const busy = t.state === "running" || t.state === "needs_input";
   return (
-    <SessionContextMenu target={{ title: t.title, archived: !!t.archived, busy, transcript: t.transcript !== false }} onAction={onAction}>
-      {tab}
-    </SessionContextMenu>
+    <ContextMenu.Root>
+      <ContextMenu.Trigger
+        className={cn(
+          "group relative flex h-7 w-56 min-w-24 max-w-56 shrink items-center rounded-md transition-colors",
+          // OpenCode separator: 1.5×12px bar 3.75px left of each tab, hidden at the first tab and beside the active or hovered one.
+          "before:-left-[3.75px] before:absolute before:top-2 before:h-3 before:w-[1.5px] before:rounded-full before:bg-tab-separator first:before:hidden hover:before:hidden data-active:before:hidden [:hover+&]:before:hidden [[data-active]+&]:before:hidden",
+          active ? "bg-secondary" : "hover:bg-secondary/70",
+        )}
+        data-active={active || undefined}
+        draggable={!renaming}
+        onDragStart={(e) => {
+          e.dataTransfer.setData(DRAG_TYPE, id);
+          e.dataTransfer.effectAllowed = "move";
+        }}
+        onDragOver={dragOver}
+        onDrop={(e) => {
+          const from = e.dataTransfer.getData(DRAG_TYPE);
+          if (!from) return;
+          e.preventDefault();
+          onMove(from, id);
+        }}
+        // Middle click closes; its mousedown would start autoscroll.
+        onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+        onAuxClick={(e) => e.button === 1 && onClose(id)}
+        data-testid="tab"
+        data-tab-id={id}
+        data-state={s}
+        title={[STATUS_LABEL[s] ? `${t.title} (${STATUS_LABEL[s]})` : t.title, t.cwd].filter(Boolean).join("\n")}
+      >
+        {renaming ? (
+          <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
+            <TabIcon s={s} cwd={t.cwd} />
+            <RenameInput title={t.title} onDone={onRenamed} />
+          </div>
+        ) : (
+          <button
+            role="tab"
+            aria-selected={active}
+            tabIndex={focusable ? 0 : -1}
+            aria-label={STATUS_LABEL[s] ? `${t.title}, ${STATUS_LABEL[s]}` : undefined}
+            className={cn(
+              "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              active ? "text-foreground" : "text-muted-foreground",
+            )}
+            onClick={() => onSelect(id)}
+            // OpenCode: double click on the title renames.
+            onDoubleClick={() => session && t.transcript !== false && onAction("rename")}
+          >
+            <TabIcon s={s} cwd={t.cwd} />
+            <span className="truncate leading-4">{t.title}</span>
+          </button>
+        )}
+        {!renaming && (
+          <button
+            aria-label={`Close ${t.title}`}
+            // Out of the Tab order (roving tabindex); Delete on the tab closes it.
+            tabIndex={-1}
+            className={cn(
+              "absolute top-0.5 right-0.5 grid size-6 cursor-pointer place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover:opacity-100",
+              active ? "opacity-100" : "opacity-0",
+            )}
+            onClick={() => onClose(id)}
+            data-testid="tab-close"
+          >
+            <XIcon className="size-3.5" />
+          </button>
+        )}
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Positioner className="z-50">
+          {/* Focus goes to the moved tab or the new active one (refocus), not back to the trigger. */}
+          <ContextMenu.Popup finalFocus={false} className={POPUP}>
+            <ContextMenu.Item className={ITEM} disabled={first} onClick={() => onMenuMove(-1)}>
+              Move left
+            </ContextMenu.Item>
+            <ContextMenu.Item className={ITEM} disabled={last} onClick={() => onMenuMove(1)}>
+              Move right
+            </ContextMenu.Item>
+            <ContextMenu.Item className={ITEM} onClick={onMenuClose}>
+              Close tab
+            </ContextMenu.Item>
+            {session && (
+              <>
+                <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+                <Items
+                  kind="context"
+                  target={{ title: t.title, archived: !!t.archived, busy: t.state === "running" || t.state === "needs_input", transcript: t.transcript !== false }}
+                  onAction={onAction}
+                />
+              </>
+            )}
+          </ContextMenu.Popup>
+        </ContextMenu.Positioner>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 
@@ -292,6 +355,7 @@ export function IconButton({
   className,
   testId,
   pressed,
+  ref,
 }: {
   label: string;
   onClick: () => void;
@@ -299,9 +363,11 @@ export function IconButton({
   className?: string;
   testId?: string;
   pressed?: boolean;
+  ref?: React.Ref<HTMLButtonElement>;
 }) {
   return (
     <button
+      ref={ref}
       aria-label={label}
       title={label}
       aria-pressed={pressed}

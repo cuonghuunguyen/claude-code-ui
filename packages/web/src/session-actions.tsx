@@ -12,12 +12,12 @@ export type SessionAction = "rename" | "archive" | "unarchive" | "delete";
 /** `busy`: running or needs input; it must be stopped before it can be deleted. `transcript`: false before the first prompt, nothing to rename or archive. */
 export type ActionTarget = { title: string; archived: boolean; busy: boolean; transcript: boolean };
 
-const POPUP =
+export const POPUP =
   "z-50 min-w-40 rounded-lg bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none origin-(--transform-origin) transition-[scale,opacity] duration-100 data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0 motion-reduce:transition-none";
-const ITEM =
+export const ITEM =
   "flex h-8 cursor-pointer select-none items-center rounded-md px-2 outline-none data-disabled:cursor-not-allowed data-disabled:text-muted-foreground data-highlighted:bg-secondary max-md:h-11";
 
-function Items({ kind, target, onAction }: { kind: "menu" | "context"; target: ActionTarget; onAction: (a: SessionAction) => void }) {
+export function Items({ kind, target, onAction }: { kind: "menu" | "context"; target: ActionTarget; onAction: (a: SessionAction) => void }) {
   const Item = kind === "menu" ? Menu.Item : ContextMenu.Item;
   const Separator = kind === "menu" ? Menu.Separator : ContextMenu.Separator;
   return (
