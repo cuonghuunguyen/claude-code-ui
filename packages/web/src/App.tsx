@@ -35,7 +35,7 @@ import { connect, type ConnectionStatus, type Request, type RequestError } from 
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { nextMode, PromptToolbar, type SendState } from "./toolbar.tsx";
 import { choose, matchCommands } from "./commands.ts";
-import { activeMention, insertAtCaret, insertMention, mentionPath } from "./mentions.ts";
+import { activeMention, insertAtCaret, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
 import { inProject, patchSession } from "./sessions.ts";
 import { PlanMeter } from "./plan-meter.tsx";
@@ -1253,6 +1253,8 @@ function PromptBox({
     // Checked before reading: a big file would be held in memory as base64 and could exceed the daemon's frame limit.
     const big = all.find((f) => f.size > MAX_UPLOAD_BYTES);
     if (big) return setSendError(`Attach failed: ${big.name} is larger than ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
+    // Only an earlier attach error is stale now; a send error stays until the next send.
+    setSendError((e) => (e?.startsWith("Attach failed") ? undefined : e));
     const others = all.filter((f) => !isPromptImage(f.type));
     const added = await readImages(all);
     setImages((i) => [...i, ...added]);
@@ -1514,15 +1516,32 @@ function RewindPanel(props: {
 
 function PartView({ part, view }: { part: Part; view: SessionView }) {
   switch (part.type) {
-    case "user_text":
+    case "user_text": {
+      const { text, files } = splitUploads(part.text);
       return (
-        <Message from="user">
-          <MessageContent>
-            <ImageStrip images={part.images} />
-            {part.text}
-          </MessageContent>
-        </Message>
+        <>
+          {(text || part.images.length > 0) && (
+            <Message from="user">
+              <MessageContent>
+                <ImageStrip images={part.images} />
+                {text}
+              </MessageContent>
+            </Message>
+          )}
+          {/* OpenCode AttachmentCardV2: 160px two-line card (name, type) below the bubble, right-aligned. */}
+          {files.length > 0 && (
+            <div className="ml-auto flex max-w-[min(82%,64ch)] flex-wrap justify-end gap-2">
+              {files.map((f) => (
+                <div key={f.path} title={f.name} data-testid="attachment" className="flex w-40 flex-col gap-1.5 rounded-md bg-accent p-2 text-[11px] leading-3 tracking-[0.05px] shadow-[inset_0_0_0_0.5px_var(--border)]">
+                  <span className="truncate font-medium">{f.name}</span>
+                  <span className="text-muted-foreground">{/\.([^.]+)$/.exec(f.name)?.[1]!.toUpperCase() ?? "File"}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       );
+    }
     case "assistant_text":
       return <AssistantText text={part.text} streaming={part.streaming} />;
     case "tool_call":

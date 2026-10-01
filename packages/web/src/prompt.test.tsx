@@ -182,6 +182,41 @@ it("attach: a file above the upload limit is refused before it is read or upload
   expect(onUpload).not.toHaveBeenCalled();
 });
 
+it("attach: a successful attach clears the error of an earlier failed attach", async () => {
+  const { $ } = await render({ onUpload: async (f: File) => `/tmp/claude-ui-x/u-abc123/${f.name}` });
+  const input = $("attach-input") as HTMLInputElement;
+  const big = new File(["x"], "big.bin");
+  Object.defineProperty(big, "size", { value: 20 * 1024 * 1024 + 1 });
+  Object.defineProperty(input, "files", { value: [big], configurable: true });
+  await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
+  await vi.waitFor(() => expect($("prompt-error")).not.toBeNull());
+  Object.defineProperty(input, "files", { value: [new File(["hi"], "notes.txt")], configurable: true });
+  await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
+  await vi.waitFor(() => expect($("prompt-error")).toBeNull());
+});
+
+it("attach: a successful attach keeps a send error, which only a send clears", async () => {
+  const { $, box } = await render({ onPrompt: () => Promise.reject(new Error("no session s1")), onUpload: async (f: File) => `/u/${f.name}` });
+  await type(box, "hello");
+  await key(box, { key: "Enter" });
+  await vi.waitFor(() => expect($("prompt-error")).not.toBeNull());
+  const input = $("attach-input") as HTMLInputElement;
+  Object.defineProperty(input, "files", { value: [new File(["hi"], "notes.txt")], configurable: true });
+  await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
+  await vi.waitFor(() => expect(box.value).toContain("@/u/notes.txt"));
+  expect($("prompt-error")!.textContent).toContain("no session s1");
+});
+
+it("user bubble: an attached file shows as a file name chip, not its upload path", async () => {
+  const text = 'read @/tmp/claude-ui-Ab12Cd/u-Xy34Ef/notes.txt and @"/tmp/claude-ui-Ab12Cd/u-Zz99Qq/my notes.md" @src/a.ts';
+  const view = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "user_text", id: "u1", text, images: [] } });
+  const { $ } = await render({}, view);
+  const msg = $("user-message")!;
+  expect([...msg.querySelectorAll('[data-testid="attachment"]')].map((c) => c.textContent)).toEqual(["notes.txtTXT", "my notes.mdMD"]);
+  expect(msg.textContent).not.toContain("/tmp/claude-ui");
+  expect(msg.textContent).toContain("read and @src/a.ts");
+});
+
 it("send button sends; while a turn runs with nothing typed it is a stop button", async () => {
   const onPrompt = vi.fn(async () => {});
   const onInterrupt = vi.fn();

@@ -26,9 +26,10 @@ export function effortOptions(models: ModelInfo[], model: string): Effort[] {
   return m?.supportsEffort && m.supportedEffortLevels?.length ? ["default", ...m.supportedEffortLevels] : [];
 }
 
-// OpenCode ghost-muted control: 28px desktop, 44px on touch screens. `!`: SelectTrigger's data-[size] height has higher specificity.
-const GHOST =
-  "h-7! cursor-pointer rounded-md border-0 bg-transparent px-2 text-muted-foreground text-xs hover:bg-accent hover:text-foreground focus-visible:ring-2 pointer-coarse:h-11! dark:bg-transparent";
+// OpenCode ghost-muted ButtonV2: 28px (44px on touch screens), padding 0 11px, 13px/20px weight 440, focus outline 2px offset 2px.
+// Focus outline uses --info (3:1 on every surface; OpenCode's #7698fd is 2.8:1 on white). `!`: SelectTrigger's data-[size] height has higher specificity.
+const FOCUS = "outline-none focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info";
+const GHOST = `h-7! cursor-pointer gap-1.5 rounded-md border-0 bg-transparent px-[11px] text-muted-foreground text-sm font-normal tracking-[-0.04px] hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground pointer-coarse:h-11! dark:bg-transparent ${FOCUS}`;
 
 function Chooser<T extends string>({
   label,
@@ -53,9 +54,16 @@ function Chooser<T extends string>({
         {icon}
         <SelectValue className="truncate">{(v: T) => items.find((i) => i.value === v)?.trigger ?? items.find((i) => i.value === v)?.label ?? v}</SelectValue>
       </SelectTrigger>
-      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="w-auto min-w-44">
+      {/* OpenCode menu-v2: 2px padding, radius 6; item 28px (44px on touch), padding 0 12px, radius 4; selected item weight 530 in the accent colour.
+          `data-[selected]`: Base UI sets data-selected="", shadcn's data-selected: variant needs "true". */}
+      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="w-auto min-w-44 rounded-md p-0.5 shadow-floating! ring-0">
         {items.map((i) => (
-          <SelectItem key={i.value} value={i.value} title={i.description} className="pointer-coarse:py-2.5">
+          <SelectItem
+            key={i.value}
+            value={i.value}
+            title={i.description}
+            className="h-7 cursor-pointer gap-2 rounded-sm py-0 pr-8 pl-3 font-normal pointer-coarse:h-11 data-[selected]:font-medium data-[selected]:**:text-info!"
+          >
             {i.label}
           </SelectItem>
         ))}
@@ -100,7 +108,7 @@ export function PromptToolbar(props: {
           aria-label="Add images and files"
           title="Add images and files"
           data-testid="attach"
-          className={`${GHOST} flex shrink-0 items-center justify-center px-0 pointer-coarse:w-11 w-7`}
+          className={`${GHOST} flex w-7 shrink-0 items-center justify-center px-0! pointer-coarse:w-11`}
           onClick={() => file.current?.click()}
         >
           <PlusIcon className="size-4" />
@@ -124,7 +132,7 @@ export function PromptToolbar(props: {
           value={props.mode}
           onChange={props.onMode}
           icon={<Mode className="size-4" />}
-          items={modes.map((m) => ({ value: m, label: MODE_LABEL[m].label, trigger: <span><span className="sm:hidden">{MODE_LABEL[m].short}</span><span className="hidden sm:inline">{MODE_LABEL[m].label}</span></span> }))}
+          items={modes.map((m) => ({ value: m, label: MODE_LABEL[m].label, trigger: <span><span className="@2xl:hidden">{MODE_LABEL[m].short}</span><span className="hidden @2xl:inline">{MODE_LABEL[m].label}</span></span> }))}
           className="shrink-0"
         />
         <Chooser
@@ -155,8 +163,7 @@ export function PromptToolbar(props: {
 
 export type SendState = "idle" | "running" | "needs_input" | "disconnected";
 
-const SEND_BASE =
-  "relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-linear-to-b from-white/20 to-transparent shadow-button-contrast focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11";
+const SEND_BASE = `relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-linear-to-b from-white/20 to-transparent shadow-button-contrast ${FOCUS} disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11`;
 
 /** OpenCode send/stop button plus the session state: spinner while running, warning color while Claude waits for an answer. */
 function SendButton({ state, hasInput, onSend, onStop, onFocusLost }: { state: SendState; hasInput: boolean; onSend: () => void; onStop: () => void; onFocusLost: () => void }) {

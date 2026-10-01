@@ -215,6 +215,8 @@ React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 - Image paste and drop.
 - Selection from the editor can be sent as context.
 - Toolbar inside the box (OpenCode): attach (`+`, native file picker), permission mode, model, effort (only for a model with `supportsEffort`), send / stop. Shift+Tab cycles the permission mode like Claude Code.
+- Attached non-image files are uploaded (`fs.upload`) and sent as `@<upload path>` mentions; the user message shows each one as a file card (name, type) instead of the path (path shape `…/u-XXXXXX/<name>`).
+- Plan mode with Haiku: Claude Code runs plan-mode turns of a `haiku` session on the default Sonnet ("haiku plan upgrade", like `opusplan`); the toolbar keeps showing the chosen model, the turn's transcript records the model that ran.
 
 ### Editor
 
