@@ -36,6 +36,8 @@ export type ToolHeaderProps = {
   title?: string;
   /** One-line summary of the input, shown after the tool name. */
   summary?: string;
+  /** Shown before the status badge, e.g. diff stats. */
+  meta?: ReactNode;
   icon?: ReactNode;
   className?: string;
 } & (
@@ -78,6 +80,7 @@ export const ToolHeader = ({
   className,
   title,
   summary,
+  meta,
   icon,
   type,
   state,
@@ -101,6 +104,7 @@ export const ToolHeader = ({
         {summary && <span className="truncate font-mono text-muted-foreground text-xs">{summary}</span>}
       </div>
       <div className="flex shrink-0 items-center gap-2">
+        {meta}
         {getStatusBadge(state)}
         <ChevronDownIcon className="size-4 text-muted-foreground transition-transform in-data-panel-open:rotate-180" />
       </div>

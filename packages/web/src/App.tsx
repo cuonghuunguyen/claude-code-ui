@@ -32,7 +32,7 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
 import { PermissionMarker, PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
+import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withEpoch, type SessionView, type ToolCall } from "./store.ts";
 import { ContextGroup, SubagentGroup, Thinking, TodoList, ToolCard } from "./tool-card.tsx";
 import { FilesPanel } from "./files-panel.tsx";
 
@@ -742,7 +742,7 @@ export function SessionPane({
         <ConversationContent className="mx-auto w-full max-w-3xl">
           {timeline(view).map((item) =>
             item.kind === "context" ? (
-              <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} />
+              <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
             ) : item.part.type === "user_text" ? (
               <div key={item.part.id} className="group flex flex-col gap-1" data-testid="user-message">
                 <PartView part={item.part} view={view} />
@@ -881,7 +881,7 @@ export function SessionPane({
 function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) {
   return timeline(view, parentId).map((item) =>
     item.kind === "context" ? (
-      <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} />
+      <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
     ) : (
       <PartView key={item.part.id} part={item.part} view={view} />
     ),
@@ -965,12 +965,12 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
     case "thinking":
       return <Thinking part={part} />;
     case "tool_call":
-      return <ToolCard call={part} result={resultOf(view, part)} />;
+      return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} />;
     case "permission_request":
       return <PermissionMarker part={part} />;
     case "subagent":
       return (
-        <SubagentGroup part={part} result={resultOf(view, part)}>
+        <SubagentGroup part={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.id)}>
           <Timeline view={view} parentId={part.id} />
         </SubagentGroup>
       );

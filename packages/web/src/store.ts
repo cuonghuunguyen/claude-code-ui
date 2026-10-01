@@ -80,6 +80,22 @@ export function pendingPermission(s: SessionView): PermissionRequest | undefined
   }
 }
 
+const awaiting = new WeakMap<SessionView["parts"], Set<string>>();
+
+/** Tool use ids, and subagent ids, of calls waiting for a permission answer; their cards render expanded. Cached per `parts` map, which every update replaces. */
+export function awaitingPermission(s: SessionView): Set<string> {
+  let ids = awaiting.get(s.parts);
+  if (ids) return ids;
+  ids = new Set();
+  for (const p of s.parts.values())
+    if (p.type === "permission_request" && !p.settled) {
+      ids.add(p.toolUseId);
+      if (p.parentId) ids.add(p.parentId);
+    }
+  awaiting.set(s.parts, ids);
+  return ids;
+}
+
 /** The oldest unsettled question; while one exists (and no permission request) the question panel replaces the prompt box. */
 export function pendingQuestion(s: SessionView): QuestionRequest | undefined {
   for (const id of s.order) {

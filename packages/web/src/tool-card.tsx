@@ -26,7 +26,7 @@ import { CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
-import { editFiles, readRange, toolSummary } from "./tools.ts";
+import { diffStats, editFiles, readRange, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 
@@ -64,14 +64,28 @@ const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {
   disableFileHeader: true,
 };
 
-// Tools whose card starts expanded (docs/spec.md "Session view UX": Bash and edits expanded).
-const EXPANDED = new Set(["Bash", "Edit", "Write"]);
+// ponytail: ids of cards the user expanded, kept outside React so a remount (a Read merging into a context group,
+// a tab switch) keeps the state; never pruned, only expanded ids land here.
+const expanded = new Set<string>();
 
-export function ToolCard({ call, result }: { call: ToolCall; result?: ToolResult }) {
+/** Per-card expand state, collapsed by default (docs/spec.md "Session view UX"); `force` holds the card open. */
+function useExpanded(id: string, force = false) {
+  const [open, setOpen] = useState(() => expanded.has(id));
+  const onOpenChange = (next: boolean) => {
+    if (next) expanded.add(id);
+    else expanded.delete(id);
+    setOpen(next);
+  };
+  return { open: open || force, onOpenChange };
+}
+
+/** `awaiting`: the call waits for a permission answer, so the card is held open. */
+export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: ToolResult; awaiting?: boolean }) {
   const Icon = ICONS[call.tool] ?? WrenchIcon;
   const range = call.tool === "Read" ? readRange(call.input, result?.output) : "";
+  const stats = useMemo(() => diffStats(call.tool, call.input), [call.tool, call.input]);
   return (
-    <Tool data-testid="tool-card" data-status={call.status} defaultOpen={EXPANDED.has(call.tool)}>
+    <Tool data-testid="tool-card" data-status={call.status} {...useExpanded(call.id, awaiting)}>
       <ToolHeader
         type="dynamic-tool"
         toolName={call.tool}
@@ -79,6 +93,14 @@ export function ToolCard({ call, result }: { call: ToolCall; result?: ToolResult
         // Next to the tool name, which is never truncated like the summary.
         title={call.editedByUser ? `${call.tool} · edited by you` : undefined}
         summary={[toolSummary(call.input), range].filter(Boolean).join(" · ")}
+        meta={
+          stats && (
+            <span data-testid="diff-stats" className="font-mono text-xs">
+              <span className="text-green-600">+{stats.added}</span>
+              <span className="ml-1 text-red-600">-{stats.removed}</span>
+            </span>
+          )
+        }
         icon={<Icon className="size-4 shrink-0 text-muted-foreground" />}
       />
       <ToolContent>
@@ -206,11 +228,19 @@ function Lines({ text, error, ansi }: { text: string; error: boolean; ansi: bool
   );
 }
 
-export function ContextGroup({ calls, result }: { calls: ToolCall[]; result: (call: ToolCall) => ToolResult | undefined }) {
+export function ContextGroup({
+  calls,
+  result,
+  awaiting = () => false,
+}: {
+  calls: ToolCall[];
+  result: (call: ToolCall) => ToolResult | undefined;
+  awaiting?: (call: ToolCall) => boolean;
+}) {
   const failed = calls.some((c) => c.status === "error" || c.status === "denied");
   const busy = calls.some((c) => c.status === "pending" || c.status === "running");
   return (
-    <Tool data-testid="context-group">
+    <Tool data-testid="context-group" {...useExpanded(`context:${calls[0]!.id}`, calls.some(awaiting))}>
       <CollapsibleTrigger className="flex w-full items-center gap-2 p-3">
         <SearchIcon className="size-4 text-muted-foreground" />
         <span className="font-medium text-sm">Context</span>
@@ -224,7 +254,7 @@ export function ContextGroup({ calls, result }: { calls: ToolCall[]; result: (ca
       </CollapsibleTrigger>
       <ToolContent className="space-y-2 p-2">
         {calls.map((c) => (
-          <ToolCard key={c.id} call={c} result={result(c)} />
+          <ToolCard key={c.id} call={c} result={result(c)} awaiting={awaiting(c)} />
         ))}
       </ToolContent>
     </Tool>
@@ -242,11 +272,10 @@ export function Thinking({ part }: { part: Extract<Part, { type: "thinking" }> }
 
 type Subagent = Extract<Part, { type: "subagent" }>;
 
-/** A subagent run: header with description and status; `children` is its nested timeline. */
-export function SubagentGroup({ part, result, children }: { part: Subagent; result?: ToolResult; children: ReactNode }) {
+/** A subagent run: header with description and status; `children` is its nested timeline. `awaiting`: a child call waits for a permission answer. */
+export function SubagentGroup({ part, result, awaiting, children }: { part: Subagent; result?: ToolResult; awaiting?: boolean; children: ReactNode }) {
   return (
-    // Open when it mounts live (pending/running), so its activity shows; finished ones from history mount collapsed.
-    <Tool data-testid="subagent" data-status={part.status} defaultOpen={part.status === "pending" || part.status === "running"}>
+    <Tool data-testid="subagent" data-status={part.status} {...useExpanded(part.id, awaiting)}>
       <ToolHeader
         type="dynamic-tool"
         toolName="Agent"

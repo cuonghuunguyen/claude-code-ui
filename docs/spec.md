@@ -174,7 +174,7 @@ React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 
 - A pending permission request or question replaces the prompt box (panel), and is also marked in the timeline.
 - Consecutive read/search tool calls merge into one "context" group with a count.
-- Tool cards collapse by default; Bash and edits expanded per tool type.
+- Every tool card, context group and subagent group renders collapsed, live and in a restored transcript; the collapsed header still tells what happened: tool name, summary (command, path, pattern), status, and `+N -N` line counts for edits. A card whose call waits for a permission answer is held expanded. Expand state is per card and survives re-renders and regrouping.
 - Streamed text is revealed at a steady pace; incomplete markdown is repaired while streaming.
 - Auto-scroll only while at the bottom.
 - Unread count in the tab title.

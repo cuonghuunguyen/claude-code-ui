@@ -47,8 +47,8 @@ const result = (output: unknown, isError = false) => ({
 });
 
 describe("Bash card", () => {
-  it("is expanded and shows the command and ANSI-colored monospace output", () => {
-    const html = renderToStaticMarkup(<ToolCard call={done("Bash", { command: "ls --color" })} result={result("\x1b[34mdir\x1b[0m\nfile")} />);
+  it("shows the command and ANSI-colored monospace output", () => {
+    const html = renderToStaticMarkup(<ToolBody call={done("Bash", { command: "ls --color" })} result={result("\x1b[34mdir\x1b[0m\nfile")} />);
     expect(html).toContain('data-testid="bash-command"');
     expect(html).toContain("ls --color");
     expect(html).toMatch(/<span style="color:#2472c8">dir<\/span>/);
@@ -136,34 +136,79 @@ describe("Thinking", () => {
 describe("ToolCard edits", () => {
   const edit = (tool: string, input: unknown): ToolCall => ({ type: "tool_call", id: "e", toolUseId: "e", tool, input, status: "done" });
 
-  it("Edit renders expanded as a diff instead of the JSON parameters", () => {
-    const html = renderToStaticMarkup(<ToolCard call={edit("Edit", { file_path: "/p/a.ts", old_string: "b = 2", new_string: "b = 3" })} />);
+  it("Edit body is a diff instead of the JSON parameters", () => {
+    const html = renderToStaticMarkup(<ToolBody call={edit("Edit", { file_path: "/p/a.ts", old_string: "b = 2", new_string: "b = 3" })} />);
     // @pierre/diffs renders the diff client-side into this element.
     expect(html).toMatch(/data-testid="edit-diff"><diffs-container>/);
     expect(html).not.toContain("Parameters");
   });
 
-  it("an Edit mounted before its input streamed in is already expanded, showing parameters until the input is complete", () => {
-    const html = renderToStaticMarkup(<ToolCard call={{ ...edit("Edit", {}), status: "pending" }} />);
+  it("an Edit body shows parameters until the input is complete", () => {
+    const html = renderToStaticMarkup(<ToolBody call={{ ...edit("Edit", {}), status: "pending" }} />);
     expect(html).not.toContain("edit-diff");
     expect(html).toContain("Parameters");
+  });
+
+  it("collapsed Edit header shows path and +/- line counts", () => {
+    const html = renderToStaticMarkup(
+      <ToolCard call={edit("Edit", { file_path: "/p/a.ts", old_string: "a\nb = 2", new_string: "a\nb = 3\nc" })} />,
+    );
+    expect(html).toContain("/p/a.ts");
+    expect(html).toMatch(/data-testid="diff-stats"[^>]*><span[^>]*>\+2<\/span><span[^>]*>-1<\/span>/);
+    expect(html).not.toContain("edit-diff");
+  });
+
+  it("no diff stats until the input is complete, and none for other tools", () => {
+    expect(renderToStaticMarkup(<ToolCard call={{ ...edit("Edit", {}), status: "pending" }} />)).not.toContain("diff-stats");
+    expect(renderToStaticMarkup(<ToolCard call={done("Bash", { command: "ls" })} />)).not.toContain("diff-stats");
+  });
+});
+
+describe("collapsed by default", () => {
+  it.each([
+    ["Bash", { command: "ls" }, "bash-command"],
+    ["Edit", { file_path: "/p/a.ts", old_string: "x", new_string: "y" }, "edit-diff"],
+    ["Write", { file_path: "/p/n.txt", content: "hi" }, "edit-diff"],
+    ["Read", { file_path: "/p/a.ts" }, "read-path"],
+    ["Grep", { pattern: "x" }, "search-pattern"],
+    ["WebFetch", { url: "https://x" }, "Parameters"],
+  ])("%s card renders collapsed", (tool, input, body) => {
+    const html = renderToStaticMarkup(<ToolCard call={done(tool, input)} result={result("out")} />);
+    expect(html).not.toContain(body);
+    expect(html).toContain('aria-expanded="false"');
+  });
+
+  it("a card with a pending permission request is expanded", () => {
+    const html = renderToStaticMarkup(<ToolCard call={{ ...done("Bash", { command: "rm -rf x" }), status: "running" }} awaiting />);
+    expect(html).toContain("bash-command");
+    expect(html).toContain('aria-expanded="true"');
+  });
+
+  it("a context group holding the awaited call is expanded", () => {
+    const html = renderToStaticMarkup(
+      <ContextGroup calls={[call("running", "Read"), { ...call("running", "Read"), id: "t2", toolUseId: "t2" }]} result={() => undefined} awaiting={(c) => c.id === "t2"} />,
+    );
+    expect(html).toMatch(/data-testid="context-group"/);
+    expect(html.match(/aria-expanded="true"/g)).toHaveLength(2);
   });
 });
 
 describe("SubagentGroup", () => {
   const sub = (status: ToolCall["status"]) => ({ type: "subagent", id: "s", toolUseId: "s", description: "Inspect value.ts", status }) as const;
 
-  it.each(["pending", "running"] as const)("shows description and status; mounted %s it is open with its child parts", (status) => {
+  it.each([
+    ["pending", "Pending"],
+    ["running", "Running"],
+    ["done", "Completed"],
+  ] as const)("shows description and status; mounted %s it is collapsed", (status, label) => {
     const html = renderToStaticMarkup(<SubagentGroup part={sub(status)}>child-part</SubagentGroup>);
     expect(html).toContain("Inspect value.ts");
-    expect(html).toContain(status === "running" ? "Running" : "Pending");
-    expect(html).toContain("child-part");
+    expect(html).toContain(label);
+    expect(html).not.toContain("child-part");
   });
 
-  it("mounted finished (history) it is collapsed", () => {
-    const html = renderToStaticMarkup(<SubagentGroup part={sub("done")}>child-part</SubagentGroup>);
-    expect(html).toContain("Completed");
-    expect(html).not.toContain("child-part");
+  it("is expanded while a child call waits for a permission answer", () => {
+    expect(renderToStaticMarkup(<SubagentGroup part={sub("running")} awaiting>child-part</SubagentGroup>)).toContain("child-part");
   });
 });
 
