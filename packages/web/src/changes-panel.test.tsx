@@ -14,6 +14,13 @@ vi.mock("@pierre/diffs/react", () => ({
   MultiFileDiff: (p: { options: typeof diff.options }) => ((diff.options = p.options), <div data-testid="pierre-diff" />),
 }));
 
+// Counts whole-file diffs, so a test can see that streaming does not re-parse them.
+const parsed = vi.hoisted(() => ({ n: 0 }));
+vi.mock("./changes.ts", async (orig) => {
+  const m = await orig<typeof import("./changes.ts")>();
+  return { ...m, fileStats: (...a: Parameters<typeof m.fileStats>) => (parsed.n++, m.fileStats(...a)) };
+});
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
   observe() {}
@@ -208,4 +215,25 @@ it("says a file with zero net change has no changes instead of an empty diff", a
   expect(body.textContent).toContain("No changes against the file before this session.");
   expect(body.querySelector("[data-testid=pierre-diff]")).toBeNull();
   expect(body.querySelector("[data-testid=diff-loading]")).toBeNull();
+});
+
+it("does not re-parse the diffs while Claude streams text", async () => {
+  const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
+  let v = view([edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")]);
+  await act(async () => root.render(<ChangesPanel client={client} view={v} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  const before = parsed.n;
+  for (let i = 1; i <= 5; i++) {
+    v = applyEvent(v, { type: "event", sessionId: "s1", seq: 100 + i, part: { type: "assistant_text", id: "t1", text: "x".repeat(i), streaming: true } });
+    await act(async () => root.render(<ChangesPanel client={client} view={v} cwd="/p" onOpen={() => {}} />));
+  }
+  expect(parsed.n).toBe(before);
+  expect(rows()).toEqual(["Ma.ts+1-1", "Mb.ts+1-1"]);
+});
+
+it("names each row by kind, relative path and stats for screen readers", async () => {
+  const client = fakeClient({ "/p/src/a.ts": "a = 2\n" });
+  await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "/p/src/a.ts", "a = 1", "a = 2")])} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  expect(el.querySelector("[data-testid=changed-file]")!.getAttribute("aria-label")).toBe("Modified src/a.ts, +1 -1");
 });

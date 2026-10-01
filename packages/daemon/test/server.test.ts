@@ -412,8 +412,21 @@ describe("daemon", () => {
     rmSync(file);
     const c = await client();
     expect(await c.request({ type: "fs.read", path: file })).toMatchObject({ code: "not_found" });
-    expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "no-dir", "f.txt") })).toMatchObject({ code: "path_not_allowed" });
+    expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "no-dir", "f.txt") })).toMatchObject({ code: "not_found" });
+    // ../ out of a root through a missing directory is still outside.
+    expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "no-dir", "..", "..", "..", "f.txt") })).toMatchObject({ code: "path_not_allowed" });
     expect(await c.request({ type: "fs.read", path: join(mkdtempSync(join(tmpdir(), "outside-")), "f.txt") })).toMatchObject({ code: "path_not_allowed" });
+  });
+
+  it("fs.read of files under a deleted directory (rm -rf after Edits) replies not_found", async () => {
+    const src = join(webRoot, "proj", "src");
+    mkdirSync(join(src, "sub"), { recursive: true });
+    writeFileSync(join(src, "math.js"), "x");
+    writeFileSync(join(src, "sub", "notes.md"), "y");
+    rmSync(src, { recursive: true });
+    const c = await client();
+    expect(await c.request({ type: "fs.read", path: join(src, "math.js") })).toMatchObject({ code: "not_found" });
+    expect(await c.request({ type: "fs.read", path: join(src, "sub", "notes.md") })).toMatchObject({ code: "not_found" });
   });
 
   it("fs.read refuses non-UTF-8 text and keeps a BOM, CRLF and a missing final newline byte for byte", async () => {

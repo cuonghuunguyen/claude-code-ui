@@ -476,8 +476,12 @@ export function createDaemon(opts: {
           return reply({});
         case "fs.read": {
           const file = allowed(msg.path);
-          // A missing file in an allowed directory (e.g. deleted after an Edit): the changes tab shows it deleted.
-          if (!file && typeof msg.path === "string" && allowed(dirname(msg.path)) && !existsSync(msg.path)) return fail("not_found", `no such file: ${msg.path}`);
+          // A missing file whose nearest existing ancestor is allowed (deleted after an Edit, also with its directory): the changes tab shows it deleted.
+          if (!file && typeof msg.path === "string" && isAbsolute(msg.path) && !existsSync(msg.path)) {
+            let dir = dirname(resolve(msg.path));
+            while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
+            if (allowed(dir)) return fail("not_found", `no such file: ${msg.path}`);
+          }
           if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           try {
             const st = statSync(file);

@@ -10,6 +10,7 @@ import { baseline, callStats, fileStats, sessionChanges, type FileChange, type S
 import type { SessionView } from "./store.ts";
 import { useDark } from "./theme.ts";
 import { DIFF_OPTIONS, InputDiff } from "./tool-card.tsx";
+import { filePath, relPath } from "./tools.ts";
 
 type Client = ReturnType<typeof connect>;
 type DiffStyle = "unified" | "split";
@@ -20,9 +21,6 @@ type Row = { change: FileChange; before?: string; after?: string; error?: string
 type Kind = "A" | "D" | "M";
 const KIND_TITLE = { A: "Added", D: "Deleted", M: "Modified" } as const;
 const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info" } as const;
-
-const baseName = (path: string) => path.split("/").at(-1) ?? path;
-const relative = (path: string, cwd: string) => (path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path);
 
 // Diff style like OpenCode's review panel: split by default, the choice kept per browser; below md always unified.
 const STYLE_KEY = "claude-ui.diffStyle";
@@ -53,7 +51,10 @@ const useNarrow = () => useSyncExternalStore(onNarrowChange, () => narrowQuery()
  * The files panel owns this connection's fs.watch list; App adds the changed files to it.
  */
 export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; view: SessionView; cwd: string; onOpen: (path: string) => void }) {
-  const changes = useMemo(() => sessionChanges(view), [view.parts]);
+  const fresh = useMemo(() => sessionChanges(view), [view.parts]);
+  // Same calls and results per path: the previous list, so streamed text does not re-parse every diff.
+  const key = fresh.map((c) => `${c.path}\n${c.calls.length}\n${c.results.filter(Boolean).length}`).join("\n");
+  const changes = useMemo(() => fresh, [key]);
   const [disk, setDisk] = useState<Record<string, Disk>>({});
   const [reload, setReload] = useState(0);
   const [selected, setSelected] = useState<string>();
@@ -62,7 +63,6 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
   const style: DiffStyle = narrow ? "unified" : chosen;
   const choose = (s: DiffStyle) => (setChosen(s), saveStyle(s));
 
-  const key = changes.map((c) => `${c.path}\n${c.calls.length}`).join("\n");
   useEffect(() => {
     let live = true;
     for (const { path } of changes)
@@ -135,8 +135,7 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
       <ul className="max-h-[35%] shrink-0 overflow-auto border-b p-1" aria-label="Changed files">
         {rows.map((r) => {
           const path = r.change.path;
-          const rel = relative(path, cwd);
-          const dir = rel.slice(0, -baseName(rel).length);
+          const { name, dir } = filePath(path, cwd);
           return (
             <li key={path}>
               <button
@@ -146,13 +145,14 @@ export function ChangesPanel({ client, view, cwd, onOpen }: { client: Client; vi
                 )}
                 aria-current={r === active}
                 title={path}
+                aria-label={`${KIND_TITLE[r.kind]} ${relPath(path, cwd)}${r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`}
                 onClick={() => setSelected(path)}
                 data-testid="changed-file"
               >
                 <KindBadge kind={r.kind} />
                 <span className="min-w-0 flex-1 truncate">
-                  {baseName(path)}
-                  {dir && <span className="ml-2 text-muted-foreground">{dir.replace(/\/$/, "")}</span>}
+                  {name}
+                  {dir && <span className="ml-2 text-muted-foreground">{dir}</span>}
                 </span>
                 {r.stats && <StatsText stats={r.stats} />}
               </button>
@@ -202,7 +202,7 @@ function FileDiff({ row, cwd, style, onOpen }: { row: Row; cwd: string; style: D
       <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3 max-md:h-14" data-testid="file-diff-header">
         <KindBadge kind={row.kind} />
         <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground text-xs" title={path}>
-          {relative(path, cwd)}
+          {relPath(path, cwd)}
         </span>
         {row.stats && <StatsText stats={row.stats} />}
         <Button size="sm" variant="ghost" className="max-md:h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
