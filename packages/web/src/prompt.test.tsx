@@ -248,3 +248,12 @@ it("question dock pages through the questions: Next, Back, Submit sends every an
   await act(async () => button("Submit").click());
   expect(onAnswer).toHaveBeenCalledWith({ "A?": "pnpm", "B?": "npm" });
 });
+
+it("the context meter sits in the prompt box toolbar once the session reports its usage", async () => {
+  const { $ } = await render({}, emptySession());
+  expect($("context-meter")).toBeNull();
+  const view = { ...emptySession(), contextUsage: { totalTokens: 1000, maxTokens: 200000, percentage: 1, categories: [] } };
+  unmount();
+  const { $: $2 } = await render({}, view);
+  expect($2("prompt-toolbar")!.contains($2("context-meter"))).toBe(true);
+});

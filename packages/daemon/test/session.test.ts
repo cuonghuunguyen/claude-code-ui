@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@claude-ui/protocol";
 import { Session } from "../src/session.ts";
-import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, controlCalls, fakeCommands, fakeQuery, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -27,7 +27,8 @@ describe("Session", () => {
 
     expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
     expect(events.every((e) => e.sessionId === s.id)).toBe(true);
-    const types = events.map((e) => e.part.type);
+    // context_usage follows the turn asynchronously (its own describe below).
+    const types = events.map((e) => e.part.type).filter((t) => t !== "context_usage");
     expect(types.slice(0, 2)).toEqual(["user_text", "session_state"]);
     expect(types.at(-2)).toBe("turn_result");
     expect(types.filter((t) => t === "assistant_text").length).toBeGreaterThan(10);
@@ -84,7 +85,8 @@ describe("Session", () => {
     const id = "0b5f1d5e-8a8e-4c9b-9f5e-3c1f2a4b5c6d";
     const before = calls.length;
     const s = Session.restore(id, "/tmp", history, { query: fakeQuery as never });
-    expect(calls.length).toBe(before); // no query until a prompt
+    // No session query until a prompt; only the context usage query, resumed on the transcript.
+    expect(calls.slice(before)).toEqual([expect.objectContaining({ resume: id, cwd: "/tmp" })]);
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
     const parts = events.map((e) => e.part);
@@ -132,7 +134,7 @@ describe("Session", () => {
     await s.setModel("haiku");
     expect(setModelCalls.at(-1)).toBe("haiku");
     expect(s.info().model).toBe("haiku");
-    expect(events.at(-1)!.part).toEqual({ type: "session_model", id: "session_model", model: "haiku" });
+    expect(lastPart(events, "session_model")).toEqual({ type: "session_model", id: "session_model", model: "haiku" });
   });
 
   it("setModel on a restored session before its first prompt applies when the query resumes", async () => {
@@ -659,5 +661,84 @@ describe("Session rewind", () => {
     const prompt = events.find((e) => e.part.type === "user_text")!.part.id;
     await expect(s.rewind(prompt, "code")).rejects.toThrow(/running/);
     await expect(s.previewRewind(prompt)).rejects.toThrow(/running/);
+  });
+});
+
+describe("Session context usage", () => {
+  const usagePart = { type: "context_usage", id: "context_usage", usage: { totalTokens: 25815, maxTokens: 1000000, percentage: 3, categories: [
+    { name: "System tools", tokens: 5161 },
+    { name: "Messages", tokens: 20654 },
+    { name: "Autocompact buffer", tokens: 33000 },
+    { name: "Free space", tokens: 941185 },
+  ] } };
+
+  it("logs a context_usage part after each turn, from the live query, without deferred categories", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    usageCalls.length = 0;
+    s.prompt("hello");
+    await until(events, (e) => e.part.type === "context_usage");
+    expect(lastPart(events, "context_usage")).toEqual(usagePart);
+    // Summary detail: from the last response's usage, no token-count requests per turn.
+    expect(usageCalls).toEqual([{ options: expect.objectContaining({ sessionId: s.id }), opts: { detail: "summary" } }]);
+    s.prompt("again");
+    await until(events, (e) => events.filter((x) => x.part.type === "context_usage").length === 2);
+  });
+
+  it("refreshes after a compaction boundary, before the turn ends", async () => {
+    let release!: () => void;
+    const compacting = ({ prompt, options }: { prompt: AsyncIterable<unknown>; options: object }) =>
+      Object.assign(
+        (async function* () {
+          for await (const _ of prompt) {
+            yield { type: "system", subtype: "compact_boundary", uuid: randomUUID(), session_id: "x", compact_metadata: { trigger: "auto", pre_tokens: 1 } };
+            await new Promise<void>((r) => (release = r));
+          }
+        })(),
+        { supportedCommands: async () => [], getContextUsage: async () => (usageCalls.push({ options }), fakeUsage) },
+      );
+    const s = new Session("/tmp", { query: compacting as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("long task");
+    await until(events, (e) => e.part.type === "context_usage");
+    expect(s.info().state).toBe("running");
+    release();
+  });
+
+  it("a restored session gets its usage before the first prompt from a closed throwaway query on its model", async () => {
+    const id = randomUUID();
+    const closedBefore = closed;
+    const s = Session.restore(id, "/tmp", history, { model: "haiku", query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await until(events, (e) => e.part.type === "context_usage");
+    expect(lastPart(events, "context_usage")).toEqual(usagePart);
+    expect(usageCalls.at(-1)!.options).toMatchObject({ resume: id, cwd: "/tmp", model: "haiku" });
+    expect(usageCalls.at(-1)!.options).not.toHaveProperty("canUseTool");
+    await vi.waitFor(() => expect(closed).toBe(closedBefore + 1));
+  });
+
+  it("refreshes after a model switch: the window size can differ", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await s.setModel("haiku");
+    await until(events, (e) => e.part.type === "context_usage");
+  });
+
+  it("a usage failure is logged, not fatal", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failing = ({ prompt }: { prompt: AsyncIterable<unknown> }) =>
+      Object.assign((async function* () { for await (const _ of prompt); })(), {
+        supportedCommands: async () => [],
+        getContextUsage: () => Promise.reject(new Error("no usage")),
+        close: () => {},
+      });
+    const s = Session.restore(randomUUID(), "/tmp", [], { query: failing as never });
+    await vi.waitFor(() => expect(err).toHaveBeenCalledWith(expect.stringContaining("context usage"), expect.any(Error)));
+    expect(s.info().state).toBe("idle");
+    err.mockRestore();
   });
 });

@@ -1,7 +1,8 @@
-// Prompt box toolbar (OpenCode prompt input v2): attach, model, effort, permission mode; send / stop on the right.
+// Prompt box toolbar (OpenCode prompt input v2): attach, model, effort, permission mode; context meter, send / stop on the right.
 import { useRef, type ReactNode } from "react";
 import { ArrowUpIcon, BrainIcon, FilePenIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldIcon, SquareIcon } from "lucide-react";
-import type { Effort, ModelInfo, PermissionMode } from "@claude-ui/protocol";
+import type { ContextUsage, Effort, ModelInfo, PermissionMode } from "@claude-ui/protocol";
+import { ContextMeter } from "./context-meter.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /** Claude Code's names for the modes; `short` fits the toolbar on a phone. */
@@ -73,6 +74,8 @@ export function PromptToolbar(props: {
   modes: PermissionMode[];
   onMode: (mode: PermissionMode) => void;
   onAttach: (files: File[]) => void;
+  /** Context window meter left of send; hidden until the session reports its usage. */
+  usage?: ContextUsage;
   /** What the send button shows: the session state, or `disconnected` while the daemon is unreachable. */
   state: SendState;
   /** Text or images are in the prompt box: idle it sends, during a turn it steers. */
@@ -87,7 +90,7 @@ export function PromptToolbar(props: {
   const modes = props.modes.includes(props.mode) ? props.modes : [props.mode, ...props.modes];
   const Mode = MODE_LABEL[props.mode].Icon;
   return (
-    <div className="flex items-end gap-1 px-2 py-2 pointer-coarse:py-1" data-testid="prompt-toolbar">
+    <div className="@container flex items-end gap-1 px-2 py-2 pointer-coarse:gap-2 pointer-coarse:py-1" data-testid="prompt-toolbar">
       {/* flex-wrap: on a narrow screen a chooser moves to the next row at its full width; nothing shrinks away the model name. */}
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 pointer-coarse:gap-2">
         <button
@@ -142,6 +145,7 @@ export function PromptToolbar(props: {
           />
         )}
       </div>
+      {props.usage && <ContextMeter usage={props.usage} />}
       <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onStop={props.onStop} />
     </div>
   );

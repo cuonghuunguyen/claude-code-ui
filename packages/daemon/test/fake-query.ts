@@ -27,6 +27,23 @@ export const inputs: SDKUserMessage[] = [];
 export const rewinds: { id: string; dryRun?: boolean }[] = [];
 export const checkpointFiles: { files: string[] } = { files: ["/repo/a.ts"] };
 export let closed = 0;
+/** getContextUsage() answer, shaped like the real one (trimmed; probe in development-docs/GH-27/probe.log). */
+export const fakeUsage = {
+  totalTokens: 25815,
+  maxTokens: 1000000,
+  rawMaxTokens: 1000000,
+  percentage: 3,
+  model: "claude-opus-5-5",
+  categories: [
+    { name: "System tools", tokens: 5161, color: "inactive" },
+    { name: "MCP tools (deferred)", tokens: 22172, color: "inactive", isDeferred: true },
+    { name: "Messages", tokens: 20654, color: "purple" },
+    { name: "Autocompact buffer", tokens: 33000, color: "inactive" },
+    { name: "Free space", tokens: 941185, color: "promptBorder" },
+  ],
+};
+/** Options of the query each getContextUsage() call went to, and the call's own options. */
+export const usageCalls: { options: Options; opts?: object }[] = [];
 
 export const fakeCommands = [{ name: "review", description: "Review a PR", argumentHint: "<pr>" }];
 
@@ -45,6 +62,7 @@ export function fakeQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMe
     applyFlagSettings: async (settings: object) => void controlCalls.push({ applyFlagSettings: settings }),
     supportedModels: async () => models,
     supportedCommands: async () => fakeCommands,
+    getContextUsage: async (opts?: object) => (usageCalls.push({ options: options ?? {}, opts }), fakeUsage),
     async rewindFiles(id: string, o?: { dryRun?: boolean }) {
       rewinds.push({ id, ...o });
       return { canRewind: true, filesChanged: checkpointFiles.files, insertions: 1, deletions: 1 };

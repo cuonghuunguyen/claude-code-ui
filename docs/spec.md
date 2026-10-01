@@ -109,6 +109,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 - Invoked by sending `/name args` as prompt text.
 - Models from `supportedModels()`; switch with `setModel()` mid-session.
 - Permission mode and effort: start options of the query; while it runs `setPermissionMode()` / `applyFlagSettings({effortLevel})`, applied from the next turn. The CLI changes the mode itself too (plan approved, "all edits this session"); `system/init` and `system/status` carry it, and the daemon logs every change as a `session_permission_mode` part. Effort changes log `session_effort`. The daemon saves each session's model, mode and effort in `sessions.json` in its config dir; a session restored after a restart shows and resumes with them (a mode not enabled now falls back to `default`).
+- Context usage: `getContextUsage({detail: "summary"})` (no token-count requests) after each `result`, each `system/compact_boundary` and each model switch, logged as a `context_usage` part (fixed id). A restored session asks a throwaway query resumed on its transcript without a prompt (the transcript stays unchanged), closed after the answer.
 - `ExitPlanMode` arrives through `canUseTool` without suggestions; the daemon adds `setMode acceptEdits` so the panel offers Claude Code's "Yes, and auto-accept edits" next to "Yes, manually approve edits" and "No, keep planning". Each "Yes" sends its mode as `setMode` (auto-accept → `acceptEdits`, manually approve → `default`); without it the CLI restores the mode active before plan mode.
 
 ### Checkpoints and rewind (same modes as Claude Code `/rewind`)
@@ -148,6 +149,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | `subagent` | `id`, `description`, `status`; child parts carry `parentId` = `id` | Nested, collapsible group |
 | `session_state` | `state` | Header badge, list badge |
 | `commands` | `commands[]` (name, description, argumentHint, aliases?) | Slash command picker; not in the timeline |
+| `context_usage` | `usage` (`totalTokens`, `maxTokens`, `percentage`, `categories[]` name + tokens, deferred left out) | Context meter in the prompt box toolbar, breakdown popover; not in the timeline |
 | `turn_result` | `durationMs`, `costUsd` (this turn; the SDK total is cumulative, absent for the first turn after a daemon restart), `usage`, `isError` | Turn footer (live turns only) |
 | `turn_interrupted` | — | Status line; replaces the turn footer |
 | `raw` | original message | Generic JSON |
