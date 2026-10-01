@@ -57,6 +57,15 @@ describe("timeline with subagents", () => {
   });
 });
 
+describe("timeline hidden parts", () => {
+  const thinking: Part = { type: "thinking", id: "k1", text: "plan", streaming: false };
+  const permission: Part = { type: "permission_request", id: "p1", requestId: "p1", toolUseId: "r2", tool: "Read", input: {}, suggestions: [], settled: true };
+
+  it("skips thinking and permission requests, so reads around them still form one context group", () => {
+    expect(shape([call("r1", "Read"), thinking, permission, call("r2", "Read")])).toEqual(["context(r1,r2)"]);
+  });
+});
+
 describe("editFiles", () => {
   it("Edit: old_string -> new_string as whole lines, named by file path", () => {
     expect(editFiles("Edit", { file_path: "/p/a.ts", old_string: "b = 2", new_string: "b = 3" })).toEqual({

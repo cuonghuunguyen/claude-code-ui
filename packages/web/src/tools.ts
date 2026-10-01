@@ -1,4 +1,5 @@
 // Tool knowledge for tool cards (docs/spec.md "Session view UX").
+import { parseDiffFromFile } from "@pierre/diffs";
 
 /** Read/search tools; consecutive calls merge into one context group. */
 export const CONTEXT_TOOLS = new Set(["Read", "Grep", "Glob"]);
@@ -37,4 +38,12 @@ export function editFiles(tool: string, input: unknown): { oldFile: FileContents
   const [before, after] = tool === "Edit" ? [line(i.old_string), line(i.new_string)] : tool === "Write" ? ["", str(i.content)] : [];
   if (name === undefined || before === undefined || after === undefined) return undefined;
   return { oldFile: { name, contents: before }, newFile: { name, contents: after } };
+}
+
+/** Added and removed line counts of an Edit/Write call, for the collapsed card header; undefined until the input is complete. */
+export function diffStats(tool: string, input: unknown): { added: number; removed: number } | undefined {
+  const files = editFiles(tool, input);
+  if (!files) return undefined;
+  const { hunks } = parseDiffFromFile(files.oldFile, files.newFile);
+  return { added: hunks.reduce((n, h) => n + h.additionLines, 0), removed: hunks.reduce((n, h) => n + h.deletionLines, 0) };
 }

@@ -33,6 +33,9 @@ const INTERRUPTED = /^\[Request interrupted by user( for tool use)?\]$/;
 // shown by the session_model part), a background task's notification (live a system/task_notification).
 // ponytail: output of a command run in the terminal CLI is dropped too; show it if terminal sessions need it.
 const CLI_OUTPUT = /^<(local-command-stdout|local-command-stderr|task-notification)>.*<\/\1>$/s;
+// CLI text sent to the model, not typed by the user: flagged isSynthetic (live) or isMeta (transcript); the nudge after
+// an empty response also matched by text, as its live flags are unverified (SDK 0.3.285).
+const NUDGE = /^\[Your previous response had no visible output\./;
 // A transcript records a slash command as these tags; live the prompt's own user_text shows it.
 const COMMAND_TAG = /<(command-name|command-message|command-args)>(.*?)<\/\1>/gs;
 
@@ -46,7 +49,7 @@ function commandPrompt(text: string): string | undefined {
 
 /** A user message's string content as parts; the /model record is dropped like its echo. */
 function userString(id: string, content: string): Part[] {
-  if (CLI_OUTPUT.test(content)) return [];
+  if (CLI_OUTPUT.test(content) || NUDGE.test(content)) return [];
   const command = commandPrompt(content);
   if (command?.split(" ")[0] === "/model") return [];
   return [{ type: "user_text", id, text: command ?? content, images: [] }];
@@ -166,7 +169,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
       case "user": {
         const content = m.message.content;
         const id = m.uuid ?? crypto.randomUUID();
-        if (typeof content === "string") return userString(id, content);
+        const synthetic = m.isSynthetic === true || (m as { isMeta?: boolean }).isMeta === true;
+        if (typeof content === "string") return synthetic ? [] : userString(id, content);
         const parts: Part[] = [];
         const rest = content.filter((b) => {
           if (b.type !== "tool_result") return true;
@@ -180,7 +184,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
             parts.push(...setStatus(b.tool_use_id, denied.has(b.tool_use_id) ? "denied" : isError ? "error" : "done"));
           return false;
         });
-        if (rest.length === 0) return parts;
+        if (rest.length === 0 || synthetic) return parts;
         if (rest.length === 1 && rest[0]!.type === "text" && INTERRUPTED.test(rest[0]!.text)) return [...parts, { type: "turn_interrupted", id }];
         if (rest.every((b) => b.type === "text" || (b.type === "image" && b.source.type === "base64"))) {
           const text = rest.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");

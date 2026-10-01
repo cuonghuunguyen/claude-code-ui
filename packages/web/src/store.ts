@@ -52,17 +52,20 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
 export const withEpoch = (s: SessionView, logEpoch: string): SessionView =>
   s.logEpoch === logEpoch ? s : { ...emptySession(), logEpoch };
 
+const HIDDEN = new Set<Part["type"]>(["tool_result", "thinking", "permission_request"]);
+
 const isContextCall = (p: Part): p is ToolCall => p.type === "tool_call" && CONTEXT_TOOLS.has(p.tool);
 
 /**
- * Render order: tool_result parts fold into their tool card; consecutive read/search calls form one context group.
+ * Render order: tool_result parts fold into their tool card; thinking and permission_request parts are not shown; consecutive read/search calls form one context group.
  * Top level by default; with `parentId`, the child parts of that subagent.
  */
 export function timeline(s: SessionView, parentId?: string): TimelineItem[] {
   const items: TimelineItem[] = [];
   for (const id of s.order) {
     const part = s.parts.get(id)!;
-    if (part.type === "tool_result" || part.parentId !== parentId) continue;
+    // Results fold into their card; reasoning is hidden; a permission request is marked by its tool card.
+    if (HIDDEN.has(part.type) || part.parentId !== parentId) continue;
     const prev = items.at(-1);
     if (isContextCall(part) && prev?.kind === "context") prev.calls.push(part);
     else if (isContextCall(part) && prev?.kind === "part" && isContextCall(prev.part))
@@ -78,6 +81,24 @@ export function pendingPermission(s: SessionView): PermissionRequest | undefined
     const p = s.parts.get(id)!;
     if (p.type === "permission_request" && !p.settled) return p;
   }
+}
+
+const awaiting = new WeakMap<SessionView["parts"], Set<string>>();
+
+/** Tool use ids, and subagent ids, of calls waiting for a permission answer; their cards render expanded. Cached per `parts` map, which every update replaces. */
+export function awaitingPermission(s: SessionView): Set<string> {
+  let ids = awaiting.get(s.parts);
+  if (ids) return ids;
+  ids = new Set();
+  for (const p of s.parts.values())
+    if (p.type === "permission_request" && !p.settled) {
+      ids.add(p.toolUseId);
+      // The daemon sends no parentId on permission requests; walk up from the call, so every enclosing subagent opens too.
+      for (let parent = s.parts.get(p.toolUseId)?.parentId; parent && !ids.has(parent); parent = s.parts.get(parent)?.parentId)
+        ids.add(parent);
+    }
+  awaiting.set(s.parts, ids);
+  return ids;
 }
 
 /** The oldest unsettled question; while one exists (and no permission request) the question panel replaces the prompt box. */
