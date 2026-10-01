@@ -22,7 +22,7 @@ async function render(props: Partial<Parameters<typeof TabsBar>[0]> = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
-  const handlers = { onSelect: vi.fn(), onClose: vi.fn(), onMove: vi.fn(), onNew: vi.fn() };
+  const handlers = { onSelect: vi.fn(), onClose: vi.fn(), onMove: vi.fn(), onNew: vi.fn(), onAction: vi.fn(), onRenamed: vi.fn() };
   await act(async () => root!.render(<TabsBar tabs={["a", "b", "c", "d", NEW_TAB]} activeId="c" info={(id) => INFO[id]!} {...handlers} {...props} />));
   const tab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
   return { el, tab, ...handlers };
@@ -142,4 +142,32 @@ it("the Home button left of the tabs toggles the sessions sidebar", async () => 
   expect(home.compareDocumentPosition(el.querySelector('[data-testid="tab-strip"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   await act(async () => home.click());
   expect(onHome).toHaveBeenCalled();
+});
+
+it("right click on a session tab opens the session menu; Delete is disabled while it runs; the new-session tab has none", async () => {
+  const { tab, onAction } = await render();
+  const menu = async (id: string) => {
+    await act(async () => void tab(id).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+    return document.querySelector<HTMLElement>('[role="menu"]');
+  };
+  expect((await menu("c"))!.textContent).toBe("RenameArchiveDelete…");
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="action-archive"]')!.click());
+  expect(onAction).toHaveBeenLastCalledWith("c", "archive");
+  expect((await menu("a"))!.querySelector('[data-testid="action-delete"]')!.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+});
+
+it("double click on a tab title asks to rename; the renaming tab edits its title in place", async () => {
+  const { tab, onAction, onRenamed } = await render({ renaming: "d" });
+  await act(async () => void tab("c").querySelector('[role="tab"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  expect(onAction).toHaveBeenLastCalledWith("c", "rename");
+  const input = tab("d").querySelector<HTMLInputElement>('[data-testid="rename-input"]')!;
+  expect(input.value).toBe("Old");
+  const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => {
+    set.call(input, "  Newer ");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  expect(onRenamed).toHaveBeenCalledWith("d", "Newer");
 });

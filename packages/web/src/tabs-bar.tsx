@@ -5,8 +5,9 @@ import { ChevronDownIcon, CircleAlertIcon, Grid2x2PlusIcon, LoaderCircleIcon, Pl
 import type { SessionState } from "@claude-ui/protocol";
 import { cn } from "@/lib/utils";
 import { NEW_TAB, avatarColor, projectName, type AvatarColor } from "./tabs.ts";
+import { RenameInput, SessionContextMenu, type SessionAction } from "./session-actions.tsx";
 
-export type TabInfo = { title: string; cwd?: string; state?: SessionState; unread: boolean };
+export type TabInfo = { title: string; cwd?: string; state?: SessionState; unread: boolean; archived?: boolean };
 type TabStatus = "new" | "running" | "needs_input" | "unread" | "idle";
 
 const status = (id: string, t: TabInfo): TabStatus =>
@@ -53,6 +54,9 @@ export function TabsBar({
   onNew,
   home,
   onHome,
+  renaming,
+  onAction,
+  onRenamed,
 }: {
   tabs: string[];
   activeId?: string;
@@ -64,6 +68,10 @@ export function TabsBar({
   /** Home button (OpenCode grid-plus, md and up): pressed while the sessions sidebar shows. */
   home?: boolean;
   onHome?: () => void;
+  /** Session tab that shows the title editor. */
+  renaming?: string;
+  onAction: (id: string, a: SessionAction) => void;
+  onRenamed: (id: string, title: string | undefined) => void;
 }) {
   const strip = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -113,7 +121,19 @@ export function TabsBar({
         onKeyDown={onKeyDown}
       >
         {tabs.map((id) => (
-          <Tab key={id} id={id} t={info(id)} active={id === activeId} focusable={id === focusable} onSelect={onSelect} onClose={onClose} onMove={onMove} />
+          <Tab
+            key={id}
+            id={id}
+            t={info(id)}
+            active={id === activeId}
+            focusable={id === focusable}
+            onSelect={onSelect}
+            onClose={onClose}
+            onMove={onMove}
+            renaming={renaming === id}
+            onAction={(a) => onAction(id, a)}
+            onRenamed={(title) => onRenamed(id, title)}
+          />
         ))}
       </div>
       {tabs.length > 0 && (
@@ -168,6 +188,9 @@ function Tab({
   onSelect,
   onClose,
   onMove,
+  renaming,
+  onAction,
+  onRenamed,
 }: {
   id: string;
   t: TabInfo;
@@ -176,20 +199,24 @@ function Tab({
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onMove: (from: string, to: string) => void;
+  renaming: boolean;
+  onAction: (a: SessionAction) => void;
+  onRenamed: (title: string | undefined) => void;
 }) {
   const s = status(id, t);
+  const session = id !== NEW_TAB;
   const dragOver = (e: DragEvent) => {
     if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
   };
-  return (
+  const tab = (
     <div
       className={cn(
         "group relative flex h-7 w-56 min-w-24 max-w-56 shrink items-center rounded-md transition-colors",
         active ? "bg-secondary" : "hover:bg-secondary/70",
       )}
-      draggable
+      draggable={!renaming}
       onDragStart={(e) => {
         e.dataTransfer.setData(DRAG_TYPE, id);
         e.dataTransfer.effectAllowed = "move";
@@ -209,34 +236,52 @@ function Tab({
       data-state={s}
       title={[STATUS_LABEL[s] ? `${t.title} (${STATUS_LABEL[s]})` : t.title, t.cwd].filter(Boolean).join("\n")}
     >
-      <button
-        role="tab"
-        aria-selected={active}
-        tabIndex={focusable ? 0 : -1}
-        aria-label={STATUS_LABEL[s] ? `${t.title}, ${STATUS_LABEL[s]}` : undefined}
-        className={cn(
-          "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-          active ? "text-foreground" : "text-muted-foreground",
-        )}
-        onClick={() => onSelect(id)}
-      >
-        <TabIcon s={s} cwd={t.cwd} />
-        <span className="truncate leading-4">{t.title}</span>
-      </button>
-      <button
-        aria-label={`Close ${t.title}`}
-        // Out of the Tab order (roving tabindex); Delete on the tab closes it.
-        tabIndex={-1}
-        className={cn(
-          "absolute top-0.5 right-0.5 grid size-6 cursor-pointer place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover:opacity-100",
-          active ? "opacity-100" : "opacity-0",
-        )}
-        onClick={() => onClose(id)}
-        data-testid="tab-close"
-      >
-        <XIcon className="size-3.5" />
-      </button>
+      {renaming ? (
+        <div className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 pr-1 pl-1.5">
+          <TabIcon s={s} cwd={t.cwd} />
+          <RenameInput title={t.title} onDone={onRenamed} />
+        </div>
+      ) : (
+        <button
+          role="tab"
+          aria-selected={active}
+          tabIndex={focusable ? 0 : -1}
+          aria-label={STATUS_LABEL[s] ? `${t.title}, ${STATUS_LABEL[s]}` : undefined}
+          className={cn(
+            "flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+            active ? "text-foreground" : "text-muted-foreground",
+          )}
+          onClick={() => onSelect(id)}
+          // OpenCode: double click on the title renames.
+          onDoubleClick={() => session && onAction("rename")}
+        >
+          <TabIcon s={s} cwd={t.cwd} />
+          <span className="truncate leading-4">{t.title}</span>
+        </button>
+      )}
+      {!renaming && (
+        <button
+          aria-label={`Close ${t.title}`}
+          // Out of the Tab order (roving tabindex); Delete on the tab closes it.
+          tabIndex={-1}
+          className={cn(
+            "absolute top-0.5 right-0.5 grid size-6 cursor-pointer place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover:opacity-100",
+            active ? "opacity-100" : "opacity-0",
+          )}
+          onClick={() => onClose(id)}
+          data-testid="tab-close"
+        >
+          <XIcon className="size-3.5" />
+        </button>
+      )}
     </div>
+  );
+  if (!session) return tab;
+  const busy = t.state === "running" || t.state === "needs_input";
+  return (
+    <SessionContextMenu target={{ title: t.title, archived: !!t.archived, busy }} onAction={onAction}>
+      {tab}
+    </SessionContextMenu>
   );
 }
 

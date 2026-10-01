@@ -64,6 +64,8 @@ export class Session {
   private readonly listeners = new Set<Listener>();
   private input = new InputQueue();
   private query?: Query;
+  /** The running drive() loop; it ends after the CLI process exited. */
+  private driving?: Promise<void>;
   private model: string;
   private permissionMode: PermissionMode;
   private effort: Effort;
@@ -144,7 +146,7 @@ export class Session {
       },
     }));
     this.resumeAt = undefined;
-    void this.drive(q);
+    this.driving = this.drive(q);
     // Later changes arrive as system/commands_changed through drive().
     q.supportedCommands().then(
       (list) => this.adapter.commands(list).forEach((p) => this.emit(p)),
@@ -175,6 +177,18 @@ export class Session {
     for (const e of this.log) if (e.seq > sinceSeq) listener(e);
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /**
+   * Ends the query for good and resolves once its message loop ended (the CLI process exited). The CLI writes
+   * session metadata to the transcript on exit, so a transcript delete must wait for this.
+   */
+  async close() {
+    this.generation++;
+    this.query?.close();
+    this.query = undefined;
+    // ponytail: 5 s cap in case the CLI hangs on exit; a later write then leaves a metadata-only transcript stub.
+    await Promise.race([this.driving, new Promise((r) => setTimeout(r, 5000).unref())]);
   }
 
   /** False once the query ended or failed: nothing reads the input queue any more. */

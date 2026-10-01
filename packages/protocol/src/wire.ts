@@ -22,7 +22,8 @@ export type SessionInfo = {
   permissionModes: PermissionMode[];
 };
 /** A `session.list` entry: a transcript from `listSessions()` (terminal CLI sessions too) or a session of this daemon run. */
-export type SessionListItem = SessionInfo & { title: string; lastActivity: number };
+/** `archived`: hidden from the list unless the archived filter is on (SDK session tag "archived"). */
+export type SessionListItem = SessionInfo & { title: string; lastActivity: number; archived: boolean };
 export type FsEntry = { name: string; path: string; isDir: boolean };
 
 /** Every client message carries a `reqId`; the daemon answers with a `reply` or an `error` with the same `reqId`. */
@@ -64,6 +65,11 @@ export type ClientMessage = { reqId: string } & (
   | { type: "project.open"; cwd: string }
   /** Removes a project from the list; files and transcripts stay. */
   | { type: "project.remove"; cwd: string }
+  /** Sets the SDK custom title (the terminal CLI shows it too). Needs a transcript: a session with no prompt yet has none. */
+  | { type: "session.rename"; sessionId: string; title: string }
+  | { type: "session.archive"; sessionId: string; archived: boolean }
+  /** Removes the transcript. Refused while a turn runs or input is pending: stop it first. */
+  | { type: "session.delete"; sessionId: string }
   /** Without `path`: the allowlisted roots. */
   | { type: "fs.list"; path?: string }
   | { type: "session.rewindPreview"; sessionId: string; userMessageId: string }
@@ -99,6 +105,8 @@ export type ServerMessage =
   | { type: "reply"; reqId: string; result: unknown }
   /** A watched file changed on disk; `path` as given in `fs.watch`, `mtime` 0 when it was deleted. */
   | { type: "fs.changed"; path: string; mtime: number }
+  /** Sent to every connection after a rename, archive or delete: refetch `session.list`. `deleted`: drop that session. */
+  | { type: "sessions.changed"; deleted?: string }
   | { type: "error"; reqId?: string; code: string; message: string };
 
 export type CreateResult = { session: SessionInfo };

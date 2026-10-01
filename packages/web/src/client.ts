@@ -23,6 +23,8 @@ export function connect(opts: {
   /** Pairing token; defaults to the one this browser stored (pairing.ts). */
   token?: string;
   onEvent: (e: Event) => void;
+  /** Another tab (or this one) renamed, archived or deleted a session. */
+  onSessionsChanged?: (m: Extract<ServerMessage, { type: "sessions.changed" }>) => void;
   onOpen?: () => void;
   onStatus?: (s: ConnectionStatus) => void;
 }) {
@@ -61,6 +63,7 @@ export function connect(opts: {
       const m: ServerMessage = JSON.parse(ev.data);
       if (m.type === "event") return opts.onEvent(m);
       if (m.type === "fs.changed") return fsListeners.forEach((l) => l(m));
+      if (m.type === "sessions.changed") return opts.onSessionsChanged?.(m);
       const p = m.reqId ? pending.get(m.reqId) : undefined;
       if (!p) return console.error("daemon error", m);
       pending.delete(m.reqId!);

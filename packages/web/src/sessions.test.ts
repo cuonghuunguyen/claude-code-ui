@@ -3,7 +3,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { groupByCwd, inProject, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
 
-const item = (id: string, cwd: string, lastActivity: number, title = id): SessionListItem => ({ id, cwd, state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [], title, lastActivity });
+const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
+  id,
+  cwd,
+  state: "idle",
+  model: "default",
+  permissionMode: "default",
+  effort: "default",
+  permissionModes: [],
+  title,
+  lastActivity,
+  archived,
+});
 
 describe("groupByCwd", () => {
   it("groups sessions by working directory, most recent group first, keeping order inside a group", () => {
@@ -20,6 +31,13 @@ describe("groupByCwd", () => {
       ["/p/y", ["b", "d"]],
       ["/p/x", ["c", "e", "a"]],
     ]);
+  });
+
+  it("hides archived sessions; the archived filter shows only them", () => {
+    const list = [item("a", "/p/x", 3), item("b", "/p/x", 2, "b", true), item("c", "/p/y", 1, "c", true)];
+    const ids = (archived: boolean) => groupByCwd(list, "", undefined, archived).flatMap((g) => g.sessions.map((s) => s.id));
+    expect(ids(false)).toEqual(["a"]);
+    expect(ids(true)).toEqual(["b", "c"]);
   });
 
   it("filters by session title or project name, case-insensitive", () => {

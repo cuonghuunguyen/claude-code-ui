@@ -1,11 +1,12 @@
 // Sidebar session list (docs/spec.md "Layout"): one collapsible group per known project, search by title or project name.
 import { useState } from "react";
-import { ChevronRightIcon, CircleAlertIcon, FolderPlusIcon, LoaderCircleIcon, SearchIcon, SquarePenIcon, XIcon } from "lucide-react";
+import { ArchiveIcon, ChevronRightIcon, CircleAlertIcon, FolderPlusIcon, LoaderCircleIcon, SearchIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionListItem, SessionState } from "@claude-ui/protocol";
 import { cn } from "@/lib/utils";
 import { groupByCwd, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
 import { IconButton, ProjectAvatar } from "./tabs-bar.tsx";
+import { RenameInput, SessionContextMenu, SessionMenu, type SessionAction } from "./session-actions.tsx";
 
 /** Only states that need attention get an indicator; idle, error and closed rows stay plain. */
 function StateIcon({ state }: { state: SessionState }) {
@@ -26,6 +27,9 @@ export function SessionList({
   onNew,
   onRemove,
   onOpenProject,
+  renaming,
+  onAction,
+  onRenamed,
 }: {
   list: SessionListItem[];
   /** Known project cwds from the daemon, newest first; a project with no session still gets a group. */
@@ -40,8 +44,14 @@ export function SessionList({
   /** Removes the project from the list; files stay. */
   onRemove: (cwd: string) => void;
   onOpenProject: () => void;
+  /** Session whose row shows the title editor. */
+  renaming?: string;
+  onAction: (id: string, a: SessionAction) => void;
+  /** New title, or undefined when the edit was cancelled. */
+  onRenamed: (id: string, title: string | undefined) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [archived, setArchived] = useState(false);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
   const toggle = (cwd: string) =>
     setCollapsed((c) => {
@@ -51,7 +61,7 @@ export function SessionList({
       return next;
     });
 
-  const groups = groupByCwd(list, query, projects);
+  const groups = groupByCwd(list, query, projects, archived);
   const header = (
     <div className="flex h-7 items-center pl-1.5">
       <h2 className="flex-1 font-medium text-muted-foreground text-sm">Projects</h2>
@@ -70,20 +80,38 @@ export function SessionList({
   return (
     <div className="flex min-h-0 flex-col gap-2">
       {header}
-      <label className="relative flex items-center">
-        <SearchIcon className="pointer-events-none absolute left-2 size-4 text-faint" aria-hidden />
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search sessions"
-          aria-label="Search sessions by title or project"
-          className="h-8 w-full rounded-md bg-secondary/60 pr-2 pl-8 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11"
-          data-testid="session-search"
-        />
-      </label>
+      <div className="flex items-center gap-1">
+        <label className="relative flex min-w-0 flex-1 items-center">
+          <SearchIcon className="pointer-events-none absolute left-2 size-4 text-faint" aria-hidden />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search sessions"
+            aria-label="Search sessions by title or project"
+            className="h-8 w-full rounded-md bg-secondary/60 pr-2 pl-8 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11"
+            data-testid="session-search"
+          />
+        </label>
+        <IconButton
+          label={archived ? "Show sessions" : "Show archived sessions"}
+          pressed={archived}
+          onClick={() => setArchived(!archived)}
+          testId="archived-filter"
+        >
+          <ArchiveIcon />
+        </IconButton>
+      </div>
       <nav className="-mx-1 flex min-h-0 flex-col gap-2 overflow-y-auto px-1" aria-label="Sessions" data-testid="session-list">
-        {!groups.length && <p className="px-1.5 text-muted-foreground text-sm">No session title or project matches "{query.trim()}".</p>}
+        {!groups.length && (
+          <p className="px-1.5 text-muted-foreground text-sm">
+            {query.trim()
+              ? `No ${archived ? "archived " : ""}session title or project matches "${query.trim()}".`
+              : archived
+                ? "No archived sessions."
+                : "All sessions are archived."}
+          </p>
+        )}
         {groups.map((g) => {
           // While searching every match shows, also in collapsed groups.
           const open = !!query.trim() || !collapsed.has(g.cwd);
@@ -118,26 +146,41 @@ export function SessionList({
                     const st = state(s);
                     const label = STATE_LABEL[st];
                     const isUnread = unread.has(s.id);
+                    const target = { title: s.title, archived: s.archived, busy: st === "running" || st === "needs_input" };
+                    const act = (a: SessionAction) => onAction(s.id, a);
+                    if (renaming === s.id)
+                      return (
+                        <li key={s.id} className="flex h-8 items-center pr-1.5 pl-7 max-md:h-11">
+                          <RenameInput title={s.title} onDone={(t) => onRenamed(s.id, t)} />
+                        </li>
+                      );
                     return (
-                      <li key={s.id}>
-                        <button
-                          data-testid="session-item"
-                          data-state={st}
-                          className={cn(
-                            "flex h-10 w-full items-center gap-2 rounded-md pr-1.5 pl-7 text-left text-sm outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11",
-                            s.id === activeId ? "bg-secondary text-foreground" : "text-muted-foreground",
-                          )}
-                          aria-current={s.id === activeId ? "page" : undefined}
-                          aria-label={[s.title, label, isUnread && "unread"].filter(Boolean).join(", ")}
-                          onClick={() => onOpen(s.id)}
-                          title={label ? `${s.title} (${label})` : s.title}
-                        >
-                          <span className={cn("min-w-0 flex-1 truncate font-medium", isUnread && "text-foreground")}>{s.title}</span>
-                          {isUnread && <span className="size-1.5 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-hidden />}
-                          <StateIcon state={st} />
-                          <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{timeAgo(s.lastActivity)}</span>
-                        </button>
-                      </li>
+                      <SessionContextMenu key={s.id} target={target} onAction={act}>
+                        <li className="group relative">
+                          <button
+                            data-testid="session-item"
+                            data-state={st}
+                            className={cn(
+                              "flex h-10 w-full items-center gap-2 rounded-md pr-8 max-md:pr-12 pl-7 text-left text-sm outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11",
+                              s.id === activeId ? "bg-secondary text-foreground" : "text-muted-foreground",
+                            )}
+                            aria-current={s.id === activeId ? "page" : undefined}
+                            aria-label={[s.title, label, isUnread && "unread"].filter(Boolean).join(", ")}
+                            onClick={() => onOpen(s.id)}
+                            title={label ? `${s.title} (${label})` : s.title}
+                          >
+                            <span className={cn("min-w-0 flex-1 truncate font-medium", isUnread && "text-foreground")}>{s.title}</span>
+                            {isUnread && <span className="size-1.5 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-hidden />}
+                            <StateIcon state={st} />
+                            <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{timeAgo(s.lastActivity)}</span>
+                          </button>
+                          <SessionMenu
+                            target={target}
+                            onAction={act}
+                            className="-translate-y-1/2 absolute top-1/2 right-1 opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-popup-open:opacity-100 pointer-coarse:opacity-100"
+                          />
+                        </li>
+                      </SessionContextMenu>
                     );
                   })}
                 </ul>
