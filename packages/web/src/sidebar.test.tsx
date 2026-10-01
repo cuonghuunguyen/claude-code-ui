@@ -14,6 +14,9 @@ const item = (id: string, cwd: string, title: string, minutesAgo: number, state:
   title,
   state,
   model: "default",
+  permissionMode: "default",
+  effort: "default",
+  permissionModes: [],
   lastActivity: now - minutesAgo * 60_000,
 });
 // Interleaved working directories, as the daemon's newest-first list gives them.
