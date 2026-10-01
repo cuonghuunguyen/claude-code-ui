@@ -20,6 +20,19 @@ it("with Alt, letters match by physical key (macOS Option turns Option+W into �
   expect(matchesKey("mod+alt+arrowright", ev("ArrowRight", { ctrlKey: true, altKey: true }), false)).toBe(true);
 });
 
+it("off macOS a letter matches by e.key only: AltGr (Ctrl+Alt) typing a character is not a shortcut", () => {
+  // Hungarian layout: AltGr+W types "|".
+  expect(matchesKey("mod+alt+w", ev("|", { ctrlKey: true, altKey: true, code: "KeyW" }), false)).toBe(false);
+  expect(matchesKey("mod+alt+w", ev("w", { ctrlKey: true, altKey: true, code: "KeyW" }), false)).toBe(true);
+});
+
+it("Ctrl+P and Cmd+P are quick open, not Ctrl+Shift+P", () => {
+  expect(matchesKey(KEYS.quickOpen, ev("p", { ctrlKey: true }), false)).toBe(true);
+  expect(matchesKey(KEYS.quickOpen, ev("p", { metaKey: true }), true)).toBe(true);
+  expect(matchesKey(KEYS.quickOpen, ev("P", { ctrlKey: true, shiftKey: true }), false)).toBe(false);
+  expect(matchesKey(KEYS.quickOpen, ev("p"), false)).toBe(false);
+});
+
 it("labels each key for the palette's keybind chips", () => {
   expect(keyLabels("mod+shift+p", false)).toEqual(["Ctrl", "Shift", "P"]);
   expect(keyLabels("mod+shift+p", true)).toEqual(["⌘", "⇧", "P"]);

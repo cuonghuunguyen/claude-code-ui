@@ -430,6 +430,12 @@ export function App() {
   const wide = (px: number) => window.matchMedia(`(min-width: ${px}px)`).matches;
   // Below lg the session and the side panel share one pane; from lg on the session always shows and "pane" picks the side panel tab.
   const showSession = () => !wide(1024) && setPane("session");
+  /** Opens a file of the shown session (path relative to its cwd) in the files panel. */
+  const openInPanel = (p: string) => {
+    setOpenFile(`${shown!.cwd.replace(/\/$/, "")}/${p}`);
+    setPane("files");
+    setPanel(true);
+  };
   const commands = appCommands({
     tabs,
     activeId,
@@ -674,16 +680,11 @@ export function App() {
         <QuickOpen
           connected={status === "connected"}
           onSearch={search(shown.cwd)}
-          onOpen={(p) => {
-            hideQuickOpen(false);
-            setOpenFile(`${shown.cwd.replace(/\/$/, "")}/${p}`);
-            setPane("files");
-            setPanel(true);
-          }}
+          onOpen={(p) => (hideQuickOpen(false), openInPanel(p))}
           onMention={(p) => {
             hideQuickOpen(false);
             setInsert(mentionPath(p));
-            setPane("session");
+            showSession();
           }}
           onClose={() => hideQuickOpen(true)}
         />
@@ -692,6 +693,7 @@ export function App() {
         <CommandPalette
           items={commands}
           start={palette.start}
+          files={shown && { search: search(shown.cwd), open: openInPanel }}
           onClose={() => {
             setPalette(undefined);
             // Before the chosen command runs, so a dialog it opens (quick open) returns focus here too.

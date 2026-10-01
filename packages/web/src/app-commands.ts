@@ -2,6 +2,7 @@
 import type { Effort, ModelInfo, PermissionMode, SessionListItem } from "@claude-ui/protocol";
 import type { PaletteItem } from "./palette.tsx";
 import { KEYS, matchesKey } from "./shortcuts.ts";
+import { timeAgo } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
 import { EFFORT_LABEL, MODE_LABEL, effortOptions } from "./toolbar.tsx";
 
@@ -34,6 +35,8 @@ export type CommandContext = {
   rewind: (userMessageId: string) => void;
   stop: () => void;
 };
+
+const RECENT_SESSIONS = 5;
 
 const firstLine = (t: string) => t.trim().split("\n")[0]!.slice(0, 80) || "(image)";
 
@@ -91,14 +94,20 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         [...s.prompts].reverse().map((p) => ({ id: `rewind:${p.id}`, group: "Messages, newest first", title: firstLine(p.text), run: () => c.rewind(p.id) })),
       ),
     s?.running && cmd("session.stop", "Stop", c.stop, "escape"),
-    ...c.sessions.map((x) => ({
-      id: `session:${x.id}`,
-      group: "Sessions",
-      title: x.title || "Untitled",
-      description: projectName(x.cwd),
-      checked: x.id === c.activeId,
-      run: () => c.selectTab(x.id),
-    })),
+    // Newest first; the recent ones also show before anything is typed (OpenCode lists recent items there, not all).
+    ...[...c.sessions]
+      .sort((a, b) => b.lastActivity - a.lastActivity)
+      .map((x, i) => ({
+        id: `session:${x.id}`,
+        group: "Sessions",
+        title: x.title || "Untitled",
+        description: projectName(x.cwd),
+        cwd: x.cwd,
+        open: c.tabs.includes(x.id),
+        meta: timeAgo(x.lastActivity),
+        searchOnly: i >= RECENT_SESSIONS,
+        run: () => c.selectTab(x.id),
+      })),
   ];
   return items.filter((i): i is PaletteItem => !!i);
 }

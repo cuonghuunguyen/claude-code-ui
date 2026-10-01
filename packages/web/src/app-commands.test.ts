@@ -99,3 +99,19 @@ it("a shortcut finds its command; Esc, Shift+Tab and plain keys run nothing from
   expect(shortcutFor(items, ev("Tab", { shiftKey: true }))).toBeUndefined();
   expect(shortcutFor(items, ev("s"))).toBeUndefined();
 });
+
+it("sessions newest first: the 5 most recent show at an empty query, the rest only for a search; rows carry avatar, open marker and time", () => {
+  const now = Date.now();
+  const sessions = Array.from({ length: 7 }, (_, i) => ({ id: `s${i}`, cwd: "/w/api", title: `T${i}`, lastActivity: now - (7 - i) * 60_000 }) as SessionListItem);
+  const rows = appCommands(ctx({ sessions, tabs: ["s6"], activeId: "s6" })).filter((i) => i.group === "Sessions");
+  expect(rows.map((r) => [r.id, !!r.searchOnly, !!r.open])).toEqual([
+    ["session:s6", false, true],
+    ["session:s5", false, false],
+    ["session:s4", false, false],
+    ["session:s3", false, false],
+    ["session:s2", false, false],
+    ["session:s1", true, false],
+    ["session:s0", true, false],
+  ]);
+  expect(rows[0]).toMatchObject({ cwd: "/w/api", description: "api", meta: "1m" });
+});

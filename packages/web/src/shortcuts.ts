@@ -30,7 +30,8 @@ export function matchesKey(spec: string, e: KeyboardEvent, mac = IS_MAC) {
   const meta = mods.has("meta") || (mods.has("mod") && mac);
   if (e.ctrlKey !== ctrl || e.metaKey !== meta || e.shiftKey !== mods.has("shift") || e.altKey !== mods.has("alt")) return false;
   // macOS Option changes e.key (Option+W is "∑"): with Alt a letter matches by its physical key.
-  return e.key.toLowerCase() === key || (e.altKey && /^[a-z]$/.test(key) && e.code === `Key${key.toUpperCase()}`);
+  // macOS only: elsewhere Ctrl+Alt is also AltGr, whose typed character (AltGr+W is "|" on a Hungarian layout) must not fire a shortcut.
+  return e.key.toLowerCase() === key || (mac && e.altKey && /^[a-z]$/.test(key) && e.code === `Key${key.toUpperCase()}`);
 }
 
 const NAMES: Record<string, [mac: string, other: string]> = {

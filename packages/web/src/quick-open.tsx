@@ -4,10 +4,6 @@ import { AtSignIcon, SearchIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FileIcon } from "./file-icon.tsx";
 
-/** Ctrl+P or Cmd+P, without Shift or Alt. */
-export const isQuickOpenKey = (e: globalThis.KeyboardEvent) =>
-  (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "p";
-
 const mod = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
 export const quickOpenLabel = `Search files (${mod}P)`;
 

@@ -30,6 +30,7 @@ const replies: Record<string, unknown> = {
   "models.list": { models: [] },
   "fs.list": { entries: [] },
   "fs.search": { paths: [] },
+  "fs.read": { content: "x", mtime: 1 },
   "session.rewindPreview": { filesChanged: [], insertions: 0, deletions: 0, conversation: true },
 };
 let emit: (e: unknown) => void = () => {};
@@ -105,4 +106,20 @@ it("Focus prompt on a narrow screen switches from the files pane back to the ses
   await act(async () => el.querySelector<HTMLElement>('[data-testid="pane-files"]')!.click());
   await press({ key: "l", code: "KeyL", ctrlKey: true });
   expect(el.querySelector('[data-testid="pane-session"]')!.getAttribute("aria-selected")).toBe("true");
+});
+
+it("a file found by the palette opens in the files panel", async () => {
+  replies["fs.search"] = { paths: ["src/app.ts"] };
+  await pickSide(/changes/i);
+  await press({ key: "k", code: "KeyK", ctrlKey: true });
+  const input = document.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "app");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {}); // the search reply
+  await act(async () => document.querySelector<HTMLElement>('[data-id="file:src/app.ts"]')!.click());
+  expect(document.querySelector('[data-testid="palette"]')).toBeNull();
+  expect(sideTab()).toMatch(/files/i);
+  replies["fs.search"] = { paths: [] };
 });

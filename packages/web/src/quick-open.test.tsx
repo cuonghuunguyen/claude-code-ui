@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { QuickOpen, isQuickOpenKey } from "./quick-open.tsx";
+import { QuickOpen } from "./quick-open.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -109,14 +109,6 @@ it("says so when nothing matches", async () => {
   const { el, type } = await render();
   await type("zzz");
   expect(el.textContent).toContain("No files found");
-});
-
-it("Ctrl+P and Cmd+P are the shortcut, not Ctrl+Shift+P", () => {
-  const k = (init: KeyboardEventInit) => isQuickOpenKey(new KeyboardEvent("keydown", init));
-  expect(k({ key: "p", ctrlKey: true })).toBe(true);
-  expect(k({ key: "p", metaKey: true })).toBe(true);
-  expect(k({ key: "P", ctrlKey: true, shiftKey: true })).toBe(false);
-  expect(k({ key: "p" })).toBe(false);
 });
 
 it("owns Escape and the arrow keys after a click moved focus off the search box", async () => {
