@@ -1480,7 +1480,8 @@ function PromptBox({
         hasInput={!disabled && (!!text.trim() || images.length > 0)}
         onSend={() => send()}
         onStop={() => onInterrupt?.()}
-        onFocusLost={() => input.current?.focus()}
+        // Not on touch screens: focusing the prompt box there opens the soft keyboard (OpenCode leaves focus on the page).
+        onFocusLost={() => !window.matchMedia?.("(pointer: coarse)").matches && input.current?.focus()}
       />
     </div>
     </div>

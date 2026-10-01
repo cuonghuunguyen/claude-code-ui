@@ -56,6 +56,11 @@ for (const theme of [":root", ".dark"]) {
       expect(contrast(solid("muted-foreground"), solid("kbd"))).toBeGreaterThanOrEqual(4.5);
     });
 
+    it("send button: its fill reaches 3:1 against the prompt box (card), its icon 4.5:1 on it", () => {
+      expect(contrast(solid("send"), solid("card"))).toBeGreaterThanOrEqual(3);
+      expect(contrast(solid("primary-foreground"), solid("send"))).toBeGreaterThanOrEqual(4.5);
+    });
+
     it("faint icons reach 3:1 on every surface", () => {
       for (const bg of SURFACES) expect(contrast(solid("faint"), solid(bg))).toBeGreaterThanOrEqual(3);
     });

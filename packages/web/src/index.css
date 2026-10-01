@@ -39,6 +39,7 @@
     --color-secondary: var(--secondary);
     --color-tab-separator: var(--tab-separator);
     --color-kbd: var(--kbd);
+    --color-send: var(--send);
     --color-primary-foreground: var(--primary-foreground);
     --color-primary: var(--primary);
     --color-popover-foreground: var(--popover-foreground);
@@ -93,6 +94,7 @@
     --accent: #0000000a;
     --accent-foreground: #161616;
     --primary: #242424;
+    --send: #242424; /* send button: --primary */
     --primary-foreground: #ffffff;
     --destructive: #b82d35;
     --success: #167a3b;
@@ -138,6 +140,7 @@
     --accent: #ffffff0f;
     --accent-foreground: #fafafa;
     --primary: #5c5c5c;
+    --send: #6b6b6b; /* lighter than --primary: 3:1 against the prompt box (#161616) */
     --primary-foreground: #ffffff;
     --destructive: #f17471;
     --success: #6bd586;

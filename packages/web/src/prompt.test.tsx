@@ -291,6 +291,8 @@ it("send button: OpenCode contrast gradient and elevation; disconnected shows an
   const button = () => $("prompt-toolbar")!.querySelector<HTMLButtonElement>("button[data-state]")!;
   expect(button().className).toContain("shadow-button-contrast");
   expect(button().className).toContain("bg-linear-to-b");
+  // --send: --primary in light; lighter in dark, so the button edge reaches 3:1 on the prompt box (theme.test.ts).
+  expect(button().className).toContain("bg-send");
   expect(button().querySelector(".lucide-wifi-off")).toBeNull();
   await rerender({ connected: false });
   expect(button().querySelector(".lucide-wifi-off")).not.toBeNull();
@@ -376,4 +378,17 @@ it("the @-mention picker searches again once the daemon reconnects", async () =>
   online = true;
   await rerender({ connected: true });
   expect(el.querySelector('[data-testid="mention-picker"]')?.textContent).toContain("spec.md");
+});
+
+it("on a touch screen a stop does not move focus to the prompt box (no soft keyboard)", async () => {
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ matches: q.includes("pointer: coarse"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  try {
+    const { $, box, rerender } = await render({}, { ...emptySession(), state: "running" });
+    $("toolbar-stop")!.focus();
+    await rerender({ view: { ...emptySession(), state: "idle" } });
+    expect(document.activeElement).not.toBe(box);
+  } finally {
+    window.matchMedia = mm;
+  }
 });

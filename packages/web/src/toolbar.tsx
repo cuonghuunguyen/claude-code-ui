@@ -203,7 +203,7 @@ function SendButton({ state, hasInput, onSend, onStop, onFocusLost }: { state: S
       data-testid={busy && !steer ? "toolbar-stop" : "send"}
       ref={ref}
       disabled={disabled}
-      className={`${SEND_BASE} ${state === "needs_input" ? "bg-warning text-background motion-safe:animate-pulse" : "bg-primary text-primary-foreground"}`}
+      className={`${SEND_BASE} ${state === "needs_input" ? "bg-warning text-background motion-safe:animate-pulse" : "bg-send text-primary-foreground"}`}
       onClick={steer || state === "idle" ? onSend : onStop}
     >
       {state === "running" && <LoaderCircleIcon aria-hidden className="absolute size-5.5 animate-spin opacity-60 motion-reduce:animate-none pointer-coarse:size-8" />}
