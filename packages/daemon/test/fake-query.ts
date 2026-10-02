@@ -242,3 +242,53 @@ export function interruptQuery({ prompt, options }: { prompt: AsyncIterable<SDKU
     close: () => void q.return(undefined as never),
   });
 }
+
+/** stopTask() calls of subagentQuery. */
+export const stopped: string[] = [];
+
+/**
+ * Fake query() with a subagent run (shapes of the edit-todo-subagent fixture): each prompt starts Agent call `agent-<n>` (task `task-<n>`),
+ * whose child Bash call asks canUseTool; once answered the run waits until stopTask() of its task, which ends it like the CLI
+ * (task_notification stopped, then an error tool_result), and the parent turn goes on to its result.
+ */
+export function subagentQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
+  calls.push(options ?? {});
+  const out: SDKMessage[] = [];
+  let wake = () => {};
+  const emit = (m: unknown) => (out.push(m as SDKMessage), wake());
+  const stops = new Map<string, () => void>();
+  let n = 0;
+  void (async () => {
+    for await (const _ of prompt) {
+      const agent = `agent-${++n}`;
+      const task = `task-${n}`;
+      emit({ type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { id: `msg_${agent}`, content: [{ type: "tool_use", id: agent, name: "Agent", input: { description: "Run tests", prompt: "npm test" } }] } });
+      emit({ type: "system", subtype: "task_started", uuid: randomUUID(), session_id: "x", task_id: task, tool_use_id: agent, description: "Run tests", spawn_depth: 1 });
+      const bash = randomUUID();
+      emit({ type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: agent, message: { id: `msg_${bash}`, content: [{ type: "tool_use", id: bash, name: "Bash", input: { command: "npm test" } }] } });
+      const abort = new AbortController();
+      permissionResults.push((await options!.canUseTool!("Bash", { command: "npm test" }, { signal: abort.signal, suggestions: [], toolUseID: bash, requestId: randomUUID(), agentID: task }))!);
+      await new Promise<void>((r) => stops.set(task, r));
+      emit({ type: "system", subtype: "task_notification", uuid: randomUUID(), session_id: "x", task_id: task, tool_use_id: agent, status: "stopped", output_file: "", summary: "" });
+      emit({ type: "user", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: agent, content: "Agent stopped", is_error: true }] } });
+      emit(turns[0]!.at(-1)!);
+    }
+  })();
+  const q = (async function* () {
+    for (;;) {
+      while (out.length) yield out.shift()!;
+      await new Promise<void>((r) => (wake = r));
+    }
+  })();
+  return Object.assign(q, {
+    supportedCommands: async () => [],
+    stopTask: async (taskId: string) => {
+      stopped.push(taskId);
+      const stop = stops.get(taskId);
+      if (!stop) throw new Error(`no task ${taskId}`);
+      stops.delete(taskId);
+      stop();
+    },
+    close: () => void q.return(undefined as never),
+  });
+}

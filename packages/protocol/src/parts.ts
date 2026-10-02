@@ -104,8 +104,12 @@ export type Part = { parentId?: string } & (
   | { type: "context_usage"; id: "context_usage"; usage: ContextUsage }
   /** Latest TodoWrite list of the main agent; `id` = `<toolUseId>:todos`. */
   | { type: "todo_update"; id: string; items: TodoItem[] }
-  /** An Agent/Task call; `id` = `toolUseId`, its `tool_result` is `<toolUseId>:result`, child parts have `parentId` = `id`. */
-  | { type: "subagent"; id: string; toolUseId: string; description: string; status: ToolStatus }
+  /**
+   * A subagent run (Agent/Task call); `id` = `toolUseId`, its `tool_result` is `<toolUseId>:result`, child parts have `parentId` = `id`.
+   * Its own `parentId`: the run that started it (absent = the session). `startedAt` / `endedAt` (ms): transcript timestamps, else the
+   * daemon's clock; `endedAt` once the status is done, error or denied (a background run: at its task_notification).
+   */
+  | { type: "subagent"; id: string; toolUseId: string; description: string; status: ToolStatus; startedAt: number; endedAt?: number }
   /** The turn was stopped (session.interrupt, or No without feedback); replaces its turn_result. */
   | { type: "turn_interrupted"; id: string }
   | { type: "raw"; id: string; message: unknown }

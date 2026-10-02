@@ -129,7 +129,7 @@ it("a user message has Copy and Rewind actions", async () => {
 it("a subagent is expanded while a child call waits for permission (daemon sends no parentId)", async () => {
   await render(
     view([
-      { type: "subagent", id: "t1", toolUseId: "t1", description: "Run tests", status: "running" },
+      { type: "subagent", id: "t1", toolUseId: "t1", description: "Run tests", status: "running", startedAt: 0 },
       { ...call("b6", "Bash", { command: "npm test" }, "running"), parentId: "t1" },
       permission("b6"),
     ]),

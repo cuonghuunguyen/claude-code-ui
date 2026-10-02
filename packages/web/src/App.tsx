@@ -1,4 +1,4 @@
-import { Activity, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type RefObject } from "react";
+import { Activity, lazy, Suspense, use, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SquareTerminalIcon, SunIcon } from "lucide-react";
 import type {
   ContextUsage,
@@ -61,7 +61,8 @@ import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
 import { KEYS, matchesKey } from "./shortcuts.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
-import { NEW_TAB, avatarColors, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { NEW_TAB, avatarColors, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { AgentsButton, inRun, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -130,6 +131,8 @@ export function App() {
   const [views, setViews] = useState<Record<string, SessionView>>({});
   // Active tab: a session id or NEW_TAB.
   const [activeId, setActiveId] = useState(hashTab);
+  // Subagent run shown in the active session tab (its subagent view; URL `#<session>/agent/<run>`), undefined = the session view.
+  const [run, setRun] = useState(() => runFromHash(location.hash));
   const [tabs, setTabs] = useState(() => {
     const h = hashTab();
     return h ? openTab(loadTabs(), h) : loadTabs();
@@ -272,15 +275,33 @@ export function App() {
   }
 
   /** Opens or focuses a tab; `undefined` shows no tab. Only a session tab goes into the URL hash. */
-  function open(id: string | undefined) {
+  function open(id: string | undefined, keepHash = false) {
     setError(undefined);
     setActiveId(id);
     setDrawer(false);
+    if (!keepHash) setRun(undefined);
     if (!id) return;
     setTabs((t) => openTab(t, id));
-    history.replaceState(null, "", tabHash(id));
+    if (!keepHash) history.replaceState(null, "", tabHash(id));
     if (id !== NEW_TAB && !viewsRef.current[id]) void subscribe(id);
   }
+
+  /** Opens the subagent view of `id` in the active session tab, or its session view; a history entry each, so browser Back returns. */
+  function openRun(sessionId: string, id?: string) {
+    history.pushState(null, "", runHash(sessionId, id));
+    setRun(id);
+  }
+
+  // Browser Back / Forward between session and subagent views.
+  useEffect(() => {
+    const onPop = () => {
+      const tab = hashTab();
+      if (tab) open(tab, true);
+      setRun(runFromHash(location.hash));
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   /** Closes the tab only: the session keeps running and stays in the sidebar. */
   function close(id: string) {
@@ -718,6 +739,11 @@ export function App() {
                         insert={id === activeId ? insert : undefined}
                         onInserted={() => setInsert(undefined)}
                         rewindTo={id === activeId ? rewindTo : undefined}
+                        run={id === activeId ? run : undefined}
+                        onOpenRun={(r) => openRun(s.id, r)}
+                        onStopRun={(subagentId) =>
+                          client.current!.request({ type: "session.stopSubagent", sessionId: s.id, subagentId }).catch((e) => setError((e as Error).message))
+                        }
                         onRewindShown={() => setRewindTo(undefined)}
                         session={s}
                         view={v}
@@ -1109,6 +1135,9 @@ const NEW_DRAFT: StartOptions = { model: "default", mode: "default", effort: "de
 
 export function SessionPane({
   scrollKey,
+  run,
+  onOpenRun = () => {},
+  onStopRun = () => {},
   insert,
   onInserted,
   rewindTo,
@@ -1132,6 +1161,12 @@ export function SessionPane({
   onGitStatus,
 }: {
   scrollKey: number;
+  /** Subagent run whose subagent view shows; an unknown one shows the session view. */
+  run?: string;
+  /** Opens a run's subagent view; undefined: the session view. */
+  onOpenRun?: (id?: string) => void;
+  /** Stop agent: stops that subagent run only. */
+  onStopRun?: (id: string) => void;
   insert?: string;
   onInserted: () => void;
   /** Opens the rewind panel of this user message (palette Rewind). */
@@ -1159,8 +1194,12 @@ export function SessionPane({
   plan?: PlanUsage | null;
   onGitStatus?: () => Promise<GitStatus | null>;
 }) {
-  const permission = pendingPermission(view);
-  const question = pendingQuestion(view);
+  const current = runOf(view, run);
+  const pendingPart = pendingPermission(view);
+  const pendingAsk = pendingQuestion(view);
+  // In a subagent view only a request from inside that run replaces the notice; the session view shows every one.
+  const permission = pendingPart && (!current || inRun(view, pendingPart.toolUseId, current.id)) ? pendingPart : undefined;
+  const question = pendingAsk && (!current || inRun(view, pendingAsk.toolUseId, current.id)) ? pendingAsk : undefined;
   // Waiting for a permission answer is part of the running turn.
   const turnRunning = view.state === "running" || view.state === "needs_input";
   // Esc stops the turn, like Claude Code; the command picker handles its own Esc first (preventDefault), and an open modal dialog owns Esc.
@@ -1181,6 +1220,10 @@ export function SessionPane({
 
   return (
     <CwdContext value={session.cwd}>
+    <OpenRunContext value={onOpenRun}>
+      {current ? (
+        <SubagentBar view={view} run={current} onOpen={onOpenRun} />
+      ) : (
       <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
         <ProjectAvatar cwd={session.cwd} />
         <span className="shrink-0 font-medium" title={session.cwd} data-testid="session-project">
@@ -1199,9 +1242,10 @@ export function SessionPane({
           </Button>
         )}
       </header>
-      <Conversation key={scrollKey} className="flex-1">
+      )}
+      <Conversation key={`${scrollKey}:${current?.id ?? ""}`} className="flex-1">
         <ConversationContent className="timeline mx-auto w-full max-w-[800px] 2xl:max-w-[1000px]">
-          {timeline(view).map((item) =>
+          {current ? <Timeline view={view} parentId={current.id} /> : timeline(view).map((item) =>
             item.kind === "context" ? (
               <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
             ) : item.part.type === "user_text" ? (
@@ -1241,8 +1285,8 @@ export function SessionPane({
               <PartView key={item.part.id} part={item.part} view={view} />
             ),
           )}
-          {/* Reasoning text stays hidden (OpenCode default); this row shows the turn is working. */}
-          {view.state === "running" && (
+          {/* Reasoning text stays hidden (OpenCode default); this row shows the turn (or the shown run) is working. */}
+          {view.state === "running" && (!current || current.status === "running") && (
             <div data-testid="thinking">
               <Shimmer as="span" className="font-medium text-sm">
                 Thinking
@@ -1259,6 +1303,8 @@ export function SessionPane({
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} />
         ) : question ? (
           <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} onDismiss={onInterrupt} />
+        ) : current ? (
+          <NotPromptable view={view} run={current} onOpen={onOpenRun} onStop={onStopRun} />
         ) : (
           <>
             <PromptBox
@@ -1283,6 +1329,7 @@ export function SessionPane({
               usage={view.contextUsage}
               stats={totals(view)}
               todos={showTodoDock(view.state, view.todos, false) ? view.todos : undefined}
+              agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
               placeholder={turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
             />
@@ -1298,6 +1345,7 @@ export function SessionPane({
           git={onGitStatus}
         />
       </div>
+    </OpenRunContext>
     </CwdContext>
   );
 }
@@ -1325,6 +1373,7 @@ function PromptBox({
   usage,
   stats,
   todos,
+  agents,
   label,
   placeholder,
   autoFocus,
@@ -1359,6 +1408,8 @@ function PromptBox({
   stats?: Totals;
   /** Todo dock above the box; none = hidden. */
   todos?: TodoItem[];
+  /** Agents button in the toolbar (session view). */
+  agents?: ReactNode;
   label: string;
   placeholder: string;
   autoFocus?: boolean;
@@ -1588,6 +1639,7 @@ function PromptBox({
         modes={modes}
         onMode={onMode}
         onAttach={(f) => void attach(f)}
+        agents={agents}
         usage={usage}
         stats={stats}
         state={state}
@@ -1704,6 +1756,7 @@ function RewindPanel(props: {
 }
 
 function PartView({ part, view }: { part: Part; view: SessionView }) {
+  const openRun = use(OpenRunContext);
   switch (part.type) {
     case "user_text": {
       const { text, files } = splitUploads(part.text);
@@ -1737,7 +1790,7 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
       return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} />;
     case "subagent":
       return (
-        <SubagentGroup part={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.id)}>
+        <SubagentGroup part={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.id)} onOpen={openRun && (() => openRun(part.id))}>
           <Timeline view={view} parentId={part.id} />
         </SubagentGroup>
       );

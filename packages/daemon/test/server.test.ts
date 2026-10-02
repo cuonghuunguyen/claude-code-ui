@@ -10,7 +10,7 @@ import { MAX_TERMINAL_INPUT_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@c
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS, MODEL_LIST_WAIT_MS } from "../src/server.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
-import { calls, controlCalls, fakeQuery, planCalls, history, interruptQuery, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
+import { calls, controlCalls, fakeQuery, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery } from "./fake-query.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
@@ -1305,6 +1305,142 @@ describe("daemon", () => {
       expect(await a.request({ type: "question.respond", requestId, answers: {} })).toMatchObject({ result: { settled: false } });
       const settled = (m: ServerMessage) => isQuestion(m) && (m as { part: { settled: boolean } }).part.settled;
       for (const c of [a, b]) expect(((await c.waitFor(settled)) as { part: object }).part).toMatchObject({ answers });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a restored session includes the subagent run timelines of its subagent transcripts, nested runs under their parent run", async () => {
+    const id = "8b2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    const msg = (type: string, parent: string | null, content: unknown, uuid = Math.random().toString(36)) =>
+      ({ type, uuid, session_id: id, parent_tool_use_id: parent, parent_agent_id: null, timestamp: "2026-09-30T18:21:30.000Z", message: { id: `m${uuid}`, role: type, content } }) as never;
+    const main = [
+      msg("user", null, "inspect"),
+      msg("assistant", null, [{ type: "tool_use", id: "toolu_outer", name: "Agent", input: { description: "Outer run" } }]),
+      msg("user", null, [{ type: "tool_result", tool_use_id: "toolu_outer", content: "done" }]),
+    ];
+    const subagents: Record<string, never[]> = {
+      // The SDK names each message's parent_tool_use_id: the Agent call that started the run.
+      outer: [
+        msg("user", "toolu_outer", "Read value.ts", "sub-prompt"),
+        msg("assistant", "toolu_outer", [{ type: "tool_use", id: "toolu_inner", name: "Agent", input: { description: "Inner run" } }]),
+        msg("user", "toolu_outer", [{ type: "tool_result", tool_use_id: "toolu_inner", content: "done" }]),
+      ],
+      inner: [
+        msg("assistant", "toolu_inner", [{ type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "/x" } }]),
+        msg("user", "toolu_inner", [{ type: "tool_result", tool_use_id: "toolu_read", content: "1" }]),
+      ],
+    };
+    const listed: unknown[] = [];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (sid: string) => (sid === id ? { sessionId: id, cwd: webRoot } : undefined)) as never,
+        getSessionMessages: (async () => main) as never,
+        listSubagents: (async (sid: string, o: unknown) => (listed.push([sid, o]), ["inner", "outer"])) as never,
+        getSubagentMessages: (async (_sid: string, agentId: string) => subagents[agentId]) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "session_state");
+      const parts = new Map(c.inbox.flatMap((m) => (m.type === "event" ? [[m.part.id, m.part] as const] : [])));
+      expect(listed).toEqual([[id, { dir: webRoot }]]);
+      expect(parts.get("toolu_outer")).toMatchObject({ type: "subagent", description: "Outer run", status: "done" });
+      expect(parts.get("toolu_outer")?.parentId).toBeUndefined();
+      expect(parts.get("toolu_inner")).toMatchObject({ type: "subagent", description: "Inner run", status: "done", parentId: "toolu_outer" });
+      expect(parts.get("toolu_read")).toMatchObject({ type: "tool_call", tool: "Read", status: "done", parentId: "toolu_inner" });
+      expect(parts.get("sub-prompt")).toMatchObject({ type: "user_text", text: "Read value.ts", parentId: "toolu_outer" });
+      // A run's prompt is no checkpoint of the session.
+      expect(await c.request({ type: "session.rewindPreview", sessionId: id, userMessageId: "sub-prompt" })).toMatchObject({ type: "error" });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a restored background subagent run keeps its real status and duration from the transcript's task notifications", async () => {
+    // Shapes of the "Sleeper" run in development-docs/GH-36 session 4c189532 (getSessionMessages, SDK 0.3.285).
+    const id = "9c3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a";
+    const at = (s: number) => new Date(Date.UTC(2026, 9, 2, 9, 16, 5) + s * 1000).toISOString();
+    const msg = (type: string, s: number, content: unknown) =>
+      ({ type, uuid: `u${s}${type}`, session_id: id, parent_tool_use_id: null, parent_agent_id: null, timestamp: at(s), message: { id: `m${s}`, role: type, content } }) as never;
+    const notice = (s: number, runId: string, agentId: string, status: string) =>
+      msg("user", s, `<task-notification>\n<task-id>${agentId}</task-id>\n<tool-use-id>${runId}</tool-use-id>\n<status>${status}</status>\n<summary>Agent finished</summary>\n</task-notification>`);
+    const launched = (runId: string, agentId: string) => [
+      { type: "tool_result", tool_use_id: runId, content: [{ type: "text", text: `Async agent launched successfully. (This tool result is internal metadata.)\nagentId: ${agentId} (internal ID - do not mention to user.)\nThe agent is working in the background.` }] },
+    ];
+    const main = [
+      msg("user", 0, "sleep in the background"),
+      msg("assistant", 0, [
+        { type: "tool_use", id: "toolu_sleeper", name: "Agent", input: { description: "Sleeper", run_in_background: true } },
+        { type: "tool_use", id: "toolu_stopped", name: "Agent", input: { description: "Stopped", run_in_background: true } },
+      ]),
+      msg("user", 1, [...launched("toolu_sleeper", "a6f05acc3b9960d0d"), ...launched("toolu_stopped", "a1b2c3d4e5f6a7b8c")]),
+      notice(40, "toolu_stopped", "a1b2c3d4e5f6a7b8c", "stopped"),
+      notice(145, "toolu_sleeper", "a6f05acc3b9960d0d", "completed"),
+    ];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (sid: string) => (sid === id ? { sessionId: id, cwd: webRoot } : undefined)) as never,
+        getSessionMessages: (async () => main) as never,
+        listSubagents: (async () => []) as never,
+        getSubagentMessages: (async () => []) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "session_state");
+      const parts = new Map(c.inbox.flatMap((m) => (m.type === "event" ? [[m.part.id, m.part] as const] : [])));
+      expect(parts.get("toolu_sleeper")).toMatchObject({ type: "subagent", status: "done", startedAt: Date.parse(at(0)), endedAt: Date.parse(at(145)) });
+      expect(parts.get("toolu_stopped")).toMatchObject({ type: "subagent", status: "error", endedAt: Date.parse(at(40)) });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.stopSubagent stops that run through stopTask with its task ID; a permission request inside the run is delivered and settled once; the turn goes on", async () => {
+    const d = createDaemon({ webRoot, roots: [webRoot], query: subagentQuery as never, token });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const [a, b] = await Promise.all([client((d.address() as AddressInfo).port), client((d.address() as AddressInfo).port)]);
+      const { result } = (await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+      const sessionId = result.session.id;
+      await a.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+      await b.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+      await a.request({ type: "session.prompt", sessionId, text: "test" });
+      const isRequest = (m: ServerMessage) => m.type === "event" && m.part.type === "permission_request";
+      const req = (await b.waitFor(isRequest)) as Extract<ServerMessage, { type: "event" }>;
+      const { requestId, toolUseId } = req.part as { requestId: string; toolUseId: string };
+      const call = a.inbox.find((m) => m.type === "event" && m.part.id === toolUseId) as Extract<ServerMessage, { type: "event" }>;
+      expect(call.part).toMatchObject({ type: "tool_call", parentId: "agent-1" });
+      const answers = await Promise.all([a.request({ type: "permission.respond", requestId, decision: "allow" }), b.request({ type: "permission.respond", requestId, decision: "deny" })]);
+      const settled = answers.map((r) => (r as { result: { settled: boolean } }).result.settled);
+      expect(settled.filter(Boolean)).toHaveLength(1);
+      // The SDK got the winning answer only.
+      expect(permissionResults.at(-1)).toMatchObject({ behavior: settled[0] ? "allow" : "deny" });
+
+      expect(await a.request({ type: "session.stopSubagent", sessionId, subagentId: "nope" })).toMatchObject({ type: "error", code: "unknown_subagent" });
+      expect(await a.request({ type: "session.stopSubagent", sessionId, subagentId: "agent-1" })).toMatchObject({ type: "reply" });
+      expect(stopped).toEqual(["task-1"]);
+      const ended = (m: ServerMessage) => m.type === "event" && m.part.type === "subagent" && m.part.status === "error";
+      for (const c of [a, b]) expect(((await c.waitFor(ended)) as { part: object }).part).toMatchObject({ id: "agent-1", endedAt: expect.any(Number) });
+      await a.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+      // Ended: nothing left to stop.
+      expect(await a.request({ type: "session.stopSubagent", sessionId, subagentId: "agent-1" })).toMatchObject({ type: "error", code: "unknown_subagent" });
+      expect(await a.request({ type: "session.stopSubagent", sessionId: "nope", subagentId: "agent-1" })).toMatchObject({ type: "error", code: "unknown_session" });
     } finally {
       d.close();
     }

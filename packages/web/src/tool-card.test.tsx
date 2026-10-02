@@ -244,7 +244,7 @@ describe("collapsed by default", () => {
 });
 
 describe("SubagentGroup", () => {
-  const sub = (status: ToolCall["status"]) => ({ type: "subagent", id: "s", toolUseId: "s", description: "Inspect value.ts", status }) as const;
+  const sub = (status: ToolCall["status"]) => ({ type: "subagent", id: "s", toolUseId: "s", description: "Inspect value.ts", status, startedAt: 0 }) as const;
 
   it.each([
     ["pending", "Pending"],

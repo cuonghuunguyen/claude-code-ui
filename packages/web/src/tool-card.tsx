@@ -5,6 +5,7 @@ import { MultiFileDiff } from "@pierre/diffs/react";
 import { useDark } from "./theme.ts";
 import type { ToolUIPart } from "ai";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
+import { SquareArrowOutUpRightIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolChevron, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark, toolRowClass } from "@/components/ai-elements/tool";
@@ -292,15 +293,31 @@ export function ContextGroup({
 type Subagent = Extract<Part, { type: "subagent" }>;
 
 /** A subagent run: header with description and status; `children` is its nested timeline. `awaiting`: a child call waits for a permission answer. */
-export function SubagentGroup({ part, result, awaiting, children }: { part: Subagent; result?: ToolResult; awaiting?: boolean; children: ReactNode }) {
+/** `onOpen`: opens the run's subagent view (Open icon right of the header). */
+export function SubagentGroup({ part, result, awaiting, onOpen, children }: { part: Subagent; result?: ToolResult; awaiting?: boolean; onOpen?: () => void; children: ReactNode }) {
   return (
     <Tool data-testid="subagent" data-status={part.status} {...useExpanded(part.id, awaiting)}>
-      <ToolHeader
-        type="dynamic-tool"
-        toolName="Agent"
-        state={STATE[part.status]}
-        summary={part.description}
-      />
+      <div className="flex items-center gap-1">
+        <ToolHeader
+          type="dynamic-tool"
+          toolName="Agent"
+          state={STATE[part.status]}
+          summary={part.description}
+          className="min-w-0 flex-1"
+        />
+        {onOpen && (
+          <button
+            type="button"
+            aria-label={`Open subagent run ${part.description}`}
+            title="Open subagent run"
+            data-testid="subagent-open"
+            className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:size-11"
+            onClick={onOpen}
+          >
+            <SquareArrowOutUpRightIcon aria-hidden className="size-4" />
+          </button>
+        )}
+      </div>
       <ToolContent className="space-y-2 border-l-2 pl-3">
         {children}
         {result && (

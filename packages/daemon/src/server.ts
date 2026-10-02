@@ -6,7 +6,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
-import { deleteSession, getSessionInfo, getSessionMessages, listSessions, renameSession, tagSession, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
+import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { gitStatus } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
@@ -51,6 +51,9 @@ type History = {
   listSessions: typeof listSessions;
   getSessionInfo: typeof getSessionInfo;
   getSessionMessages: typeof getSessionMessages;
+  /** Subagent run transcripts (`<session>/subagents/agent-<id>.jsonl`); not in getSessionMessages(). */
+  listSubagents?: typeof listSubagents;
+  getSubagentMessages?: typeof getSubagentMessages;
   renameSession?: typeof renameSession;
   tagSession?: typeof tagSession;
   deleteSession?: typeof deleteSession;
@@ -240,7 +243,7 @@ export function createDaemon(opts: {
   const restoring = new Map<string, Promise<Session | undefined>>();
   // Sessions whose delete is in progress (session.delete).
   const deleting = new Set<string>();
-  const history = { listSessions, getSessionInfo, getSessionMessages, renameSession, tagSession, deleteSession, ...opts.history };
+  const history = { listSessions, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, ...opts.history };
   const projectsDir = opts.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
   const projects = opts.projects ?? createProjects();
   const connections = new Set<WebSocket>();
@@ -353,6 +356,10 @@ export function createDaemon(opts: {
         if (!info?.cwd || !allowed(info.cwd)) return undefined;
         const messages = await history.getSessionMessages(id, { dir: info.cwd });
         await modelList().catch(() => {});
+        // Each run's messages name the Agent call that started it (parent_tool_use_id), so after the main transcript they nest by it.
+        // An unreadable run transcript leaves that run without its timeline, not the session unrestored.
+        const agents = await history.listSubagents(id, { dir: info.cwd }).catch((err) => (console.error(`listing subagent runs of ${id} failed:`, err), []));
+        const runs = (await Promise.all(agents.map((a) => history.getSubagentMessages(id, a, { dir: info.cwd }).catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []))))).flat();
         // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
         const used = transcriptModel(messages);
         // No entry (sessions.json lost, a session of the terminal CLI): mode and effort the transcript last recorded.
@@ -362,7 +369,7 @@ export function createDaemon(opts: {
         const modes = permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model ?? "default") });
         const permissionMode = modes.includes(saved.permissionMode as never) ? (saved.permissionMode as SessionSettings["permissionMode"]) : undefined;
         const effort = EFFORTS.includes(saved.effort as never) ? (saved.effort as SessionSettings["effort"]) : undefined;
-        return track(Session.restore(id, info.cwd, messages, sessionOpts(() => id, { model, permissionMode, effort })));
+        return track(Session.restore(id, info.cwd, [...messages, ...runs], sessionOpts(() => id, { model, permissionMode, effort })));
       })()
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
         .finally(() => restoring.delete(id));
@@ -535,6 +542,16 @@ export function createDaemon(opts: {
             await s.interrupt();
           } catch (e) {
             return fail("interrupt_failed", (e as Error).message);
+          }
+          return reply({});
+        }
+        case "session.stopSubagent": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          try {
+            if (!(await s.stopSubagent(msg.subagentId))) return fail("unknown_subagent", "no running subagent run with that ID");
+          } catch (e) {
+            return fail("stop_failed", (e as Error).message);
           }
           return reply({});
         }

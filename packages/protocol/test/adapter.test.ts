@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAdapter, imageBlock, type Part } from "../src/index.ts";
 
 const fixture = (name: string) =>
@@ -385,8 +385,50 @@ describe("adapter on a background subagent", () => {
     expect(status(run([agent, started, result, { ...done, status: "failed" }]))).toEqual(["running", "error"]);
   });
 
-  it("a restored history (no task messages) ends done on the tool_result", () => {
-    expect(status(run([agent, result]))).toEqual(["running", "done"]);
+  it("live: a later notification without tool_use_id (the run resumed) moves its end", () => {
+    const done = { type: "system", subtype: "task_notification", task_id: "k1", tool_use_id: "a1", status: "completed" };
+    const parts = run([agent, started, result, done, { ...done, tool_use_id: undefined, status: "failed" }]);
+    expect(status(parts)).toEqual(["running", "done", "error"]);
+  });
+
+  // Shapes of the "Sleeper" run in development-docs/GH-36 session 4c189532 (getSessionMessages, SDK 0.3.285).
+  describe("restored from its transcript (no task messages)", () => {
+    const at = (s: number) => new Date(Date.UTC(2026, 9, 2, 9, 16, 5) + s * 1000).toISOString();
+    const placeholder = {
+      type: "user",
+      parent_tool_use_id: null,
+      timestamp: at(1),
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "a1", content: [{ type: "text", text: "Async agent launched successfully. (This tool result is internal metadata.)\nagentId: a6f05acc3b9960d0d (internal ID - do not mention to user.)\nThe agent is working in the background." }] }],
+      },
+    };
+    const notice = (s: number, status: string, toolUseId = true) => ({
+      type: "user",
+      parent_tool_use_id: null,
+      timestamp: at(s),
+      message: {
+        role: "user",
+        content: `<task-notification>\n<task-id>a6f05acc3b9960d0d</task-id>\n${toolUseId ? "<tool-use-id>a1</tool-use-id>\n" : ""}<status>${status}</status>\n<summary>Agent "Sleeper" finished</summary>\n</task-notification>`,
+      },
+    });
+    const restored = [{ ...agent, timestamp: at(0) }, placeholder];
+    const last = (parts: Part[]) => parts.filter((p) => p.type === "subagent").at(-1) as Extract<Part, { type: "subagent" }>;
+
+    it("stays running after its placeholder tool_result", () => {
+      expect(last(run(restored)).status).toBe("running");
+    });
+
+    it("ends at its last task notification; a notice without tool-use-id finds the run by its agentId", () => {
+      const parts = run([...restored, notice(88, "completed"), notice(145, "completed", false)]);
+      expect(last(parts)).toMatchObject({ status: "done", endedAt: Date.parse(at(145)) });
+      expect(last(parts).endedAt! - last(parts).startedAt).toBe(145_000);
+    });
+
+    it("a stopped or failed run ends as error", () => {
+      expect(last(run([...restored, notice(30, "stopped")])).status).toBe("error");
+      expect(last(run([...restored, notice(30, "failed")])).status).toBe("error");
+    });
   });
 });
 
@@ -410,5 +452,59 @@ describe("adapter on a compaction (shapes recorded in development-docs/FIX-C/pro
 
   it("a synthetic message not right after a boundary stays hidden", () => {
     expect(run([{ type: "user", uuid: "n1", session_id: "x", parent_tool_use_id: null, isSynthetic: true, message: { role: "user", content: "nudge" } }])).toEqual([]);
+  });
+});
+
+describe("adapter on nested subagent runs", () => {
+  const agent = (id: string, parent: string | null, description: string, timestamp?: string) => ({
+    type: "assistant",
+    parent_tool_use_id: parent,
+    ...(timestamp ? { timestamp } : {}),
+    message: { id: `m${id}`, content: [{ type: "tool_use", id, name: "Agent", input: { description } }] },
+  });
+  const result = (id: string, parent: string | null, timestamp?: string) => ({
+    type: "user",
+    parent_tool_use_id: parent,
+    ...(timestamp ? { timestamp } : {}),
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] },
+  });
+  const read = (id: string, parent: string) => ({
+    type: "assistant",
+    parent_tool_use_id: parent,
+    message: { id: `m${id}`, content: [{ type: "tool_use", id, name: "Read", input: { file_path: "/x" } }] },
+  });
+  const last = (parts: Part[], id: string) => parts.filter((p) => p.id === id).at(-1);
+
+  it("a run started inside a run has that run as parent; its child parts link to it", () => {
+    const parts = run([agent("a1", null, "Outer"), agent("a2", "a1", "Inner"), read("r1", "a2"), result("r1", "a2"), result("a2", "a1"), result("a1", null)]);
+    expect(last(parts, "a1")).toMatchObject({ type: "subagent", status: "done" });
+    expect(last(parts, "a1")?.parentId).toBeUndefined();
+    expect(last(parts, "a2")).toMatchObject({ type: "subagent", parentId: "a1", description: "Inner", status: "done" });
+    expect(last(parts, "r1")).toMatchObject({ type: "tool_call", parentId: "a2", status: "done" });
+  });
+
+  it("transcript: start and end time of a run come from the message timestamps", () => {
+    const parts = run([agent("a1", null, "Outer", "2026-09-30T18:21:30.000Z"), result("a1", null, "2026-09-30T18:21:42.500Z")]);
+    expect(last(parts, "a1")).toMatchObject({ startedAt: Date.parse("2026-09-30T18:21:30.000Z"), endedAt: Date.parse("2026-09-30T18:21:42.500Z") });
+  });
+
+  it("live: the start time is kept from the streamed tool_use; a background run ends at its task_notification", () => {
+    vi.useFakeTimers({ now: 1000 });
+    try {
+      const adapter = createAdapter();
+      const stream = { type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "a1", name: "Agent" } } };
+      adapter.convert(stream as never);
+      vi.setSystemTime(2000);
+      const running = adapter.convert(agent("a1", null, "Scan") as never);
+      expect(running[0]).toMatchObject({ status: "running", startedAt: 1000 });
+      expect(running[0]).not.toHaveProperty("endedAt");
+      adapter.convert({ type: "system", subtype: "task_started", task_id: "k1", tool_use_id: "a1", description: "Scan", is_backgrounded: true } as never);
+      adapter.convert(result("a1", null) as never);
+      vi.setSystemTime(5000);
+      const done = adapter.convert({ type: "system", subtype: "task_notification", task_id: "k1", tool_use_id: "a1", status: "stopped" } as never);
+      expect(done).toEqual([expect.objectContaining({ id: "a1", status: "error", startedAt: 1000, endedAt: 5000 })]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

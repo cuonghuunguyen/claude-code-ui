@@ -57,7 +57,15 @@ export const avatarColor = (cwd: string, known?: Map<string, AvatarColor>) => kn
 
 // The active tab lives in the URL hash, so a reload reopens it: a session id, or "#new" for the new-session tab.
 export const tabHash = (id: string) => `#${encodeURIComponent(id)}`;
-export const tabFromHash = (hash: string) => (hash === tabHash(NEW_TAB) ? NEW_TAB : /^#[0-9a-f-]{36}$/i.exec(hash)?.[0].slice(1));
+// A subagent view adds its run: `#<session id>/agent/<subagent part id>`.
+const SESSION_HASH = /^#([0-9a-f-]{36})(?:\/agent\/([^/]+))?$/i;
+export const tabFromHash = (hash: string) => (hash === tabHash(NEW_TAB) ? NEW_TAB : SESSION_HASH.exec(hash)?.[1]);
+/** The subagent run of a subagent view's hash; undefined for the session view. */
+export const runFromHash = (hash: string) => {
+  const run = SESSION_HASH.exec(hash)?.[2];
+  return run && decodeURIComponent(run);
+};
+export const runHash = (id: string, run?: string) => tabHash(id) + (run ? `/agent/${encodeURIComponent(run)}` : "");
 
 export const projectName = (cwd: string) => cwd.split("/").filter(Boolean).at(-1) ?? cwd;
 

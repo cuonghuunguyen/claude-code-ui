@@ -90,6 +90,8 @@ export class Session {
   private rewinding = false;
   /** Pending permission requests and questions by requestId (docs/spec.md "Permission bridge", "Questions"). */
   private readonly pending = new Map<string, { part: PermissionPart | QuestionPart; resolve: (r: PermissionResult) => void }>();
+  /** SDK task ID of each running subagent run by its Agent call's toolUseId (task_started; dropped at task_notification). */
+  private readonly tasks = new Map<string, string>();
   /** Bumped per refreshUsage(): an older answer that arrives later is dropped. */
   private usageRequest = 0;
   /** False until the first start(): the first query creates the transcript (sessionId), every later one resumes it. */
@@ -115,7 +117,8 @@ export class Session {
     const adapter = createAdapter();
     for (const m of restored.history) {
       for (const part of adapter.convert(m as SDKMessage)) {
-        if (part.type === "user_text") this.checkpoints.set(part.id, this.lastAssistant);
+        // A subagent run's prompt is no checkpoint.
+        if (part.type === "user_text" && !part.parentId) this.checkpoints.set(part.id, this.lastAssistant);
         this.emit(part);
       }
       if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
@@ -286,6 +289,17 @@ export class Session {
     await this.query.interrupt();
   }
 
+  /**
+   * Stop agent: stops one subagent run (`stopTask()` of its task); the parent turn goes on with the run's error result.
+   * False when no run with that Agent call ID is running in the live query.
+   */
+  async stopSubagent(subagentId: string): Promise<boolean> {
+    const task = this.tasks.get(subagentId);
+    if (!task || !this.query) return false;
+    await this.query.stopTask(task);
+    return true;
+  }
+
   /** Dry run of a code rewind to before this prompt. */
   async previewRewind(userMessageId: string): Promise<RewindPreview> {
     const r = await this.control(userMessageId).rewindFiles(userMessageId, { dryRun: true });
@@ -429,6 +443,8 @@ export class Session {
           continue;
         }
         if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
+        if (m.type === "system" && m.subtype === "task_started" && m.tool_use_id) this.tasks.set(m.tool_use_id, m.task_id);
+        if (m.type === "system" && m.subtype === "task_notification" && m.tool_use_id) this.tasks.delete(m.tool_use_id);
         // The CLI changes the mode itself too (plan approved, "all edits this session"); init and status carry it.
         if (m.type === "system" && (m.subtype === "init" || m.subtype === "status") && m.permissionMode) this.setMode(m.permissionMode);
         for (const part of this.adapter.convert(m)) this.emit(part);

@@ -89,6 +89,8 @@ export function PromptToolbar(props: {
   modes: PermissionMode[];
   onMode: (mode: PermissionMode) => void;
   onAttach: (files: File[]) => void;
+  /** Agents button (session view), after the choosers. */
+  agents?: ReactNode;
   /** Context window meter left of send; hidden until the session reports its usage. */
   usage?: ContextUsage;
   /** Session token totals for the context breakdown. */
@@ -163,6 +165,7 @@ export function PromptToolbar(props: {
             className="shrink-0"
           />
         )}
+        {props.agents}
       </div>
       {props.usage && <ContextMeter usage={props.usage} stats={props.stats} />}
       <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onStop={props.onStop} onFocusLost={props.onFocusLost} />
