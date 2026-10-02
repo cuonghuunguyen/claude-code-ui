@@ -62,3 +62,11 @@ _Avoid_: undo, revert
 
 **Tool card**:
 The UI rendering of a `tool_call` merged with its `tool_result`, grouped by `toolUseId`.
+
+**Subagent run**:
+One Agent/Task call: a child agent with its own timeline, inside one turn of the parent session. Stored in the parent's transcript, not as a separate session.
+_Avoid_: child session, subtask
+
+**Permission mode**:
+The session setting that decides what happens before a tool runs: ask (default), accept edits, plan, auto (a classifier decides), don't ask (deny anything not pre-approved by a permission rule), bypass (allow everything). Same modes as Claude Code.
+_Avoid_: approval mode, auto-approve
