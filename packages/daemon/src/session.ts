@@ -229,11 +229,14 @@ export class Session {
     this.model = model;
     this.emit({ type: "session_model", id: "session_model", model });
     // Auto needs a model that supports it: back to ask, as the web toast says.
-    if (this.permissionMode === "auto" && !this.opts.supportsAuto?.(model)) {
-      await this.query?.setPermissionMode("default");
-      this.setMode("default");
+    try {
+      if (this.permissionMode === "auto" && !this.opts.supportsAuto?.(model)) {
+        await this.query?.setPermissionMode("default");
+        this.setMode("default");
+      }
+    } finally {
+      this.settingsChanged();
     }
-    this.settingsChanged();
     // The window size can differ per model.
     void this.refreshUsage();
   }

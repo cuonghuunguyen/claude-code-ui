@@ -19,6 +19,8 @@ const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
 /** sessions.json keeps the settings of this many sessions (most recently changed). */
 export const MAX_SETTINGS = 1000;
+/** session.list waits this long for the model list (auto mode of new sessions) before it replies without it. */
+export const MODEL_LIST_WAIT_MS = 2000;
 
 /** ws maxPayload (default 100 MiB): a prompt with two images at MAX_UPLOAD_BYTES as base64, plus the JSON around them. */
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
@@ -304,7 +306,11 @@ export function createDaemon(opts: {
   }
 
   async function list(): Promise<ListResult> {
-    await modelList().catch(() => {});
+    // The model list starts a CLI: not waiting longer than this offers no auto mode until it is there.
+    await new Promise<void>((done) => {
+      const t = setTimeout(done, MODEL_LIST_WAIT_MS);
+      modelList().catch(() => {}).then(() => (clearTimeout(t), done()));
+    });
     const items = new Map<string, SessionListItem>();
     const all = await transcripts();
     // Entries of sessions deleted outside this daemon (CLI, file removed): no transcript and not live.

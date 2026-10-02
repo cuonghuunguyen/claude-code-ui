@@ -19,6 +19,7 @@ Element.prototype.scrollIntoView ??= () => {};
 const models: ModelInfo[] = [
   { value: "default", displayName: "Default (recommended)", description: "", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "max"] },
   { value: "haiku", displayName: "Haiku 4.5", description: "" },
+  { value: "sonnet", displayName: "Sonnet 5.5", description: "", supportsAutoMode: true },
 ];
 const noop = () => {};
 let unmount = noop;
@@ -306,7 +307,7 @@ const openModes = async ($: (id: string) => HTMLElement | null) => {
 };
 
 it("the permission mode picker lists Auto mode and Don't ask (deny unapproved) next to the other modes", async () => {
-  const { $ } = await render({ session: { id: "s1", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [...ALL_MODES] } });
+  const { $ } = await render({ session: { id: "s1", cwd: "/tmp", state: "idle", model: "sonnet", permissionMode: "default", effort: "default", permissionModes: [...ALL_MODES] } });
   expect(await openModes($)).toEqual(["Ask before edits", "Edit automatically", "Plan mode", "Auto mode", "Don't ask (deny unapproved)", "Bypass permissions"]);
 });
 
@@ -317,7 +318,7 @@ it("the picker has no Auto mode when the model does not offer it", async () => {
 
 it("Shift+Tab goes Plan, Auto mode, Bypass and never stops at Don't ask", async () => {
   const onMode = vi.fn();
-  const session = { id: "s1", cwd: "/tmp", state: "idle" as const, model: "default", permissionMode: "plan" as const, effort: "default" as const, permissionModes: [...ALL_MODES] };
+  const session = { id: "s1", cwd: "/tmp", state: "idle" as const, model: "sonnet", permissionMode: "plan" as const, effort: "default" as const, permissionModes: [...ALL_MODES] };
   const { box, rerender } = await render({ onMode, session });
   await key(box, { key: "Tab", shiftKey: true });
   expect(onMode).toHaveBeenLastCalledWith("auto");

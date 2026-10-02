@@ -8,7 +8,7 @@ import WebSocket from "ws";
 import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createProjects } from "../src/projects.ts";
-import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
+import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS, MODEL_LIST_WAIT_MS } from "../src/server.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, controlCalls, fakeQuery, planCalls, history, interruptQuery, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
 
@@ -451,6 +451,17 @@ describe("daemon", () => {
     } finally {
       delete models[0]!.supportsAutoMode;
     }
+  });
+
+  it("session.list does not wait long for a model list that is not available yet; new sessions then offer no auto", async () => {
+    const hung = (a: Parameters<typeof fakeQuery>[0]) => ({ ...fakeQuery(a), supportedModels: () => new Promise<never>(() => {}) });
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: hung as never, history: { listSessions: (async () => []) as never } as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
+    const t = Date.now();
+    expect(await c.request({ type: "session.list" })).toMatchObject({ result: { permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] } });
+    expect(Date.now() - t).toBeLessThan(MODEL_LIST_WAIT_MS + 1000);
+    d.close();
   });
 
   it("restores a saved auto or dontAsk mode; auto on a model without support restores as default", async () => {

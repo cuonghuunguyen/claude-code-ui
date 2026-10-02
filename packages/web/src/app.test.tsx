@@ -423,3 +423,21 @@ it("the new-session tab offers Auto mode only while its model supports it, and l
     restore();
   }
 });
+
+it("another client that gets only the session_model part follows the model's permission modes", async () => {
+  const sonnet = { ...session, model: "sonnet", permissionMode: "default", permissionModes: [...MODES] };
+  const restore = await remount({
+    "session.list": { sessions: [sonnet], projects: ["/p/demo"] },
+    "session.subscribe": { logEpoch: "e1", session: sonnet },
+    "models.list": { models: AUTO_MODELS },
+  });
+  try {
+    expect(await optionsOf("*")).toContain("Auto mode");
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_model", id: "session_model", model: "haiku" } }));
+    expect(await optionsOf("*")).not.toContain("Auto mode");
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "session_model", id: "session_model", model: "sonnet" } }));
+    expect(await optionsOf("*")).toContain("Auto mode");
+  } finally {
+    restore();
+  }
+});

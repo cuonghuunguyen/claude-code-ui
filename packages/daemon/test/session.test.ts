@@ -184,6 +184,20 @@ describe("Session", () => {
     expect(lastPart(events, "session_model")).toEqual({ type: "session_model", id: "session_model", model: "haiku" });
   });
 
+  it("setModel persists the new model even when the SDK refuses the fallback to default mode", async () => {
+    const refuse = async (m: string) => {
+      if (m === "default") throw new Error("control failed");
+    };
+    const failing = (a: Parameters<typeof fakeQuery>[0]) => Object.assign(fakeQuery(a), { setPermissionMode: refuse });
+    const saved: unknown[] = [];
+    const s = started({ query: failing as never, model: "sonnet", supportsAuto: (m: string) => m === "sonnet", onSettings: (x) => saved.push(x) });
+    // The CLI's init message reports its mode; auto is set after it.
+    await new Promise((r) => setTimeout(r, 10));
+    await s.setPermissionMode("auto");
+    await expect(s.setModel("haiku")).rejects.toThrow("control failed");
+    expect(saved.at(-1)).toMatchObject({ model: "haiku" });
+  });
+
   it("setModel on a restored session before its first prompt applies when the query resumes", async () => {
     const s = Session.restore(randomUUID(), "/tmp", [], { query: fakeQuery as never });
     const before = setModelCalls.length;

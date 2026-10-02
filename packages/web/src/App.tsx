@@ -543,7 +543,7 @@ export function App() {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
       mode: view?.permissionMode ?? shown.permissionMode,
-      modes: shown.permissionModes,
+      modes: modesOf(shown.permissionModes, view?.model ?? shown.model, models),
       running: view?.state === "running" || view?.state === "needs_input",
       prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" ? [{ id: i.part.id, text: i.part.text }] : [])),
     },
@@ -1097,6 +1097,10 @@ export function NewSession({
   );
 }
 
+/** The modes a session offers now: SessionInfo.permissionModes is from the last reply; auto follows the current model, which another client can change. */
+const modesOf = (offered: PermissionMode[], model: string, models: ModelInfo[]) =>
+  offered.length && models.length ? permissionModesFor({ allowBypass: offered.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === model && m.supportsAutoMode) }) : offered;
+
 const autoUnavailable = (models: ModelInfo[], model: string) => `Auto mode not available for ${models.find((m) => m.value === model)?.displayName ?? model}; switched to Ask`;
 
 export type StartOptions = { model: string; mode: PermissionMode; effort: Effort };
@@ -1266,7 +1270,7 @@ export function SessionPane({
               effort={view.effort ?? session.effort}
               onEffort={onEffort}
               mode={view.permissionMode ?? session.permissionMode}
-              modes={session.permissionModes}
+              modes={modesOf(session.permissionModes, view.model ?? session.model, models)}
               onMode={onMode}
               onUpload={onUpload}
               onPrompt={onPrompt}
@@ -1288,7 +1292,7 @@ export function SessionPane({
           view={view}
           model={models.find((m) => m.value === (view.model ?? session.model))?.displayName ?? view.model ?? session.model}
           mode={view.permissionMode ?? session.permissionMode}
-          modes={session.permissionModes}
+          modes={modesOf(session.permissionModes, view.model ?? session.model, models)}
           onMode={onMode}
           plan={plan ?? null}
           git={onGitStatus}
