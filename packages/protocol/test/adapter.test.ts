@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAdapter, imageBlock, type Part } from "../src/index.ts";
 
 const fixture = (name: string) =>
@@ -410,5 +410,59 @@ describe("adapter on a compaction (shapes recorded in development-docs/FIX-C/pro
 
   it("a synthetic message not right after a boundary stays hidden", () => {
     expect(run([{ type: "user", uuid: "n1", session_id: "x", parent_tool_use_id: null, isSynthetic: true, message: { role: "user", content: "nudge" } }])).toEqual([]);
+  });
+});
+
+describe("adapter on nested subagent runs", () => {
+  const agent = (id: string, parent: string | null, description: string, timestamp?: string) => ({
+    type: "assistant",
+    parent_tool_use_id: parent,
+    ...(timestamp ? { timestamp } : {}),
+    message: { id: `m${id}`, content: [{ type: "tool_use", id, name: "Agent", input: { description } }] },
+  });
+  const result = (id: string, parent: string | null, timestamp?: string) => ({
+    type: "user",
+    parent_tool_use_id: parent,
+    ...(timestamp ? { timestamp } : {}),
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] },
+  });
+  const read = (id: string, parent: string) => ({
+    type: "assistant",
+    parent_tool_use_id: parent,
+    message: { id: `m${id}`, content: [{ type: "tool_use", id, name: "Read", input: { file_path: "/x" } }] },
+  });
+  const last = (parts: Part[], id: string) => parts.filter((p) => p.id === id).at(-1);
+
+  it("a run started inside a run has that run as parent; its child parts link to it", () => {
+    const parts = run([agent("a1", null, "Outer"), agent("a2", "a1", "Inner"), read("r1", "a2"), result("r1", "a2"), result("a2", "a1"), result("a1", null)]);
+    expect(last(parts, "a1")).toMatchObject({ type: "subagent", status: "done" });
+    expect(last(parts, "a1")?.parentId).toBeUndefined();
+    expect(last(parts, "a2")).toMatchObject({ type: "subagent", parentId: "a1", description: "Inner", status: "done" });
+    expect(last(parts, "r1")).toMatchObject({ type: "tool_call", parentId: "a2", status: "done" });
+  });
+
+  it("transcript: start and end time of a run come from the message timestamps", () => {
+    const parts = run([agent("a1", null, "Outer", "2026-09-30T18:21:30.000Z"), result("a1", null, "2026-09-30T18:21:42.500Z")]);
+    expect(last(parts, "a1")).toMatchObject({ startedAt: Date.parse("2026-09-30T18:21:30.000Z"), endedAt: Date.parse("2026-09-30T18:21:42.500Z") });
+  });
+
+  it("live: the start time is kept from the streamed tool_use; a background run ends at its task_notification", () => {
+    vi.useFakeTimers({ now: 1000 });
+    try {
+      const adapter = createAdapter();
+      const stream = { type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "a1", name: "Agent" } } };
+      adapter.convert(stream as never);
+      vi.setSystemTime(2000);
+      const running = adapter.convert(agent("a1", null, "Scan") as never);
+      expect(running[0]).toMatchObject({ status: "running", startedAt: 1000 });
+      expect(running[0]).not.toHaveProperty("endedAt");
+      adapter.convert({ type: "system", subtype: "task_started", task_id: "k1", tool_use_id: "a1", description: "Scan", is_backgrounded: true } as never);
+      adapter.convert(result("a1", null) as never);
+      vi.setSystemTime(5000);
+      const done = adapter.convert({ type: "system", subtype: "task_notification", task_id: "k1", tool_use_id: "a1", status: "stopped" } as never);
+      expect(done).toEqual([expect.objectContaining({ id: "a1", status: "error", startedAt: 1000, endedAt: 5000 })]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

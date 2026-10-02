@@ -2,3 +2,4 @@ development-docs/
 node_modules/
 dist/
 .playwright-cli/
+__pycache__/

@@ -58,7 +58,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 ### Event log and sequence numbers
 
 - Every event has a per-session, monotonically increasing `seq`. The log is in memory only.
-- History before the daemon started is rebuilt from `getSessionMessages()` through the adapter.
+- History before the daemon started is rebuilt from `getSessionMessages()` through the adapter, followed by every subagent run transcript (`listSubagents()` / `getSubagentMessages()`, `<session>/subagents/agent-<agentId>.jsonl`; each message names the Agent call that started its run in `parent_tool_use_id`), so restored and terminal CLI sessions have full subagent timelines. A run's prompt is no checkpoint.
 - Each daemon start has a `logEpoch`. `session.subscribe {sessionId, sinceSeq, logEpoch}`: same epoch → replay after `sinceSeq`; different epoch → client clears its store and gets a full replay. The reply carries the current `SessionInfo` and its `seq`: replayed model/mode/effort changes up to that `seq` are older and do not override it.
 - Clients drop events with `seq` ≤ the last applied one.
 - State changes, permission requests, questions and their settlement are all logged events, so replay alone restores the full view.
@@ -71,6 +71,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 | client → daemon | `session.subscribe {sessionId, sinceSeq, logEpoch}` | Replay and follow |
 | client → daemon | `session.prompt {sessionId, text, images?}` | Send a user message; while a turn runs it steers the turn |
 | client → daemon | `session.interrupt {sessionId}` | Stop the running turn |
+| client → daemon | `session.stopSubagent {sessionId, subagentId}` | Stop agent: stop one running subagent run (`subagentId` = its subagent part id); the turn goes on. `unknown_subagent` when that run is not running in the live query |
 | client → daemon | `session.setModel {sessionId, model}` | Switch model (`setModel()`) |
 | client → daemon | `session.setPermissionMode {sessionId, mode}` | `default`, `acceptEdits`, `plan`, `bypassPermissions` (`setPermissionMode()`) |
 | client → daemon | `session.setEffort {sessionId, effort}` | Thinking effort or `default` (`applyFlagSettings({effortLevel})`) |
@@ -116,6 +117,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 ### Steering and interrupt
 
 - A message sent while a turn runs is pushed into the query immediately (steering); Claude Code injects it after the current tool calls. The SDK does the same (verified, see "Open items"). Its `isReplay` echo marks when the CLI took it; a message taken after the turn ended runs as its own turn, so the echo sets `running` again.
+- `session.stopSubagent`: `stopTask()` with the `task_id` of the run's `system/task_started` (matched by `tool_use_id`, dropped at its `task_notification`); the CLI then sends `task_notification` `stopped` and the Agent call's error result.
 - `session.interrupt` denies pending requests (like No without feedback), then calls `interrupt()`; a no-op while `idle`. Stop button and Esc in the web app. The CLI then sends the user text `[Request interrupted by user]` (or `... for tool use]`), logged as `turn_interrupted`, and a `result` with `terminal_reason` `aborted_streaming` / `aborted_tools`, which logs no `turn_result` and returns the session to `idle`. The query stays live.
 
 ### Commands, skills, models
@@ -164,7 +166,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | `permission_request` | `requestId`, `toolUseId`, `tool`, `input`, `suggestions[]`, `settled`, `decision?` | Permission panel; in the timeline its tool card is held expanded with status "Awaiting approval" |
 | `question` | `requestId`, `toolUseId`, `questions[]`, `settled`, `answers?` (absent = cancelled) | Question panel |
 | `todo_update` | `items[]` (content, status, activeForm) | Pinned todo list (todo dock: each item by its content, as OpenCode; collapsed state kept per browser) |
-| `subagent` | `id`, `description`, `status`; child parts carry `parentId` = `id` | Nested, collapsible group |
+| `subagent` | `id`, `description`, `status`, `startedAt`, `endedAt?`; child parts carry `parentId` = `id`; its own `parentId` = the run that started it (none = the session) | Nested, collapsible group with an Open icon; agent map node; subagent view |
 | `session_state` | `state` | Header badge, list badge |
 | `commands` | `commands[]` (name, description, argumentHint, aliases?) | Slash command picker; not in the timeline |
 | `context_usage` | `usage` (`totalTokens`, `maxTokens`, `percentage`, `categories[]` name + tokens + SDK `kind` used/free/buffer, deferred left out) | Context meter in the prompt box toolbar, breakdown popover; not in the timeline |
@@ -180,7 +182,8 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 - A `tool_result` updates its `tool_call` status; grouped by `toolUseId`.
 - Tool rendering keyed on `tool`: `Bash`, `Edit`/`Write` (diff), `Read`, `Grep`/`Glob`, `TodoWrite`, `Task` (subagent), anything else (JSON).
 - The daemon enables TodoWrite (`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, `CLAUDE_CODE_ENABLE_TASKS=0`; off by default on current models) and `forwardSubagentText`.
-- A background subagent ends with `task_notification`, not with its placeholder `tool_result`.
+- A background subagent ends with `task_notification`, not with its placeholder `tool_result`; `stopped` and `failed` end it as `error`.
+- A subagent run's `startedAt` / `endedAt` (ms) are the transcript timestamps of its Agent call and of the message that ends it, live the daemon clock; the first part of a call fixes `startedAt`. Nested runs (spawn depth up to 3, SDK default) nest by the same `parentId` rule.
 - The same adapter converts live SDK messages and `getSessionMessages()` history.
 - Fixture tests recorded from real SDK sessions.
 
@@ -205,6 +208,7 @@ React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 - Consecutive read/search tool calls merge into one "context" group: one row "Explored" ("Exploring" while running) with "N reads, N searches".
 - A tool card is a borderless 32px row (44px on touch screens): tool name, muted summary, `+N -N` for edits, a status icon (label only for awaiting approval, error, denied), chevron shown on hover, keyboard focus, while open and on touch screens. For a file tool (Read, Edit, Write) the summary is the file name, then its directory relative to the session cwd; a narrow row cuts the directory from the left, then the name, the Read line range stays; the full path is the tooltip of the row. Expanded Bash: `$ command` and output as plain text in one bordered box; expanded Edit/Write: the diff with a file header (icon, path relative to cwd, `+N -N`), result text only on error. Timeline rhythm (OpenCode): 12px between rows, assistant text 24px more, 24px between turns.
 - CLI text that is no user input (synthetic or meta user messages, e.g. the "no visible output" nudge) is not shown.
+- Subagent runs (OpenCode child sessions): an Agents button in the prompt toolbar after the choosers, shown when the session has a subagent run, with the number of running runs. It opens the agent map popover: a tree (`role="tree"`, status and duration in each node's name) with the session as root and each run under the run that started it, live status and duration; ↑/↓/Home/End move, ←/→ go to the parent / first child, Enter or click opens (the session node: the session view) and closes the map, Esc closes it (the turn keeps running). The subagent view (URL `#<session id>/agent/<subagent part id>`, a history entry per navigation so browser Back returns; an unknown run shows the session view) shows the run's timeline, live; a top bar with Back (to the parent run, or the session), parent / description (OpenCode breadcrumb), status and duration, a Children menu when the run started runs of its own, and the Agents button; instead of the prompt box "Subagent runs cannot be prompted. Back to main session." (OpenCode) with Stop agent while the run runs. A permission request or question from inside a run shows in that run's view (and those of the runs above it) and in the session view; the first answer settles it.
 - Every tool card, context group and subagent group renders collapsed, live and in a restored transcript; the collapsed header still tells what happened: tool name, summary (command, path, pattern), status, and `+N -N` line counts for edits. A card whose call waits for a permission answer is held expanded. Expand state is per card and survives re-renders and regrouping.
 - Streamed text is revealed at a steady pace; incomplete markdown is repaired while streaming.
 - Auto-scroll only while at the bottom.

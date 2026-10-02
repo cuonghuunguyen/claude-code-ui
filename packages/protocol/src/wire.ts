@@ -50,6 +50,8 @@ export type ClientMessage = { reqId: string } & (
   | { type: "fs.upload"; name: string; data: string }
   /** Stops the running turn; a no-op while idle. */
   | { type: "session.interrupt"; sessionId: string }
+  /** Stop agent: stops one running subagent run (`subagentId` = its subagent part id); the turn goes on. `unknown_subagent` when none runs. */
+  | { type: "session.stopSubagent"; sessionId: string; subagentId: string }
   /**
    * First answer wins; a later one gets `{ settled: false }`. "allow_always" applies `suggestions[ruleIndex]`
    * (all suggestions when ruleIndex is omitted). `message`: feedback for Claude with "deny".

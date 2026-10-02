@@ -8,11 +8,14 @@ type Call = Extract<Part, { type: "tool_call" | "subagent" }>;
 // Tools that run a subagent; they become `subagent` parts instead of tool cards.
 const SUBAGENT_TOOLS = new Set(["Agent", "Task"]);
 
-function callPart(id: string, tool: string, input: unknown, status: ToolStatus): Call {
+/** `startedAt`: a subagent run's start (ms), kept from an earlier part of the same call. */
+function callPart(id: string, tool: string, input: unknown, status: ToolStatus, startedAt: number): Call {
   if (!SUBAGENT_TOOLS.has(tool)) return { type: "tool_call", id, toolUseId: id, tool, input, status };
   const description = (input as { description?: unknown }).description;
-  return { type: "subagent", id, toolUseId: id, description: typeof description === "string" ? description : "", status };
+  return { type: "subagent", id, toolUseId: id, description: typeof description === "string" ? description : "", status, startedAt };
 }
+
+const ENDED = new Set<ToolStatus>(["done", "error", "denied"]);
 
 // Known SDK messages the UI does not show. Anything else unhandled becomes a `raw` part.
 const IGNORED = new Set([
@@ -77,10 +80,17 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   // Live compact_boundary waiting for its summary, the synthetic user message that follows it (SDK 0.3.285).
   let compacting: Extract<Part, { type: "compaction" }> | undefined;
 
+  // Time of the message being converted: its transcript timestamp, else now (live messages carry none).
+  let now = 0;
+  const startOf = (id: string) => {
+    const call = calls.get(id);
+    return call?.type === "subagent" ? call.startedAt : now;
+  };
+
   function setStatus(toolUseId: string, status: ToolStatus): Part[] {
     const call = calls.get(toolUseId);
     if (!call || call.status === status) return [];
-    const next = { ...call, status };
+    const next = call.type === "subagent" && ENDED.has(status) ? { ...call, status, endedAt: now } : { ...call, status };
     calls.set(toolUseId, next);
     return [next];
   }
@@ -110,6 +120,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
 
   /** Parts from inside a subagent get `parentId` = the subagent's toolUseId. */
   function convert(m: SDKMessage): Part[] {
+    const timestamp = (m as { timestamp?: unknown }).timestamp;
+    now = (typeof timestamp === "string" && Date.parse(timestamp)) || Date.now();
     const parts = convertMessage(m);
     const parentId = "parent_tool_use_id" in m ? m.parent_tool_use_id : null;
     if (!parentId) return parts;
@@ -127,7 +139,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
         if (e.type === "message_start") streamingMessageId = e.message.id;
         if (e.type === "content_block_start" && e.content_block.type === "tool_use") {
           const { id, name } = e.content_block;
-          const call = callPart(id, name, {}, "pending");
+          const call = callPart(id, name, {}, "pending", startOf(id));
           calls.set(id, call);
           return [call];
         }
@@ -162,7 +174,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           }
           if (block.type === "redacted_thinking") return [];
           if (block.type === "tool_use") {
-            const call = callPart(block.id, block.name, block.input, denied.has(block.id) ? "denied" : "running");
+            const call = callPart(block.id, block.name, block.input, denied.has(block.id) ? "denied" : "running", startOf(block.id));
             calls.set(block.id, call);
             const todos = (block.input as { todos?: TodoItem[] }).todos;
             if (block.name !== "TodoWrite" || m.parent_tool_use_id || !Array.isArray(todos)) return [call];

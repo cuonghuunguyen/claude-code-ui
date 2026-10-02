@@ -44,7 +44,7 @@ describe("timeline", () => {
 });
 
 describe("timeline with subagents", () => {
-  const sub: Part = { type: "subagent", id: "s", toolUseId: "s", description: "Scan", status: "running" };
+  const sub: Part = { type: "subagent", id: "s", toolUseId: "s", description: "Scan", status: "running", startedAt: 0 };
   const child = (p: Part): Part => ({ ...p, parentId: "s" });
   const parts = [sub, child(call("a", "Read")), child(call("b", "Read")), text("t"), child(text("u"))];
 
