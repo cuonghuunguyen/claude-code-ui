@@ -385,8 +385,50 @@ describe("adapter on a background subagent", () => {
     expect(status(run([agent, started, result, { ...done, status: "failed" }]))).toEqual(["running", "error"]);
   });
 
-  it("a restored history (no task messages) ends done on the tool_result", () => {
-    expect(status(run([agent, result]))).toEqual(["running", "done"]);
+  it("live: a later notification without tool_use_id (the run resumed) moves its end", () => {
+    const done = { type: "system", subtype: "task_notification", task_id: "k1", tool_use_id: "a1", status: "completed" };
+    const parts = run([agent, started, result, done, { ...done, tool_use_id: undefined, status: "failed" }]);
+    expect(status(parts)).toEqual(["running", "done", "error"]);
+  });
+
+  // Shapes of the "Sleeper" run in development-docs/GH-36 session 4c189532 (getSessionMessages, SDK 0.3.285).
+  describe("restored from its transcript (no task messages)", () => {
+    const at = (s: number) => new Date(Date.UTC(2026, 9, 2, 9, 16, 5) + s * 1000).toISOString();
+    const placeholder = {
+      type: "user",
+      parent_tool_use_id: null,
+      timestamp: at(1),
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "a1", content: [{ type: "text", text: "Async agent launched successfully. (This tool result is internal metadata.)\nagentId: a6f05acc3b9960d0d (internal ID - do not mention to user.)\nThe agent is working in the background." }] }],
+      },
+    };
+    const notice = (s: number, status: string, toolUseId = true) => ({
+      type: "user",
+      parent_tool_use_id: null,
+      timestamp: at(s),
+      message: {
+        role: "user",
+        content: `<task-notification>\n<task-id>a6f05acc3b9960d0d</task-id>\n${toolUseId ? "<tool-use-id>a1</tool-use-id>\n" : ""}<status>${status}</status>\n<summary>Agent "Sleeper" finished</summary>\n</task-notification>`,
+      },
+    });
+    const restored = [{ ...agent, timestamp: at(0) }, placeholder];
+    const last = (parts: Part[]) => parts.filter((p) => p.type === "subagent").at(-1) as Extract<Part, { type: "subagent" }>;
+
+    it("stays running after its placeholder tool_result", () => {
+      expect(last(run(restored)).status).toBe("running");
+    });
+
+    it("ends at its last task notification; a notice without tool-use-id finds the run by its agentId", () => {
+      const parts = run([...restored, notice(88, "completed"), notice(145, "completed", false)]);
+      expect(last(parts)).toMatchObject({ status: "done", endedAt: Date.parse(at(145)) });
+      expect(last(parts).endedAt! - last(parts).startedAt).toBe(145_000);
+    });
+
+    it("a stopped or failed run ends as error", () => {
+      expect(last(run([...restored, notice(30, "stopped")])).status).toBe("error");
+      expect(last(run([...restored, notice(30, "failed")])).status).toBe("error");
+    });
   });
 });
 

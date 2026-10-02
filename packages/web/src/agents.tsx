@@ -100,7 +100,7 @@ export function AgentsButton({ view, current, onOpen, side = "top" }: { view: Se
         <NetworkIcon aria-hidden className="size-4" />
         <span className="hidden @2xl:inline">Agents</span>
         {running > 0 && (
-          <span data-testid="agents-running" className="min-w-4 rounded-full bg-accent px-1 text-center text-[11px] text-foreground tabular-nums">
+          <span data-testid="agents-running" className="min-w-4 rounded-full bg-accent px-1 text-center text-xs text-foreground tabular-nums">
             {running}
           </span>
         )}
@@ -259,7 +259,7 @@ export function SubagentBar({ view, run, onOpen }: { view: SessionView; run: Run
 export function NotPromptable({ view, run, onOpen, onStop }: { view: SessionView; run: Run; onOpen: (id?: string) => void; onStop: (id: string) => void }) {
   const parent = runOf(view, run.parentId);
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-card p-3 text-sm text-muted-foreground" data-testid="not-promptable">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-muted p-3 text-sm text-muted-foreground" data-testid="not-promptable">
       <p className="min-w-0 flex-1">
         Subagent runs cannot be prompted.{" "}
         <button type="button" className="cursor-pointer text-foreground hover:underline pointer-coarse:min-h-11" data-testid="not-promptable-back" onClick={() => onOpen(parent?.id)}>

@@ -1364,6 +1364,53 @@ describe("daemon", () => {
     }
   });
 
+  it("a restored background subagent run keeps its real status and duration from the transcript's task notifications", async () => {
+    // Shapes of the "Sleeper" run in development-docs/GH-36 session 4c189532 (getSessionMessages, SDK 0.3.285).
+    const id = "9c3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a";
+    const at = (s: number) => new Date(Date.UTC(2026, 9, 2, 9, 16, 5) + s * 1000).toISOString();
+    const msg = (type: string, s: number, content: unknown) =>
+      ({ type, uuid: `u${s}${type}`, session_id: id, parent_tool_use_id: null, parent_agent_id: null, timestamp: at(s), message: { id: `m${s}`, role: type, content } }) as never;
+    const notice = (s: number, runId: string, agentId: string, status: string) =>
+      msg("user", s, `<task-notification>\n<task-id>${agentId}</task-id>\n<tool-use-id>${runId}</tool-use-id>\n<status>${status}</status>\n<summary>Agent finished</summary>\n</task-notification>`);
+    const launched = (runId: string, agentId: string) => [
+      { type: "tool_result", tool_use_id: runId, content: [{ type: "text", text: `Async agent launched successfully. (This tool result is internal metadata.)\nagentId: ${agentId} (internal ID - do not mention to user.)\nThe agent is working in the background.` }] },
+    ];
+    const main = [
+      msg("user", 0, "sleep in the background"),
+      msg("assistant", 0, [
+        { type: "tool_use", id: "toolu_sleeper", name: "Agent", input: { description: "Sleeper", run_in_background: true } },
+        { type: "tool_use", id: "toolu_stopped", name: "Agent", input: { description: "Stopped", run_in_background: true } },
+      ]),
+      msg("user", 1, [...launched("toolu_sleeper", "a6f05acc3b9960d0d"), ...launched("toolu_stopped", "a1b2c3d4e5f6a7b8c")]),
+      notice(40, "toolu_stopped", "a1b2c3d4e5f6a7b8c", "stopped"),
+      notice(145, "toolu_sleeper", "a6f05acc3b9960d0d", "completed"),
+    ];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (sid: string) => (sid === id ? { sessionId: id, cwd: webRoot } : undefined)) as never,
+        getSessionMessages: (async () => main) as never,
+        listSubagents: (async () => []) as never,
+        getSubagentMessages: (async () => []) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "session_state");
+      const parts = new Map(c.inbox.flatMap((m) => (m.type === "event" ? [[m.part.id, m.part] as const] : [])));
+      expect(parts.get("toolu_sleeper")).toMatchObject({ type: "subagent", status: "done", startedAt: Date.parse(at(0)), endedAt: Date.parse(at(145)) });
+      expect(parts.get("toolu_stopped")).toMatchObject({ type: "subagent", status: "error", endedAt: Date.parse(at(40)) });
+    } finally {
+      d.close();
+    }
+  });
+
   it("session.stopSubagent stops that run through stopTask with its task ID; a permission request inside the run is delivered and settled once; the turn goes on", async () => {
     const d = createDaemon({ webRoot, roots: [webRoot], query: subagentQuery as never, token });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));

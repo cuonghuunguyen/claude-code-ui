@@ -34,12 +34,16 @@ const IGNORED = new Set([
 // After an interrupt the CLI sends this user text, then a result with an aborted terminal_reason (SDK 0.3.285).
 const INTERRUPTED = /^\[Request interrupted by user( for tool use)?\]$/;
 // CLI text that is no prompt (SDK 0.3.285): a local command's output (live an assistant message; the setModel() echo is
-// shown by the session_model part), a background task's notification (live a system/task_notification).
+// shown by the session_model part).
 // ponytail: output of a command run in the terminal CLI is dropped too; show it if terminal sessions need it.
-const CLI_OUTPUT = /^<(local-command-stdout|local-command-stderr|task-notification)>.*<\/\1>$/s;
+const CLI_OUTPUT = /^<(local-command-stdout|local-command-stderr)>.*<\/\1>$/s;
 // CLI text sent to the model, not typed by the user: flagged isSynthetic (live) or isMeta (transcript); the nudge after
 // an empty response also matched by text, as its live flags are unverified (SDK 0.3.285).
 const NUDGE = /^\[Your previous response had no visible output\./;
+// A background subagent's placeholder tool_result names its agentId, which is the task ID of its notifications (SDK 0.3.285).
+const ASYNC_LAUNCHED = /^Async agent launched successfully\.[\s\S]*?^agentId: (\w+)/m;
+// A transcript records a background task's notification as this user text; a notice after the run resumed has no tool-use-id.
+const NOTIFICATION_TAG = /<(task-id|tool-use-id|status)>(.*?)<\/\1>/g;
 // A transcript records a slash command as these tags; live the prompt's own user_text shows it.
 const COMMAND_TAG = /<(command-name|command-message|command-args)>(.*?)<\/\1>/gs;
 
@@ -72,6 +76,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   const denied = new Set<string>();
   // Subagents running in the background: their tool_result is a placeholder, task_notification ends them.
   const background = new Set<string>();
+  // Background task ID -> its tool_use_id, for a notification that names only the task.
+  const tasks = new Map<string, string>();
   // Paths whose original file was already sent: the changes tab needs only the first one.
   const originals = new Set<string>();
   // total_cost_usd is cumulative per query; a turn's cost is the difference to the previous result. Undefined = unknown.
@@ -87,12 +93,19 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     return call?.type === "subagent" ? call.startedAt : now;
   };
 
-  function setStatus(toolUseId: string, status: ToolStatus): Part[] {
+  /** `again`: a later end of a run that resumed moves its endedAt, even with the same status. */
+  function setStatus(toolUseId: string, status: ToolStatus, again = false): Part[] {
     const call = calls.get(toolUseId);
-    if (!call || call.status === status) return [];
+    if (!call || (call.status === status && !(again && call.type === "subagent"))) return [];
     const next = call.type === "subagent" && ENDED.has(status) ? { ...call, status, endedAt: now } : { ...call, status };
     calls.set(toolUseId, next);
     return [next];
+  }
+
+  /** A background task's notification (live or from a transcript) ends its call. */
+  function taskEnded(taskId: string | undefined, toolUseId: string | undefined, status: string | undefined): Part[] {
+    const id = toolUseId ?? (taskId ? tasks.get(taskId) : undefined);
+    return id ? setStatus(id, status === "completed" ? "done" : "error", true) : [];
   }
 
   function deny(toolUseId: string): Part[] {
@@ -193,6 +206,10 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           // Transcript: isCompactSummary; live: the synthetic message right after the boundary.
           if ((m as { isCompactSummary?: boolean }).isCompactSummary) return [{ type: "compaction", id, summary: content }];
           if (synthetic && boundary) return [{ ...boundary, summary: content }];
+          if (content.startsWith("<task-notification>")) {
+            const tags = new Map([...content.matchAll(NOTIFICATION_TAG)].map((t) => [t[1], t[2]]));
+            return taskEnded(tags.get("task-id"), tags.get("tool-use-id"), tags.get("status"));
+          }
           return synthetic ? [] : userString(id, content);
         }
         const parts: Part[] = [];
@@ -212,6 +229,11 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
             result.original = original;
           }
           parts.push(result);
+          const launched = typeof output === "string" ? ASYNC_LAUNCHED.exec(output) : null;
+          if (launched) {
+            background.add(b.tool_use_id);
+            tasks.set(launched[1]!, b.tool_use_id);
+          }
           if (!background.has(b.tool_use_id))
             parts.push(...setStatus(b.tool_use_id, denied.has(b.tool_use_id) ? "denied" : isError ? "error" : "done"));
           return false;
@@ -266,10 +288,10 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
         }
         if (m.type === "system" && m.subtype === "task_started") {
           if (m.is_backgrounded && m.tool_use_id) background.add(m.tool_use_id);
+          if (m.tool_use_id) tasks.set(m.task_id, m.tool_use_id);
           return [];
         }
-        if (m.type === "system" && m.subtype === "task_notification")
-          return m.tool_use_id ? setStatus(m.tool_use_id, m.status === "completed" ? "done" : "error") : [];
+        if (m.type === "system" && m.subtype === "task_notification") return taskEnded(m.task_id, m.tool_use_id, m.status);
         if (IGNORED.has(m.type) || IGNORED.has(`${m.type}:${"subtype" in m ? m.subtype : ""}`)) return [];
         return [{ type: "raw", id: ("uuid" in m && m.uuid) || crypto.randomUUID(), message: m }];
     }

@@ -182,7 +182,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 - A `tool_result` updates its `tool_call` status; grouped by `toolUseId`.
 - Tool rendering keyed on `tool`: `Bash`, `Edit`/`Write` (diff), `Read`, `Grep`/`Glob`, `TodoWrite`, `Task` (subagent), anything else (JSON).
 - The daemon enables TodoWrite (`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, `CLAUDE_CODE_ENABLE_TASKS=0`; off by default on current models) and `forwardSubagentText`.
-- A background subagent ends with `task_notification`, not with its placeholder `tool_result`; `stopped` and `failed` end it as `error`.
+- A background subagent ends with `task_notification`, not with its placeholder `tool_result`; `stopped` and `failed` end it as `error`. A restored one ends with the transcript's `<task-notification>` user text; a later notice of a run that resumed (task ID only) moves its `endedAt`.
 - A subagent run's `startedAt` / `endedAt` (ms) are the transcript timestamps of its Agent call and of the message that ends it, live the daemon clock; the first part of a call fixes `startedAt`. Nested runs (spawn depth up to 3, SDK default) nest by the same `parentId` rule.
 - The same adapter converts live SDK messages and `getSessionMessages()` history.
 - Fixture tests recorded from real SDK sessions.
