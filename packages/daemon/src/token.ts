@@ -25,4 +25,4 @@ export function loadToken(dir = configDir()): string {
 }
 
 /** The token goes in the fragment: browsers never send it to the server, so it stays out of request lines. */
-export const pairingUrl = (host: string, port: number, token: string) => `http://${host}:${port}/#token=${token}`;
+export const pairingUrl = (origin: string, token: string) => `${origin}/#token=${token}`;

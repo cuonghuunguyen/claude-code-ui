@@ -23,6 +23,6 @@ describe("token", () => {
   });
 
   it("puts the token in the URL fragment so it is never sent in an HTTP request", () => {
-    expect(pairingUrl("127.0.0.1", 4280, "abc")).toBe("http://127.0.0.1:4280/#token=abc");
+    expect(pairingUrl("http://127.0.0.1:4280", "abc")).toBe("http://127.0.0.1:4280/#token=abc");
   });
 });

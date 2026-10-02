@@ -57,8 +57,7 @@ type History = {
 /** SDK session tag that marks an archived session (no archive flag of its own; ADR 0001: no store of ours). */
 const ARCHIVED_TAG = "archived";
 
-// ponytail: loopback only; add the remote-access hostname here once that is decided (ADR 0003).
-const LOCAL_HOSTNAMES = new Set(["127.0.0.1", "localhost"]);
+const LOCAL_HOSTNAMES = ["127.0.0.1", "localhost"];
 
 /** Canonical path (symlinks resolved), or undefined when it does not exist. */
 function real(path: string) {
@@ -179,6 +178,7 @@ function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
  * `projects`: known projects store; in memory when omitted.
  * `listCache`: reuse the last transcript scan while no transcript file under `projectsDir` changed (default: on with the
  * SDK's own listSessions()).
+ * `hostnames`: hostnames besides loopback that browsers may reach the daemon by, e.g. a `tailscale serve` name (ADR 0003).
  */
 export function createDaemon(opts: {
   webRoot: string;
@@ -193,7 +193,9 @@ export function createDaemon(opts: {
   settingsFile?: string;
   projects?: Projects;
   listCache?: boolean;
+  hostnames?: string[];
 }) {
+  const hostnames = new Set([...LOCAL_HOSTNAMES, ...(opts.hostnames ?? [])]);
   const logEpoch = randomUUID();
   /**
    * fs.upload parent: one private (0700, mkdtemp) folder per daemon. Made up front: every session gets it as an
@@ -400,7 +402,7 @@ export function createDaemon(opts: {
     socket.on("error", () => socket.destroy());
     // String compare, not new URL: a malformed request target must not throw here (uncaught in an upgrade listener).
     if (req.url?.split("?")[0] !== "/ws") return reject("404 Not Found");
-    if (!isOwnOrigin(req)) return reject("403 Forbidden");
+    if (!isOwnOrigin(req, hostnames)) return reject("403 Forbidden");
     if (!hasToken(req)) return reject("401 Unauthorized");
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   });
@@ -791,14 +793,14 @@ const isModel = (m: unknown): m is string => typeof m === "string" && m.trim() !
 
 /**
  * The Origin must be the origin the browser used to reach this daemon (its Host header), and that host
- * must be loopback: a cross-site page has a foreign Origin, a DNS-rebinding page has a foreign Host.
+ * must be loopback or a configured hostname: a cross-site page has a foreign Origin, a DNS-rebinding page has a foreign Host.
  */
-function isOwnOrigin(req: IncomingMessage) {
+function isOwnOrigin(req: IncomingMessage, hostnames: Set<string>) {
   const { origin, host } = req.headers;
   if (!origin || !host) return false;
   try {
     const o = new URL(origin);
-    return (o.protocol === "http:" || o.protocol === "https:") && o.host === host && LOCAL_HOSTNAMES.has(o.hostname);
+    return (o.protocol === "http:" || o.protocol === "https:") && o.host === host && hostnames.has(o.hostname);
   } catch {
     return false;
   }

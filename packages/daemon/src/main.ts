@@ -16,9 +16,11 @@ const roots = (process.env.CLAUDE_UI_ROOTS ?? homedir()).split(delimiter).filter
 
 // docs/spec.md "Security": bypass permissions mode stays off unless enabled here.
 const allowBypass = process.env.CLAUDE_UI_ALLOW_BYPASS === "1";
+// ADR 0003: the HTTPS name a private VPN proxy (e.g. `tailscale serve`) forwards to this loopback port.
+const hostname = process.env.CLAUDE_UI_HOSTNAME;
 
-createDaemon({ webRoot, token, roots, push: createPush(), allowBypass, settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }) }).listen(port, HOST, async () => {
-  const url = pairingUrl(HOST, port, token);
+createDaemon({ webRoot, token, roots, push: createPush(), allowBypass, settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), hostnames: hostname ? [hostname] : [] }).listen(port, HOST, async () => {
+  const url = pairingUrl(hostname ? `https://${hostname}` : `http://${HOST}:${port}`, token);
   // The pairing URL is the one place the token is printed; keep it out of every other log line.
   console.log(`claude-ui daemon on http://${HOST}:${port}, roots: ${roots.join(delimiter)}\nPair a browser: open ${url}\n${await QRCode.toString(url, { type: "terminal", small: true })}`);
 });

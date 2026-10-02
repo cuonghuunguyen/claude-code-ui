@@ -1329,6 +1329,20 @@ describe("WebSocket auth and origin check", () => {
     }
   });
 
+  it("accepts a configured hostname (tailscale serve) and only on the daemon that configured it", async () => {
+    const name = "box.tail1234.ts.net";
+    const headers = { origin: `https://${name}`, host: name };
+    expect((await attempt({ protocols: protocols(), headers })).status).toBe(403);
+    const d = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, hostnames: [name] });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${(d.address() as AddressInfo).port}/ws`, protocols(), { headers });
+      expect(await new Promise((r) => (ws.on("open", () => (r("open"), ws.close())), ws.on("unexpected-response", (_q, res) => r(res.statusCode))))).toBe("open");
+    } finally {
+      d.close();
+    }
+  });
+
   it("rejects upgrades on paths other than /ws", async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/other`, protocols(), { origin: origin() });
     const status = await new Promise((r) => (ws.on("unexpected-response", (_q, res) => r(res.statusCode)), ws.on("error", () => {})));

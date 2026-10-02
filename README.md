@@ -23,6 +23,13 @@ PORT=5000 npm start
 CLAUDE_UI_ALLOW_BYPASS=1 npm start   # offer the "Bypass permissions" mode (off by default)
 ```
 
+Phone access over Tailscale (ADR 0003: private VPN, no hosting). The daemon stays on loopback; `tailscale serve` adds HTTPS, which Web Push needs:
+
+```sh
+tailscale serve --bg 4280                       # once; tailnet needs MagicDNS + HTTPS certificates enabled
+CLAUDE_UI_HOSTNAME=<machine>.<tailnet>.ts.net npm start   # prints the https pairing URL + QR for the phone
+```
+
 Dev mode with hot reload: `npm run dev` (daemon on 4280, Vite on http://127.0.0.1:5173 proxying `/ws`).
 
 ## Check
