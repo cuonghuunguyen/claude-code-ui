@@ -78,6 +78,14 @@ async function render(p: Partial<Props>) {
   return { el, text, rerender: (n: Partial<Props>) => act(async () => root.render(<StatusBar {...props} {...n} />)) };
 }
 
+it("the status bar names auto and don't ask mode", async () => {
+  const { el, rerender } = await render({ mode: "auto", modes: ["default", "auto", "dontAsk"] });
+  const trigger = () => el.querySelector('[data-field="mode"]')!.textContent;
+  expect(trigger()).toContain("auto mode on");
+  await rerender({ mode: "dontAsk" });
+  expect(trigger()).toContain("don't ask on");
+});
+
 it("shows every field like the Claude Code status line", async () => {
   vi.useFakeTimers({ now: NOW, toFake: ["Date", "setInterval", "clearInterval"] });
   const v = view(

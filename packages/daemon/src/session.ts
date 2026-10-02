@@ -17,7 +17,7 @@ import {
 import {
   createAdapter,
   imageBlock,
-  PERMISSION_MODES,
+  permissionModesFor,
   type Effort,
   type Event,
   type Part,
@@ -47,6 +47,8 @@ export type SessionSettings = Pick<SessionInfo, "model" | "permissionMode" | "ef
 /** `onSettings`: called after model, permission mode or effort changed (the daemon persists them for a restore). */
 type SessionOpts = Partial<SessionSettings> & {
   allowBypass?: boolean;
+  /** Whether a model value (`ModelInfo.value`) supports auto mode (`supportsAutoMode`); none = no model does. */
+  supportsAuto?: (model: string) => boolean;
   uploadDir?: string;
   query?: typeof sdkQuery;
   onSettings?: (s: SessionSettings) => void;
@@ -172,7 +174,7 @@ export class Session {
       model: this.model,
       permissionMode: this.permissionMode,
       effort: this.effort,
-      permissionModes: PERMISSION_MODES.filter((m) => m !== "bypassPermissions" || this.opts.allowBypass),
+      permissionModes: permissionModesFor({ allowBypass: this.opts.allowBypass, supportsAuto: this.opts.supportsAuto?.(this.model) }),
     };
   }
 
@@ -226,7 +228,15 @@ export class Session {
     await this.query?.setModel(model);
     this.model = model;
     this.emit({ type: "session_model", id: "session_model", model });
-    this.settingsChanged();
+    // Auto needs a model that supports it: back to ask, as the web toast says.
+    try {
+      if (this.permissionMode === "auto" && !this.opts.supportsAuto?.(model)) {
+        await this.query?.setPermissionMode("default");
+        this.setMode("default");
+      }
+    } finally {
+      this.settingsChanged();
+    }
     // The window size can differ per model.
     void this.refreshUsage();
   }
