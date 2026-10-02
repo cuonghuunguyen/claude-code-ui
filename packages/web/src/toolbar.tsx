@@ -1,6 +1,6 @@
 // Prompt box toolbar (OpenCode prompt input v2): attach, model, effort, permission mode; context meter, send / stop on the right.
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
-import { ArrowUpIcon, BrainIcon, FilePenIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
+import { ArrowUpIcon, BrainIcon, FilePenIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
 import type { ContextUsage, Effort, ModelInfo, PermissionMode } from "@claude-ui/protocol";
 import { ContextMeter } from "./context-meter.tsx";
 import type { Totals } from "./status-bar.tsx";
@@ -12,14 +12,17 @@ export const MODE_LABEL: Record<PermissionMode, { label: string; short: string; 
   acceptEdits: { label: "Edit automatically", short: "Edits", Icon: FilePenIcon },
   plan: { label: "Plan mode", short: "Plan", Icon: ListTodoIcon },
   bypassPermissions: { label: "Bypass permissions", short: "Bypass", Icon: ShieldAlertIcon },
-  dontAsk: { label: "Don't ask", short: "Don't ask", Icon: ShieldIcon },
-  auto: { label: "Auto", short: "Auto", Icon: ShieldIcon },
+  auto: { label: "Auto mode", short: "Auto", Icon: ShieldCheckIcon },
+  dontAsk: { label: "Don't ask (deny unapproved)", short: "Don't ask", Icon: ShieldBanIcon },
 };
 
 export const EFFORT_LABEL: Record<Effort, string> = { default: "Default", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
 
-/** Shift+Tab: the next mode in Claude Code's order, wrapping around. */
-export const nextMode = (modes: PermissionMode[], mode: PermissionMode) => modes[(modes.indexOf(mode) + 1) % modes.length] ?? mode;
+/** Shift+Tab: the next mode in Claude Code's order, wrapping around. Don't ask is only chosen from the picker: a silently denying mode must not be entered by accident. */
+export const nextMode = (modes: PermissionMode[], mode: PermissionMode) => {
+  const cycle: PermissionMode[] = modes.filter((m) => m !== "dontAsk");
+  return cycle[(cycle.indexOf(mode) + 1) % cycle.length] ?? mode;
+};
 
 /** The model's effort levels plus "default"; none when the model does not support effort (the chooser is hidden). */
 export function effortOptions(models: ModelInfo[], model: string): Effort[] {

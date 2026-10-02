@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
+import { EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, listSessions, renameSession, tagSession, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { gitStatus } from "./git.ts";
@@ -224,6 +224,7 @@ export function createDaemon(opts: {
     ...initial,
     plan,
     allowBypass: opts.allowBypass,
+    supportsAuto,
     uploadDir: uploadParent,
     query: opts.query,
     onSettings: (s: SessionSettings) => {
@@ -244,11 +245,14 @@ export function createDaemon(opts: {
   const root = resolve(opts.webRoot);
   // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
   let models: ReturnType<typeof listModels> | undefined;
+  // Sync copy for SessionInfo.permissionModes: every path that builds a SessionInfo awaits modelList() first.
+  let known: ModelInfo[] = [];
   const modelList = () =>
-    (models ??= listModels(opts.query)).catch((e) => {
+    (models ??= listModels(opts.query).then((l) => (known = l))).catch((e) => {
       models = undefined;
       throw e;
     });
+  const supportsAuto = (model: string) => known.some((m) => m.value === model && m.supportsAutoMode);
   const roots = opts.roots.map(real).filter((r) => r !== undefined);
   const inRoots = (path: string) =>
     roots.some((r) => {
@@ -300,6 +304,7 @@ export function createDaemon(opts: {
   }
 
   async function list(): Promise<ListResult> {
+    await modelList().catch(() => {});
     const items = new Map<string, SessionListItem>();
     const all = await transcripts();
     // Entries of sessions deleted outside this daemon (CLI, file removed): no transcript and not live.
@@ -321,7 +326,7 @@ export function createDaemon(opts: {
     return {
       projects: open,
       sessions: listed.filter((s) => shown.has(trim(s.cwd))).sort((a, b) => b.lastActivity - a.lastActivity),
-      permissionModes: PERMISSION_MODES.filter((m) => m !== "bypassPermissions" || opts.allowBypass),
+      permissionModes: permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto("default") }),
     };
   }
 
@@ -339,13 +344,14 @@ export function createDaemon(opts: {
         const info = await history.getSessionInfo(id);
         if (!info?.cwd || !allowed(info.cwd)) return undefined;
         const messages = await history.getSessionMessages(id, { dir: info.cwd });
+        await modelList().catch(() => {});
         // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
         const used = transcriptModel(messages);
         // No entry (sessions.json lost, a session of the terminal CLI): mode and effort the transcript last recorded.
         const saved = settings[id] ?? { model: undefined, ...transcriptSettings(projectsDir, info.cwd, id) };
         const model = isModel(saved?.model) ? saved.model : used && ((await modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
         // A mode the daemon does not enable now (bypass without CLAUDE_UI_ALLOW_BYPASS) falls back to the default.
-        const modes = PERMISSION_MODES.filter((m) => m !== "bypassPermissions" || opts.allowBypass);
+        const modes = permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model ?? "default") });
         const permissionMode = modes.includes(saved.permissionMode as never) ? (saved.permissionMode as SessionSettings["permissionMode"]) : undefined;
         const effort = EFFORTS.includes(saved.effort as never) ? (saved.effort as SessionSettings["effort"]) : undefined;
         return track(Session.restore(id, info.cwd, messages, sessionOpts(() => id, { model, permissionMode, effort })));
@@ -448,6 +454,7 @@ export function createDaemon(opts: {
           if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          await modelList().catch(() => {});
           const s: Session = track(new Session(cwd, sessionOpts(() => s.id, { model: msg.model })));
           return reply({ session: s.info() });
         }

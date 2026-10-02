@@ -196,7 +196,7 @@ describe("Session", () => {
   it("starts in default permission mode and model default effort; bypass only when the daemon enables it", () => {
     const s = started({ query: fakeQuery as never });
     expect(calls.at(-1)).toMatchObject({ permissionMode: "default", allowDangerouslySkipPermissions: false, effort: undefined });
-    expect(s.info()).toMatchObject({ permissionMode: "default", effort: "default", permissionModes: ["default", "acceptEdits", "plan"] });
+    expect(s.info()).toMatchObject({ permissionMode: "default", effort: "default", permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] });
     started({ allowBypass: true, query: fakeQuery as never });
     expect(calls.at(-1)).toMatchObject({ allowDangerouslySkipPermissions: true });
   });

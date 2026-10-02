@@ -4,13 +4,16 @@ import type { Effort, Part, PermissionMode, PlanUsage, SessionState } from "./pa
 
 export type { ModelInfo };
 
-/** Modes the permission mode chooser offers, in Claude Code's Shift+Tab order; bypass only when the daemon config enables it. */
-export const PERMISSION_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
+/** All permission modes, in picker order. Shift+Tab cycles them without dontAsk (Claude Code's order). */
+export const PERMISSION_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
+/** The modes offered now: auto only when the model has `supportsAutoMode`, bypass only when the daemon config enables it. */
+export const permissionModesFor = ({ allowBypass, supportsAuto }: { allowBypass?: boolean; supportsAuto?: boolean }) =>
+  PERMISSION_MODES.filter((m) => (m === "bypassPermissions" ? allowBypass : m === "auto" ? supportsAuto : true));
 export const EFFORTS: Effort[] = ["default", "low", "medium", "high", "xhigh", "max"];
 
 /**
  * `model` is a `ModelInfo.value` from models.list; "default" = the SDK default model. `effort`: "default" = the model's default.
- * `permissionModes`: the modes this session can switch to (PERMISSION_MODES, without bypassPermissions unless enabled).
+ * `permissionModes`: the modes this session can switch to (permissionModesFor: auto follows the session's model).
  */
 export type SessionInfo = {
   id: string;
@@ -157,7 +160,7 @@ export const TOKEN_PROTOCOL_PREFIX = "token.";
 /**
  * `projects`: known project cwds, newest activity first: session cwds plus opened projects, minus removed ones.
  * `sessions`: only sessions of those projects.
- * `permissionModes`: the modes a new session can start in (PERMISSION_MODES, without bypassPermissions unless enabled).
+ * `permissionModes`: the modes a new session can start in (permissionModesFor, for the default model).
  */
 export type ListResult = { sessions: SessionListItem[]; projects: string[]; permissionModes: PermissionMode[] };
 /** `cwd`: the canonical path of the opened project. */

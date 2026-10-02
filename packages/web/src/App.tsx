@@ -1,4 +1,4 @@
-import { Activity, lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type RefObject } from "react";
+import { Activity, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type RefObject } from "react";
 import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SquareTerminalIcon, SunIcon } from "lucide-react";
 import type {
   ContextUsage,
@@ -27,7 +27,7 @@ import type {
   GitStatus,
   GitStatusResult,
 } from "@claude-ui/protocol";
-import { isPromptImage, MAX_UPLOAD_BYTES, PERMISSION_MODES } from "@claude-ui/protocol";
+import { isPromptImage, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { useStickToBottomContext } from "use-stick-to-bottom";
 import { Shimmer } from "@/components/ai-elements/shimmer";
@@ -35,6 +35,7 @@ import { Message, MessageAction, MessageActions, MessageContent, MessageResponse
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
+import { Toast } from "./toast.tsx";
 import { nextMode, PromptToolbar, type SendState } from "./toolbar.tsx";
 import { choose, matchCommands } from "./commands.ts";
 import { activeMention, insertAtCaret, insertMention, mentionPath, splitUploads } from "./mentions.ts";
@@ -138,6 +139,8 @@ export function App() {
   useEffect(() => void (!draftOpen && setDraft(NEW_DRAFT)), [draftOpen]);
   const [theme, setTheme] = useState<ThemePref>(loadPref);
   const [error, setError] = useState<string>();
+  const [toast, setToast] = useState<string>();
+  const closeToast = useCallback(() => setToast(undefined), []);
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
   const [drawer, setDrawer] = useState(false);
   // Wide screens: the Home button shows or hides the sessions sidebar.
@@ -426,8 +429,11 @@ export function App() {
   async function configure(msg: Extract<Request, { type: "session.setModel" | "session.setPermissionMode" | "session.setEffort" }>) {
     setError(undefined);
     try {
+      const before = viewsRef.current[msg.sessionId]?.permissionMode ?? infos[msg.sessionId]?.permissionMode;
       const { session } = await client.current!.request<SetModelResult>(msg);
       setInfos((i) => ({ ...i, [session.id]: session }));
+      // The daemon drops auto to ask when the new model has no auto support.
+      if (msg.type === "session.setModel" && before === "auto" && session.permissionMode !== "auto") setToast(autoUnavailable(models, session.model));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -520,12 +526,19 @@ export function App() {
     setPanel(true);
   };
   const draftShown = activeId === NEW_TAB && tabs.includes(NEW_TAB);
+  const draftModes = permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === draft.model && m.supportsAutoMode) });
+  // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
+  const changeDraft = (d: StartOptions) => {
+    const lost = d.mode === "auto" && !models.some((m) => m.value === d.model && m.supportsAutoMode);
+    if (lost) setToast(autoUnavailable(models, d.model));
+    setDraft(lost ? { ...d, mode: "default" } : d);
+  };
   const commands = appCommands({
     tabs,
     activeId,
     sessions: list,
     session: draftShown
-      ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: newModes, running: false, prompts: [], draft: true }
+      ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: draftModes, running: false, prompts: [], draft: true }
       : shown && {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
@@ -552,7 +565,7 @@ export function App() {
       const prompts = () => [...document.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"], textarea[aria-label="First prompt"]')];
       requestAnimationFrame(() => (id === NEW_TAB ? newPrompt.current : prompts().find((el) => el.offsetParent))?.focus());
     },
-    setModel: (model) => (draftShown ? setDraft((d) => ({ ...d, model })) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
+    setModel: (model) => (draftShown ? changeDraft({ ...draft, model }) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
     setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
     setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
     rewind: (id) => (setRewindTo(id), showSession()),
@@ -807,8 +820,8 @@ export function App() {
                   onCwd={setDraftCwd}
                   models={models}
                   draft={draft}
-                  onDraft={setDraft}
-                  modes={newModes}
+                  onDraft={changeDraft}
+                  modes={draftModes}
                   onOpenProject={() => setOpeningProject(true)}
                   onUpload={upload}
                   onSearch={search}
@@ -859,6 +872,7 @@ export function App() {
         // Focus goes to the new-session prompt, not back to the button that opened the dialog.
         finalFocus={newPrompt}
       />
+      {toast && <Toast message={toast} onClose={closeToast} />}
     </div>
     </AvatarColors>
   );
@@ -1082,6 +1096,8 @@ export function NewSession({
     </div>
   );
 }
+
+const autoUnavailable = (models: ModelInfo[], model: string) => `Auto mode not available for ${models.find((m) => m.value === model)?.displayName ?? model}; switched to Ask`;
 
 export type StartOptions = { model: string; mode: PermissionMode; effort: Effort };
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");

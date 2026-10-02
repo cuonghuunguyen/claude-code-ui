@@ -339,3 +339,87 @@ it("the terminal below the side panel resizes with the arrow keys (100px to 60% 
   await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
   localStorage.clear();
 });
+
+const MODES = ["default", "acceptEdits", "plan", "auto", "dontAsk"] as const;
+const AUTO_MODELS = [
+  { value: "sonnet", displayName: "Sonnet 5.5", description: "", supportsAutoMode: true },
+  { value: "haiku", displayName: "Haiku 4.5", description: "" },
+];
+/** Mounts the app again so the first replies carry `over`. */
+async function remount(over: Record<string, unknown>) {
+  const saved = Object.fromEntries(Object.keys(over).map((k) => [k, replies[k]]));
+  Object.assign(replies, over);
+  act(() => root.unmount());
+  root = createRoot(el);
+  await act(async () => root.render(<App />));
+  await act(async () => {});
+  return () => Object.assign(replies, saved);
+}
+const pickOption = async (trigger: string, name: string) => {
+  await act(async () => el.querySelector<HTMLElement>(trigger)!.click());
+  await act(async () => [...document.querySelectorAll<HTMLElement>("[role=option]")].find((o) => o.textContent === name)!.click());
+};
+const optionsOf = async (scope: string) => {
+  await act(async () => el.querySelector<HTMLElement>(`${scope} [data-testid="mode-select"]`)!.click());
+  const names = [...document.querySelectorAll<HTMLElement>("[role=option]")].map((o) => o.textContent);
+  await press({ key: "Escape" });
+  return names;
+};
+
+it("a session in auto mode that gets a model without auto support is in Ask, and a toast says why", async () => {
+  const auto = { ...session, model: "sonnet", permissionMode: "auto", permissionModes: [...MODES] };
+  const restore = await remount({
+    "session.list": { sessions: [auto], projects: ["/p/demo"] },
+    "session.subscribe": { logEpoch: "e1", session: auto },
+    "models.list": { models: AUTO_MODELS },
+    "session.setModel": { session: { ...auto, model: "haiku", permissionMode: "default", permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] } },
+  });
+  try {
+    expect(el.querySelector('[data-testid="toast"]')).toBeNull();
+    await pickOption('[data-testid="session-model"]', "Haiku 4.5");
+    // The daemon's session_model and session_permission_mode events (the log tells every tab).
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_model", id: "session_model", model: "haiku" } }));
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "session_permission_mode", id: "session_permission_mode", mode: "default" } }));
+    expect(el.querySelector('[data-testid="toast"]')?.textContent).toBe("Auto mode not available for Haiku 4.5; switched to Ask");
+    expect(el.querySelector('[data-testid="mode-select"]')?.textContent).toContain("Ask");
+  } finally {
+    restore();
+  }
+});
+
+it("a model change in another mode shows no toast", async () => {
+  const plan = { ...session, model: "sonnet", permissionMode: "plan", permissionModes: [...MODES] };
+  const restore = await remount({
+    "session.list": { sessions: [plan], projects: ["/p/demo"] },
+    "session.subscribe": { logEpoch: "e1", session: plan },
+    "models.list": { models: AUTO_MODELS },
+    "session.setModel": { session: { ...plan, model: "haiku", permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] } },
+  });
+  try {
+    await pickOption('[data-testid="session-model"]', "Haiku 4.5");
+    expect(el.querySelector('[data-testid="toast"]')).toBeNull();
+  } finally {
+    restore();
+  }
+});
+
+it("the new-session tab offers Auto mode only while its model supports it, and leaving auto shows the toast", async () => {
+  const restore = await remount({
+    "session.list": { sessions: [session], projects: ["/p/demo"], permissionModes: ["default", "acceptEdits", "plan", "auto", "dontAsk"] },
+    "models.list": { models: [{ ...AUTO_MODELS[0]!, value: "default", displayName: "Default (recommended)" }, AUTO_MODELS[1]!] },
+  });
+  try {
+    await openNewTab();
+    const tab = '[data-testid="new-session-tab"]';
+    expect(await optionsOf(tab)).toEqual(["Ask before edits", "Edit automatically", "Plan mode", "Auto mode", "Don't ask (deny unapproved)"]);
+    await pickOption(`${tab} [data-testid="mode-select"]`, "Auto mode");
+    expect(el.querySelector(`${tab} [data-testid="mode-select"]`)?.textContent).toContain("Auto mode");
+    expect(el.querySelector('[data-testid="toast"]')).toBeNull();
+    await pickOption(`${tab} [data-testid="session-model"]`, "Haiku 4.5");
+    expect(el.querySelector('[data-testid="toast"]')?.textContent).toBe("Auto mode not available for Haiku 4.5; switched to Ask");
+    expect(el.querySelector(`${tab} [data-testid="mode-select"]`)?.textContent).toContain("Ask");
+    expect(await optionsOf(tab)).not.toContain("Auto mode");
+  } finally {
+    restore();
+  }
+});

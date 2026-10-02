@@ -21,6 +21,7 @@ export const controlCalls: unknown[] = [];
 export const models: ModelInfo[] = [
   { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "" },
   { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", description: "" },
+  { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5", description: "", supportsAutoMode: true },
 ];
 export const inputs: SDKUserMessage[] = [];
 /** rewindFiles() calls, and the files each dry run reports (set per test). */

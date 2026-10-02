@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -9,7 +10,7 @@ import { MAX_TERMINAL_INPUT_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@c
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
-import { calls, fakeQuery, planCalls, history, interruptQuery, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
+import { calls, controlCalls, fakeQuery, planCalls, history, interruptQuery, models, permissionQuery, questionQuery, setModelCalls } from "./fake-query.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
@@ -356,18 +357,22 @@ describe("daemon", () => {
       const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, allowBypass, history: { listSessions: (async () => []) as never } as never });
       await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
       const c = await client((d.address() as AddressInfo).port);
-      const modes = allowBypass ? ["default", "acceptEdits", "plan", "bypassPermissions"] : ["default", "acceptEdits", "plan"];
+      const modes = allowBypass ? ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"] : ["default", "acceptEdits", "plan", "dontAsk"];
       expect(await c.request({ type: "session.list" })).toMatchObject({ result: { permissionModes: modes } });
       d.close();
     }
   });
 
   it("lists models from supportedModels() and caches them", async () => {
-    const c = await client();
+    // Own daemon: session.create of other tests loads the list of the shared one.
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, history: { listSessions: (async () => []) as never } as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
     const before = calls.length;
     expect(await c.request({ type: "models.list" })).toMatchObject({ type: "reply", result: { models } });
     expect(await c.request({ type: "models.list" })).toMatchObject({ result: { models } });
     expect(calls.length).toBe(before + 1);
+    d.close();
   });
 
   it("creates a session with a model and switches it with session.setModel; its CLI starts on the first prompt", async () => {
@@ -394,7 +399,86 @@ describe("daemon", () => {
     expect(await c.request({ type: "session.setEffort", sessionId: id, effort: "huge" })).toMatchObject({ code: "bad_effort" });
     expect(await c.request({ type: "session.setPermissionMode", sessionId: id, mode: "bypassPermissions" })).toMatchObject({ code: "set_failed" });
     const sub = await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
-    expect(sub).toMatchObject({ result: { session: { permissionMode: "plan", effort: "max", permissionModes: ["default", "acceptEdits", "plan"] } } });
+    expect(sub).toMatchObject({ result: { session: { permissionMode: "plan", effort: "max", permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] } } });
+  });
+
+  it("offers auto mode only for a model with supportsAutoMode; dontAsk always; both reach the SDK", async () => {
+    const c = await client();
+    const create = async (model?: string) =>
+      ((await c.request({ type: "session.create", cwd: webRoot, model })) as { result: { session: { id: string; permissionModes: string[] } } }).result.session;
+    const sonnet = await create("sonnet");
+    expect(sonnet.permissionModes).toEqual(["default", "acceptEdits", "plan", "auto", "dontAsk"]);
+    const haiku = await create("haiku");
+    expect(haiku.permissionModes).toEqual(["default", "acceptEdits", "plan", "dontAsk"]);
+    expect(await c.request({ type: "session.setPermissionMode", sessionId: haiku.id, mode: "auto" })).toMatchObject({ code: "set_failed" });
+    expect(await c.request({ type: "session.setPermissionMode", sessionId: haiku.id, mode: "dontAsk" })).toMatchObject({ result: { session: { permissionMode: "dontAsk" } } });
+    // Before the CLI runs the mode is its start option; afterwards setPermissionMode().
+    expect(await c.request({ type: "session.setPermissionMode", sessionId: sonnet.id, mode: "auto" })).toMatchObject({ result: { session: { permissionMode: "auto" } } });
+    await c.request({ type: "session.prompt", sessionId: sonnet.id, text: "hi" });
+    expect(calls.find((o) => o.sessionId === sonnet.id)).toMatchObject({ permissionMode: "auto" });
+    await c.request({ type: "session.setPermissionMode", sessionId: sonnet.id, mode: "dontAsk" });
+    expect(controlCalls.at(-1)).toEqual({ setPermissionMode: "dontAsk" });
+    await c.request({ type: "session.setPermissionMode", sessionId: sonnet.id, mode: "auto" });
+    expect(controlCalls.at(-1)).toEqual({ setPermissionMode: "auto" });
+  });
+
+  it("a session in auto mode drops to default when its model changes to one without auto support", async () => {
+    const c = await client();
+    const id = ((await c.request({ type: "session.create", cwd: webRoot, model: "sonnet" })) as { result: { session: { id: string } } }).result.session.id;
+    await c.request({ type: "session.prompt", sessionId: id, text: "hi" });
+    await c.request({ type: "session.setPermissionMode", sessionId: id, mode: "auto" });
+    const r = await c.request({ type: "session.setModel", sessionId: id, model: "haiku" });
+    expect(r).toMatchObject({ result: { session: { model: "haiku", permissionMode: "default", permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] } } });
+    expect(controlCalls.at(-1)).toEqual({ setPermissionMode: "default" });
+    const sub = await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+    expect(sub).toMatchObject({ result: { session: { permissionMode: "default" } } });
+    // Other modes stay as they are.
+    await c.request({ type: "session.setModel", sessionId: id, model: "sonnet" });
+    await c.request({ type: "session.setPermissionMode", sessionId: id, mode: "dontAsk" });
+    expect(await c.request({ type: "session.setModel", sessionId: id, model: "haiku" })).toMatchObject({ result: { session: { permissionMode: "dontAsk" } } });
+  });
+
+  it("session.list offers auto to a new session only when the default model supports it", async () => {
+    const c = await client();
+    expect(await c.request({ type: "session.list" })).toMatchObject({ result: { permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] } });
+    models[0]!.supportsAutoMode = true;
+    try {
+      const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, history: { listSessions: (async () => []) as never } as never });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      const c2 = await client((d.address() as AddressInfo).port);
+      expect(await c2.request({ type: "session.list" })).toMatchObject({ result: { permissionModes: ["default", "acceptEdits", "plan", "auto", "dontAsk"] } });
+      d.close();
+    } finally {
+      delete models[0]!.supportsAutoMode;
+    }
+  });
+
+  it("restores a saved auto or dontAsk mode; auto on a model without support restores as default", async () => {
+    const settingsFile = join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json");
+    const restored = async (model: string, permissionMode: string) => {
+      const id = randomUUID();
+      writeFileSync(settingsFile, JSON.stringify({ [id]: { model, permissionMode, effort: "default" } }));
+      const d = createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        query: fakeQuery as never,
+        settingsFile,
+        history: {
+          listSessions: (async () => []) as never,
+          getSessionInfo: (async (sid: string) => ({ sessionId: sid, cwd: webRoot })) as never,
+          getSessionMessages: (async () => history) as never,
+        },
+      });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      const c = await client((d.address() as AddressInfo).port);
+      const sub = (await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })) as { result: { session: { permissionMode: string } } };
+      d.close();
+      return sub.result.session.permissionMode;
+    };
+    expect(await restored("sonnet", "auto")).toBe("auto");
+    expect(await restored("haiku", "dontAsk")).toBe("dontAsk");
+    expect(await restored("haiku", "auto")).toBe("default");
   });
 
   it("stores an uploaded file under its own name in a fresh folder and replies the path", async () => {
