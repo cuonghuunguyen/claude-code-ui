@@ -36,7 +36,8 @@ describe("searchFiles", () => {
   writeFileSync(join(dir, ".env.main"), "");
   const outside = mkdtempSync(join(tmpdir(), "outside-"));
   writeFileSync(join(outside, "main.secret"), "");
-  symlinkSync(outside, join(dir, "linked"));
+  // A junction on Windows: a directory symlink needs admin rights there (the type is ignored elsewhere).
+  symlinkSync(outside, join(dir, "linked"), "junction");
 
   it("returns paths relative to the directory, folders with a trailing slash", () => {
     expect(searchFiles(dir, "main").sort()).toEqual([".env.main", "src/deep/main.ts"]);

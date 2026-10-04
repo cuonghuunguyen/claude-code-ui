@@ -13,7 +13,8 @@ import { CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
-import { diffStats, editFiles, filePath, readRange, relPath, toolSummary } from "./tools.ts";
+import { relPath } from "./paths.ts";
+import { diffStats, editFiles, filePath, readRange, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 

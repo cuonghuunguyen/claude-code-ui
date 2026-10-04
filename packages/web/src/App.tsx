@@ -60,7 +60,7 @@ import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendin
 import { ContextGroup, CwdContext, SubagentGroup, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
-import { relPath } from "./tools.ts";
+import { joinPath, relPath } from "./paths.ts";
 import { FilesPanel } from "./files-panel.tsx";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionChanges } from "./changes.ts";
@@ -602,7 +602,7 @@ export function App() {
   const showSession = () => !wide(1024) && setPane("session");
   /** Opens a file of the shown session (path relative to its cwd) in the files panel. */
   const openInPanel = (p: string) => {
-    setOpenFile(`${shown!.cwd.replace(/\/$/, "")}/${p}`);
+    setOpenFile(joinPath(shown!.cwd, p));
     setPane("files");
     setPanel(true);
   };

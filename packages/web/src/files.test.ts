@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention } from "./files.ts";
+import { inDir } from "./paths.ts";
+import { diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -86,6 +87,10 @@ describe("selectionMention", () => {
   it("is @path#Lstart-end relative to cwd, for a selection across lines", () => {
     expect(selectionMention(at(doc, 5, 10), "/p/src/a.ts", "/p")).toBe("@src/a.ts#L2-3");
     expect(selectionMention(at(doc, 10, 5), "/p/src/a.ts", "/p")).toBe("@src/a.ts#L2-3");
+  });
+
+  it("a Windows path is relative to cwd without case, in forward slashes", () => {
+    expect(selectionMention(at(doc, 5, 10), "C:\\p\\src\\a.ts", "c:\\P")).toBe("@src/a.ts#L2-3");
   });
 
   it("is one line number for a selection inside a line", () => {

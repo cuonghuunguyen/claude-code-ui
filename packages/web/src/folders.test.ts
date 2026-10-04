@@ -17,6 +17,15 @@ describe("browse", () => {
     expect(browse("/sr", roots)).toEqual({ prefix: "/sr" });
     expect(browse("/home/user2/x", roots)).toEqual({ prefix: "/home/user2/x" });
   });
+
+  it("a Windows daemon: splits on either separator, a root matches without case", () => {
+    const win = ["C:\\Users\\me"];
+    expect(browse("C:\\Users\\me\\", win)).toEqual({ dir: "C:\\Users\\me", prefix: "" });
+    expect(browse("C:\\Users\\me\\proj\\cl", win)).toEqual({ dir: "C:\\Users\\me\\proj", prefix: "cl" });
+    expect(browse("c:\\users\\me/proj/cl", win)).toEqual({ dir: "c:\\users\\me/proj", prefix: "cl" });
+    expect(browse("C:\\Users\\other\\x", win)).toEqual({ prefix: "C:\\Users\\other\\x" });
+    expect(browse("C:\\x", ["C:\\"])).toEqual({ dir: "C:\\", prefix: "x" });
+  });
 });
 
 describe("matchFolders", () => {

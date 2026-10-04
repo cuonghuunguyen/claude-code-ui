@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
@@ -19,6 +19,8 @@ const added = (...cwds: string[]) => {
   return p;
 };
 
+// POSIX-only assertions (sh syntax, symlinks without admin rights) are skipped or swapped on Windows.
+const posix = process.platform !== "win32";
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
@@ -520,7 +522,7 @@ describe("daemon", () => {
   it("stores an uploaded file under its own name in a fresh folder and replies the path", async () => {
     const c = await client();
     const r = (await c.request({ type: "fs.upload", name: "../notes.txt", data: Buffer.from("hi").toString("base64") })) as { result: { path: string } };
-    expect(r.result.path).toMatch(/claude-ui-uploads\/u-[^/]+\/notes\.txt$/);
+    expect(r.result.path).toMatch(/claude-ui-uploads[\\/]u-[^\\/]+[\\/]notes\.txt$/);
     expect(readFileSync(r.result.path, "utf8")).toBe("hi");
     expect(await c.request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
   });
@@ -533,7 +535,7 @@ describe("daemon", () => {
     await c.request({ type: "session.prompt", sessionId: created.result.session.id, text: "read it" });
     const dirs = calls.find((o) => o.sessionId === created.result.session.id)!.additionalDirectories!;
     expect(dirs).toHaveLength(1);
-    expect(up.result.path.startsWith(`${dirs[0]}/`)).toBe(true);
+    expect(up.result.path.startsWith(`${dirs[0]}${sep}`)).toBe(true);
   });
 
   it("survives a frame above ws maxPayload: that socket closes with 1009, the daemon keeps answering", async () => {
@@ -601,7 +603,25 @@ describe("daemon", () => {
       if (!live) c.ws.close();
     });
 
-    it("opens a shell in a cwd inside the roots only", async () => {
+    // The tests above and below speak sh; on Windows the default shell is PowerShell (no SHELL that exists there).
+    it.runIf(!posix)("Windows: opens PowerShell in the cwd, keeps its scrollback for a new connection, drops it on exit", async () => {
+      const c = await client();
+      expect(await c.request({ type: "terminal.create", cwd: tmpdir(), cols: 80, rows: 24 })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+      const t = await create(c);
+      await c.request({ type: "terminal.attach", terminalId: t.id });
+      await c.request({ type: "terminal.input", terminalId: t.id, data: "(Get-Location).Path; echo \"win-$(40+2)\"\r" });
+      await c.waitFor(() => output(c.inbox, t.id).includes("win-42"));
+      expect(output(c.inbox, t.id)).toContain(realpathSync.native(webRoot));
+      c.ws.close();
+      const b = await client();
+      expect(((await b.request({ type: "terminal.attach", terminalId: t.id })) as { result: { buffer: string } }).result.buffer).toContain("win-42");
+      await b.request({ type: "terminal.input", terminalId: t.id, data: "exit\r" });
+      await b.waitFor((m) => m.type === "terminal.exit" && m.terminalId === t.id);
+      expect(await b.request({ type: "terminal.list", cwd: webRoot })).toMatchObject({ result: { terminals: [] } });
+      b.ws.close();
+    });
+
+    it.runIf(posix)("opens a shell in a cwd inside the roots only", async () => {
       const c = await client();
       expect(await c.request({ type: "terminal.create", cwd: tmpdir(), cols: 80, rows: 24 })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
       expect(await c.request({ type: "terminal.create", cwd: "relative", cols: 80, rows: 24 })).toMatchObject({ code: "cwd_not_allowed" });
@@ -613,7 +633,7 @@ describe("daemon", () => {
       await c.request({ type: "terminal.close", terminalId: t.id });
     });
 
-    it("numbers terminals per cwd, lists them, resizes, and drops one whose shell exits", async () => {
+    it.runIf(posix)("numbers terminals per cwd, lists them, resizes, and drops one whose shell exits", async () => {
       const c = await client();
       const a = await create(c);
       const b = await create(c);
@@ -630,7 +650,7 @@ describe("daemon", () => {
       expect(await c.request({ type: "terminal.input", terminalId: a.id, data: "x" })).toMatchObject({ code: "unknown_terminal" });
     });
 
-    it("keeps running after the connection drops; a new connection gets the scrollback, then live output", async () => {
+    it.runIf(posix)("keeps running after the connection drops; a new connection gets the scrollback, then live output", async () => {
       const a = await client();
       const t = await create(a);
       await a.request({ type: "terminal.attach", terminalId: t.id });
@@ -657,7 +677,8 @@ describe("daemon", () => {
       await b.request({ type: "terminal.close", terminalId: t.id });
     });
 
-    it("caps terminals per connection and per daemon: too_many_terminals", async () => {
+    // 32 ConPTY shells start in ~20 s on Windows alone, longer under the parallel suite.
+    it("caps terminals per connection and per daemon: too_many_terminals", { timeout: posix ? 30_000 : 120_000 }, async () => {
       const cs = await Promise.all([client(), client(), client(), client(), client()]);
       const ids: string[] = [];
       for (const c of cs.slice(0, 4)) for (let i = 0; i < MAX_TERMINALS_PER_CLIENT; i++) ids.push((await create(c)).id);
@@ -670,7 +691,7 @@ describe("daemon", () => {
       for (const id of ids) await cs[0]!.request({ type: "terminal.close", terminalId: id });
     });
 
-    it("rejects terminal.input above 64 KiB and a size above 1000", async () => {
+    it.runIf(posix)("rejects terminal.input above 64 KiB and a size above 1000", async () => {
       const c = await client();
       const t = await create(c);
       expect(await c.request({ type: "terminal.input", terminalId: t.id, data: "x".repeat(MAX_TERMINAL_INPUT_BYTES + 1) })).toMatchObject({ code: "too_large" });
@@ -687,7 +708,7 @@ describe("daemon", () => {
       await c.request({ type: "terminal.close", terminalId: t.id });
     });
 
-    it("the shell env has no CLAUDE_UI_* and no daemon PORT, the rest of the user's env stays", async () => {
+    it.runIf(posix)("the shell env has no CLAUDE_UI_* and no daemon PORT, the rest of the user's env stays", async () => {
       Object.assign(process.env, { CLAUDE_UI_ROOTS: "/secret-roots", PORT: "5999", GH33_KEEP: "kept-value" });
       try {
         const c = await client();
@@ -745,8 +766,9 @@ describe("daemon", () => {
   });
 
   it("does not offer a symlink whose real path is outside the roots as an @-mention", async () => {
-    symlinkSync(mkdtempSync(join(tmpdir(), "outside-")), join(webRoot, "linkedout"));
-    symlinkSync(join(webRoot, "proj"), join(webRoot, "linkedin"));
+    // Junctions on Windows: a directory symlink needs admin rights there (the type is ignored elsewhere).
+    symlinkSync(mkdtempSync(join(tmpdir(), "outside-")), join(webRoot, "linkedout"), "junction");
+    symlinkSync(join(webRoot, "proj"), join(webRoot, "linkedin"), "junction");
     const c = await client();
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "linked" })).toMatchObject({ result: { paths: ["linkedin"] } });
   });
@@ -778,9 +800,10 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.read", path: outside })).toMatchObject({ code: "path_not_allowed" });
     expect(await c.request({ type: "fs.write", path: outside, content: "x" })).toMatchObject({ code: "path_not_allowed" });
     expect(readFileSync(outside, "utf8")).toBe("secret");
-    // A symlink inside a root pointing outside it is outside.
-    symlinkSync(outside, join(webRoot, "proj", "link.txt"));
-    expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "link.txt") })).toMatchObject({
+    // A symlink inside a root pointing outside it is outside. Windows: a junction to its folder (a file symlink needs admin rights).
+    const link = posix ? join(webRoot, "proj", "link.txt") : join(webRoot, "proj", "linkdir", "secret.txt");
+    symlinkSync(posix ? outside : dirname(outside), posix ? link : dirname(link), posix ? "file" : "junction");
+    expect(await c.request({ type: "fs.read", path: link })).toMatchObject({
       code: "path_not_allowed",
     });
     expect(await c.request({ type: "fs.read", path: join(webRoot, "proj") })).toMatchObject({ code: "not_a_file" });

@@ -2,6 +2,7 @@
 import { Compartment, EditorState, Text, type TransactionSpec } from "@codemirror/state";
 import type { FsReadResult } from "@claude-ui/protocol";
 import { mentionPath } from "./mentions.ts";
+import { isWinPath, relPath } from "./paths.ts";
 
 export type Tab = {
   path: string;
@@ -44,7 +45,6 @@ export const saved = (t: Tab, content: string, mtime: number): Tab => ({
   error: undefined,
 });
 
-export const inDir = (path: string, dir: string) => path === dir || path.startsWith(dir.endsWith("/") ? dir : `${dir}/`);
 
 // CodeMirror splits on any line break and joins with "\n" unless the separator is set: a CRLF file would turn dirty and save as LF.
 const separator = new Compartment();
@@ -70,7 +70,8 @@ export const docText = (state: EditorState) => state.sliceDoc();
  * The SDK attaches only the range for `#L…` (`#start-end` attaches the whole file), and a quoted path needs the range inside the quotes.
  */
 export function selectionMention(state: EditorState, path: string, cwd: string) {
-  const rel = inDir(path, cwd) && path !== cwd ? path.slice(cwd.replace(/\/$/, "").length + 1) : path;
+  // A Windows path in "/": the CLI resolves either, and "\" would read as an escape in a quoted mention.
+  const rel = isWinPath(path) ? relPath(path, cwd).replace(/\\/g, "/") : relPath(path, cwd);
   const { from, to, empty } = state.selection.main;
   if (empty) return mentionPath(rel);
   const start = state.doc.lineAt(from);

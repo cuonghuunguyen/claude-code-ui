@@ -1,14 +1,15 @@
 // Open project folder browser: the input is a path inside a root; its last segment filters the folders listed (type-ahead).
 import type { FsEntry } from "@claude-ui/protocol";
+import { inDir, isWinPath, withSep } from "./paths.ts";
 
-const inside = (path: string, root: string) => path === root || path.startsWith(root.endsWith("/") ? root : `${root}/`);
-
-/** The directory to list (`dir`, absent = the roots) and the text that filters its folders. */
+/** The directory to list (`dir`, absent = the roots) and the text that filters its folders. A Windows path also splits on "\\". */
 export function browse(input: string, roots: string[]): { dir?: string; prefix: string } {
-  if (roots.some((r) => input === r || input === `${r}/`)) return { dir: input.replace(/(.)\/$/, "$1"), prefix: "" };
-  const cut = input.lastIndexOf("/");
-  const dir = input.slice(0, cut) || "/";
-  if (cut < 0 || !roots.some((r) => inside(dir, r))) return { prefix: input };
+  const win = isWinPath(input);
+  if (roots.some((r) => input === r || input === withSep(r))) return { dir: input.replace(win ? /([^:])[\\/]$/ : /(.)\/$/, "$1"), prefix: "" };
+  const cut = win ? Math.max(input.lastIndexOf("/"), input.lastIndexOf("\\")) : input.lastIndexOf("/");
+  // A drive root keeps its separator ("C:\\").
+  const dir = input.slice(0, win && cut === 2 ? 3 : cut) || "/";
+  if (cut < 0 || !roots.some((r) => inDir(dir, r))) return { prefix: input };
   return { dir, prefix: input.slice(cut + 1) };
 }
 

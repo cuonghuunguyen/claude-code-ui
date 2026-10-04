@@ -1,4 +1,5 @@
 // Tabs bar (docs/spec.md "Layout"): open sessions as browser-like tabs, plus one new-session tab. Order persists per browser.
+import { baseName } from "./paths.ts";
 
 /** Id of the new-session tab; every other tab id is a session id. */
 export const NEW_TAB = "new";
@@ -67,7 +68,7 @@ export const runFromHash = (hash: string) => {
 };
 export const runHash = (id: string, run?: string) => tabHash(id) + (run ? `/agent/${encodeURIComponent(run)}` : "");
 
-export const projectName = (cwd: string) => cwd.split("/").filter(Boolean).at(-1) ?? cwd;
+export const projectName = baseName;
 
 const KEY = "claude-ui.tabs";
 

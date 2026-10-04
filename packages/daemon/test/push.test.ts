@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Event, Part } from "@claude-ui/protocol";
 import { createNotifier, createPush, fitPayload, MAX_PAYLOAD_BYTES } from "../src/push.ts";
 
+// File modes are POSIX: on Windows chmod only sets the read-only flag.
+const posix = process.platform !== "win32";
+
 let seq = 0;
 const ev = (part: Part, sessionId = "s1"): Event => ({ type: "event", sessionId, seq: ++seq, part });
 const state = (s: "idle" | "running" | "needs_input" | "error", sessionId = "s1") =>
@@ -123,7 +126,7 @@ describe("createPush", () => {
     const dir = mkdtempSync(join(tmpdir(), "push-"));
     const a = createPush({ dir });
     expect(a.publicKey).toMatch(/^[A-Za-z0-9_-]{80,}$/);
-    expect(statSync(join(dir, "vapid.json")).mode & 0o777).toBe(0o600);
+    if (posix) expect(statSync(join(dir, "vapid.json")).mode & 0o777).toBe(0o600);
     expect(createPush({ dir }).publicKey).toBe(a.publicKey);
   });
 
@@ -136,7 +139,7 @@ describe("createPush", () => {
     expect(p.subscribe({ endpoint: "https://x" })).toBe(false);
     expect(p.subscribe(null)).toBe(false);
     expect(JSON.parse(readFileSync(join(dir, "push-subscriptions.json"), "utf8"))).toEqual([sub()]);
-    expect(statSync(join(dir, "push-subscriptions.json")).mode & 0o777).toBe(0o600);
+    if (posix) expect(statSync(join(dir, "push-subscriptions.json")).mode & 0o777).toBe(0o600);
   });
 
   it("sends the encrypted payload to every subscription with VAPID and drops gone ones (404/410)", async () => {

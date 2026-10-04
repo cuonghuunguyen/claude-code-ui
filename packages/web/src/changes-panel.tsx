@@ -11,8 +11,8 @@ import type { SessionView } from "./store.ts";
 import { useDark } from "./theme.ts";
 import { DIFF_OPTIONS, InputDiff } from "./tool-card.tsx";
 import { FileIcon } from "./file-icon.tsx";
-import { inDir } from "./files.ts";
-import { filePath, relPath } from "./tools.ts";
+import { inDir, isWinPath, relPath } from "./paths.ts";
+import { filePath } from "./tools.ts";
 
 type Client = ReturnType<typeof connect>;
 type DiffStyle = "unified" | "split";
@@ -56,7 +56,8 @@ function fileTree(rows: Row[], cwd: string): Folder {
     const { dir } = filePath(r.change.path, cwd);
     // A file outside cwd keeps its absolute directory as one top-level folder.
     let at = root;
-    for (const name of !dir ? [] : dir.startsWith("/") ? [dir] : dir.split("/")) {
+    const win = isWinPath(r.change.path);
+    for (const name of !dir ? [] : dir.startsWith("/") || (win && isWinPath(dir)) ? [dir] : dir.split(win ? /[\\/]/ : "/")) {
       let next = at.folders.find((f) => f.name === name);
       if (!next) at.folders.push((next = { name, path: at.path ? `${at.path}/${name}` : name, folders: [], files: [] }));
       at = next;

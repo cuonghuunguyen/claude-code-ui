@@ -1,5 +1,6 @@
 // Tool knowledge for tool cards (docs/spec.md "Session view UX").
 import { parseDiffFromFile } from "@pierre/diffs";
+import { isWinPath, relPath } from "./paths.ts";
 
 /** Read/search tools; consecutive calls merge into one context group. */
 export const CONTEXT_TOOLS = new Set(["Read", "Grep", "Glob"]);
@@ -16,16 +17,10 @@ export function toolSummary(input: unknown): string {
   return typeof value === "string" ? (value.split("\n")[0] ?? "") : "";
 }
 
-/** `path` relative to `cwd` when inside it, else unchanged. */
-export function relPath(path: string, cwd: string) {
-  const root = cwd.replace(/\/$/, "");
-  return root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
-}
-
 /** File name and directory for a card header; the directory relative to `cwd` when the file is inside it. */
 export function filePath(path: string, cwd: string) {
   const rel = relPath(path, cwd);
-  const i = rel.lastIndexOf("/");
+  const i = isWinPath(path) ? Math.max(rel.lastIndexOf("/"), rel.lastIndexOf("\\")) : rel.lastIndexOf("/");
   return { name: rel.slice(i + 1), dir: i < 0 ? "" : rel.slice(0, i) || "/" };
 }
 

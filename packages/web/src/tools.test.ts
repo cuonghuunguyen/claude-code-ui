@@ -114,4 +114,10 @@ describe("filePath", () => {
     expect(filePath("/wx/a.ts", "/w")).toEqual({ name: "a.ts", dir: "/wx" });
     expect(filePath("/a.ts", "")).toEqual({ name: "a.ts", dir: "/" });
   });
+
+  it("a Windows path splits on either separator and matches cwd without case", () => {
+    expect(filePath("C:\\w\\src\\lib\\a.ts", "C:\\w")).toEqual({ name: "a.ts", dir: "src\\lib" });
+    expect(filePath("c:/w/src/a.ts", "C:\\w")).toEqual({ name: "a.ts", dir: "src" });
+    expect(filePath("D:\\x\\a.ts", "C:\\w")).toEqual({ name: "a.ts", dir: "D:\\x" });
+  });
 });
