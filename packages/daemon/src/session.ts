@@ -123,8 +123,8 @@ export class Session {
       }
       if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
     }
-    // No query runs: a run without its end in the transcript (the CLI exited mid-run) is no longer running.
-    for (const part of this.adapter.endRuns()) this.emit(part);
+    // No query runs: a call or run without its end in the transcript (the CLI exited mid-run) is no longer running.
+    for (const part of this.adapter.endCalls()) this.emit(part);
     this.setState("idle");
     void this.refreshUsage();
   }
@@ -464,10 +464,10 @@ export class Session {
       this.emit({ type: "raw", id: randomUUID(), message: { error: String(err) } });
       this.setState("error");
     } finally {
-      // Nothing waits for these answers any more, and no run of this query runs.
+      // Nothing waits for these answers any more, and no call of this query runs.
       for (const id of [...this.pending.keys()]) this.cancel(id, "Session ended");
       this.tasks.clear();
-      if (generation === this.generation) for (const part of this.adapter.endRuns()) this.emit(part);
+      if (generation === this.generation) for (const part of this.adapter.endCalls()) this.emit(part);
     }
   }
 

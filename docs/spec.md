@@ -58,7 +58,7 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 ### Event log and sequence numbers
 
 - Every event has a per-session, monotonically increasing `seq`. The log is in memory only.
-- History before the daemon started is rebuilt from `getSessionMessages()` through the adapter, followed by every subagent run transcript (`listSubagents()` / `getSubagentMessages()`, `<session>/subagents/agent-<agentId>.jsonl`; each message names the Agent call that started its run in `parent_tool_use_id`), so restored and terminal CLI sessions have full subagent timelines. A run's prompt is no checkpoint. The live query resumes on the same adapter, so a later task notification finds a restored run. A run still running at the end of the restore (no `<task-notification>`: its CLI exited mid-run) ends `stopped` at its last transcript message: no query runs it.
+- History before the daemon started is rebuilt from `getSessionMessages()` through the adapter, followed by every subagent run transcript (`listSubagents()` / `getSubagentMessages()`, `<session>/subagents/agent-<agentId>.jsonl`; each message names the Agent call that started its run in `parent_tool_use_id`), so restored and terminal CLI sessions have full subagent timelines. A run's prompt is no checkpoint. The live query resumes on the same adapter, so a later task notification finds a restored run. A run or call still running at the end of the restore (no `<task-notification>` or `tool_result`: its CLI exited mid-run) ends `stopped`, a run at its last transcript message: no query runs it.
 - Each daemon start has a `logEpoch`. `session.subscribe {sessionId, sinceSeq, logEpoch}`: same epoch → replay after `sinceSeq`; different epoch → client clears its store and gets a full replay. The reply carries the current `SessionInfo` and its `seq`: replayed model/mode/effort changes up to that `seq` are older and do not override it.
 - Clients drop events with `seq` ≤ the last applied one.
 - State changes, permission requests, questions and their settlement are all logged events, so replay alone restores the full view.
@@ -161,7 +161,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | `user_text` | `id`, `text`, `images[]` | User bubble, with copy and rewind actions (shown on hover or focus) |
 | `assistant_text` | `id`, `text`, `streaming` | Markdown, streamed at a steady pace |
 | `thinking` | `id`, `text` | Not shown; a "Thinking" row shows while the turn runs |
-| `tool_call` | `toolUseId`, `tool`, `input`, `status` (pending / running / done / error / denied / stopped; stopped: a stopped background task or subagent run) | Tool card, by tool type |
+| `tool_call` | `toolUseId`, `tool`, `input`, `status` (pending / running / done / error / denied / stopped; stopped: a stopped background task or subagent run, or a call whose query ended without its result) | Tool card, by tool type |
 | `tool_result` | `toolUseId`, `output`, `isError`, `original?` (file before the first Edit/Write of a path, live only) | Merged into its tool card; `original` feeds the changes tab |
 | `permission_request` | `requestId`, `toolUseId`, `tool`, `input`, `suggestions[]`, `settled`, `decision?` | Permission panel; in the timeline its tool card is held expanded with status "Awaiting approval" |
 | `question` | `requestId`, `toolUseId`, `questions[]`, `settled`, `answers?` (absent = cancelled) | Question panel |
@@ -182,7 +182,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 - A `tool_result` updates its `tool_call` status; grouped by `toolUseId`.
 - Tool rendering keyed on `tool`: `Bash`, `Edit`/`Write` (diff), `Read`, `Grep`/`Glob`, `TodoWrite`, `Task` (subagent), anything else (JSON).
 - The daemon enables TodoWrite (`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, `CLAUDE_CODE_ENABLE_TASKS=0`; off by default on current models) and `forwardSubagentText`.
-- A background subagent ends with `task_notification`, not with its placeholder `tool_result`; `stopped` ends it as `stopped` (the error `tool_result` after a stop keeps it so), `failed` as `error`. When the live query ends (CLI exited), its runs still running end `stopped` and the stop map is cleared. A restored one ends with the transcript's `<task-notification>` user text; a later notice of a run that resumed (task ID only) moves its `endedAt`.
+- A background subagent ends with `task_notification`, not with its placeholder `tool_result`; `stopped` ends it as `stopped` (the error `tool_result` after a stop keeps it so), `failed` as `error`. When the live query ends (CLI exited), its runs and calls still running end `stopped` and the stop map is cleared. A restored one ends with the transcript's `<task-notification>` user text; a later notice of a run that resumed (task ID only) moves its `endedAt`.
 - A subagent run's `startedAt` / `endedAt` (ms) are the transcript timestamps of its Agent call and of the message that ends it, live the daemon clock; the first part of a call fixes `startedAt`. Nested runs (spawn depth up to 3, SDK default) nest by the same `parentId` rule.
 - The same adapter converts live SDK messages and `getSessionMessages()` history.
 - Fixture tests recorded from real SDK sessions.

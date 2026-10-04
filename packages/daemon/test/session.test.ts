@@ -921,14 +921,17 @@ describe("Session subagent runs", () => {
     ]),
     msg("user", 3, "Sweep the widgets", "toolu_sweep"),
     msg("assistant", 40, [{ type: "text", text: "Looking at widgets" }], "toolu_sweep"),
+    msg("assistant", 41, [{ type: "tool_use", id: "toolu_grep", name: "Grep", input: { pattern: "rowHeight" } }], "toolu_sweep"),
   ];
   const run = (events: Event[]) => lastPart(events, "toolu_sweep") as Extract<Event["part"], { type: "subagent" }>;
 
-  it("a restored run without a task notification ends stopped at its last transcript entry; nothing to stop", async () => {
+  it("a restored run without a task notification ends stopped at its last transcript entry, with its open calls; nothing to stop", async () => {
     const s = Session.restore(randomUUID(), "/tmp", orphan, { query: fakeQuery as never });
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
-    expect(run(events)).toMatchObject({ status: "stopped", startedAt: Date.parse(at(1)), endedAt: Date.parse(at(40)) });
+    expect(run(events)).toMatchObject({ status: "stopped", startedAt: Date.parse(at(1)), endedAt: Date.parse(at(41)) });
+    // Its call without a result does not spin either.
+    expect(lastPart(events, "toolu_grep")).toMatchObject({ type: "tool_call", status: "stopped" });
     expect(await s.stopSubagent("toolu_sweep")).toBe(false);
   });
 

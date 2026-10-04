@@ -310,16 +310,16 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     return [next];
   }
 
-  /** Ends every subagent run still pending or running as stopped, at its last message: no query runs it any more. */
-  function endRuns(): Part[] {
+  /** Ends every call still pending or running as stopped (a run at its last message): no query runs it any more. */
+  function endCalls(): Part[] {
     return [...calls.values()].flatMap((c) => {
-      if (c.type !== "subagent" || ENDED.has(c.status)) return [];
-      const next = { ...c, status: "stopped" as const, endedAt: lastSeen.get(c.id) ?? c.startedAt };
+      if (ENDED.has(c.status)) return [];
+      const next: Call = c.type === "subagent" ? { ...c, status: "stopped", endedAt: lastSeen.get(c.id) ?? c.startedAt } : { ...c, status: "stopped" };
       calls.set(c.id, next);
       return [next];
     });
   }
 
   /** deny: marks a tool call denied now; its later tool_result keeps status denied. */
-  return { convert, commands, deny, edit, endRuns };
+  return { convert, commands, deny, edit, endCalls };
 }
