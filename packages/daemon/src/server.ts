@@ -326,7 +326,7 @@ export function createDaemon(opts: {
     },
     onChanged: (cwd, reload) => {
       config.dropAll();
-      broadcast({ type: "config.changed", kind: "plugins", cwd, ...(reload?.failed.length && { reloadFailed: reload.failed }) });
+      broadcast({ type: "config.changed", kind: "plugins", cwd, ...(reload && { reloadFailed: reload.failed }) });
     },
   });
   const root = resolve(opts.webRoot);

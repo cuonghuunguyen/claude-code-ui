@@ -1,7 +1,7 @@
 // Manage Plugins dialog (docs/spec.md "Config dialogs: plugins", same as the VS Code extension 2.1.283): `claude plugin …` through
 // the CLI runner in the project cwd; after each write the daemon reloads plugins in every live query and broadcasts config.changed.
 import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type {
   AvailablePlugin,
   ClientMessage,
@@ -20,11 +20,16 @@ const SCOPES: ConfigScope[] = ["user", "project", "local"];
 const UPDATE_SCOPES = ["user", "project", "local", "managed"];
 /** Marketplace part of ids the extension never updates: `--plugin-dir` plugins, skills folders, claude.ai synced plugins, builtins. */
 const NOT_UPDATABLE = ["inline", "skills-dir", "synced", "builtin"];
+/** Install, update and marketplace add/update clone from git: 5 minutes, not the CLI default of 30 s. */
+const FETCH_TIMEOUT_MS = 5 * 60_000;
 const OFFICIAL_REPO = "anthropics/claude-plugins-official";
 
 type RawInstalled = { id: string; version?: string; scope: string; enabled?: boolean; installPath?: string; projectPath?: string | null };
 type RawAvailable = { pluginId: string; name: string; description?: string; marketplaceName: string; source?: unknown; installCount?: number };
 type RawMarketplace = { name: string; source: string; repo?: string; url?: string; path?: string; package?: string };
+
+/** `user:token@` of every URL in `text`: a marketplace URL may carry credentials, and they must not reach the browser. */
+const redact = (text: string) => text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi, "$1");
 
 const marketplaceOf = (id: string) => (id.includes("@") ? id.slice(id.lastIndexOf("@") + 1) : undefined);
 const official = (m: RawMarketplace) => m.source === "github" && m.repo === OFFICIAL_REPO;
@@ -62,11 +67,12 @@ const serversOf = (v: Record<string, unknown> | undefined) => {
 export function manifestOf(installPath: string | undefined) {
   if (!installPath) return {};
   const manifest = readJson(join(installPath, ".claude-plugin", "plugin.json"));
+  const inside = (f: string) => f.startsWith(resolve(installPath) + sep);
   const decl = manifest?.mcpServers;
   const files = typeof decl === "string" ? [decl] : Array.isArray(decl) ? decl.filter((x) => typeof x === "string") : [];
   const names = new Set([
     ...(decl && typeof decl === "object" && !Array.isArray(decl) ? Object.keys(decl) : []),
-    ...files.flatMap((f) => serversOf(readJson(resolve(installPath, f)))),
+    ...files.map((f) => resolve(installPath, f)).filter(inside).flatMap((f) => serversOf(readJson(f))),
     ...serversOf(readJson(join(installPath, ".mcp.json"))),
   ]);
   return {
@@ -114,7 +120,7 @@ const toMarketplace = (m: RawMarketplace): MarketplaceInfo => ({
   name: m.name,
   source: m.source,
   ...(m.repo !== undefined && { repo: m.repo }),
-  ...(m.url !== undefined && { url: m.url }),
+  ...(m.url !== undefined && { url: redact(m.url) }),
   ...(m.path !== undefined && { path: m.path }),
   ...(m.package !== undefined && { package: m.package }),
   official: official(m),
@@ -135,7 +141,7 @@ function resultLine(stdout: string): { outcome?: string; message?: string; failu
 /** The CLI's error: the `--json` message, else the first stderr line without its "✘ Failed to … plugin "x": " prefix. */
 function errorOf(r: { code: number; stdout: string; stderr: string }) {
   const line = r.stderr.trim().split("\n")[0]?.trim() ?? "";
-  return resultLine(r.stdout)?.message || line.replace(/^[✘✗×]\s*Failed to [^:]*:\s*/, "") || `claude exited with code ${r.code}`;
+  return redact((resultLine(r.stdout)?.message || line.replace(/^[✘✗×]\s*Failed to [^:]*:\s*/, "") || `claude exited with code ${r.code}`).replace(/^[✘✗×]\s*/, ""));
 }
 
 /** The extension's update failure kinds (`bX5`): the CLI's failureCode first, else its message patterns. */
@@ -188,8 +194,8 @@ export function createPlugins(opts: { cli: CliRunner; reload: () => Promise<Relo
   };
   const marketplaces = (cwd: string): Promise<RawMarketplace[]> => json(["plugin", "marketplace", "list", "--json"], cwd);
   /** Runs a write; then reloads (when it changes what sessions load) and tells every connection. */
-  async function write(args: string[], cwd: string, reload: boolean) {
-    const r = await opts.cli(args, cwd);
+  async function write(args: string[], cwd: string, reload: boolean, timeoutMs?: number) {
+    const r = await opts.cli(args, cwd, undefined, timeoutMs);
     if (r.code !== 0) throw new ConfigError("cli_failed", errorOf(r));
     const result = reload ? await opts.reload() : undefined;
     opts.onChanged(cwd, result);
@@ -208,7 +214,7 @@ export function createPlugins(opts: { cli: CliRunner; reload: () => Promise<Relo
         const id = arg(msg.pluginId, "pluginId");
         if (!SCOPES.includes(msg.scope)) throw new ConfigError("bad_request", "scope must be user, project or local");
         try {
-          return { reload: await write(["plugin", "install", "--scope", msg.scope, "--json", "-y", "--", id], cwd, true) };
+          return { reload: await write(["plugin", "install", "--scope", msg.scope, "--json", "-y", "--", id], cwd, true, FETCH_TIMEOUT_MS) };
         } catch (e) {
           // The extension's notices for a plugin that is installed already or no longer in its marketplace.
           const name = id.includes("@") ? id.slice(0, id.lastIndexOf("@")) : id;
@@ -231,7 +237,7 @@ export function createPlugins(opts: { cli: CliRunner; reload: () => Promise<Relo
         if (!UPDATE_SCOPES.includes(msg.scope)) throw new ConfigError("bad_request", "scope must be user, project, local or managed");
         let r;
         try {
-          r = await opts.cli(["plugin", "update", "--scope", msg.scope, "--json", "-y", "--", id], cwd);
+          r = await opts.cli(["plugin", "update", "--scope", msg.scope, "--json", "-y", "--", id], cwd, undefined, FETCH_TIMEOUT_MS);
         } catch (e) {
           if (e instanceof ConfigError && e.code === "cli_timeout") return { outcome: "failed", kind: "timeout", message: e.message } satisfies PluginUpdateResult;
           throw e;
@@ -255,13 +261,13 @@ export function createPlugins(opts: { cli: CliRunner; reload: () => Promise<Relo
         opts.restart(arg(msg.sessionId, "sessionId"));
         return {};
       case "marketplace.add":
-        await write(["plugin", "marketplace", "add", "--", arg(msg.source, "source")], cwd, false);
+        await write(["plugin", "marketplace", "add", "--", arg(msg.source, "source")], cwd, false, FETCH_TIMEOUT_MS);
         return {};
       case "marketplace.remove":
         // Its plugins are uninstalled with it.
         return { reload: await write(["plugin", "marketplace", "remove", "--", arg(msg.name, "name")], cwd, true) };
       case "marketplace.update":
-        await write(["plugin", "marketplace", "update", "--", arg(msg.name, "name")], cwd, false);
+        await write(["plugin", "marketplace", "update", "--", arg(msg.name, "name")], cwd, false, FETCH_TIMEOUT_MS);
         return {};
     }
   }

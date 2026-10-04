@@ -42,6 +42,7 @@ import { choose, dialogOf, matchCommands, withDialogCommands, type DialogName } 
 import { McpDialog } from "./mcp-dialog.tsx";
 import { SkillsDialog } from "./skills-dialog.tsx";
 import { PluginsDialog } from "./plugins-dialog.tsx";
+import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
@@ -347,7 +348,7 @@ export function App() {
       onPlanUsage: setPlan,
       onConfigChanged: (m) => {
         setConfigChanged((c) => ({ ...c, [m.cwd]: (c[m.cwd] ?? 0) + 1 }));
-        if (m.reloadFailed) setReloadFailed((f) => new Set([...f, ...m.reloadFailed!]));
+        setReloadFailed((f) => nextReloadFailed(f, m.reloadFailed));
       },
       onOpen: () => {
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.

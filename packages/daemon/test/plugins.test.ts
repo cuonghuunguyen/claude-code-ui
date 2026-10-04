@@ -9,7 +9,8 @@ import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PluginsListResult, ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
-import { failureKind } from "../src/plugins.ts";
+import { failureKind, manifestOf } from "../src/plugins.ts";
+import { timeoutMessage } from "../src/config.ts";
 import { fakeQuery } from "./fake-query.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
@@ -29,11 +30,13 @@ const LIST = fixture("list-available.json");
 const MARKETS = fixture("marketplace-list.json");
 
 const cliCalls: { args: string[]; cwd: string }[] = [];
+/** The timeout each CLI call asked for (undefined: the runner's default), parallel to `cliCalls`. */
+const timeouts: (number | undefined)[] = [];
 /** Answer per first args joined ("plugin list", "plugin update", …); default success with no output. */
 const answers = new Map<string, { code: number; stdout: string; stderr: string }>();
 const answer = (args: string[]) => {
   if (args.join(" ") === "plugin list --json --available") return { code: 0, stdout: LIST, stderr: "" };
-  if (args.join(" ") === "plugin marketplace list --json") return { code: 0, stdout: MARKETS, stderr: "" };
+  if (args.join(" ") === "plugin marketplace list --json") return answers.get("plugin marketplace list") ?? { code: 0, stdout: MARKETS, stderr: "" };
   return answers.get(args.slice(0, 2).join(" ")) ?? answers.get(args.slice(0, 3).join(" ")) ?? { code: 0, stdout: "", stderr: "" };
 };
 
@@ -67,7 +70,7 @@ const http = createDaemon({
   roots: [webRoot, project],
   query: pluginQuery as never,
   token,
-  cli: async (args, cwd) => (cliCalls.push({ args, cwd }), { ...answer(args) }),
+  cli: async (args, cwd, _stdin, timeoutMs) => (cliCalls.push({ args, cwd }), timeouts.push(timeoutMs), { ...answer(args) }),
 });
 await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
 const { port } = http.address() as AddressInfo;
@@ -134,6 +137,28 @@ describe("plugins.list", () => {
     c.ws.close();
   });
 
+  it("redacts the user and password of a marketplace URL before it reaches the browser", async () => {
+    const c = await client();
+    const marketUrl = "https://octocat:ghp_secret123@git.example.com/org/market.git";
+    const markets = JSON.parse(MARKETS);
+    markets.push({ name: "private", source: "git", url: marketUrl, installLocation: "/home/me/.claude/plugins/marketplaces/private" });
+    answers.set("plugin marketplace list", { code: 0, stdout: JSON.stringify(markets), stderr: "" });
+    try {
+      for (const msg of [{ type: "plugins.list" }, { type: "marketplace.list" }]) {
+        const raw = JSON.stringify((await c.request({ ...msg, cwd: project })).result);
+        expect(raw).not.toContain("ghp_secret123");
+        expect(raw).not.toContain("octocat");
+        expect(raw).toContain("https://git.example.com/org/market.git");
+      }
+      // A CLI error that quotes the URL is redacted too.
+      answers.set("plugin marketplace update", { code: 1, stdout: "", stderr: `✘ Failed to update marketplace: Failed to clone ${marketUrl}` });
+      expect(await c.request({ type: "marketplace.update", cwd: project, name: "private" })).toMatchObject({ type: "error", message: "Failed to clone https://git.example.com/org/market.git" });
+    } finally {
+      answers.clear();
+    }
+    c.ws.close();
+  });
+
   it("reports the CLI's error and refuses a cwd outside the roots", async () => {
     const c = await client();
     expect(await c.request({ type: "plugins.list", cwd: "/etc" })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
@@ -141,6 +166,9 @@ describe("plugins.list", () => {
     expect(await c.request({ type: "plugins.uninstall", cwd: project, pluginId: "x@y" })).toMatchObject({ type: "error", message: 'Plugin "x@y" not found in installed plugins' });
     answers.set("plugin marketplace add", { code: 1, stdout: "", stderr: "✘ Failed to add marketplace: Path does not exist: /nope\nmore" });
     expect(await c.request({ type: "marketplace.add", cwd: project, source: "/nope" })).toMatchObject({ type: "error", message: "Path does not exist: /nope" });
+    // A second glyph inside the message is dropped too (recorded: `marketplace add "nope:/bad source"`).
+    answers.set("plugin marketplace add", { code: 1, stdout: "", stderr: "✘ Failed to add marketplace: ✘ Invalid marketplace source format" });
+    expect(await c.request({ type: "marketplace.add", cwd: project, source: "nope:/bad source" })).toMatchObject({ type: "error", message: "Invalid marketplace source format" });
     answers.set("plugin install", { code: 1, stdout: "", stderr: '✘ Failed to install plugin "nope@ponytail": Plugin "nope" not found in marketplace "ponytail"' });
     expect(await c.request({ type: "plugins.install", cwd: project, pluginId: "nope@ponytail", scope: "local" })).toMatchObject({ type: "error", message: 'Plugin "nope" not found in the marketplace.' });
     answers.clear();
@@ -174,7 +202,8 @@ describe("plugin writes", () => {
       expect(reloads.sort()).toEqual([one, two].sort());
       expect(r.result).toEqual({ reload: { reloaded: 2, failed: [], errorCount: 2 } });
       await b.waitFor((m) => m.type === "config.changed");
-      expect(b.inbox).toContainEqual({ type: "config.changed", kind: "plugins", cwd: project });
+      // A reload that failed nowhere says so: every client clears the restart banner of sessions that reloaded.
+      expect(b.inbox).toContainEqual({ type: "config.changed", kind: "plugins", cwd: project, reloadFailed: [] });
     }
     // The reloaded command list reaches the session as its commands part.
     expect(a.inbox.some((m) => m.type === "event" && m.sessionId === one && m.part.type === "commands" && m.part.commands.some((x) => x.name === "lazy"))).toBe(true);
@@ -214,6 +243,42 @@ describe("plugin writes", () => {
     expect(await a.request({ type: "plugins.restart", cwd: project, sessionId: "nope" })).toMatchObject({ type: "error", code: "not_found" });
     a.ws.close();
     b.ws.close();
+  });
+});
+
+describe("manifestOf", () => {
+  it("reads MCP server files only inside the install path", () => {
+    const outside = join(pluginsDir, "outside.json");
+    write(outside, { mcpServers: { leaked: {} } });
+    write(join(pluginsDir, "inner/.claude-plugin/plugin.json"), { mcpServers: ["./servers.json", "../outside.json", "/etc/passwd"] });
+    write(join(pluginsDir, "inner/servers.json"), { mcpServers: { fine: {} } });
+    expect(manifestOf(join(pluginsDir, "inner")).mcpServers).toEqual(["fine"]);
+  });
+});
+
+describe("CLI timeouts", () => {
+  it("gives the commands that fetch from git 5 minutes and the quick ones the default", async () => {
+    const c = await client();
+    const FIVE_MINUTES = 5 * 60_000;
+    const cases: [object, number | undefined][] = [
+      [{ type: "plugins.list" }, undefined],
+      [{ type: "plugins.setEnabled", pluginId: "a@b", enabled: true }, undefined],
+      [{ type: "plugins.install", pluginId: "a@b", scope: "user" }, FIVE_MINUTES],
+      [{ type: "plugins.update", pluginId: "a@b", scope: "user" }, FIVE_MINUTES],
+      [{ type: "marketplace.add", source: "owner/repo" }, FIVE_MINUTES],
+      [{ type: "marketplace.update", name: "ponytail" }, FIVE_MINUTES],
+    ];
+    for (const [msg, ms] of cases) {
+      timeouts.length = 0;
+      await c.request({ ...msg, cwd: project });
+      expect(timeouts.at(-1), JSON.stringify(msg)).toBe(ms);
+    }
+    c.ws.close();
+  });
+
+  it("words the CLI timeout in minutes or seconds", async () => {
+    expect(timeoutMessage(5 * 60_000)).toBe("Claude CLI timed out after 5 min");
+    expect(timeoutMessage(30_000)).toBe("Claude CLI timed out after 30 s");
   });
 });
 

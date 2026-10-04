@@ -59,6 +59,7 @@ export function PluginsDialog({
   const [search, setSearch] = useState("");
   const [picking, setPicking] = useState<string>();
   const [updating, setUpdating] = useState<string>();
+  const [installing, setInstalling] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
   const [failure, setFailure] = useState<Failure>();
@@ -130,7 +131,15 @@ export function PluginsDialog({
     }
     await refresh();
   };
-  const install = (p: AvailablePlugin, scope: string) => (setPicking(undefined), write({ type: "plugins.install", cwd, pluginId: p.pluginId, scope: scope as never }));
+  const install = async (p: AvailablePlugin, scope: string) => {
+    setPicking(undefined);
+    setInstalling(p.pluginId);
+    try {
+      await write({ type: "plugins.install", cwd, pluginId: p.pluginId, scope: scope as never });
+    } finally {
+      setInstalling(undefined);
+    }
+  };
   const setEnabled = (id: string, enabled: boolean) => write({ type: "plugins.setEnabled", cwd, pluginId: id, enabled });
   const uninstall = (p: InstalledPlugin) => write({ type: "plugins.uninstall", cwd, pluginId: p.id, scope: p.scope });
 
@@ -220,8 +229,15 @@ export function PluginsDialog({
   };
 
   const shown = filterAvailable(available, search);
+  // Install and update clone from git and can take minutes: the dialog says what it waits for and holds the other writes.
+  const working = !!(installing || updating);
   const lines = (
     <>
+      {working && (
+        <p role="status" className="text-muted-foreground text-sm" data-testid="plugins-installing">
+          {installing ? `Installing ${installing}…` : `Updating ${updating}…`}
+        </p>
+      )}
       {error && <Banner kind="error">{error}</Banner>}
       {notice && <Banner kind="success">{notice}</Banner>}
     </>
@@ -274,13 +290,13 @@ export function PluginsDialog({
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  <Switch on={p.enabled} label={`Enable ${p.id}`} held={!!updating} onToggle={(on) => void setEnabled(p.id, on)} />
+                  <Switch on={p.enabled} label={`Enable ${p.id}`} held={working} onToggle={(on) => void setEnabled(p.id, on)} />
                   {p.updatable && (
-                    <IconButton label={updating === p.id ? "Updating…" : "Update plugin"} title={updating === p.id ? "Updating…" : "Update plugin to the latest version"} disabled={!!updating} onClick={() => void update(p)}>
+                    <IconButton label={updating === p.id ? "Updating…" : "Update plugin"} title={updating === p.id ? "Updating…" : "Update plugin to the latest version"} disabled={working} onClick={() => void update(p)}>
                       <RefreshCwIcon className={cn(updating === p.id && "motion-safe:animate-spin")} />
                     </IconButton>
                   )}
-                  <IconButton label={`Uninstall ${p.id}`} title="Uninstall and remove plugin" disabled={!!updating} onClick={() => void uninstall(p)}>
+                  <IconButton label={`Uninstall ${p.id}`} title="Uninstall and remove plugin" disabled={working} onClick={() => void uninstall(p)}>
                     <Trash2Icon />
                   </IconButton>
                 </div>
@@ -296,15 +312,15 @@ export function PluginsDialog({
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <div className="flex flex-wrap items-baseline gap-x-2">
                     <span className="min-w-0 font-medium text-[13px] [overflow-wrap:anywhere]">{p.name}</span>
-                    {p.installCount > 0 && <span className="text-faint text-xs">{formatInstalls(p.installCount)} installs</span>}
+                    {p.installCount > 0 && <span className="text-muted-foreground text-xs">{formatInstalls(p.installCount)} installs</span>}
                   </div>
                   {p.description && <p className="text-muted-foreground text-xs leading-4">{p.description}</p>}
-                  <p className="flex items-center gap-1 text-faint text-xs">
+                  <p className="flex items-center gap-1 text-muted-foreground text-xs">
                     from {p.marketplaceName}
                     {p.official && <Official />}
                   </p>
                   {p.sourceUrl && (
-                    <p className="min-w-0 break-all text-faint text-xs">
+                    <p className="min-w-0 break-all text-muted-foreground text-xs">
                       Source:{" "}
                       <a href={p.sourceUrl} target="_blank" rel="noopener noreferrer" className="underline-offset-4 hover:text-foreground hover:underline">
                         {p.sourceUrl}
@@ -332,7 +348,7 @@ export function PluginsDialog({
                   )}
                 </div>
                 {picking !== p.pluginId && (
-                  <Button size="sm" className="shrink-0 max-md:h-11" onClick={() => setPicking(p.pluginId)}>
+                  <Button size="sm" className="shrink-0 max-md:h-11" disabled={working} onClick={() => setPicking(p.pluginId)}>
                     Install
                   </Button>
                 )}
@@ -443,7 +459,7 @@ export function PluginsDialog({
             type="button"
             role="tab"
             aria-selected={tab === id}
-            onClick={() => setTab(id)}
+            onClick={() => (clear(), setTab(id))}
             className={cn(
               "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[13px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:h-11",
               tab === id && "bg-secondary text-foreground",

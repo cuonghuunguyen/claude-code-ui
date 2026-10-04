@@ -104,6 +104,9 @@ it("lists available plugins by installs with source and official badge, filters 
   expect(rows[0]!.querySelector('[title="Official Claude Code marketplace"]')).not.toBeNull();
   expect(rows[0]!.querySelector("a")!.href).toBe("https://github.com/anthropics/claude-plugins-official/tree/main/plugins/big");
   expect(rows[1]!.querySelector('[title="Official Claude Code marketplace"]')).toBeNull();
+  // Meta lines are text: --faint is 3.95:1 in the light theme (icons only), --muted-foreground passes 4.5:1.
+  expect(rows[0]!.querySelector(".text-faint")).toBeNull();
+  expect(rows.map((r) => [...r.querySelectorAll("p, span")].filter((e) => /installs|^from |^Source:/.test(e.textContent ?? "") && !e.querySelector("p, span")).every((e) => e.classList.contains("text-muted-foreground")))).toEqual([true, true]);
   await d.type(d.q("plugins-search")!, "git");
   expect(d.all("plugin-available").length).toBe(1);
   await d.click(d.all("plugin-available")[0]!.querySelector("button"));
@@ -117,6 +120,17 @@ it("lists available plugins by installs with source and official badge, filters 
   ]);
   await d.click([...picker.querySelectorAll("button")][2]);
   expect(d.calls).toContainEqual({ type: "plugins.install", cwd: "/p", pluginId: "big@claude-plugins-official", scope: "local" });
+});
+
+it("shows progress while a plugin installs (a git clone can take minutes) and blocks a second install", async () => {
+  let finish!: (v: unknown) => void;
+  const d = await render({ "plugins.install": () => new Promise((r) => (finish = r)) });
+  await d.click(d.all("plugin-available")[0]!.querySelector("button"));
+  await d.click(d.button("Install for youAvailable in all your projects"));
+  expect(d.q("plugins-installing")!.textContent).toBe("Installing big@claude-plugins-official…");
+  expect(d.all("plugin-available").flatMap((r) => [...r.querySelectorAll("button")]).every((b) => b.disabled)).toBe(true);
+  await act(async () => finish(OK));
+  expect(d.q("plugins-installing")).toBeNull();
 });
 
 it("shows the install error line", async () => {
@@ -213,9 +227,13 @@ it("manages marketplaces: source text, add with Enter and its error, refresh, re
   await act(async () => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
   expect(d.calls).toContainEqual({ type: "marketplace.add", cwd: "/p", source: "/x" });
   expect(d.q("banner-error")!.textContent).toBe("Failed to add marketplace: Path does not exist: /x");
+  // The error belongs to the tab it came from.
+  await d.click(d.q("plugins-tab-plugins"));
+  expect(d.q("banner-error")).toBeNull();
+  await d.click(d.q("plugins-tab-marketplaces"));
   fail = false;
   await d.click(d.button("Add"));
-  expect(input.value).toBe("");
+  expect((d.q("marketplace-source") as HTMLInputElement).value).toBe("");
   await d.click(d.all("marketplace-row")[1]!.querySelector('[aria-label="Refresh marketplace"]') as HTMLElement);
   expect(d.calls).toContainEqual({ type: "marketplace.update", cwd: "/p", name: "local" });
   await d.click(d.all("marketplace-row")[1]!.querySelector('[aria-label="Remove marketplace"]') as HTMLElement);

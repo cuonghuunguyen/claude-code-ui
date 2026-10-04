@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { AvailablePlugin } from "@claude-ui/protocol";
-import { chipOf, failureDialog, filterAvailable, formatInstalls, marketplaceLink, marketplaceText, updateNotice } from "./plugins.ts";
+import { chipOf, failureDialog, filterAvailable, formatInstalls, marketplaceLink, marketplaceText, nextReloadFailed, updateNotice } from "./plugins.ts";
 
 const avail = (name: string, installCount: number, extra: Partial<AvailablePlugin> = {}): AvailablePlugin => ({ pluginId: `${name}@m`, name, marketplaceName: "m", official: false, installCount, ...extra });
 
 describe("plugins", () => {
+  it("a config.changed that reloaded replaces the failed sessions: a successful reload clears the banner, no reload keeps it", () => {
+    const failed = new Set(["s1", "s2"]);
+    expect([...nextReloadFailed(failed, ["s2", "s3"])].sort()).toEqual(["s2", "s3"]);
+    expect([...nextReloadFailed(failed, [])]).toEqual([]);
+    expect(nextReloadFailed(failed, undefined)).toBe(failed);
+  });
+
   it("formats install counts like the extension", () => {
     expect([formatInstalls(999), formatInstalls(1000), formatInstalls(1234), formatInstalls(3_000_000), formatInstalls(2_450_000)]).toEqual(["999", "1k", "1.2k", "3m", "2.5m"]);
   });

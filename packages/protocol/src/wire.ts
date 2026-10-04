@@ -181,7 +181,7 @@ export type ServerMessage =
   | { type: "terminal.output"; terminalId: string; data: string }
   /** The terminal's shell exited (or it was closed); sent to every attached connection. The terminal is gone. */
   | { type: "terminal.exit"; terminalId: string; exitCode: number }
-  /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes. `reloadFailed`: sessions whose plugin reload failed. */
+  /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes. `reloadFailed`: set when plugins were reloaded: the sessions whose reload failed (empty: none; restart banners then clear). */
   | { type: "config.changed"; kind: ConfigKind; cwd: string; reloadFailed?: string[] }
   | { type: "error"; reqId?: string; code: string; message: string };
 

@@ -2,6 +2,9 @@
 import type { AvailablePlugin, ConfigScope, MarketplaceInfo, McpServerInfo, PluginUpdateFailure } from "@claude-ui/protocol";
 
 /** `name` of `name@marketplace`. */
+/** The sessions whose last plugin reload failed, after a `config.changed`: one that reloaded replaces the set (a success clears the banner); `undefined`: no reload ran. */
+export const nextReloadFailed = (failed: Set<string>, reloadFailed: string[] | undefined) => (reloadFailed ? new Set(reloadFailed) : failed);
+
 export const pluginName = (id: string) => (id.includes("@") ? id.slice(0, id.lastIndexOf("@")) : id);
 export const marketplaceOf = (id: string) => (id.includes("@") ? id.slice(id.lastIndexOf("@") + 1) : id);
 
