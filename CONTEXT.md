@@ -74,3 +74,11 @@ _Avoid_: CLI turn, foreign message
 **Permission mode**:
 The session setting that decides what happens before a tool runs: ask (default), accept edits, plan, auto (a classifier decides), don't ask (deny anything not pre-approved by a permission rule), bypass (allow everything). Same modes as Claude Code.
 _Avoid_: approval mode, auto-approve
+
+**Config scope**:
+Where an MCP server (or plugin setting) is saved: local = this project, private to you (`~/.claude.json` project entry); user = all your projects; project = shared in the repo (`.mcp.json`). Claude Code's own term.
+_Avoid_: permission rule scope (different thing)
+
+**Config query**:
+A query with no prompt, started in a project cwd for a config dialog when the session has no live query; held open while the dialog uses it, closed 30 s after its last request.
+_Avoid_: throwaway (that one closes after one answer)

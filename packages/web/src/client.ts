@@ -28,6 +28,8 @@ export function connect(opts: {
   onSessionsChanged?: (m: Extract<ServerMessage, { type: "sessions.changed" }>) => void;
   /** Account plan usage, on connect and on each change; null = no plan limits. */
   onPlanUsage?: (u: PlanUsage | null) => void;
+  /** A config write (e.g. an MCP server added) in a project: an open config dialog of it refreshes. */
+  onConfigChanged?: (m: Extract<ServerMessage, { type: "config.changed" }>) => void;
   onOpen?: () => void;
   onStatus?: (s: ConnectionStatus) => void;
 }) {
@@ -70,6 +72,7 @@ export function connect(opts: {
       if (m.type === "terminal.output" || m.type === "terminal.exit") return terminalListeners.forEach((l) => l(m));
       if (m.type === "sessions.changed") return opts.onSessionsChanged?.(m);
       if (m.type === "plan_usage") return opts.onPlanUsage?.(m.usage);
+      if (m.type === "config.changed") return opts.onConfigChanged?.(m);
       const p = m.reqId ? pending.get(m.reqId) : undefined;
       if (!p) return console.error("daemon error", m);
       pending.delete(m.reqId!);

@@ -218,6 +218,11 @@ export class Session {
     await Promise.race([this.driving, new Promise((r) => setTimeout(r, 5000).unref())]);
   }
 
+  /** The running query, for control requests of the config dialogs; none before the first prompt or after it ended. */
+  liveQuery(): Query | undefined {
+    return this.isLive() ? this.query : undefined;
+  }
+
   /** False once the query ended or failed: nothing reads the input queue any more. */
   isLive() {
     return this.state !== "error" && this.state !== "closed";
@@ -683,7 +688,7 @@ export const THROWAWAY_TIMEOUT_MS = 30_000;
  * must not run the user's hooks (SessionStart fires on every CLI start, resume included; verified with SDK 0.3.285).
  */
 export async function withQuery<T>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery, options: Options = {}): Promise<T> {
-  const q = query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env), settings: { disableAllHooks: true }, ...options } });
+  const q = openQuery(query, options);
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(`no answer from the CLI within ${THROWAWAY_TIMEOUT_MS} ms`)), THROWAWAY_TIMEOUT_MS);
@@ -696,12 +701,16 @@ export async function withQuery<T>(fn: (q: Query) => Promise<T>, query: typeof s
   }
 }
 
+/** A query with no prompt, for control requests only (withQuery, config queries); the caller closes it. */
+export const openQuery = (query: typeof sdkQuery = sdkQuery, options: Options = {}): Query =>
+  query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env), settings: { disableAllHooks: true }, ...options } });
+
 /** withQuery() in the daemon-wide throwaway queue. */
 export const queuedQuery = <T,>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery): Promise<T> => queued(() => withQuery(fn, query));
 
 export const listModels = (query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> => withQuery((q) => q.supportedModels(), query);
 
-function withoutApiKeys(env: NodeJS.ProcessEnv) {
+export function withoutApiKeys(env: NodeJS.ProcessEnv) {
   const { ANTHROPIC_API_KEY: _key, ANTHROPIC_AUTH_TOKEN: _token, ...rest } = env;
   return rest;
 }

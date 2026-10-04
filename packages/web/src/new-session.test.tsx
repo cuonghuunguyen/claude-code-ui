@@ -127,3 +127,18 @@ it("the @-mention picker of the first prompt searches again once the daemon reco
   await rerender({ connected: true });
   expect(el.querySelector('[data-testid="mention-picker"]')?.textContent).toContain("spec.md");
 });
+
+it("/mcp alone opens the MCP servers dialog instead of starting a session; the picker lists it", async () => {
+  const onStart = vi.fn(async () => {});
+  const onDialog = vi.fn();
+  const { el, box } = await render({ onStart, onDialog });
+  await type(box, "/mc");
+  expect(el.textContent).toContain("Configure Model Context Protocol servers");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenCalledWith("mcp");
+  expect(onStart).not.toHaveBeenCalled();
+  expect(box.value).toBe("");
+  await type(box, "/mcp please");
+  await key(box, { key: "Enter" });
+  expect(onStart).toHaveBeenCalledTimes(1);
+});

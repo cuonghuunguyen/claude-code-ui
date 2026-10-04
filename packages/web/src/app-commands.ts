@@ -38,6 +38,8 @@ export type CommandContext = {
   setMode: (mode: PermissionMode) => void;
   rewind: (userMessageId: string) => void;
   stop: () => void;
+  /** Opens the MCP servers dialog of the shown project; none without a project. */
+  openMcp?: () => void;
 };
 
 const RECENT_SESSIONS = 5;
@@ -101,6 +103,8 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         [...s.prompts].reverse().map((p) => ({ id: `rewind:${p.id}`, group: "Messages, newest first", title: firstLine(p.text), run: () => c.rewind(p.id) })),
       ),
     s?.running && cmd("session.stop", "Stop", c.stop, "escape"),
+    // The extension's command menu section "Customize".
+    c.openMcp && { id: "mcp.open", group: "Customize", title: "MCP servers", description: "Configure Model Context Protocol servers", run: c.openMcp },
     // Newest first; the recent ones also show before anything is typed (OpenCode lists recent items there, not all).
     ...[...c.sessions]
       .sort((a, b) => b.lastActivity - a.lastActivity)

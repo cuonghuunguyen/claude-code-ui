@@ -136,3 +136,11 @@ it("sessions newest first: the 5 most recent show at an empty query, the rest on
   ]);
   expect(rows[0]).toMatchObject({ cwd: "/w/api", description: "api", meta: "1m ago" });
 });
+
+it("lists MCP servers in the Customize group while a project is shown", () => {
+  expect(appCommands(ctx()).find((i) => i.id === "mcp.open")).toBeUndefined();
+  const openMcp = vi.fn();
+  const item = run(ctx({ openMcp }), "mcp.open");
+  expect(item).toMatchObject({ group: "Customize", title: "MCP servers", description: "Configure Model Context Protocol servers" });
+  expect(openMcp).toHaveBeenCalled();
+});

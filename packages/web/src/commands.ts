@@ -25,3 +25,12 @@ export function choose(c: SlashCommand, typed = ""): { send: string } | { text: 
   const full = [c.name, ...(c.aliases ?? [])].some((n) => typed.toLowerCase() === `/${n.toLowerCase()}`);
   return c.argumentHint && !full ? { text: `/${c.name} ` } : { send: `/${c.name}` };
 }
+
+/** Commands the web app handles itself, like the VS Code extension: typed alone they open a dialog and are not sent. */
+export const DIALOG_COMMANDS: (SlashCommand & { dialog: "mcp" })[] = [{ name: "mcp", description: "Configure Model Context Protocol servers", argumentHint: "", dialog: "mcp" }];
+
+/** The picker's rows: the session's commands plus the dialog commands (a CLI row of the same name gives way). */
+export const withDialogCommands = (commands: SlashCommand[]): SlashCommand[] => [...commands.filter((c) => !DIALOG_COMMANDS.some((d) => d.name === c.name)), ...DIALOG_COMMANDS];
+
+/** The dialog a prompt opens instead of being sent: `/mcp` alone (always intercepted, as in the extension). */
+export const dialogOf = (text: string) => DIALOG_COMMANDS.find((d) => text.trim() === `/${d.name}`)?.dialog;

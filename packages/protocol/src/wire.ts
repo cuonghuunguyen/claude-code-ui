@@ -110,6 +110,23 @@ export type ClientMessage = { reqId: string } & (
   | { type: "terminal.close"; terminalId: string }
   /** Status bar: branch and diff size of `cwd` (a session's cwd, inside the roots). */
   | { type: "git.status"; cwd: string }
+  // MCP servers dialog (docs/spec.md "Config dialogs"): the live query of `sessionId` when it has one, else the config query of `cwd`.
+  /** Reply McpListResult. */
+  | { type: "mcp.list"; cwd: string; sessionId?: string }
+  /** `toggleMcpServer()`: persists for new sessions of the project; reply McpListResult. */
+  | { type: "mcp.toggle"; cwd: string; sessionId?: string; name: string; enabled: boolean }
+  /** Reply McpListResult. */
+  | { type: "mcp.reconnect"; cwd: string; sessionId?: string; name: string }
+  /** Reply McpAuthResult; the CLI then waits for the OAuth redirect on its callback port. */
+  | { type: "mcp.authenticate"; cwd: string; sessionId?: string; name: string }
+  /** The redirect URL pasted from a browser that could not reach the CLI's callback port. */
+  | { type: "mcp.oauthCallback"; cwd: string; sessionId?: string; name: string; callbackUrl: string }
+  /** HTTP/SSE servers only. */
+  | { type: "mcp.clearAuth"; cwd: string; sessionId?: string; name: string }
+  /** `claude mcp add --scope <scope>`; running sessions do not get it. Broadcasts `config.changed`. */
+  | { type: "mcp.add"; cwd: string; name: string; scope: ConfigScope; config: McpAddConfig }
+  /** `claude mcp remove --scope <scope>`; running sessions keep it until restarted. Broadcasts `config.changed`. */
+  | { type: "mcp.remove"; cwd: string; name: string; scope: ConfigScope }
 );
 
 /** `PushSubscription.toJSON()`. */
@@ -136,6 +153,8 @@ export type ServerMessage =
   | { type: "terminal.output"; terminalId: string; data: string }
   /** The terminal's shell exited (or it was closed); sent to every attached connection. The terminal is gone. */
   | { type: "terminal.exit"; terminalId: string; exitCode: number }
+  /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes. */
+  | { type: "config.changed"; kind: ConfigKind; cwd: string }
   | { type: "error"; reqId?: string; code: string; message: string };
 
 export type CreateResult = { session: SessionInfo };
@@ -191,3 +210,30 @@ export const MAX_TERMINAL_INPUT_BYTES = 64 * 1024;
 export type GitStatus = { branch: string; added: number; removed: number };
 /** `status` null outside a git work tree. */
 export type GitStatusResult = { status: GitStatus | null };
+
+/** Where an MCP server (or plugin setting) is saved; Claude Code's term. local: this project, private; user: all projects; project: `.mcp.json`. */
+export type ConfigScope = "local" | "user" | "project";
+export type ConfigKind = "mcp" | "plugins" | "skills";
+/** `McpServerStatus.status` of the SDK. */
+export type McpStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";
+/**
+ * `McpServerStatus` without secrets: `config` has no headers or env, `tools` only names and annotations.
+ * `scope`: project, local, user, claudeai, managed, enterprise, dynamic, ... (open set). `error`: the CLI's text.
+ */
+export type McpServerInfo = {
+  name: string;
+  status: McpStatus | (string & {});
+  scope?: string;
+  source?: string;
+  error?: string;
+  serverInfo?: { name: string; version: string };
+  config?: { type: string; command?: string; url?: string };
+  tools?: { name: string; readOnly?: boolean; destructive?: boolean }[];
+};
+export type McpListResult = { servers: McpServerInfo[] };
+/** `requiresUserAction`: the user signs in at `authUrl`; the server connects once the CLI got the redirect. */
+export type McpAuthResult = { authUrl?: string; requiresUserAction: boolean };
+/** Add form values as `claude mcp add` takes them: `env` "KEY=value", `headers` "Header-Name: value". */
+export type McpAddConfig =
+  | { transport: "stdio"; command: string; args: string[]; env: string[] }
+  | { transport: "http" | "sse"; url: string; headers: string[] };
