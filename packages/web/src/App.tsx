@@ -703,7 +703,7 @@ export function App() {
             </IconButton>
           </div>
           <label
-            className="flex items-center gap-2"
+            className="flex items-center gap-2 pointer-coarse:min-h-11"
             title={pushSupported() ? "Push notification when a session needs input or finishes" : "Push needs HTTPS or localhost and a browser with Web Push"}
           >
             <input type="checkbox" checked={pushOn} disabled={!pushSupported()} onChange={togglePush} data-testid="push-toggle" />

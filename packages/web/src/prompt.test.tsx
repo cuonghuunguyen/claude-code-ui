@@ -113,11 +113,11 @@ it("narrow screen: the toolbar choosers wrap to a second row instead of shrinkin
 });
 
 it("phone: the model picker drops the parenthesised note, the choosers wrap in the toolbar's own row and ring + send sit in a right group", async () => {
-  expect(["Default (recommended)", "Sonnet 5.5", "Opus 5.5 (1M context)", "(x)"].map(shortModel)).toEqual(["Default", "Sonnet 5.5", "Opus 5.5", "(x)"]);
+  expect(["Default (recommended)", "Sonnet 5.5", "Opus 5.5 (1M context)", "(x)"].map(shortModel)).toEqual(["Default model", "Sonnet 5.5", "Opus 5.5 (1M context)", "(x)"]);
   const view = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "context_usage", id: "context_usage", usage: { totalTokens: 100, maxTokens: 1000, percentage: 10, categories: [] } } });
   const { $ } = await render({}, view);
   // jsdom shows both labels (CSS picks one by the toolbar width); the full name stays the accessible name.
-  expect($("session-model")!.textContent).toContain("DefaultDefault (recommended)");
+  expect($("session-model")!.textContent).toContain("Default modelDefault (recommended)");
   expect($("session-model")!.getAttribute("aria-label")).toBe("Default (recommended), Model");
   expect($("session-model")!.parentElement!.className).toContain("max-sm:contents");
   expect($("prompt-toolbar")!.className).toContain("max-sm:flex-wrap");

@@ -24,8 +24,11 @@ export const nextMode = (modes: PermissionMode[], mode: PermissionMode) => {
   return cycle[(cycle.indexOf(mode) + 1) % cycle.length] ?? mode;
 };
 
-/** "Default (recommended)" -> "Default": the picker label on a phone, where the toolbar has no room for the note. */
-export const shortModel = (name: string) => name.replace(/\s*\(.*\)\s*$/, "") || name;
+/** "Default (recommended)" -> "Default model": the picker label on a phone, where the toolbar has no room for the note. Only that note goes; one that names the model (a context size) stays. "Default" alone would read like the effort chooser beside it. */
+export const shortModel = (name: string) => {
+  const short = name.replace(/\s*\(recommended\)\s*$/i, "") || name;
+  return short === "Default" ? "Default model" : short;
+};
 
 /** The model's effort levels plus "default"; none when the model does not support effort (the chooser is hidden). */
 export function effortOptions(models: ModelInfo[], model: string): Effort[] {

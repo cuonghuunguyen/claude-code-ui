@@ -102,6 +102,12 @@ it("phone: the titlebar keeps the sessions menu, tab switcher with the session n
   expect(tools.querySelector('[data-testid="drawer-quick-open"]')).not.toBeNull();
 });
 
+it("phone: the drawer Notifications toggle is a 44px target on a coarse pointer", async () => {
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="open-drawer"]')!.click());
+  const label = document.querySelector('[data-testid="push-toggle"]')!.closest("label")!;
+  expect(label.className).toContain("pointer-coarse:min-h-11");
+});
+
 it("phone: Search in the drawer closes the drawer and opens quick open", async () => {
   await act(async () => el.querySelector<HTMLElement>('[data-testid="open-drawer"]')!.click());
   await act(async () => el.querySelector<HTMLElement>('[data-testid="drawer-quick-open"]')!.click());
