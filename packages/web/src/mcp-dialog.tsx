@@ -144,18 +144,22 @@ export function McpDialog({
       setSuccess(ok);
       after?.();
     } catch (e) {
-      setError((e as Error).message || ACTION_ERROR[action]);
+      // The failure text of the action, with the CLI's reason when it gives one.
+      const reason = (e as Error).message;
+      setError(reason ? `${ACTION_ERROR[action]}: ${reason}` : ACTION_ERROR[action]);
     } finally {
       setBusy(undefined);
       await load();
     }
   };
+  /** Back to the whole list after Disable or Remove (a filter would show only part of it). */
+  const toList = () => (setSelected(undefined), setWaiting(undefined), setFilter(""));
   const named = (type: "mcp.reconnect" | "mcp.clearAuth", name: string) => request({ type, ...base, name });
   const toggle = (name: string, enabled: boolean) => request({ type: "mcp.toggle", ...base, name, enabled });
   const run: Record<McpAction, (name: string) => unknown> = {
     reconnect: (n) => act(n, "reconnect", () => named("mcp.reconnect", n), resultText.reconnect(n)),
     clearAuth: (n) => act(n, "clearAuth", () => named("mcp.clearAuth", n), resultText.clearAuth(n)),
-    disable: (n) => act(n, "disable", () => toggle(n, false), resultText.disable(n), () => (setSelected(undefined), setWaiting(undefined))),
+    disable: (n) => act(n, "disable", () => toggle(n, false), resultText.disable(n), toList),
     enable: (n) => act(n, "enable", () => toggle(n, true), resultText.enable(n)),
     authenticate: (n) => authenticate(n),
   };
@@ -198,11 +202,12 @@ export function McpDialog({
     }
   }
   const remove = (name: string, scope: ConfigScope) =>
-    act(name, "remove", () => request({ type: "mcp.remove", cwd, name, scope }), resultText.remove(name, scope), () => (setSelected(undefined), setWaiting(undefined)));
+    act(name, "remove", () => request({ type: "mcp.remove", cwd, name, scope }), resultText.remove(name, scope), toList);
   const add = async (name: string, scope: ConfigScope, config: McpAddConfig) => {
     await request({ type: "mcp.add", cwd, name, scope, config });
     setSuccess(resultText.add(name, scope));
     setAdding(false);
+    setFilter("");
     void load();
   };
 
