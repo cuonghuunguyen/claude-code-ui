@@ -1,11 +1,11 @@
 // Titlebar tabs (OpenCode titlebar-tab-strip): avatar + title + close; middle click closes, drag reorders, overflow scrolls.
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
 // Below md the strip collapses into a switcher (native select over the active tab).
-import { createContext, use, useEffect, useRef, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
+import { createContext, memo, use, useEffect, useRef, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { ChevronDownIcon, CircleAlertIcon, Grid2x2PlusIcon, LoaderCircleIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
-import { cn } from "@/lib/utils";
+import { cn, useStableProps } from "@/lib/utils";
 import { NEW_TAB, avatarColor, closeTab, projectName, type AvatarColor } from "./tabs.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
@@ -148,7 +148,7 @@ export function TabsBar({
         onKeyDown={onKeyDown}
       >
         {tabs.map((id, i) => (
-          <Tab
+          <StableTab
             key={id}
             id={id}
             t={info(id)}
@@ -209,6 +209,14 @@ export function TabsBar({
       </IconButton>
     </div>
   );
+}
+
+// A tab re-renders only when what it shows changes (info by value), not for App's new closures and info objects on every render.
+const MemoTab = memo(Tab, (a, b) =>
+  (Object.keys(b) as (keyof typeof b)[]).every((k) => (k === "t" ? (Object.keys(b.t) as (keyof TabInfo)[]).every((f) => a.t[f] === b.t[f]) : a[k] === b[k])),
+);
+function StableTab(props: ComponentProps<typeof Tab>) {
+  return <MemoTab {...useStableProps(props)} />;
 }
 
 function Tab({

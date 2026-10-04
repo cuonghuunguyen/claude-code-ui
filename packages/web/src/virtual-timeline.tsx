@@ -1,9 +1,17 @@
 import { measureElement, observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDownIcon } from "lucide-react";
-import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 /** Scrolling down to this distance from the end returns to the bottom (follow output, no scroll button). */
 const END_THRESHOLD = 80;
+
+/**
+ * One item: renders again only for a new item, index or `renderItem`, not for the virtualizer's own re-renders (scroll start and end,
+ * which also follow a hidden tab shown again: its scroll position comes back with a scroll event).
+ */
+const Row = memo(function Row({ item, index, render }: { item: unknown; index: number; render: (item: never, index: number) => ReactNode }) {
+  return render(item as never, index);
+});
 
 /**
  * Session timeline that renders only the items in or near the viewport (docs/spec.md "Session view UX").
@@ -114,7 +122,7 @@ export function VirtualTimeline<T>({
                 className={`absolute inset-x-0 top-0 flex flex-col ${row.index ? "pt-3" : ""}`}
                 style={{ transform: `translateY(${row.start}px)` }}
               >
-                {renderItem(items[row.index]!, row.index)}
+                <Row item={items[row.index]!} index={row.index} render={renderItem} />
               </div>
             ))}
           </div>

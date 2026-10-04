@@ -289,6 +289,31 @@ it("says a file with zero net change has no changes instead of an empty diff", a
   expect(body.querySelector("[data-testid=diff-loading]")).toBeNull();
 });
 
+it("parses each file's diff once while the file reads come back one by one (a tab switch remounts the panel)", async () => {
+  const n = 12;
+  const files = Object.fromEntries(Array.from({ length: n }, (_, i) => [`/p/f${i}.ts`, `v = ${i}\n`]));
+  const client = fakeClient(files);
+  // Each reply in its own task, like separate WebSocket messages.
+  const read = client.request as unknown as ReturnType<typeof vi.fn>;
+  const reply = read.getMockImplementation() as (m: never) => unknown;
+  let i = 0;
+  read.mockImplementation((m: never) => new Promise((r) => setTimeout(() => r(reply(m)), 10 * ++i)));
+  const v = view(Array.from({ length: n }, (_, i) => edit(`e${i}`, `/p/f${i}.ts`, "v = x", `v = ${i}`)));
+  const before = parsed.n;
+  await act(async () => root.render(<ChangesPanel client={client} view={v} cwd="/p" onOpen={() => {}} hidden />));
+  const wait = async () => {
+    for (let t = 0; t <= n; t++) await act(async () => void (await new Promise((r) => setTimeout(r, 10))));
+  };
+  await wait();
+  expect(parsed.n - before).toBe(n);
+  // Shown again after another session's panel: nothing changed, nothing parsed.
+  act(() => root.render(null));
+  i = 0;
+  await act(async () => root.render(<ChangesPanel client={client} view={v} cwd="/p" onOpen={() => {}} hidden />));
+  await wait();
+  expect(parsed.n - before).toBe(n);
+});
+
 it("does not re-parse the diffs while Claude streams text", async () => {
   const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
   let v = view([edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")]);
@@ -368,6 +393,24 @@ it("previous/next buttons and the arrow keys cycle the selected file, not while 
   const input = el.querySelector<HTMLInputElement>("input[aria-label='Filter files']")!;
   await act(async () => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
   expect(current()).toContain("a.ts");
+});
+
+it("once shown, hiding keeps the list mounted (display: none), so showing it again renders nothing new; arrow keys stay alone while hidden", async () => {
+  const client = fakeClient({ "/p/a.ts": "a = 2\n" });
+  const v = view([edit("e1", "/p/a.ts", "a = 1", "a = 2")]);
+  const show = (hidden: boolean) => act(async () => root.render(<ChangesPanel client={client} view={v} cwd="/p" onOpen={() => {}} hidden={hidden} />));
+  await show(false);
+  await flush();
+  const panel = el.querySelector("[data-testid=changes-panel]")!;
+  await show(true);
+  expect(el.querySelector("[data-testid=changes-panel]")).toBe(panel);
+  expect(panel.hasAttribute("hidden")).toBe(true);
+  const key = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+  await act(async () => void document.body.dispatchEvent(key));
+  expect(key.defaultPrevented).toBe(false);
+  await show(false);
+  expect(el.querySelector("[data-testid=changes-panel]")).toBe(panel);
+  expect(panel.hasAttribute("hidden")).toBe(false);
 });
 
 it("reports the listed file count to the pane tab (a created and deleted file is not counted); hidden it renders nothing and leaves the arrow keys alone", async () => {

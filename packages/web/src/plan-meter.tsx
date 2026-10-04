@@ -30,12 +30,16 @@ function duration(ms: number) {
   return `${Math.floor(m / 1440)}d ${Math.floor(m / 60) % 24}h`;
 }
 
+// Made once: toLocaleTimeString with options builds a formatter on every call (~1 ms each), and every render of a meter formats.
+const TIME = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+const DAY = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" });
+
 /** "Resets 13:40 (in 2h 5m)": time only today, weekday and date otherwise. */
 export function resetText(at: number, now = Date.now()) {
   if (at <= now) return "Resets now";
   const d = new Date(at);
-  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  const day = d.toDateString() === new Date(now).toDateString() ? "" : `${d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} `;
+  const time = TIME.format(d);
+  const day = d.toDateString() === new Date(now).toDateString() ? "" : `${DAY.format(d)} `;
   return `Resets ${day}${time} (in ${duration(at - now)})`;
 }
 
