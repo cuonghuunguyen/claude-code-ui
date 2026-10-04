@@ -1533,6 +1533,80 @@ describe("daemon", () => {
     }
   });
 
+  it("a restored subagent run keeps parallel tool calls whose tool_use lines getSubagentMessages() drops with their results", async () => {
+    // Shapes of run "Mine base features" (a39f5d09) in session 7a3df1cd, API message …MtzhX8 (SDK 0.3.285): the parallel tool_use
+    // lines of one API message chain off each other; the leaf chain goes through call 1's result, so calls 2 and 3 (and their
+    // results) are on a side branch. Hook attachments sit between lines; the SDK does not return them.
+    const id = "7a3df1cd-2a8b-4f32-8270-c70ece8c957e";
+    const at = "2026-10-01T10:00:00.000Z";
+    const line = (type: string, uuid: string, parentUuid: string | null, content: unknown) =>
+      ({ type, uuid, parentUuid, isSidechain: true, agentId: "a39f5d0972c7cf0a8", sessionId: id, timestamp: at, message: type === "assistant" ? { id: "msg_MtzhX8", role: type, content } : { role: type, content } });
+    const call = (n: number) => [{ type: "tool_use", id: `toolu_read${n}`, name: "Read", input: { file_path: `/x${n}` } }];
+    const result = (n: number) => [{ type: "tool_result", tool_use_id: `toolu_read${n}`, content: `${n}` }];
+    const hook = (uuid: string, parentUuid: string) => ({ type: "attachment", uuid, parentUuid, isSidechain: true, attachment: { type: "hook_success" } });
+    const raw = [
+      line("user", "p", null, "Read all"),
+      line("assistant", "t", "p", [{ type: "thinking", thinking: "" }]),
+      line("assistant", "a1", "t", call(1)),
+      line("assistant", "a2", "a1", call(2)),
+      line("assistant", "a3", "a2", call(3)),
+      hook("h1", "a3"),
+      line("user", "r1", "a1", result(1)),
+      hook("h2", "r1"),
+      line("assistant", "a4", "h2", call(4)),
+      line("assistant", "a5", "a4", call(5)),
+      line("user", "r2", "a2", result(2)),
+      line("user", "r3", "a3", result(3)),
+      line("user", "r4", "a4", result(4)),
+      line("user", "r5", "a5", result(5)),
+      { ...line("assistant", "a6", "r5", [{ type: "text", text: "done" }]), message: { id: "msg_next", role: "assistant", content: [{ type: "text", text: "done" }] } },
+    ];
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const runs = join(projectsDir, webRoot.replace(/[^a-zA-Z0-9]/g, "-"), id, "subagents");
+    mkdirSync(runs, { recursive: true });
+    writeFileSync(join(runs, "agent-a39f5d0972c7cf0a8.jsonl"), raw.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    const sdk = (l: { type: string; uuid: string; message?: unknown }) => ({ type: l.type, uuid: l.uuid, session_id: id, message: l.message, parent_tool_use_id: "toolu_outer", parent_agent_id: null, timestamp: at });
+    const main = [
+      { type: "user", uuid: "u0", session_id: id, parent_tool_use_id: null, parent_agent_id: null, timestamp: at, message: { role: "user", content: "inspect" } },
+      { type: "assistant", uuid: "u1", session_id: id, parent_tool_use_id: null, parent_agent_id: null, timestamp: at, message: { id: "m1", role: "assistant", content: [{ type: "tool_use", id: "toolu_outer", name: "Agent", input: { description: "Mine" } }] } },
+      { type: "user", uuid: "u2", session_id: id, parent_tool_use_id: null, parent_agent_id: null, timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_outer", content: "done" }] } },
+    ];
+    // The leaf chain a6 > r5 > a5 > a4 > h2 > r1 > a1 > t > p, without the attachment.
+    const chain = ["p", "t", "a1", "r1", "a4", "a5", "r5", "a6"];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      projectsDir,
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (sid: string) => (sid === id ? { sessionId: id, cwd: webRoot } : undefined)) as never,
+        getSessionMessages: (async () => main) as never,
+        listSubagents: (async () => ["a39f5d0972c7cf0a8"]) as never,
+        getSubagentMessages: (async () => chain.map((u) => sdk(raw.find((l) => l.uuid === u)!))) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "session_state");
+      const events = c.inbox.flatMap((m) => (m.type === "event" ? [m.part] : []));
+      const parts = new Map(events.map((p) => [p.id, p] as const));
+      for (const n of [1, 2, 3, 4, 5]) {
+        expect(parts.get(`toolu_read${n}`)).toMatchObject({ type: "tool_call", status: "done", parentId: "toolu_outer" });
+        expect(parts.get(`toolu_read${n}:result`)).toMatchObject({ type: "tool_result", output: `${n}`, parentId: "toolu_outer" });
+      }
+      // Calls keep the API message's order.
+      const order = events.flatMap((p) => (p.type === "tool_call" && p.id.startsWith("toolu_read") && !p.id.includes(":") ? [p.id] : []));
+      expect([...new Set(order)]).toEqual([1, 2, 3, 4, 5].map((n) => `toolu_read${n}`));
+    } finally {
+      d.close();
+      rmSync(projectsDir, { recursive: true, force: true });
+    }
+  });
+
   it("a restored background subagent run keeps its real status and duration from the transcript's task notifications", async () => {
     // Shapes of the "Sleeper" run in development-docs/GH-36 session 4c189532 (getSessionMessages, SDK 0.3.285).
     const id = "9c3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a";

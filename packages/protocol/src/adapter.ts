@@ -298,9 +298,10 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           return [];
         }
         if (m.type === "system" && m.subtype === "task_notification") return taskEnded(m.task_id, m.tool_use_id, m.status);
-        // Claude Code's banners: "info" only in its transcript mode, "notice" gray, the rest prominent.
+        // Claude Code's banners: "info" only in its transcript mode, "notice" gray, the rest prominent. Progress notices of one
+        // tool call (tool_use_id) share one line.
         if (m.type === "system" && m.subtype === "informational")
-          return m.level === "info" ? [] : [{ type: "notice", id: m.uuid, level: m.level === "notice" ? "notice" : "warning", text: m.content }];
+          return m.level === "info" ? [] : [{ type: "notice", id: m.tool_use_id ? `${m.tool_use_id}:notice` : m.uuid, level: m.level === "notice" ? "notice" : "warning", text: m.content }];
         if (m.type === "system" && (m.subtype === "model_refusal_fallback" || m.subtype === "model_refusal_no_fallback"))
           return [{ type: "notice", id: m.uuid, level: "warning", text: m.content }];
         if (IGNORED.has(m.type) || IGNORED.has(`${m.type}:${"subtype" in m ? m.subtype : ""}`)) return [];

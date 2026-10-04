@@ -1842,11 +1842,11 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
         </div>
       );
     case "notice":
-      // Claude Code's banner levels: notice in inactive gray, warning prominent.
+      // Claude Code's banner levels: notice in inactive gray, warning prominent. A run of blank lines shows as one.
       return (
         <div data-testid="notice" className={`flex items-start gap-1.5 text-xs ${part.level === "warning" ? "text-warning" : "text-muted-foreground"}`}>
           {part.level === "warning" && <TriangleAlertIcon role="img" aria-label="Warning" className="mt-px size-3.5 shrink-0" />}
-          <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{part.text}</span>
+          <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{part.text.replace(/\n{3,}/g, "\n\n")}</span>
         </div>
       );
     case "raw":

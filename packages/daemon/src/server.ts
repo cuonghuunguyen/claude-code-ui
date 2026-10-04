@@ -1,5 +1,6 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { closeSync, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { createServer, type IncomingMessage } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -109,36 +110,53 @@ function transcriptSettings(projectsDir: string, cwd: string, sessionId: string)
 }
 
 /**
- * getSubagentMessages() keeps only the run transcript's last parentUuid chain, so the tool_result of a parallel call on a side
- * branch is lost (each parallel tool_use is its own assistant line, its result a child of it; SDK 0.3.285). Puts each lost
- * tool_result back after its assistant message, read from the raw `agent-<id>.jsonl` under `<session>/subagents/` (nested folders too).
+ * getSubagentMessages() keeps only the run transcript's last parentUuid chain (SDK 0.3.285). Parallel tool calls branch: each
+ * parallel tool_use of one API message is its own assistant line chained off the previous one, each tool_result a child of its
+ * tool_use line, so the calls and results off the leaf chain are lost. Puts back, from the raw `agent-<id>.jsonl`, each lost
+ * assistant line of an API message the output has and each lost tool_result, right after its parent (the nearest ancestor
+ * that is kept or put back; attachment lines in between are skipped).
  */
-function withParallelResults(projectsDir: string, cwd: string, sessionId: string, agentId: string, messages: SessionMessage[]): SessionMessage[] {
-  const dir = transcriptFile(projectsDir, cwd, sessionId).replace(/\.jsonl$/, "/subagents");
+async function withParallelCalls(file: string | undefined, messages: SessionMessage[]): Promise<SessionMessage[]> {
+  if (!file) return messages;
   let text: string;
   try {
-    const file = readdirSync(dir, { recursive: true, encoding: "utf8" }).find((f) => basename(f) === `agent-${agentId}.jsonl`);
-    if (!file) return messages;
-    text = readFileSync(join(dir, file), "utf8");
+    text = await readFile(file, "utf8");
   } catch {
     return messages;
   }
+  type Line = { type: SessionMessage["type"]; uuid: string; parentUuid?: string; message?: { id?: unknown; content?: unknown }; timestamp?: string };
   const have = new Set(messages.map((m) => m.uuid));
-  const lost = new Map<string, { uuid: string; message: unknown; timestamp?: string }[]>();
+  const apiIds = new Set<unknown>(messages.flatMap((m) => (m.type === "assistant" && (m.message as { id?: unknown })?.id) || []));
+  const parentOf = new Map<string, string>();
+  const lost = new Map<string, Line>();
   for (const line of text.split("\n")) {
-    if (!line.includes('"tool_result"')) continue;
+    if (!line) continue;
     try {
-      const e = JSON.parse(line) as { type?: string; uuid?: string; parentUuid?: string; message?: { content?: unknown }; timestamp?: string };
+      const e = JSON.parse(line) as Line;
+      if (!e.uuid) continue;
+      if (e.parentUuid) parentOf.set(e.uuid, e.parentUuid);
+      if (have.has(e.uuid)) continue;
       const content = e.message?.content;
-      if (e.type !== "user" || !e.uuid || !e.parentUuid || have.has(e.uuid) || !have.has(e.parentUuid)) continue;
-      if (!Array.isArray(content) || !content.some((b) => (b as { type?: unknown })?.type === "tool_result")) continue;
-      lost.set(e.parentUuid, [...(lost.get(e.parentUuid) ?? []), { uuid: e.uuid, message: e.message, timestamp: e.timestamp }]);
+      const result = e.type === "user" && Array.isArray(content) && content.some((b) => (b as { type?: unknown })?.type === "tool_result");
+      if (result || (e.type === "assistant" && apiIds.has(e.message?.id))) lost.set(e.uuid, e);
     } catch {
       // A line cut by a concurrent write.
     }
   }
   if (!lost.size) return messages;
-  return messages.flatMap((m) => [m, ...(lost.get(m.uuid) ?? []).map((e) => ({ ...m, type: "user" as const, ...e }))]);
+  const children = new Map<string, Line[]>();
+  for (const e of lost.values()) {
+    let p = e.parentUuid;
+    for (let i = 0; p && !have.has(p) && !lost.has(p) && i < parentOf.size; i++) p = parentOf.get(p);
+    if (p) children.set(p, [...(children.get(p) ?? []), e]);
+  }
+  const out: SessionMessage[] = [];
+  const add = (m: SessionMessage) => {
+    out.push(m);
+    for (const e of children.get(m.uuid) ?? []) add({ ...m, type: e.type, uuid: e.uuid, message: e.message, timestamp: e.timestamp } as SessionMessage);
+  };
+  messages.forEach(add);
+  return out;
 }
 
 /** Names, sizes and mtimes of every transcript under `projectsDir`; undefined when it cannot be read. */
@@ -331,7 +349,25 @@ export function createDaemon(opts: {
   async function readTranscript(id: string, cwd: string): Promise<Transcript> {
     const main = await history.getSessionMessages(id, { dir: cwd });
     const agents = await history.listSubagents(id, { dir: cwd }).catch((err) => (console.error(`listing subagent runs of ${id} failed:`, err), []));
-    const runs = await Promise.all(agents.map((a) => history.getSubagentMessages(id, a, { dir: cwd }).then((m) => withParallelResults(projectsDir, cwd, id, a, m)).catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []))));
+    const dir = transcriptFile(projectsDir, cwd, id).replace(/\.jsonl$/, "/subagents");
+    let files: string[] = [];
+    try {
+      if (agents.length) files = readdirSync(dir, { recursive: true, encoding: "utf8" });
+    } catch {
+      // No raw run files: the SDK output as is.
+    }
+    const runFile = (a: string) => {
+      const f = files.find((f) => basename(f) === `agent-${a}.jsonl`);
+      return f && join(dir, f);
+    };
+    const runs = await Promise.all(
+      agents.map((a) =>
+        history
+          .getSubagentMessages(id, a, { dir: cwd })
+          .then((m) => withParallelCalls(runFile(a), m))
+          .catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), [])),
+      ),
+    );
     return { main, runs };
   }
 

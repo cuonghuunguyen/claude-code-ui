@@ -232,6 +232,12 @@ it("a CLI notice shows as a gray line, a warning notice with a warning icon, not
   expect(el.querySelector('[data-testid="raw-part"]')).toBeNull();
 });
 
+it("a CLI notice shows a run of blank lines as one blank line", async () => {
+  // A UserPromptSubmit hook's block reason (development-docs/GH-46/review, screenshot 03).
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "notice", id: "h1", level: "warning", text: "Blocked by hook\n\n\n\nOriginal prompt: hi" } }));
+  expect(el.querySelector('[data-testid="notice"]')!.textContent).toBe("Blocked by hook\n\nOriginal prompt: hi");
+});
+
 it("Remove project asks first; Cancel keeps it, Remove sends project.remove", async () => {
   const removeSent = () => sent.filter((m) => m.type === "project.remove");
   const remove = () => act(async () => el.querySelector<HTMLElement>('[data-testid="project-remove"]')!.click());

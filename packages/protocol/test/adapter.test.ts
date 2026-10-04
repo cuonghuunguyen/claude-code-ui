@@ -271,6 +271,15 @@ describe("adapter on unknown messages", () => {
     ]);
   });
 
+  it("keeps one notice line per tool call for progress notices with a tool_use_id, the latest text", () => {
+    // SDKInformationalMessage.tool_use_id "dedupes progress messages for the same tool use" (SDK 0.3.285).
+    const parts = run([
+      { type: "system", subtype: "informational", uuid: "p1", level: "notice", tool_use_id: "t1", content: "Downloading 10%" },
+      { type: "system", subtype: "informational", uuid: "p2", level: "notice", tool_use_id: "t1", content: "Downloading 90%" },
+    ]);
+    expect(new Map(parts.map((p) => [p.id, p]))).toEqual(new Map([["t1:notice", { type: "notice", id: "t1:notice", level: "notice", text: "Downloading 90%" }]]));
+  });
+
   it("marks a call denied from result.permission_denials", () => {
     const parts = run([
       { type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "t1", name: "Write", input: {} }] } },
