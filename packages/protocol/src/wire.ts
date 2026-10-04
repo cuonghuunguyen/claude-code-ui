@@ -160,11 +160,14 @@ export const WS_PROTOCOL = "claude-ui";
 export const TOKEN_PROTOCOL_PREFIX = "token.";
 
 /**
- * `projects`: known project cwds, newest activity first: session cwds plus opened projects, minus removed ones.
+ * `projects`: added project cwds only (project.open, a created session, a deep link), newest activity first.
  * `sessions`: only sessions of those projects.
+ * `recentProjects`: cwds with sessions that are not added, newest activity first: suggestions for the Open project dialog.
  * `permissionModes`: the modes a new session can start in (permissionModesFor, for the default model).
  */
-export type ListResult = { sessions: SessionListItem[]; projects: string[]; permissionModes: PermissionMode[] };
+export type ListResult = { sessions: SessionListItem[]; projects: string[]; recentProjects: RecentProject[]; permissionModes: PermissionMode[] };
+/** `lastActivity`: ms of its newest session. */
+export type RecentProject = { cwd: string; sessionCount: number; lastActivity: number };
 /** `cwd`: the canonical path of the opened project. */
 export type ProjectOpenResult = { cwd: string };
 export type FsListResult = { entries: FsEntry[] };

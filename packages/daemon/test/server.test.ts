@@ -12,6 +12,13 @@ import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS, MODEL_LIST_WAIT_MS } from 
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, controlCalls, fakeQuery, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery } from "./fake-query.ts";
 
+/** A projects store with these cwds added. */
+const added = (...cwds: string[]) => {
+  const p = createProjects();
+  cwds.forEach((c) => p.open(c));
+  return p;
+};
+
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
@@ -866,13 +873,15 @@ describe("daemon", () => {
       const c = await client((d.address() as AddressInfo).port);
       const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
       const list = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string }[] } };
-      expect(list.result.sessions).toMatchObject([
-        { id: created.result.session.id, cwd: webRoot, state: "idle", model: "default", title: "New session", lastActivity: expect.any(Number), archived: false, transcript: false },
-        { id: inside, cwd, state: "closed", model: "default", title: "fix the bug", lastActivity: 1000, archived: false, transcript: true },
-      ]);
+      // The created session adds its project; the transcript-only project is not listed.
+      expect(list.result.sessions).toMatchObject([{ id: created.result.session.id, cwd: webRoot, state: "idle", model: "default", title: "New session", lastActivity: expect.any(Number), archived: false, transcript: false }]);
 
       expect(await c.request({ type: "session.subscribe", sessionId: outside, sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
+      // A deep link to a session of a project that is not added opens it and adds the project.
       await c.request({ type: "session.subscribe", sessionId: inside, sinceSeq: 0 });
+      const linked = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string }[]; projects: string[] } };
+      expect(linked.result.projects).toEqual([cwd, webRoot]);
+      expect(linked.result.sessions.map((s) => s.id)).toContain(inside);
       await c.request({ type: "session.prompt", sessionId: inside, text: "go on" });
       expect(calls.filter((o) => o.resume === inside && o.canUseTool)).toHaveLength(1);
       const again = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; state: string }[] } };
@@ -895,6 +904,7 @@ describe("daemon", () => {
       token,
       roots: [webRoot],
       query: fakeQuery as never,
+      projects: added(webRoot),
       history: {
         listSessions: (async () => {
           scans++;
@@ -984,6 +994,7 @@ describe("daemon", () => {
       roots: [webRoot],
       query: fakeQuery as never,
       projectsDir,
+      projects: added(cwd),
       history: { listSessions: (async () => transcripts) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
     });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
@@ -1017,51 +1028,131 @@ describe("daemon", () => {
     }
   });
 
-  it("project.open keeps a project with no sessions across a restart; project.remove hides it and its sessions", async () => {
-    const cwd = mkdtempSync(join(webRoot, "proj-"));
-    const opened = mkdtempSync(join(webRoot, "opened-"));
-    const file = join(mkdtempSync(join(tmpdir(), "cfg-")), "projects.json");
-    const transcripts = [{ sessionId: "5b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", summary: "old", lastModified: 1000, cwd }];
-    const start = async () => {
+  describe("added projects", () => {
+    const cwdOf = (n: string) => mkdtempSync(join(webRoot, `${n}-`));
+    const sid = (n: number) => `0b2c3d4e-5f60-4718-8a9b-${String(n).padStart(12, "0")}`;
+    const start = async (transcripts: { sessionId: string; summary: string; lastModified: number; cwd: string }[], projects: ReturnType<typeof createProjects>, settingsFile?: string) => {
       const d = createDaemon({
         webRoot,
         token,
         roots: [webRoot],
         query: fakeQuery as never,
-        projects: createProjects({ file }),
+        projects,
+        settingsFile,
         history: { listSessions: (async () => transcripts) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
       });
       await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
       return { d, c: await client((d.address() as AddressInfo).port) };
     };
-    const list = async (c: Awaited<ReturnType<typeof client>>) =>
-      ((await c.request({ type: "session.list" })) as { result: { projects: string[]; sessions: { id: string }[] } }).result;
+    type Listed = { projects: string[]; recentProjects: { cwd: string; sessionCount: number; lastActivity: number }[]; sessions: { id: string }[] };
+    const list = async (c: Awaited<ReturnType<typeof client>>) => ((await c.request({ type: "session.list" })) as { result: Listed }).result;
 
-    const a = await start();
-    try {
-      // Another connected client hears of the change and refreshes its list.
-      const other = await client((a.d.address() as AddressInfo).port);
-      expect(await a.c.request({ type: "project.open", cwd: opened })).toMatchObject({ result: { cwd: opened } });
-      await other.waitFor((m) => m.type === "sessions.changed");
-      expect(await a.c.request({ type: "project.open", cwd: "/etc" })).toMatchObject({ code: "cwd_not_allowed" });
-      expect(await a.c.request({ type: "project.open", cwd: join(webRoot, "index.html") })).toMatchObject({ code: "cwd_not_allowed" });
-      expect((await list(a.c)).projects).toEqual([opened, cwd]);
-    } finally {
-      a.d.close();
-    }
-    const b = await start();
-    try {
-      expect((await list(b.c)).projects).toEqual([opened, cwd]);
-      const other = await client((b.d.address() as AddressInfo).port);
-      await b.c.request({ type: "project.remove", cwd });
-      await other.waitFor((m) => m.type === "sessions.changed");
-      expect(await list(b.c)).toMatchObject({ projects: [opened], sessions: [] });
-      expect(await b.c.request({ type: "project.remove", cwd: 7 })).toMatchObject({ code: "bad_cwd" });
-      // Files stay.
-      expect(statSync(cwd).isDirectory()).toBe(true);
-    } finally {
-      b.d.close();
-    }
+    it("a fresh state lists no project and no session while transcripts exist; they are the recent projects, newest first", async () => {
+      const [a, b] = [cwdOf("a"), cwdOf("b")];
+      const x = await start(
+        [
+          { sessionId: sid(1), summary: "a1", lastModified: 10, cwd: a },
+          { sessionId: sid(2), summary: "b1", lastModified: 30, cwd: b },
+          { sessionId: sid(3), summary: "a2", lastModified: 20, cwd: a },
+          { sessionId: sid(4), summary: "outside", lastModified: 40, cwd: "/etc" },
+        ],
+        createProjects(),
+      );
+      try {
+        expect(await list(x.c)).toMatchObject({
+          projects: [],
+          sessions: [],
+          recentProjects: [
+            { cwd: b, sessionCount: 1, lastActivity: 30 },
+            { cwd: a, sessionCount: 2, lastActivity: 20 },
+          ],
+        });
+      } finally {
+        x.d.close();
+      }
+    });
+
+    it("project.open keeps a project across a restart and moves it from recent to the list with its sessions; project.remove hides it again", async () => {
+      const cwd = cwdOf("proj");
+      const empty = cwdOf("empty");
+      const file = join(mkdtempSync(join(tmpdir(), "cfg-")), "projects.json");
+      const transcripts = [{ sessionId: sid(1), summary: "old", lastModified: 1000, cwd }];
+      const a = await start(transcripts, createProjects({ file }));
+      try {
+        // Another connected client hears of the change and refreshes its list.
+        const other = await client((a.d.address() as AddressInfo).port);
+        expect(await a.c.request({ type: "project.open", cwd: empty })).toMatchObject({ result: { cwd: empty } });
+        await other.waitFor((m) => m.type === "sessions.changed");
+        expect(await a.c.request({ type: "project.open", cwd: "/etc" })).toMatchObject({ code: "cwd_not_allowed" });
+        expect(await a.c.request({ type: "project.open", cwd: join(webRoot, "index.html") })).toMatchObject({ code: "cwd_not_allowed" });
+        expect(await list(a.c)).toMatchObject({ projects: [empty], sessions: [], recentProjects: [{ cwd }] });
+        await a.c.request({ type: "project.open", cwd });
+        expect(await list(a.c)).toMatchObject({ projects: [cwd, empty], sessions: [{ id: sid(1) }], recentProjects: [] });
+      } finally {
+        a.d.close();
+      }
+      const b = await start(transcripts, createProjects({ file }));
+      try {
+        expect((await list(b.c)).projects).toEqual([cwd, empty]);
+        const other = await client((b.d.address() as AddressInfo).port);
+        await b.c.request({ type: "project.remove", cwd });
+        await other.waitFor((m) => m.type === "sessions.changed");
+        expect(await list(b.c)).toMatchObject({ projects: [empty], sessions: [], recentProjects: [{ cwd, sessionCount: 1 }] });
+        expect(await b.c.request({ type: "project.remove", cwd: 7 })).toMatchObject({ code: "bad_cwd" });
+        // Files stay.
+        expect(statSync(cwd).isDirectory()).toBe(true);
+      } finally {
+        b.d.close();
+      }
+    });
+
+    it("session.create adds its project, so it stays listed after a restart", async () => {
+      const cwd = cwdOf("created");
+      const file = join(mkdtempSync(join(tmpdir(), "cfg-")), "projects.json");
+      const a = await start([], createProjects({ file }));
+      try {
+        await a.c.request({ type: "session.create", cwd });
+        expect((await list(a.c)).projects).toEqual([cwd]);
+      } finally {
+        a.d.close();
+      }
+      const b = await start([], createProjects({ file }));
+      try {
+        expect((await list(b.c)).projects).toEqual([cwd]);
+      } finally {
+        b.d.close();
+      }
+    });
+
+    it("upgrade: the first start with the new rule adds opened projects and cwds of sessions with saved claude-ui settings; transcript-only cwds stay recent", async () => {
+      const [saved, opened, cliOnly, removed] = [cwdOf("saved"), cwdOf("opened"), cwdOf("cli"), cwdOf("removed")];
+      const dir = mkdtempSync(join(tmpdir(), "cfg-"));
+      const file = join(dir, "projects.json");
+      // projects.json of the old version: no "seeded" mark.
+      writeFileSync(file, JSON.stringify({ opened: { [opened]: 5 }, removed: { [removed]: 5000 } }));
+      const settingsFile = join(dir, "sessions.json");
+      writeFileSync(settingsFile, JSON.stringify({ [sid(1)]: { permissionMode: "default" }, [sid(4)]: { permissionMode: "default" } }));
+      const transcripts = [
+        { sessionId: sid(1), summary: "saved", lastModified: 100, cwd: saved },
+        { sessionId: sid(2), summary: "cli", lastModified: 200, cwd: cliOnly },
+        // Removed after its last activity (old rule): not seeded back.
+        { sessionId: sid(4), summary: "removed", lastModified: 300, cwd: removed },
+      ];
+      const a = await start(transcripts, createProjects({ file }), settingsFile);
+      try {
+        expect(await list(a.c)).toMatchObject({ projects: [saved, opened], recentProjects: [{ cwd: removed }, { cwd: cliOnly }] });
+      } finally {
+        a.d.close();
+      }
+      // Seeded once: a later removal and a new transcript-only cwd do not come back through a second seed.
+      const b = await start(transcripts, createProjects({ file }), settingsFile);
+      try {
+        await b.c.request({ type: "project.remove", cwd: saved });
+        expect((await list(b.c)).projects).toEqual([opened]);
+      } finally {
+        b.d.close();
+      }
+    });
   });
 
   it("session.list drops an opened project whose directory is gone or outside the roots", async () => {
@@ -1094,6 +1185,7 @@ describe("daemon", () => {
       token,
       roots: [webRoot],
       query: permissionQuery as never,
+      projects: added(cwd),
       history: {
         listSessions: (async () => transcripts) as never,
         getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,

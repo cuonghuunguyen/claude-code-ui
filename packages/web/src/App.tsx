@@ -8,6 +8,7 @@ import type {
   FsListResult,
   FsSearchResult,
   ListResult,
+  RecentProject,
   ModelInfo,
   ModelsResult,
   Part,
@@ -120,6 +121,7 @@ export function App() {
   const [plan, setPlan] = useState<PlanUsage | null>(null);
   // Known project cwds from the daemon, newest first.
   const [projects, setProjects] = useState<string[]>([]);
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   // Project the new-session tab starts in.
   const [draftCwd, setDraftCwd] = useState<string>();
   // The new-session tab's model, mode and effort: here, not in the tab, so the palette can change them too.
@@ -214,12 +216,13 @@ export function App() {
 
   async function refreshList() {
     try {
-      const { sessions, projects, permissionModes } = await client.current!.request<ListResult>({ type: "session.list" });
+      const { sessions, projects, recentProjects = [], permissionModes } = await client.current!.request<ListResult>({ type: "session.list" });
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
       const listed = new Set(sessions.map((s) => s.id));
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
       setList(sessions);
       setProjects(projects);
+      setRecentProjects(recentProjects);
       if (permissionModes) setNewModes(permissionModes);
       if (restored.current) {
         for (const id of staleTabs(restored.current, new Set(sessions.map((s) => s.id)))) forget(id);
@@ -893,6 +896,7 @@ export function App() {
         onOpenChange={setOpeningProject}
         list={async (path) => (await client.current!.request<FsListResult>(path ? { type: "fs.list", path } : { type: "fs.list" })).entries}
         onPick={openProject}
+        recent={recentProjects}
         // Focus goes to the new-session prompt, not back to the button that opened the dialog.
         finalFocus={newPrompt}
       />

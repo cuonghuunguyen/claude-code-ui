@@ -272,6 +272,17 @@ export function createDaemon(opts: {
     return p && inRoots(p) ? p : undefined;
   };
 
+  /** Adds the project of a session the user opened or created; other clients refresh their list. A failed write is only logged: the session works. */
+  function addProject(cwd: string) {
+    if (projects.has(cwd)) return;
+    try {
+      projects.open(cwd);
+      broadcast({ type: "sessions.changed" });
+    } catch (err) {
+      console.error("saving projects failed:", err);
+    }
+  }
+
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<WebSocket, string>();
   const notifier = createNotifier({
@@ -331,11 +342,20 @@ export function createDaemon(opts: {
     for (const s of sessions.values())
       if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false });
     const listed = [...items.values()];
-    // An opened project whose directory is gone or left the roots is not listed (its New session would fail).
+    // Upgrade from "every transcript cwd is a project": the projects with saved claude-ui state stay, once.
+    if (!projects.seeded)
+      try {
+        projects.seed(listed.filter((s) => s.id in settings));
+      } catch (err) {
+        // In memory it holds; the next start seeds again.
+        console.error("saving projects failed:", err);
+      }
+    // An added project whose directory is gone or left the roots is not listed (its New session would fail).
     const open = projects.list(listed).filter((cwd) => allowed(cwd));
     const shown = new Set(open);
     return {
       projects: open,
+      recentProjects: projects.recent(listed),
       sessions: listed.filter((s) => shown.has(trim(s.cwd))).sort((a, b) => b.lastActivity - a.lastActivity),
       permissionModes: permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto("default") }),
     };
@@ -471,11 +491,14 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           await modelList().catch(() => {});
           const s: Session = track(new Session(cwd, sessionOpts(() => s.id, { model: msg.model })));
+          addProject(cwd);
           return reply({ session: s.info() });
         }
         case "session.subscribe": {
           const s = await find(msg.sessionId);
           if (!s || ws.readyState !== ws.OPEN) return;
+          // A link to a session of a project that is not added opens it and adds the project.
+          addProject(s.cwd);
           unsubscribes.get(s.id)?.();
           // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
           const since = msg.logEpoch === logEpoch ? msg.sinceSeq : 0;

@@ -441,3 +441,20 @@ it("another client that gets only the session_model part follows the model's per
     restore();
   }
 });
+
+it("with no added project: empty state, and the Open project dialog adds a recent project in one click", async () => {
+  replies["session.list"] = { sessions: [], projects: [], recentProjects: [{ cwd: "/p/cli", sessionCount: 2, lastActivity: Date.now() }] };
+  location.hash = "";
+  try {
+    await act(async () => sessionsChanged({ type: "sessions.changed" }));
+    await act(async () => {});
+    expect(el.textContent).toContain("No projects yet");
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="open-project"]')!.click());
+    await act(async () => {});
+    sent.length = 0;
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="recent-row"]')!.click());
+    expect(sent).toContainEqual(expect.objectContaining({ type: "project.open", cwd: "/p/cli" }));
+  } finally {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+  }
+});
