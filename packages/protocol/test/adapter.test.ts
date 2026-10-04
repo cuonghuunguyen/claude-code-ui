@@ -253,6 +253,33 @@ describe("adapter on unknown messages", () => {
     expect(run([m])).toEqual([{ type: "raw", id: "c1", message: m }]);
   });
 
+  it("turns informational and refusal fallback notices into notice parts as Claude Code shows them; per-turn effort changes are hidden", () => {
+    // Shapes from session f89b1df5 (development-docs/GH-37, CLI 2.1.285); per_turn_effort_changed came with them (no SDK type yet).
+    const parts = run([
+      { type: "system", subtype: "informational", uuid: "i1", level: "notice", content: "Opus 5.5's safeguards stopped the response above · continuing once with that noted" },
+      { type: "system", subtype: "informational", uuid: "i2", level: "info", content: "transcript-only line" },
+      { type: "system", subtype: "informational", uuid: "i3", level: "warning", content: "Stop hook denied continuation" },
+      { type: "system", subtype: "model_refusal_fallback", uuid: "f1", direction: "retry", content: "Opus 4.8 is answering instead" },
+      { type: "system", subtype: "model_refusal_no_fallback", uuid: "f2", content: "Opus 5.5 declined to answer" },
+      { type: "system", subtype: "per_turn_effort_changed", uuid: "e1" },
+    ]);
+    expect(parts).toEqual([
+      { type: "notice", id: "i1", level: "notice", text: "Opus 5.5's safeguards stopped the response above · continuing once with that noted" },
+      { type: "notice", id: "i3", level: "warning", text: "Stop hook denied continuation" },
+      { type: "notice", id: "f1", level: "warning", text: "Opus 4.8 is answering instead" },
+      { type: "notice", id: "f2", level: "warning", text: "Opus 5.5 declined to answer" },
+    ]);
+  });
+
+  it("keeps one notice line per tool call for progress notices with a tool_use_id, the latest text", () => {
+    // SDKInformationalMessage.tool_use_id "dedupes progress messages for the same tool use" (SDK 0.3.285).
+    const parts = run([
+      { type: "system", subtype: "informational", uuid: "p1", level: "notice", tool_use_id: "t1", content: "Downloading 10%" },
+      { type: "system", subtype: "informational", uuid: "p2", level: "notice", tool_use_id: "t1", content: "Downloading 90%" },
+    ]);
+    expect(new Map(parts.map((p) => [p.id, p]))).toEqual(new Map([["t1:notice", { type: "notice", id: "t1:notice", level: "notice", text: "Downloading 90%" }]]));
+  });
+
   it("marks a call denied from result.permission_denials", () => {
     const parts = run([
       { type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "t1", name: "Write", input: {} }] } },

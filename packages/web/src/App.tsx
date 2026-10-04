@@ -1,5 +1,5 @@
 import { Activity, lazy, Suspense, use, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SquareTerminalIcon, SunIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon } from "lucide-react";
 import type {
   ContextUsage,
   CreateResult,
@@ -1839,6 +1839,14 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
       return (
         <div className="text-muted-foreground text-xs" data-testid="turn-interrupted">
           Interrupted by user
+        </div>
+      );
+    case "notice":
+      // Claude Code's banner levels: notice in inactive gray, warning prominent. A run of blank lines shows as one.
+      return (
+        <div data-testid="notice" className={`flex items-start gap-1.5 text-xs ${part.level === "warning" ? "text-warning" : "text-muted-foreground"}`}>
+          {part.level === "warning" && <TriangleAlertIcon role="img" aria-label="Warning" className="mt-px size-3.5 shrink-0" />}
+          <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{part.text.replace(/\n{3,}/g, "\n\n")}</span>
         </div>
       );
     case "raw":
