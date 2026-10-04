@@ -4,6 +4,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { SessionPane } from "./App.tsx";
+import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -377,4 +378,17 @@ it("a rewind that removes later items leaves the timeline at the bottom of what 
   expect(button()).toBeNull();
   expect(text()).toContain("answer 59");
   expect(text()).not.toContain("message 60");
+});
+
+it("the virtualizer's own re-renders (scroll start and end, a hidden tab shown again and scrolled back) render no item again (GH-51)", async () => {
+  const items = Array.from({ length: 100 }, (_, i) => `item ${i}`);
+  const rendered: string[] = [];
+  const renderItem = (item: string) => (rendered.push(item), <p>{item}</p>);
+  await act(async () => root.render(<VirtualTimeline items={items} itemKey={(i) => i} renderItem={renderItem} />));
+  await settle();
+  expect(rendered).toContain("item 99");
+  rendered.length = 0;
+  // A few pixels: the same items stay in the window; only the virtualizer re-renders (isScrolling on, then off).
+  await userScroll(log().scrollTop - 30);
+  expect(rendered).toEqual([]);
 });

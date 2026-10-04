@@ -6,6 +6,13 @@ import { TabsBar, type TabInfo } from "./tabs-bar.tsx";
 import { NEW_TAB, closeTab, moveTab } from "./tabs.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// One context menu per rendered tab: counts the tabs' renders.
+const tabRenders = vi.hoisted(() => ({ n: 0 }));
+vi.mock("@base-ui/react/context-menu", async (orig) => {
+  const m = await orig<typeof import("@base-ui/react/context-menu")>();
+  const Root = (p: Parameters<typeof m.ContextMenu.Root>[0]) => (tabRenders.n++, <m.ContextMenu.Root {...p} />);
+  return { ...m, ContextMenu: { ...m.ContextMenu, Root } };
+});
 
 const INFO: Record<string, TabInfo> = {
   a: { title: "Fix login", cwd: "/home/u/web", state: "running", unread: false },
@@ -290,4 +297,25 @@ it("a tab with no transcript yet does not rename on double click", async () => {
 it("session tab buttons show the pointer cursor", async () => {
   const { tab } = await render();
   for (const id of ["a", "c", NEW_TAB]) expect(tab(id).querySelector('[role="tab"]')!.className).toMatch(/(^|\s)cursor-pointer(\s|$)/);
+});
+
+it("a tab switch re-renders only the tabs that lose or get the selection (GH-51)", async () => {
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  const onClose = vi.fn();
+  // App passes new closures and new info objects on every render.
+  const show = (activeId: string) =>
+    act(async () =>
+      root!.render(
+        <TabsBar tabs={["a", "b", "c", "d"]} activeId={activeId} info={(id) => ({ ...INFO[id]! })} onSelect={() => {}} onClose={(id) => onClose(id)} onMove={() => {}} onNew={() => {}} onAction={() => {}} onRenamed={() => {}} />,
+      ),
+    );
+  await show("c");
+  tabRenders.n = 0;
+  await show("a");
+  expect(tabRenders.n).toBe(2);
+  // A tab that did not re-render still closes with the latest handler.
+  await act(async () => el.querySelector<HTMLElement>('[data-tab-id="b"] [data-testid="tab-close"]')!.click());
+  expect(onClose).toHaveBeenCalledWith("b");
 });

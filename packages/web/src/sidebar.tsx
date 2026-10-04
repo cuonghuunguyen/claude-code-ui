@@ -1,9 +1,9 @@
 // Sidebar session list (docs/spec.md "Layout"): one collapsible group per known project, search by title or project name.
-import { useState } from "react";
+import { memo, useState } from "react";
 import { ArchiveIcon, ChevronRightIcon, CircleAlertIcon, FolderPlusIcon, LoaderCircleIcon, SearchIcon, SquarePenIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SessionListItem, SessionState } from "@claude-ui/protocol";
-import { cn } from "@/lib/utils";
+import { cn, useStableProps } from "@/lib/utils";
 import { byDay, groupByCwd, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
 import { IconButton, ProjectAvatar } from "./tabs-bar.tsx";
@@ -51,6 +51,8 @@ export function SessionList({
   /** New title, or undefined when the edit was cancelled. */
   onRenamed: (id: string, title: string | undefined) => void;
 }) {
+  // Stable for the memo rows: a tab switch re-renders only the two rows whose active mark changes.
+  const rowProps = useStableProps({ onOpen, onAction, onRenamed });
   const [query, setQuery] = useState("");
   const [archived, setArchived] = useState(false);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
@@ -157,47 +159,9 @@ export function SessionList({
                       {day.title}
                     </h4>
                     <ul className="flex flex-col gap-0.5">
-                      {day.sessions.map((s) => {
-                        const st = state(s);
-                        const label = STATE_LABEL[st];
-                        const isUnread = unread.has(s.id);
-                        const target = { title: s.title, archived: s.archived, busy: st === "running" || st === "needs_input", transcript: s.transcript };
-                        const act = (a: SessionAction) => onAction(s.id, a);
-                        if (renaming === s.id)
-                          return (
-                            <li key={s.id} className="flex h-8 items-center pr-1.5 pl-7 max-md:h-11">
-                              <RenameInput title={s.title} onDone={(t) => onRenamed(s.id, t)} />
-                            </li>
-                          );
-                        return (
-                          <SessionContextMenu key={s.id} target={target} onAction={act}>
-                            <li className="group relative">
-                              <button
-                                data-testid="session-item"
-                                data-state={st}
-                                className={cn(
-                                  "flex h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-8 max-md:pr-12 pl-7 text-left text-sm outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11",
-                                  s.id === activeId && "bg-secondary",
-                                )}
-                                aria-current={s.id === activeId ? "page" : undefined}
-                                aria-label={[s.title, label, isUnread && "unread"].filter(Boolean).join(", ")}
-                                onClick={() => onOpen(s.id)}
-                                title={label ? `${s.title} (${label})` : s.title}
-                              >
-                                <span className="min-w-0 flex-1 truncate font-medium text-foreground">{s.title}</span>
-                                {isUnread && <span className="size-1.5 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-hidden />}
-                                <StateIcon state={st} />
-                                <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{timeAgo(s.lastActivity)}</span>
-                              </button>
-                              <SessionMenu
-                                target={target}
-                                onAction={act}
-                                className="-translate-y-1/2 absolute top-1/2 right-1 opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-popup-open:opacity-100 pointer-coarse:opacity-100"
-                              />
-                            </li>
-                          </SessionContextMenu>
-                        );
-                      })}
+                      {day.sessions.map((s) => (
+                        <SessionRow key={s.id} s={s} st={state(s)} unread={unread.has(s.id)} active={s.id === activeId} renaming={renaming === s.id} {...rowProps} />
+                      ))}
                     </ul>
                   </div>
                 ))}
@@ -208,3 +172,61 @@ export function SessionList({
     </div>
   );
 }
+
+const SessionRow = memo(function SessionRow({
+  s,
+  st,
+  unread,
+  active,
+  renaming,
+  onOpen,
+  onAction,
+  onRenamed,
+}: {
+  s: SessionListItem;
+  st: SessionState;
+  unread: boolean;
+  active: boolean;
+  renaming: boolean;
+  onOpen: (id: string) => void;
+  onAction: (id: string, a: SessionAction) => void;
+  onRenamed: (id: string, title: string | undefined) => void;
+}) {
+  const label = STATE_LABEL[st];
+  const target = { title: s.title, archived: s.archived, busy: st === "running" || st === "needs_input", transcript: s.transcript };
+  const act = (a: SessionAction) => onAction(s.id, a);
+  if (renaming)
+    return (
+      <li className="flex h-8 items-center pr-1.5 pl-7 max-md:h-11">
+        <RenameInput title={s.title} onDone={(t) => onRenamed(s.id, t)} />
+      </li>
+    );
+  return (
+    <SessionContextMenu target={target} onAction={act}>
+      <li className="group relative">
+        <button
+          data-testid="session-item"
+          data-state={st}
+          className={cn(
+            "flex h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-8 max-md:pr-12 pl-7 text-left text-sm outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11",
+            active && "bg-secondary",
+          )}
+          aria-current={active ? "page" : undefined}
+          aria-label={[s.title, label, unread && "unread"].filter(Boolean).join(", ")}
+          onClick={() => onOpen(s.id)}
+          title={label ? `${s.title} (${label})` : s.title}
+        >
+          <span className="min-w-0 flex-1 truncate font-medium text-foreground">{s.title}</span>
+          {unread && <span className="size-1.5 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-hidden />}
+          <StateIcon state={st} />
+          <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{timeAgo(s.lastActivity)}</span>
+        </button>
+        <SessionMenu
+          target={target}
+          onAction={act}
+          className="-translate-y-1/2 absolute top-1/2 right-1 opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-popup-open:opacity-100 pointer-coarse:opacity-100"
+        />
+      </li>
+    </SessionContextMenu>
+  );
+});

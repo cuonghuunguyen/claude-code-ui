@@ -1,4 +1,4 @@
-import { Activity, lazy, Suspense, use, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Activity, lazy, memo, Suspense, use, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon } from "lucide-react";
 import type {
   ContextUsage,
@@ -59,6 +59,7 @@ import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
+import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { joinPath, relPath } from "./paths.ts";
 import { FilesPanel } from "./files-panel.tsx";
@@ -851,7 +852,7 @@ export function App() {
                   if (!s || !v) return null;
                   return (
                     <Activity key={id} mode={id === activeId ? "visible" : "hidden"}>
-                      <SessionPane
+                      <SessionTab
                         scrollKey={scrollKeys[id] ?? 0}
                         insert={id === activeId ? insert : undefined}
                         onInserted={() => setInsert(undefined)}
@@ -1294,6 +1295,16 @@ type DraftPick = Omit<StartOptions, "mode"> & { mode?: PermissionMode };
 const NEW_DRAFT: DraftPick = { model: "default", effort: "default" };
 
 const timelineKey = (item: TimelineItem) => (item.kind === "context" ? item.id : item.part.id);
+
+const MemoSessionPane = memo(SessionPane);
+
+/**
+ * A mounted session tab: its pane re-renders only when a value prop changes (its view, session, connection), not for the new callbacks of
+ * every App render (a tab switch, another session's event). The callbacks it gets are stable and call the latest App closure.
+ */
+function SessionTab(props: ComponentProps<typeof SessionPane>) {
+  return <MemoSessionPane {...useStableProps(props)} />;
+}
 
 export function SessionPane({
   scrollKey,

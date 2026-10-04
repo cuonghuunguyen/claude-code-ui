@@ -72,6 +72,36 @@ function fileTree(rows: Row[], cwd: string): Folder {
   sort(root);
   return root;
 }
+/**
+ * Rows per file by its last call: the disk reads come back one by one, and a session tab switch remounts the panel, so without it every
+ * read re-parses every diff. Hit only for the same calls, results and disk content; `reading`: the rows while the file is being read.
+ */
+const rowCache = new WeakMap<object, { change: FileChange; reading?: Row[]; read?: { d: Disk; rows: Row[] } }>();
+const same = <T,>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+function cachedRows(change: FileChange, d: Disk | undefined): Row[] {
+  const last = change.calls.at(-1)!;
+  let hit = rowCache.get(last);
+  if (!hit || !same(hit.change.calls, change.calls) || !same(hit.change.results, change.results)) rowCache.set(last, (hit = { change }));
+  if (!d) return (hit.reading ??= fileRows(change, d));
+  const r = hit.read;
+  if (r && r.d.content === d.content && r.d.deleted === d.deleted && r.d.error === d.error && r.d.notice === d.notice) return r.rows;
+  hit.read = { d, rows: fileRows(change, d) };
+  return hit.read.rows;
+}
+
+/** The list row of a changed file, none when it was created and deleted again; `d`: its disk content, undefined while being read. */
+function fileRows(change: FileChange, d: Disk | undefined): Row[] {
+  if (d?.content === undefined) return [{ change, error: d?.error, notice: d?.notice, stats: callStats(change), kind: "M" }];
+  const before = baseline(d.content, change);
+  // Added: the file did not exist (original null), or a restored transcript's Write created it. An existing empty file is M.
+  const created = change.original === null || (change.original === undefined && before === "");
+  // Created and deleted again: no net change, so no row (OpenCode's before/after list has none).
+  if (d.deleted && created) return [];
+  const kind = d.deleted ? "D" : created ? "A" : "M";
+  // A deleted file with an unknown before has no net stats; the per-call sums would not count the deletion.
+  if (before === undefined) return [{ change, after: d.content, stats: d.deleted ? undefined : callStats(change), kind }];
+  return [{ change, before, after: d.content, stats: fileStats(before, d.content, change.path), kind }];
+}
 const treeOrder = (f: Folder): Row[] => [...f.folders.flatMap(treeOrder), ...f.files];
 
 /**
@@ -122,23 +152,7 @@ export function ChangesPanel({
   }, [key, reload]);
   useEffect(() => client.onFsChanged((m) => changes.some((c) => c.path === m.path) && setReload((n) => n + 1)), [client, key]);
 
-  const rows = useMemo(
-    () =>
-      changes.flatMap((change): Row[] => {
-        const d = disk[change.path];
-        if (d?.content === undefined) return [{ change, error: d?.error, notice: d?.notice, stats: callStats(change), kind: "M" }];
-        const before = baseline(d.content, change);
-        // Added: the file did not exist (original null), or a restored transcript's Write created it. An existing empty file is M.
-        const created = change.original === null || (change.original === undefined && before === "");
-        // Created and deleted again: no net change, so no row (OpenCode's before/after list has none).
-        if (d.deleted && created) return [];
-        const kind = d.deleted ? "D" : created ? "A" : "M";
-        // A deleted file with an unknown before has no net stats; the per-call sums would not count the deletion.
-        if (before === undefined) return [{ change, after: d.content, stats: d.deleted ? undefined : callStats(change), kind }];
-        return [{ change, before, after: d.content, stats: fileStats(before, d.content, change.path), kind }];
-      }),
-    [changes, disk],
-  );
+  const rows = useMemo(() => changes.flatMap((change) => cachedRows(change, disk[change.path])), [changes, disk]);
   const total = rows.reduce((t, r) => ({ added: t.added + (r.stats?.added ?? 0), removed: t.removed + (r.stats?.removed ?? 0) }), { added: 0, removed: 0 });
   const [filter, setFilter] = useState("");
   // No filter in the narrow accordion (OpenCode has none there).
@@ -217,17 +231,20 @@ export function ChangesPanel({
     </>
   );
 
-  if (hidden) return null;
+  // Nothing until first shown; after that hidden with display: none, so switching back to this pane renders and highlights nothing again.
+  const [shownOnce, setShownOnce] = useState(!hidden);
+  if (!hidden && !shownOnce) setShownOnce(true);
+  if (!shownOnce) return null;
   if (!rows.length)
     return (
-      <div className="m-auto flex flex-col items-center gap-2 p-4 text-muted-foreground" data-testid="changes-empty">
+      <div className="m-auto flex flex-col items-center gap-2 p-4 text-muted-foreground" hidden={hidden} data-testid="changes-empty">
         <FileDiffIcon className="size-5 text-faint" aria-hidden />
         No changes in this session yet.
       </div>
     );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="changes-panel">
+    <div className="flex min-h-0 flex-1 flex-col" hidden={hidden} data-testid="changes-panel">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3 max-md:h-14">
         <span className="font-medium">
           {rows.length} Changed {rows.length === 1 ? "file" : "files"}

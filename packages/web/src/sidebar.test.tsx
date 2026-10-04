@@ -6,6 +6,12 @@ import type { SessionListItem, SessionState } from "@claude-ui/protocol";
 import { SessionList } from "./sidebar.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// One actions menu per rendered row: counts the rows' renders by title.
+const rowRenders = vi.hoisted(() => [] as string[]);
+vi.mock("./session-actions.tsx", async (orig) => {
+  const m = await orig<typeof import("./session-actions.tsx")>();
+  return { ...m, SessionMenu: (p: Parameters<typeof m.SessionMenu>[0]) => (rowRenders.push(p.target.title), <m.SessionMenu {...p} />) };
+});
 
 const now = Date.now();
 const item = (id: string, cwd: string, title: string, minutesAgo: number, state: SessionState = "closed"): SessionListItem => ({
@@ -248,4 +254,37 @@ it("read titles use the base text colour like OpenCode, not the muted one", asyn
   const title = rows()[3]!.querySelector("span")!;
   expect(title.className).toContain("text-foreground");
   expect(rows()[3]!.className).not.toContain("text-muted-foreground");
+});
+
+it("a tab switch re-renders only the rows that lose or get the active mark, not every row (GH-51)", async () => {
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  const onOpen = vi.fn();
+  // App passes new closures on every render.
+  const show = (activeId: string) =>
+    act(async () =>
+      root!.render(
+        <SessionList
+          list={LIST}
+          projects={["/home/u/web", "/home/u/api"]}
+          state={(s) => s.state}
+          unread={new Set()}
+          activeId={activeId}
+          onOpen={(id) => onOpen(id)}
+          onNew={() => {}}
+          onRemove={() => {}}
+          onOpenProject={() => {}}
+          onAction={() => {}}
+          onRenamed={() => {}}
+        />,
+      ),
+    );
+  await show("a");
+  rowRenders.length = 0;
+  await show("b");
+  expect(rowRenders.sort()).toEqual(["Docs pass", "Fix login"]);
+  // A row that did not re-render opens with the latest handler.
+  await act(async () => [...el.querySelectorAll<HTMLElement>("[data-testid=session-item]")].find((b) => b.textContent?.includes("Old idea"))!.click());
+  expect(onOpen).toHaveBeenCalledWith("c");
 });
