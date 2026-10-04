@@ -109,9 +109,22 @@ function toInfo(s: McpServerStatus): McpServerInfo {
     ...(s.source !== undefined && { source: s.source }),
     ...(s.error !== undefined && { error: s.error }),
     ...(s.serverInfo && { serverInfo: { name: s.serverInfo.name, version: s.serverInfo.version } }),
-    config: { type: c.type ?? "stdio", ...(c.command !== undefined && { command: c.command }), ...(c.url !== undefined && { url: c.url }) },
+    config: { type: c.type ?? "stdio", ...(c.command !== undefined && { command: c.command }), ...(c.url !== undefined && { url: redactUrl(c.url) }) },
     ...(s.tools && { tools: s.tools.map((t) => ({ name: t.name, ...(t.annotations?.readOnly && { readOnly: true }), ...(t.annotations?.destructive && { destructive: true }) })) }),
   };
+}
+
+/** Query-string values and a password in a server URL may be tokens: `***` in their place; an unparsable URL loses its query. */
+function redactUrl(url: string) {
+  try {
+    const u = new URL(url);
+    if (u.password) u.password = "***";
+    // Not via searchParams: it would re-encode the keys.
+    u.search = u.search.replace(/=[^&]*/g, "=***");
+    return u.href;
+  } catch {
+    return url.replace(/\?.*/s, "");
+  }
 }
 
 /** Rejects after the throwaway timeout: a hung CLI must not hang the dialog. */

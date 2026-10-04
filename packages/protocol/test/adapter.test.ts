@@ -271,6 +271,21 @@ describe("adapter on unknown messages", () => {
     ]);
   });
 
+  it("retracts the parts of the messages a refusal fallback names in retracted_message_uuids; unknown uuids are ignored", () => {
+    const parts = run([
+      { type: "assistant", uuid: "a1", message: { id: "m1", content: [{ type: "text", text: "partial" }] } },
+      { type: "assistant", uuid: "a2", message: { id: "m1", content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] } },
+      { type: "user", uuid: "u1", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "tombstone" }] } },
+      { type: "system", subtype: "model_refusal_fallback", uuid: "f1", direction: "retry", content: "Opus 4.8 is answering instead", retracted_message_uuids: ["a1", "a2", "u1", "gone"] },
+      { type: "system", subtype: "model_refusal_fallback", uuid: "f2", direction: "retry", content: "again", retracted_message_uuids: ["gone"] },
+    ]);
+    expect(parts.slice(-3)).toEqual([
+      { type: "notice", id: "f1", level: "warning", text: "Opus 4.8 is answering instead" },
+      { type: "retract", id: "f1:retract", partIds: ["m1:0", "t1", "t1:result"] },
+      { type: "notice", id: "f2", level: "warning", text: "again" },
+    ]);
+  });
+
   it("keeps one notice line per tool call for progress notices with a tool_use_id, the latest text", () => {
     // SDKInformationalMessage.tool_use_id "dedupes progress messages for the same tool use" (SDK 0.3.285).
     const parts = run([

@@ -75,6 +75,24 @@ it("a failed prompt goes back into the prompt box and shows the error in the pan
   expect(el.querySelector('[data-testid="prompt-error"]')?.textContent).toContain("no session s1");
 });
 
+it("while a terminal CLI turn runs the prompt box says so and keeps the prompt; it sends once the turn ended", async () => {
+  const ev = (seq: number, running: boolean) => ({ type: "event" as const, sessionId: "s1", seq, part: { type: "external_turn" as const, id: "external_turn" as const, running } });
+  const busy = applyEvent(emptySession(), ev(1, true));
+  const onPrompt = vi.fn(async () => {});
+  const { box, $, rerender } = await render({ onPrompt }, busy);
+  expect($("external-turn")!.textContent).toBe("A terminal CLI turn is running in this session");
+  expect($("external-turn")!.getAttribute("role")).toBe("status");
+  await type(box, "after the CLI");
+  await key(box, { key: "Enter" });
+  expect(onPrompt).not.toHaveBeenCalled();
+  expect(box.value).toBe("after the CLI");
+  expect(($("send") as HTMLButtonElement).disabled).toBe(true);
+  await rerender({ view: applyEvent(busy, ev(2, false)) });
+  expect($("external-turn")).toBeNull();
+  await key(box, { key: "Enter" });
+  expect(onPrompt).toHaveBeenCalledWith("after the CLI", []);
+});
+
 it("a send error sits between the todo dock and the prompt box, so the prompt box drops its lift and stays outside the dock", async () => {
   const running = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "session_state", id: "st", state: "running" } });
   const view = applyEvent(running, { type: "event", sessionId: "s1", seq: 2, part: { type: "todo_update", id: "t:todos", items: [{ content: "Fix", status: "pending" }] } });

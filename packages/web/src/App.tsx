@@ -1473,6 +1473,7 @@ export function SessionPane({
               usage={view.contextUsage}
               stats={totals(view)}
               todos={showTodoDock(view.state, view.todos, false) ? view.todos : undefined}
+              blocked={view.externalTurn ? "A terminal CLI turn is running in this session" : undefined}
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
               placeholder={turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
@@ -1522,6 +1523,7 @@ function PromptBox({
   placeholder,
   autoFocus,
   disabled,
+  blocked,
   inputRef,
   onDialog,
 }: {
@@ -1561,6 +1563,8 @@ function PromptBox({
   placeholder: string;
   autoFocus?: boolean;
   disabled?: boolean;
+  /** Why nothing is sent now (a terminal CLI turn runs): shown above the box; the text stays and Send is off. */
+  blocked?: string;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   const [text, setText] = useState("");
@@ -1571,7 +1575,7 @@ function PromptBox({
   const [found, setFound] = useState<{ query: string; paths: string[] }>();
   const [sendError, setSendError] = useState<string>();
   // The prompt box covers the dock's bottom 36px (OpenCode prompt lift), only when it directly follows the dock.
-  const lift = !!todos && !sendError && !images.length;
+  const lift = !!todos && !blocked && !sendError && !images.length;
   const input = useRef<HTMLTextAreaElement>(null);
   const matches = dismissed ? undefined : matchCommands(onDialog ? withDialogCommands(commands) : commands, text);
   const mention = dismissed || matches ? undefined : activeMention(text, caret);
@@ -1614,6 +1618,7 @@ function PromptBox({
     if (!t.trim() && !images.length) return;
     const dialog = onDialog && !images.length && dialogOf(t, commands);
     if (dialog) return onDialog(dialog), edit("");
+    if (blocked) return;
     const sent = images;
     setSendError(undefined);
     onPrompt(t, sent).catch((e: Error) => {
@@ -1697,6 +1702,13 @@ function PromptBox({
   return (
     <div className="relative flex flex-col gap-2" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
     {todos && <TodoDock items={todos} className={lift ? "pb-9" : undefined} />}
+    {blocked && (
+      // OpenCode composer dock anatomy (followup dock): rounded-xl, hairline border, layer-01 background.
+      <p role="status" data-testid="external-turn" className="flex min-h-[42px] w-full items-center gap-2 rounded-xl border-[0.5px] bg-muted py-2 pr-3 pl-4 text-sm">
+        <SquareTerminalIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        {blocked}
+      </p>
+    )}
     {sendError && (
       <p className="text-destructive text-sm" role="alert" data-testid="prompt-error">
         {sendError}
@@ -1792,7 +1804,7 @@ function PromptBox({
         usage={usage}
         stats={stats}
         state={state}
-        hasInput={!disabled && (!!text.trim() || images.length > 0)}
+        hasInput={!disabled && !blocked && (!!text.trim() || images.length > 0)}
         onSend={() => send()}
         onStop={() => onInterrupt?.()}
         // Not on touch screens: focusing the prompt box there opens the soft keyboard (OpenCode leaves focus on the page).

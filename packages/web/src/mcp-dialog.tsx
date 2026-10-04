@@ -17,6 +17,7 @@ import {
   groupServers,
   PROJECT_SCOPE_WARNING,
   resultText,
+  safeAuthUrl,
   SCOPES,
   scopeLabel,
   statusIcon,
@@ -173,6 +174,7 @@ export function McpDialog({
     if (tab) tab.opener = null;
     try {
       const r = await request<McpAuthResult>({ type: "mcp.authenticate", ...base, name });
+      if (r.authUrl && !safeAuthUrl(r.authUrl)) throw new Error(`Sign-in page not opened: not https: ${r.authUrl}`);
       if (r.authUrl && tab) tab.location.href = r.authUrl;
       else tab?.close();
       if (r.requiresUserAction) {

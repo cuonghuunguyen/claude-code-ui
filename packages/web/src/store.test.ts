@@ -19,6 +19,23 @@ describe("applyEvent", () => {
     expect(s.lastSeq).toBe(5);
   });
 
+  it("a retract part removes the named parts (refusal fallback) and is not rendered", () => {
+    let s = emptySession();
+    s = applyEvent(s, ev(1, { type: "user_text", id: "u1", text: "one", images: [] }));
+    s = applyEvent(s, ev(2, text("a", "refused", false)));
+    s = applyEvent(s, ev(3, { type: "retract", id: "f:retract", partIds: ["a", "unknown"] }));
+    s = applyEvent(s, ev(4, text("b", "answer", false)));
+    expect(s.order).toEqual(["u1", "b"]);
+    expect([...s.parts.keys()]).toEqual(["u1", "b"]);
+  });
+
+  it("an external_turn part sets whether a terminal CLI turn runs", () => {
+    const s = applyEvent(emptySession(), ev(1, { type: "external_turn", id: "external_turn", running: true }));
+    expect(s.externalTurn).toBe(true);
+    expect(s.order).toEqual([]);
+    expect(applyEvent(s, ev(2, { type: "external_turn", id: "external_turn", running: false })).externalTurn).toBe(false);
+  });
+
   it("replaces a part with the same id instead of appending", () => {
     let s = emptySession();
     s = applyEvent(s, ev(1, text("a", "Hel")));

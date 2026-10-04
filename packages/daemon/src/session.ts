@@ -114,6 +114,11 @@ export class Session {
   private syncDeferred = false;
   private syncing?: Promise<void>;
   private syncAgain = false;
+  /** UUIDs of the prompts and messages of the session's own query: a transcript ending in one is no external turn. */
+  private readonly own = new Set<string>();
+  /** A terminal CLI turn runs (external_turn part); ends with its turn, or EXTERNAL_TURN_QUIET_MS after the last growth. */
+  private externalTurn = false;
+  private externalQuiet?: NodeJS.Timeout;
 
   constructor(
     readonly cwd: string,
@@ -172,6 +177,9 @@ export class Session {
       },
     }));
     this.resumeAt = undefined;
+    // The first query creates the transcript: saved now, defaults too. A restore without an entry reads the transcript, whose
+    // replies record the effort they ran with (the model's default, e.g. medium), not "default".
+    if (!this.started) this.settingsChanged();
     this.started = true;
     this.driving = this.drive(q);
     // Later changes arrive as system/commands_changed through drive().
@@ -211,6 +219,7 @@ export class Session {
    * session metadata to the transcript on exit, so a transcript delete must wait for this.
    */
   async close() {
+    clearTimeout(this.externalQuiet);
     this.generation++;
     this.query?.close();
     this.query = undefined;
@@ -243,6 +252,11 @@ export class Session {
     this.dropQuery();
   }
 
+  /** A terminal CLI turn runs in this session: a prompt now would fork the transcript (docs/spec.md "Terminal CLI and web app on one session"). */
+  externalTurnRunning() {
+    return this.externalTurn;
+  }
+
   /** False once the query ended or failed: nothing reads the input queue any more. */
   isLive() {
     return this.state !== "error" && this.state !== "closed";
@@ -254,6 +268,7 @@ export class Session {
     if (this.rewinding) throw new Error("session is rewinding");
     const uuid = randomUUID();
     this.known.add(uuid);
+    this.own.add(uuid);
     this.timeline.push(uuid);
     this.checkpoints.set(uuid, this.lastAssistant);
     this.emit({ type: "user_text", id: uuid, text, images });
@@ -454,8 +469,14 @@ export class Session {
     const runs = t.runs.flatMap((run) =>
       run.some((m) => m.parent_tool_use_id && this.ownCalls.has(m.parent_tool_use_id)) ? [] : run.slice(lastIndex(run, (m) => this.known.has(m.uuid)) + 1).filter((m) => !this.known.has(m.uuid)),
     );
+    // A compaction (terminal CLI /compact or auto-compact) puts its summary before the preserved messages the session knows.
+    const summaries = chain.slice(0, from + 1).filter((m) => (m as { isCompactSummary?: boolean }).isCompactSummary && !this.known.has(m.uuid));
+    // External messages that open or continue a turn: a CLI turn runs. A read without new ones (a prompt's sync) only ends it.
+    const last = chain.at(-1);
+    const open = !!last && !this.own.has(last.uuid) && turnOpen(last);
+    if (!open || fresh.length || runs.length) this.setExternalTurn(open);
     // Nothing new: e.g. the transcript lags behind the own query's last messages.
-    if (!fresh.length && !runs.length) return;
+    if (!fresh.length && !runs.length && !summaries.length) return;
     if (forked && from >= 0) {
       const common = this.timeline.lastIndexOf(chain[from]!.uuid);
       const prompt = this.timeline.slice(common + 1).find((u) => this.checkpoints.has(u));
@@ -465,8 +486,18 @@ export class Session {
     this.dropQuery();
     this.resumeAt = undefined;
     this.lastAssistant = chain[lastIndex(chain.slice(0, from + 1), (m) => m.type === "assistant")]?.uuid;
-    this.logTranscript([...fresh, ...runs]);
+    // Chain order, as a restore shows it: the divider before the messages after it.
+    this.logTranscript([...summaries, ...fresh, ...runs]);
     void this.refreshUsage();
+  }
+
+  private setExternalTurn(running: boolean) {
+    clearTimeout(this.externalQuiet);
+    // ponytail: a CLI that died mid-turn leaves no end in the transcript; the quiet time ends the turn for the web app.
+    if (running) this.externalQuiet = setTimeout(() => this.setExternalTurn(false), EXTERNAL_TURN_QUIET_MS).unref();
+    if (running === this.externalTurn) return;
+    this.externalTurn = running;
+    this.emit({ type: "external_turn", id: "external_turn", running });
   }
 
   /** The query to send control requests to, started (resumed) without a prompt if none runs. */
@@ -565,6 +596,7 @@ export class Session {
         if (generation !== this.generation) return;
         if ((m.type === "user" || m.type === "assistant") && m.uuid) {
           this.known.add(m.uuid);
+          this.own.add(m.uuid);
           if (!m.parent_tool_use_id && !("isReplay" in m && m.isReplay)) this.timeline.push(m.uuid);
         }
         if (m.type === "assistant") for (const b of m.message.content) if (b.type === "tool_use") this.ownCalls.add(b.id);
@@ -674,6 +706,23 @@ export function transcriptModel(history: SessionMessage[]): string | undefined {
     if (m.type === "user" && typeof content === "string") model = SET_MODEL.exec(content)?.[1] ?? model;
   }
   return model;
+}
+
+/**
+ * A terminal CLI turn without transcript growth for this long counts as ended: a CLI that died mid-turn writes no end, and a
+ * tool or permission prompt running longer in the terminal is no longer guarded.
+ */
+export const EXTERNAL_TURN_QUIET_MS = 120_000;
+
+// User text that ends a turn: a local command's output, an interrupt.
+const TURN_END = /^(<local-command-std(out|err)>|\[Request interrupted by user)/;
+
+/** Whether a transcript's last main-chain message leaves a turn open: a prompt, a tool result, a reply calling a tool or cut mid-stream. */
+function turnOpen(m: SessionMessage) {
+  const { content, stop_reason } = (m.message ?? {}) as { content?: unknown; stop_reason?: unknown };
+  if (m.type === "assistant") return stop_reason === "tool_use" || stop_reason == null;
+  if (typeof content === "string") return !TURN_END.test(content);
+  return !(Array.isArray(content) && content.some((b) => (b as { type?: unknown })?.type === "text" && TURN_END.test((b as { text?: string }).text ?? "")));
 }
 
 /** Index of the last message matching `pred`, -1 when none (Array#findLastIndex is ES2023). */
