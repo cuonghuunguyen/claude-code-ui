@@ -1829,6 +1829,22 @@ describe("/clear", () => {
     }
   });
 
+  it("lists a cleared session by its first prompt when the SDK titles it '/clear' (prompt past the SDK's head read window)", async () => {
+    const id = randomUUID();
+    const user = (content: string, extra = {}) => ({ type: "user", uuid: randomUUID(), session_id: id, message: { role: "user", content }, parent_tool_use_id: null, parent_agent_id: null, ...extra });
+    // The /clear record, a background task's notification turn, then the first prompt.
+    const main = [user(CLEAR_RECORD), user("<task-notification><task-id>t1</task-id><status>completed</status></task-notification>"), user("fix the bug")];
+    const d = createDaemon({ webRoot, token, roots: [webRoot], projects: added(webRoot), query: fakeQuery as never, history: { listSessions: (async () => [{ sessionId: id, summary: "/clear", lastModified: 1, cwd: webRoot }]) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => main) as never, listSubagents: (async () => []) as never } });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const list = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string }[] } };
+      expect(list.result.sessions.find((s) => s.id === id)?.title).toBe("fix the bug");
+    } finally {
+      d.close();
+    }
+  });
+
   it("after a restart both transcripts restore: the old one with its history, the new one without the /clear record", async () => {
     const [old, next] = [randomUUID(), randomUUID()];
     const user = (uuid: string, content: string) => ({ type: "user", uuid, session_id: next, message: { role: "user", content }, parent_tool_use_id: null, parent_agent_id: null });

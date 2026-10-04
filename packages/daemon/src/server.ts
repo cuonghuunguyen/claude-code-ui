@@ -6,8 +6,8 @@ import { createServer, type IncomingMessage } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
-import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { createAdapter, EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
+import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { gitStatus } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
@@ -521,6 +521,22 @@ export function createDaemon(opts: {
     return (nextScan ??= scan.catch(() => {}).then(() => ((nextScan = undefined), transcripts())));
   }
 
+  /** First prompt of a session cleared into, by ID; found once, it stays. */
+  const clearedTitles = new Map<string, string>();
+  /**
+   * The SDK titles a session cleared into (/clear) "/clear" until it finds a prompt in the transcript's head read window, which
+   * a background task's notification turn can fill: its first prompt from the transcript, none yet "New session".
+   */
+  async function clearedTitle(id: string, cwd: string) {
+    if (clearedTitles.has(id)) return clearedTitles.get(id)!;
+    const main = await readTranscript(id, cwd).then((t) => t.main, () => []);
+    const adapter = createAdapter();
+    const prompt = main.flatMap((m) => adapter.convert(m as SDKMessage)).find((p) => p.type === "user_text");
+    if (!prompt) return "New session";
+    clearedTitles.set(id, prompt.text);
+    return prompt.text;
+  }
+
   async function list(): Promise<ListResult> {
     // The model list starts a CLI: not waiting longer than this offers no auto mode until it is there.
     await new Promise<void>((done) => {
@@ -536,8 +552,7 @@ export function createDaemon(opts: {
     for (const t of all) {
       if (!t.cwd || !allowed(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
-      // The SDK titles a transcript by its first prompt: a session cleared into (/clear) has none of its own yet.
-      const title = CLEARED.test(t.summary) ? "New session" : t.summary;
+      const title = CLEARED.test(t.summary) ? await clearedTitle(t.sessionId, t.cwd) : t.summary;
       items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).

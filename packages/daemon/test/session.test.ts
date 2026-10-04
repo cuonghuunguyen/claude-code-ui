@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Event } from "@claude-ui/protocol";
 import { queuedQuery, Session, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
-import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -430,6 +430,33 @@ describe("Session /clear", () => {
     const later = next.length;
     heir.prompt("still live");
     await until(next, (e) => e.seq > later && e.part.type === "turn_result");
+  });
+
+  it("a background call running at /clear moves to the new session: stopped in the old one, Stop agent works in the new one", async () => {
+    const heirs: Session[] = [];
+    const s = new Session("/repo", { query: clearQuery as never, onCleared: (h) => heirs.push(h) });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("bg");
+    await until(events, (e) => e.part.type === "session_state" && e.part.state === "idle");
+    expect(lastPart(events, "bg")).toMatchObject({ status: "running" });
+    s.prompt("/clear");
+    await until(events, (e) => e.part.type === "session_cleared");
+    const heir = heirs[0]!;
+    // The old session no longer runs it, as after a restore of its transcript.
+    expect(lastPart(events, "bg")).toMatchObject({ status: "stopped" });
+    expect(await s.stopSubagent("bg")).toBe(false);
+    expect(stopped).not.toContain("bg-task");
+
+    // The new session owns it: its shells list shows it, Stop agent stops it, its notification ends the call there.
+    const next: Event[] = [];
+    heir.subscribe(0, (e) => next.push(e));
+    expect(lastPart(next, "bg")).toMatchObject({ type: "tool_call", status: "running" });
+    expect(await heir.stopSubagent("bg")).toBe(true);
+    expect(stopped.at(-1)).toBe("bg-task");
+    await until(next, (e) => e.part.id === "bg" && "status" in e.part && e.part.status === "stopped");
+    await until(next, (e) => e.part.type === "session_state" && e.part.state === "idle" && e.seq > 1);
+    expect(events.filter((e) => e.part.id === "bg").at(-1)!.part).toMatchObject({ status: "stopped" });
   });
 
   it("permission requests of the handed-over query go to the new session", async () => {

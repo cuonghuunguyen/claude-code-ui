@@ -67,6 +67,7 @@ import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
+import { shownPrompt } from "./config-dialog.tsx";
 import { KEYS, matchesKey } from "./shortcuts.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { NEW_TAB, avatarColors, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
@@ -231,6 +232,8 @@ export function App() {
   const titleRefreshed = useRef(0);
   /** Seq of each session's last subscribe reply: events up to it are a replay of known changes, not new ones. */
   const replayedTo = useRef<Record<string, number>>({});
+  /** Session whose prompt box gets the focus once shown (follow()). */
+  const refocus = useRef<string>(undefined);
   // Tabs restored from storage, checked against the first session list: a stale one would show "Untitled".
   const restored = useRef<string[] | undefined>(tabs);
 
@@ -282,10 +285,12 @@ export function App() {
     }
   }
 
-  /** The tab of session `from` shows session `to` instead, in its place; the active one opens it. */
+  /** The tab of session `from` shows session `to` instead, in its place; the active one opens it, its prompt box keeps the focus. */
   function follow(from: string, to: string) {
     setTabs((t) => (t.includes(from) ? replaceTab(t, from, to) : t));
-    if (hashId() === from) open(to);
+    if (hashId() !== from) return;
+    if (document.activeElement && document.activeElement === shownPrompt()) refocus.current = to;
+    open(to);
   }
 
   /** `deleted`: removed on purpose (this or another tab), so no "no longer exists" error. */
@@ -557,6 +562,12 @@ export function App() {
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   const view = activeId ? views[activeId] : undefined;
   const shown = active && view ? active : undefined;
+  // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
+  useEffect(() => {
+    if (!shown || refocus.current !== shown.id) return;
+    refocus.current = undefined;
+    requestAnimationFrame(() => shownPrompt()?.focus());
+  }, [shown?.id]);
   // The side panel stays mounted while the new-session tab or no tab shows, so its open files survive.
   const lastShown = useRef<SessionInfo>(undefined);
   if (shown) lastShown.current = shown;
@@ -2020,19 +2031,21 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
 }
 
 /** An SDK message the adapter does not know yet, or the error of a failed query: one muted line, never its JSON. */
+/** "type/subtype" of an SDK message, e.g. "system/task_updated", muted; the error text of a failed query as a warning notice. */
 function RawPart({ message }: { message: unknown }) {
+  const { type, subtype, error } = (message ?? {}) as { type?: unknown; subtype?: unknown; error?: unknown };
+  if (typeof error === "string")
+    return (
+      <div className="flex items-start gap-1.5 text-warning text-xs" data-testid="raw-part">
+        <TriangleAlertIcon role="img" aria-label="Warning" className="mt-px size-3.5 shrink-0" />
+        <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{error}</span>
+      </div>
+    );
   return (
     <div className="text-muted-foreground text-xs [overflow-wrap:anywhere]" data-testid="raw-part">
-      {rawLabel(message)}
+      {[type, subtype].filter((v) => typeof v === "string").join("/") || "SDK message"}
     </div>
   );
-}
-
-/** "type/subtype" of an SDK message, e.g. "system/task_updated"; the error text of a failed query. */
-function rawLabel(m: unknown) {
-  const { type, subtype, error } = (m ?? {}) as { type?: unknown; subtype?: unknown; error?: unknown };
-  if (typeof error === "string") return error;
-  return [type, subtype].filter((v) => typeof v === "string").join("/") || "SDK message";
 }
 
 /** OpenCode compaction divider (line, label, line, 10px block padding); the summary Claude continues from, collapsed below it. */

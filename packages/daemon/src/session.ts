@@ -102,7 +102,7 @@ export class Session {
   /** Pending permission requests and questions by requestId (docs/spec.md "Permission bridge", "Questions"). */
   private readonly pending = new Map<string, { part: PermissionPart | QuestionPart; resolve: (r: PermissionResult) => void }>();
   /** SDK task ID of each running subagent run by its Agent call's toolUseId (task_started; dropped at task_notification). */
-  private readonly tasks = new Map<string, string>();
+  private tasks = new Map<string, string>();
   /** Bumped per refreshUsage(): an older answer that arrives later is dropped. */
   private usageRequest = 0;
   /** False until the first start(): the first query creates the transcript (sessionId), every later one resumes it. */
@@ -675,6 +675,15 @@ export class Session {
    */
   private handOver(id: string, clearId: string | undefined): Session {
     const heir = Session.restore(id, this.cwd, [], { ...this.opts, model: this.model, permissionMode: this.permissionMode, effort: this.effort });
+    // Background calls (shells, subagent runs) still run in the CLI: the heir owns them (shells list, Stop agent, their
+    // notification); here they end as a restore of this transcript shows them.
+    for (const part of this.adapter.endCalls(true)) this.emit(part);
+    for (const call of this.adapter.openCalls()) {
+      heir.ownCalls.add(call.id);
+      heir.emit(call);
+    }
+    heir.tasks = this.tasks;
+    this.tasks = new Map();
     // The CLI's cost total and command list carry over; this session starts over like a restored one.
     heir.adapter = this.adapter;
     this.adapter = createAdapter({ resumed: true });
@@ -685,7 +694,6 @@ export class Session {
     if (heir.owner) heir.owner.session = heir;
     this.query = this.driving = this.owner = undefined;
     this.input = new InputQueue();
-    this.tasks.clear();
     heir.setState(this.state);
     heir.settingsChanged();
     this.opts.onCleared?.(heir);
