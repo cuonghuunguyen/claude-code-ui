@@ -67,6 +67,7 @@ import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
+import { shownPrompt } from "./config-dialog.tsx";
 import { KEYS, matchesKey } from "./shortcuts.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { NEW_TAB, avatarColors, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
@@ -231,6 +232,8 @@ export function App() {
   const titleRefreshed = useRef(0);
   /** Seq of each session's last subscribe reply: events up to it are a replay of known changes, not new ones. */
   const replayedTo = useRef<Record<string, number>>({});
+  /** Session whose prompt box gets the focus once shown (follow()). */
+  const refocus = useRef<string>(undefined);
   // Tabs restored from storage, checked against the first session list: a stale one would show "Untitled".
   const restored = useRef<string[] | undefined>(tabs);
 
@@ -280,6 +283,14 @@ export function App() {
       if ((e as RequestError).code === "unknown_session") return forget(sessionId);
       if ((e as Error).message !== "disconnected") setError((e as Error).message); // else resubscribed on reconnect
     }
+  }
+
+  /** The tab of session `from` shows session `to` instead, in its place; the active one opens it, its prompt box keeps the focus. */
+  function follow(from: string, to: string) {
+    setTabs((t) => (t.includes(from) ? replaceTab(t, from, to) : t));
+    if (hashId() !== from) return;
+    if (document.activeElement && document.activeElement === shownPrompt()) refocus.current = to;
+    open(to);
   }
 
   /** `deleted`: removed on purpose (this or another tab), so no "no longer exists" error. */
@@ -350,6 +361,8 @@ export function App() {
         // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
         // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
         const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+        // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
+        if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
         if (e.part.type === "session_state" && live) void refreshList();
         // The title of a session without transcript is "New session" until its transcript exists, some time into the first turn.
         else if (live && listRef.current.some((s) => s.id === e.sessionId && !s.transcript) && Date.now() - titleRefreshed.current > 2000) {
@@ -549,6 +562,12 @@ export function App() {
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   const view = activeId ? views[activeId] : undefined;
   const shown = active && view ? active : undefined;
+  // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
+  useEffect(() => {
+    if (!shown || refocus.current !== shown.id) return;
+    refocus.current = undefined;
+    requestAnimationFrame(() => shownPrompt()?.focus());
+  }, [shown?.id]);
   // The side panel stays mounted while the new-session tab or no tab shows, so its open files survive.
   const lastShown = useRef<SessionInfo>(undefined);
   if (shown) lastShown.current = shown;
@@ -2005,27 +2024,28 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
         </div>
       );
     case "raw":
-      return <RawPart id={part.id} message={part.message} />;
+      return <RawPart message={part.message} />;
     default:
       return null;
   }
 }
 
-/** Collapsed: an SDK message the adapter does not know yet, useful only when debugging. */
-function RawPart({ id, message }: { id: string; message: unknown }) {
-  const { open, onOpenChange } = useExpanded(`raw:${id}`);
+/** An SDK message the adapter does not know yet, or the error of a failed query: one muted line, never its JSON. */
+/** "type/subtype" of an SDK message, e.g. "system/task_updated", muted; the error text of a failed query as a warning notice. */
+function RawPart({ message }: { message: unknown }) {
+  const { type, subtype, error } = (message ?? {}) as { type?: unknown; subtype?: unknown; error?: unknown };
+  if (typeof error === "string")
+    return (
+      <div className="flex items-start gap-1.5 text-warning text-xs" data-testid="raw-part">
+        <TriangleAlertIcon role="img" aria-label="Warning" className="mt-px size-3.5 shrink-0" />
+        <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{error}</span>
+      </div>
+    );
   return (
-    <details className="rounded bg-muted p-2 text-xs" data-testid="raw-part" open={open} onToggle={(e) => onOpenChange(e.currentTarget.open)}>
-      <summary className="cursor-pointer text-muted-foreground">{rawLabel(message)}</summary>
-      <pre className="overflow-x-auto">{JSON.stringify(message, null, 2)}</pre>
-    </details>
+    <div className="text-muted-foreground text-xs [overflow-wrap:anywhere]" data-testid="raw-part">
+      {[type, subtype].filter((v) => typeof v === "string").join("/") || "SDK message"}
+    </div>
   );
-}
-
-/** "type/subtype" of an SDK message, e.g. "system/task_updated". */
-function rawLabel(m: unknown) {
-  const { type, subtype } = (m ?? {}) as { type?: unknown; subtype?: unknown };
-  return [type, subtype].filter((v) => typeof v === "string").join("/") || "SDK message";
 }
 
 /** OpenCode compaction divider (line, label, line, 10px block padding); the summary Claude continues from, collapsed below it. */

@@ -200,6 +200,12 @@ describe("adapter on known SDK noise", () => {
     expect(run([result("r1", 3, 5, 0.1), result("empty", 0, 0, 0.1), result("r2", 3, 5, 0.2)]).map((p) => p.id)).toEqual(["r1", "r2"]);
   });
 
+  it("drops the empty result of a /clear also in a restored session, whose cost total is unknown", () => {
+    const adapter = createAdapter({ resumed: true });
+    const result = { type: "result", subtype: "success", uuid: "c", session_id: "x", is_error: false, duration_ms: 1900, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 }, permission_denials: [] };
+    expect(adapter.convert(result as never)).toEqual([]);
+  });
+
   it("drops the CLI's echo of a model switch; the session_model part shows it", () => {
     const echo = { type: "user", uuid: "e1", message: { role: "user", content: "<local-command-stdout>Set model to `sonnet (claude-sonnet-5-5)`</local-command-stdout>" }, parent_tool_use_id: null };
     // In a transcript the switch is also recorded as the /model command.
@@ -242,6 +248,12 @@ describe("adapter on CLI markup in a transcript (getSessionMessages, SDK 0.3.285
     expect(run([stdout, stderr, notification])).toEqual([]);
   });
 
+  it("drops the /clear record that opens a cleared session's transcript: its timeline starts empty, as the VS Code extension shows it", () => {
+    // First chain message of the new transcript after /clear (development-docs/GH-52/probe-msgs.log); /reset and /new are its aliases.
+    const record = (name: string) => user(name, `<command-name>/${name}</command-name>\n            <command-message>${name}</command-message>\n            <command-args></command-args>`);
+    expect(run([record("clear"), record("reset"), record("new")])).toEqual([]);
+  });
+
   it("keeps a prompt that only mentions the markup", () => {
     expect(texts(run([user("p1", "what does <command-name> mean?")]))).toEqual(["what does <command-name> mean?"]);
   });
@@ -251,6 +263,11 @@ describe("adapter on unknown messages", () => {
   it("wraps an unknown SDK message in a raw part keyed by uuid", () => {
     const m = { type: "system", subtype: "some_future_subtype", uuid: "c1" };
     expect(run([m])).toEqual([{ type: "raw", id: "c1", message: m }]);
+  });
+
+  it("shows no conversation_reset: the daemon moves the live query to the session the CLI continues in", () => {
+    const m = { type: "conversation_reset", new_conversation_id: "n1", trigger: "clear", user_message_uuid: "c1", uuid: "r1", session_id: "s1" };
+    expect(run([m])).toEqual([]);
   });
 
   it("turns informational and refusal fallback notices into notice parts as Claude Code shows them; per-turn effort changes are hidden", () => {

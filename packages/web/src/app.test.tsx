@@ -232,6 +232,62 @@ it("a CLI notice shows as a gray line, a warning notice with a warning icon, not
   expect(el.querySelector('[data-testid="raw-part"]')).toBeNull();
 });
 
+it("/clear: a live session_cleared moves the open tab to the session the CLI goes on in; a replayed one does not", async () => {
+  const NEXT = "99999999-2222-3333-4444-555555555555";
+  replies["session.subscribe"] = { logEpoch: "e1", seq: 1, session };
+  await act(async () => root.unmount());
+  root = createRoot(el);
+  await act(async () => root.render(<App />));
+  await act(async () => {});
+  // Replayed (seq 1 <= the subscribe reply's seq): reopening the old session later must not jump away.
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_cleared", id: "c0", sessionId: NEXT } }));
+  expect(location.hash).toBe(`#${ID}`);
+  sent.length = 0;
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
+  expect(location.hash).toBe(`#${NEXT}`);
+  expect(sent).toContainEqual(expect.objectContaining({ type: "session.subscribe", sessionId: NEXT }));
+  const tabs: string[] = JSON.parse(localStorage.getItem("claude-ui.tabs")!);
+  expect([tabs.includes(NEXT), tabs.includes(ID)]).toEqual([true, false]);
+  expect(el.querySelector('[data-testid="raw-part"]')).toBeNull();
+  replies["session.subscribe"] = { logEpoch: "e1", session };
+});
+
+it("/clear typed in the prompt box: the box of the session the tab follows to has the focus", async () => {
+  const NEXT = "99999999-2222-3333-4444-555555555555";
+  // jsdom has no layout: only the shown tab's prompt box (not in a hidden Activity) has a layout box.
+  const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetParent")!;
+  Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get(this: HTMLElement) { return this.closest('[style*="display: none"]') ? null : document.body; } });
+  try {
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e1", seq: 0, session: { ...session, id: m.sessionId } });
+    el.querySelector<HTMLElement>('textarea[aria-label="Prompt"]')!.focus();
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
+    await act(async () => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+    expect(location.hash).toBe(`#${NEXT}`);
+    const box = document.activeElement as HTMLElement;
+    expect(box.getAttribute("aria-label")).toBe("Prompt");
+    expect(box.offsetParent).not.toBeNull();
+  } finally {
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", offsetParent);
+    replies["session.subscribe"] = { logEpoch: "e1", session };
+  }
+});
+
+it("an SDK message the adapter does not know shows as a short muted line, not as JSON", async () => {
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "raw", id: "r1", message: { type: "system", subtype: "some_future_subtype", secret: "payload" } } }));
+  const row = el.querySelector<HTMLElement>('[data-testid="raw-part"]')!;
+  expect(row.textContent).toBe("system/some_future_subtype");
+  expect(row.className).toContain("text-muted-foreground");
+  expect(el.textContent).not.toContain("payload");
+});
+
+it("a failed query's error shows as a warning line, not a muted one", async () => {
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "raw", id: "r1", message: { error: "Error: boom" } } }));
+  const row = el.querySelector<HTMLElement>('[data-testid="raw-part"]')!;
+  expect(row.textContent).toBe("Error: boom");
+  expect(row.className).toContain("text-warning");
+  expect(row.querySelector('[aria-label="Warning"]')).not.toBeNull();
+});
+
 it("a CLI notice shows a run of blank lines as one blank line", async () => {
   // A UserPromptSubmit hook's block reason (development-docs/GH-46/review, screenshot 03).
   await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "notice", id: "h1", level: "warning", text: "Blocked by hook\n\n\n\nOriginal prompt: hi" } }));

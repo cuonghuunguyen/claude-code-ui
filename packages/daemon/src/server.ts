@@ -6,8 +6,8 @@ import { createServer, type IncomingMessage } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
-import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { createAdapter, EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
+import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { gitStatus } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
@@ -22,6 +22,8 @@ import { JsonlTail } from "./transcript.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
+/** SDK title of a transcript whose only prompt is /clear (or its aliases /reset, /new). */
+const CLEARED = /^\/(clear|reset|new)$/;
 /** sessions.json keeps the settings of this many sessions (most recently changed). */
 export const MAX_SETTINGS = 1000;
 /** session.list waits this long for the model list (auto mode of new sessions) before it replies without it. */
@@ -293,7 +295,7 @@ export function createDaemon(opts: {
   // Account-wide, so not a session event: every connection gets each change.
   const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query) });
   /** Options of every session: settings changes are saved under its ID. */
-  const sessionOpts = (id: () => string, initial: Partial<SessionSettings>) => ({
+  const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
     plan,
     allowBypass: opts.allowBypass,
@@ -301,10 +303,15 @@ export function createDaemon(opts: {
     uploadDir: uploadParent,
     query: opts.query,
     readTranscript,
-    onSettings: (s: SessionSettings) => {
-      delete settings[id()];
-      settings[id()] = s;
+    onSettings: (s: SessionSettings, id: string) => {
+      delete settings[id];
+      settings[id] = s;
       saveSettings();
+    },
+    // /clear: the new session is listed; tabs that show the old one follow its session_cleared part.
+    onCleared: (heir: Session) => {
+      track(heir);
+      broadcast({ type: "sessions.changed" });
     },
   });
   const restoring = new Map<string, Promise<Session | undefined>>();
@@ -514,6 +521,22 @@ export function createDaemon(opts: {
     return (nextScan ??= scan.catch(() => {}).then(() => ((nextScan = undefined), transcripts())));
   }
 
+  /** First prompt of a session cleared into, by ID; found once, it stays. */
+  const clearedTitles = new Map<string, string>();
+  /**
+   * The SDK titles a session cleared into (/clear) "/clear" until it finds a prompt in the transcript's head read window, which
+   * a background task's notification turn can fill: its first prompt from the transcript, none yet "New session".
+   */
+  async function clearedTitle(id: string, cwd: string) {
+    if (clearedTitles.has(id)) return clearedTitles.get(id)!;
+    const main = await readTranscript(id, cwd).then((t) => t.main, () => []);
+    const adapter = createAdapter();
+    const prompt = main.flatMap((m) => adapter.convert(m as SDKMessage)).find((p) => p.type === "user_text");
+    if (!prompt) return "New session";
+    clearedTitles.set(id, prompt.text);
+    return prompt.text;
+  }
+
   async function list(): Promise<ListResult> {
     // The model list starts a CLI: not waiting longer than this offers no auto mode until it is there.
     await new Promise<void>((done) => {
@@ -529,7 +552,8 @@ export function createDaemon(opts: {
     for (const t of all) {
       if (!t.cwd || !allowed(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title: t.summary, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true });
+      const title = CLEARED.test(t.summary) ? await clearedTitle(t.sessionId, t.cwd) : t.summary;
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
@@ -587,7 +611,7 @@ export function createDaemon(opts: {
         const permissionMode = modes.includes(saved.permissionMode as never) ? (saved.permissionMode as SessionSettings["permissionMode"]) : undefined;
         const effort = EFFORTS.includes(saved.effort as never) ? (saved.effort as SessionSettings["effort"]) : undefined;
         // Each run's messages name the Agent call that started it (parent_tool_use_id), so after the main transcript they nest by it.
-        return track(Session.restore(id, info.cwd, [...messages, ...runs.flat()], sessionOpts(() => id, { model, permissionMode, effort })));
+        return track(Session.restore(id, info.cwd, [...messages, ...runs.flat()], sessionOpts({ model, permissionMode, effort })));
       })()
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
         .finally(() => restoring.delete(id));
@@ -688,7 +712,7 @@ export function createDaemon(opts: {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           await modelList().catch(() => {});
-          const s: Session = track(new Session(cwd, sessionOpts(() => s.id, { model: msg.model, permissionMode: defaultModeFor(cwd, msg.model) })));
+          const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode: defaultModeFor(cwd, msg.model) })));
           addProject(cwd);
           return reply({ session: s.info() });
         }

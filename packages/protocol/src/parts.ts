@@ -127,6 +127,11 @@ export type Part = { parentId?: string } & (
   /** Refusal fallback (`retracted_message_uuids`): the client drops these parts of the refused messages. `id` = `<notice id>:retract`. */
   | { type: "retract"; id: string; partIds: string[] }
   /**
+   * /clear (SDK `conversation_reset`): the live query goes on as session `sessionId`, a new transcript; this session keeps its
+   * history and resumes its own transcript on its next prompt. Not rendered; a tab that shows this session live switches to `sessionId`.
+   */
+  | { type: "session_cleared"; id: string; sessionId: string }
+  /**
    * A terminal CLI turn runs in this session (the live mirror sees its transcript growing, its last message not ending a turn);
    * the web app sends no prompt until `running` is false.
    */
