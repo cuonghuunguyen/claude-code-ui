@@ -878,7 +878,7 @@ describe("daemon", () => {
 
       expect(await c.request({ type: "session.subscribe", sessionId: outside, sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
       // A deep link to a session of a project that is not added opens it and adds the project.
-      await c.request({ type: "session.subscribe", sessionId: inside, sinceSeq: 0 });
+      await c.request({ type: "session.subscribe", sessionId: inside, sinceSeq: 0, addProject: true });
       const linked = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string }[]; projects: string[] } };
       expect(linked.result.projects).toEqual([cwd, webRoot]);
       expect(linked.result.sessions.map((s) => s.id)).toContain(inside);
@@ -1124,10 +1124,29 @@ describe("daemon", () => {
       }
     });
 
+    it("a resubscribe after project.remove does not add the project again; only a subscribe with addProject does", async () => {
+      const cwd = cwdOf("resub");
+      const a = await start([], createProjects());
+      try {
+        const created = (await a.c.request({ type: "session.create", cwd })) as { result: { session: { id: string } } };
+        const sessionId = created.result.session.id;
+        expect((await list(a.c)).projects).toEqual([cwd]);
+        await a.c.request({ type: "project.remove", cwd });
+        // The web app resubscribes every view it holds on a reconnect.
+        await a.c.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+        expect((await list(a.c)).projects).toEqual([]);
+        await a.c.request({ type: "session.subscribe", sessionId, sinceSeq: 0, addProject: true });
+        expect((await list(a.c)).projects).toEqual([cwd]);
+      } finally {
+        a.d.close();
+      }
+    });
+
     it("upgrade: the first start with the new rule adds opened projects and cwds of sessions with saved claude-ui settings; transcript-only cwds stay recent", async () => {
       const [saved, opened, cliOnly, removed] = [cwdOf("saved"), cwdOf("opened"), cwdOf("cli"), cwdOf("removed")];
       const dir = mkdtempSync(join(tmpdir(), "cfg-"));
       const file = join(dir, "projects.json");
+      // sid(2) has no saved settings (default model, mode, effort never changed): not seeded, a documented gap (docs/spec.md "Projects").
       // projects.json of the old version: no "seeded" mark.
       writeFileSync(file, JSON.stringify({ opened: { [opened]: 5 }, removed: { [removed]: 5000 } }));
       const settingsFile = join(dir, "sessions.json");

@@ -126,8 +126,8 @@ function Browser({
     return () => void (stale = true);
   }, [dir, roots]);
 
-  const needle = prefix.toLowerCase();
-  const recents = recent.filter((r) => projectName(r.cwd).toLowerCase().includes(needle)).slice(0, needle ? undefined : RECENT_SHOWN);
+  // Only while no path segment is typed: a typed path keeps the folder type-ahead (Tab, Enter) as it was.
+  const recents = prefix ? [] : recent.slice(0, RECENT_SHOWN);
   const folders = matchFolders(entries, prefix).filter((e) => !recents.some((r) => r.cwd === e.path));
   // One keyboard list: recent projects first, then folders.
   const rows: { path: string; recent?: RecentProject; entry?: FsEntry }[] = [...recents.map((r) => ({ path: r.cwd, recent: r })), ...folders.map((e) => ({ path: e.path, entry: e }))];
@@ -153,7 +153,8 @@ function Browser({
   };
   const onKeyDown = (e: KeyboardEvent) => {
     const row = rows[selected];
-    const tabTo = rows[Math.max(selected, 0)];
+    // Nothing selected: the first folder, never a recent project.
+    const tabTo = rows[selected] ?? rows.find((r) => r.entry);
     const keys: Record<string, (() => unknown) | undefined> = {
       ArrowDown: rows.length ? () => setSelected((i) => (i + 1) % rows.length) : undefined,
       ArrowUp: rows.length ? () => setSelected((i) => (i <= 0 ? rows.length - 1 : i - 1)) : undefined,
@@ -219,8 +220,8 @@ function Browser({
                   >
                     <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />
                     <span className="min-w-0 truncate font-medium max-md:flex-1">{projectName(row.path)}</span>
-                    <span className="min-w-0 flex-1 truncate text-faint max-md:hidden">{row.path}</span>
-                    <span className="shrink-0 text-faint text-xs">
+                    <span className="min-w-0 flex-1 truncate text-muted-foreground max-md:hidden">{row.path}</span>
+                    <span className="shrink-0 text-muted-foreground text-xs">
                       {row.recent.sessionCount} {row.recent.sessionCount === 1 ? "session" : "sessions"} · {ago(row.recent.lastActivity)}
                     </span>
                   </li>

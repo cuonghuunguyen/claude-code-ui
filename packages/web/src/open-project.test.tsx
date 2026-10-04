@@ -137,15 +137,39 @@ it("suggests the first 5 recent projects with session count and age; one click a
   expect(onPick).toHaveBeenCalledWith("/home/u/old-one");
 });
 
-it("typing filters the recent projects by name and shows all matches; Enter picks the best match, a recent one first", async () => {
-  const { recents, rows, type, key, onPick } = await render(undefined, recent);
-  await type("/home/u/proj");
-  expect(recents().map((r) => r.textContent)).toEqual([expect.stringContaining("a-proj"), expect.stringContaining("b-proj"), expect.stringContaining("c-proj"), expect.stringContaining("d-proj")]);
-  await type("/home/u/ol");
-  expect(recents()).toHaveLength(1);
-  expect(rows()).toEqual([]);
+it("a typed path behaves as without recents: a recent whose name contains the text does not take Tab or Enter from the folder", async () => {
+  const withMatch = [{ cwd: "/home/u/old-api-2", sessionCount: 1, lastActivity: now }, ...recent];
+  const { recents, rows, type, key, input, onPick } = await render(undefined, withMatch);
+  await type("/home/u/api");
+  expect(recents()).toHaveLength(0);
+  expect(rows()).toEqual(["api/"]);
+  await key("Tab");
+  expect(input().value).toBe("/home/u/api/");
+  await type("/home/u/api");
   await key("Enter");
-  expect(onPick).toHaveBeenCalledWith("/home/u/old-one");
+  expect(onPick).toHaveBeenCalledWith("/home/u/api");
+});
+
+it("in the start state Tab descends into the first folder, not a recent project", async () => {
+  const { input, key } = await render(undefined, recent);
+  await key("Tab");
+  expect(input().value).toBe("/home/u/claude-ui/");
+});
+
+it("a recent project is picked with Enter only after ArrowDown selects it", async () => {
+  const { key, onPick } = await render(undefined, recent);
+  await key("Enter");
+  expect(onPick).toHaveBeenLastCalledWith("/home/u");
+  await key("ArrowDown");
+  await key("Enter");
+  expect(onPick).toHaveBeenLastCalledWith("/home/u/api");
+});
+
+it("recent-row path and meta text use the muted token (4.5:1), not the icon-only faint one", async () => {
+  const { recents } = await render(undefined, recent);
+  const text = [...recents()[0]!.querySelectorAll("span")].slice(1);
+  expect(text).toHaveLength(2);
+  for (const s of text) expect(s.className).toContain("text-muted-foreground");
 });
 
 it("without recent projects the dialog shows no recent section", async () => {

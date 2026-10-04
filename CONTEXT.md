@@ -13,7 +13,7 @@ One SDK session in one working directory, identified by its session ID. The SDK 
 _Avoid_: chat, conversation, thread
 
 **Project**:
-A working directory the user added in claude-ui: opened with "Open project" (also by picking a recent project), the cwd of a session created in the web app, or a project reached by a link to one of its sessions. Cwds that only have terminal CLI transcripts are recent projects, not projects, until added. New sessions start in a project. Removing one hides it from the list; files and transcripts stay.
+A working directory the user added in claude-ui: opened with "Open project" (also by picking a recent project), the cwd of a session created in the web app, or a project reached by a link or notification click to one of its sessions (not by a reconnect). Cwds that only have terminal CLI transcripts are recent projects, not projects, until added. New sessions start in a project. Removing one hides it from the list; files and transcripts stay.
 _Avoid_: workspace, folder (folder = any directory in the folder browser)
 
 **Turn**:

@@ -497,8 +497,8 @@ export function createDaemon(opts: {
         case "session.subscribe": {
           const s = await find(msg.sessionId);
           if (!s || ws.readyState !== ws.OPEN) return;
-          // A link to a session of a project that is not added opens it and adds the project.
-          addProject(s.cwd);
+          // Only an explicit open (link, notification) adds the project; a reconnect resubscribe must not bring back a removed one.
+          if (msg.addProject === true) addProject(s.cwd);
           unsubscribes.get(s.id)?.();
           // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
           const since = msg.logEpoch === logEpoch ? msg.sinceSeq : 0;

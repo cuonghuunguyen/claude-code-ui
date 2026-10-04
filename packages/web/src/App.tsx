@@ -239,7 +239,8 @@ export function App() {
 
   // Replays events after the view's last seq, or everything when the daemon restarted (new logEpoch).
   // A session that is not live in the daemon is rebuilt from its transcript and resumes with the same ID on the next prompt.
-  async function subscribe(sessionId: string) {
+  /** `addProject`: an explicit open (link, notification, click); a reconnect resubscribe must not re-add a project the user removed. */
+  async function subscribe(sessionId: string, addProject = false) {
     const view = viewsRef.current[sessionId];
     try {
       const r = await client.current!.request<SubscribeResult>({
@@ -247,6 +248,7 @@ export function App() {
         sessionId,
         sinceSeq: view?.lastSeq ?? 0,
         logEpoch: view?.logEpoch,
+        ...(addProject && { addProject }),
       });
       // Runs before the replayed events: the reply precedes them on the socket and this continuation is a microtask.
       replayedTo.current[sessionId] = r.seq;
@@ -286,7 +288,7 @@ export function App() {
     if (!id) return;
     setTabs((t) => openTab(t, id));
     if (!keepHash) history.replaceState(null, "", tabHash(id));
-    if (id !== NEW_TAB && !viewsRef.current[id]) void subscribe(id);
+    if (id !== NEW_TAB && !viewsRef.current[id]) void subscribe(id, true);
   }
 
   /** Opens the subagent view of `id` in the active session tab, or its session view; a history entry each, so browser Back returns. */
@@ -335,10 +337,10 @@ export function App() {
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
         void refreshList();
-        const ids = new Set(Object.keys(viewsRef.current));
         const h = hashId();
-        if (h) ids.add(h);
-        ids.forEach((id) => void subscribe(id));
+        // The hash session of a page load is a link; the held views are only resubscribed.
+        if (h && !viewsRef.current[h]) void subscribe(h, true);
+        Object.keys(viewsRef.current).forEach((id) => void subscribe(id));
         void pushSubscription().then((sub) => {
           setPushOn(!!sub);
           if (sub) sendSubscription(c, sub).catch(() => {});

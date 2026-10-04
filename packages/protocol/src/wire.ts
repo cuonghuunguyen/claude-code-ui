@@ -35,7 +35,8 @@ export type FsEntry = { name: string; path: string; isDir: boolean };
 /** Every client message carries a `reqId`; the daemon answers with a `reply` or an `error` with the same `reqId`. */
 export type ClientMessage = { reqId: string } & (
   | { type: "session.create"; cwd: string; model?: string }
-  | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string }
+  /** `addProject`: an explicit open (link, notification) of a session of a project that is not added adds the project; a resubscribe must not. */
+  | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string; addProject?: boolean }
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   | { type: "session.setModel"; sessionId: string; model: string }

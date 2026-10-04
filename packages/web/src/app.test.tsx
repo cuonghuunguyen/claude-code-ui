@@ -55,12 +55,14 @@ vi.mock("@xterm/xterm", () => ({
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 let emit: (e: unknown) => void = () => {};
 let sessionsChanged: (m: unknown) => void = () => {};
+let reconnect: () => void = () => {};
 const sent: { type: string }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
   connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void; onSessionsChanged?: (m: unknown) => void }) => {
     emit = opts.onEvent;
     sessionsChanged = opts.onSessionsChanged ?? (() => {});
+    reconnect = opts.onOpen ?? (() => {});
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return { request: async (m: { type: string }) => (sent.push(m), replies[m.type] ?? {}), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
   },
@@ -457,4 +459,19 @@ it("with no added project: empty state, and the Open project dialog adds a recen
   } finally {
     replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
   }
+});
+
+it("a link opens its session with addProject; a reconnect resubscribe does not, so a removed project stays removed", async () => {
+  const subscribes = () => sent.filter((m) => m.type === "session.subscribe");
+  // Page load with the session in the hash (deep link, notification click).
+  sent.length = 0;
+  await act(async () => (root.unmount(), (root = createRoot(el)), root.render(<App />)));
+  await act(async () => {});
+  expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: ID, addProject: true }));
+  // Reconnect: every held view is subscribed again.
+  sent.length = 0;
+  await act(async () => reconnect());
+  await act(async () => {});
+  expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: ID }));
+  expect(subscribes().some((m) => "addProject" in m)).toBe(false);
 });
