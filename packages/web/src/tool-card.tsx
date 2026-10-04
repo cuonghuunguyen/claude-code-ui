@@ -41,11 +41,11 @@ export const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {
 export const CwdContext = createContext("");
 
 // ponytail: ids of cards the user expanded, kept outside React so a remount (a Read merging into a context group,
-// a tab switch) keeps the state; never pruned, only expanded ids land here.
+// a tab switch, an item leaving the rendered window) keeps the state; never pruned, only expanded ids land here.
 const expanded = new Set<string>();
 
 /** Per-card expand state, collapsed by default (docs/spec.md "Session view UX"); `force` holds the card open. */
-function useExpanded(id: string, force = false) {
+export function useExpanded(id: string, force = false) {
   const [open, setOpen] = useState(() => expanded.has(id));
   const onOpenChange = (next: boolean) => {
     if (next) expanded.add(id);
@@ -116,7 +116,7 @@ function FileSummary({ path, range }: { path: string; range: string }) {
 
 /** Card body by tool type; tools without a purpose-built body get the generic JSON view. */
 export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult }) {
-  const output = result && <Lines text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} />;
+  const output = result && <Lines id={call.id} text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} />;
   switch (call.tool) {
     case "Bash":
       // OpenCode shell anatomy: `$ command` and the output as plain text in one bordered box.
@@ -228,8 +228,8 @@ export function InputDiff({
 const MAX_LINES = 20;
 
 /** Monospace output, cut to MAX_LINES lines until expanded. `plain`: Bash output, ANSI colors and no box of its own. */
-function Lines({ text, error, plain = false }: { text: string; error: boolean; plain?: boolean }) {
-  const [all, setAll] = useState(false);
+function Lines({ id, text, error, plain = false }: { id: string; text: string; error: boolean; plain?: boolean }) {
+  const { open: all, onOpenChange: setAll } = useExpanded(`lines:${id}`);
   const lines = text.replace(/\n$/, "").split("\n");
   const shown = all ? lines.join("\n") : lines.slice(0, MAX_LINES).join("\n");
   return (
