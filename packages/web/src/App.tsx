@@ -3,6 +3,7 @@ import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, Monitor
 import type {
   ContextUsage,
   CreateResult,
+  DefaultModeResult,
   Effort,
   Event,
   FsListResult,
@@ -131,7 +132,10 @@ export function App() {
   // Project the new-session tab starts in.
   const [draftCwd, setDraftCwd] = useState<string>();
   // The new-session tab's model, mode and effort: here, not in the tab, so the palette can change them too.
-  const [draft, setDraft] = useState<StartOptions>(NEW_DRAFT);
+  // `mode` is unset until picked: the project's `permissions.defaultMode` (daemon, `defaultMode`) applies.
+  const [pick, setDraft] = useState<DraftPick>(NEW_DRAFT);
+  const [defaultMode, setDefaultMode] = useState<PermissionMode>("default");
+  const draft: StartOptions = { ...pick, mode: pick.mode ?? defaultMode };
   // Modes a new session may start in (session.list): bypassPermissions only when the daemon enables it.
   const [newModes, setNewModes] = useState<PermissionMode[]>(NEW_SESSION_MODES);
   const [openingProject, setOpeningProject] = useState(false);
@@ -590,10 +594,20 @@ export function App() {
   const changeDraft = (d: StartOptions) => {
     const lost = d.mode === "auto" && !models.some((m) => m.value === d.model && m.supportsAutoMode);
     if (lost) setToast(autoUnavailable(models, d.model));
-    setDraft(lost ? { ...d, mode: "default" } : d);
+    setDraft(lost ? { ...d, mode: "default" } : { ...d, mode: d.mode === draft.mode ? pick.mode : d.mode });
   };
   // The project the config dialogs act on: the shown session's cwd, or the new-session tab's project chip.
   const draftProject = draftCwd && projects.includes(draftCwd) ? draftCwd : projects[0];
+  // The new-session tab's mode comes from the Claude settings of its project, read again each time the tab is shown.
+  useEffect(() => {
+    if (!draftShown || !draftProject || status !== "connected") return;
+    let stale = false;
+    client.current!.request<DefaultModeResult>({ type: "session.defaultMode", cwd: draftProject }).then(
+      (r) => !stale && setDefaultMode(r.mode ?? "default"),
+      () => {},
+    );
+    return () => void (stale = true);
+  }, [draftShown, draftProject, status]);
   const project = draftShown ? draftProject : shown?.cwd;
   const projectSession = draftShown ? undefined : shown?.id;
   const openMcp = (server?: string) => project && setMcp({ open: true, cwd: project, sessionId: projectSession, server });
@@ -1256,7 +1270,8 @@ const autoUnavailable = (models: ModelInfo[], model: string) => `Auto mode not a
 
 export type StartOptions = { model: string; mode: PermissionMode; effort: Effort };
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
-const NEW_DRAFT: StartOptions = { model: "default", mode: "default", effort: "default" };
+type DraftPick = Omit<StartOptions, "mode"> & { mode?: PermissionMode };
+const NEW_DRAFT: DraftPick = { model: "default", effort: "default" };
 
 const timelineKey = (item: TimelineItem) => (item.kind === "context" ? item.id : item.part.id);
 

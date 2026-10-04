@@ -35,6 +35,8 @@ export type FsEntry = { name: string; path: string; isDir: boolean };
 /** Every client message carries a `reqId`; the daemon answers with a `reply` or an `error` with the same `reqId`. */
 export type ClientMessage = { reqId: string } & (
   | { type: "session.create"; cwd: string; model?: string }
+  /** The mode a new session in `cwd` starts in: Claude settings `permissions.defaultMode` (local > project > user), when offered; else "default". */
+  | { type: "session.defaultMode"; cwd: string }
   /** `addProject`: an explicit open (link, notification) of a session of a project that is not added adds the project; a resubscribe must not. */
   | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string; addProject?: boolean }
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
@@ -193,6 +195,8 @@ export type CreateResult = { session: SessionInfo };
 export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo };
 /** session.setModel, session.setPermissionMode, session.setEffort. */
 export type SetModelResult = { session: SessionInfo };
+/** session.defaultMode. */
+export type DefaultModeResult = { mode: PermissionMode };
 export type UploadResult = { path: string };
 /** fs.upload size cap; the client checks it before reading the file. */
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;

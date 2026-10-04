@@ -2181,3 +2181,83 @@ describe("transcript sync (terminal CLI turns)", () => {
     }
   });
 });
+
+describe("default permission mode from Claude settings (permissions.defaultMode)", () => {
+  const write = (file: string, mode: unknown) => (mkdirSync(dirname(file), { recursive: true }), writeFileSync(file, JSON.stringify({ permissions: { defaultMode: mode } })));
+  /** A daemon with its own Claude user dir and project dir (a root, so cwd is allowed). */
+  async function setup(allowBypass = false) {
+    const claudeDir = mkdtempSync(join(tmpdir(), "claude-user-"));
+    const project = mkdtempSync(join(tmpdir(), "proj-"));
+    const d = createDaemon({ webRoot, token, roots: [project], query: fakeQuery as never, claudeDir, allowBypass, history: { listSessions: (async () => []) as never } as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
+    const mode = async (cwd = project) => ((await c.request({ type: "session.defaultMode", cwd })) as { result: { mode: string } }).result.mode;
+    return { claudeDir, project, d, c, mode, user: join(claudeDir, "settings.json"), shared: join(project, ".claude", "settings.json"), local: join(project, ".claude", "settings.local.json") };
+  }
+
+  it("user settings give the mode; unset, invalid or unreadable settings give default", async () => {
+    const t = await setup();
+    expect(await t.mode()).toBe("default");
+    write(t.user, "acceptEdits");
+    expect(await t.mode()).toBe("acceptEdits");
+    write(t.user, "yolo");
+    expect(await t.mode()).toBe("default");
+    writeFileSync(t.user, "{ not json");
+    expect(await t.mode()).toBe("default");
+    t.d.close();
+  });
+
+  it("local overrides project overrides user, per cwd", async () => {
+    const t = await setup();
+    write(t.user, "acceptEdits");
+    write(t.shared, "plan");
+    expect(await t.mode()).toBe("plan");
+    write(t.local, "dontAsk");
+    expect(await t.mode()).toBe("dontAsk");
+    mkdirSync(join(t.project, "other"));
+    expect(await t.mode(join(t.project, "other"))).toBe("acceptEdits");
+    t.d.close();
+  });
+
+  it("an invalid higher-precedence value wins over a valid lower one (-> default), like Claude Code's merge", async () => {
+    const t = await setup();
+    write(t.user, "plan");
+    write(t.shared, "nonsense");
+    expect(await t.mode()).toBe("default");
+    t.d.close();
+  });
+
+  it("bypassPermissions needs the daemon's allow-bypass; auto needs a model with auto support", async () => {
+    const t = await setup();
+    write(t.user, "bypassPermissions");
+    expect(await t.mode()).toBe("default");
+    write(t.user, "auto");
+    // The default model has no supportsAutoMode in the fake list.
+    expect(await t.mode()).toBe("default");
+    t.d.close();
+    const b = await setup(true);
+    write(b.user, "bypassPermissions");
+    expect(await b.mode()).toBe("bypassPermissions");
+    b.d.close();
+  });
+
+  it("session.defaultMode refuses a cwd outside the roots", async () => {
+    const t = await setup();
+    expect(await t.c.request({ type: "session.defaultMode", cwd: tmpdir() })).toMatchObject({ code: "cwd_not_allowed" });
+    t.d.close();
+  });
+
+  it("session.create without a mode starts in the default mode (auto on a supporting model); the CLI gets it; settings edits apply to the next session", async () => {
+    const t = await setup();
+    write(t.user, "auto");
+    const create = async (model?: string) => ((await t.c.request({ type: "session.create", cwd: t.project, model })) as { result: { session: { id: string; permissionMode: string } } }).result.session;
+    const sonnet = await create("sonnet");
+    expect(sonnet.permissionMode).toBe("auto");
+    await t.c.request({ type: "session.prompt", sessionId: sonnet.id, text: "hi" });
+    expect(calls.find((o) => o.sessionId === sonnet.id)).toMatchObject({ permissionMode: "auto" });
+    expect((await create("haiku")).permissionMode).toBe("default");
+    write(t.shared, "plan");
+    expect((await create("sonnet")).permissionMode).toBe("plan");
+    t.d.close();
+  });
+});
