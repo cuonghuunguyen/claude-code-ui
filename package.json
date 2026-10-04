@@ -9,7 +9,7 @@
     "build": "npm run build -w @claude-ui/web",
     "start": "npm run build && npm start -w @claude-ui/daemon",
     "dev": "npm run dev -w @claude-ui/daemon & npm run dev -w @claude-ui/web",
-    "typecheck": "npm run typecheck --workspaces",
+    "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run"
   },
   "devDependencies": {
