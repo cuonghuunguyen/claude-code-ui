@@ -40,6 +40,8 @@ export type CommandContext = {
   stop: () => void;
   /** Opens the MCP servers dialog of the shown project; none without a project. */
   openMcp?: () => void;
+  /** Opens the "Slash commands" dialog of the shown project; none without a project. */
+  openSkills?: () => void;
 };
 
 const RECENT_SESSIONS = 5;
@@ -105,6 +107,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s?.running && cmd("session.stop", "Stop", c.stop, "escape"),
     // The extension's command menu section "Customize".
     c.openMcp && { id: "mcp.open", group: "Customize", title: "MCP servers", description: "Configure Model Context Protocol servers", run: c.openMcp },
+    c.openSkills && { id: "skills.open", group: "Customize", title: "Slash commands", description: "Browse slash commands", run: c.openSkills },
     // Newest first; the recent ones also show before anything is typed (OpenCode lists recent items there, not all).
     ...[...c.sessions]
       .sort((a, b) => b.lastActivity - a.lastActivity)

@@ -142,3 +142,18 @@ it("/mcp alone opens the MCP servers dialog instead of starting a session; the p
   await key(box, { key: "Enter" });
   expect(onStart).toHaveBeenCalledTimes(1);
 });
+
+it("/skills and /help alone open the Slash commands dialog instead of starting a session; the picker lists /skills", async () => {
+  const onStart = vi.fn(async () => {});
+  const onDialog = vi.fn();
+  const { el, box } = await render({ onStart, onDialog });
+  await type(box, "/ski");
+  expect(el.textContent).toContain("List available skills");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenLastCalledWith("skills");
+  await type(box, "/help");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenLastCalledWith("skills");
+  expect(onStart).not.toHaveBeenCalled();
+  expect(box.value).toBe("");
+});

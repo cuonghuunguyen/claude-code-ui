@@ -56,7 +56,23 @@ describe("dialog commands", () => {
     expect(dialogOf("/mcp list")).toBeUndefined();
     expect(dialogOf("/mcpx")).toBeUndefined();
     const rows = withDialogCommands([cmd("mcp"), cmd("init")]);
-    expect(rows.map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"]]);
+    expect(rows.map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"]]);
     expect(matchCommands(rows, "/mc")!.map((c) => c.name)).toEqual(["mcp"]);
+  });
+});
+
+describe("/skills and /help", () => {
+  it("open the Slash commands dialog alone, unless the CLI has a command of that name", () => {
+    expect(dialogOf("/skills")).toBe("skills");
+    expect(dialogOf(" /help ")).toBe("skills");
+    expect(dialogOf("/skills x")).toBeUndefined();
+    expect(dialogOf("/skills", [cmd("skills")])).toBeUndefined();
+    expect(dialogOf("/help", [cmd("help")])).toBeUndefined();
+    expect(dialogOf("/help", [cmd("skills")])).toBe("skills");
+    expect(dialogOf("/mcp", [cmd("mcp")])).toBe("mcp");
+  });
+  it("the picker lists /skills with the extension's description unless the CLI has it", () => {
+    expect(withDialogCommands([cmd("init")]).map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"]]);
+    expect(withDialogCommands([cmd("skills")]).map((r) => r.description)).toEqual(["skills desc", "Configure Model Context Protocol servers"]);
   });
 });

@@ -144,3 +144,11 @@ it("lists MCP servers in the Customize group while a project is shown", () => {
   expect(item).toMatchObject({ group: "Customize", title: "MCP servers", description: "Configure Model Context Protocol servers" });
   expect(openMcp).toHaveBeenCalled();
 });
+
+it("lists Slash commands in the Customize group while a project is shown", () => {
+  expect(appCommands(ctx()).find((i) => i.id === "skills.open")).toBeUndefined();
+  const openSkills = vi.fn();
+  const item = run(ctx({ openSkills }), "skills.open");
+  expect(item).toMatchObject({ group: "Customize", title: "Slash commands", description: "Browse slash commands" });
+  expect(openSkills).toHaveBeenCalled();
+});

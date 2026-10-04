@@ -127,6 +127,11 @@ export type ClientMessage = { reqId: string } & (
   | { type: "mcp.add"; cwd: string; name: string; scope: ConfigScope; config: McpAddConfig }
   /** `claude mcp remove --scope <scope>`; running sessions keep it until restarted. Broadcasts `config.changed`. */
   | { type: "mcp.remove"; cwd: string; name: string; scope: ConfigScope }
+  // "Slash commands" dialog (docs/spec.md "Config dialogs"): the live query of `sessionId` when it has one, else the config query of `cwd`.
+  /** `getSkillsDialog()`; reply SkillsResult (empty when the CLI does not support it). */
+  | { type: "skills.list"; cwd: string; sessionId?: string }
+  /** `claude edit-skill-overrides --json`, then `reloadSkills()` and a poll until the row shows `state`; reply SkillsSetStateResult. Broadcasts `config.changed`. */
+  | { type: "skills.setState"; cwd: string; sessionId?: string; name: string; state: SkillState; handles?: SkillHandles }
 );
 
 /** `PushSubscription.toJSON()`. */
@@ -237,3 +242,26 @@ export type McpAuthResult = { authUrl?: string; requiresUserAction: boolean };
 export type McpAddConfig =
   | { transport: "stdio"; command: string; args: string[]; env: string[] }
   | { transport: "http" | "sse"; url: string; headers: string[] };
+
+/** Claude Code's `skillOverrides` values; the dialog labels them On / Name only / User only / Off. */
+export type SkillState = "on" | "name-only" | "user-invocable-only" | "off";
+/** `get_skills_dialog` `handles` as the CLI sends it (snake_case), passed back unchanged to `edit-skill-overrides`. */
+export type SkillHandles = { unqualified_name?: string; aliases?: string[]; bare_name_reserved?: boolean };
+/**
+ * One skill of the "Slash commands" dialog (`get_skills_dialog`). `source`: user, project, plugin, built-in, claude.ai sync, ... (open set).
+ * `lockedBy`: why the state cannot be changed: plugin, author, policy, flag, reserved-name (open set). `advertised`: listed as a command.
+ */
+export type SkillRow = {
+  name: string;
+  displayName: string;
+  description: string;
+  source: string;
+  tokens: number;
+  state: SkillState | (string & {});
+  lockedBy?: string;
+  advertised: boolean;
+  handles?: SkillHandles;
+};
+export type SkillsResult = { skills: SkillRow[] };
+/** `confirmed` false: saved, but the session's dialog still shows the previous state after 5 reads. */
+export type SkillsSetStateResult = SkillsResult & { confirmed: boolean };

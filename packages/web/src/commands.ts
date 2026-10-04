@@ -26,11 +26,30 @@ export function choose(c: SlashCommand, typed = ""): { send: string } | { text: 
   return c.argumentHint && !full ? { text: `/${c.name} ` } : { send: `/${c.name}` };
 }
 
-/** Commands the web app handles itself, like the VS Code extension: typed alone they open a dialog and are not sent. */
-export const DIALOG_COMMANDS: (SlashCommand & { dialog: "mcp" })[] = [{ name: "mcp", description: "Configure Model Context Protocol servers", argumentHint: "", dialog: "mcp" }];
+/** The dialogs the web app opens itself. */
+export type DialogName = "mcp" | "skills";
 
-/** The picker's rows: the session's commands plus the dialog commands (a CLI row of the same name gives way). */
-export const withDialogCommands = (commands: SlashCommand[]): SlashCommand[] => [...commands.filter((c) => !DIALOG_COMMANDS.some((d) => d.name === c.name)), ...DIALOG_COMMANDS];
+/**
+ * Commands the web app handles itself, like the VS Code extension: typed alone they open a dialog and are not sent.
+ * `always`: also when the CLI has a command of that name (`/mcp`); the others only without one (the CLI's own command wins).
+ */
+export const DIALOG_COMMANDS: (SlashCommand & { dialog: DialogName; always?: boolean })[] = [
+  { name: "mcp", description: "Configure Model Context Protocol servers", argumentHint: "", dialog: "mcp", always: true },
+  { name: "skills", description: "List available skills", argumentHint: "", dialog: "skills" },
+];
 
-/** The dialog a prompt opens instead of being sent: `/mcp` alone (always intercepted, as in the extension). */
-export const dialogOf = (text: string) => DIALOG_COMMANDS.find((d) => text.trim() === `/${d.name}`)?.dialog;
+const has = (commands: SlashCommand[], name: string) => commands.some((c) => c.name === name || c.aliases?.includes(name));
+
+/** The picker's rows: the session's commands plus the dialog commands (a CLI row of the same name gives way to `always` ones). */
+export const withDialogCommands = (commands: SlashCommand[]): SlashCommand[] => [
+  ...commands.filter((c) => !DIALOG_COMMANDS.some((d) => d.always && d.name === c.name)),
+  ...DIALOG_COMMANDS.filter((d) => d.always || !has(commands, d.name)),
+];
+
+/** The dialog a prompt opens instead of being sent: `/mcp` alone; `/skills` and `/help` alone unless the CLI has a command of that name. */
+export function dialogOf(text: string, commands: SlashCommand[] = []): DialogName | undefined {
+  const name = /^\/(\S+)$/.exec(text.trim())?.[1];
+  if (!name) return undefined;
+  const d = DIALOG_COMMANDS.find((d) => d.name === name || (name === "help" && d.dialog === "skills"));
+  return d && (d.always || !has(commands, name)) ? d.dialog : undefined;
+}

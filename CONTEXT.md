@@ -82,3 +82,6 @@ _Avoid_: permission rule scope (different thing)
 **Config query**:
 A query with no prompt, started in a project cwd for a config dialog when the session has no live query; held open while the dialog uses it, closed 30 s after its last request.
 _Avoid_: throwaway (that one closes after one answer)
+
+**Skill state**:
+How much of a skill Claude sees: On (listed with its description, and yours to invoke), Name only (listed by name), User only (yours to invoke, Claude does not see it), Off (hidden from both). Claude Code's `skillOverrides` values `on`, `name-only`, `user-invocable-only`, `off`; set in the "Slash commands" dialog.

@@ -429,3 +429,16 @@ it("on a touch screen a stop does not move focus to the prompt box (no soft keyb
     window.matchMedia = mm;
   }
 });
+
+it("/skills is the CLI's own command when the session's list has one; /help alone still opens the dialog", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onDialog = vi.fn();
+  const { box } = await render({ onPrompt, onDialog }, { ...emptySession(), commands: [{ name: "skills", description: "CLI skills", argumentHint: "" }] });
+  await type(box, "/skills");
+  await key(box, { key: "Enter" });
+  expect(onPrompt).toHaveBeenCalledWith("/skills", []);
+  expect(onDialog).not.toHaveBeenCalled();
+  await type(box, "/help");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenCalledWith("skills");
+});
