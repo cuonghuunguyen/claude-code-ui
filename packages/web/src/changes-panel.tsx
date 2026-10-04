@@ -12,14 +12,15 @@ import { useDark } from "./theme.ts";
 import { DIFF_OPTIONS, InputDiff } from "./tool-card.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { inDir, isWinPath, relPath } from "./paths.ts";
+import { readFailure } from "./files.ts";
 import { filePath } from "./tools.ts";
 
 type Client = ReturnType<typeof connect>;
 type DiffStyle = "unified" | "split";
 /** Disk content of a changed file: "" once deleted. */
-type Disk = { content?: string; deleted?: boolean; error?: string };
+type Disk = { content?: string; deleted?: boolean; error?: string; notice?: boolean };
 /** `kind`: OpenCode's file badge, A(dded) / D(eleted) / M(odified). */
-type Row = { change: FileChange; before?: string; after?: string; error?: string; stats?: Stats; kind: Kind };
+type Row = { change: FileChange; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; kind: Kind };
 type Kind = "A" | "D" | "M";
 const KIND_TITLE = { A: "Added", D: "Deleted", M: "Modified" } as const;
 const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info" } as const;
@@ -111,7 +112,7 @@ export function ChangesPanel({
       client
         .request<FsReadResult>({ type: "fs.read", path })
         .then((r): Disk => ({ content: r.content }))
-        .catch((e: RequestError): Disk => (e.code === "not_found" ? { content: "", deleted: true } : { error: e.message }))
+        .catch((e: RequestError): Disk => (e.code === "not_found" ? { content: "", deleted: true } : { error: readFailure(e).text, notice: readFailure(e).notice }))
         .then((d) => live && setDisk((x) => ({ ...x, [path]: d })));
     return () => void (live = false);
   }, [key, reload]);
@@ -121,7 +122,7 @@ export function ChangesPanel({
     () =>
       changes.flatMap((change): Row[] => {
         const d = disk[change.path];
-        if (d?.content === undefined) return [{ change, error: d?.error, stats: callStats(change), kind: "M" }];
+        if (d?.content === undefined) return [{ change, error: d?.error, notice: d?.notice, stats: callStats(change), kind: "M" }];
         const before = baseline(d.content, change);
         // Added: the file did not exist (original null), or a restored transcript's Write created it. An existing empty file is M.
         const created = change.original === null || (change.original === undefined && before === "");
@@ -399,7 +400,7 @@ function FileDiff({ row, cwd, style, onOpen, inline }: { row: Row; cwd: string; 
         </div>
       )}
       <div className={cn("text-xs", !inline && "min-h-0 flex-1 overflow-auto p-2")}>
-        {row.error && <p className="p-2 text-destructive">{row.error}</p>}
+        {row.error && <p className={cn("p-2", row.notice ? "text-muted-foreground" : "text-destructive")}>{row.error}</p>}
         {!row.error && (row.after === undefined || (files && !same && !drawn)) && (
           <p className="p-2 text-muted-foreground" data-testid="diff-loading">
             Loading diff…

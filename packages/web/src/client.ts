@@ -10,7 +10,7 @@ export type TerminalMessage = Extract<ServerMessage, { type: "terminal.output" |
 
 /** "unauthorized": the daemon rejected this browser's token (or it has none); no redial until it is paired. */
 /** A daemon `error` reply; `code` as the daemon sent it (e.g. unknown_session). */
-export type RequestError = Error & { code?: string };
+export type RequestError = Error & { code?: string; size?: number };
 
 export type ConnectionStatus = "connected" | "reconnecting" | "offline" | "unauthorized";
 
@@ -76,7 +76,7 @@ export function connect(opts: {
       const p = m.reqId ? pending.get(m.reqId) : undefined;
       if (!p) return console.error("daemon error", m);
       pending.delete(m.reqId!);
-      m.type === "reply" ? p.resolve(m.result) : p.reject(Object.assign(new Error(m.message), { code: m.code }));
+      m.type === "reply" ? p.resolve(m.result) : p.reject(Object.assign(new Error(m.message), { code: m.code, size: m.size }));
     });
     // Node's WebSocket fires only error on a rejected upgrade, a browser error then close: handle the first, once.
     let down = false;
