@@ -87,6 +87,19 @@ export function selectionMention(state: EditorState, path: string, cwd: string) 
 
 export const fileSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${+(n / 1024).toFixed(1)} KB` : `${+(n / 1024 ** 2).toFixed(1)} MB`);
 
+/** Mirrors the daemon's MAX_FILE_BYTES (fs.read). */
+const MAX_FILE_CHARS = 2 * 1024 * 1024;
+
+/**
+ * The fs.read checks on a file the daemon already decoded (the changes tab's before side, from the SDK): too large, UTF-16 BOM or NUL bytes,
+ * or U+FFFD from invalid UTF-8. Undefined for text. ponytail: a text file that holds U+FFFD itself counts as not UTF-8.
+ */
+export function textFailure(s: string): { text: string; notice: boolean } | undefined {
+  const code = s.length > MAX_FILE_CHARS ? "too_large" : s.startsWith("\ufffd\ufffd") ? "not_utf8" : s.includes("\0") ? "binary" : s.includes("\ufffd") ? "not_utf8" : undefined;
+  // The decoded string has no true byte size, so only a too large file shows one.
+  return code && readFailure(Object.assign(new Error(code), { code, size: code === "too_large" ? s.length : undefined }));
+}
+
 /** What the viewer says about a failed fs.read: `notice` for a file that cannot be shown (not an error), no raw error code. */
 export function readFailure(e: RequestError): { text: string; notice: boolean } {
   const size = e.size === undefined ? "" : ` (${fileSize(e.size)})`;

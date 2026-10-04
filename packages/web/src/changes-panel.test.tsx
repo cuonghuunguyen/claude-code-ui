@@ -442,3 +442,17 @@ it("a changed file that is binary, too large or not UTF-8 shows its state, not a
   }
   expect(el.textContent).not.toMatch(/too_large|not_utf8|binary file:/);
 });
+
+it("a file that was binary, too large or not UTF-8 before the session shows its state on the before side, not garbled text", async () => {
+  const garbled = "PK\u0003\u0004\0\0��\u0014\0";
+  const files: Record<string, string> = { "/p/a.zip": "now text\n", "/p/u16.txt": "now text\n", "/p/big.log": "now text\n" };
+  const before: Record<string, string> = { "/p/a.zip": garbled, "/p/u16.txt": "��a\0b\0", "/p/big.log": "x".repeat(2 * 1024 ** 2 + 1) };
+  const parts = Object.keys(files).flatMap((p, i) => [edit(`e${i}`, p, "a", "b"), original(`e${i}`, before[p]!)]);
+  await act(async () => root.render(<ChangesPanel client={fakeClient(files)} view={view(parts)} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  for (const [path, text] of [["/p/a.zip", "Binary file, not shown"], ["/p/u16.txt", "File is not UTF-8 text, not shown"], ["/p/big.log", "File too large to show"]]) {
+    await act(async () => (el.querySelector<HTMLButtonElement>(`[data-testid=changed-file][aria-label*="${path.slice(3)}"]`)!.click(), undefined));
+    expect(el.querySelector("[data-testid=file-diff]")!.textContent).toContain(text);
+    expect(el.querySelector("[data-testid=pierre-diff]")).toBeNull();
+  }
+});

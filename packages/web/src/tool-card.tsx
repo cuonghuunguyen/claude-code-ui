@@ -44,7 +44,9 @@ const note = (b: unknown) => {
 /** The output with each base64 block replaced by its one-line note. */
 const redact = (output: unknown) => (Array.isArray(output) ? output.map((b) => note(b) ?? b) : output);
 
-const text = (output: unknown) => (typeof output === "string" ? output : JSON.stringify(redact(output), null, 2));
+// The CLI wraps a tool's error message in <tool_use_error> tags.
+const text = (output: unknown) =>
+  typeof output === "string" ? output.replace(/^<tool_use_error>([\s\S]*?)\s*<\/tool_use_error>$/, "$1") : JSON.stringify(redact(output), null, 2);
 
 // themeType follows the app theme (`.dark` on <html>), not the OS: "system" would ignore the theme toggle.
 export const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {

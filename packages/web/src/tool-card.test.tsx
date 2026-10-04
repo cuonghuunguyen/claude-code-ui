@@ -284,3 +284,13 @@ describe("Read of an image or PDF", () => {
     expect(renderToStaticMarkup(<ToolBody call={done("mcp__x__shot", {})} result={{ type: "tool_result", toolUseId: "t1", output: pdf, isError: false } as never} />)).not.toContain(b64);
   });
 });
+
+describe("failed Read card", () => {
+  it("shows the error message without the <tool_use_error> wrapper", () => {
+    const html = renderToStaticMarkup(
+      <ToolBody call={done("Read", { file_path: "/p/pic.png" })} result={result("<tool_use_error>This tool cannot read binary files.</tool_use_error>", true)} />,
+    );
+    expect(html).toContain("This tool cannot read binary files.");
+    expect(html).not.toContain("tool_use_error");
+  });
+});
