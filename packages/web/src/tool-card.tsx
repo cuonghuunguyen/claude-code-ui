@@ -23,7 +23,10 @@ const STATE: Record<ToolStatus, ToolUIPart["state"]> = {
   done: "output-available",
   error: "output-error",
   denied: "output-denied",
+  stopped: "output-denied",
 };
+/** Labels that differ from the state's own. */
+const LABEL: Partial<Record<ToolStatus, string>> = { stopped: "Stopped" };
 
 const text = (output: unknown) => (typeof output === "string" ? output : JSON.stringify(output, null, 2));
 
@@ -63,6 +66,7 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
         type="dynamic-tool"
         toolName={call.tool}
         state={awaiting ? "approval-requested" : STATE[call.status]}
+        statusLabel={awaiting ? undefined : LABEL[call.status]}
         // Next to the tool name, which is never truncated like the summary.
         title={call.editedByUser ? `${call.tool} · edited by you` : undefined}
         summary={path ? <FileSummary path={path} range={range} /> : toolSummary(call.input)}
@@ -302,6 +306,7 @@ export function SubagentGroup({ part, result, awaiting, onOpen, children }: { pa
           type="dynamic-tool"
           toolName="Agent"
           state={STATE[part.status]}
+          statusLabel={LABEL[part.status]}
           summary={part.description}
           className="min-w-0 flex-1"
         />

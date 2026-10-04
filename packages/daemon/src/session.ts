@@ -113,16 +113,18 @@ export class Session {
       void this.loadCommands();
       return;
     }
-    // ADR 0001: after a daemon restart the SDK transcript is the history; the query resumes on the first prompt.
-    const adapter = createAdapter();
+    // ADR 0001: after a daemon restart the SDK transcript is the history; the query resumes on the first prompt. The live query
+    // shares the adapter: a task notification after the resume finds a restored run.
     for (const m of restored.history) {
-      for (const part of adapter.convert(m as SDKMessage)) {
+      for (const part of this.adapter.convert(m as SDKMessage)) {
         // A subagent run's prompt is no checkpoint.
         if (part.type === "user_text" && !part.parentId) this.checkpoints.set(part.id, this.lastAssistant);
         this.emit(part);
       }
       if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
     }
+    // No query runs: a run without its end in the transcript (the CLI exited mid-run) is no longer running.
+    for (const part of this.adapter.endRuns()) this.emit(part);
     this.setState("idle");
     void this.refreshUsage();
   }
@@ -462,8 +464,10 @@ export class Session {
       this.emit({ type: "raw", id: randomUUID(), message: { error: String(err) } });
       this.setState("error");
     } finally {
-      // Nothing waits for these answers any more.
+      // Nothing waits for these answers any more, and no run of this query runs.
       for (const id of [...this.pending.keys()]) this.cancel(id, "Session ended");
+      this.tasks.clear();
+      if (generation === this.generation) for (const part of this.adapter.endRuns()) this.emit(part);
     }
   }
 

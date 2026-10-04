@@ -35,6 +35,8 @@ export type ToolHeaderProps = {
   meta?: ReactNode;
   /** Native tooltip of the whole row, e.g. the full file path. */
   tooltip?: string;
+  /** Shown instead of the state's own label, e.g. "Stopped" on output-denied. */
+  statusLabel?: string;
   className?: string;
 } & (
   | { type: ToolUIPart["type"]; state: ToolUIPart["state"]; toolName?: never }
@@ -67,10 +69,10 @@ const statusIcons: Record<ToolPart["state"], ReactNode> = {
 };
 const labelled = new Set<ToolPart["state"]>(["approval-requested", "output-denied", "output-error"]);
 
-export const ToolStatusMark = ({ state }: { state: ToolPart["state"] }) => (
-  <span className="flex items-center gap-1 text-muted-foreground text-xs" title={statusLabels[state]} data-state={state}>
+export const ToolStatusMark = ({ state, label = statusLabels[state] }: { state: ToolPart["state"]; label?: string }) => (
+  <span className="flex items-center gap-1 text-muted-foreground text-xs" title={label} data-state={state}>
     {statusIcons[state]}
-    {labelled.has(state) ? statusLabels[state] : <span className="sr-only">{statusLabels[state]}</span>}
+    {labelled.has(state) ? label : <span className="sr-only">{label}</span>}
   </span>
 );
 
@@ -93,6 +95,7 @@ export const ToolHeader = ({
   summary,
   meta,
   tooltip,
+  statusLabel,
   type,
   state,
   toolName,
@@ -111,7 +114,7 @@ export const ToolHeader = ({
       {typeof summary === "string" ? summary && <span className="min-w-0 truncate text-muted-foreground">{summary}</span> : summary}
       <span className="ml-auto flex shrink-0 items-center gap-2">
         {meta}
-        <ToolStatusMark state={state} />
+        <ToolStatusMark state={state} label={statusLabel} />
         <ToolChevron />
       </span>
     </CollapsibleTrigger>

@@ -1405,7 +1405,7 @@ describe("daemon", () => {
       await c.waitFor((m) => m.type === "event" && m.part.type === "session_state");
       const parts = new Map(c.inbox.flatMap((m) => (m.type === "event" ? [[m.part.id, m.part] as const] : [])));
       expect(parts.get("toolu_sleeper")).toMatchObject({ type: "subagent", status: "done", startedAt: Date.parse(at(0)), endedAt: Date.parse(at(145)) });
-      expect(parts.get("toolu_stopped")).toMatchObject({ type: "subagent", status: "error", endedAt: Date.parse(at(40)) });
+      expect(parts.get("toolu_stopped")).toMatchObject({ type: "subagent", status: "stopped", endedAt: Date.parse(at(40)) });
     } finally {
       d.close();
     }
@@ -1435,9 +1435,11 @@ describe("daemon", () => {
       expect(await a.request({ type: "session.stopSubagent", sessionId, subagentId: "nope" })).toMatchObject({ type: "error", code: "unknown_subagent" });
       expect(await a.request({ type: "session.stopSubagent", sessionId, subagentId: "agent-1" })).toMatchObject({ type: "reply" });
       expect(stopped).toEqual(["task-1"]);
-      const ended = (m: ServerMessage) => m.type === "event" && m.part.type === "subagent" && m.part.status === "error";
+      // Stopped, not failed: the error tool_result that follows keeps it stopped.
+      const ended = (m: ServerMessage) => m.type === "event" && m.part.type === "subagent" && m.part.status === "stopped";
       for (const c of [a, b]) expect(((await c.waitFor(ended)) as { part: object }).part).toMatchObject({ id: "agent-1", endedAt: expect.any(Number) });
       await a.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+      expect(a.inbox.filter((m) => m.type === "event" && m.part.id === "agent-1").at(-1)).toMatchObject({ part: { status: "stopped" } });
       // Ended: nothing left to stop.
       expect(await a.request({ type: "session.stopSubagent", sessionId, subagentId: "agent-1" })).toMatchObject({ type: "error", code: "unknown_subagent" });
       expect(await a.request({ type: "session.stopSubagent", sessionId: "nope", subagentId: "agent-1" })).toMatchObject({ type: "error", code: "unknown_session" });

@@ -425,8 +425,8 @@ describe("adapter on a background subagent", () => {
       expect(last(parts).endedAt! - last(parts).startedAt).toBe(145_000);
     });
 
-    it("a stopped or failed run ends as error", () => {
-      expect(last(run([...restored, notice(30, "stopped")])).status).toBe("error");
+    it("a stopped run ends stopped, a failed run as error", () => {
+      expect(last(run([...restored, notice(30, "stopped")])).status).toBe("stopped");
       expect(last(run([...restored, notice(30, "failed")])).status).toBe("error");
     });
   });
@@ -502,7 +502,7 @@ describe("adapter on nested subagent runs", () => {
       adapter.convert(result("a1", null) as never);
       vi.setSystemTime(5000);
       const done = adapter.convert({ type: "system", subtype: "task_notification", task_id: "k1", tool_use_id: "a1", status: "stopped" } as never);
-      expect(done).toEqual([expect.objectContaining({ id: "a1", status: "error", startedAt: 1000, endedAt: 5000 })]);
+      expect(done).toEqual([expect.objectContaining({ id: "a1", status: "stopped", startedAt: 1000, endedAt: 5000 })]);
     } finally {
       vi.useRealTimers();
     }

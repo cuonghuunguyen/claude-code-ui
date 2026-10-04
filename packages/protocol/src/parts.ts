@@ -9,7 +9,8 @@ export type Effort = EffortLevel | "default";
 
 export type SessionState = "idle" | "running" | "needs_input" | "error" | "closed";
 
-export type ToolStatus = "pending" | "running" | "done" | "error" | "denied";
+/** `stopped`: a subagent run or background task stopped (Stop agent, or its CLI exited mid-run). */
+export type ToolStatus = "pending" | "running" | "done" | "error" | "denied" | "stopped";
 
 /** "allow" = Yes, "allow_always" = Yes and don't ask again, "deny" = No; "cancelled" = the SDK withdrew the request. */
 export type PermissionDecision = "allow" | "allow_always" | "deny" | "cancelled";
@@ -107,7 +108,8 @@ export type Part = { parentId?: string } & (
   /**
    * A subagent run (Agent/Task call); `id` = `toolUseId`, its `tool_result` is `<toolUseId>:result`, child parts have `parentId` = `id`.
    * Its own `parentId`: the run that started it (absent = the session). `startedAt` / `endedAt` (ms): transcript timestamps, else the
-   * daemon's clock; `endedAt` once the status is done, error or denied (a background run: at its task_notification).
+   * daemon's clock; `endedAt` once the status is done, error, denied or stopped (a background run: at its task_notification; a run
+   * no query runs any more: at its last message).
    */
   | { type: "subagent"; id: string; toolUseId: string; description: string; status: ToolStatus; startedAt: number; endedAt?: number }
   /** The turn was stopped (session.interrupt, or No without feedback); replaces its turn_result. */
