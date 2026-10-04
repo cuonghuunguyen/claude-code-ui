@@ -531,6 +531,23 @@ it("a page-load link does not re-add a removed project; opening the session (cli
   replies["session.subscribe"] = { logEpoch: "e1", session };
 });
 
+it("opening the page-load session of a removed project (popstate, tab click) adds the project, though its view exists", async () => {
+  const subscribes = () => sent.filter((m) => m.type === "session.subscribe");
+  // The session is in the hash but not in the list: its project is not added.
+  sent.length = 0;
+  const restore = await remount({ "session.list": { sessions: [], projects: [] } });
+  try {
+    expect(subscribes().some((m) => "addProject" in m)).toBe(false);
+    sent.length = 0;
+    await act(async () => (location.hash = "#new", window.dispatchEvent(new PopStateEvent("popstate"))));
+    await act(async () => (location.hash = `#${ID}`, window.dispatchEvent(new PopStateEvent("popstate"))));
+    await act(async () => {});
+    expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: ID, addProject: true }));
+  } finally {
+    restore();
+  }
+});
+
 it("a session without transcript gets its title during the first turn: its events refresh the list, throttled", async () => {
   const fresh = { ...session, title: "New session", transcript: false };
   const restore = await remount({ "session.list": { sessions: [fresh], projects: ["/p/demo"] }, "session.subscribe": { logEpoch: "e1", session: fresh } });

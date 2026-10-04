@@ -206,6 +206,21 @@ it("Jump to latest moves the focus to the prompt box, not to body, when the butt
   expect(document.activeElement).toBe(el.querySelector('textarea[aria-label="Prompt"]'));
 });
 
+it("Jump to latest on a touch screen does not focus the prompt box: the soft keyboard stays closed", async () => {
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ matches: q.includes("pointer: coarse"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  try {
+    await open(view(turns(100)));
+    await userScroll(1000);
+    await act(async () => button()!.click());
+    await settle();
+    expect(button()).toBeNull();
+    expect(document.activeElement).not.toBe(el.querySelector('textarea[aria-label="Prompt"]'));
+  } finally {
+    window.matchMedia = mm;
+  }
+});
+
 it("at the bottom, a 20px scroll up leaves the bottom: new output and a growing last item do not pull the view down", async () => {
   await open(view([...turns(50), answer(50, "start", true)]));
   await userScroll(log().scrollTop - 20);

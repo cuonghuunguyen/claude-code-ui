@@ -305,7 +305,8 @@ export function App() {
     if (!id) return;
     setTabs((t) => openTab(t, id));
     if (!keepHash) history.replaceState(null, "", tabHash(id));
-    if (id !== NEW_TAB && !viewsRef.current[id]) void subscribe(id, true);
+    // A page-load link subscribed without adding its project: the first explicit open of that session adds it, view or not.
+    if (id !== NEW_TAB && (!viewsRef.current[id] || !listRef.current.some((s) => s.id === id))) void subscribe(id, true);
   }
 
   /** Opens the subagent view of `id` in the active session tab, or its session view; a history entry each, so browser Back returns. */
@@ -1407,7 +1408,7 @@ export function SessionPane({
           items={items}
           itemKey={timelineKey}
           reveal={reveal}
-          onJump={() => prompt.current?.focus()}
+          onJump={() => !window.matchMedia?.("(pointer: coarse)").matches && prompt.current?.focus()}
           footer={thinking}
           renderItem={(item, index) =>
             item.kind === "context" ? (

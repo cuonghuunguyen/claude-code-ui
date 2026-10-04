@@ -233,7 +233,8 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
       } finally {
         // The hold counts from the last answer.
         if (!live && held.get(cwd)?.q === q) configQuery(cwd);
-        else if (!live && flows.get(cwd)?.q === q) flowHold(cwd);
+        // A detached flow lives while its dialog polls (those go to the held query), not only while its own query is used.
+        if (!live && flows.get(cwd)?.q !== held.get(cwd)?.q) flowHold(cwd);
       }
     };
     return { q, call };
