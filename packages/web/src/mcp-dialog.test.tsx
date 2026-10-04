@@ -171,6 +171,9 @@ it("Authenticate opens the sign-in page, waits with Check connection and the pas
   expect(wait.textContent).toContain("If the redirect page shows a connection error, paste the URL from your browser's address bar:");
   expect((d.q("mcp-callback") as HTMLInputElement).placeholder).toBe("http://localhost:.../callback?code=...&state=...");
   expect(wait.querySelector("a")!.getAttribute("href")).toBe("https://auth/x");
+  expect(wait.querySelector("a")!.className).toContain("max-md:min-h-11");
+  expect(d.text()).toContain("Learn more about MCP");
+  expect([...document.querySelectorAll("a")].find((x) => x.textContent === "Learn more about MCP")!.className).toContain("max-md:min-h-11");
   expect(d.button("Check connection")).toBeTruthy();
   expect(d.button("Authenticate")).toBeUndefined();
   await d.type(d.q("mcp-callback")!, "http://localhost:1/callback");

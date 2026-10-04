@@ -124,6 +124,21 @@ describe("mcp.*", () => {
     c.ws.close();
   });
 
+  it("drops the held config query after a successful add or remove, so the next list sees the new config", async () => {
+    const c = await client();
+    await c.request({ type: "mcp.list", cwd: quiet });
+    const before = configQueries().length;
+    await c.request({ type: "mcp.add", cwd: quiet, name: "fresh", scope: "local", config: { transport: "http", url: "https://x.example/mcp", headers: [] } });
+    const stale = configQueries().at(-1)!;
+    expect(closedQueries).toContain(stale);
+    await c.request({ type: "mcp.list", cwd: quiet });
+    expect(configQueries().length).toBe(before + 1);
+    await c.request({ type: "mcp.remove", cwd: quiet, name: "fresh", scope: "local" });
+    await c.request({ type: "mcp.list", cwd: quiet });
+    expect(configQueries().length).toBe(before + 2);
+    c.ws.close();
+  });
+
   it("toggles and reconnects a server and replies the fresh list", async () => {
     const c = await client();
     const t = await c.request({ type: "mcp.toggle", cwd: project, name: "broken", enabled: false });

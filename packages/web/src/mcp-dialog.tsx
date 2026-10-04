@@ -229,7 +229,7 @@ export function McpDialog({
       busy={formBusy || busy?.action === "remove"}
       testId="mcp-dialog"
       footer={
-        <a href={DOCS} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
+        <a href={DOCS} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline max-md:inline-flex max-md:min-h-11 max-md:items-center">
           Learn more about MCP
         </a>
       }
@@ -370,7 +370,7 @@ export function McpDialog({
                 </Button>
               </div>
               {authUrl && (
-                <a href={authUrl} target="_blank" rel="noopener noreferrer" className="self-start text-muted-foreground underline underline-offset-4 hover:text-foreground">
+                <a href={authUrl} target="_blank" rel="noopener noreferrer" className="self-start text-muted-foreground underline underline-offset-4 hover:text-foreground max-md:inline-flex max-md:min-h-11 max-md:items-center">
                   Re-open authentication page
                 </a>
               )}

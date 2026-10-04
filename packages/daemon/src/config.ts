@@ -156,6 +156,9 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
   async function write(args: string[], cwd: string) {
     const r = await cli(args, cwd);
     if (r.code !== 0) throw new ConfigError("cli_failed", firstLine(r.stderr) || firstLine(r.stdout) || `claude exited with code ${r.code}`);
+    // The held query read its config at start; the next list needs a fresh one.
+    const h = held.get(cwd);
+    if (h) drop(cwd, h.q);
     opts.onChanged("mcp", cwd);
     return {};
   }
