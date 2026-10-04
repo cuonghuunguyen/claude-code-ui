@@ -140,6 +140,44 @@ describe("mcp.*", () => {
     c.ws.close();
   });
 
+  it("an add or remove does not end an OAuth flow waiting on the held config query: its callback still reaches that query", async () => {
+    const c = await client();
+    await sleep(HOLD_MS + 100);
+    const before = configQueries().length;
+    await c.request({ type: "mcp.authenticate", cwd: quiet, name: "ctx" });
+    const flow = configQueries().at(-1)!;
+    expect(configQueries().length).toBe(before + 1);
+    await c.request({ type: "mcp.add", cwd: quiet, name: "other", scope: "local", config: { transport: "http", url: "https://x.example/mcp", headers: [] } });
+    expect(closedQueries).not.toContain(flow);
+    // The next list reads the new config from a fresh query.
+    await c.request({ type: "mcp.list", cwd: quiet });
+    expect(configQueries().length).toBe(before + 2);
+    await c.request({ type: "mcp.oauthCallback", cwd: quiet, name: "ctx", callbackUrl: "http://localhost:5555/callback?code=x&state=s" });
+    expect(mcpCalls.at(-1)).toMatchObject({ call: "mcpSubmitOAuthCallbackUrl", options: flow });
+    // The flow is over: its query closes.
+    expect(closedQueries).toContain(flow);
+    c.ws.close();
+    await sleep(HOLD_MS + 100);
+  });
+
+  it("the waiting dialog's polls keep a detached OAuth flow alive past the hold: its callback still reaches that query", async () => {
+    const c = await client();
+    await sleep(HOLD_MS + 100);
+    await c.request({ type: "mcp.authenticate", cwd: quiet, name: "ctx" });
+    const flow = configQueries().at(-1)!;
+    await c.request({ type: "mcp.add", cwd: quiet, name: "other2", scope: "local", config: { transport: "http", url: "https://x.example/mcp", headers: [] } });
+    // Polls of the dialog go to the new held query for longer than one hold.
+    for (let i = 0; i < 4; i++) {
+      await sleep(HOLD_MS / 2);
+      await c.request({ type: "mcp.list", cwd: quiet });
+    }
+    expect(closedQueries).not.toContain(flow);
+    await c.request({ type: "mcp.oauthCallback", cwd: quiet, name: "ctx", callbackUrl: "http://localhost:5555/callback?code=x&state=s" });
+    expect(mcpCalls.at(-1)).toMatchObject({ call: "mcpSubmitOAuthCallbackUrl", options: flow });
+    c.ws.close();
+    await sleep(HOLD_MS + 100);
+  });
+
   it("toggles and reconnects a server and replies the fresh list", async () => {
     const c = await client();
     const t = await c.request({ type: "mcp.toggle", cwd: project, name: "broken", enabled: false });

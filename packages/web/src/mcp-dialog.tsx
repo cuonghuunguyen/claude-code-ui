@@ -432,10 +432,10 @@ function Remove({ name, scope, disabled, removing, onRemove }: { name: string; s
       <span className="text-sm">
         Remove {name} from {scope} config?
       </span>
-      <Button variant="destructive" className="max-md:h-11" disabled={disabled} onClick={onRemove} autoFocus>
+      <Button variant="destructive" className="max-md:h-11" disabled={disabled} onClick={onRemove}>
         {removing ? "Removing…" : "Confirm remove"}
       </Button>
-      <Button variant="secondary" className="max-md:h-11" disabled={disabled} onClick={() => setConfirm(false)}>
+      <Button variant="secondary" className="max-md:h-11" disabled={disabled} onClick={() => setConfirm(false)} autoFocus>
         Cancel
       </Button>
     </div>

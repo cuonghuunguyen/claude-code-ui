@@ -160,16 +160,33 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
   // One config query per project cwd: OAuth state lives in its CLI process, so a flow's requests must reach the same one.
   // ponytail: not in the one-at-a-time throwaway queue (it would block context usage reads for the whole hold); one per open project dialog.
   const held = new Map<string, { q: Query; timer?: NodeJS.Timeout }>();
+  // The query of a project whose OAuth flow waits for its callback. A config write replaces the held query, but not this
+  // one: it runs until the flow ends or the hold passes, so another tab's add/remove does not end the flow.
+  const flows = new Map<string, { q: Query; timer?: NodeJS.Timeout }>();
   // Config type of each listed server by cwd and name: the CLI drops claude.ai connectors from its status for a moment while
   // it reloads (after a toggle), and Authenticate still has to know one.
   // ponytail: never pruned; a few short strings per server ever listed.
   const types = new Map<string, string>();
   const drop = (cwd: string, q: Query) => {
     const h = held.get(cwd);
+    if (flows.get(cwd)?.q === q && h?.q !== q) {
+      // Detached by a config write: only the flow's end or its hold closes it.
+      clearTimeout(flows.get(cwd)!.timer);
+      flows.delete(cwd);
+      return q.close();
+    }
     if (h?.q !== q) return;
     clearTimeout(h.timer);
     held.delete(cwd);
+    if (flows.get(cwd)?.q === q) flows.delete(cwd);
     q.close();
+  };
+  /** A detached flow query is used: its hold counts from now. */
+  const flowHold = (cwd: string) => {
+    const f = flows.get(cwd);
+    if (!f) return;
+    clearTimeout(f.timer);
+    f.timer = setTimeout(() => drop(cwd, f.q), holdMs);
   };
   function configQuery(cwd: string) {
     let h = held.get(cwd);
@@ -196,16 +213,17 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
   async function write(args: string[], cwd: string) {
     const r = await cli(args, cwd);
     if (r.code !== 0) throw new ConfigError("cli_failed", firstLine(r.stderr) || firstLine(r.stdout) || `claude exited with code ${r.code}`);
-    // The held query read its config at start; the next list needs a fresh one.
+    // The held query read its config at start; the next list needs a fresh one. One with a waiting OAuth flow lives on, detached.
     const h = held.get(cwd);
-    if (h) drop(cwd, h.q);
+    if (h && flows.get(cwd)?.q === h.q) held.delete(cwd);
+    else if (h) drop(cwd, h.q);
     opts.onChanged("mcp", cwd);
     return {};
   }
 
-  /** The query a dialog request goes to (the session's live one, else the project's config query) and a `call` that bounds each answer. */
-  function access(cwd: string, live?: Query) {
-    const q = (live ?? configQuery(cwd)) as ExtraQuery;
+  /** The query a dialog request goes to (the session's live one, else `flow`, else the project's config query) and a `call` that bounds each answer. */
+  function access(cwd: string, live?: Query, flow?: Query) {
+    const q = (live ?? flow ?? configQuery(cwd)) as ExtraQuery;
     const call = async <T,>(p: () => Promise<T>) => {
       try {
         return await timed(p());
@@ -215,6 +233,8 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
       } finally {
         // The hold counts from the last answer.
         if (!live && held.get(cwd)?.q === q) configQuery(cwd);
+        // A detached flow lives while its dialog polls (those go to the held query), not only while its own query is used.
+        if (!live && flows.get(cwd)?.q !== held.get(cwd)?.q) flowHold(cwd);
       }
     };
     return { q, call };
@@ -259,7 +279,9 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
       return write(["mcp", "remove", "--scope", msg.scope, "--", msg.name], cwd);
     }
     if (msg.type !== "mcp.list" && typeof msg.name !== "string") throw new ConfigError("bad_request", "name required");
-    const { q, call } = access(cwd, live);
+    const flow = flows.get(cwd);
+    // The callback belongs to the query that started the flow.
+    const { q, call } = access(cwd, live, msg.type === "mcp.oauthCallback" ? flow?.q : undefined);
     const status = () => call(() => q.mcpServerStatus());
     const remember = (list: McpServerStatus[]) => list.forEach((s) => s.config && types.set(`${cwd}\0${s.name}`, s.config.type ?? "stdio"));
     const servers = async () => {
@@ -289,11 +311,19 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
         if (type === "claudeai-proxy") return { authUrl: "https://claude.ai/customize/connectors", requiresUserAction: true };
         if (type !== "http" && type !== "sse") throw new ConfigError("not_supported", `Server type "${type}" does not support authentication`);
         const r = await call(() => q.mcpAuthenticate(msg.name));
+        if (!live && r.requiresUserAction) {
+          const old = flows.get(cwd);
+          if (old && old.q !== q && held.get(cwd)?.q !== old.q) drop(cwd, old.q);
+          flows.set(cwd, held.get(cwd) ?? { q });
+        }
         return { ...(r.authUrl && { authUrl: r.authUrl }), requiresUserAction: !!r.requiresUserAction };
       }
       case "mcp.oauthCallback":
         if (typeof msg.callbackUrl !== "string" || !msg.callbackUrl.trim()) throw new ConfigError("bad_request", "callbackUrl required");
         await call(() => q.mcpSubmitOAuthCallbackUrl(msg.name, msg.callbackUrl.trim()));
+        // The flow is over; a detached query has nothing left to do.
+        if (!live && flow && held.get(cwd)?.q !== flow.q) drop(cwd, flow.q);
+        flows.delete(cwd);
         return {};
       case "mcp.clearAuth": {
         const type = await typeOf(msg.name);

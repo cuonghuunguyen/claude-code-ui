@@ -505,19 +505,98 @@ it("with no added project: empty state, and the Open project dialog adds a recen
   }
 });
 
-it("a link opens its session with addProject; a reconnect resubscribe does not, so a removed project stays removed", async () => {
+it("a page-load link does not re-add a removed project; opening the session (click, popstate, notification) does", async () => {
   const subscribes = () => sent.filter((m) => m.type === "session.subscribe");
-  // Page load with the session in the hash (deep link, notification click).
+  // Page load with the session in the hash: only subscribed, the project stays removed until the user opens the session.
   sent.length = 0;
   await act(async () => (root.unmount(), (root = createRoot(el)), root.render(<App />)));
   await act(async () => {});
-  expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: ID, addProject: true }));
-  // Reconnect: every held view is subscribed again.
+  expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: ID }));
+  expect(subscribes().some((m) => "addProject" in m)).toBe(false);
+  // Reconnect: every held view is subscribed again, without addProject either.
   sent.length = 0;
   await act(async () => reconnect());
   await act(async () => {});
   expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: ID }));
   expect(subscribes().some((m) => "addProject" in m)).toBe(false);
+  // The user opens a session of a project that is not added (sidebar row): addProject.
+  const other = { ...session, id: "99999999-2222-3333-4444-555555555555", cwd: "/p/other" };
+  replies["session.list"] = { sessions: [session, other], projects: ["/p/demo", "/p/other"] };
+  replies["session.subscribe"] = { logEpoch: "e1", session: other };
+  sent.length = 0;
+  await act(async () => (location.hash = `#${other.id}`, window.dispatchEvent(new PopStateEvent("popstate"))));
+  await act(async () => {});
+  expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: other.id, addProject: true }));
+  replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+  replies["session.subscribe"] = { logEpoch: "e1", session };
+});
+
+it("opening the page-load session of a removed project (popstate, tab click) adds the project, though its view exists", async () => {
+  const subscribes = () => sent.filter((m) => m.type === "session.subscribe");
+  // The session is in the hash but not in the list: its project is not added.
+  sent.length = 0;
+  const restore = await remount({ "session.list": { sessions: [], projects: [] } });
+  try {
+    expect(subscribes().some((m) => "addProject" in m)).toBe(false);
+    sent.length = 0;
+    await act(async () => (location.hash = "#new", window.dispatchEvent(new PopStateEvent("popstate"))));
+    await act(async () => (location.hash = `#${ID}`, window.dispatchEvent(new PopStateEvent("popstate"))));
+    await act(async () => {});
+    expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: ID, addProject: true }));
+  } finally {
+    restore();
+  }
+});
+
+it("a page-load link to a session of a removed project shows the session, no 'no longer exists' error, when subscribe answers before the list", async () => {
+  // The daemon answers subscribe at once; the list waits for models and transcripts, then omits the session (project not added).
+  let release!: (r: unknown) => void;
+  const restore = await remount({ "session.list": new Promise((r) => (release = r)) });
+  try {
+    await act(async () => release({ sessions: [], projects: [] }));
+    await act(async () => {});
+    expect(el.textContent).not.toContain("That session no longer exists");
+    expect(location.hash).toBe(`#${ID}`);
+    expect(el.querySelector('[data-testid="tab-switcher"]')?.parentElement?.textContent).toContain("Untitled");
+  } finally {
+    restore();
+  }
+});
+
+it("a session without transcript gets its title during the first turn: its events refresh the list, throttled", async () => {
+  const fresh = { ...session, title: "New session", transcript: false };
+  const restore = await remount({ "session.list": { sessions: [fresh], projects: ["/p/demo"] }, "session.subscribe": { logEpoch: "e1", session: fresh } });
+  const lists = () => sent.filter((m) => m.type === "session.list").length;
+  const event = (seq: number) => act(async () => emit({ type: "event", sessionId: ID, seq, part: { type: "user_text", id: `u${seq}`, text: "hi", images: [] } }));
+  try {
+    expect(el.querySelector('[data-testid="tab-switcher"]')?.parentElement?.textContent).toContain("New session");
+    const before = lists();
+    await event(1);
+    await event(2);
+    expect(lists()).toBe(before + 1);
+    // Its transcript exists now: the title is the SDK's, and further events do not refresh the list.
+    replies["session.list"] = { sessions: [{ ...fresh, title: "hi", transcript: true }], projects: ["/p/demo"] };
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 5_000 });
+    await event(3);
+    vi.useRealTimers();
+    await act(async () => {});
+    expect(el.textContent).toContain("hi");
+    const after = lists();
+    await event(4);
+    expect(lists()).toBe(after);
+  } finally {
+    vi.useRealTimers();
+    restore();
+  }
+});
+
+it("a link to an open session opens it at the bottom: the timeline remounts, like a notification click", async () => {
+  const log = () => el.querySelector('[role="log"]');
+  const before = log();
+  expect(before).not.toBeNull();
+  await act(async () => window.dispatchEvent(new PopStateEvent("popstate")));
+  expect(log()).not.toBeNull();
+  expect(log()).not.toBe(before);
 });
 
 it("a session opened in Don't ask that goes to Auto mode with Shift+Tab and then gets a model without auto support ends in Ask: the picker sends no mode the user did not pick", async () => {

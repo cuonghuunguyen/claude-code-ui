@@ -195,6 +195,55 @@ it("scrolled up, new output does not pull the view down; the scroll-to-bottom bu
   expect(scrollBehaviors).toContain("smooth");
 });
 
+it("Jump to latest moves the focus to the prompt box, not to body, when the button turns inert", async () => {
+  await open(view(turns(100)));
+  await userScroll(1000);
+  button()!.focus();
+  expect(document.activeElement).toBe(button());
+  await act(async () => button()!.click());
+  await settle();
+  expect(button()).toBeNull();
+  expect(document.activeElement).toBe(el.querySelector('textarea[aria-label="Prompt"]'));
+});
+
+it("Jump to latest moves the focus to the permission panel's first action when the panel replaces the prompt box", async () => {
+  const permission: Part = { type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "ls" }, suggestions: [], settled: false };
+  await open(view([...turns(100), bash("t1"), permission]));
+  await userScroll(1000);
+  button()!.focus();
+  await act(async () => button()!.click());
+  await settle();
+  expect(button()).toBeNull();
+  expect(el.querySelector('textarea[aria-label="Prompt"]')).toBeNull();
+  expect(document.activeElement).toBe(el.querySelector('[data-testid="permission-panel"] button'));
+});
+
+it("Jump to latest moves the focus to the question panel's first option, not Dismiss (which stops the turn)", async () => {
+  const question: Part = { type: "question", id: "q1", requestId: "q1", toolUseId: "t1", questions: [{ question: "Which?", header: "Which", options: [{ label: "npm", description: "" }, { label: "pnpm", description: "" }], multiSelect: false }], settled: false };
+  await open(view([...turns(100), bash("t1"), question]));
+  await userScroll(1000);
+  button()!.focus();
+  await act(async () => button()!.click());
+  await settle();
+  expect(el.querySelector('textarea[aria-label="Prompt"]')).toBeNull();
+  expect(document.activeElement).toBe(el.querySelector('[data-testid="question-panel"] input'));
+});
+
+it("Jump to latest on a touch screen does not focus the prompt box: the soft keyboard stays closed", async () => {
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ matches: q.includes("pointer: coarse"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  try {
+    await open(view(turns(100)));
+    await userScroll(1000);
+    await act(async () => button()!.click());
+    await settle();
+    expect(button()).toBeNull();
+    expect(document.activeElement).not.toBe(el.querySelector('textarea[aria-label="Prompt"]'));
+  } finally {
+    window.matchMedia = mm;
+  }
+});
+
 it("at the bottom, a 20px scroll up leaves the bottom: new output and a growing last item do not pull the view down", async () => {
   await open(view([...turns(50), answer(50, "start", true)]));
   await userScroll(log().scrollTop - 20);
