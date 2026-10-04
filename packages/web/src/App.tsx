@@ -648,12 +648,13 @@ export function App() {
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:gap-2">
           {plan && status !== "unauthorized" && <PlanMeter usage={plan} />}
+          {/* Below sm the tab switcher needs the width for the session name: search and theme live in the drawer. */}
           {canQuickOpen && (
-            <IconButton label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button">
+            <IconButton className="max-sm:hidden" label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button">
               <SearchIcon />
             </IconButton>
           )}
-          <IconButton label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
+          <IconButton className="max-sm:hidden" label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
             <ThemeIcon />
           </IconButton>
         </div>
@@ -691,8 +692,18 @@ export function App() {
           className={`fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col gap-3 bg-card p-3 shadow-floating transition-transform md:static md:translate-x-0 md:bg-transparent md:p-1 md:shadow-none ${sidebar ? "" : "md:hidden"} ${drawer ? "translate-x-0" : "-translate-x-full"}`}
         >
           <ConnectionBadge status={status} />
+          <div className="flex items-center gap-2 sm:hidden" data-testid="drawer-tools">
+            {canQuickOpen && (
+              <IconButton label={quickOpenLabel} onClick={() => (setDrawer(false), showQuickOpen())} testId="drawer-quick-open">
+                <SearchIcon />
+              </IconButton>
+            )}
+            <IconButton label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="drawer-theme">
+              <ThemeIcon />
+            </IconButton>
+          </div>
           <label
-            className="flex items-center gap-2"
+            className="flex items-center gap-2 pointer-coarse:min-h-11"
             title={pushSupported() ? "Push notification when a session needs input or finishes" : "Push needs HTTPS or localhost and a browser with Web Push"}
           >
             <input type="checkbox" checked={pushOn} disabled={!pushSupported()} onChange={togglePush} data-testid="push-toggle" />
@@ -913,12 +924,13 @@ type Pane = "session" | "changes" | "files" | "terminal";
 /** `changes`: the changed file count, shown on the changes tab like OpenCode's "Files Changed N". */
 export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[]; value: Pane; onChange: (p: Pane) => void; changes?: number }) {
   return (
-    <div className="flex gap-1" role="tablist" aria-label="Panes">
+    <div className="flex gap-1 pointer-coarse:gap-2" role="tablist" aria-label="Panes">
       {panes.map((p) => (
         <Button
           key={p}
           size="sm"
           variant={p === value ? "secondary" : "ghost"}
+          className="pointer-coarse:h-11"
           role="tab"
           aria-selected={p === value}
           onClick={() => onChange(p)}
@@ -1263,7 +1275,7 @@ export function SessionPane({
           {view.state}
         </span>
         {turnRunning && (
-          <Button size="sm" variant="outline" className="h-6 px-2 text-xs" title="Stop (Esc)" data-testid="stop" onClick={onInterrupt}>
+          <Button size="sm" variant="outline" className="h-6 px-2 text-xs pointer-coarse:h-11 pointer-coarse:px-3" title="Stop (Esc)" data-testid="stop" onClick={onInterrupt}>
             <SquareIcon className="size-3 fill-current" />
             Stop
           </Button>
@@ -1297,6 +1309,7 @@ export function SessionPane({
                   <CopyAction text={item.part.text} />
                   {/* No tooltip prop: its trigger renders a button around this button. */}
                   <MessageAction
+                    className="pointer-coarse:size-11"
                     title="Rewind"
                     label="Rewind to before this message"
                     disabled={turnRunning}
@@ -1708,7 +1721,7 @@ function CopyAction({ text }: { text: string }) {
       () => {},
     );
   return (
-    <MessageAction title="Copy" label="Copy message" onClick={copy}>
+    <MessageAction title="Copy" label="Copy message" className="pointer-coarse:size-11" onClick={copy}>
       {copied ? <CheckIcon /> : <CopyIcon />}
     </MessageAction>
   );

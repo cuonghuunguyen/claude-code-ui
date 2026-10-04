@@ -24,6 +24,12 @@ export const nextMode = (modes: PermissionMode[], mode: PermissionMode) => {
   return cycle[(cycle.indexOf(mode) + 1) % cycle.length] ?? mode;
 };
 
+/** "Default (recommended)" -> "Default model": the picker label on a phone, where the toolbar has no room for the note. Only that note goes; one that names the model (a context size) stays. "Default" alone would read like the effort chooser beside it. */
+export const shortModel = (name: string) => {
+  const short = name.replace(/\s*\(recommended\)\s*$/i, "") || name;
+  return short === "Default" ? "Default model" : short;
+};
+
 /** The model's effort levels plus "default"; none when the model does not support effort (the chooser is hidden). */
 export function effortOptions(models: ModelInfo[], model: string): Effort[] {
   const m = models.find((x) => x.value === model);
@@ -111,9 +117,10 @@ export function PromptToolbar(props: {
   const modes = props.modes.includes(props.mode) ? props.modes : [props.mode, ...props.modes];
   const Mode = MODE_LABEL[props.mode].Icon;
   return (
-    <div className="@container flex items-end gap-1 px-2 py-2 pointer-coarse:gap-2 pointer-coarse:py-1" data-testid="prompt-toolbar">
+    // Below sm (phone) the choosers and the right group wrap as one flex row (contents): the model row, then effort, agents, context ring and send.
+    <div className="@container flex items-end gap-1 px-2 py-2 pointer-coarse:gap-2 pointer-coarse:py-1 max-sm:flex-wrap" data-testid="prompt-toolbar">
       {/* flex-wrap: on a narrow screen a chooser moves to the next row at its full width; nothing shrinks away the model name. */}
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 pointer-coarse:gap-2">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 pointer-coarse:gap-2 max-sm:contents">
         <button
           type="button"
           aria-label="Add images and files"
@@ -151,7 +158,18 @@ export function PromptToolbar(props: {
           testId="session-model"
           value={props.model}
           onChange={props.onModel}
-          items={models.map((m) => ({ value: m.value, label: m.displayName, description: m.description }))}
+          items={models.map((m) => ({
+            value: m.value,
+            label: m.displayName,
+            description: m.description,
+            trigger:
+              shortModel(m.displayName) === m.displayName ? undefined : (
+                <span>
+                  <span className="sm:hidden">{shortModel(m.displayName)}</span>
+                  <span className="max-sm:hidden">{m.displayName}</span>
+                </span>
+              ),
+          }))}
           className="max-w-55"
         />
         {efforts.length > 0 && (
@@ -167,8 +185,10 @@ export function PromptToolbar(props: {
         )}
         {props.agents}
       </div>
-      {props.usage && <ContextMeter usage={props.usage} stats={props.stats} />}
-      <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onStop={props.onStop} onFocusLost={props.onFocusLost} />
+      <div className="flex items-end gap-1 pointer-coarse:gap-2 max-sm:ml-auto">
+        {props.usage && <ContextMeter usage={props.usage} stats={props.stats} />}
+        <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onStop={props.onStop} onFocusLost={props.onFocusLost} />
+      </div>
     </div>
   );
 }

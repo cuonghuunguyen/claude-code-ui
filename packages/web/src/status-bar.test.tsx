@@ -152,11 +152,20 @@ it("click opens the details: context breakdown, plan usage, permission mode choo
   expect(onMode).toHaveBeenCalledWith("acceptEdits");
 });
 
-it("narrow screens keep model, ctx used and session percent; the rest is hidden below sm", async () => {
-  const v = view({ type: "context_usage", id: "context_usage", usage }, result("r1", 1, 1, 1));
+it("phone: no model, ctx used or session text (the toolbar ring and the titlebar ring show them); only the background shells stay", async () => {
+  const v = view({ type: "context_usage", id: "context_usage", usage }, result("r1", 1, 1, 1), bash("a", { command: "sleep 9", run_in_background: true }, "running"));
   const { el } = await render({ view: v, plan });
   const narrow = [...el.querySelectorAll("[data-field]")].filter((f) => !f.className.includes("max-sm:hidden")).map((f) => f.getAttribute("data-field"));
-  expect(narrow).toEqual(["model", "ctx-used", "session"]);
+  expect(narrow).toEqual(["shells"]);
+});
+
+it("phone: the bar takes no row when no field shows, and keeps its row for background shells", async () => {
+  const v = view({ type: "context_usage", id: "context_usage", usage });
+  const { el, rerender } = await render({ view: v, plan });
+  const bar = () => el.querySelector('[data-testid="status-bar"]')!;
+  expect(bar().className).toContain("max-sm:hidden");
+  await rerender({ view: view(bash("a", { command: "sleep 9", run_in_background: true }, "running")) });
+  expect(bar().className).not.toContain("max-sm:hidden");
 });
 
 it("clickable fields keep the visible text as accessible name (WCAG 2.5.3) and are at least 24px high (WCAG 2.5.8)", async () => {

@@ -80,7 +80,7 @@ export function TodoDock({ items, className }: { items: TodoItem[]; className?: 
         />
       </TaskTrigger>
       <CollapsibleContent>
-        <div role="list" className="flex max-h-42 flex-col gap-1.5 overflow-y-auto px-4 pb-3">
+        <div role="list" className="flex max-h-[min(10.5rem,30dvh)] flex-col gap-1.5 overflow-y-auto overscroll-contain px-4 pb-3">
           {items.map((item, i) => (
             <TaskItem
               key={i}

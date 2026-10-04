@@ -103,6 +103,15 @@ it("below md the titlebar controls have a 44px hit area and 8px gaps (touch-targ
   expect(el.firstElementChild!.className).toMatch(/\bmax-md:gap-2\b/);
 });
 
+it("phone: the switcher shows the active session's name and the tab count, without a chevron below sm (the room goes to the name)", async () => {
+  const { el } = await render();
+  const sw = el.querySelector('[data-testid="tab-switcher"]')!;
+  const pill = sw.previousElementSibling as HTMLElement;
+  expect(pill.querySelector(".truncate")!.textContent).toBe("Refactor");
+  expect(pill.querySelector(".ml-auto")!.textContent).toBe("5");
+  expect(pill.querySelector("svg:last-child")!.getAttribute("class")).toContain("max-sm:hidden");
+});
+
 it("arrow keys, Home and End move focus and selection between tabs; only the active tab is in the Tab order", async () => {
   const { tab, onSelect } = await render();
   const btn = (id: string) => tab(id).querySelector<HTMLElement>('[role="tab"]')!;

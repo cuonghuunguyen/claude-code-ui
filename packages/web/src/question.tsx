@@ -36,8 +36,10 @@ export function QuestionPanel({ part, onAnswer, onDismiss }: { part: QuestionReq
   const card = (selected: boolean) =>
     `flex cursor-pointer items-start gap-3 rounded-md border bg-muted py-2 pr-2 pl-2.5 hover:bg-card ${selected ? "ring-2 ring-foreground" : ""}`;
   return (
-    <form onSubmit={submit} className={`${DOCK} max-h-[60vh]`} data-testid="question-panel" aria-label="Question">
-      <fieldset key={q.question} className="flex min-h-0 flex-col gap-2 overflow-y-auto p-3">
+    <form onSubmit={submit} className={`${DOCK} max-h-[60dvh]`} data-testid="question-panel" aria-label="Question">
+      {/* The scroller is a div: a fieldset does not scroll reliably everywhere. The tray below stays in view. */}
+      <div className="min-h-0 overflow-y-auto overscroll-contain">
+      <fieldset key={q.question} className="flex flex-col gap-2 p-3">
         <p className="flex items-center gap-2 text-muted-foreground text-xs">
           <span className="rounded bg-secondary px-1.5 py-0.5 text-secondary-foreground">{q.header}</span>
           {page + 1} of {part.questions.length} questions
@@ -66,7 +68,7 @@ export function QuestionPanel({ part, onAnswer, onDismiss }: { part: QuestionReq
           <span className="flex min-w-0 flex-1 flex-col gap-1">
             Type your own answer
             <input
-              className="min-w-0 rounded-md border bg-transparent px-2 py-1 pointer-coarse:text-base"
+              className="min-w-0 rounded-md border bg-transparent px-2 py-1 pointer-coarse:min-h-11 pointer-coarse:text-base"
               aria-label={`Other answer to: ${q.question}`}
               placeholder="Type your answer..."
               value={c.other ?? ""}
@@ -77,6 +79,7 @@ export function QuestionPanel({ part, onAnswer, onDismiss }: { part: QuestionReq
         </label>
         {preview && <pre className="max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-xs">{preview}</pre>}
       </fieldset>
+      </div>
       <div className={TRAY}>
         {onDismiss && (
           <Button type="button" variant="ghost" className="mr-auto" title="Dismiss (Esc): stops the turn" onClick={onDismiss}>

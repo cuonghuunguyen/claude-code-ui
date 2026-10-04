@@ -88,6 +88,32 @@ const sideTab = () => el.querySelector('[data-testid="side-panel"] [aria-selecte
 const pickSide = (name: RegExp) =>
   act(async () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] button')].find((b) => name.test(b.textContent ?? ""))!.click());
 
+it("phone: the titlebar keeps the sessions menu, tab switcher with the session name, new tab and plan ring; search and theme move to the drawer", async () => {
+  const bar = el.querySelector('[data-testid="titlebar"]')!;
+  const phoneHidden = (id: string) => bar.querySelector(`[data-testid="${id}"]`)!.className.includes("max-sm:hidden");
+  expect(phoneHidden("quick-open-button")).toBe(true);
+  expect(phoneHidden("theme-toggle")).toBe(true);
+  for (const id of ["open-drawer", "tab-switcher", "tab-new", "tab-close-active"]) expect(bar.querySelector(`[data-testid="${id}"]`)!.className).not.toContain("max-sm:hidden");
+  expect(bar.querySelector('[data-testid="tab-switcher"]')!.previousElementSibling!.textContent).toContain("Demo");
+  // The drawer has the same two tools, for sm and up hidden.
+  const tools = el.querySelector('[data-testid="drawer-tools"]')!;
+  expect(tools.className).toContain("sm:hidden");
+  expect(tools.querySelector('[data-testid="drawer-theme"]')).not.toBeNull();
+  expect(tools.querySelector('[data-testid="drawer-quick-open"]')).not.toBeNull();
+});
+
+it("phone: the drawer Notifications toggle is a 44px target on a coarse pointer", async () => {
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="open-drawer"]')!.click());
+  const label = document.querySelector('[data-testid="push-toggle"]')!.closest("label")!;
+  expect(label.className).toContain("pointer-coarse:min-h-11");
+});
+
+it("phone: Search in the drawer closes the drawer and opens quick open", async () => {
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="open-drawer"]')!.click());
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="drawer-quick-open"]')!.click());
+  expect(document.querySelector('[data-testid="quick-open"]')).not.toBeNull();
+});
+
 it("Focus prompt (Ctrl+L) on a wide screen keeps the side panel on Changes", async () => {
   await pickSide(/changes/i);
   expect(sideTab()).toMatch(/changes/i);
