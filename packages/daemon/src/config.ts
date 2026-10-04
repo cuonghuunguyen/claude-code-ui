@@ -7,7 +7,8 @@ import type { ClientMessage, ConfigKind, ConfigScope, McpAddConfig, McpServerInf
 import { openQuery, THROWAWAY_TIMEOUT_MS, withoutApiKeys } from "./session.ts";
 
 /** One-shot CLI call in `cwd` (`stdin`: written to it, for `edit-skill-overrides`); resolves with its exit code and output (never rejects on a non-zero exit). */
-export type CliRunner = (args: string[], cwd: string, stdin?: string) => Promise<{ code: number; stdout: string; stderr: string }>;
+/** `timeoutMs`: default 30 s; commands that fetch from git pass more. */
+export type CliRunner = (args: string[], cwd: string, stdin?: string, timeoutMs?: number) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 /** A config query unused this long is closed (the extension keeps its CLI per panel; one OAuth flow must stay on one query). */
 export const CONFIG_HOLD_MS = 30_000;
@@ -56,13 +57,15 @@ export function claudeBin() {
   throw new Error("the Agent SDK's Claude Code binary is not installed; set CLAUDE_UI_CLAUDE_BIN");
 }
 
-/** execFile of the bundled CLI without API keys (ADR 0002), 30 s timeout, 10 MB output. Arguments may hold secrets: never logged. */
-export const runCli: CliRunner = (args, cwd, stdin) =>
+export const timeoutMessage = (ms: number) => `Claude CLI timed out after ${ms >= 60_000 ? `${ms / 60_000} min` : `${ms / 1000} s`}`;
+
+/** execFile of the bundled CLI without API keys (ADR 0002), 30 s timeout unless asked, 10 MB output. Arguments may hold secrets: never logged. */
+export const runCli: CliRunner = (args, cwd, stdin, timeoutMs = CLI_TIMEOUT_MS) =>
   new Promise((resolve, reject) => {
     // Set when the daemon itself was started from a Claude Code session: `edit-skill-overrides` then refuses ("cannot be changed from an editor started inside a Claude Code session").
     const { CLAUDE_CODE_CHILD_SESSION: _child, ...env } = withoutApiKeys(process.env);
-    const child = execFile(claudeBin(), args, { cwd, env, timeout: CLI_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err?.killed) return reject(new ConfigError("cli_timeout", "Claude CLI timed out after 30s"));
+    const child = execFile(claudeBin(), args, { cwd, env, timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err?.killed) return reject(new ConfigError("cli_timeout", timeoutMessage(timeoutMs)));
       if (err && typeof err.code !== "number") return reject(new ConfigError("cli_failed", err.message));
       resolve({ code: err ? (err.code as number) : 0, stdout, stderr });
     });
@@ -112,7 +115,7 @@ function toInfo(s: McpServerStatus): McpServerInfo {
 }
 
 /** Rejects after the throwaway timeout: a hung CLI must not hang the dialog. */
-const timed = <T,>(p: Promise<T>) => {
+export const timed = <T,>(p: Promise<T>) => {
   let t: NodeJS.Timeout;
   return Promise.race([p, new Promise<never>((_, reject) => (t = setTimeout(() => reject(new ConfigError("cli_timeout", `no answer from the CLI within ${THROWAWAY_TIMEOUT_MS} ms`)), THROWAWAY_TIMEOUT_MS)))]).finally(() => clearTimeout(t));
 };
@@ -289,5 +292,8 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
     }
   }
 
-  return { mcp, skills };
+  /** After a plugin write: plugins are user-wide, so every held config query has a stale view. */
+  const dropAll = () => [...held].forEach(([cwd, h]) => drop(cwd, h.q));
+
+  return { mcp, skills, dropAll };
 }

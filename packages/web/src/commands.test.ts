@@ -56,8 +56,19 @@ describe("dialog commands", () => {
     expect(dialogOf("/mcp list")).toBeUndefined();
     expect(dialogOf("/mcpx")).toBeUndefined();
     const rows = withDialogCommands([cmd("mcp"), cmd("init")]);
-    expect(rows.map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"]]);
+    expect(rows.map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"]]);
     expect(matchCommands(rows, "/mc")!.map((c) => c.name)).toEqual(["mcp"]);
+  });
+
+  it("/plugin, /plugins and /marketplace alone open Manage Plugins unless the session has a command of that name", () => {
+    expect(["/plugin", "/plugins", " /marketplace "].map((t) => dialogOf(t))).toEqual(["plugins", "plugins", "plugins"]);
+    expect(dialogOf("/plugins install x")).toBeUndefined();
+    expect(dialogOf("/plugin", [cmd("plugin")])).toBeUndefined();
+    expect(dialogOf("/plugins", [cmd("plugin")])).toBe("plugins");
+    expect(dialogOf("/mcp", [cmd("mcp")])).toBe("mcp");
+    expect(withDialogCommands([cmd("init")]).map((r) => r.name)).toEqual(["init", "mcp", "skills", "plugins"]);
+    expect(withDialogCommands([cmd("plugins")]).filter((r) => r.name === "plugins").map((r) => r.description)).toEqual(["plugins desc"]);
+    expect(matchCommands(withDialogCommands([]), "/market")!.map((c) => c.name)).toEqual(["plugins"]);
   });
 });
 
@@ -72,7 +83,7 @@ describe("/skills and /help", () => {
     expect(dialogOf("/mcp", [cmd("mcp")])).toBe("mcp");
   });
   it("the picker lists /skills with the extension's description unless the CLI has it", () => {
-    expect(withDialogCommands([cmd("init")]).map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"]]);
-    expect(withDialogCommands([cmd("skills")]).map((r) => r.description)).toEqual(["skills desc", "Configure Model Context Protocol servers"]);
+    expect(withDialogCommands([cmd("init")]).map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"]]);
+    expect(withDialogCommands([cmd("skills")]).map((r) => r.description)).toEqual(["skills desc", "Configure Model Context Protocol servers", "Install, enable, or disable plugins"]);
   });
 });

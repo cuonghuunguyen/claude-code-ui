@@ -1,0 +1,26 @@
+[
+  {
+    "name": "claude-notebook",
+    "source": "github",
+    "repo": "cuonghuunguyen/claude-notebook",
+    "installLocation": "/home/me/.claude/plugins/marketplaces/claude-notebook"
+  },
+  {
+    "name": "claude-obsidian-marketplace",
+    "source": "directory",
+    "path": "/home/me/marketplace",
+    "installLocation": "/home/me/marketplace"
+  },
+  {
+    "name": "claude-plugins-official",
+    "source": "github",
+    "repo": "anthropics/claude-plugins-official",
+    "installLocation": "/home/me/.claude/plugins/marketplaces/claude-plugins-official"
+  },
+  {
+    "name": "ponytail",
+    "source": "github",
+    "repo": "DietrichGebert/ponytail",
+    "installLocation": "/home/me/.claude/plugins/marketplaces/ponytail"
+  }
+]

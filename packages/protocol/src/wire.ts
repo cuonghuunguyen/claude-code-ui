@@ -132,6 +132,29 @@ export type ClientMessage = { reqId: string } & (
   | { type: "skills.list"; cwd: string; sessionId?: string }
   /** `claude edit-skill-overrides --json`, then `reloadSkills()` and a poll until the row shows `state`; reply SkillsSetStateResult. Broadcasts `config.changed`. */
   | { type: "skills.setState"; cwd: string; sessionId?: string; name: string; state: SkillState; handles?: SkillHandles }
+  // Manage Plugins dialog (docs/spec.md "Config dialogs: plugins"): `claude plugin …` in `cwd`; each write then reloads plugins in
+  // every live query and broadcasts `config.changed` (kind plugins).
+  /** Reply PluginsListResult. */
+  | { type: "plugins.list"; cwd: string }
+  /** Reply PluginWriteResult. */
+  | { type: "plugins.install"; cwd: string; pluginId: string; scope: ConfigScope }
+  /** `scope`: the installed row's (the CLI uninstalls from user scope otherwise). */
+  | { type: "plugins.uninstall"; cwd: string; pluginId: string; scope?: PluginScope }
+  | { type: "plugins.setEnabled"; cwd: string; pluginId: string; enabled: boolean }
+  /** Reply PluginUpdateResult. */
+  | { type: "plugins.update"; cwd: string; pluginId: string; scope: PluginScope }
+  /** `reloadPlugins()` in every live query; reply ReloadResult. */
+  | { type: "plugins.reload"; cwd: string }
+  /** Closes the session's live query; its next prompt resumes the transcript in a new CLI. */
+  | { type: "plugins.restart"; cwd: string; sessionId: string }
+  /** Reply MarketplacesResult. */
+  | { type: "marketplace.list"; cwd: string }
+  /** `source`: GitHub repo, URL or path. Reply `{}`. */
+  | { type: "marketplace.add"; cwd: string; source: string }
+  /** Uninstalls its plugins too. Reply PluginWriteResult. */
+  | { type: "marketplace.remove"; cwd: string; name: string }
+  /** Refreshes its catalog. Reply `{}`. */
+  | { type: "marketplace.update"; cwd: string; name: string }
 );
 
 /** `PushSubscription.toJSON()`. */
@@ -158,8 +181,8 @@ export type ServerMessage =
   | { type: "terminal.output"; terminalId: string; data: string }
   /** The terminal's shell exited (or it was closed); sent to every attached connection. The terminal is gone. */
   | { type: "terminal.exit"; terminalId: string; exitCode: number }
-  /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes. */
-  | { type: "config.changed"; kind: ConfigKind; cwd: string }
+  /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes. `reloadFailed`: set when plugins were reloaded: the sessions whose reload failed (empty: none; restart banners then clear). */
+  | { type: "config.changed"; kind: ConfigKind; cwd: string; reloadFailed?: string[] }
   | { type: "error"; reqId?: string; code: string; message: string };
 
 export type CreateResult = { session: SessionInfo };
@@ -265,3 +288,22 @@ export type SkillRow = {
 export type SkillsResult = { skills: SkillRow[] };
 /** `confirmed` false: saved, but the session's dialog still shows the previous state after 5 reads. */
 export type SkillsSetStateResult = SkillsResult & { confirmed: boolean };
+/** Scope of an installed plugin as `claude plugin list --json` reports it; `managed` and `synced` are not install targets. */
+export type PluginScope = ConfigScope | "managed" | "synced" | (string & {});
+/**
+ * An installed plugin of this project (user, managed, synced, or project/local scope of `cwd`). `id`: `name@marketplace`.
+ * `description`, `mcpServers`: from its `.claude-plugin/plugin.json` and `.mcp.json`. `updatable`: the VS Code extension's rule.
+ */
+export type InstalledPlugin = { id: string; version?: string; scope: PluginScope; enabled: boolean; projectPath?: string; description?: string; mcpServers?: string[]; updatable: boolean };
+/** A marketplace plugin not installed in this project. `official`: from `anthropics/claude-plugins-official`. */
+export type AvailablePlugin = { pluginId: string; name: string; description?: string; marketplaceName: string; official: boolean; sourceUrl?: string; installCount: number };
+/** `claude plugin marketplace list --json` row. `source`: github (repo), git / url (url), directory / file (path), npm (package). */
+export type MarketplaceInfo = { name: string; source: string; repo?: string; url?: string; path?: string; package?: string; official: boolean };
+export type PluginsListResult = { installed: InstalledPlugin[]; available: AvailablePlugin[]; marketplaces: MarketplaceInfo[] };
+export type MarketplacesResult = { marketplaces: MarketplaceInfo[] };
+/** `failed`: sessions whose `reloadPlugins()` threw (restart them); `errorCount`: plugin load errors summed. */
+export type ReloadResult = { reloaded: number; failed: string[]; errorCount: number };
+export type PluginWriteResult = { reload: ReloadResult };
+export type PluginUpdateFailure = "timeout" | "policy" | "disabled" | "needs_consent" | "not_installed" | "not_found" | "network" | "other";
+/** ok: `message` = the CLI's result line (e.g. already at the latest version); `reload` when the update needs one. */
+export type PluginUpdateResult = { outcome: "ok"; message?: string; reload?: ReloadResult } | { outcome: "failed"; kind: PluginUpdateFailure; message: string };

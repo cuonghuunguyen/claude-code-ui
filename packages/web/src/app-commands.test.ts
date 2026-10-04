@@ -152,3 +152,11 @@ it("lists Slash commands in the Customize group while a project is shown", () =>
   expect(item).toMatchObject({ group: "Customize", title: "Slash commands", description: "Browse slash commands" });
   expect(openSkills).toHaveBeenCalled();
 });
+
+it("lists Manage plugins in the Customize group while a project is shown", () => {
+  expect(appCommands(ctx()).find((i) => i.id === "plugins.open")).toBeUndefined();
+  const openPlugins = vi.fn();
+  const item = run(ctx({ openPlugins }), "plugins.open");
+  expect(item).toMatchObject({ group: "Customize", title: "Manage plugins", description: "Install, enable, or disable plugins" });
+  expect(openPlugins).toHaveBeenCalled();
+});

@@ -85,3 +85,11 @@ _Avoid_: throwaway (that one closes after one answer)
 
 **Skill state**:
 How much of a skill Claude sees: On (listed with its description, and yours to invoke), Name only (listed by name), User only (yours to invoke, Claude does not see it), Off (hidden from both). Claude Code's `skillOverrides` values `on`, `name-only`, `user-invocable-only`, `off`; set in the "Slash commands" dialog.
+
+**Plugin**:
+A Claude Code plugin, `name@marketplace`: commands, skills, agents, hooks and MCP servers in one package; installed from a marketplace and enabled per config scope (`enabledPlugins` in the user, project or local settings file).
+_Avoid_: extension, add-on
+
+**Marketplace**:
+A plugin catalog known to the Claude Code CLI (a GitHub repo, git or URL source, a local directory or file, an npm package).
+_Avoid_: plugin store, registry
