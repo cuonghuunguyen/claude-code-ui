@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { McpServerInfo } from "@claude-ui/protocol";
-import { actionsFor, buildAdd, canRemove, errorLine, groupServers, paletteOrder, scopeLabel, statusIcon, statusLabel, type AddForm } from "./mcp.ts";
+import { actionsFor, buildAdd, canRemove, errorLine, groupServers, paletteOrder, safeAuthUrl, scopeLabel, statusIcon, statusLabel, type AddForm } from "./mcp.ts";
 
 const s = (name: string, status: string, scope?: string, type = "stdio", extra: Partial<McpServerInfo> = {}): McpServerInfo => ({ name, status, scope, config: { type }, ...extra });
 
 describe("MCP servers dialog logic", () => {
+  it("opens only https sign-in pages, or http on this machine", () => {
+    for (const ok of ["https://auth.example/x?state=1", "http://localhost:3000/cb", "http://127.0.0.1/cb", "http://[::1]:8/cb"]) expect(safeAuthUrl(ok)).toBe(true);
+    for (const bad of ["http://auth.example/x", "javascript:alert(1)", "data:text/html,x", "file:///etc/passwd", "not a url", "http://localhost.evil.example/"]) expect(safeAuthUrl(bad)).toBe(false);
+  });
+
   it("groups by scope in the extension's order, unknown scopes last, names sorted, filtered by name", () => {
     const servers = [s("b", "connected", "user"), s("z", "failed", "dynamic"), s("a", "connected", "user"), s("p", "pending", "project"), s("c", "connected", "claudeai"), s("l", "connected", "local"), s("n", "connected")];
     expect(groupServers(servers).map(([g, l]) => [scopeLabel(g), l.map((x) => x.name)])).toEqual([

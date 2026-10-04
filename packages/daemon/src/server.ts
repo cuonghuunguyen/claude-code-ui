@@ -1,6 +1,6 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { closeSync, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { createServer, type IncomingMessage } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -17,6 +17,7 @@ import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings
 import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
 import { createPlugins, type PluginsRequest } from "./plugins.ts";
+import { JsonlTail } from "./transcript.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
@@ -115,8 +116,8 @@ function transcriptSettings(projectsDir: string, cwd: string, sessionId: string)
  * getSubagentMessages() keeps only the run transcript's last parentUuid chain (SDK 0.3.285). Parallel tool calls branch: each
  * parallel tool_use of one API message is its own assistant line chained off the previous one, each tool_result a child of its
  * tool_use line, so the calls and results off the leaf chain are lost. Puts back, from the raw `agent-<id>.jsonl`, each lost
- * assistant line of an API message the output has and each lost tool_result, right after its parent (the nearest ancestor
- * that is kept or put back; attachment lines in between are skipped).
+ * assistant line of an API message the output has and each lost tool_result whose parent (the nearest ancestor, attachment
+ * lines in between skipped) is kept or put back. Output in raw file order: a run does not rewind, so that is the API order.
  */
 async function withParallelCalls(file: string | undefined, messages: SessionMessage[]): Promise<SessionMessage[]> {
   if (!file) return messages;
@@ -131,11 +132,13 @@ async function withParallelCalls(file: string | undefined, messages: SessionMess
   const apiIds = new Set<unknown>(messages.flatMap((m) => (m.type === "assistant" && (m.message as { id?: unknown })?.id) || []));
   const parentOf = new Map<string, string>();
   const lost = new Map<string, Line>();
+  const index = new Map<string, number>();
   for (const line of text.split("\n")) {
     if (!line) continue;
     try {
       const e = JSON.parse(line) as Line;
       if (!e.uuid) continue;
+      index.set(e.uuid, index.size);
       if (e.parentUuid) parentOf.set(e.uuid, e.parentUuid);
       if (have.has(e.uuid)) continue;
       const content = e.message?.content;
@@ -158,7 +161,7 @@ async function withParallelCalls(file: string | undefined, messages: SessionMess
     for (const e of children.get(m.uuid) ?? []) add({ ...m, type: e.type, uuid: e.uuid, message: e.message, timestamp: e.timestamp } as SessionMessage);
   };
   messages.forEach(add);
-  return out;
+  return out.sort((a, b) => (index.get(a.uuid) ?? 0) - (index.get(b.uuid) ?? 0));
 }
 
 /** Names, sizes and mtimes of every transcript under `projectsDir`; undefined when it cannot be read. */
@@ -239,6 +242,7 @@ function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
  * `hostnames`: hostnames besides loopback that browsers may reach the daemon by, e.g. a `tailscale serve` name (ADR 0003).
  * `cli`: runs the Claude Code CLI for config writes (default: the SDK-bundled binary). `configHoldMs`: config query hold.
  * `configPollMs`: pause between the reads that confirm a skill state change.
+ * `modelListWaitMs`: how long session.list waits for the model list (default MODEL_LIST_WAIT_MS).
  */
 export function createDaemon(opts: {
   webRoot: string;
@@ -257,6 +261,7 @@ export function createDaemon(opts: {
   cli?: CliRunner;
   configHoldMs?: number;
   configPollMs?: number;
+  modelListWaitMs?: number;
 }) {
   const hostnames = new Set([...LOCAL_HOSTNAMES, ...(opts.hostnames ?? [])]);
   const logEpoch = randomUUID();
@@ -352,6 +357,14 @@ export function createDaemon(opts: {
     return p && inRoots(p) ? p : undefined;
   };
 
+  /** A missing absolute path whose nearest existing ancestor is allowed: deleted inside the roots (outside them, existence stays hidden). */
+  const missingInRoots = (path: unknown) => {
+    if (typeof path !== "string" || !isAbsolute(path) || existsSync(path)) return false;
+    let dir = dirname(resolve(path));
+    while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
+    return !!allowed(dir);
+  };
+
   /** Adds the project of a session the user opened or created; other clients refresh their list. A failed write is only logged: the session works. */
   function addProject(cwd: string) {
     if (projects.has(cwd)) return;
@@ -373,9 +386,31 @@ export function createDaemon(opts: {
       await opts.push?.send({ sessionId, title, body });
     },
   });
-  /** Main chain and subagent runs of a session's transcript. An unreadable run transcript leaves that run out, not the session. */
+  /**
+   * Per session: its transcript entries read so far (JsonlTail), the main chain built from them for a file stamp, and each
+   * subagent run's messages for its file stamp. Dropped when the live mirror stops (the last subscriber left) or on delete.
+   */
+  type Cache = { tail: JsonlTail; stamp?: string; main?: SessionMessage[]; runs: Map<string, { stamp: string; messages: SessionMessage[] }> };
+  const caches = new Map<string, Cache>();
+  const fileStamp = async (file: string | undefined) => (file ? stat(file).then(stampOf, () => undefined) : undefined);
+  /**
+   * Main chain and subagent runs of a session's transcript. An unreadable run transcript leaves that run out, not the session.
+   * Stat-gated: the main chain is rebuilt only after its file changed, from the lines appended since the last read; a run is
+   * read again only after its file changed. A transcript not at the expected path (long cwd) is read whole by the SDK.
+   */
   async function readTranscript(id: string, cwd: string): Promise<Transcript> {
-    const main = await history.getSessionMessages(id, { dir: cwd });
+    const cache = caches.get(id) ?? caches.set(id, { tail: new JsonlTail(), runs: new Map() }).get(id)!;
+    const file = transcriptFile(projectsDir, cwd, id);
+    // Taken before the read: a write during it changes the stamp, so the next read takes it.
+    const stamp = await fileStamp(file);
+    let main: SessionMessage[];
+    if (stamp === undefined) main = await history.getSessionMessages(id, { dir: cwd });
+    else if (stamp === cache.stamp && cache.main) main = cache.main;
+    else {
+      await cache.tail.read(file);
+      main = await history.getSessionMessages(id, { dir: cwd, sessionStore: cache.tail.store() });
+      Object.assign(cache, { stamp, main });
+    }
     const agents = await history.listSubagents(id, { dir: cwd }).catch((err) => (console.error(`listing subagent runs of ${id} failed:`, err), []));
     const dir = transcriptFile(projectsDir, cwd, id).replace(/\.jsonl$/, "/subagents");
     let files: string[] = [];
@@ -389,12 +424,17 @@ export function createDaemon(opts: {
       return f && join(dir, f);
     };
     const runs = await Promise.all(
-      agents.map((a) =>
-        history
+      agents.map(async (a) => {
+        const f = runFile(a);
+        const runStamp = await fileStamp(f);
+        const cached = cache.runs.get(a);
+        if (runStamp !== undefined && cached?.stamp === runStamp) return cached.messages;
+        return history
           .getSubagentMessages(id, a, { dir: cwd })
-          .then((m) => withParallelCalls(runFile(a), m))
-          .catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), [])),
-      ),
+          .then((m) => withParallelCalls(f, m))
+          .then((messages) => (runStamp !== undefined && cache.runs.set(a, { stamp: runStamp, messages }), messages))
+          .catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []));
+      }),
     );
     return { main, runs };
   }
@@ -438,6 +478,7 @@ export function createDaemon(opts: {
       if (--watch.subscribers) return;
       unwatchFile(watch.file, watch.listener);
       mirrors.delete(s.id);
+      caches.delete(s.id);
     };
   }
 
@@ -472,7 +513,7 @@ export function createDaemon(opts: {
   async function list(): Promise<ListResult> {
     // The model list starts a CLI: not waiting longer than this offers no auto mode until it is there.
     await new Promise<void>((done) => {
-      const t = setTimeout(done, MODEL_LIST_WAIT_MS);
+      const t = setTimeout(done, opts.modelListWaitMs ?? MODEL_LIST_WAIT_MS);
       modelList().catch(() => {}).then(() => (clearTimeout(t), done()));
     });
     const items = new Map<string, SessionListItem>();
@@ -666,6 +707,8 @@ export function createDaemon(opts: {
           // Sync before prompt: the prompt continues after the terminal CLI's turns (a running turn is steered as is).
           if (s.info().state === "idle") await s.sync();
           if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
+          // The web app holds the prompt while it shows the external turn; this covers a client that has not seen it yet.
+          if (s.externalTurnRunning()) return fail("external_turn", "A terminal CLI turn is running in this session");
           s.prompt(msg.text, images);
           return reply({});
         }
@@ -814,6 +857,7 @@ export function createDaemon(opts: {
           } finally {
             deleting.delete(msg.sessionId);
           }
+          caches.delete(msg.sessionId);
           if (settings[msg.sessionId]) delete settings[msg.sessionId], saveSettings();
           broadcast({ type: "sessions.changed", deleted: msg.sessionId });
           return reply({});
@@ -868,11 +912,7 @@ export function createDaemon(opts: {
         case "fs.read": {
           const file = allowed(msg.path);
           // A missing file whose nearest existing ancestor is allowed (deleted after an Edit, also with its directory): the changes tab shows it deleted.
-          if (!file && typeof msg.path === "string" && isAbsolute(msg.path) && !existsSync(msg.path)) {
-            let dir = dirname(resolve(msg.path));
-            while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
-            if (allowed(dir)) return fail("not_found", `no such file: ${msg.path}`);
-          }
+          if (!file && missingInRoots(msg.path)) return fail("not_found", `no such file: ${msg.path}`);
           if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           try {
             const st = statSync(file);
@@ -994,7 +1034,7 @@ export function createDaemon(opts: {
         case "marketplace.update":
         case "skills.list":
         case "skills.setState": {
-          if (typeof msg.cwd === "string" && isAbsolute(msg.cwd) && !existsSync(msg.cwd))
+          if (missingInRoots(msg.cwd))
             return fail("bad_cwd", `Working directory not found: ${msg.cwd}. If this session's folder was deleted, re-open the project and try again.`);
           const cwd = allowed(msg.cwd);
           if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);

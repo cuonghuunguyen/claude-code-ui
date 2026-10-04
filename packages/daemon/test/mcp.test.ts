@@ -19,7 +19,7 @@ const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 
 /** As `mcpServerStatus()` answers, with secrets in config and full tool entries. */
 const statuses = [
-  { name: "ctx", status: "connected", scope: "user", config: { type: "http", url: "https://mcp.example/mcp", headers: { Authorization: "Bearer SECRET" } }, tools: [{ name: "search", description: "Search docs", annotations: { readOnly: true, openWorld: true } }, { name: "drop", annotations: { destructive: true } }] },
+  { name: "ctx", status: "connected", scope: "user", config: { type: "http", url: "https://u:SECRET@mcp.example/mcp?key=SECRET&team=SECRET#top", headers: { Authorization: "Bearer SECRET" } }, tools: [{ name: "search", description: "Search docs", annotations: { readOnly: true, openWorld: true } }, { name: "drop", annotations: { destructive: true } }] },
   { name: "broken", status: "failed", scope: "project", error: "Connection closed", config: { type: "stdio", command: "false", args: ["--token", "SECRET"], env: { API_KEY: "SECRET" } } },
   { name: "drive", status: "needs-auth", scope: "claudeai", config: { type: "claudeai-proxy", url: "https://claude.ai/x", id: "mcprs_1" } },
   { name: "host", status: "connected", source: "sdk", config: { type: "sdk", name: "host" } },
@@ -98,7 +98,8 @@ describe("mcp.*", () => {
     expect(mcpCalls.at(-1)).toMatchObject({ call: "mcpServerStatus", options: { sessionId: id } });
     expect(r.result).toEqual({
       servers: [
-        { name: "ctx", status: "connected", scope: "user", config: { type: "http", url: "https://mcp.example/mcp" }, tools: [{ name: "search", readOnly: true }, { name: "drop", destructive: true }] },
+        // Query-string values and a password in the URL may be tokens too.
+        { name: "ctx", status: "connected", scope: "user", config: { type: "http", url: "https://u:***@mcp.example/mcp?key=***&team=***#top" }, tools: [{ name: "search", readOnly: true }, { name: "drop", destructive: true }] },
         { name: "broken", status: "failed", scope: "project", error: "Connection closed", config: { type: "stdio", command: "false" } },
         { name: "drive", status: "needs-auth", scope: "claudeai", config: { type: "claudeai-proxy", url: "https://claude.ai/x" } },
       ],
@@ -208,6 +209,9 @@ describe("mcp.*", () => {
     expect(await c.request({ type: "mcp.add", cwd: project, name: "ok", scope: "local", config: { transport: "stdio", command: "x", args: [], env: ["NOVALUE"] } })).toMatchObject({ type: "error", code: "bad_request" });
     expect(await c.request({ type: "mcp.remove", cwd: "/etc", name: "ok", scope: "local" })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
     expect(await c.request({ type: "mcp.list", cwd: "/etc" })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+    // Outside the roots the reply does not tell whether the path exists; inside them a deleted folder gets its own hint.
+    expect(await c.request({ type: "mcp.list", cwd: "/etc/no-such-dir" })).toMatchObject({ type: "error", code: "cwd_not_allowed", message: "not a directory inside the allowlisted roots: /etc/no-such-dir" });
+    expect(await c.request({ type: "mcp.list", cwd: join(project, "gone", "deeper") })).toMatchObject({ type: "error", code: "bad_cwd" });
     expect(cliCalls.length).toBe(n);
     Object.assign(cliResult, { code: 1, stderr: "MCP server ok already exists in local config\nmore" });
     expect(await c.request({ type: "mcp.add", cwd: project, name: "ok", scope: "local", config: http })).toMatchObject({ type: "error", message: "MCP server ok already exists in local config" });

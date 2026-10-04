@@ -43,15 +43,26 @@ describe("terminal backpressure", () => {
   });
 });
 
+/**
+ * Runs `sleep 30` in the shell and resolves once it runs, so the shell reads no more input. Under load the shell may not
+ * have read the line yet when the test writes; it would then read the test's input itself. `RE""ADY` in the echoed line
+ * is not `READY`: only the command's output matches.
+ */
+async function sleeping(terminals: ReturnType<typeof createTerminals>, t: NonNullable<ReturnType<ReturnType<typeof createTerminals>["get"]>>) {
+  let out = "";
+  const ready = new Promise<void>((r) => t.pty.onData((d) => (out += d).includes("READY") && r()));
+  terminals.write(t, 'echo RE""ADY; sleep 30\r');
+  await ready;
+}
+
 // node-pty 1.1.0 retried queued input on the PTY fd after the shell exit closed it, into whatever reused that fd number.
 it("never writes queued input into a file that reuses the fd of a closed terminal", { timeout: 30_000 }, async () => {
   const terminals = createTerminals();
   const t = terminals.get(terminals.create(tmpdir(), 80, 24, {}).id)!;
   const fd = (t.pty as unknown as { fd: number }).fd;
   const { ino } = fstatSync(fd);
-  await new Promise<void>((r) => t.pty.onData(() => r()));
   // The shell does not read while `sleep` runs: the kernel buffer fills and the rest stays queued.
-  terminals.write(t, "sleep 30\r");
+  await sleeping(terminals, t);
   for (let i = 0; i < 8; i++) terminals.write(t, "x".repeat(64 * 1024));
   const exited = new Promise((r) => t.pty.onExit(r));
   const file = join(mkdtempSync(join(tmpdir(), "fd-reuse-")), "victim");
@@ -76,11 +87,14 @@ it("never writes queued input into a file that reuses the fd of a closed termina
 it("refuses input while MAX_PENDING_INPUT_BYTES wait for the shell to read", { timeout: 30_000 }, async () => {
   const terminals = createTerminals();
   const t = terminals.get(terminals.create(tmpdir(), 80, 24, {}).id)!;
-  await new Promise<void>((r) => t.pty.onData(() => r()));
-  terminals.write(t, "sleep 30\r");
+  await sleeping(terminals, t);
   const chunk = "x".repeat(64 * 1024);
-  for (let i = 0; i < MAX_PENDING_INPUT_BYTES / chunk.length; i++) expect(terminals.write(t, chunk)).toBeUndefined();
-  expect(terminals.write(t, chunk)).toBe("input_backlog");
+  // The kernel takes a varying part of the first chunks (PTY buffers, echo timing): count, do not predict, where it refuses.
+  let accepted = 0;
+  let refused: string | undefined;
+  while (accepted < 64 && !(refused = terminals.write(t, chunk))) accepted++;
+  expect(refused).toBe("input_backlog");
+  expect(accepted).toBeGreaterThanOrEqual(MAX_PENDING_INPUT_BYTES / chunk.length);
   const exited = new Promise((r) => t.pty.onExit(r));
   terminals.close(t);
   await exited;
@@ -94,7 +108,7 @@ it("never sends input or a resize of a terminal whose master closed to the termi
   await new Promise<void>((r) => a.pty.onData(() => r()));
   // The shell lives on without a PTY fd: node-pty reads EIO and closes the master, onExit does not fire.
   terminals.write(a, "trap '' HUP; exec sleep 20 </dev/null >/dev/null 2>&1\r");
-  await vi.waitFor(() => expect(() => fstatSync(fd)).toThrow(), { timeout: 5000, interval: 5 });
+  await vi.waitFor(() => expect(() => fstatSync(fd)).toThrow(), { timeout: 15_000, interval: 5 });
   const b = terminals.get(terminals.create(tmpdir(), 80, 24, {}).id)!;
   expect((b.pty as unknown as { fd: number }).fd).toBe(fd);
   let out = "";

@@ -23,6 +23,8 @@ export type SessionView = {
   commands: SlashCommand[];
   /** Latest context_usage; undefined until the daemon reports it. */
   contextUsage?: ContextUsage;
+  /** A terminal CLI turn runs in this session (external_turn): the prompt box sends nothing until it ends. */
+  externalTurn?: boolean;
   /** Latest todo list (todo_update) of the live turn; cleared on idle, error and rewind. */
   todos: TodoItem[];
   order: string[];
@@ -55,6 +57,13 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
     for (const id of s.order.slice(at)) parts.delete(id);
     return { ...s, lastSeq: e.seq, order: s.order.slice(0, at), parts, todos: [] };
   }
+  if (part.type === "retract") {
+    const gone = new Set(part.partIds);
+    const parts = new Map(s.parts);
+    gone.forEach((id) => parts.delete(id));
+    return { ...s, lastSeq: e.seq, order: s.order.filter((id) => !gone.has(id)), parts };
+  }
+  if (part.type === "external_turn") return { ...s, lastSeq: e.seq, externalTurn: part.running };
   if (part.type === "todo_update") return { ...s, lastSeq: e.seq, todos: part.items };
   const parts = new Map(s.parts).set(part.id, part);
   const order = s.parts.has(part.id) ? s.order : [...s.order, part.id];

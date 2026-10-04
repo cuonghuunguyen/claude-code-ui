@@ -3,6 +3,16 @@ import type { ConfigScope, McpAddConfig, McpServerInfo } from "@claude-ui/protoc
 
 const ICONS: Record<string, string> = { connected: "✓", failed: "✗", "needs-auth": "⚠", pending: "◐", disabled: "○" };
 const LABELS: Record<string, string> = { connected: "Connected", failed: "Failed", "needs-auth": "Needs Auth", pending: "Connecting…", disabled: "Disabled" };
+/** A sign-in page the dialog may open: https, or http on this machine (a local OAuth server); never javascript:, data: or file:. */
+export function safeAuthUrl(url: string) {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" || (u.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname));
+  } catch {
+    return false;
+  }
+}
+
 export const statusIcon = (status: string) => ICONS[status] ?? "?";
 export const statusLabel = (status: string) => LABELS[status] ?? status;
 

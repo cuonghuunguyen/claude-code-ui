@@ -8,7 +8,7 @@ import WebSocket from "ws";
 import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createProjects } from "../src/projects.ts";
-import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS, MODEL_LIST_WAIT_MS } from "../src/server.ts";
+import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, yielded } from "./fake-query.ts";
 
@@ -357,6 +357,23 @@ describe("daemon", () => {
       expect(sub.result.session).toMatchObject({ permissionMode: "acceptEdits", effort: "high" });
       d.close();
     });
+
+    it("a prompted web session with default settings restores with effort Default, not the effective effort its transcript records", async () => {
+      const f = file();
+      const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+      const dir = join(projectsDir, webRoot.replace(/[^a-zA-Z0-9]/g, "-"));
+      mkdirSync(dir);
+      const first = await daemon(f, [], projectsDir);
+      const id = ((await first.c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      await first.c.request({ type: "session.prompt", sessionId: id, text: "hi" });
+      // The CLI records the effort it ran with (the model's default) on every reply.
+      writeFileSync(join(dir, `${id}.jsonl`), JSON.stringify({ type: "assistant", effort: "medium" }) + "\n");
+      first.d.close();
+      const second = await daemon(f, [], projectsDir);
+      const sub = (await second.c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })) as { result: { session: object } };
+      expect(sub.result.session).toMatchObject({ effort: "default", permissionMode: "default", model: "default" });
+      second.d.close();
+    });
   });
 
   it("session.list names the modes a new session may start in: bypassPermissions only when the daemon enables it", async () => {
@@ -462,12 +479,13 @@ describe("daemon", () => {
 
   it("session.list does not wait long for a model list that is not available yet; new sessions then offer no auto", async () => {
     const hung = (a: Parameters<typeof fakeQuery>[0]) => ({ ...fakeQuery(a), supportedModels: () => new Promise<never>(() => {}) });
-    const d = createDaemon({ webRoot, token, roots: [webRoot], query: hung as never, history: { listSessions: (async () => []) as never } as never });
+    // A short wait: a wall-clock bound near the 2 s default failed under a loaded parallel suite. The model list never answers.
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: hung as never, modelListWaitMs: 100, history: { listSessions: (async () => []) as never } as never });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     const c = await client((d.address() as AddressInfo).port);
     const t = Date.now();
     expect(await c.request({ type: "session.list" })).toMatchObject({ result: { permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] } });
-    expect(Date.now() - t).toBeLessThan(MODEL_LIST_WAIT_MS + 1000);
+    expect(Date.now() - t).toBeLessThan(5000);
     d.close();
   });
 
@@ -1607,6 +1625,51 @@ describe("daemon", () => {
     }
   });
 
+  it("a restored subagent run shows put-back parallel calls in the raw file's order, also when a lost call's subtree holds a later call", async () => {
+    // GH-46 review round 2: call 5's line hangs off lost call 2's line but is written after kept calls 3 and 4.
+    const id = "8b4ef2a1-2a8b-4f32-8270-c70ece8c957e";
+    const at = "2026-10-01T10:00:00.000Z";
+    const line = (uuid: string, parentUuid: string | null, content: unknown, msg = "msg_P") =>
+      ({ type: uuid === "p" ? "user" : "assistant", uuid, parentUuid, isSidechain: true, sessionId: id, timestamp: at, message: { id: msg, role: uuid === "p" ? "user" : "assistant", content } });
+    const call = (n: number) => [{ type: "tool_use", id: `toolu_call${n}`, name: "Read", input: { file_path: `/x${n}` } }];
+    const raw = [line("p", null, "Read all"), line("a1", "p", call(1)), line("a2", "a1", call(2)), line("a3", "a1", call(3)), line("a4", "a3", call(4)), line("a6", "a2", call(5)), line("a7", "a4", [{ type: "text", text: "done" }], "msg_next")];
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const runs = join(projectsDir, webRoot.replace(/[^a-zA-Z0-9]/g, "-"), id, "subagents");
+    mkdirSync(runs, { recursive: true });
+    writeFileSync(join(runs, "agent-b1.jsonl"), raw.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    const sdk = (l: (typeof raw)[number]) => ({ type: l.type, uuid: l.uuid, session_id: id, message: l.message, parent_tool_use_id: "toolu_outer", parent_agent_id: null, timestamp: at });
+    const main = [
+      { type: "user", uuid: "u0", session_id: id, parent_tool_use_id: null, parent_agent_id: null, timestamp: at, message: { role: "user", content: "inspect" } },
+      { type: "assistant", uuid: "u1", session_id: id, parent_tool_use_id: null, parent_agent_id: null, timestamp: at, message: { id: "m1", role: "assistant", content: [{ type: "tool_use", id: "toolu_outer", name: "Agent", input: { description: "Mine" } }] } },
+    ];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      projectsDir,
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (sid: string) => (sid === id ? { sessionId: id, cwd: webRoot } : undefined)) as never,
+        getSessionMessages: (async () => main) as never,
+        listSubagents: (async () => ["b1"]) as never,
+        // The leaf chain a7 > a4 > a3 > a1 > p.
+        getSubagentMessages: (async () => ["p", "a1", "a3", "a4", "a7"].map((u) => sdk(raw.find((l) => l.uuid === u)!))) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "session_state");
+      const order = c.inbox.flatMap((m) => (m.type === "event" && m.part.type === "tool_call" ? [m.part.id] : []));
+      expect([...new Set(order)]).toEqual([1, 2, 3, 4, 5].map((n) => `toolu_call${n}`));
+    } finally {
+      d.close();
+      rmSync(projectsDir, { recursive: true, force: true });
+    }
+  });
+
   it("a restored background subagent run keeps its real status and duration from the transcript's task notifications", async () => {
     // Shapes of the "Sleeper" run in development-docs/GH-36 session 4c189532 (getSessionMessages, SDK 0.3.285).
     const id = "9c3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a";
@@ -1851,7 +1914,11 @@ describe("transcript sync (terminal CLI turns)", () => {
   const at = history.findIndex((m: Msg) => m.uuid === "u2");
   /** What the CLI writes for the fake query's turns: prompt 1, the fixture's first turn, prompt 2, its second turn. */
   const own = (...prompts: string[]) => prompts.flatMap((p, i) => [msg("user", p, "x"), ...(i ? history.slice(at + 1) : history.slice(1, at))]) as Msg[];
-  const external = (n: string) => [msg("user", `cli-${n}`, `from the terminal ${n}`), msg("assistant", `cli-${n}-reply`, [{ type: "text", text: `terminal reply ${n}` }])];
+  /** A finished terminal CLI turn: its reply ends the turn (stop_reason end_turn, as the CLI writes it). */
+  const external = (n: string) => {
+    const reply = msg("assistant", `cli-${n}-reply`, [{ type: "text", text: `terminal reply ${n}` }]) as Msg & { message: object };
+    return [msg("user", `cli-${n}`, `from the terminal ${n}`), { ...reply, message: { ...reply.message, stop_reason: "end_turn" } } as Msg];
+  };
   const quiet = () => new Promise((r) => setTimeout(r, 1500));
   type Event = Extract<ServerMessage, { type: "event" }>;
   const events = (c: { inbox: ServerMessage[] }) => c.inbox.filter((m): m is Event => m.type === "event");
@@ -1861,6 +1928,9 @@ describe("transcript sync (terminal CLI turns)", () => {
   async function syncDaemon(query: unknown = fakeQuery, restored: Record<string, Msg[]> = {}) {
     const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
     const files: Record<string, Msg[] | "unreadable"> = { ...restored };
+    // Transcript reads (getSessionMessages calls, getSubagentMessages agent IDs) and the subagent runs listSubagents names.
+    const reads = { main: 0, runs: [] as string[] };
+    const agents: string[] = [];
     const d = createDaemon({
       webRoot,
       token,
@@ -1871,18 +1941,21 @@ describe("transcript sync (terminal CLI turns)", () => {
         listSessions: (async () => []) as never,
         getSessionInfo: (async (sid: string) => (restored[sid] ? { sessionId: sid, cwd: webRoot } : undefined)) as never,
         getSessionMessages: (async (sid: string) => {
+          reads.main++;
           if (files[sid] === "unreadable") throw new Error("EACCES");
           return files[sid] ?? [];
         }) as never,
-        listSubagents: (async () => []) as never,
+        listSubagents: (async () => agents) as never,
+        getSubagentMessages: (async (_sid: string, agent: string) => (reads.runs.push(agent), [])) as never,
       },
     });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     const c = await client((d.address() as AddressInfo).port);
-    const touch = (sid: string, cwd: string) => {
-      const dir = join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+    /** Grows the session's transcript file, or with `agent` that subagent run's file. */
+    const touch = (sid: string, cwd: string, agent?: string) => {
+      const dir = join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"), ...(agent ? [sid, "subagents"] : []));
       mkdirSync(dir, { recursive: true });
-      appendFileSync(join(dir, `${sid}.jsonl`), "{}\n");
+      appendFileSync(join(dir, agent ? `agent-${agent}.jsonl` : `${sid}.jsonl`), "{}\n");
     };
     const create = async () => {
       const { result } = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string; cwd: string } } };
@@ -1897,8 +1970,89 @@ describe("transcript sync (terminal CLI turns)", () => {
       await idle(sid, user.seq);
       return user.part.id;
     };
-    return { d, c, files, touch, create, prompt, port: (d.address() as AddressInfo).port };
+    return { d, c, files, touch, create, prompt, reads, agents, port: (d.address() as AddressInfo).port };
   }
+
+  it("a terminal CLI /compact shows the compaction divider once, like a restore: its summary lies before the preserved known messages", { timeout: 15_000 }, async () => {
+    const { d, c, files, touch, create, prompt } = await syncDaemon();
+    try {
+      const s = await create();
+      const p1 = await prompt(s.id, "hi");
+      files[s.id] = own(p1);
+      touch(s.id, s.cwd);
+      await quiet();
+      // Chain after `claude -p "/compact" --resume <id>` (GH-38 review session 717f91ad): summary, preserved tail, command record, its output.
+      const summary = { ...msg("user", "sum", "This session is being continued from a previous conversation."), isCompactSummary: true } as Msg;
+      const command = msg("user", "cmd", "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>");
+      files[s.id] = [summary, ...own(p1), command, msg("user", "out", "<local-command-stdout>Compacted</local-command-stdout>")];
+      touch(s.id, s.cwd);
+      const divider = (await c.waitFor(isPart("compaction", "sum"))) as Event;
+      expect(divider.part).toMatchObject({ summary: "This session is being continued from a previous conversation." });
+      const slash = (await c.waitFor(isPart("user_text", "cmd"))) as Event;
+      expect(slash.part).toMatchObject({ text: "/compact" });
+      touch(s.id, s.cwd);
+      await quiet();
+      expect(events(c).filter((e) => e.part.id === "sum")).toHaveLength(1);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("while a terminal CLI turn runs (transcript grew, its last message opens a turn) the session reports it and refuses prompts; its end clears it", { timeout: 15_000 }, async () => {
+    const { d, c, files, touch, create, prompt } = await syncDaemon();
+    try {
+      const s = await create();
+      const p1 = await prompt(s.id, "hi");
+      files[s.id] = own(p1);
+      touch(s.id, s.cwd);
+      await quiet();
+      expect(events(c).some((e) => e.part.type === "external_turn")).toBe(false);
+      const reply = (uuid: string, content: unknown[], stop_reason: string) => {
+        const m = msg("assistant", uuid, content) as Msg & { message: object };
+        return { ...m, message: { ...m.message, stop_reason } } as Msg;
+      };
+      const call = reply("cli-call", [{ type: "tool_use", id: "toolu_cli", name: "Bash", input: { command: "sleep 5" } }], "tool_use");
+      files[s.id] = [...own(p1), msg("user", "cli-p", "from the terminal"), call];
+      touch(s.id, s.cwd);
+      await c.waitFor((m) => isPart("external_turn")(m) && (m as Event).part.type === "external_turn" && (m as { part: { running: boolean } }).part.running);
+      expect(await c.request({ type: "session.prompt", sessionId: s.id, text: "too early" })).toMatchObject({ type: "error", code: "external_turn", message: "A terminal CLI turn is running in this session" });
+      expect(events(c).some((e) => e.part.type === "user_text" && (e.part as { text: string }).text === "too early")).toBe(false);
+      const result = msg("user", "cli-result", [{ type: "tool_result", tool_use_id: "toolu_cli", content: "" }]);
+      files[s.id] = [...own(p1), msg("user", "cli-p", "from the terminal"), call, result, reply("cli-end", [{ type: "text", text: "done" }], "end_turn")];
+      touch(s.id, s.cwd);
+      await c.waitFor((m) => isPart("external_turn")(m) && !(m as { part: { running: boolean } }).part.running);
+      await prompt(s.id, "now");
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a sync reads the transcript only when its file changed, from the last offset, and a subagent run file only when that file changed", { timeout: 15_000 }, async () => {
+    const { d, c, files, touch, create, prompt, reads, agents } = await syncDaemon();
+    try {
+      const s = await create();
+      const p1 = await prompt(s.id, "hi");
+      files[s.id] = own(p1);
+      agents.push("r1", "r2");
+      touch(s.id, s.cwd);
+      touch(s.id, s.cwd, "r1");
+      touch(s.id, s.cwd, "r2");
+      await quiet();
+      expect(reads.runs.sort()).toEqual(["r1", "r2"]);
+      // Nothing changed: the sync before this prompt reads no transcript.
+      Object.assign(reads, { main: 0, runs: [] });
+      const p2 = await prompt(s.id, "again");
+      expect(reads).toEqual({ main: 0, runs: [] });
+      files[s.id] = [...own(p1, p2), ...external("1")];
+      touch(s.id, s.cwd, "r2");
+      touch(s.id, s.cwd);
+      await c.waitFor(isPart("user_text", "cli-1"));
+      expect(reads.main).toBe(1);
+      expect(reads.runs).toEqual(["r2"]);
+    } finally {
+      d.close();
+    }
+  });
 
   it("mirrors terminal CLI turns of a viewed session once, in order; the daemon's own turns do not come back; replay by sinceSeq", { timeout: 15_000 }, async () => {
     const { d, c, files, touch, create, prompt, port } = await syncDaemon();

@@ -84,6 +84,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   const lastSeen = new Map<string, number>();
   // Paths whose original file was already sent: the changes tab needs only the first one.
   const originals = new Set<string>();
+  // SDK message uuid -> ids of the parts made from it (assistant blocks, tool results), for a refusal fallback's retraction.
+  const partsOf = new Map<string, string[]>();
   // total_cost_usd is cumulative per query; a turn's cost is the difference to the previous result. Undefined = unknown.
   // ponytail: the first turn after a daemon restart shows no cost; the CLI saves the resumed total only in the transcript's cost-state.
   let costTotal: number | undefined = opts.resumed ? undefined : 0;
@@ -140,6 +142,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     const timestamp = (m as { timestamp?: unknown }).timestamp;
     now = (typeof timestamp === "string" && Date.parse(timestamp)) || Date.now();
     const parts = convertMessage(m);
+    if ((m.type === "assistant" || m.type === "user") && m.uuid)
+      partsOf.set(m.uuid, parts.flatMap((p) => (m.type === "assistant" || p.type === "tool_result" ? [p.id] : [])));
     const parentId = "parent_tool_use_id" in m ? m.parent_tool_use_id : null;
     if (!parentId) return parts;
     lastSeen.set(parentId, now);
@@ -302,8 +306,13 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
         // tool call (tool_use_id) share one line.
         if (m.type === "system" && m.subtype === "informational")
           return m.level === "info" ? [] : [{ type: "notice", id: m.tool_use_id ? `${m.tool_use_id}:notice` : m.uuid, level: m.level === "notice" ? "notice" : "warning", text: m.content }];
-        if (m.type === "system" && (m.subtype === "model_refusal_fallback" || m.subtype === "model_refusal_no_fallback"))
-          return [{ type: "notice", id: m.uuid, level: "warning", text: m.content }];
+        if (m.type === "system" && m.subtype === "model_refusal_fallback") {
+          // The refused partial answer: the CLI asks hosts to remove these messages.
+          const partIds = (m.retracted_message_uuids ?? []).flatMap((u) => partsOf.get(u) ?? []);
+          const notice: Part = { type: "notice", id: m.uuid, level: "warning", text: m.content };
+          return partIds.length ? [notice, { type: "retract", id: `${m.uuid}:retract`, partIds }] : [notice];
+        }
+        if (m.type === "system" && m.subtype === "model_refusal_no_fallback") return [{ type: "notice", id: m.uuid, level: "warning", text: m.content }];
         if (IGNORED.has(m.type) || IGNORED.has(`${m.type}:${"subtype" in m ? m.subtype : ""}`)) return [];
         return [{ type: "raw", id: ("uuid" in m && m.uuid) || crypto.randomUUID(), message: m }];
     }

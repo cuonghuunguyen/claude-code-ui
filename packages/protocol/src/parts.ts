@@ -124,4 +124,11 @@ export type Part = { parentId?: string } & (
   | { type: "compaction"; id: string; trigger?: "manual" | "auto"; summary?: string }
   /** Conversation rewind: the client drops `userMessageId` and every part after it. */
   | { type: "rewind"; id: string; userMessageId: string }
+  /** Refusal fallback (`retracted_message_uuids`): the client drops these parts of the refused messages. `id` = `<notice id>:retract`. */
+  | { type: "retract"; id: string; partIds: string[] }
+  /**
+   * A terminal CLI turn runs in this session (the live mirror sees its transcript growing, its last message not ending a turn);
+   * the web app sends no prompt until `running` is false.
+   */
+  | { type: "external_turn"; id: "external_turn"; running: boolean }
 );

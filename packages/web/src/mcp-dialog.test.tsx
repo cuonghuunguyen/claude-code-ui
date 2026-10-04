@@ -223,6 +223,18 @@ it("Authenticate opens the sign-in page, waits with Check connection and the pas
   open.mockRestore();
 });
 
+it("Authenticate does not open a sign-in URL that is not https (or http on this machine)", async () => {
+  const tab = { opener: {}, location: { href: "" }, close: vi.fn() };
+  const open = vi.spyOn(window, "open").mockReturnValue(tab as never);
+  const d = await render({ "mcp.authenticate": () => ({ authUrl: "javascript:alert(1)", requiresUserAction: true }) }, { server: "auth" });
+  await d.click(d.button("Authenticate"));
+  expect(tab.location.href).toBe("");
+  expect(tab.close).toHaveBeenCalled();
+  expect(d.q("banner-error")!.textContent).toContain("not https");
+  expect(d.q("mcp-auth-wait")).toBeNull();
+  open.mockRestore();
+});
+
 it("polls every 5 s while a server is connecting", async () => {
   vi.useFakeTimers();
   const d = await render({ "mcp.list": () => ({ servers: [{ name: "p", status: "pending", scope: "user", config: { type: "stdio" } }] }) });
