@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { choose, matchCommands } from "./commands.ts";
+import { choose, dialogOf, matchCommands, withDialogCommands } from "./commands.ts";
 
 const cmd = (name: string, argumentHint = "") => ({ name, description: `${name} desc`, argumentHint });
 const all = [cmd("review", "<pr>"), cmd("compact"), cmd("code-review"), cmd("init")];
@@ -47,5 +47,16 @@ describe("choose", () => {
   it("sends a command with an argument hint when its full name is typed, like Enter in Claude Code (/compact needs one Enter)", () => {
     expect(choose(cmd("compact", "<optional custom summarization instructions>"), "/compact")).toEqual({ send: "/compact" });
     expect(choose(cmd("compact", "<optional custom summarization instructions>"), "/comp")).toEqual({ text: "/compact " });
+  });
+});
+
+describe("dialog commands", () => {
+  it("/mcp alone opens the MCP servers dialog, with or without the CLI's own mcp row", () => {
+    expect(dialogOf(" /mcp ")).toBe("mcp");
+    expect(dialogOf("/mcp list")).toBeUndefined();
+    expect(dialogOf("/mcpx")).toBeUndefined();
+    const rows = withDialogCommands([cmd("mcp"), cmd("init")]);
+    expect(rows.map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"]]);
+    expect(matchCommands(rows, "/mc")!.map((c) => c.name)).toEqual(["mcp"]);
   });
 });

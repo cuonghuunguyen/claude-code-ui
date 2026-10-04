@@ -51,14 +51,21 @@ export function CommandPalette({
   items: openedWith,
   start,
   files,
+  more,
   onClose,
 }: {
   items: PaletteItem[];
   start?: string;
   files?: { search: (query: string) => Promise<string[]>; open: (path: string) => void };
+  /** Rows fetched once the first query is typed (they are search-only), e.g. the project's MCP servers. */
+  more?: () => Promise<PaletteItem[]>;
   onClose: () => void;
 }) {
-  const [items] = useState(openedWith);
+  const [opened] = useState(openedWith);
+  const [fetched, setFetched] = useState<PaletteItem[]>([]);
+  // Before the sessions, which a broad query fills up.
+  const at = opened.findIndex((i) => i.group === "Sessions");
+  const items = fetched.length ? (at < 0 ? [...opened, ...fetched] : [...opened.slice(0, at), ...fetched, ...opened.slice(at)]) : opened;
   const initial = items.find((i) => i.id === start);
   const [page, setPage] = useState(initial && "page" in initial ? initial.page : undefined);
   const [query, setQuery] = useState("");
@@ -70,6 +77,13 @@ export function CommandPalette({
   const placeholder = page?.placeholder ?? (files ? "Search files, commands, and sessions" : "Search commands and sessions");
 
   useEffect(() => input.current?.focus(), []);
+  const asked = useRef(false);
+  useEffect(() => {
+    if (!q || !more || asked.current) return;
+    asked.current = true;
+    // A failed fetch leaves those rows out.
+    more().then(setFetched, () => {});
+  }, [q]);
   useEffect(() => {
     if (page || !files || !q) return;
     let current = true;

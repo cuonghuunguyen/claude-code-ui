@@ -15,6 +15,7 @@ import { createProjects, trim, type Projects } from "./projects.ts";
 import { createPlanTracker } from "./plan-usage.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
+import { ConfigError, createConfig, type CliRunner, type McpRequest } from "./config.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
@@ -235,6 +236,7 @@ function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
  * `listCache`: reuse the last transcript scan while no transcript file under `projectsDir` changed (default: on with the
  * SDK's own listSessions()).
  * `hostnames`: hostnames besides loopback that browsers may reach the daemon by, e.g. a `tailscale serve` name (ADR 0003).
+ * `cli`: runs the Claude Code CLI for config writes (default: the SDK-bundled binary). `configHoldMs`: config query hold.
  */
 export function createDaemon(opts: {
   webRoot: string;
@@ -250,6 +252,8 @@ export function createDaemon(opts: {
   projects?: Projects;
   listCache?: boolean;
   hostnames?: string[];
+  cli?: CliRunner;
+  configHoldMs?: number;
 }) {
   const hostnames = new Set([...LOCAL_HOSTNAMES, ...(opts.hostnames ?? [])]);
   const logEpoch = randomUUID();
@@ -301,6 +305,7 @@ export function createDaemon(opts: {
   const connections = new Set<WebSocket>();
   const terminals = createTerminals();
   const broadcast = (m: ServerMessage) => connections.forEach((ws) => send(ws, m));
+  const config = createConfig({ query: opts.query, cli: opts.cli, holdMs: opts.configHoldMs, onChanged: (kind, cwd) => broadcast({ type: "config.changed", kind, cwd }) });
   const root = resolve(opts.webRoot);
   // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
   let models: ReturnType<typeof listModels> | undefined;
@@ -944,6 +949,26 @@ export function createDaemon(opts: {
             terminals.resize(t, msg.cols, msg.rows);
           } else terminals.close(t);
           return reply({});
+        }
+        case "mcp.list":
+        case "mcp.toggle":
+        case "mcp.reconnect":
+        case "mcp.authenticate":
+        case "mcp.oauthCallback":
+        case "mcp.clearAuth":
+        case "mcp.add":
+        case "mcp.remove": {
+          if (typeof msg.cwd === "string" && isAbsolute(msg.cwd) && !existsSync(msg.cwd))
+            return fail("bad_cwd", `Working directory not found: ${msg.cwd}. If this session's folder was deleted, re-open the project and try again.`);
+          const cwd = allowed(msg.cwd);
+          if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
+          // The session's running query when it runs in that project; otherwise the project's config query.
+          const s = "sessionId" in msg && typeof msg.sessionId === "string" ? sessions.get(msg.sessionId) : undefined;
+          try {
+            return reply(await config.mcp(msg as McpRequest, cwd, s?.cwd === cwd ? s.liveQuery() : undefined));
+          } catch (e) {
+            return fail(e instanceof ConfigError ? e.code : "mcp_failed", (e as Error).message);
+          }
         }
         default:
           return fail("unknown_type", `unknown message type ${(msg as { type?: string }).type}`);

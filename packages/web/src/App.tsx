@@ -8,6 +8,7 @@ import type {
   FsListResult,
   FsSearchResult,
   ListResult,
+  McpListResult,
   RecentProject,
   ModelInfo,
   ModelsResult,
@@ -37,7 +38,9 @@ import { connect, type ConnectionStatus, type Request, type RequestError } from 
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { Toast } from "./toast.tsx";
 import { nextMode, PromptToolbar, type SendState } from "./toolbar.tsx";
-import { choose, matchCommands } from "./commands.ts";
+import { choose, dialogOf, matchCommands, withDialogCommands } from "./commands.ts";
+import { McpDialog } from "./mcp-dialog.tsx";
+import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
 import { inProject, patchSession, projectCwd } from "./sessions.ts";
@@ -129,6 +132,11 @@ export function App() {
   // Modes a new session may start in (session.list): bypassPermissions only when the daemon enables it.
   const [newModes, setNewModes] = useState<PermissionMode[]>(NEW_SESSION_MODES);
   const [openingProject, setOpeningProject] = useState(false);
+  // MCP servers dialog, on the project (and session) shown when it opened; `server`: opened on that server's detail (palette row).
+  // Kept after closing, so the dialog stays mounted for its close and focus return.
+  const [mcp, setMcp] = useState<{ open: boolean; cwd: string; sessionId?: string; server?: string }>();
+  // config.changed count per project cwd: an open dialog of that project refreshes.
+  const [configChanged, setConfigChanged] = useState<Record<string, number>>({});
   const newPrompt = useRef<HTMLTextAreaElement>(null);
   const [views, setViews] = useState<Record<string, SessionView>>({});
   // Active tab: a session id or NEW_TAB.
@@ -330,6 +338,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
+      onConfigChanged: (m) => setConfigChanged((c) => ({ ...c, [m.cwd]: (c[m.cwd] ?? 0) + 1 })),
       onOpen: () => {
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
         c.request<ModelsResult>({ type: "models.list" }).then(
@@ -559,6 +568,23 @@ export function App() {
     if (lost) setToast(autoUnavailable(models, d.model));
     setDraft(lost ? { ...d, mode: "default" } : d);
   };
+  // The project the config dialogs act on: the shown session's cwd, or the new-session tab's project chip.
+  const draftProject = draftCwd && projects.includes(draftCwd) ? draftCwd : projects[0];
+  const project = draftShown ? draftProject : shown?.cwd;
+  const projectSession = draftShown ? undefined : shown?.id;
+  const openMcp = (server?: string) => project && setMcp({ open: true, cwd: project, sessionId: projectSession, server });
+  const mcpRows = async () =>
+    project
+      ? paletteOrder((await client.current!.request<McpListResult>({ type: "mcp.list", cwd: project, ...(projectSession && { sessionId: projectSession }) })).servers).map((x) => ({
+          id: `mcp:${x.name}`,
+          group: "MCP servers",
+          title: x.name,
+          description: "Open MCP server details",
+          meta: `${statusIcon(x.status)} ${statusLabel(x.status)}`,
+          searchOnly: true,
+          run: () => openMcp(x.name),
+        }))
+      : [];
   const commands = appCommands({
     tabs,
     activeId,
@@ -596,6 +622,7 @@ export function App() {
     setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
+    openMcp: project ? () => openMcp() : undefined,
   });
   // App shortcuts. Each has Ctrl, Cmd or Alt, so it also fires in the prompt box; an open dialog (quick open, palette) owns the keyboard.
   // A shortcut whose command does not apply now is left to the browser (e.g. Ctrl+P prints without a session).
@@ -783,6 +810,7 @@ export function App() {
                         }
                         onRespond={respond}
                         onSearch={search(s.cwd)}
+                        onDialog={() => openMcp()}
                         onAnswer={answer}
                         connected={status === "connected"}
                         plan={plan}
@@ -866,6 +894,7 @@ export function App() {
                   onUpload={upload}
                   onSearch={search}
                   onStart={createSession}
+                  onDialog={() => openMcp()}
                   inputRef={newPrompt}
                   connected={status === "connected"}
                 />
@@ -897,6 +926,7 @@ export function App() {
           items={commands}
           start={palette.start}
           files={shown && { search: search(shown.cwd), open: openInPanel }}
+          more={project ? mcpRows : undefined}
           onClose={() => {
             setPalette(undefined);
             // Before the chosen command runs, so a dialog it opens (quick open) returns focus here too.
@@ -913,6 +943,17 @@ export function App() {
         // Focus goes to the new-session prompt, not back to the button that opened the dialog.
         finalFocus={newPrompt}
       />
+      {mcp && (
+        <McpDialog
+          open={mcp.open}
+          cwd={mcp.cwd}
+          sessionId={mcp.sessionId}
+          server={mcp.server}
+          changed={configChanged[mcp.cwd]}
+          request={(m) => client.current!.request(m)}
+          onClose={() => setMcp({ ...mcp, open: false })}
+        />
+      )}
       {toast && <Toast message={toast} onClose={closeToast} />}
     </div>
     </AvatarColors>
@@ -1060,6 +1101,7 @@ export function NewSession({
   onUpload,
   onSearch,
   onStart,
+  onDialog,
   inputRef,
   connected = true,
 }: {
@@ -1075,6 +1117,8 @@ export function NewSession({
   onSearch: (cwd: string) => (query: string) => Promise<string[]>;
   /** Rejects when the session was not created; the prompt box keeps the draft. */
   onStart: (cwd: string, opts: StartOptions, text: string, images: string[]) => Promise<void>;
+  /** `/mcp` typed alone: opens the MCP servers dialog of `cwd` instead of creating a session. */
+  onDialog?: (dialog: "mcp") => void;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   connected?: boolean;
 }) {
@@ -1087,6 +1131,7 @@ export function NewSession({
         <PromptBox
           cwd={cwd}
           commands={[]}
+          onDialog={cwd ? onDialog : undefined}
           models={models}
           model={model}
           onModel={(m) => onDraft({ ...draft, model: m })}
@@ -1177,6 +1222,7 @@ export function SessionPane({
   connected,
   plan,
   onGitStatus,
+  onDialog,
 }: {
   scrollKey: number;
   /** Subagent run whose subagent view shows; an unknown one shows the session view. */
@@ -1211,6 +1257,8 @@ export function SessionPane({
   /** Account plan limits for the status bar; null hides its plan fields. */
   plan?: PlanUsage | null;
   onGitStatus?: () => Promise<GitStatus | null>;
+  /** `/mcp` typed alone: opens the MCP servers dialog instead of sending. */
+  onDialog?: (dialog: "mcp") => void;
 }) {
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
@@ -1354,6 +1402,7 @@ export function SessionPane({
             <PromptBox
               cwd={session.cwd}
               commands={view.commands}
+              onDialog={onDialog}
               models={models}
               model={view.model ?? session.model}
               onModel={onModel}
@@ -1423,10 +1472,13 @@ function PromptBox({
   autoFocus,
   disabled,
   inputRef,
+  onDialog,
 }: {
   /** Changing it clears the send error. */
   cwd?: string;
   commands: SlashCommand[];
+  /** Given: the dialog commands (`/mcp`) are in the picker and open their dialog instead of being sent. */
+  onDialog?: (dialog: "mcp") => void;
   models: ModelInfo[];
   model: string;
   onModel: (model: string) => void;
@@ -1470,7 +1522,7 @@ function PromptBox({
   // The prompt box covers the dock's bottom 36px (OpenCode prompt lift), only when it directly follows the dock.
   const lift = !!todos && !sendError && !images.length;
   const input = useRef<HTMLTextAreaElement>(null);
-  const matches = dismissed ? undefined : matchCommands(commands, text);
+  const matches = dismissed ? undefined : matchCommands(onDialog ? withDialogCommands(commands) : commands, text);
   const mention = dismissed || matches ? undefined : activeMention(text, caret);
   // Only results for the query being typed, so Enter never picks a stale path.
   const paths = mention && found?.query === mention.query ? found.paths : [];
@@ -1509,6 +1561,8 @@ function PromptBox({
   useEffect(() => setSendError(undefined), [cwd]);
   const send = (t = text) => {
     if (!t.trim() && !images.length) return;
+    const dialog = onDialog && !images.length && dialogOf(t);
+    if (dialog) return onDialog(dialog), edit("");
     const sent = images;
     setSendError(undefined);
     onPrompt(t, sent).catch((e: Error) => {

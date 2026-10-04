@@ -179,3 +179,26 @@ it("keeps the list it opened with: Stop stays when the turn ends while the palet
   await key("Enter");
   expect(stop).toHaveBeenCalled();
 });
+
+it("fetches the extra rows once the first query is typed and lists them before the sessions", async () => {
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  const open = vi.fn();
+  const more = vi.fn(async (): Promise<PaletteItem[]> => [{ id: "mcp:ctx", group: "MCP servers", title: "ctx", description: "Open MCP server details", meta: "⚠ Needs Auth", searchOnly: true, run: open }]);
+  await act(async () => root!.render(<CommandPalette items={ITEMS} more={more} onClose={noop} />));
+  expect(more).not.toHaveBeenCalled();
+  const input = el.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+  const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  for (const v of ["c", "i"])
+    await act(async () => {
+      set.call(input, v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  expect(more).toHaveBeenCalledTimes(1);
+  const row = [...el.querySelectorAll<HTMLElement>('[role="option"]')].find((r) => r.textContent?.includes("ctx"))!;
+  expect(row.textContent).toBe("ctxOpen MCP server details⚠ Needs Auth");
+  expect([...el.querySelectorAll('[role="group"]')].map((g) => g.getAttribute("aria-label"))).toEqual(["Commands", "MCP servers", "Sessions"]);
+  await act(async () => row.click());
+  expect(open).toHaveBeenCalled();
+});
