@@ -62,7 +62,9 @@ export function Chooser<T extends string>({
   // The name starts with the visible text (WCAG 2.5.3 Label in Name), then says what the control sets.
   const visible = typeof current?.trigger === "string" ? current.trigger : (current?.label ?? value);
   return (
-    <Select items={items} value={value} onValueChange={(v) => v !== null && v !== value && onChange(v as T)}>
+    // Only the user's pick: when the items change and drop the value for a render, Base UI resets to the value the picker
+    // mounted with (reason "none"), e.g. Don't ask after a model switch left Auto mode (GH-46).
+    <Select items={items} value={value} onValueChange={(v, { reason }) => reason === "item-press" && v !== null && v !== value && onChange(v as T)}>
       <SelectTrigger aria-label={`${visible}, ${label}`} title={`${label}: ${current?.label ?? value}`} data-testid={testId} className={`${GHOST} min-w-0 ${className}`}>
         {icon}
         <SelectValue className="truncate">{(v: T) => items.find((i) => i.value === v)?.trigger ?? items.find((i) => i.value === v)?.label ?? v}</SelectValue>

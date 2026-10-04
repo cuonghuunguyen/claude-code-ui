@@ -114,6 +114,8 @@ export type Part = { parentId?: string } & (
   | { type: "subagent"; id: string; toolUseId: string; description: string; status: ToolStatus; startedAt: number; endedAt?: number }
   /** The turn was stopped (session.interrupt, or No without feedback); replaces its turn_result. */
   | { type: "turn_interrupted"; id: string }
+  /** A CLI banner (system/informational, model refusal fallback): `notice` gray, `warning` prominent; `id` = its uuid. */
+  | { type: "notice"; id: string; level: "notice" | "warning"; text: string }
   | { type: "raw"; id: string; message: unknown }
   /**
    * Compaction: live from `system/compact_boundary` (`trigger`), re-emitted with `summary` once the CLI sends the summary

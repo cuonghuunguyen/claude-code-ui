@@ -357,6 +357,9 @@ export class Session {
     this.generation++;
     this.query?.close();
     this.query = undefined;
+    // The old drive loop's finally skips this (newer generation): a background run of the closed query stops with it.
+    this.tasks.clear();
+    for (const part of this.adapter.endCalls()) this.emit(part);
     this.input = new InputQueue();
   }
 
@@ -576,8 +579,11 @@ export class Session {
     } finally {
       // Nothing waits for these answers any more, and no call of this query runs.
       for (const id of [...this.pending.keys()]) this.cancel(id, "Session ended");
-      this.tasks.clear();
-      if (generation === this.generation) for (const part of this.adapter.endCalls()) this.emit(part);
+      // A newer generation (conversation rewind) already ended them, and its query may run tasks of its own.
+      if (generation === this.generation) {
+        this.tasks.clear();
+        for (const part of this.adapter.endCalls()) this.emit(part);
+      }
     }
   }
 

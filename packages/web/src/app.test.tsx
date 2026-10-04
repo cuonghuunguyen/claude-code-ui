@@ -220,6 +220,18 @@ it("a compaction shows a 'Conversation compacted' divider with its summary colla
   expect([...el.querySelectorAll('[data-testid="user-message"]')].length).toBe(0);
 });
 
+it("a CLI notice shows as a gray line, a warning notice with a warning icon, not as a raw system message", async () => {
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "notice", id: "i1", level: "notice", text: "Continuing once with that noted" } }));
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "notice", id: "f1", level: "warning", text: "Opus 4.8 is answering instead" } }));
+  const [notice, warning] = [...el.querySelectorAll<HTMLElement>('[data-testid="notice"]')];
+  expect(notice!.textContent).toBe("Continuing once with that noted");
+  expect(notice!.className).toContain("text-muted-foreground");
+  expect(warning!.textContent).toBe("Opus 4.8 is answering instead");
+  expect(warning!.className).toContain("text-warning");
+  expect(warning!.querySelector("svg")?.getAttribute("aria-label")).toBe("Warning");
+  expect(el.querySelector('[data-testid="raw-part"]')).toBeNull();
+});
+
 it("Remove project asks first; Cancel keeps it, Remove sends project.remove", async () => {
   const removeSent = () => sent.filter((m) => m.type === "project.remove");
   const remove = () => act(async () => el.querySelector<HTMLElement>('[data-testid="project-remove"]')!.click());
@@ -500,4 +512,33 @@ it("a link opens its session with addProject; a reconnect resubscribe does not, 
   await act(async () => {});
   expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: ID }));
   expect(subscribes().some((m) => "addProject" in m)).toBe(false);
+});
+
+it("a session opened in Don't ask that goes to Auto mode with Shift+Tab and then gets a model without auto support ends in Ask: the picker sends no mode the user did not pick", async () => {
+  const dontAsk = { ...session, model: "sonnet", permissionMode: "dontAsk", permissionModes: [...MODES] };
+  const restore = await remount({
+    "session.list": { sessions: [dontAsk], projects: ["/p/demo"] },
+    "session.subscribe": { logEpoch: "e1", session: dontAsk },
+    "models.list": { models: AUTO_MODELS },
+    "session.setPermissionMode": { session: dontAsk },
+    "session.setModel": { session: { ...dontAsk, model: "haiku", permissionMode: "default", permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] } },
+  });
+  let seq = 0;
+  const event = (part: unknown) => act(async () => emit({ type: "event", sessionId: ID, seq: ++seq, part }));
+  try {
+    // Opened once: the picker's items are registered (development-docs/GH-37 proposals: the tester picked Don't ask first).
+    await pickOption('[data-testid="mode-select"]', "Don't ask (deny unapproved)");
+    for (const mode of ["default", "acceptEdits", "plan", "auto"]) {
+      await press({ key: "Tab", shiftKey: true }, el.querySelector("textarea")!);
+      await event({ type: "session_permission_mode", id: "session_permission_mode", mode });
+    }
+    sent.length = 0;
+    await pickOption('[data-testid="session-model"]', "Haiku 4.5");
+    await event({ type: "session_model", id: "session_model", model: "haiku" });
+    await event({ type: "session_permission_mode", id: "session_permission_mode", mode: "default" });
+    expect(sent.filter((m) => m.type.startsWith("session.set"))).toEqual([{ type: "session.setModel", sessionId: ID, model: "haiku" }]);
+    expect(el.querySelector('[data-testid="mode-select"]')?.textContent).toContain("Ask");
+  } finally {
+    restore();
+  }
 });

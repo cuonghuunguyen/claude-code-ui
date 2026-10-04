@@ -6,7 +6,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
-import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
+import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { gitStatus } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
@@ -106,6 +106,39 @@ function transcriptSettings(projectsDir: string, cwd: string, sessionId: string)
     }
   }
   return found;
+}
+
+/**
+ * getSubagentMessages() keeps only the run transcript's last parentUuid chain, so the tool_result of a parallel call on a side
+ * branch is lost (each parallel tool_use is its own assistant line, its result a child of it; SDK 0.3.285). Puts each lost
+ * tool_result back after its assistant message, read from the raw `agent-<id>.jsonl` under `<session>/subagents/` (nested folders too).
+ */
+function withParallelResults(projectsDir: string, cwd: string, sessionId: string, agentId: string, messages: SessionMessage[]): SessionMessage[] {
+  const dir = transcriptFile(projectsDir, cwd, sessionId).replace(/\.jsonl$/, "/subagents");
+  let text: string;
+  try {
+    const file = readdirSync(dir, { recursive: true, encoding: "utf8" }).find((f) => basename(f) === `agent-${agentId}.jsonl`);
+    if (!file) return messages;
+    text = readFileSync(join(dir, file), "utf8");
+  } catch {
+    return messages;
+  }
+  const have = new Set(messages.map((m) => m.uuid));
+  const lost = new Map<string, { uuid: string; message: unknown; timestamp?: string }[]>();
+  for (const line of text.split("\n")) {
+    if (!line.includes('"tool_result"')) continue;
+    try {
+      const e = JSON.parse(line) as { type?: string; uuid?: string; parentUuid?: string; message?: { content?: unknown }; timestamp?: string };
+      const content = e.message?.content;
+      if (e.type !== "user" || !e.uuid || !e.parentUuid || have.has(e.uuid) || !have.has(e.parentUuid)) continue;
+      if (!Array.isArray(content) || !content.some((b) => (b as { type?: unknown })?.type === "tool_result")) continue;
+      lost.set(e.parentUuid, [...(lost.get(e.parentUuid) ?? []), { uuid: e.uuid, message: e.message, timestamp: e.timestamp }]);
+    } catch {
+      // A line cut by a concurrent write.
+    }
+  }
+  if (!lost.size) return messages;
+  return messages.flatMap((m) => [m, ...(lost.get(m.uuid) ?? []).map((e) => ({ ...m, type: "user" as const, ...e }))]);
 }
 
 /** Names, sizes and mtimes of every transcript under `projectsDir`; undefined when it cannot be read. */
@@ -298,7 +331,7 @@ export function createDaemon(opts: {
   async function readTranscript(id: string, cwd: string): Promise<Transcript> {
     const main = await history.getSessionMessages(id, { dir: cwd });
     const agents = await history.listSubagents(id, { dir: cwd }).catch((err) => (console.error(`listing subagent runs of ${id} failed:`, err), []));
-    const runs = await Promise.all(agents.map((a) => history.getSubagentMessages(id, a, { dir: cwd }).catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []))));
+    const runs = await Promise.all(agents.map((a) => history.getSubagentMessages(id, a, { dir: cwd }).then((m) => withParallelResults(projectsDir, cwd, id, a, m)).catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []))));
     return { main, runs };
   }
 

@@ -29,6 +29,8 @@ const IGNORED = new Set([
   "system:hook_started",
   "system:hook_progress",
   "system:hook_response",
+  // The effort picker shows the effort; Claude Code prints no line for it.
+  "system:per_turn_effort_changed",
   "tool_progress",
 ]);
 // After an interrupt the CLI sends this user text, then a result with an aborted terminal_reason (SDK 0.3.285).
@@ -296,6 +298,11 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           return [];
         }
         if (m.type === "system" && m.subtype === "task_notification") return taskEnded(m.task_id, m.tool_use_id, m.status);
+        // Claude Code's banners: "info" only in its transcript mode, "notice" gray, the rest prominent.
+        if (m.type === "system" && m.subtype === "informational")
+          return m.level === "info" ? [] : [{ type: "notice", id: m.uuid, level: m.level === "notice" ? "notice" : "warning", text: m.content }];
+        if (m.type === "system" && (m.subtype === "model_refusal_fallback" || m.subtype === "model_refusal_no_fallback"))
+          return [{ type: "notice", id: m.uuid, level: "warning", text: m.content }];
         if (IGNORED.has(m.type) || IGNORED.has(`${m.type}:${"subtype" in m ? m.subtype : ""}`)) return [];
         return [{ type: "raw", id: ("uuid" in m && m.uuid) || crypto.randomUUID(), message: m }];
     }

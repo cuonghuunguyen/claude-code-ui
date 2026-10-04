@@ -1475,6 +1475,64 @@ describe("daemon", () => {
     }
   });
 
+  it("a restored subagent run keeps the results of its parallel tool calls that getSubagentMessages() drops", async () => {
+    // Shapes of run "Second widgets feature sweep" in session 7a3df1cd (development-docs/GH-36/review-fix2.html, SDK 0.3.285): each
+    // parallel tool_use is its own assistant line, each tool_result a child of it; the SDK keeps only the last parentUuid chain.
+    const id = "7a3df1cd-2a8b-4f32-8270-c70ece8c957d";
+    const at = "2026-10-01T10:00:00.000Z";
+    const line = (type: string, uuid: string, parentUuid: string | null, content: unknown) =>
+      ({ type, uuid, parentUuid, isSidechain: true, agentId: "a0bbcf768e4c2d321", sessionId: id, timestamp: at, message: { role: type, content } });
+    const call = (n: number) => [{ type: "tool_use", id: `toolu_read${n}`, name: "Read", input: { file_path: `/x${n}` } }];
+    const result = (n: number) => [{ type: "tool_result", tool_use_id: `toolu_read${n}`, content: `${n}` }];
+    const raw = [
+      line("user", "p", null, "Read both"),
+      line("assistant", "a1", "p", call(1)),
+      line("assistant", "a2", "a1", call(2)),
+      line("user", "r1", "a1", result(1)),
+      line("user", "r2", "a2", result(2)),
+      line("assistant", "a3", "r2", [{ type: "text", text: "done" }]),
+    ];
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const runs = join(projectsDir, webRoot.replace(/[^a-zA-Z0-9]/g, "-"), id, "subagents");
+    mkdirSync(runs, { recursive: true });
+    writeFileSync(join(runs, "agent-a0bbcf768e4c2d321.jsonl"), raw.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    const sdk = (l: (typeof raw)[number]) => ({ type: l.type, uuid: l.uuid, session_id: id, message: l.message, parent_tool_use_id: "toolu_outer", parent_agent_id: null, timestamp: at });
+    const main = [
+      { type: "user", uuid: "u0", session_id: id, parent_tool_use_id: null, parent_agent_id: null, timestamp: at, message: { role: "user", content: "inspect" } },
+      { type: "assistant", uuid: "u1", session_id: id, parent_tool_use_id: null, parent_agent_id: null, timestamp: at, message: { id: "m1", role: "assistant", content: [{ type: "tool_use", id: "toolu_outer", name: "Agent", input: { description: "Sweep" } }] } },
+      { type: "user", uuid: "u2", session_id: id, parent_tool_use_id: null, parent_agent_id: null, timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_outer", content: "done" }] } },
+    ];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      projectsDir,
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (sid: string) => (sid === id ? { sessionId: id, cwd: webRoot } : undefined)) as never,
+        getSessionMessages: (async () => main) as never,
+        listSubagents: (async () => ["a0bbcf768e4c2d321"]) as never,
+        // The leaf chain a3 > r2 > a2 > a1 > p: r1 is on a side branch.
+        getSubagentMessages: (async () => raw.filter((l) => l.uuid !== "r1").map(sdk)) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "session_state");
+      const parts = new Map(c.inbox.flatMap((m) => (m.type === "event" ? [[m.part.id, m.part] as const] : [])));
+      for (const n of [1, 2]) {
+        expect(parts.get(`toolu_read${n}`)).toMatchObject({ type: "tool_call", status: "done", parentId: "toolu_outer" });
+        expect(parts.get(`toolu_read${n}:result`)).toMatchObject({ type: "tool_result", output: `${n}`, parentId: "toolu_outer" });
+      }
+    } finally {
+      d.close();
+      rmSync(projectsDir, { recursive: true, force: true });
+    }
+  });
+
   it("a restored background subagent run keeps its real status and duration from the transcript's task notifications", async () => {
     // Shapes of the "Sleeper" run in development-docs/GH-36 session 4c189532 (getSessionMessages, SDK 0.3.285).
     const id = "9c3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a";

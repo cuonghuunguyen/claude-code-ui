@@ -682,6 +682,38 @@ describe("Session rewind", () => {
     expect(calls.at(-1)).toMatchObject({ resume: s.id, resumeSessionAt: firstTurnLastAssistant });
   });
 
+  it("a conversation rewind while a background subagent run runs ends the run as stopped: the closed query no longer runs it", async () => {
+    // development-docs/GH-36/probe/rewind-probe.mts: the first turn starts a background run that is still running when it ends.
+    const result = (uuid: string) => ({ type: "result", subtype: "success", uuid, session_id: "x", is_error: false, duration_ms: 1, total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 1 }, permission_denials: [] });
+    let turn = 0;
+    const query = ({ prompt }: { prompt: AsyncIterable<unknown> }) => {
+      const gen = (async function* () {
+        for await (const _ of prompt) {
+          if (++turn === 1) {
+            yield { type: "assistant", uuid: "a1", session_id: "x", parent_tool_use_id: null, message: { id: "m1", content: [{ type: "tool_use", id: "bg-1", name: "Agent", input: { description: "Background sweep", run_in_background: true } }] } };
+            yield { type: "system", subtype: "task_started", uuid: "t1", session_id: "x", task_id: "task-1", tool_use_id: "bg-1", description: "Background sweep" };
+            yield { type: "user", uuid: "r1", session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bg-1", content: "Async agent launched successfully.\nagentId: task-1 (internal)" }] } };
+          } else yield { type: "assistant", uuid: "a2", session_id: "x", parent_tool_use_id: null, message: { id: "m2", content: [{ type: "text", text: "ok" }] } };
+          yield result(`res${turn}`);
+        }
+      })();
+      return Object.assign(gen, { supportedCommands: async () => [], close: () => void gen.return(undefined), getContextUsage: async () => fakeUsage, stopTask: async () => {} });
+    };
+    const s = new Session("/tmp", { query: query as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("first");
+    await until(events, (e) => e.part.type === "turn_result");
+    s.prompt("second");
+    await until(events, () => events.filter((e) => e.part.type === "turn_result").length === 2);
+    await until(events, () => s.info().state === "idle");
+    expect(lastPart(events, "bg-1")).toMatchObject({ type: "subagent", status: "running" });
+    const second = events.filter((e) => e.part.type === "user_text").at(-1)!.part.id;
+    await s.rewind(second, "conversation");
+    expect(lastPart(events, "bg-1")).toMatchObject({ type: "subagent", status: "stopped", endedAt: expect.any(Number) });
+    expect(await s.stopSubagent("bg-1")).toBe(false);
+  });
+
   it("rejects a conversation rewind to the first prompt, before touching files", async () => {
     const { s } = restored();
     rewinds.length = 0;
