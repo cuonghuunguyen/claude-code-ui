@@ -54,7 +54,11 @@ type SessionOpts = Partial<SessionSettings> & {
   onSettings?: (s: SessionSettings) => void;
   /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */
   plan?: Pick<PlanTracker, "refresh" | "rateLimit">;
+  /** Reads the session's SDK transcript: its main chain and each subagent run's messages (sync()). */
+  readTranscript?: (id: string, cwd: string) => Promise<Transcript>;
 };
+
+export type Transcript = { main: SessionMessage[]; runs: SessionMessage[][] };
 
 // ExitPlanMode comes without suggestions; Claude Code's "Yes, and auto-accept edits" (verified: the CLI then runs in acceptEdits).
 const ACCEPT_EDITS: PermissionUpdate = { type: "setMode", mode: "acceptEdits", destination: "session" };
@@ -96,6 +100,20 @@ export class Session {
   private usageRequest = 0;
   /** False until the first start(): the first query creates the transcript (sessionId), every later one resumes it. */
   private started: boolean;
+  /** Converts transcript messages (restore and sync); the live adapter converts the query's stream. */
+  private readonly transcript = createAdapter();
+  /** UUID of every transcript message the session logged or its own query streamed: the rest are external turns. */
+  private readonly known = new Set<string>();
+  /** Main-chain message UUIDs the timeline shows, in log order; a rewind cuts it. */
+  private readonly timeline: string[] = [];
+  /** tool_use IDs of the session's own query: their subagent runs are not external. */
+  private readonly ownCalls = new Set<string>();
+  /** True from a task_notification to the next result: the CLI runs a turn of its own for it, while the session is idle. */
+  private cliTurn = false;
+  /** A sync was asked while the session was busy: it runs at the end of the turn. */
+  private syncDeferred = false;
+  private syncing?: Promise<void>;
+  private syncAgain = false;
 
   constructor(
     readonly cwd: string,
@@ -115,14 +133,7 @@ export class Session {
     }
     // ADR 0001: after a daemon restart the SDK transcript is the history; the query resumes on the first prompt. The live query
     // shares the adapter: a task notification after the resume finds a restored run.
-    for (const m of restored.history) {
-      for (const part of this.adapter.convert(m as SDKMessage)) {
-        // A subagent run's prompt is no checkpoint.
-        if (part.type === "user_text" && !part.parentId) this.checkpoints.set(part.id, this.lastAssistant);
-        this.emit(part);
-      }
-      if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
-    }
+    this.logTranscript(restored.history, this.adapter);
     // No query runs: a call or run without its end in the transcript (the CLI exited mid-run) is no longer running.
     for (const part of this.adapter.endCalls()) this.emit(part);
     this.setState("idle");
@@ -217,6 +228,8 @@ export class Session {
     if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
     if (this.rewinding) throw new Error("session is rewinding");
     const uuid = randomUUID();
+    this.known.add(uuid);
+    this.timeline.push(uuid);
     this.checkpoints.set(uuid, this.lastAssistant);
     this.emit({ type: "user_text", id: uuid, text, images });
     this.setState(this.pending.size ? "needs_input" : "running");
@@ -332,15 +345,99 @@ export class Session {
     if (mode === "code") return;
     // The running CLI holds the full conversation: drop it; the next prompt resumes the transcript truncated at forkAt.
     // resumeDropsTurn is not passed: it refuses any discarded range longer than one turn (verified with SDK 0.3.285).
+    this.dropQuery();
+    this.resumeAt = this.lastAssistant = forkAt;
+    this.cut(userMessageId);
+    // The window now holds the conversation up to forkAt only.
+    void this.refreshUsage();
+  }
+
+  /** Closes the live query for good; the next prompt starts a fresh one that resumes the transcript. */
+  private dropQuery() {
     this.generation++;
     this.query?.close();
     this.query = undefined;
     this.input = new InputQueue();
-    this.resumeAt = this.lastAssistant = forkAt;
+  }
+
+  /** Drops this prompt and everything after it from the timeline (a `rewind` event). */
+  private cut(userMessageId: string) {
     let drop = false;
     for (const id of [...this.checkpoints.keys()]) if ((drop ||= id === userMessageId)) this.checkpoints.delete(id);
+    const at = this.timeline.indexOf(userMessageId);
+    if (at >= 0) this.timeline.length = at;
     this.emit({ type: "rewind", id: randomUUID(), userMessageId });
-    // The window now holds the conversation up to forkAt only.
+  }
+
+  /** Logs transcript messages (main chain, then subagent runs) through the transcript adapter (restore: the live one). */
+  private logTranscript(messages: SessionMessage[], adapter = this.transcript) {
+    for (const m of messages) {
+      this.known.add(m.uuid);
+      if (!m.parent_tool_use_id) this.timeline.push(m.uuid);
+      for (const part of adapter.convert(m as SDKMessage)) {
+        // A subagent run's prompt is no checkpoint.
+        if (part.type === "user_text" && !part.parentId) this.checkpoints.set(part.id, this.lastAssistant);
+        this.emit(part);
+      }
+      if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
+    }
+  }
+
+  /** A turn, a decision or a rewind is under way, or a subagent run of the own query still runs: a sync now would cut into it. */
+  private busy() {
+    return this.state !== "idle" || this.pending.size > 0 || this.rewinding || this.tasks.size > 0 || this.cliTurn;
+  }
+
+  /**
+   * Appends external turns (docs/spec.md "Terminal CLI and web app on one session"): transcript messages after the last
+   * one the session knows. When the timeline's last message left the main chain (a terminal CLI rewind), a `rewind` event
+   * first cuts the timeline back to the common message. Found any: the live query, which misses them, is dropped. A busy
+   * session syncs at the end of its turn; calls during a sync run it once more after it.
+   */
+  sync(): Promise<void> {
+    this.syncAgain = !!this.syncing;
+    return (this.syncing ??= (async () => {
+      do {
+        this.syncAgain = false;
+        await this.syncOnce();
+      } while (this.syncAgain);
+    })().finally(() => (this.syncing = undefined)));
+  }
+
+  private async syncOnce() {
+    if (!this.started || !this.opts.readTranscript || !this.isLive()) return;
+    if (this.busy()) return void (this.syncDeferred = true);
+    let t: Transcript;
+    try {
+      t = await this.opts.readTranscript(this.id, this.cwd);
+    } catch (err) {
+      return void console.error(`session ${this.id}: reading the transcript failed:`, err);
+    }
+    if (!this.isLive()) return;
+    if (this.busy()) return void (this.syncDeferred = true);
+    const chain = t.main.filter((m) => !m.parent_tool_use_id);
+    const tail = this.timeline.at(-1);
+    // A daemon-run message not in the transcript (yet): the timeline forked from the transcript at the last message both have.
+    const forked = tail !== undefined && !chain.some((m) => m.uuid === tail);
+    const timeline = new Set(this.timeline);
+    const from = forked ? lastIndex(chain, (m) => timeline.has(m.uuid)) : lastIndex(chain, (m) => this.known.has(m.uuid));
+    const fresh = chain.slice(from + 1).filter((m) => !this.known.has(m.uuid));
+    // A run of an external Agent call; the own query's runs stream to the session (their first prompt does not).
+    const runs = t.runs.flatMap((run) =>
+      run.some((m) => m.parent_tool_use_id && this.ownCalls.has(m.parent_tool_use_id)) ? [] : run.slice(lastIndex(run, (m) => this.known.has(m.uuid)) + 1).filter((m) => !this.known.has(m.uuid)),
+    );
+    // Nothing new: e.g. the transcript lags behind the own query's last messages.
+    if (!fresh.length && !runs.length) return;
+    if (forked && from >= 0) {
+      const common = this.timeline.lastIndexOf(chain[from]!.uuid);
+      const prompt = this.timeline.slice(common + 1).find((u) => this.checkpoints.has(u));
+      if (prompt) this.cut(prompt);
+      this.timeline.length = common + 1;
+    }
+    this.dropQuery();
+    this.resumeAt = undefined;
+    this.lastAssistant = chain[lastIndex(chain.slice(0, from + 1), (m) => m.type === "assistant")]?.uuid;
+    this.logTranscript([...fresh, ...runs]);
     void this.refreshUsage();
   }
 
@@ -438,6 +535,11 @@ export class Session {
     try {
       for await (const m of q) {
         if (generation !== this.generation) return;
+        if ((m.type === "user" || m.type === "assistant") && m.uuid) {
+          this.known.add(m.uuid);
+          if (!m.parent_tool_use_id && !("isReplay" in m && m.isReplay)) this.timeline.push(m.uuid);
+        }
+        if (m.type === "assistant") for (const b of m.message.content) if (b.type === "tool_use") this.ownCalls.add(b.id);
         // Echo of a prompt() message (replay-user-messages); its user_text is already logged. The CLI took it now:
         // a steering message pushed as the turn ended starts a turn of its own. Other replays (the model switch echo) start none.
         if (m.type === "user" && "isReplay" in m && m.isReplay) {
@@ -446,14 +548,22 @@ export class Session {
         }
         if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
         if (m.type === "system" && m.subtype === "task_started" && m.tool_use_id) this.tasks.set(m.tool_use_id, m.task_id);
-        if (m.type === "system" && m.subtype === "task_notification" && m.tool_use_id) this.tasks.delete(m.tool_use_id);
+        if (m.type === "system" && m.subtype === "task_notification") {
+          if (m.tool_use_id) this.tasks.delete(m.tool_use_id);
+          this.cliTurn = true;
+        }
         // The CLI changes the mode itself too (plan approved, "all edits this session"); init and status carry it.
         if (m.type === "system" && (m.subtype === "init" || m.subtype === "status") && m.permissionMode) this.setMode(m.permissionMode);
         for (const part of this.adapter.convert(m)) this.emit(part);
         if (m.type === "rate_limit_event") void this.opts.plan?.rateLimit(m.rate_limit_info, q);
         if (m.type === "result") {
+          this.cliTurn = false;
           this.setState("idle");
           void this.opts.plan?.refresh(q);
+          if (this.syncDeferred && !this.busy()) {
+            this.syncDeferred = false;
+            void this.sync();
+          }
         }
         if (m.type === "result" || (m.type === "system" && m.subtype === "compact_boundary")) void this.refreshUsage();
       }
@@ -533,6 +643,12 @@ export function transcriptModel(history: SessionMessage[]): string | undefined {
     if (m.type === "user" && typeof content === "string") model = SET_MODEL.exec(content)?.[1] ?? model;
   }
   return model;
+}
+
+/** Index of the last message matching `pred`, -1 when none (Array#findLastIndex is ES2023). */
+function lastIndex(ms: SessionMessage[], pred: (m: SessionMessage) => boolean) {
+  for (let i = ms.length - 1; i >= 0; i--) if (pred(ms[i]!)) return i;
+  return -1;
 }
 
 /** Tail of the daemon-wide queue of throwaway queries: one throwaway CLI at a time (a reload subscribes every restored tab at once, FIX-LEAK). */

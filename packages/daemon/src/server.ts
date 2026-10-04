@@ -12,7 +12,7 @@ import { gitStatus } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { createPlanTracker } from "./plan-usage.ts";
-import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings } from "./session.ts";
+import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
@@ -234,6 +234,7 @@ export function createDaemon(opts: {
     supportsAuto,
     uploadDir: uploadParent,
     query: opts.query,
+    readTranscript,
     onSettings: (s: SessionSettings) => {
       delete settings[id()];
       settings[id()] = s;
@@ -293,6 +294,56 @@ export function createDaemon(opts: {
       await opts.push?.send({ sessionId, title, body });
     },
   });
+  /** Main chain and subagent runs of a session's transcript. An unreadable run transcript leaves that run out, not the session. */
+  async function readTranscript(id: string, cwd: string): Promise<Transcript> {
+    const main = await history.getSessionMessages(id, { dir: cwd });
+    const agents = await history.listSubagents(id, { dir: cwd }).catch((err) => (console.error(`listing subagent runs of ${id} failed:`, err), []));
+    const runs = await Promise.all(agents.map((a) => history.getSubagentMessages(id, a, { dir: cwd }).catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []))));
+    return { main, runs };
+  }
+
+  /**
+   * Live mirror: while a connection is subscribed to a session, a changed size or mtime of its transcript (stat polling
+   * like fs.watch) syncs the session. `stamps`: the transcript's size and mtime at the last sync or restore; a first
+   * subscriber syncs when it changed meanwhile. ponytail: one poll per watched session, no cap.
+   */
+  const mirrors = new Map<string, { subscribers: number; file: string; listener: (curr: Stats) => void }>();
+  const stamps = new Map<string, string>();
+  const stampOf = (st: Stats) => `${st.size}:${st.mtimeMs}`;
+  const statStamp = (file: string) => {
+    try {
+      return stampOf(statSync(file));
+    } catch {
+      return "0:0";
+    }
+  };
+  function mirror(s: Session) {
+    let m = mirrors.get(s.id);
+    if (!m) {
+      const file = transcriptFile(projectsDir, s.cwd, s.id);
+      // Also called once with zeroed stats for a missing file: no change then.
+      const sync = (stamp: string) => {
+        if (stamps.get(s.id) === stamp) return;
+        stamps.set(s.id, stamp);
+        void s.sync();
+      };
+      const listener = (curr: Stats) => sync(stampOf(curr));
+      mirrors.set(s.id, (m = { subscribers: 0, file, listener }));
+      watchFile(file, { interval: WATCH_INTERVAL_MS }, listener);
+      sync(statStamp(file));
+    }
+    const watch = m;
+    watch.subscribers++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (--watch.subscribers) return;
+      unwatchFile(watch.file, watch.listener);
+      mirrors.delete(s.id);
+    };
+  }
+
   /** Adds a session and follows its live events (not its history) for pushes. */
   function track(s: Session) {
     sessions.set(s.id, s);
@@ -374,12 +425,10 @@ export function createDaemon(opts: {
       p = (async () => {
         const info = await history.getSessionInfo(id);
         if (!info?.cwd || !allowed(info.cwd)) return undefined;
-        const messages = await history.getSessionMessages(id, { dir: info.cwd });
+        // Before the read: a write during it changes the stamp, so the first subscriber syncs it.
+        stamps.set(id, statStamp(transcriptFile(projectsDir, info.cwd, id)));
+        const { main: messages, runs } = await readTranscript(id, info.cwd);
         await modelList().catch(() => {});
-        // Each run's messages name the Agent call that started it (parent_tool_use_id), so after the main transcript they nest by it.
-        // An unreadable run transcript leaves that run without its timeline, not the session unrestored.
-        const agents = await history.listSubagents(id, { dir: info.cwd }).catch((err) => (console.error(`listing subagent runs of ${id} failed:`, err), []));
-        const runs = (await Promise.all(agents.map((a) => history.getSubagentMessages(id, a, { dir: info.cwd }).catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []))))).flat();
         // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
         const used = transcriptModel(messages);
         // No entry (sessions.json lost, a session of the terminal CLI): mode and effort the transcript last recorded.
@@ -389,7 +438,8 @@ export function createDaemon(opts: {
         const modes = permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model ?? "default") });
         const permissionMode = modes.includes(saved.permissionMode as never) ? (saved.permissionMode as SessionSettings["permissionMode"]) : undefined;
         const effort = EFFORTS.includes(saved.effort as never) ? (saved.effort as SessionSettings["effort"]) : undefined;
-        return track(Session.restore(id, info.cwd, [...messages, ...runs], sessionOpts(() => id, { model, permissionMode, effort })));
+        // Each run's messages name the Agent call that started it (parent_tool_use_id), so after the main transcript they nest by it.
+        return track(Session.restore(id, info.cwd, [...messages, ...runs.flat()], sessionOpts(() => id, { model, permissionMode, effort })));
       })()
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
         .finally(() => restoring.delete(id));
@@ -503,7 +553,9 @@ export function createDaemon(opts: {
           // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
           const since = msg.logEpoch === logEpoch ? msg.sinceSeq : 0;
           reply({ logEpoch, seq: s.seq(), session: s.info() });
-          unsubscribes.set(s.id, s.subscribe(since, (e) => send(ws, e)));
+          const stop = s.subscribe(since, (e) => send(ws, e));
+          const release = mirror(s);
+          unsubscribes.set(s.id, () => (stop(), release()));
           return;
         }
         case "session.prompt": {
@@ -513,6 +565,9 @@ export function createDaemon(opts: {
           if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
             return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
           if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return fail("bad_prompt", "empty prompt");
+          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
+          // Sync before prompt: the prompt continues after the terminal CLI's turns (a running turn is steered as is).
+          if (s.info().state === "idle") await s.sync();
           if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
           s.prompt(msg.text, images);
           return reply({});

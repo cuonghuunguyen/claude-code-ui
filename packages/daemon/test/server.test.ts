@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -10,7 +10,7 @@ import { MAX_TERMINAL_INPUT_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@c
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS, MODEL_LIST_WAIT_MS } from "../src/server.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
-import { calls, controlCalls, fakeQuery, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery } from "./fake-query.ts";
+import { calls, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, yielded } from "./fake-query.ts";
 
 /** A projects store with these cwds added. */
 const added = (...cwds: string[]) => {
@@ -1709,5 +1709,189 @@ describe("WebSocket auth and origin check", () => {
     });
     expect(res).toMatch(/^HTTP\/1\.1 101 /);
     expect(res.toLowerCase()).not.toContain("sec-websocket-protocol");
+  });
+});
+
+describe("transcript sync (terminal CLI turns)", () => {
+  type Msg = { type: string; uuid: string; parent_tool_use_id: string | null };
+  const msg = (type: "user" | "assistant", uuid: string, content: unknown, parent: string | null = null) =>
+    ({ type, uuid, session_id: "x", parent_tool_use_id: parent, parent_agent_id: null, message: type === "user" ? { role: "user", content } : { id: `msg_${uuid}`, role: "assistant", content } }) as Msg;
+  const at = history.findIndex((m: Msg) => m.uuid === "u2");
+  /** What the CLI writes for the fake query's turns: prompt 1, the fixture's first turn, prompt 2, its second turn. */
+  const own = (...prompts: string[]) => prompts.flatMap((p, i) => [msg("user", p, "x"), ...(i ? history.slice(at + 1) : history.slice(1, at))]) as Msg[];
+  const external = (n: string) => [msg("user", `cli-${n}`, `from the terminal ${n}`), msg("assistant", `cli-${n}-reply`, [{ type: "text", text: `terminal reply ${n}` }])];
+  const quiet = () => new Promise((r) => setTimeout(r, 1500));
+  type Event = Extract<ServerMessage, { type: "event" }>;
+  const events = (c: { inbox: ServerMessage[] }) => c.inbox.filter((m): m is Event => m.type === "event");
+  const isPart = (type: string, id?: string) => (m: ServerMessage) => m.type === "event" && m.part.type === type && (id === undefined || m.part.id === id);
+
+  /** A daemon whose transcripts are `files` (getSessionMessages) with a file per session under its projectsDir that `touch` grows. */
+  async function syncDaemon(query: unknown = fakeQuery, restored: Record<string, Msg[]> = {}) {
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const files: Record<string, Msg[] | "unreadable"> = { ...restored };
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: query as never,
+      projectsDir,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (sid: string) => (restored[sid] ? { sessionId: sid, cwd: webRoot } : undefined)) as never,
+        getSessionMessages: (async (sid: string) => {
+          if (files[sid] === "unreadable") throw new Error("EACCES");
+          return files[sid] ?? [];
+        }) as never,
+        listSubagents: (async () => []) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
+    const touch = (sid: string, cwd: string) => {
+      const dir = join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+      mkdirSync(dir, { recursive: true });
+      appendFileSync(join(dir, `${sid}.jsonl`), "{}\n");
+    };
+    const create = async () => {
+      const { result } = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string; cwd: string } } };
+      await c.request({ type: "session.subscribe", sessionId: result.session.id, sinceSeq: 0 });
+      return result.session;
+    };
+    const idle = (sid: string, after: number) => c.waitFor((m) => m.type === "event" && m.sessionId === sid && m.seq > after && m.part.type === "session_state" && m.part.state === "idle");
+    const prompt = async (sid: string, text: string) => {
+      const before = events(c).at(-1)?.seq ?? 0;
+      await c.request({ type: "session.prompt", sessionId: sid, text });
+      const user = (await c.waitFor((m) => m.type === "event" && m.sessionId === sid && m.part.type === "user_text" && m.part.text === text)) as Event;
+      await idle(sid, user.seq);
+      return user.part.id;
+    };
+    return { d, c, files, touch, create, prompt, port: (d.address() as AddressInfo).port };
+  }
+
+  it("mirrors terminal CLI turns of a viewed session once, in order; the daemon's own turns do not come back; replay by sinceSeq", { timeout: 15_000 }, async () => {
+    const { d, c, files, touch, create, prompt, port } = await syncDaemon();
+    try {
+      const s = await create();
+      const p1 = await prompt(s.id, "hi");
+      files[s.id] = own(p1);
+      touch(s.id, s.cwd);
+      await quiet();
+      const before = events(c).length;
+      const lastSeq = events(c).at(-1)!.seq;
+      expect(before).toBeGreaterThan(0);
+      expect(events(c).filter((e) => e.part.type === "user_text")).toHaveLength(1);
+
+      files[s.id] = [...own(p1), ...external("1")];
+      touch(s.id, s.cwd);
+      const reply = await c.waitFor(isPart("assistant_text", "msg_cli-1-reply:0"));
+      const user = events(c).find((e) => e.part.id === "cli-1")!;
+      expect(user.part).toMatchObject({ type: "user_text", text: "from the terminal 1" });
+      expect(user.seq).toBeGreaterThan(lastSeq);
+      expect((reply as Event).seq).toBeGreaterThan(user.seq);
+      // A sync that logged turns refreshes the context usage, as the end of a turn does.
+      await c.waitFor((m) => isPart("context_usage")(m) && (m as Event).seq > user.seq);
+
+      touch(s.id, s.cwd);
+      await quiet();
+      expect(events(c).filter((e) => e.part.id === "cli-1")).toHaveLength(1);
+
+      const sub = (await c.request({ type: "session.subscribe", sessionId: s.id, sinceSeq: 0 })) as { result: { logEpoch: string } };
+      const b = await client(port);
+      await b.request({ type: "session.subscribe", sessionId: s.id, sinceSeq: lastSeq, logEpoch: sub.result.logEpoch });
+      await b.waitFor(isPart("assistant_text", "msg_cli-1-reply:0"));
+      expect(events(b)[0]).toMatchObject({ seq: lastSeq + 1 });
+      expect(events(b).filter((e) => e.part.id === "cli-1")).toHaveLength(1);
+      b.ws.close();
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a prompt after terminal CLI turns starts a fresh query resuming the transcript with the session's model, mode and effort; without them it reuses the live query", { timeout: 15_000 }, async () => {
+    const { d, c, files, create, prompt } = await syncDaemon();
+    try {
+      const s = await create();
+      const mine = () => calls.filter((o) => (o.sessionId === s.id || o.resume === s.id) && o.canUseTool);
+      const p1 = await prompt(s.id, "hi");
+      files[s.id] = own(p1);
+      const p2 = await prompt(s.id, "again");
+      expect(mine()).toHaveLength(1);
+      expect(closedQueries).not.toContain(mine()[0]);
+      // After the fixture turns: their system/init reports mode default.
+      await c.request({ type: "session.setModel", sessionId: s.id, model: "sonnet" });
+      await c.request({ type: "session.setPermissionMode", sessionId: s.id, mode: "acceptEdits" });
+      await c.request({ type: "session.setEffort", sessionId: s.id, effort: "high" });
+
+      // No file change: the prompt itself syncs first.
+      files[s.id] = [...own(p1, p2), ...external("1")];
+      await prompt(s.id, "third");
+      expect(mine()).toHaveLength(2);
+      expect(mine().at(-1)).toMatchObject({ resume: s.id, model: "sonnet", permissionMode: "acceptEdits", effort: "high", resumeSessionAt: undefined });
+      expect(closedQueries).toContain(mine()[0]);
+      const order = events(c).filter((e) => e.part.type === "user_text").map((e) => e.part.id);
+      expect(order.slice(-2)).toEqual(["cli-1", expect.any(String)]);
+      expect((events(c).find((e) => e.part.id === order.at(-1)) as Event).part).toMatchObject({ text: "third" });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("no sync while a permission request is pending; the terminal CLI turns arrive after the turn ends", { timeout: 15_000 }, async () => {
+    const { d, c, files, touch, create } = await syncDaemon(permissionQuery);
+    try {
+      const s = await create();
+      await c.request({ type: "session.prompt", sessionId: s.id, text: "run tests" });
+      const req = (await c.waitFor(isPart("permission_request"))) as Event;
+      const p1 = events(c).find((e) => e.part.type === "user_text")!.part.id;
+      files[s.id] = [msg("user", p1, "run tests"), yielded.at(-1) as never as Msg, ...external("1")];
+      touch(s.id, s.cwd);
+      await quiet();
+      expect(events(c).some((e) => e.part.id === "cli-1")).toBe(false);
+      expect(c.inbox.some((m) => m.type === "event" && m.part.type === "permission_request" && (m.part as { settled: boolean }).settled)).toBe(false);
+
+      await c.request({ type: "permission.respond", requestId: (req.part as { requestId: string }).requestId, decision: "allow" });
+      const user = (await c.waitFor(isPart("user_text", "cli-1"))) as Event;
+      const result = events(c).find((e) => e.part.type === "turn_result")!;
+      expect(user.seq).toBeGreaterThan(result.seq);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a fork in the transcript (terminal CLI rewind) rewinds the timeline to the common message, then shows the new branch; its prompt is a checkpoint", { timeout: 15_000 }, async () => {
+    const id = "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f";
+    const { d, c, files, touch } = await syncDaemon(fakeQuery, { [id]: history as never });
+    try {
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await c.waitFor(isPart("session_state"));
+      files[id] = [...(history.slice(0, at) as Msg[]), ...external("fork")];
+      touch(id, webRoot);
+      const user = (await c.waitFor(isPart("user_text", "cli-fork"))) as Event;
+      const rewind = events(c).find((e) => e.part.type === "rewind")!;
+      expect(rewind.part).toMatchObject({ userMessageId: "u2" });
+      expect(rewind.seq).toBeLessThan(user.seq);
+      expect(await c.request({ type: "session.rewindPreview", sessionId: id, userMessageId: "cli-fork" })).toMatchObject({ result: { conversation: true } });
+      await c.request({ type: "session.prompt", sessionId: id, text: "go on" });
+      expect(calls.filter((o) => o.resume === id && o.canUseTool).at(-1)).toMatchObject({ resume: id, resumeSessionAt: undefined });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("an unreadable transcript logs no events and leaves the session usable", { timeout: 15_000 }, async () => {
+    const { d, c, files, touch, create, prompt } = await syncDaemon();
+    try {
+      const s = await create();
+      await prompt(s.id, "hi");
+      files[s.id] = "unreadable";
+      const before = events(c).length;
+      touch(s.id, s.cwd);
+      await quiet();
+      expect(events(c)).toHaveLength(before);
+      await prompt(s.id, "again");
+      await c.waitFor((m) => isPart("turn_result")(m) && (m as Event).seq > before);
+    } finally {
+      d.close();
+    }
   });
 });
