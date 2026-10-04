@@ -3,15 +3,18 @@
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { query as sdkQuery, type McpServerStatus, type Query } from "@anthropic-ai/claude-agent-sdk";
-import type { ClientMessage, ConfigScope, McpAddConfig, McpServerInfo } from "@claude-ui/protocol";
+import type { ClientMessage, ConfigKind, ConfigScope, McpAddConfig, McpServerInfo, SkillHandles, SkillRow, SkillsResult, SkillsSetStateResult } from "@claude-ui/protocol";
 import { openQuery, THROWAWAY_TIMEOUT_MS, withoutApiKeys } from "./session.ts";
 
-/** One-shot CLI call in `cwd`; resolves with its exit code and output (never rejects on a non-zero exit). */
-export type CliRunner = (args: string[], cwd: string) => Promise<{ code: number; stdout: string; stderr: string }>;
+/** One-shot CLI call in `cwd` (`stdin`: written to it, for `edit-skill-overrides`); resolves with its exit code and output (never rejects on a non-zero exit). */
+export type CliRunner = (args: string[], cwd: string, stdin?: string) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 /** A config query unused this long is closed (the extension keeps its CLI per panel; one OAuth flow must stay on one query). */
 export const CONFIG_HOLD_MS = 30_000;
 const CLI_TIMEOUT_MS = 30_000;
+/** After a skill state write: reads of the dialog, 1 s apart, until the row shows the new state (the extension polls the same way). */
+const SKILLS_POLLS = 5;
+const SKILLS_POLL_MS = 1000;
 
 /** Error with the wire `code` the daemon replies. */
 export class ConfigError extends Error {
@@ -31,7 +34,10 @@ type ExtraQuery = Query & {
   mcpAuthenticate(name: string, redirectUri?: string): Promise<{ authUrl?: string; requiresUserAction: boolean }>;
   mcpClearAuth(name: string): Promise<unknown>;
   mcpSubmitOAuthCallbackUrl(name: string, callbackUrl: string): Promise<unknown>;
+  getSkillsDialog(): Promise<{ skills: RawSkill[] }>;
 };
+/** A `get_skills_dialog` row as the CLI 2.1.285 sends it. */
+type RawSkill = { name: string; display_name: string; description: string; source: string; tokens: number; state: string; locked_by?: string; advertised: boolean; handles?: SkillHandles };
 
 /** The Claude Code binary the SDK runs (same version as the sessions); `CLAUDE_UI_CLAUDE_BIN` overrides it. */
 export function claudeBin() {
@@ -51,14 +57,17 @@ export function claudeBin() {
 }
 
 /** execFile of the bundled CLI without API keys (ADR 0002), 30 s timeout, 10 MB output. Arguments may hold secrets: never logged. */
-export const runCli: CliRunner = (args, cwd) =>
-  new Promise((resolve, reject) =>
-    execFile(claudeBin(), args, { cwd, env: withoutApiKeys(process.env), timeout: CLI_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+export const runCli: CliRunner = (args, cwd, stdin) =>
+  new Promise((resolve, reject) => {
+    // Set when the daemon itself was started from a Claude Code session: `edit-skill-overrides` then refuses ("cannot be changed from an editor started inside a Claude Code session").
+    const { CLAUDE_CODE_CHILD_SESSION: _child, ...env } = withoutApiKeys(process.env);
+    const child = execFile(claudeBin(), args, { cwd, env, timeout: CLI_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err?.killed) return reject(new ConfigError("cli_timeout", "Claude CLI timed out after 30s"));
       if (err && typeof err.code !== "number") return reject(new ConfigError("cli_failed", err.message));
       resolve({ code: err ? (err.code as number) : 0, stdout, stderr });
-    }),
-  );
+    });
+    if (stdin !== undefined) child.stdin?.end(stdin);
+  });
 
 const firstLine = (t: string) => t.trim().split("\n")[0]!.trim();
 
@@ -109,13 +118,28 @@ const timed = <T,>(p: Promise<T>) => {
 };
 
 export type McpRequest = Extract<ClientMessage, { type: `mcp.${string}` }>;
+export type SkillsRequest = Extract<ClientMessage, { type: `skills.${string}` }>;
+
+const SKILL_STATES = ["on", "name-only", "user-invocable-only", "off"];
+const toSkill = (s: RawSkill): SkillRow => ({
+  name: s.name,
+  displayName: s.display_name,
+  description: s.description,
+  source: s.source,
+  tokens: s.tokens,
+  state: s.state,
+  ...(s.locked_by !== undefined && { lockedBy: s.locked_by }),
+  advertised: s.advertised,
+  ...(s.handles && { handles: s.handles }),
+});
 
 /**
  * `cli`: runs the CLI (tests inject a fake). `holdMs`: config query hold. `onChanged`: after a config write in `cwd`
  * (the daemon broadcasts `config.changed`).
  */
-export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; holdMs?: number; onChanged: (kind: "mcp", cwd: string) => void }) {
+export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; holdMs?: number; pollMs?: number; onChanged: (kind: ConfigKind, cwd: string) => void }) {
   const cli = opts.cli ?? runCli;
+  const pollMs = opts.pollMs ?? SKILLS_POLL_MS;
   const holdMs = opts.holdMs ?? CONFIG_HOLD_MS;
   // One config query per project cwd: OAuth state lives in its CLI process, so a flow's requests must reach the same one.
   // ponytail: not in the one-at-a-time throwaway queue (it would block context usage reads for the whole hold); one per open project dialog.
@@ -163,15 +187,8 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
     return {};
   }
 
-  /** Handles one `mcp.*` request for `cwd` (checked by the caller); `live`: the session's running query, if any. */
-  async function mcp(msg: McpRequest, cwd: string, live?: Query): Promise<unknown> {
-    if (msg.type === "mcp.add") return write(mcpAddArgs(msg.name, msg.scope, msg.config), cwd);
-    if (msg.type === "mcp.remove") {
-      if (typeof msg.name !== "string" || !NAME.test(msg.name)) throw new ConfigError("bad_request", "invalid server name");
-      if (!SCOPES.includes(msg.scope)) throw new ConfigError("bad_request", "scope must be local, user or project");
-      return write(["mcp", "remove", "--scope", msg.scope, "--", msg.name], cwd);
-    }
-    if (msg.type !== "mcp.list" && typeof msg.name !== "string") throw new ConfigError("bad_request", "name required");
+  /** The query a dialog request goes to (the session's live one, else the project's config query) and a `call` that bounds each answer. */
+  function access(cwd: string, live?: Query) {
     const q = (live ?? configQuery(cwd)) as ExtraQuery;
     const call = async <T,>(p: () => Promise<T>) => {
       try {
@@ -184,6 +201,49 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
         if (!live && held.get(cwd)?.q === q) configQuery(cwd);
       }
     };
+    return { q, call };
+  }
+
+  /** Handles one `skills.*` request for `cwd` (checked by the caller); `live`: the session's running query, if any. */
+  async function skills(msg: SkillsRequest, cwd: string, live?: Query): Promise<SkillsResult | SkillsSetStateResult> {
+    const { q, call } = access(cwd, live);
+    // A CLI without the request ("Unsupported control request subtype") shows commands only, as the extension does.
+    const list = async () => {
+      try {
+        return (await call(() => q.getSkillsDialog())).skills.map(toSkill);
+      } catch (e) {
+        if (/unsupported control request/i.test((e as Error).message)) return [];
+        throw e;
+      }
+    };
+    if (msg.type === "skills.list") return { skills: await list() };
+    if (typeof msg.name !== "string" || !msg.name) throw new ConfigError("bad_request", "name required");
+    if (!SKILL_STATES.includes(msg.state)) throw new ConfigError("bad_request", "state must be on, name-only, user-invocable-only or off");
+    const r = await cli(["edit-skill-overrides", "--json"], cwd, JSON.stringify({ name: msg.name, state: msg.state, handles: msg.handles ?? {} }));
+    if (r.code !== 0) throw new ConfigError("cli_failed", firstLine(r.stderr) || firstLine(r.stdout) || `claude exited with code ${r.code}`);
+    // The running query re-reads its skills; the change is saved either way, so a failed reload only delays the confirmation.
+    await call(() => q.reloadSkills()).catch(() => {});
+    let rows: SkillRow[] = [];
+    let confirmed = false;
+    for (let i = 0; i < SKILLS_POLLS && !confirmed; i++) {
+      if (i) await new Promise((r) => setTimeout(r, pollMs));
+      rows = await list();
+      confirmed = rows.find((s) => s.name === msg.name)?.state === msg.state;
+    }
+    opts.onChanged("skills", cwd);
+    return { skills: rows, confirmed };
+  }
+
+  /** Handles one `mcp.*` request for `cwd` (checked by the caller); `live`: the session's running query, if any. */
+  async function mcp(msg: McpRequest, cwd: string, live?: Query): Promise<unknown> {
+    if (msg.type === "mcp.add") return write(mcpAddArgs(msg.name, msg.scope, msg.config), cwd);
+    if (msg.type === "mcp.remove") {
+      if (typeof msg.name !== "string" || !NAME.test(msg.name)) throw new ConfigError("bad_request", "invalid server name");
+      if (!SCOPES.includes(msg.scope)) throw new ConfigError("bad_request", "scope must be local, user or project");
+      return write(["mcp", "remove", "--scope", msg.scope, "--", msg.name], cwd);
+    }
+    if (msg.type !== "mcp.list" && typeof msg.name !== "string") throw new ConfigError("bad_request", "name required");
+    const { q, call } = access(cwd, live);
     const status = () => call(() => q.mcpServerStatus());
     const remember = (list: McpServerStatus[]) => list.forEach((s) => s.config && types.set(`${cwd}\0${s.name}`, s.config.type ?? "stdio"));
     const servers = async () => {
@@ -229,5 +289,5 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
     }
   }
 
-  return { mcp };
+  return { mcp, skills };
 }

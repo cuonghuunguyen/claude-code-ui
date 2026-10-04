@@ -38,8 +38,9 @@ import { connect, type ConnectionStatus, type Request, type RequestError } from 
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { Toast } from "./toast.tsx";
 import { nextMode, PromptToolbar, type SendState } from "./toolbar.tsx";
-import { choose, dialogOf, matchCommands, withDialogCommands } from "./commands.ts";
+import { choose, dialogOf, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { McpDialog } from "./mcp-dialog.tsx";
+import { SkillsDialog } from "./skills-dialog.tsx";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
@@ -135,6 +136,8 @@ export function App() {
   // MCP servers dialog, on the project (and session) shown when it opened; `server`: opened on that server's detail (palette row).
   // Kept after closing, so the dialog stays mounted for its close and focus return.
   const [mcp, setMcp] = useState<{ open: boolean; cwd: string; sessionId?: string; server?: string }>();
+  // "Slash commands" dialog, same rules.
+  const [skillsDialog, setSkillsDialog] = useState<{ open: boolean; cwd: string; sessionId?: string }>();
   // config.changed count per project cwd: an open dialog of that project refreshes.
   const [configChanged, setConfigChanged] = useState<Record<string, number>>({});
   const newPrompt = useRef<HTMLTextAreaElement>(null);
@@ -573,6 +576,19 @@ export function App() {
   const project = draftShown ? draftProject : shown?.cwd;
   const projectSession = draftShown ? undefined : shown?.id;
   const openMcp = (server?: string) => project && setMcp({ open: true, cwd: project, sessionId: projectSession, server });
+  const openSkills = () => project && setSkillsDialog({ open: true, cwd: project, sessionId: projectSession });
+  const openDialog = (d: DialogName) => (d === "mcp" ? openMcp() : openSkills());
+  // The dialog lists the commands of its session (none on the new-session tab), plus the ones the web app handles itself.
+  const dialogSession = skillsDialog?.sessionId ? views[skillsDialog.sessionId] : undefined;
+  const skillsCommands = dialogSession?.commands.length ? withDialogCommands(dialogSession.commands) : [];
+  /** A command row was clicked: `/name ` goes into the prompt box, a command without arguments is sent (a dialog command opens its dialog). */
+  const runCommand = (r: ReturnType<typeof choose>) => {
+    if ("text" in r) return setInsert(r.text.trimEnd());
+    const dialog = dialogOf(r.send, dialogSession?.commands);
+    if (dialog) return openDialog(dialog);
+    if (!skillsDialog?.sessionId) return;
+    client.current!.request({ type: "session.prompt", sessionId: skillsDialog.sessionId, text: r.send, images: [] }).catch((e) => setError((e as Error).message));
+  };
   const mcpRows = async () =>
     project
       ? paletteOrder((await client.current!.request<McpListResult>({ type: "mcp.list", cwd: project, ...(projectSession && { sessionId: projectSession }) })).servers).map((x) => ({
@@ -623,6 +639,7 @@ export function App() {
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
     openMcp: project ? () => openMcp() : undefined,
+    openSkills: project ? openSkills : undefined,
   });
   // App shortcuts. Each has Ctrl, Cmd or Alt, so it also fires in the prompt box; an open dialog (quick open, palette) owns the keyboard.
   // A shortcut whose command does not apply now is left to the browser (e.g. Ctrl+P prints without a session).
@@ -810,7 +827,7 @@ export function App() {
                         }
                         onRespond={respond}
                         onSearch={search(s.cwd)}
-                        onDialog={() => openMcp()}
+                        onDialog={openDialog}
                         onAnswer={answer}
                         connected={status === "connected"}
                         plan={plan}
@@ -894,7 +911,7 @@ export function App() {
                   onUpload={upload}
                   onSearch={search}
                   onStart={createSession}
-                  onDialog={() => openMcp()}
+                  onDialog={openDialog}
                   inputRef={newPrompt}
                   connected={status === "connected"}
                 />
@@ -952,6 +969,18 @@ export function App() {
           changed={configChanged[mcp.cwd]}
           request={(m) => client.current!.request(m)}
           onClose={() => setMcp({ ...mcp, open: false })}
+        />
+      )}
+      {skillsDialog && (
+        <SkillsDialog
+          open={skillsDialog.open}
+          cwd={skillsDialog.cwd}
+          sessionId={skillsDialog.sessionId}
+          commands={skillsCommands}
+          changed={configChanged[skillsDialog.cwd]}
+          request={(m) => client.current!.request(m)}
+          onRun={runCommand}
+          onClose={() => setSkillsDialog({ ...skillsDialog, open: false })}
         />
       )}
       {toast && <Toast message={toast} onClose={closeToast} />}
@@ -1118,7 +1147,7 @@ export function NewSession({
   /** Rejects when the session was not created; the prompt box keeps the draft. */
   onStart: (cwd: string, opts: StartOptions, text: string, images: string[]) => Promise<void>;
   /** `/mcp` typed alone: opens the MCP servers dialog of `cwd` instead of creating a session. */
-  onDialog?: (dialog: "mcp") => void;
+  onDialog?: (dialog: DialogName) => void;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   connected?: boolean;
 }) {
@@ -1258,7 +1287,7 @@ export function SessionPane({
   plan?: PlanUsage | null;
   onGitStatus?: () => Promise<GitStatus | null>;
   /** `/mcp` typed alone: opens the MCP servers dialog instead of sending. */
-  onDialog?: (dialog: "mcp") => void;
+  onDialog?: (dialog: DialogName) => void;
 }) {
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
@@ -1478,7 +1507,7 @@ function PromptBox({
   cwd?: string;
   commands: SlashCommand[];
   /** Given: the dialog commands (`/mcp`) are in the picker and open their dialog instead of being sent. */
-  onDialog?: (dialog: "mcp") => void;
+  onDialog?: (dialog: DialogName) => void;
   models: ModelInfo[];
   model: string;
   onModel: (model: string) => void;
@@ -1561,7 +1590,7 @@ function PromptBox({
   useEffect(() => setSendError(undefined), [cwd]);
   const send = (t = text) => {
     if (!t.trim() && !images.length) return;
-    const dialog = onDialog && !images.length && dialogOf(t);
+    const dialog = onDialog && !images.length && dialogOf(t, commands);
     if (dialog) return onDialog(dialog), edit("");
     const sent = images;
     setSendError(undefined);
