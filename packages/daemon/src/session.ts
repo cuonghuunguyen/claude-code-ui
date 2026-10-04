@@ -223,6 +223,26 @@ export class Session {
     return this.isLive() ? this.query : undefined;
   }
 
+  /** Plugins dialog: `reloadPlugins()` on the running query (none: undefined); the new command list becomes the commands part. */
+  async reloadPlugins(): Promise<number | undefined> {
+    const q = this.liveQuery();
+    if (!q) return undefined;
+    // As the VS Code extension 2.1.283 does: get_settings first makes the CLI re-read the settings files a plugin write just
+    // changed; without it the reload can miss a plugin installed a moment ago (seen with CLI 2.1.285). `getSettings` is in
+    // sdk.mjs 0.3.285 but not in sdk.d.ts.
+    await (q as Query & { getSettings(): Promise<unknown> }).getSettings();
+    const r = await q.reloadPlugins();
+    this.adapter.commands(r.commands).forEach((p) => this.emit(p));
+    return r.error_count;
+  }
+
+  /** Plugins dialog "Restart": drops the running query; the next prompt resumes the transcript in a new CLI (same model, mode, effort). */
+  restartQuery() {
+    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
+    if (this.state !== "idle") throw new Error("session is running: interrupt the turn first");
+    this.dropQuery();
+  }
+
   /** False once the query ended or failed: nothing reads the input queue any more. */
   isLive() {
     return this.state !== "error" && this.state !== "closed";

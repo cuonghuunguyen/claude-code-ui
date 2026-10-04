@@ -15,7 +15,8 @@ import { createProjects, trim, type Projects } from "./projects.ts";
 import { createPlanTracker } from "./plan-usage.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
-import { ConfigError, createConfig, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
+import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
+import { createPlugins, type PluginsRequest } from "./plugins.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
@@ -308,6 +309,26 @@ export function createDaemon(opts: {
   const terminals = createTerminals();
   const broadcast = (m: ServerMessage) => connections.forEach((ws) => send(ws, m));
   const config = createConfig({ query: opts.query, cli: opts.cli, holdMs: opts.configHoldMs, pollMs: opts.configPollMs, onChanged: (kind, cwd) => broadcast({ type: "config.changed", kind, cwd }) });
+  const plugins = createPlugins({
+    cli: opts.cli ?? runCli,
+    // Plugins are user- or project-wide: every live query reloads, as the extension reloads every open session.
+    reload: async () => {
+      const live = [...sessions.values()].filter((s) => s.liveQuery());
+      const results = await Promise.allSettled(live.map((s) => timed(s.reloadPlugins())));
+      const failed = live.filter((s, i) => results[i]!.status === "rejected" && (console.error(`session ${s.id}: reloadPlugins failed:`, (results[i] as PromiseRejectedResult).reason), true)).map((s) => s.id);
+      const errorCount = results.reduce((n, r) => n + (r.status === "fulfilled" ? (r.value ?? 0) : 0), 0);
+      return { reloaded: live.length - failed.length, failed, errorCount };
+    },
+    restart: (id) => {
+      const s = sessions.get(id);
+      if (!s) throw new ConfigError("not_found", `unknown session ${id}`);
+      s.restartQuery();
+    },
+    onChanged: (cwd, reload) => {
+      config.dropAll();
+      broadcast({ type: "config.changed", kind: "plugins", cwd, ...(reload?.failed.length && { reloadFailed: reload.failed }) });
+    },
+  });
   const root = resolve(opts.webRoot);
   // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
   let models: ReturnType<typeof listModels> | undefined;
@@ -960,12 +981,29 @@ export function createDaemon(opts: {
         case "mcp.clearAuth":
         case "mcp.add":
         case "mcp.remove":
+        case "plugins.list":
+        case "plugins.install":
+        case "plugins.uninstall":
+        case "plugins.setEnabled":
+        case "plugins.update":
+        case "plugins.reload":
+        case "plugins.restart":
+        case "marketplace.list":
+        case "marketplace.add":
+        case "marketplace.remove":
+        case "marketplace.update":
         case "skills.list":
         case "skills.setState": {
           if (typeof msg.cwd === "string" && isAbsolute(msg.cwd) && !existsSync(msg.cwd))
             return fail("bad_cwd", `Working directory not found: ${msg.cwd}. If this session's folder was deleted, re-open the project and try again.`);
           const cwd = allowed(msg.cwd);
           if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
+          if (!msg.type.startsWith("mcp.") && !msg.type.startsWith("skills."))
+            try {
+              return reply(await plugins.handle(msg as PluginsRequest, cwd));
+            } catch (e) {
+              return fail(e instanceof ConfigError ? e.code : "plugins_failed", (e as Error).message);
+            }
           // The session's running query when it runs in that project; otherwise the project's config query.
           const s = "sessionId" in msg && typeof msg.sessionId === "string" ? sessions.get(msg.sessionId) : undefined;
           try {

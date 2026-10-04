@@ -442,3 +442,19 @@ it("/skills is the CLI's own command when the session's list has one; /help alon
   await key(box, { key: "Enter" });
   expect(onDialog).toHaveBeenCalledWith("skills");
 });
+
+it("/plugins alone opens Manage Plugins; a session command of that name is sent instead", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onDialog = vi.fn();
+  const { box, rerender } = await render({ onPrompt, onDialog });
+  await type(box, "/marketplace");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenCalledWith("plugins");
+  expect(onPrompt).not.toHaveBeenCalled();
+  const view = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "commands", id: "commands", commands: [{ name: "plugin", description: "CLI plugin", argumentHint: "" }] } });
+  await rerender({ view });
+  await type(box, "/plugin");
+  await key(box, { key: "Enter" });
+  expect(onPrompt).toHaveBeenCalledWith("/plugin", []);
+  expect(onDialog).toHaveBeenCalledTimes(1);
+});

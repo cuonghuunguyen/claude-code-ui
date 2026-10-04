@@ -41,6 +41,7 @@ import { nextMode, PromptToolbar, type SendState } from "./toolbar.tsx";
 import { choose, dialogOf, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { McpDialog } from "./mcp-dialog.tsx";
 import { SkillsDialog } from "./skills-dialog.tsx";
+import { PluginsDialog } from "./plugins-dialog.tsx";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
@@ -140,6 +141,9 @@ export function App() {
   const [skillsDialog, setSkillsDialog] = useState<{ open: boolean; cwd: string; sessionId?: string }>();
   // config.changed count per project cwd: an open dialog of that project refreshes.
   const [configChanged, setConfigChanged] = useState<Record<string, number>>({});
+  // Manage Plugins dialog, like `mcp`; `reloadFailed`: sessions whose last plugin reload failed (its restart banner).
+  const [plugins, setPlugins] = useState<{ open: boolean; cwd: string; sessionId?: string }>();
+  const [reloadFailed, setReloadFailed] = useState<Set<string>>(new Set());
   const newPrompt = useRef<HTMLTextAreaElement>(null);
   const [views, setViews] = useState<Record<string, SessionView>>({});
   // Active tab: a session id or NEW_TAB.
@@ -341,7 +345,10 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onConfigChanged: (m) => setConfigChanged((c) => ({ ...c, [m.cwd]: (c[m.cwd] ?? 0) + 1 })),
+      onConfigChanged: (m) => {
+        setConfigChanged((c) => ({ ...c, [m.cwd]: (c[m.cwd] ?? 0) + 1 }));
+        if (m.reloadFailed) setReloadFailed((f) => new Set([...f, ...m.reloadFailed!]));
+      },
       onOpen: () => {
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
         c.request<ModelsResult>({ type: "models.list" }).then(
@@ -576,8 +583,9 @@ export function App() {
   const project = draftShown ? draftProject : shown?.cwd;
   const projectSession = draftShown ? undefined : shown?.id;
   const openMcp = (server?: string) => project && setMcp({ open: true, cwd: project, sessionId: projectSession, server });
+  const openPlugins = () => project && setPlugins({ open: true, cwd: project, sessionId: projectSession });
   const openSkills = () => project && setSkillsDialog({ open: true, cwd: project, sessionId: projectSession });
-  const openDialog = (d: DialogName) => (d === "mcp" ? openMcp() : openSkills());
+  const openDialog = (d: DialogName) => (d === "mcp" ? openMcp() : d === "plugins" ? openPlugins() : openSkills());
   // The dialog lists the commands of its session (none on the new-session tab), plus the ones the web app handles itself.
   const dialogSession = skillsDialog?.sessionId ? views[skillsDialog.sessionId] : undefined;
   const skillsCommands = dialogSession?.commands.length ? withDialogCommands(dialogSession.commands) : [];
@@ -640,6 +648,7 @@ export function App() {
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
     openMcp: project ? () => openMcp() : undefined,
     openSkills: project ? openSkills : undefined,
+    openPlugins: project ? openPlugins : undefined,
   });
   // App shortcuts. Each has Ctrl, Cmd or Alt, so it also fires in the prompt box; an open dialog (quick open, palette) owns the keyboard.
   // A shortcut whose command does not apply now is left to the browser (e.g. Ctrl+P prints without a session).
@@ -983,6 +992,18 @@ export function App() {
           onClose={() => setSkillsDialog({ ...skillsDialog, open: false })}
         />
       )}
+      {plugins && (
+        <PluginsDialog
+          open={plugins.open}
+          cwd={plugins.cwd}
+          sessionId={plugins.sessionId}
+          changed={configChanged[plugins.cwd]}
+          reloadFailed={!!plugins.sessionId && reloadFailed.has(plugins.sessionId)}
+          request={(m) => client.current!.request(m)}
+          onRestarted={(ids) => setReloadFailed((f) => new Set([...f].filter((x) => !ids.includes(x))))}
+          onClose={() => setPlugins({ ...plugins, open: false })}
+        />
+      )}
       {toast && <Toast message={toast} onClose={closeToast} />}
     </div>
     </AvatarColors>
@@ -1146,7 +1167,7 @@ export function NewSession({
   onSearch: (cwd: string) => (query: string) => Promise<string[]>;
   /** Rejects when the session was not created; the prompt box keeps the draft. */
   onStart: (cwd: string, opts: StartOptions, text: string, images: string[]) => Promise<void>;
-  /** `/mcp` typed alone: opens the MCP servers dialog of `cwd` instead of creating a session. */
+  /** `/mcp`, `/skills`, `/plugins` typed alone: opens that dialog of `cwd` instead of creating a session. */
   onDialog?: (dialog: DialogName) => void;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   connected?: boolean;
@@ -1286,7 +1307,7 @@ export function SessionPane({
   /** Account plan limits for the status bar; null hides its plan fields. */
   plan?: PlanUsage | null;
   onGitStatus?: () => Promise<GitStatus | null>;
-  /** `/mcp` typed alone: opens the MCP servers dialog instead of sending. */
+  /** `/mcp`, `/skills`, `/plugins` typed alone: opens that dialog instead of sending. */
   onDialog?: (dialog: DialogName) => void;
 }) {
   const current = runOf(view, run);
@@ -1506,7 +1527,7 @@ function PromptBox({
   /** Changing it clears the send error. */
   cwd?: string;
   commands: SlashCommand[];
-  /** Given: the dialog commands (`/mcp`) are in the picker and open their dialog instead of being sent. */
+  /** Given: the dialog commands (`/mcp`, `/skills`, `/plugins`) are in the picker and open their dialog instead of being sent. */
   onDialog?: (dialog: DialogName) => void;
   models: ModelInfo[];
   model: string;

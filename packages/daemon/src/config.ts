@@ -112,7 +112,7 @@ function toInfo(s: McpServerStatus): McpServerInfo {
 }
 
 /** Rejects after the throwaway timeout: a hung CLI must not hang the dialog. */
-const timed = <T,>(p: Promise<T>) => {
+export const timed = <T,>(p: Promise<T>) => {
   let t: NodeJS.Timeout;
   return Promise.race([p, new Promise<never>((_, reject) => (t = setTimeout(() => reject(new ConfigError("cli_timeout", `no answer from the CLI within ${THROWAWAY_TIMEOUT_MS} ms`)), THROWAWAY_TIMEOUT_MS)))]).finally(() => clearTimeout(t));
 };
@@ -289,5 +289,8 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
     }
   }
 
-  return { mcp, skills };
+  /** After a plugin write: plugins are user-wide, so every held config query has a stale view. */
+  const dropAll = () => [...held].forEach(([cwd, h]) => drop(cwd, h.q));
+
+  return { mcp, skills, dropAll };
 }
