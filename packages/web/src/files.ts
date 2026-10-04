@@ -95,7 +95,7 @@ const MAX_FILE_CHARS = 2 * 1024 * 1024;
  * or U+FFFD from invalid UTF-8. Undefined for text. ponytail: a text file that holds U+FFFD itself counts as not UTF-8.
  */
 export function textFailure(s: string): { text: string; notice: boolean } | undefined {
-  const code = s.length > MAX_FILE_CHARS ? "too_large" : s.startsWith("\ufffd\ufffd") ? "not_utf8" : s.includes("\0") ? "binary" : s.includes("\ufffd") ? "not_utf8" : undefined;
+  const code = s.length > MAX_FILE_CHARS ? "too_large" : /^\ufffd\ufffd(\0[^\0]|[^\0\ufffd]\0)/.test(s) ? "not_utf8" : s.includes("\0") ? "binary" : s.includes("\ufffd") ? "not_utf8" : undefined;
   // The decoded string has no true byte size, so only a too large file shows one.
   return code && readFailure(Object.assign(new Error(code), { code, size: code === "too_large" ? s.length : undefined }));
 }

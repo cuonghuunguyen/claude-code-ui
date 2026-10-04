@@ -94,7 +94,7 @@ function fileRows(change: FileChange, d: Disk | undefined): Row[] {
   if (d?.content === undefined) return [{ change, error: d?.error, notice: d?.notice, stats: callStats(change), kind: "M" }];
   const before = baseline(d.content, change);
   const old = before === undefined ? undefined : textFailure(before);
-  if (old) return [{ change, error: old.text, notice: old.notice, stats: callStats(change), kind: "M" }];
+  if (old) return [{ change, error: old.text, notice: old.notice, kind: "M" }];
   // Added: the file did not exist (original null), or a restored transcript's Write created it. An existing empty file is M.
   const created = change.original === null || (change.original === undefined && before === "");
   // Created and deleted again: no net change, so no row (OpenCode's before/after list has none).
@@ -423,7 +423,7 @@ function FileDiff({ row, cwd, style, onOpen, inline }: { row: Row; cwd: string; 
         </div>
       )}
       <div className={cn("text-xs", !inline && "min-h-0 flex-1 overflow-auto p-2")}>
-        {row.error && <p className={cn("p-2", row.notice ? "text-muted-foreground" : "text-destructive")}>{row.error}</p>}
+        {row.error && <p role={row.notice ? "status" : undefined} className={cn("p-2", row.notice ? "text-muted-foreground" : "text-destructive")}>{row.error}</p>}
         {!row.error && (row.after === undefined || (files && !same && !drawn)) && (
           <p className="p-2 text-muted-foreground" data-testid="diff-loading">
             Loading diff…
