@@ -11,6 +11,7 @@ import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages,
 import { searchFiles } from "./search.ts";
 import { gitStatus } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
+import { readDefaultMode } from "./default-mode.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { createPlanTracker } from "./plan-usage.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
@@ -255,6 +256,8 @@ export function createDaemon(opts: {
   uploadDir?: string;
   projectsDir?: string;
   settingsFile?: string;
+  /** The Claude user config folder (`settings.json` holds `permissions.defaultMode`); default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. */
+  claudeDir?: string;
   projects?: Projects;
   listCache?: boolean;
   hostnames?: string[];
@@ -308,7 +311,8 @@ export function createDaemon(opts: {
   // Sessions whose delete is in progress (session.delete).
   const deleting = new Set<string>();
   const history = { listSessions, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, ...opts.history };
-  const projectsDir = opts.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+  const claudeDir = opts.claudeDir ?? (process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
+  const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const connections = new Set<WebSocket>();
   const terminals = createTerminals();
@@ -550,6 +554,12 @@ export function createDaemon(opts: {
     };
   }
 
+  /** `permissions.defaultMode` of the Claude settings for `cwd`, when this daemon offers it for `model` (bypass needs the daemon flag, auto a model with support). */
+  const defaultModeFor = (cwd: string, model = "default") => {
+    const mode = readDefaultMode(claudeDir, cwd);
+    return permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model) }).find((m) => m === mode);
+  };
+
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
   function findSession(id: string): Promise<Session | undefined> {
     // Its transcript still exists until the delete ends; a restore now would bring the session back.
@@ -678,9 +688,15 @@ export function createDaemon(opts: {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           await modelList().catch(() => {});
-          const s: Session = track(new Session(cwd, sessionOpts(() => s.id, { model: msg.model })));
+          const s: Session = track(new Session(cwd, sessionOpts(() => s.id, { model: msg.model, permissionMode: defaultModeFor(cwd, msg.model) })));
           addProject(cwd);
           return reply({ session: s.info() });
+        }
+        case "session.defaultMode": {
+          const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          await modelList().catch(() => {});
+          return reply({ mode: defaultModeFor(cwd) ?? "default" });
         }
         case "session.subscribe": {
           const s = await find(msg.sessionId);

@@ -64,7 +64,7 @@ vi.mock("./client.ts", async (orig) => ({
     sessionsChanged = opts.onSessionsChanged ?? (() => {});
     reconnect = opts.onOpen ?? (() => {});
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
-    return { request: async (m: { type: string }) => (sent.push(m), replies[m.type] ?? {}), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
+    return { request: async (m: { type: string }) => (sent.push(m), typeof replies[m.type] === "function" ? (replies[m.type] as (m: unknown) => unknown)(m) : (replies[m.type] ?? {})), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
   },
 }));
 const { App } = await import("./App.tsx");
@@ -468,6 +468,56 @@ it("the new-session tab offers Auto mode only while its model supports it, and l
   } finally {
     restore();
   }
+});
+
+it("the new-session tab preselects the mode the daemon reports for its project; a picked mode stays", async () => {
+  const restore = await remount({
+    "session.list": { sessions: [session], projects: ["/p/demo"], permissionModes: ["default", "acceptEdits", "plan", "auto", "dontAsk"] },
+    "models.list": { models: [{ ...AUTO_MODELS[0]!, value: "default", displayName: "Default (recommended)" }, AUTO_MODELS[1]!] },
+    "session.defaultMode": { mode: "auto" },
+  });
+  try {
+    sent.length = 0;
+    await openNewTab();
+    const select = '[data-testid="new-session-tab"] [data-testid="mode-select"]';
+    expect(sent).toContainEqual({ type: "session.defaultMode", cwd: "/p/demo" });
+    expect(el.querySelector(select)?.textContent).toContain("Auto mode");
+    await pickOption(select, "Plan mode");
+    expect(el.querySelector(select)?.textContent).toContain("Plan mode");
+    await pickOption('[data-testid="new-session-tab"] [data-testid="session-model"]', "Haiku 4.5");
+    // Picked Plan stays; the model change does not bring the settings mode back.
+    expect(el.querySelector(select)?.textContent).toContain("Plan mode");
+  } finally {
+    restore();
+  }
+});
+
+it("the new-session tab shows Ask when a project's default mode (auto) arrives for a model without auto", async () => {
+  const restore = await remount({
+    "session.list": { sessions: [session, { ...session, id: "other", cwd: "/p/other" }], projects: ["/p/demo", "/p/other"], permissionModes: ["default", "acceptEdits", "plan", "auto", "dontAsk"] },
+    "models.list": { models: [{ ...AUTO_MODELS[0]!, value: "default", displayName: "Default (recommended)" }, AUTO_MODELS[1]!] },
+    "session.defaultMode": (m: { cwd: string }) => ({ mode: m.cwd === "/p/other" ? "auto" : "default" }),
+  });
+  try {
+    await openNewTab();
+    const tab = '[data-testid="new-session-tab"]';
+    await pickOption(`${tab} [data-testid="session-model"]`, "Haiku 4.5");
+    const chip = el.querySelector<HTMLSelectElement>(`${tab} [data-testid="project-chip"]`)!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(chip, "/p/other");
+      chip.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(sent).toContainEqual({ type: "session.defaultMode", cwd: "/p/other" });
+    expect(el.querySelector(`${tab} [data-testid="mode-select"]`)?.textContent).toContain("Ask");
+  } finally {
+    restore();
+  }
+});
+
+it("the new-session tab starts in Ask when the daemon reports no default mode", async () => {
+  await openNewTab();
+  expect(el.querySelector('[data-testid="new-session-tab"] [data-testid="mode-select"]')?.textContent).toContain("Ask");
 });
 
 it("another client that gets only the session_model part follows the model's permission modes", async () => {
