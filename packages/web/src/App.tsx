@@ -242,7 +242,8 @@ export function App() {
       setRecentProjects(recentProjects);
       if (permissionModes) setNewModes(permissionModes);
       if (restored.current) {
-        for (const id of staleTabs(restored.current, new Set(sessions.map((s) => s.id)))) forget(id);
+        // The page-load hash session is left out: its project may be removed (not listed); its own subscribe forgets it when unknown.
+        for (const id of staleTabs(restored.current.filter((id) => id !== hashId()), new Set(sessions.map((s) => s.id)))) forget(id);
         restored.current = undefined;
       }
       // Live sessions are followed so their unread markers update without opening them.
@@ -1368,6 +1369,7 @@ export function SessionPane({
   );
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
   const prompt = useRef<HTMLTextAreaElement>(null);
+  const dock = useRef<HTMLDivElement>(null);
 
   return (
     <CwdContext value={session.cwd}>
@@ -1408,7 +1410,11 @@ export function SessionPane({
           items={items}
           itemKey={timelineKey}
           reveal={reveal}
-          onJump={() => !window.matchMedia?.("(pointer: coarse)").matches && prompt.current?.focus()}
+          onJump={() => {
+            if (window.matchMedia?.("(pointer: coarse)").matches) return;
+            // A permission or question panel replaces the prompt box: its first action is the sensible target.
+            (prompt.current ?? dock.current?.querySelector<HTMLElement>("form button"))?.focus();
+          }}
           footer={thinking}
           renderItem={(item, index) =>
             item.kind === "context" ? (
@@ -1454,6 +1460,7 @@ export function SessionPane({
         />
       )}
       <div
+        ref={dock}
         className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4"
       >
         {permission ? (

@@ -548,6 +548,21 @@ it("opening the page-load session of a removed project (popstate, tab click) add
   }
 });
 
+it("a page-load link to a session of a removed project shows the session, no 'no longer exists' error, when subscribe answers before the list", async () => {
+  // The daemon answers subscribe at once; the list waits for models and transcripts, then omits the session (project not added).
+  let release!: (r: unknown) => void;
+  const restore = await remount({ "session.list": new Promise((r) => (release = r)) });
+  try {
+    await act(async () => release({ sessions: [], projects: [] }));
+    await act(async () => {});
+    expect(el.textContent).not.toContain("That session no longer exists");
+    expect(location.hash).toBe(`#${ID}`);
+    expect(el.querySelector('[data-testid="tab-switcher"]')?.parentElement?.textContent).toContain("Untitled");
+  } finally {
+    restore();
+  }
+});
+
 it("a session without transcript gets its title during the first turn: its events refresh the list, throttled", async () => {
   const fresh = { ...session, title: "New session", transcript: false };
   const restore = await remount({ "session.list": { sessions: [fresh], projects: ["/p/demo"] }, "session.subscribe": { logEpoch: "e1", session: fresh } });

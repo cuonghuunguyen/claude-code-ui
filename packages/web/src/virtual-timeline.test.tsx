@@ -206,6 +206,18 @@ it("Jump to latest moves the focus to the prompt box, not to body, when the butt
   expect(document.activeElement).toBe(el.querySelector('textarea[aria-label="Prompt"]'));
 });
 
+it("Jump to latest moves the focus to the permission panel's first action when the panel replaces the prompt box", async () => {
+  const permission: Part = { type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "ls" }, suggestions: [], settled: false };
+  await open(view([...turns(100), bash("t1"), permission]));
+  await userScroll(1000);
+  button()!.focus();
+  await act(async () => button()!.click());
+  await settle();
+  expect(button()).toBeNull();
+  expect(el.querySelector('textarea[aria-label="Prompt"]')).toBeNull();
+  expect(document.activeElement).toBe(el.querySelector('[data-testid="permission-panel"] button'));
+});
+
 it("Jump to latest on a touch screen does not focus the prompt box: the soft keyboard stays closed", async () => {
   const mm = window.matchMedia;
   window.matchMedia = ((q: string) => ({ matches: q.includes("pointer: coarse"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
