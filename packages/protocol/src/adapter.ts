@@ -32,6 +32,8 @@ const IGNORED = new Set([
   // The effort picker shows the effort; Claude Code prints no line for it.
   "system:per_turn_effort_changed",
   "tool_progress",
+  // /clear: the daemon moves the live query to the session the CLI continues in (session_cleared part).
+  "conversation_reset",
 ]);
 // After an interrupt the CLI sends this user text, then a result with an aborted terminal_reason (SDK 0.3.285).
 const INTERRUPTED = /^\[Request interrupted by user( for tool use)?\]$/;
@@ -57,11 +59,15 @@ function commandPrompt(text: string): string | undefined {
   return name ? [name, tags.get("command-args")].filter(Boolean).join(" ") : undefined;
 }
 
-/** A user message's string content as parts; the /model record is dropped like its echo. */
+// Not shown as a prompt: /model (its echo is the session_model part); /clear and its aliases open a cleared session's
+// transcript, whose timeline starts empty as in the VS Code extension.
+const HIDDEN_COMMANDS = new Set(["/model", "/clear", "/reset", "/new"]);
+
+/** A user message's string content as parts; the /model and /clear records are dropped. */
 function userString(id: string, content: string): Part[] {
   if (CLI_OUTPUT.test(content) || NUDGE.test(content)) return [];
   const command = commandPrompt(content);
-  if (command?.split(" ")[0] === "/model") return [];
+  if (HIDDEN_COMMANDS.has(command?.split(" ")[0] ?? "")) return [];
   return [{ type: "user_text", id, text: command ?? content, images: [] }];
 }
 const ABORTED = new Set(["aborted_streaming", "aborted_tools"]);
@@ -265,8 +271,9 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
         const costUsd = costTotal === undefined ? undefined : total >= costTotal ? total - costTotal : total;
         costTotal = total;
         const u = m.usage;
-        // The CLI's own turn after a background task notification ends with a result of no tokens: no footer for it.
-        const empty = !m.is_error && costUsd === 0 && !u.input_tokens && !u.output_tokens && !u.cache_read_input_tokens && !u.cache_creation_input_tokens;
+        // The CLI's own turn after a background task notification, and a /clear, end with a result of no tokens: no footer for
+        // them (an unknown cost, first result after a restore: its total, 0 after a /clear).
+        const empty = !m.is_error && (costUsd ?? total) === 0 && !u.input_tokens && !u.output_tokens && !u.cache_read_input_tokens && !u.cache_creation_input_tokens;
         return [
           ...(m.permission_denials ?? []).flatMap((d) => deny(d.tool_use_id)),
           // An aborted turn has its turn_interrupted instead.

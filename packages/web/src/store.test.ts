@@ -36,6 +36,11 @@ describe("applyEvent", () => {
     expect(applyEvent(s, ev(2, { type: "external_turn", id: "external_turn", running: false })).externalTurn).toBe(false);
   });
 
+  it("a session_cleared part adds no timeline item", () => {
+    const s = applyEvent(emptySession(), ev(1, { type: "session_cleared", id: "c1", sessionId: "next" }));
+    expect([s.order, s.lastSeq]).toEqual([[], 1]);
+  });
+
   it("replaces a part with the same id instead of appending", () => {
     let s = emptySession();
     s = applyEvent(s, ev(1, text("a", "Hel")));

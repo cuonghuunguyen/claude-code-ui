@@ -10,7 +10,7 @@ import { MAX_TERMINAL_INPUT_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@c
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
-import { calls, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, yielded } from "./fake-query.ts";
+import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, yielded } from "./fake-query.ts";
 
 /** A projects store with these cwds added. */
 const added = (...cwds: string[]) => {
@@ -1770,6 +1770,90 @@ describe("daemon", () => {
       await c.request({ type: "session.prompt", sessionId, text: "hi" });
       await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
       expect(await c.request({ type: "session.interrupt", sessionId: "nope" })).toMatchObject({ type: "error", code: "unknown_session" });
+    } finally {
+      d.close();
+    }
+  });
+});
+
+describe("/clear", () => {
+  it("the live query goes on as the CLI's new session: tabs see session_cleared, both sessions are listed, prompts reach the new one, settings are saved under its ID", async () => {
+    const settingsFile = join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json");
+    const d = createDaemon({ webRoot, roots: [webRoot], query: clearQuery as never, token, settingsFile, history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never } });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const other = await client((d.address() as AddressInfo).port);
+      const { result } = (await c.request({ type: "session.create", cwd: webRoot, model: "haiku" })) as { result: { session: { id: string } } };
+      const old = result.session.id;
+      await c.request({ type: "session.subscribe", sessionId: old, sinceSeq: 0 });
+      await c.request({ type: "session.prompt", sessionId: old, text: "hi" });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+      // Prompt queries; throwaway ones (context usage, plan usage) have no canUseTool.
+      const prompting = () => calls.filter((o) => o.canUseTool).length;
+      const queries = prompting();
+      await c.request({ type: "session.prompt", sessionId: old, text: "/clear" });
+      const cleared = (await c.waitFor((m) => m.type === "event" && m.part.type === "session_cleared")) as Extract<ServerMessage, { type: "event" }>;
+      expect(cleared.sessionId).toBe(old);
+      const next = (cleared.part as { sessionId: string }).sessionId;
+      // Every client refreshes its list: the new session appears.
+      await other.waitFor((m) => m.type === "sessions.changed");
+      const list = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; state: string }[] } };
+      expect(list.result.sessions.map((s) => s.id)).toEqual(expect.arrayContaining([old, next]));
+      expect(list.result.sessions.find((s) => s.id === old)?.state).toBe("idle");
+      expect(JSON.parse(readFileSync(settingsFile, "utf8"))[next]).toMatchObject({ model: "haiku" });
+
+      expect(await c.request({ type: "session.subscribe", sessionId: next, sinceSeq: 0 })).toMatchObject({ result: { session: { id: next, model: "haiku" } } });
+      await c.request({ type: "session.prompt", sessionId: next, text: "after" });
+      await c.waitFor((m) => m.type === "event" && m.sessionId === next && m.part.type === "turn_result");
+      expect(prompting()).toBe(queries);
+      expect(c.inbox.some((m) => m.type === "event" && m.part.type === "raw")).toBe(false);
+      // The old session goes on in its own transcript.
+      await c.request({ type: "session.prompt", sessionId: old, text: "old again" });
+      expect(calls.at(-1)).toMatchObject({ resume: old });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("lists a session whose transcript holds only the /clear as 'New session' until it has a title of its own", async () => {
+    const id = randomUUID();
+    const d = createDaemon({ webRoot, token, roots: [webRoot], projects: added(webRoot), query: fakeQuery as never, history: { listSessions: (async () => [{ sessionId: id, summary: "/clear", lastModified: 1, cwd: webRoot }]) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never } });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const list = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string }[] } };
+      expect(list.result.sessions.find((s) => s.id === id)?.title).toBe("New session");
+    } finally {
+      d.close();
+    }
+  });
+
+  it("after a restart both transcripts restore: the old one with its history, the new one without the /clear record", async () => {
+    const [old, next] = [randomUUID(), randomUUID()];
+    const user = (uuid: string, content: string) => ({ type: "user", uuid, session_id: next, message: { role: "user", content }, parent_tool_use_id: null, parent_agent_id: null });
+    const transcripts: Record<string, unknown[]> = { [old]: history, [next]: [user("c1", CLEAR_RECORD), user("a1", "after")] };
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (sid: string) => (transcripts[sid] ? { sessionId: sid, cwd: webRoot } : undefined)) as never,
+        getSessionMessages: (async (sid: string) => transcripts[sid]) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const prompts = async (sid: string) => {
+        await c.request({ type: "session.subscribe", sessionId: sid, sinceSeq: 0 });
+        await c.waitFor((m) => m.type === "event" && m.sessionId === sid && m.part.type === "session_state");
+        return c.inbox.flatMap((m) => (m.type === "event" && m.sessionId === sid && m.part.type === "user_text" ? [m.part.text] : []));
+      };
+      expect(await prompts(old)).toEqual(["first", "second"]);
+      expect(await prompts(next)).toEqual(["after"]);
     } finally {
       d.close();
     }

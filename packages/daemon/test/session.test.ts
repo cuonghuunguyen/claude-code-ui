@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Event } from "@claude-ui/protocol";
 import { queuedQuery, Session, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
-import { aborts, askInput, bashSuggestion, calls, checkpointFiles, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -382,6 +382,85 @@ describe("Session", () => {
       expect(lastPart(events, req.id)).toMatchObject({ settled: true, decision: "cancelled" });
       expect(s.respond(req.requestId, { decision: "allow" })).toBe(false);
     });
+  });
+});
+
+describe("Session /clear", () => {
+  it("hands the live query to a new session under the CLI's next session ID; the old one keeps its history and resumes its own transcript", async () => {
+    const heirs: Session[] = [];
+    const s = new Session("/repo", { query: clearQuery as never, onCleared: (h) => heirs.push(h) });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hi");
+    await until(events, (e) => e.part.type === "turn_result");
+    const queries = calls.length;
+    s.prompt("/clear");
+    await until(events, (e) => e.part.type === "session_cleared");
+    const heir = heirs[0]!;
+    const clear = events.find((e) => e.part.type === "user_text" && e.part.text === "/clear")!.part.id;
+    // The CLI's new transcript is named by the session_id of its messages after the reset, not by new_conversation_id.
+    expect(heir.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(heir.id).not.toBe(s.id);
+    expect(events.find((e) => e.part.type === "session_cleared")!.part).toEqual({ type: "session_cleared", id: expect.any(String), sessionId: heir.id });
+    // The old transcript does not record the /clear: dropped from the old timeline too.
+    expect(events.some((e) => e.part.type === "rewind" && e.part.userMessageId === clear)).toBe(true);
+    expect(s.info().state).toBe("idle");
+    expect(events.some((e) => e.part.type === "raw")).toBe(false);
+
+    const next: Event[] = [];
+    heir.subscribe(0, (e) => next.push(e));
+    await until(next, (e) => e.part.type === "session_state" && e.part.state === "idle");
+    // An empty timeline: no /clear prompt, no footer for its empty result; the command list for the / menu; the context of the new conversation.
+    expect(next.filter((e) => ["user_text", "turn_result", "raw"].includes(e.part.type))).toEqual([]);
+    expect(next.some((e) => e.part.type === "commands")).toBe(true);
+    await until(next, (e) => e.part.type === "context_usage");
+
+    // The next prompt runs in the same CLI, now in the new conversation.
+    heir.prompt("after");
+    await until(next, (e) => e.part.type === "turn_result");
+    expect(calls.length).toBe(queries);
+    expect(next.find((e) => e.part.type === "user_text")!.part).toMatchObject({ text: "after" });
+    expect(heir.info()).toMatchObject({ id: heir.id, state: "idle" });
+
+    // Closing the old session does not end the new one's CLI; its next prompt resumes the old transcript in a CLI of its own.
+    await s.close();
+    s.prompt("old again");
+    expect(calls.at(-1)).toMatchObject({ resume: s.id });
+    expect(calls.length).toBe(queries + 1);
+    const later = next.length;
+    heir.prompt("still live");
+    await until(next, (e) => e.seq > later && e.part.type === "turn_result");
+  });
+
+  it("permission requests of the handed-over query go to the new session", async () => {
+    const heirs: Session[] = [];
+    const s = new Session("/repo", { query: clearQuery as never, onCleared: (h) => heirs.push(h) });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("/clear");
+    await until(events, (e) => e.part.type === "session_cleared");
+    const next: Event[] = [];
+    heirs[0]!.subscribe(0, (e) => next.push(e));
+    await until(next, (e) => e.part.type === "session_state" && e.part.state === "idle");
+    heirs[0]!.prompt("ask");
+    await until(next, (e) => e.part.type === "permission_request");
+    expect(heirs[0]!.info().state).toBe("needs_input");
+    expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
+    heirs[0]!.respond(lastPart(next, next.find((e) => e.part.type === "permission_request")!.part.id).id, { decision: "allow" });
+    await until(next, (e) => e.part.type === "turn_result");
+  });
+
+  it("the new session saves the old one's model, mode and effort under its own ID", async () => {
+    const saved: [string, object][] = [];
+    const heirs: Session[] = [];
+    const opts = { query: clearQuery as never, model: "haiku", effort: "high" as const, onCleared: (h: Session) => heirs.push(h), onSettings: (st: object, id: string) => void saved.push([id, st]) };
+    const s = new Session("/repo", opts);
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("/clear");
+    await until(events, (e) => e.part.type === "session_cleared");
+    expect(heirs[0]!.info()).toMatchObject({ model: "haiku", effort: "high", permissionMode: "default" });
+    expect(saved.at(-1)).toEqual([heirs[0]!.id, { model: "haiku", effort: "high", permissionMode: "default" }]);
   });
 });
 

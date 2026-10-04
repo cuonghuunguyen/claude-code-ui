@@ -64,6 +64,8 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
     return { ...s, lastSeq: e.seq, order: s.order.filter((id) => !gone.has(id)), parts };
   }
   if (part.type === "external_turn") return { ...s, lastSeq: e.seq, externalTurn: part.running };
+  // Not rendered: App moves a tab that shows the session live.
+  if (part.type === "session_cleared") return { ...s, lastSeq: e.seq };
   if (part.type === "todo_update") return { ...s, lastSeq: e.seq, todos: part.items };
   const parts = new Map(s.parts).set(part.id, part);
   const order = s.parts.has(part.id) ? s.order : [...s.order, part.id];

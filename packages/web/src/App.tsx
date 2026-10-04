@@ -282,6 +282,12 @@ export function App() {
     }
   }
 
+  /** The tab of session `from` shows session `to` instead, in its place; the active one opens it. */
+  function follow(from: string, to: string) {
+    setTabs((t) => (t.includes(from) ? replaceTab(t, from, to) : t));
+    if (hashId() === from) open(to);
+  }
+
   /** `deleted`: removed on purpose (this or another tab), so no "no longer exists" error. */
   function forget(sessionId: string, deleted = false) {
     const without = <T,>(r: Record<string, T>) => Object.fromEntries(Object.entries(r).filter(([id]) => id !== sessionId));
@@ -350,6 +356,8 @@ export function App() {
         // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
         // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
         const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+        // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
+        if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
         if (e.part.type === "session_state" && live) void refreshList();
         // The title of a session without transcript is "New session" until its transcript exists, some time into the first turn.
         else if (live && listRef.current.some((s) => s.id === e.sessionId && !s.transcript) && Date.now() - titleRefreshed.current > 2000) {
@@ -2005,26 +2013,25 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
         </div>
       );
     case "raw":
-      return <RawPart id={part.id} message={part.message} />;
+      return <RawPart message={part.message} />;
     default:
       return null;
   }
 }
 
-/** Collapsed: an SDK message the adapter does not know yet, useful only when debugging. */
-function RawPart({ id, message }: { id: string; message: unknown }) {
-  const { open, onOpenChange } = useExpanded(`raw:${id}`);
+/** An SDK message the adapter does not know yet, or the error of a failed query: one muted line, never its JSON. */
+function RawPart({ message }: { message: unknown }) {
   return (
-    <details className="rounded bg-muted p-2 text-xs" data-testid="raw-part" open={open} onToggle={(e) => onOpenChange(e.currentTarget.open)}>
-      <summary className="cursor-pointer text-muted-foreground">{rawLabel(message)}</summary>
-      <pre className="overflow-x-auto">{JSON.stringify(message, null, 2)}</pre>
-    </details>
+    <div className="text-muted-foreground text-xs [overflow-wrap:anywhere]" data-testid="raw-part">
+      {rawLabel(message)}
+    </div>
   );
 }
 
-/** "type/subtype" of an SDK message, e.g. "system/task_updated". */
+/** "type/subtype" of an SDK message, e.g. "system/task_updated"; the error text of a failed query. */
 function rawLabel(m: unknown) {
-  const { type, subtype } = (m ?? {}) as { type?: unknown; subtype?: unknown };
+  const { type, subtype, error } = (m ?? {}) as { type?: unknown; subtype?: unknown; error?: unknown };
+  if (typeof error === "string") return error;
   return [type, subtype].filter((v) => typeof v === "string").join("/") || "SDK message";
 }
 

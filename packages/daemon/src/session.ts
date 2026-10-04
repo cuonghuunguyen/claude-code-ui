@@ -9,6 +9,7 @@ import {
   type PermissionUpdate,
   type Query,
   type SDKControlGetContextUsageResponse,
+  type SDKConversationResetMessage,
   type SDKMessage,
   type SDKUserMessage,
   type SessionMessage,
@@ -44,14 +45,18 @@ const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 /** `allowBypass`: daemon config enables bypassPermissions (docs/spec.md "Security"). */
 /** `uploadDir`: the fs.upload folder, readable by Claude without a permission request. */
 export type SessionSettings = Pick<SessionInfo, "model" | "permissionMode" | "effort">;
-/** `onSettings`: called after model, permission mode or effort changed (the daemon persists them for a restore). */
+/**
+ * `onSettings`: called after model, permission mode or effort changed (the daemon persists them for a restore).
+ * `onCleared`: a /clear handed the live query to `heir`, a new session (the daemon lists it).
+ */
 type SessionOpts = Partial<SessionSettings> & {
   allowBypass?: boolean;
   /** Whether a model value (`ModelInfo.value`) supports auto mode (`supportsAutoMode`); none = no model does. */
   supportsAuto?: (model: string) => boolean;
   uploadDir?: string;
   query?: typeof sdkQuery;
-  onSettings?: (s: SessionSettings) => void;
+  onSettings?: (s: SessionSettings, id: string) => void;
+  onCleared?: (heir: Session) => void;
   /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */
   plan?: Pick<PlanTracker, "refresh" | "rateLimit">;
   /** Reads the session's SDK transcript: its main chain and each subagent run's messages (sync()). */
@@ -76,10 +81,12 @@ export class Session {
   private query?: Query;
   /** The running drive() loop; it ends after the CLI process exited. */
   private driving?: Promise<void>;
+  /** The session the live query's permission requests go to: this one, until a /clear hands the query over. */
+  private owner?: { session: Session };
   private model: string;
   private permissionMode: PermissionMode;
   private effort: Effort;
-  private readonly adapter: ReturnType<typeof createAdapter>;
+  private adapter: ReturnType<typeof createAdapter>;
   /** Bumped when a conversation rewind drops the query; the old drive loop then stops logging. */
   private generation = 0;
   /**
@@ -151,6 +158,7 @@ export class Session {
   }
 
   private start() {
+    const owner = (this.owner = { session: this as Session });
     const q = (this.query = (this.opts.query ?? sdkQuery)({
       prompt: this.input,
       options: {
@@ -173,7 +181,7 @@ export class Session {
         // ADR 0002: subscription login only. An inherited API key would take precedence and bill per token.
         // Todo tools are off by default on current models; TodoWrite (not the Task* tools) sends the whole list.
         env: { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1", CLAUDE_CODE_ENABLE_TASKS: "0", ...withoutApiKeys(process.env) },
-        canUseTool: this.canUseTool,
+        canUseTool: (tool, input, o) => owner.session.canUseTool(tool, input, o),
       },
     }));
     this.resumeAt = undefined;
@@ -324,7 +332,7 @@ export class Session {
   }
 
   private settingsChanged() {
-    this.opts.onSettings?.({ model: this.model, permissionMode: this.permissionMode, effort: this.effort });
+    this.opts.onSettings?.({ model: this.model, permissionMode: this.permissionMode, effort: this.effort }, this.id);
   }
 
   /**
@@ -590,58 +598,101 @@ export class Session {
   }
 
   private async drive(q: Query) {
-    const generation = this.generation;
+    // The session the query's messages belong to: a /clear hands the query to a new one.
+    let s: Session = this;
+    let generation = this.generation;
+    // After a conversation_reset the CLI writes a new transcript, named by the session_id of its next messages (not by
+    // new_conversation_id; development-docs/GH-52/probe-clear.log, CLI 2.1.285).
+    let reset: SDKConversationResetMessage | undefined;
     try {
       for await (const m of q) {
-        if (generation !== this.generation) return;
-        if ((m.type === "user" || m.type === "assistant") && m.uuid) {
-          this.known.add(m.uuid);
-          this.own.add(m.uuid);
-          if (!m.parent_tool_use_id && !("isReplay" in m && m.isReplay)) this.timeline.push(m.uuid);
+        if (generation !== s.generation) return;
+        if (m.type === "conversation_reset") reset = m;
+        else if (reset && m.session_id && m.session_id !== s.id) {
+          s = s.handOver(m.session_id, reset.user_message_uuid);
+          generation = s.generation;
+          reset = undefined;
         }
-        if (m.type === "assistant") for (const b of m.message.content) if (b.type === "tool_use") this.ownCalls.add(b.id);
-        // Echo of a prompt() message (replay-user-messages); its user_text is already logged. The CLI took it now:
-        // a steering message pushed as the turn ended starts a turn of its own. Other replays (the model switch echo) start none.
-        if (m.type === "user" && "isReplay" in m && m.isReplay) {
-          if (this.state === "idle" && m.uuid && this.checkpoints.has(m.uuid)) this.setState("running");
-          continue;
-        }
-        if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
-        if (m.type === "system" && m.subtype === "task_started" && m.tool_use_id) this.tasks.set(m.tool_use_id, m.task_id);
-        if (m.type === "system" && m.subtype === "task_notification") {
-          if (m.tool_use_id) this.tasks.delete(m.tool_use_id);
-          this.cliTurn = true;
-        }
-        // The CLI changes the mode itself too (plan approved, "all edits this session"); init and status carry it.
-        if (m.type === "system" && (m.subtype === "init" || m.subtype === "status") && m.permissionMode) this.setMode(m.permissionMode);
-        for (const part of this.adapter.convert(m)) this.emit(part);
-        if (m.type === "rate_limit_event") void this.opts.plan?.rateLimit(m.rate_limit_info, q);
-        if (m.type === "result") {
-          this.cliTurn = false;
-          this.setState("idle");
-          void this.opts.plan?.refresh(q);
-          if (this.syncDeferred && !this.busy()) {
-            this.syncDeferred = false;
-            void this.sync();
-          }
-        }
-        if (m.type === "result" || (m.type === "system" && m.subtype === "compact_boundary")) void this.refreshUsage();
+        s.receive(m, q);
       }
-      if (generation === this.generation) this.setState("closed");
+      if (generation === s.generation) s.setState("closed");
     } catch (err) {
-      if (generation !== this.generation) return;
-      console.error(`session ${this.id} failed:`, err);
-      this.emit({ type: "raw", id: randomUUID(), message: { error: String(err) } });
-      this.setState("error");
+      if (generation !== s.generation) return;
+      console.error(`session ${s.id} failed:`, err);
+      s.emit({ type: "raw", id: randomUUID(), message: { error: String(err) } });
+      s.setState("error");
     } finally {
       // Nothing waits for these answers any more, and no call of this query runs.
-      for (const id of [...this.pending.keys()]) this.cancel(id, "Session ended");
+      for (const id of [...s.pending.keys()]) s.cancel(id, "Session ended");
       // A newer generation (conversation rewind) already ended them, and its query may run tasks of its own.
-      if (generation === this.generation) {
-        this.tasks.clear();
-        for (const part of this.adapter.endCalls()) this.emit(part);
+      if (generation === s.generation) {
+        s.tasks.clear();
+        for (const part of s.adapter.endCalls()) s.emit(part);
       }
     }
+  }
+
+  /** One SDK message of this session's live query. */
+  private receive(m: SDKMessage, q: Query) {
+    if ((m.type === "user" || m.type === "assistant") && m.uuid) {
+      this.known.add(m.uuid);
+      this.own.add(m.uuid);
+      if (!m.parent_tool_use_id && !("isReplay" in m && m.isReplay)) this.timeline.push(m.uuid);
+    }
+    if (m.type === "assistant") for (const b of m.message.content) if (b.type === "tool_use") this.ownCalls.add(b.id);
+    // Echo of a prompt() message (replay-user-messages); its user_text is already logged. The CLI took it now:
+    // a steering message pushed as the turn ended starts a turn of its own. Other replays (the model switch echo) start none.
+    if (m.type === "user" && "isReplay" in m && m.isReplay) {
+      if (this.state === "idle" && m.uuid && this.checkpoints.has(m.uuid)) this.setState("running");
+      return;
+    }
+    if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
+    if (m.type === "system" && m.subtype === "task_started" && m.tool_use_id) this.tasks.set(m.tool_use_id, m.task_id);
+    if (m.type === "system" && m.subtype === "task_notification") {
+      if (m.tool_use_id) this.tasks.delete(m.tool_use_id);
+      this.cliTurn = true;
+    }
+    // The CLI changes the mode itself too (plan approved, "all edits this session"); init and status carry it.
+    if (m.type === "system" && (m.subtype === "init" || m.subtype === "status") && m.permissionMode) this.setMode(m.permissionMode);
+    for (const part of this.adapter.convert(m)) this.emit(part);
+    if (m.type === "rate_limit_event") void this.opts.plan?.rateLimit(m.rate_limit_info, q);
+    if (m.type === "result") {
+      this.cliTurn = false;
+      this.setState("idle");
+      void this.opts.plan?.refresh(q);
+      if (this.syncDeferred && !this.busy()) {
+        this.syncDeferred = false;
+        void this.sync();
+      }
+    }
+    if (m.type === "result" || (m.type === "system" && m.subtype === "compact_boundary")) void this.refreshUsage();
+  }
+
+  /**
+   * /clear (SDK conversation_reset; also plan mode exit with clear context): the CLI goes on in a new transcript `id`. A new
+   * session takes over the live query, its state, model, mode and effort; this one keeps its history without the /clear prompt
+   * (`clearId`; its transcript does not record it), and its next prompt resumes its own transcript in a CLI of its own.
+   */
+  private handOver(id: string, clearId: string | undefined): Session {
+    const heir = Session.restore(id, this.cwd, [], { ...this.opts, model: this.model, permissionMode: this.permissionMode, effort: this.effort });
+    // The CLI's cost total and command list carry over; this session starts over like a restored one.
+    heir.adapter = this.adapter;
+    this.adapter = createAdapter({ resumed: true });
+    heir.query = this.query;
+    heir.input = this.input;
+    heir.driving = this.driving;
+    heir.owner = this.owner;
+    if (heir.owner) heir.owner.session = heir;
+    this.query = this.driving = this.owner = undefined;
+    this.input = new InputQueue();
+    this.tasks.clear();
+    heir.setState(this.state);
+    heir.settingsChanged();
+    this.opts.onCleared?.(heir);
+    if (clearId && this.checkpoints.has(clearId)) this.cut(clearId);
+    this.emit({ type: "session_cleared", id: randomUUID(), sessionId: id });
+    this.setState("idle");
+    return heir;
   }
 
   /**
