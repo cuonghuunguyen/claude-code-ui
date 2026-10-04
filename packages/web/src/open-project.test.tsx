@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { FsEntry } from "@claude-ui/protocol";
+import type { FsEntry, RecentProject } from "@claude-ui/protocol";
 import { OpenProjectDialog } from "./open-project.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -18,11 +18,11 @@ const list = vi.fn(async (path?: string): Promise<FsEntry[]> => {
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => root?.unmount());
 
-async function render(onPick = vi.fn(async () => {})) {
+async function render(onPick = vi.fn(async () => {}), recent?: RecentProject[]) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
-  await act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={list} onPick={onPick} />));
+  await act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={list} onPick={onPick} recent={recent} />));
   const input = () => document.querySelector<HTMLInputElement>('[data-testid="folder-input"]')!;
   const rows = () => [...document.querySelectorAll<HTMLElement>('[data-testid="folder-row"]')].map((r) => r.textContent);
   const type = async (v: string) => {
@@ -33,7 +33,8 @@ async function render(onPick = vi.fn(async () => {})) {
     });
   };
   const key = (k: string) => act(async () => void input().dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
-  return { input, rows, type, key, onPick };
+  const recents = () => [...document.querySelectorAll<HTMLElement>('[data-testid="recent-row"]')];
+  return { input, rows, type, key, onPick, recents };
 }
 
 // The first dialog render loads Base UI cold (~2 s alone); under the full parallel suite it took over the 5 s default.
@@ -113,4 +114,65 @@ it("closing without a pick gives the focus back to the opener; after a pick the 
   await act(async () => new Promise((r) => setTimeout(r, 50)));
   expect(document.activeElement).toBe(prompt);
   trigger.remove(), prompt.remove();
+});
+
+const now = Date.now();
+const recent: RecentProject[] = [
+  { cwd: "/home/u/api", sessionCount: 3, lastActivity: now - 5 * 60_000 },
+  { cwd: "/home/u/old-one", sessionCount: 1, lastActivity: now - 3 * 3_600_000 },
+  ...["a", "b", "c", "d"].map((n, i) => ({ cwd: `/home/u/${n}-proj`, sessionCount: 2, lastActivity: now - (i + 5) * 86_400_000 })),
+];
+
+it("suggests the first 5 recent projects with session count and age; one click adds one", async () => {
+  const { recents, onPick } = await render(undefined, recent);
+  expect(document.body.textContent).toContain("Recent projects");
+  expect(recents().map((r) => r.textContent)).toEqual([
+    expect.stringMatching(/^api\/home\/u\/api3 sessions · 5m ago$/),
+    expect.stringMatching(/^old-one\/home\/u\/old-one1 session · 3h ago$/),
+    expect.stringContaining("a-proj"),
+    expect.stringContaining("b-proj"),
+    expect.stringContaining("c-proj"),
+  ]);
+  await act(async () => recents()[1]!.click());
+  expect(onPick).toHaveBeenCalledWith("/home/u/old-one");
+});
+
+it("a typed path behaves as without recents: a recent whose name contains the text does not take Tab or Enter from the folder", async () => {
+  const withMatch = [{ cwd: "/home/u/old-api-2", sessionCount: 1, lastActivity: now }, ...recent];
+  const { recents, rows, type, key, input, onPick } = await render(undefined, withMatch);
+  await type("/home/u/api");
+  expect(recents()).toHaveLength(0);
+  expect(rows()).toEqual(["api/"]);
+  await key("Tab");
+  expect(input().value).toBe("/home/u/api/");
+  await type("/home/u/api");
+  await key("Enter");
+  expect(onPick).toHaveBeenCalledWith("/home/u/api");
+});
+
+it("in the start state Tab descends into the first folder, not a recent project", async () => {
+  const { input, key } = await render(undefined, recent);
+  await key("Tab");
+  expect(input().value).toBe("/home/u/claude-ui/");
+});
+
+it("a recent project is picked with Enter only after ArrowDown selects it", async () => {
+  const { key, onPick } = await render(undefined, recent);
+  await key("Enter");
+  expect(onPick).toHaveBeenLastCalledWith("/home/u");
+  await key("ArrowDown");
+  await key("Enter");
+  expect(onPick).toHaveBeenLastCalledWith("/home/u/api");
+});
+
+it("recent-row path and meta text use the muted token (4.5:1), not the icon-only faint one", async () => {
+  const { recents } = await render(undefined, recent);
+  const text = [...recents()[0]!.querySelectorAll("span")].slice(1);
+  expect(text).toHaveLength(2);
+  for (const s of text) expect(s.className).toContain("text-muted-foreground");
+});
+
+it("without recent projects the dialog shows no recent section", async () => {
+  await render(undefined, []);
+  expect(document.body.textContent).not.toContain("Recent projects");
 });

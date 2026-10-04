@@ -1,6 +1,7 @@
 // Sidebar session list (docs/spec.md "Layout"): one collapsible group per known project, search by title or project name.
 import { useState } from "react";
 import { ArchiveIcon, ChevronRightIcon, CircleAlertIcon, FolderPlusIcon, LoaderCircleIcon, SearchIcon, SquarePenIcon, XIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { SessionListItem, SessionState } from "@claude-ui/protocol";
 import { cn } from "@/lib/utils";
 import { byDay, groupByCwd, loadCollapsed, saveCollapsed, timeAgo } from "./sessions.ts";
@@ -74,7 +75,10 @@ export function SessionList({
     return (
       <div className="flex flex-col gap-2">
         {header}
-        <p className="px-1.5 text-muted-foreground text-sm">No projects yet. Open a project folder to start a session in it.</p>
+        <p className="px-1.5 text-muted-foreground text-sm">No projects yet. Add a project folder to start a session in it.</p>
+        <Button variant="secondary" size="sm" className="mx-1.5 self-start max-md:h-11" onClick={onOpenProject} data-testid="empty-open-project">
+          <FolderPlusIcon /> Add project
+        </Button>
       </div>
     );
   return (

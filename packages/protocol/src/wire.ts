@@ -35,7 +35,8 @@ export type FsEntry = { name: string; path: string; isDir: boolean };
 /** Every client message carries a `reqId`; the daemon answers with a `reply` or an `error` with the same `reqId`. */
 export type ClientMessage = { reqId: string } & (
   | { type: "session.create"; cwd: string; model?: string }
-  | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string }
+  /** `addProject`: an explicit open (link, notification) of a session of a project that is not added adds the project; a resubscribe must not. */
+  | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string; addProject?: boolean }
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   | { type: "session.setModel"; sessionId: string; model: string }
@@ -160,11 +161,14 @@ export const WS_PROTOCOL = "claude-ui";
 export const TOKEN_PROTOCOL_PREFIX = "token.";
 
 /**
- * `projects`: known project cwds, newest activity first: session cwds plus opened projects, minus removed ones.
+ * `projects`: added project cwds only (project.open, a created session, a deep link), newest activity first.
  * `sessions`: only sessions of those projects.
+ * `recentProjects`: cwds with sessions that are not added, newest activity first: suggestions for the Open project dialog.
  * `permissionModes`: the modes a new session can start in (permissionModesFor, for the default model).
  */
-export type ListResult = { sessions: SessionListItem[]; projects: string[]; permissionModes: PermissionMode[] };
+export type ListResult = { sessions: SessionListItem[]; projects: string[]; recentProjects: RecentProject[]; permissionModes: PermissionMode[] };
+/** `lastActivity`: ms of its newest session. */
+export type RecentProject = { cwd: string; sessionCount: number; lastActivity: number };
 /** `cwd`: the canonical path of the opened project. */
 export type ProjectOpenResult = { cwd: string };
 export type FsListResult = { entries: FsEntry[] };

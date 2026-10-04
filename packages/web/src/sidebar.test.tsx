@@ -142,7 +142,8 @@ it("a known project with no sessions still has a group; its New session and Remo
 it("with no projects it offers Open project", async () => {
   const { el, onOpenProject } = await render({ projects: [] });
   expect(el.textContent).toContain("No projects yet");
-  await act(async () => el.querySelector<HTMLElement>('[data-testid="open-project"]')!.click());
+  // The empty state has its own action next to the header icon.
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="empty-open-project"]')!.click());
   expect(onOpenProject).toHaveBeenCalled();
 });
 

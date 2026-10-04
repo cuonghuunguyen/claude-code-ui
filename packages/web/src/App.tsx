@@ -8,6 +8,7 @@ import type {
   FsListResult,
   FsSearchResult,
   ListResult,
+  RecentProject,
   ModelInfo,
   ModelsResult,
   Part,
@@ -120,6 +121,7 @@ export function App() {
   const [plan, setPlan] = useState<PlanUsage | null>(null);
   // Known project cwds from the daemon, newest first.
   const [projects, setProjects] = useState<string[]>([]);
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   // Project the new-session tab starts in.
   const [draftCwd, setDraftCwd] = useState<string>();
   // The new-session tab's model, mode and effort: here, not in the tab, so the palette can change them too.
@@ -214,12 +216,13 @@ export function App() {
 
   async function refreshList() {
     try {
-      const { sessions, projects, permissionModes } = await client.current!.request<ListResult>({ type: "session.list" });
+      const { sessions, projects, recentProjects = [], permissionModes } = await client.current!.request<ListResult>({ type: "session.list" });
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
       const listed = new Set(sessions.map((s) => s.id));
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
       setList(sessions);
       setProjects(projects);
+      setRecentProjects(recentProjects);
       if (permissionModes) setNewModes(permissionModes);
       if (restored.current) {
         for (const id of staleTabs(restored.current, new Set(sessions.map((s) => s.id)))) forget(id);
@@ -236,7 +239,8 @@ export function App() {
 
   // Replays events after the view's last seq, or everything when the daemon restarted (new logEpoch).
   // A session that is not live in the daemon is rebuilt from its transcript and resumes with the same ID on the next prompt.
-  async function subscribe(sessionId: string) {
+  /** `addProject`: an explicit open (link, notification, click); a reconnect resubscribe must not re-add a project the user removed. */
+  async function subscribe(sessionId: string, addProject = false) {
     const view = viewsRef.current[sessionId];
     try {
       const r = await client.current!.request<SubscribeResult>({
@@ -244,6 +248,7 @@ export function App() {
         sessionId,
         sinceSeq: view?.lastSeq ?? 0,
         logEpoch: view?.logEpoch,
+        ...(addProject && { addProject }),
       });
       // Runs before the replayed events: the reply precedes them on the socket and this continuation is a microtask.
       replayedTo.current[sessionId] = r.seq;
@@ -283,7 +288,7 @@ export function App() {
     if (!id) return;
     setTabs((t) => openTab(t, id));
     if (!keepHash) history.replaceState(null, "", tabHash(id));
-    if (id !== NEW_TAB && !viewsRef.current[id]) void subscribe(id);
+    if (id !== NEW_TAB && !viewsRef.current[id]) void subscribe(id, true);
   }
 
   /** Opens the subagent view of `id` in the active session tab, or its session view; a history entry each, so browser Back returns. */
@@ -332,10 +337,10 @@ export function App() {
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
         void refreshList();
-        const ids = new Set(Object.keys(viewsRef.current));
         const h = hashId();
-        if (h) ids.add(h);
-        ids.forEach((id) => void subscribe(id));
+        // The hash session of a page load is a link; the held views are only resubscribed.
+        if (h && !viewsRef.current[h]) void subscribe(h, true);
+        Object.keys(viewsRef.current).forEach((id) => void subscribe(id));
         void pushSubscription().then((sub) => {
           setPushOn(!!sub);
           if (sub) sendSubscription(c, sub).catch(() => {});
@@ -893,6 +898,7 @@ export function App() {
         onOpenChange={setOpeningProject}
         list={async (path) => (await client.current!.request<FsListResult>(path ? { type: "fs.list", path } : { type: "fs.list" })).entries}
         onPick={openProject}
+        recent={recentProjects}
         // Focus goes to the new-session prompt, not back to the button that opened the dialog.
         finalFocus={newPrompt}
       />

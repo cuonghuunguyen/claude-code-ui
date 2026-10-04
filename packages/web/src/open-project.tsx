@@ -1,13 +1,14 @@
 // "Open project" dialog (OpenCode dialog-select-directory): browse folders inside the allowlisted roots with type-ahead.
 // Click a folder to list its subfolders, Enter or "Open" picks it; the daemon remembers it as a project.
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { FolderIcon, SearchIcon, XIcon } from "lucide-react";
-import type { FsEntry } from "@claude-ui/protocol";
+import type { FsEntry, RecentProject } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { trapTab } from "./focus-trap.ts";
 import { browse, matchFolders } from "./folders.ts";
+import { timeAgo } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
 
 /** `list()`: the roots; `list(path)`: the entries of a directory inside them. `onPick` rejects when the daemon refuses. */
@@ -16,12 +17,15 @@ export function OpenProjectDialog({
   onOpenChange,
   list,
   onPick,
+  recent,
   finalFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   list: (path?: string) => Promise<FsEntry[]>;
   onPick: (cwd: string) => Promise<unknown>;
+  /** Projects that are not added but have sessions, newest first: offered above the folders (OpenCode's "Recent projects"). */
+  recent?: RecentProject[];
   /** Gets the focus when the dialog closes after a pick, when it exists; a cancel gives it back to the opener. */
   finalFocus?: React.RefObject<HTMLElement | null>;
 }) {
@@ -60,14 +64,28 @@ export function OpenProjectDialog({
               <XIcon className="size-4" />
             </Dialog.Close>
           </div>
-          <Browser input={input} list={list} onPick={pick} />
+          <Browser input={input} list={list} onPick={pick} recent={recent} />
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>
   );
 }
 
-function Browser({ input, list, onPick }: { input: React.RefObject<HTMLInputElement | null>; list: (path?: string) => Promise<FsEntry[]>; onPick: (cwd: string) => Promise<unknown> }) {
+/** Recent projects shown while nothing is typed; a typed name shows every match. */
+const RECENT_SHOWN = 5;
+const ago = (ms: number) => ((t) => (t === "now" ? "Just now" : `${t} ago`))(timeAgo(ms));
+
+function Browser({
+  input,
+  list,
+  onPick,
+  recent = [],
+}: {
+  input: React.RefObject<HTMLInputElement | null>;
+  list: (path?: string) => Promise<FsEntry[]>;
+  onPick: (cwd: string) => Promise<unknown>;
+  recent?: RecentProject[];
+}) {
   const [roots, setRoots] = useState<FsEntry[]>();
   const [value, setValue] = useState("");
   const [entries, setEntries] = useState<FsEntry[]>([]);
@@ -108,13 +126,17 @@ function Browser({ input, list, onPick }: { input: React.RefObject<HTMLInputElem
     return () => void (stale = true);
   }, [dir, roots]);
 
-  const rows = matchFolders(entries, prefix);
+  // Only while no path segment is typed: a typed path keeps the folder type-ahead (Tab, Enter) as it was.
+  const recents = prefix ? [] : recent.slice(0, RECENT_SHOWN);
+  const folders = matchFolders(entries, prefix).filter((e) => !recents.some((r) => r.cwd === e.path));
+  // One keyboard list: recent projects first, then folders.
+  const rows: { path: string; recent?: RecentProject; entry?: FsEntry }[] = [...recents.map((r) => ({ path: r.cwd, recent: r })), ...folders.map((e) => ({ path: e.path, entry: e }))];
   const edit = (v: string) => {
     setValue(v);
     setSelected(browse(v, rootPaths).prefix ? 0 : -1);
     setError(undefined);
   };
-  const descend = (e: FsEntry) => {
+  const descend = (e: Pick<FsEntry, "path">) => {
     toEnd.current = true;
     edit(`${e.path.replace(/\/$/, "")}/`);
     input.current?.focus();
@@ -131,7 +153,8 @@ function Browser({ input, list, onPick }: { input: React.RefObject<HTMLInputElem
   };
   const onKeyDown = (e: KeyboardEvent) => {
     const row = rows[selected];
-    const tabTo = rows[Math.max(selected, 0)];
+    // Nothing selected: the first folder, never a recent project.
+    const tabTo = rows[selected] ?? rows.find((r) => r.entry);
     const keys: Record<string, (() => unknown) | undefined> = {
       ArrowDown: rows.length ? () => setSelected((i) => (i + 1) % rows.length) : undefined,
       ArrowUp: rows.length ? () => setSelected((i) => (i <= 0 ? rows.length - 1 : i - 1)) : undefined,
@@ -168,32 +191,59 @@ function Browser({ input, list, onPick }: { input: React.RefObject<HTMLInputElem
         </label>
       </div>
       <div className="flex min-h-30 flex-1 flex-col overflow-y-auto px-1.5 pt-1.5 pb-2">
-        <p className="my-1.5 px-3 text-muted-foreground text-sm" id="folder-list-label">
-          {dir ? `Folders in ${projectName(dir)}` : "Allowlisted roots"}
-        </p>
-        <ul id="folder-list" role="listbox" aria-labelledby="folder-list-label" className="flex flex-col gap-px" data-testid="folder-list">
-          {rows.map((e, i) => (
-            <li
-              key={e.path}
-              id={`folder-${i}`}
-              role="option"
-              aria-selected={i === selected}
-              ref={(el) => void (i === selected && el?.scrollIntoView?.({ block: "nearest" }))}
-              className={cn("flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm max-md:h-11", i === selected && "bg-secondary")}
-              title={`${e.path}\nClick to list its subfolders, double click to open`}
-              onMouseDown={(ev) => ev.preventDefault()}
-              onMouseMove={() => setSelected(i)}
-              onClick={() => descend(e)}
-              onDoubleClick={() => pick(e.path)}
-              data-testid="folder-row"
-            >
-              <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />
-              <span className="truncate font-medium">
-                {dir ? e.name : e.path}
-                <span className="font-normal text-faint">/</span>
-              </span>
-            </li>
-          ))}
+        <ul id="folder-list" role="listbox" aria-label="Recent projects and folders" className="flex flex-col gap-px" data-testid="folder-list">
+          {rows.map((row, i) => {
+            const common = {
+              id: `folder-${i}`,
+              role: "option",
+              "aria-selected": i === selected,
+              ref: (el: HTMLElement | null) => void (i === selected && el?.scrollIntoView?.({ block: "nearest" })),
+              onMouseDown: (ev: React.MouseEvent) => ev.preventDefault(),
+              onMouseMove: () => setSelected(i),
+            };
+            const heading = (text: string, id: string) => (
+              <li role="presentation" id={id} className="mt-1.5 mb-1.5 px-3 text-muted-foreground text-sm">
+                {text}
+              </li>
+            );
+            return (
+              <Fragment key={row.path}>
+                {i === 0 && row.recent && heading("Recent projects", "recent-label")}
+                {i === recents.length && row.entry && heading(dir ? `Folders in ${projectName(dir)}` : "Allowlisted roots", "folder-list-label")}
+                {row.recent ? (
+                  <li
+                    {...common}
+                    className={cn("flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm max-md:h-11", i === selected && "bg-secondary")}
+                    title={`${row.path}\nClick to add it`}
+                    onClick={() => pick(row.path)}
+                    data-testid="recent-row"
+                  >
+                    <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />
+                    <span className="min-w-0 truncate font-medium max-md:flex-1">{projectName(row.path)}</span>
+                    <span className="min-w-0 flex-1 truncate text-muted-foreground max-md:hidden">{row.path}</span>
+                    <span className="shrink-0 text-muted-foreground text-xs">
+                      {row.recent.sessionCount} {row.recent.sessionCount === 1 ? "session" : "sessions"} · {ago(row.recent.lastActivity)}
+                    </span>
+                  </li>
+                ) : (
+                  <li
+                    {...common}
+                    className={cn("flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm max-md:h-11", i === selected && "bg-secondary")}
+                    title={`${row.path}\nClick to list its subfolders, double click to open`}
+                    onClick={() => descend(row.entry!)}
+                    onDoubleClick={() => pick(row.path)}
+                    data-testid="folder-row"
+                  >
+                    <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />
+                    <span className="truncate font-medium">
+                      {dir ? row.entry!.name : row.path}
+                      <span className="font-normal text-faint">/</span>
+                    </span>
+                  </li>
+                )}
+              </Fragment>
+            );
+          })}
         </ul>
         {roots && !rows.length && <p className="m-auto py-6 text-muted-foreground text-sm">No folder matches "{prefix}"</p>}
       </div>

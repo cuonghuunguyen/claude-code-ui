@@ -7,23 +7,44 @@ import { createProjects } from "../src/projects.ts";
 const at = (cwd: string, lastActivity: number) => ({ cwd, lastActivity });
 
 describe("projects", () => {
-  it("lists session cwds and opened projects, newest activity first", () => {
+  it("lists only added projects, newest activity first; transcript-only cwds are not listed", () => {
     const p = createProjects({ now: () => 50 });
+    p.open("/r/a");
     p.open("/r/empty");
-    expect(p.list([at("/r/a", 10), at("/r/b", 90), at("/r/a", 70)])).toEqual(["/r/b", "/r/a", "/r/empty"]);
+    expect(p.list([at("/r/a", 10), at("/r/b", 90), at("/r/a", 70)])).toEqual(["/r/a", "/r/empty"]);
+    expect(p.list([at("/r/a", 10), at("/r/empty", 60)])).toEqual(["/r/empty", "/r/a"]);
+    expect(createProjects().list([at("/r/b", 90)])).toEqual([]);
   });
 
-  it("a removed project is hidden until it is opened again or gets a newer session", () => {
+  it("recent: not-added cwds with a session count and their newest activity, newest first", () => {
+    const p = createProjects();
+    p.open("/r/added/");
+    expect(p.recent([at("/r/a", 10), at("/r/added", 99), at("/r/b/", 90), at("/r/a", 70), at("/r/b", 20)])).toEqual([
+      { cwd: "/r/b", sessionCount: 2, lastActivity: 90 },
+      { cwd: "/r/a", sessionCount: 2, lastActivity: 70 },
+    ]);
+  });
+
+  it("a removed project is hidden, also with newer sessions, until it is added again", () => {
     let t = 100;
     const p = createProjects({ now: () => t });
     p.open("/r/x");
     p.remove("/r/x");
-    p.remove("/r/a");
-    expect(p.list([at("/r/a", 90)])).toEqual([]);
-    expect(p.list([at("/r/a", 110)])).toEqual(["/r/a"]);
+    expect(p.list([at("/r/x", 110)])).toEqual([]);
+    expect(p.recent([at("/r/x", 110)])).toEqual([{ cwd: "/r/x", sessionCount: 1, lastActivity: 110 }]);
     t = 200;
     p.open("/r/x");
     expect(p.list([])).toEqual(["/r/x"]);
+  });
+
+  it("seed (upgrade) adds the given session cwds once, not those removed after their last activity; an old file is not seeded", () => {
+    const file = join(mkdtempSync(join(tmpdir(), "projects-")), "projects.json");
+    writeFileSync(file, '{"opened":{"/r/opened":5},"removed":{"/r/gone":100}}');
+    const p = createProjects({ file });
+    expect(p.seeded).toBe(false);
+    p.seed([at("/r/used", 40), at("/r/gone", 90), at("/r/used", 60), at("/r/gone2", 10)]);
+    expect(p.list([])).toEqual(["/r/used", "/r/gone2", "/r/opened"]);
+    expect(createProjects({ file }).seeded).toBe(true);
   });
 
   it("a truncated file starts an empty list instead of stopping the daemon; a save leaves no temp file", () => {
