@@ -135,7 +135,6 @@ export function App() {
   // `mode` is unset until picked: the project's `permissions.defaultMode` (daemon, `defaultMode`) applies.
   const [pick, setDraft] = useState<DraftPick>(NEW_DRAFT);
   const [defaultMode, setDefaultMode] = useState<PermissionMode>("default");
-  const draft: StartOptions = { ...pick, mode: pick.mode ?? defaultMode };
   // Modes a new session may start in (session.list): bypassPermissions only when the daemon enables it.
   const [newModes, setNewModes] = useState<PermissionMode[]>(NEW_SESSION_MODES);
   const [openingProject, setOpeningProject] = useState(false);
@@ -589,7 +588,9 @@ export function App() {
     setPanel(true);
   };
   const draftShown = activeId === NEW_TAB && tabs.includes(NEW_TAB);
-  const draftModes = permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === draft.model && m.supportsAutoMode) });
+  const draftModes = permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === pick.model && m.supportsAutoMode) });
+  // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
+  const draft: StartOptions = { ...pick, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : "default") };
   // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
   const changeDraft = (d: StartOptions) => {
     const lost = d.mode === "auto" && !models.some((m) => m.value === d.model && m.supportsAutoMode);

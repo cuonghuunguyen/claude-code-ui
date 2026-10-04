@@ -2219,11 +2219,34 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     t.d.close();
   });
 
-  it("an invalid higher-precedence value wins over a valid lower one (-> default), like Claude Code's merge", async () => {
+  it("an invalid higher-precedence value is skipped for the next valid one, like Claude Code", async () => {
     const t = await setup();
     write(t.user, "plan");
     write(t.shared, "nonsense");
-    expect(await t.mode()).toBe("default");
+    expect(await t.mode()).toBe("plan");
+    write(t.local, 5);
+    expect(await t.mode()).toBe("plan");
+    t.d.close();
+  });
+
+  it.each(["shared", "local"] as const)("auto and bypassPermissions in the %s project settings are ignored (user settings decide), like Claude Code", async (file) => {
+    const t = await setup(true);
+    write(t.user, "plan");
+    for (const mode of ["bypassPermissions", "auto"]) {
+      write(t[file], mode);
+      expect(await t.mode()).toBe("plan");
+    }
+    // Other values still count from project files.
+    write(t[file], "acceptEdits");
+    expect(await t.mode()).toBe("acceptEdits");
+    t.d.close();
+  });
+
+  it("bypassPermissions from the user settings still counts (with allow-bypass)", async () => {
+    const t = await setup(true);
+    write(t.user, "bypassPermissions");
+    write(t.shared, "bypassPermissions");
+    expect(await t.mode()).toBe("bypassPermissions");
     t.d.close();
   });
 
