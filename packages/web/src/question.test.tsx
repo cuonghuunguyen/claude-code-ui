@@ -48,6 +48,17 @@ describe("QuestionPanel", () => {
   });
 });
 
+describe("QuestionPanel on a phone", () => {
+  it("is bounded by the dynamic viewport and scrolls its options; Dismiss, Back and Next/Submit stay outside the scroller", () => {
+    const html = renderToStaticMarkup(<QuestionPanel part={request()} onAnswer={() => {}} onDismiss={() => {}} />);
+    expect(html).toMatch(/<form[^>]*max-h-\[60dvh\]/);
+    // A <fieldset> is no reliable scroll container (older Safari): the scroller wraps it.
+    expect(html).toMatch(/<div class="[^"]*overflow-y-auto[^"]*overscroll-contain[^"]*"><fieldset/);
+    expect(html.indexOf("</fieldset>")).toBeLessThan(html.indexOf(">Dismiss<"));
+    expect(html.indexOf("</fieldset></div>")).toBeGreaterThan(0);
+  });
+});
+
 describe("QuestionMarker", () => {
   it.each([
     [request(), "Waiting for an answer"],

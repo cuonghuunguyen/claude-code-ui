@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ModelInfo } from "@claude-ui/protocol";
 import { SessionPane } from "./App.tsx";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
-import { effortOptions, nextMode } from "./toolbar.tsx";
+import { effortOptions, nextMode, shortModel } from "./toolbar.tsx";
 import { QuestionPanel } from "./question.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -98,6 +98,11 @@ it("the header holds no model chooser; the prompt toolbar shows model, effort an
   expect($("effort-select")!.textContent).toContain("High");
 });
 
+it("a model name without a note shows as is", async () => {
+  const { $ } = await render({ session: { id: "s1", cwd: "/tmp", state: "idle", model: "haiku", permissionMode: "default", effort: "default", permissionModes: ["default"] } }, { ...emptySession(), model: "haiku" });
+  expect($("session-model")!.textContent).toContain("Haiku 4.5");
+});
+
 it("narrow screen: the toolbar choosers wrap to a second row instead of shrinking the model name away", async () => {
   // jsdom has no layout; flex-wrap breaks lines at each item's content width, so a chooser never shrinks while others share its row.
   const { $ } = await render();
@@ -105,6 +110,20 @@ it("narrow screen: the toolbar choosers wrap to a second row instead of shrinkin
   expect(choosers.className.split(" ")).toContain("flex-wrap");
   expect(choosers.contains($("mode-select")) && choosers.contains($("effort-select"))).toBe(true);
   expect($("prompt-toolbar")!.className).not.toMatch(/(^| )h-\d/);
+});
+
+it("phone: the model picker drops the parenthesised note, the choosers wrap in the toolbar's own row and ring + send sit in a right group", async () => {
+  expect(["Default (recommended)", "Sonnet 5.5", "Opus 5.5 (1M context)", "(x)"].map(shortModel)).toEqual(["Default", "Sonnet 5.5", "Opus 5.5", "(x)"]);
+  const view = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "context_usage", id: "context_usage", usage: { totalTokens: 100, maxTokens: 1000, percentage: 10, categories: [] } } });
+  const { $ } = await render({}, view);
+  // jsdom shows both labels (CSS picks one by the toolbar width); the full name stays the accessible name.
+  expect($("session-model")!.textContent).toContain("DefaultDefault (recommended)");
+  expect($("session-model")!.getAttribute("aria-label")).toBe("Default (recommended), Model");
+  expect($("session-model")!.parentElement!.className).toContain("max-sm:contents");
+  expect($("prompt-toolbar")!.className).toContain("max-sm:flex-wrap");
+  const right = $("send")!.parentElement!;
+  expect(right.className).toContain("max-sm:ml-auto");
+  expect(right.contains($("context-meter"))).toBe(true);
 });
 
 it("hides the effort chooser for a model without effort support", async () => {

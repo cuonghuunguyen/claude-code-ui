@@ -176,7 +176,7 @@ export function TabsBar({
             {active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} /> : null}
             <span className="truncate">{active?.title ?? "Open tabs"}</span>
             <span className="ml-auto text-muted-foreground tabular-nums">{tabs.length}</span>
-            <ChevronDownIcon className="size-4 shrink-0 text-faint" />
+            <ChevronDownIcon className="size-4 shrink-0 text-faint max-sm:hidden" />
           </div>
           <select
             aria-label="Switch tab"

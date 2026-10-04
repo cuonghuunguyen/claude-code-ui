@@ -37,6 +37,14 @@ describe("TodoDock", () => {
     expect(el.querySelector('[data-testid="todo-dock"]')!.className).toContain("rounded-xl");
   });
 
+  it("scrolls inside a bounded height (a share of the viewport on a phone), so a long list never pushes the prompt box out", async () => {
+    await render(items);
+    const list = el.querySelector<HTMLElement>("[role=list]")!;
+    expect(list.className).toMatch(/\boverflow-y-auto\b/);
+    expect(list.className).toMatch(/max-h-\[min\([^\]]*dvh\)\]/);
+    expect(list.className).toContain("overscroll-contain");
+  });
+
   it("collapses to the header with the active todo as preview, and expands again", async () => {
     await render(items);
     expect(el.querySelector('[data-testid="todo-preview"]')).toBeNull();

@@ -77,7 +77,7 @@ function useGit(git: (() => Promise<GitStatus | null>) | undefined, state: strin
   return status;
 }
 
-// Below sm only the fields in Claude Code's priority (model, ctx used, session) and the clickable shells stay.
+// Below sm only the clickable shells stay: the prompt toolbar shows the model, its ring the context, the titlebar ring the plan usage.
 const WIDE = "max-sm:hidden";
 const TRIGGER =
   "cursor-pointer rounded-md px-1 -mx-1 outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-accent data-popup-open:text-foreground min-h-6 pointer-coarse:min-h-11";
@@ -127,8 +127,8 @@ export function StatusBar(props: {
   const planPopup = plan && <PlanPopup usage={plan} side="top" />;
   const modes = props.modes.includes(props.mode) ? props.modes : [props.mode, ...props.modes];
   return (
-    <div data-testid="status-bar" className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-muted-foreground text-xs tabular-nums">
-      <Field field="model" wide={false}>{`Model: ${props.model}`}</Field>
+    <div data-testid="status-bar" className={`flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-muted-foreground text-xs tabular-nums ${shells.length ? "" : WIDE}`}>
+      <Field field="model">{`Model: ${props.model}`}</Field>
       {usage && <Field field="ctx" popup={ctxPopup} label="Context window, show breakdown">{`Ctx: ${tokens(usage.totalTokens)}`}</Field>}
       {git && <Field field="branch">{git.branch}</Field>}
       {git && (
@@ -140,12 +140,12 @@ export function StatusBar(props: {
       {sum && <Field field="out">{`Out: ${tokens(sum.output)}`}</Field>}
       {sum && <Field field="cached">{`Cached: ${tokens(sum.cached)}`}</Field>}
       {usage && (
-        <Field field="ctx-used" wide={false} popup={ctxPopup} label="Context window, show breakdown">
+        <Field field="ctx-used" popup={ctxPopup} label="Context window, show breakdown">
           {`Ctx Used: ${pct((usage.totalTokens / usage.maxTokens) * 100)}`}
         </Field>
       )}
       {session && (
-        <Field field="session" wide={false} popup={planPopup} label="Plan usage, show details">
+        <Field field="session" popup={planPopup} label="Plan usage, show details">
           {`Session: ${pct(session.percent)}`}
         </Field>
       )}
