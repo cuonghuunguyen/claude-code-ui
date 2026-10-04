@@ -137,17 +137,34 @@ it("suggests the first 5 recent projects with session count and age; one click a
   expect(onPick).toHaveBeenCalledWith("/home/u/old-one");
 });
 
-it("a typed path behaves as without recents: a recent whose name contains the text does not take Tab or Enter from the folder", async () => {
+it("typing filters the recent projects by name; Tab and Enter still act on the typed folder, never on a recent", async () => {
   const withMatch = [{ cwd: "/home/u/old-api-2", sessionCount: 1, lastActivity: now }, ...recent];
   const { recents, rows, type, key, input, onPick } = await render(undefined, withMatch);
   await type("/home/u/api");
-  expect(recents()).toHaveLength(0);
+  expect(recents().map((r) => r.textContent)).toEqual([expect.stringContaining("old-api-2"), expect.stringContaining("api/home/u/api")]);
   expect(rows()).toEqual(["api/"]);
   await key("Tab");
   expect(input().value).toBe("/home/u/api/");
   await type("/home/u/api");
   await key("Enter");
   expect(onPick).toHaveBeenCalledWith("/home/u/api");
+  await type("/home/u/old");
+  expect(recents().map((r) => r.textContent)).toEqual([expect.stringContaining("old-api-2"), expect.stringContaining("old-one")]);
+  await key("Enter");
+  expect(onPick).toHaveBeenLastCalledWith("/home/u");
+  await type("/home/u/zzz");
+  expect(recents()).toHaveLength(0);
+});
+
+it("recent projects show only at the start level, not in a browsed directory", async () => {
+  const { recents, type, rows } = await render(undefined, recent);
+  expect(recents().length).toBeGreaterThan(0);
+  await type("/home/u/claude-ui/");
+  expect(rows()).toEqual(["packages/", "docs/"]);
+  expect(recents()).toHaveLength(0);
+  expect(document.body.textContent).not.toContain("Recent projects");
+  await type("/home/u/");
+  expect(recents().length).toBeGreaterThan(0);
 });
 
 it("in the start state Tab descends into the first folder, not a recent project", async () => {

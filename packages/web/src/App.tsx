@@ -225,6 +225,7 @@ export function App() {
   const listRef = useRef(list);
   listRef.current = list;
   const requested = useRef(new Set<string>());
+  const titleRefreshed = useRef(0);
   /** Seq of each session's last subscribe reply: events up to it are a replay of known changes, not new ones. */
   const replayedTo = useRef<Record<string, number>>({});
   // Tabs restored from storage, checked against the first session list: a stale one would show "Untitled".
@@ -317,7 +318,11 @@ export function App() {
   useEffect(() => {
     const onPop = () => {
       const tab = hashTab();
-      if (tab) open(tab, true);
+      if (tab) {
+        open(tab, true);
+        // A link to a session: it opens at the bottom, also when its tab is open and scrolled up (like a notification click).
+        setScrollKeys((k) => ({ ...k, [tab]: (k[tab] ?? 0) + 1 }));
+      }
       setRun(runFromHash(location.hash));
     };
     window.addEventListener("popstate", onPop);
@@ -339,7 +344,13 @@ export function App() {
         setViews((v) => ({ ...v, [e.sessionId]: applyEvent(v[e.sessionId] ?? emptySession(), e) }));
         // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
         // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
-        if (e.part.type === "session_state" && e.seq > (replayedTo.current[e.sessionId] ?? 0)) void refreshList();
+        const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+        if (e.part.type === "session_state" && live) void refreshList();
+        // The title of a session without transcript is "New session" until its transcript exists, some time into the first turn.
+        else if (live && listRef.current.some((s) => s.id === e.sessionId && !s.transcript) && Date.now() - titleRefreshed.current > 2000) {
+          titleRefreshed.current = Date.now();
+          void refreshList();
+        }
       },
       onSessionsChanged: (m) => {
         if (m.deleted) forget(m.deleted, true);
@@ -358,8 +369,8 @@ export function App() {
         );
         void refreshList();
         const h = hashId();
-        // The hash session of a page load is a link; the held views are only resubscribed.
-        if (h && !viewsRef.current[h]) void subscribe(h, true);
+        // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
+        if (h && !viewsRef.current[h]) void subscribe(h);
         Object.keys(viewsRef.current).forEach((id) => void subscribe(id));
         void pushSubscription().then((sub) => {
           setPushOn(!!sub);
@@ -1355,6 +1366,7 @@ export function SessionPane({
     </div>
   );
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
+  const prompt = useRef<HTMLTextAreaElement>(null);
 
   return (
     <CwdContext value={session.cwd}>
@@ -1395,6 +1407,7 @@ export function SessionPane({
           items={items}
           itemKey={timelineKey}
           reveal={reveal}
+          onJump={() => prompt.current?.focus()}
           footer={thinking}
           renderItem={(item, index) =>
             item.kind === "context" ? (
@@ -1476,6 +1489,7 @@ export function SessionPane({
               blocked={view.externalTurn ? "A terminal CLI turn is running in this session" : undefined}
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
+              inputRef={prompt}
               placeholder={turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
             />
           </>

@@ -171,6 +171,8 @@ it("Remove asks inline, then removes from its scope and returns to the list", as
   const d = await render({}, { server: "auth" });
   await d.click(d.button("Remove"));
   expect(d.q("mcp-remove-confirm")!.textContent).toContain("Remove auth from local config?");
+  // The safe choice has the focus: Enter or Space does not remove by accident.
+  expect(document.activeElement).toBe(d.button("Cancel"));
   await d.click(d.button("Cancel"));
   expect(d.q("mcp-remove-confirm")).toBeNull();
   await d.click(d.button("Remove"));

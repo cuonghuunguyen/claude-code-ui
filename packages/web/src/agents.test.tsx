@@ -69,8 +69,11 @@ async function mount(hash = `#${ID}`) {
 beforeEach(() => {
   seq = 0;
   sent.length = 0;
+  // A frozen clock: durations (startedAt = now - 65 s) do not tick over a second boundary between the event and the render.
+  vi.useFakeTimers({ toFake: ["Date"], now: 1_800_000_000_000 });
 });
 afterEach(() => {
+  vi.useRealTimers();
   if (root) act(() => root!.unmount()), el.remove();
   root = undefined;
 });

@@ -27,6 +27,11 @@ describe("ruleLabel", () => {
 });
 
 describe("PermissionPanel", () => {
+  it("is bounded in height: the body scrolls and the Allow/Deny tray stays outside the scroller", () => {
+    const html = renderToStaticMarkup(<PermissionPanel part={request()} onRespond={() => {}} />);
+    expect(html).toMatch(/<form[^>]*max-h-\[60dvh\]/);
+    expect(html).toMatch(/<div[^>]*min-h-0[^>]*overflow-y-auto[^>]*>(?:(?!<\/form>).)*<\/div><div[^>]*border-t[^>]*><button[^>]*>Deny/s);
+  });
   it("ExitPlanMode shows the plan as markdown with Claude Code's plan approval options", () => {
     const accept: PermissionUpdate = { type: "setMode", mode: "acceptEdits", destination: "session" };
     const html = renderToStaticMarkup(<PermissionPanel part={request({ tool: "ExitPlanMode", input: { plan: "## Plan\n\n1. edit **a.txt**" }, suggestions: [accept] })} onRespond={() => {}} />);

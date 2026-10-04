@@ -195,6 +195,17 @@ it("scrolled up, new output does not pull the view down; the scroll-to-bottom bu
   expect(scrollBehaviors).toContain("smooth");
 });
 
+it("Jump to latest moves the focus to the prompt box, not to body, when the button turns inert", async () => {
+  await open(view(turns(100)));
+  await userScroll(1000);
+  button()!.focus();
+  expect(document.activeElement).toBe(button());
+  await act(async () => button()!.click());
+  await settle();
+  expect(button()).toBeNull();
+  expect(document.activeElement).toBe(el.querySelector('textarea[aria-label="Prompt"]'));
+});
+
 it("at the bottom, a 20px scroll up leaves the bottom: new output and a growing last item do not pull the view down", async () => {
   await open(view([...turns(50), answer(50, "start", true)]));
   await userScroll(log().scrollTop - 20);

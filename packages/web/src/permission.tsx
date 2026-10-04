@@ -71,8 +71,9 @@ export function PermissionPanel({ part, onRespond }: { part: PermissionRequest; 
   };
   const noLabel = plan !== undefined ? "No, keep planning: tell Claude what to change" : "No, and tell Claude what to do differently";
   return (
-    <form onSubmit={deny} className={DOCK} data-testid="permission-panel" aria-label="Permission request">
-      <div className="flex flex-col gap-3 p-3">
+    <form onSubmit={deny} className={`${DOCK} max-h-[60dvh]`} data-testid="permission-panel" aria-label="Permission request">
+      {/* The body scrolls inside the bounded panel; the tray below stays in view (same as the question panel). */}
+      <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain p-3">
         <p className="flex items-center gap-2 font-medium">
           {plan !== undefined ? <ListTodoIcon className="size-4 shrink-0 text-muted-foreground" /> : <TriangleAlertIcon className="size-4 shrink-0 text-warning" />}
           {plan !== undefined ? "Ready to code? Claude has written up a plan" : "Permission required"}

@@ -10,6 +10,7 @@ const END_THRESHOLD = 80;
  * Sticks to the bottom while at the bottom: on append and while the last item grows; opens at the bottom.
  * `footer` renders after the last item, not windowed (the Thinking row).
  * `reveal`: scrolls this item key to the top of the viewport (palette Rewind); a new object scrolls again.
+ * `onJump`: runs after "Jump to latest" is activated; the button turns inert at the bottom, so the caller moves the focus.
  */
 export function VirtualTimeline<T>({
   items,
@@ -17,12 +18,14 @@ export function VirtualTimeline<T>({
   renderItem,
   footer,
   reveal,
+  onJump,
 }: {
   items: T[];
   itemKey: (item: T) => string;
   renderItem: (item: T, index: number) => ReactNode;
   footer?: ReactNode;
   reveal?: { key: string };
+  onJump?: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Pinned: follows new output. Any scroll up away from the end leaves (OpenCode); scrolling down near the end returns.
@@ -126,7 +129,10 @@ export function VirtualTimeline<T>({
         data-testid="scroll-to-bottom"
         inert={pinned}
         className={`absolute bottom-8 left-1/2 z-10 flex h-7 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-lg bg-background/90 text-foreground shadow-raised outline-none backdrop-blur-[2px] transition-[opacity,scale,translate] duration-200 ease-out hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info motion-reduce:transition-none pointer-coarse:size-11 ${pinned ? "pointer-events-none translate-y-2 scale-[0.8] opacity-0" : ""}`}
-        onClick={() => v.scrollToEnd({ behavior: matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })}
+        onClick={() => {
+          v.scrollToEnd({ behavior: matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+          onJump?.();
+        }}
       >
         <ArrowDownIcon aria-hidden className="size-4" />
       </button>

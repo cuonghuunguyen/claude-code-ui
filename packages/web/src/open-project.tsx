@@ -89,8 +89,8 @@ function Browser({
   const [roots, setRoots] = useState<FsEntry[]>();
   const [value, setValue] = useState("");
   const [entries, setEntries] = useState<FsEntry[]>([]);
-  // -1: no row highlighted, Enter opens the listed folder itself. Typing a filter highlights the best match.
-  const [selected, setSelected] = useState(-1);
+  // Undefined: follows the typing: nothing highlighted (Enter opens the listed folder itself), or the best matching folder.
+  const [picked, setPicked] = useState<number>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const rootPaths = roots?.map((r) => r.path) ?? [];
@@ -104,6 +104,8 @@ function Browser({
     el.scrollLeft = el.scrollWidth;
   }, [value]);
   const { dir, prefix } = browse(value, rootPaths);
+  // Recent projects belong to the start level: inside the only root, or the list of roots.
+  const atStart = rootPaths.length === 1 ? dir === rootPaths[0]!.replace(/(.)\/$/, "$1") : !dir;
 
   useEffect(() => {
     list().then(
@@ -126,14 +128,18 @@ function Browser({
     return () => void (stale = true);
   }, [dir, roots]);
 
-  // Only while no path segment is typed: a typed path keeps the folder type-ahead (Tab, Enter) as it was.
-  const recents = prefix ? [] : recent.slice(0, RECENT_SHOWN);
-  const folders = matchFolders(entries, prefix).filter((e) => !recents.some((r) => r.cwd === e.path));
+  // Only at the start level; the typed text filters them by name. They never take Tab or Enter from the typed folder (below).
+  const q = prefix.toLowerCase();
+  const recents = atStart ? recent.filter((r) => projectName(r.cwd).toLowerCase().includes(q)).slice(0, prefix ? undefined : RECENT_SHOWN) : [];
+  // Idle: a recent project is not listed again as a folder. Typed: the folder row stays, it is what Tab and Enter act on.
+  const folders = matchFolders(entries, prefix).filter((e) => prefix || !recents.some((r) => r.cwd === e.path));
   // One keyboard list: recent projects first, then folders.
   const rows: { path: string; recent?: RecentProject; entry?: FsEntry }[] = [...recents.map((r) => ({ path: r.cwd, recent: r })), ...folders.map((e) => ({ path: e.path, entry: e }))];
+  // Typing a filter highlights the best matching folder, never a recent project.
+  const selected = picked ?? (prefix ? rows.findIndex((r) => r.entry) : -1);
   const edit = (v: string) => {
     setValue(v);
-    setSelected(browse(v, rootPaths).prefix ? 0 : -1);
+    setPicked(undefined);
     setError(undefined);
   };
   const descend = (e: Pick<FsEntry, "path">) => {
@@ -154,10 +160,10 @@ function Browser({
   const onKeyDown = (e: KeyboardEvent) => {
     const row = rows[selected];
     // Nothing selected: the first folder, never a recent project.
-    const tabTo = rows[selected] ?? rows.find((r) => r.entry);
+    const tabTo = row ?? rows.find((r) => r.entry);
     const keys: Record<string, (() => unknown) | undefined> = {
-      ArrowDown: rows.length ? () => setSelected((i) => (i + 1) % rows.length) : undefined,
-      ArrowUp: rows.length ? () => setSelected((i) => (i <= 0 ? rows.length - 1 : i - 1)) : undefined,
+      ArrowDown: rows.length ? () => setPicked((selected + 1) % rows.length) : undefined,
+      ArrowUp: rows.length ? () => setPicked(selected <= 0 ? rows.length - 1 : selected - 1) : undefined,
       Tab: tabTo && !e.shiftKey ? () => descend(tabTo) : undefined,
       Enter: row ? () => pick(row.path) : dir ? () => pick(dir) : undefined,
     };
@@ -199,7 +205,7 @@ function Browser({
               "aria-selected": i === selected,
               ref: (el: HTMLElement | null) => void (i === selected && el?.scrollIntoView?.({ block: "nearest" })),
               onMouseDown: (ev: React.MouseEvent) => ev.preventDefault(),
-              onMouseMove: () => setSelected(i),
+              onMouseMove: () => setPicked(i),
             };
             const heading = (text: string, id: string) => (
               <li role="presentation" id={id} className="mt-1.5 mb-1.5 px-3 text-muted-foreground text-sm">
@@ -207,7 +213,7 @@ function Browser({
               </li>
             );
             return (
-              <Fragment key={row.path}>
+              <Fragment key={`${row.recent ? "recent" : "folder"}:${row.path}`}>
                 {i === 0 && row.recent && heading("Recent projects", "recent-label")}
                 {i === recents.length && row.entry && heading(dir ? `Folders in ${projectName(dir)}` : "Allowlisted roots", "folder-list-label")}
                 {row.recent ? (
