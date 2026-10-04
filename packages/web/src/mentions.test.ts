@@ -47,6 +47,16 @@ describe("splitUploads", () => {
     });
   });
 
+  it("takes out attached files with Windows upload paths, quoted when the path has spaces", () => {
+    expect(splitUploads('read @C:\\Users\\me\\AppData\\Local\\Temp\\claude-ui-1Fk6g9\\u-Uexatz\\notes.txt and @"C:\\Users\\First Last\\Temp\\u-Zz99Qq\\my notes.md" @src\\a.ts')).toEqual({
+      text: "read and @src\\a.ts",
+      files: [
+        { path: "C:\\Users\\me\\AppData\\Local\\Temp\\claude-ui-1Fk6g9\\u-Uexatz\\notes.txt", name: "notes.txt" },
+        { path: "C:\\Users\\First Last\\Temp\\u-Zz99Qq\\my notes.md", name: "my notes.md" },
+      ],
+    });
+  });
+
   it("takes out an attached file followed by a newline", () => {
     expect(splitUploads("secret word in @/tmp/claude-ui-E8LKGI/u-DRFNWD/notes.txt\nThanks.")).toEqual({
       text: "secret word in \nThanks.",
@@ -56,5 +66,6 @@ describe("splitUploads", () => {
 
   it("leaves text without uploads as it is", () => {
     expect(splitUploads("see @src/u-main.ts  me@/x/u-abcdef/y")).toEqual({ text: "see @src/u-main.ts  me@/x/u-abcdef/y", files: [] });
+    expect(splitUploads("see @src\\u-abcdef\\x.ts").files).toEqual([]);
   });
 });

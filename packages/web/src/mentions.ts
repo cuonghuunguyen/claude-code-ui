@@ -25,9 +25,9 @@ export function insertAtCaret(text: string, caret: number, token: string) {
   return { text: before + insert + text.slice(caret), caret: caret + insert.length };
 }
 
-// fs.upload paths: `<upload folder>/u-XXXXXX/<name>` (daemon mkdtemp, 6 random characters); quoted when the path has spaces.
+// fs.upload paths: `<upload folder>/u-XXXXXX/<name>`, `C:\...\u-XXXXXX\<name>` on Windows (daemon mkdtemp, 6 random characters); quoted when the path has spaces.
 // ponytail: matched by path shape, so a project path with a `u-XXXXXX` folder also shows as a chip; send the upload folder in the wire if that bites.
-const UPLOAD = /(?<=^|\s)@(?:"(\/[^"]*\/u-[A-Za-z0-9]{6}\/([^"/]+))"|(\/\S*\/u-[A-Za-z0-9]{6}\/([^\s/"]+)))(?: |(?=\s|$))/g;
+const UPLOAD = /(?<=^|\s)@(?:"((?:[A-Za-z]:)?[\\/][^"]*[\\/]u-[A-Za-z0-9]{6}[\\/]([^"\\/]+))"|((?:[A-Za-z]:)?[\\/]\S*[\\/]u-[A-Za-z0-9]{6}[\\/]([^\s\\/"]+)))(?: |(?=\s|$))/g;
 
 /** Attached files (`@<upload path>` mentions) taken out of a prompt: the text without them and each file's name and path. */
 export function splitUploads(text: string) {

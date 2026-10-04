@@ -12,8 +12,10 @@ import pkg from "../package.json" with { type: "json" };
 const pkgDir = fileURLToPath(new URL("..", import.meta.url));
 const tmp = mkdtempSync(join(tmpdir(), "claude-ui-pack-"));
 // Windows: npm and the bin are .cmd shims, which only start through a shell.
+// A shell joins the arguments with spaces and no quoting: quote the ones with spaces (C:\Users\First Last\...).
 const shell = process.platform === "win32";
-const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], shell });
+const q = (a) => (shell && /\s/.test(a) ? `"${a}"` : a);
+const run = (cmd, args, cwd) => execFileSync(q(cmd), args.map(q), { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], shell });
 const step = (m) => console.log(`\n== ${m}`);
 const assert = (ok, m) => {
   if (!ok) throw new Error(m);
@@ -59,7 +61,7 @@ try {
   step("start, GET /, WebSocket with token");
   const port = await freePort();
   const out = [];
-  child = spawn(bin, ["--port", String(port)], { cwd: app, env: { ...process.env, XDG_CONFIG_HOME: join(tmp, "config") }, shell });
+  child = spawn(q(bin), ["--port", String(port)], { cwd: app, env: { ...process.env, XDG_CONFIG_HOME: join(tmp, "config") }, shell });
   child.stdout.on("data", (d) => out.push(String(d)));
   child.stderr.on("data", (d) => out.push(String(d)));
   const token = await new Promise((res, rej) => {

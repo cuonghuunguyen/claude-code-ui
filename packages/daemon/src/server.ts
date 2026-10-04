@@ -374,6 +374,9 @@ export function createDaemon(opts: {
    * the canonical path keeps that session in its project. Elsewhere as written: the transcript folder name derives from it.
    */
   const sessionCwd = (cwd: string) => (process.platform === "win32" && allowed(cwd)) || cwd;
+  /** The cwd a restored session's transcript was written under (as the CLI typed it): a junction or subst drive differs from sessionCwd in more than case. */
+  const transcriptCwds = new Map<string, string>();
+  const transcriptCwd = (id: string, cwd: string) => transcriptCwds.get(id) ?? cwd;
 
   /** A missing absolute path whose nearest existing ancestor is allowed: deleted inside the roots (outside them, existence stays hidden). */
   const missingInRoots = (path: unknown) => {
@@ -416,7 +419,8 @@ export function createDaemon(opts: {
    * Stat-gated: the main chain is rebuilt only after its file changed, from the lines appended since the last read; a run is
    * read again only after its file changed. A transcript not at the expected path (long cwd) is read whole by the SDK.
    */
-  async function readTranscript(id: string, cwd: string): Promise<Transcript> {
+  async function readTranscript(id: string, listedCwd: string): Promise<Transcript> {
+    const cwd = transcriptCwd(id, listedCwd);
     const cache = caches.get(id) ?? caches.set(id, { tail: new JsonlTail(), runs: new Map() }).get(id)!;
     const file = transcriptFile(projectsDir, cwd, id);
     // Taken before the read: a write during it changes the stamp, so the next read takes it.
@@ -475,7 +479,7 @@ export function createDaemon(opts: {
   function mirror(s: Session) {
     let m = mirrors.get(s.id);
     if (!m) {
-      const file = transcriptFile(projectsDir, s.cwd, s.id);
+      const file = transcriptFile(projectsDir, transcriptCwd(s.id, s.cwd), s.id);
       // Also called once with zeroed stats for a missing file: no change then.
       const sync = (stamp: string) => {
         if (stamps.get(s.id) === stamp) return;
@@ -604,6 +608,7 @@ export function createDaemon(opts: {
       p = (async () => {
         const info = await history.getSessionInfo(id);
         if (!info?.cwd || !allowed(info.cwd)) return undefined;
+        transcriptCwds.set(id, info.cwd);
         // Before the read: a write during it changes the stamp, so the first subscriber syncs it.
         stamps.set(id, statStamp(transcriptFile(projectsDir, info.cwd, id)));
         const { main: messages, runs } = await readTranscript(id, info.cwd);

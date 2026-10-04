@@ -2048,7 +2048,7 @@ describe("transcript sync (terminal CLI turns)", () => {
   const isPart = (type: string, id?: string) => (m: ServerMessage) => m.type === "event" && m.part.type === type && (id === undefined || m.part.id === id);
 
   /** A daemon whose transcripts are `files` (getSessionMessages) with a file per session under its projectsDir that `touch` grows. */
-  async function syncDaemon(query: unknown = fakeQuery, restored: Record<string, Msg[]> = {}) {
+  async function syncDaemon(query: unknown = fakeQuery, restored: Record<string, Msg[]> = {}, restoredCwd = webRoot) {
     const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
     const files: Record<string, Msg[] | "unreadable"> = { ...restored };
     // Transcript reads (getSessionMessages calls, getSubagentMessages agent IDs) and the subagent runs listSubagents names.
@@ -2062,7 +2062,7 @@ describe("transcript sync (terminal CLI turns)", () => {
       projectsDir,
       history: {
         listSessions: (async () => []) as never,
-        getSessionInfo: (async (sid: string) => (restored[sid] ? { sessionId: sid, cwd: webRoot } : undefined)) as never,
+        getSessionInfo: (async (sid: string) => (restored[sid] ? { sessionId: sid, cwd: restoredCwd } : undefined)) as never,
         getSessionMessages: (async (sid: string) => {
           reads.main++;
           if (files[sid] === "unreadable") throw new Error("EACCES");
@@ -2284,6 +2284,28 @@ describe("transcript sync (terminal CLI turns)", () => {
       expect(calls.filter((o) => o.resume === id && o.canUseTool).at(-1)).toMatchObject({ resume: id, resumeSessionAt: undefined });
     } finally {
       d.close();
+    }
+  });
+
+  it("Windows: a restored session whose CLI ran in a junction (cwd differs from the canonical path) still reads and mirrors its transcript by the cwd the CLI wrote", { timeout: 15_000 }, async () => {
+    // The native realpath on Linux resolves a symlink as it does a junction or subst drive on Windows.
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const link = join(webRoot, "junction");
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    symlinkSync(join(webRoot, "proj"), link, "junction");
+    const id = "4d5e6f7a-8b9c-4dad-8f10-2b3c4d5e6f7a";
+    const { d, c, files, touch, reads } = await syncDaemon(fakeQuery, { [id]: history as never }, link);
+    try {
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await c.waitFor(isPart("session_state"));
+      const before = reads.main;
+      files[id] = [...(history as Msg[]), ...external("junction")];
+      touch(id, link);
+      await c.waitFor(isPart("user_text", "cli-junction"));
+      expect(reads.main).toBeGreaterThan(before);
+    } finally {
+      d.close();
+      platform.mockRestore();
     }
   });
 
