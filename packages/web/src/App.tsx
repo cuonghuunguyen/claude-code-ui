@@ -1412,8 +1412,8 @@ export function SessionPane({
           reveal={reveal}
           onJump={() => {
             if (window.matchMedia?.("(pointer: coarse)").matches) return;
-            // A permission or question panel replaces the prompt box: its first action is the sensible target.
-            (prompt.current ?? dock.current?.querySelector<HTMLElement>("form button"))?.focus();
+            // A permission or question panel replaces the prompt box: its first option or action is the target (a question's Dismiss stops the turn, so it is never first).
+            (prompt.current ?? dock.current?.querySelector<HTMLElement>("form input[type=radio], form input[type=checkbox], form button"))?.focus();
           }}
           footer={thinking}
           renderItem={(item, index) =>

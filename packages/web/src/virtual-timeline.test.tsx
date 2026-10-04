@@ -218,6 +218,17 @@ it("Jump to latest moves the focus to the permission panel's first action when t
   expect(document.activeElement).toBe(el.querySelector('[data-testid="permission-panel"] button'));
 });
 
+it("Jump to latest moves the focus to the question panel's first option, not Dismiss (which stops the turn)", async () => {
+  const question: Part = { type: "question", id: "q1", requestId: "q1", toolUseId: "t1", questions: [{ question: "Which?", header: "Which", options: [{ label: "npm", description: "" }, { label: "pnpm", description: "" }], multiSelect: false }], settled: false };
+  await open(view([...turns(100), bash("t1"), question]));
+  await userScroll(1000);
+  button()!.focus();
+  await act(async () => button()!.click());
+  await settle();
+  expect(el.querySelector('textarea[aria-label="Prompt"]')).toBeNull();
+  expect(document.activeElement).toBe(el.querySelector('[data-testid="question-panel"] input'));
+});
+
 it("Jump to latest on a touch screen does not focus the prompt box: the soft keyboard stays closed", async () => {
   const mm = window.matchMedia;
   window.matchMedia = ((q: string) => ({ matches: q.includes("pointer: coarse"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
