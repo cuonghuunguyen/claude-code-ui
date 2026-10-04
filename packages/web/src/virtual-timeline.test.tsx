@@ -140,7 +140,8 @@ const userScroll = async (top: number) => {
   await act(async () => log().scrollTo({ top }));
   await settle();
 };
-const button = () => el.querySelector<HTMLButtonElement>('[data-testid="scroll-to-bottom"]');
+/** The scroll-to-bottom button while shown (hidden it stays mounted, inert, for its fade). */
+const button = () => el.querySelector<HTMLButtonElement>('[data-testid="scroll-to-bottom"]:not([inert])');
 const atBottom = () => log().scrollTop === maxScroll(log());
 const lastItem = () => [...log().querySelectorAll<HTMLElement>("[data-index]")].at(-1)!;
 
@@ -192,6 +193,34 @@ it("scrolled up, new output does not pull the view down; the scroll-to-bottom bu
   expect(text()).toContain("newest");
   expect(button()).toBeNull();
   expect(scrollBehaviors).toContain("smooth");
+});
+
+it("at the bottom, a 20px scroll up leaves the bottom: new output and a growing last item do not pull the view down", async () => {
+  await open(view([...turns(50), answer(50, "start", true)]));
+  await userScroll(log().scrollTop - 20);
+  const top = log().scrollTop;
+  expect(button()).not.toBeNull();
+  await render({ view: view([answer(50, "start and more", true)], props!.view) });
+  heights.set(100, 700);
+  await resize(lastItem());
+  await settle();
+  expect(log().scrollTop).toBe(top);
+  await render({ view: view([user(51), answer(51, "newest")], props!.view) });
+  await settle();
+  expect(log().scrollTop).toBe(top);
+  expect(button()).not.toBeNull();
+});
+
+it("the scroll-to-bottom button shows a keyboard focus ring and fades in and out (OpenCode), hidden it is inert", async () => {
+  await open(view(turns(100)));
+  const hiddenButton = el.querySelector<HTMLButtonElement>('[data-testid="scroll-to-bottom"]');
+  expect(hiddenButton?.hasAttribute("inert")).toBe(true);
+  expect(hiddenButton!.className).toContain("opacity-0");
+  await userScroll(1000);
+  expect(button()!.className).toContain("focus-visible:outline-solid");
+  expect(button()!.className).toContain("transition-[opacity,scale,translate]");
+  expect(button()!.className).toContain("motion-reduce:transition-none");
+  expect(button()!.className).not.toContain("opacity-0");
 });
 
 it("with reduced motion the scroll-to-bottom button scrolls instantly", async () => {

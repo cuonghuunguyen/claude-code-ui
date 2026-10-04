@@ -2,7 +2,7 @@ import { measureElement, observeElementRect, useVirtualizer } from "@tanstack/re
 import { ArrowDownIcon } from "lucide-react";
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-/** Scroll distance from the end that still counts as "at the bottom" (follow output, no scroll button). */
+/** Scrolling down to this distance from the end returns to the bottom (follow output, no scroll button). */
 const END_THRESHOLD = 80;
 
 /**
@@ -25,7 +25,7 @@ export function VirtualTimeline<T>({
   reveal?: { key: string };
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Pinned: follows new output. Leaves only when the user scrolls up away from the end, returns at the end.
+  // Pinned: follows new output. Any scroll up away from the end leaves (OpenCode); scrolling down near the end returns.
   // Own state from scroll events, not the virtualizer's followOnAppend: that misses appends that arrive before the
   // scroll event of the previous follow (event log replay), and its scrollToEnd keeps re-aiming at the end for up to
   // 5 s while items get measured, pulling back a user who scrolls up.
@@ -39,13 +39,12 @@ export function VirtualTimeline<T>({
     count: items.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 80,
-    getItemKey: useCallback((i: number) => itemKey(items[i]!), [items]),
+    getItemKey: useCallback((i: number) => itemKey(items[i]!), [items, itemKey]),
     paddingStart: 16,
     // Tab from a rendered item reaches the next one.
     overscan: 8,
-    // At the end, a measured size change keeps the end in view.
+    // At the end (default 1px), a measured size change keeps the end in view; a user scrolled up stays where they are.
     anchorTo: "end",
-    scrollEndThreshold: END_THRESHOLD,
     // Until the first non-zero size (jsdom, a tab mounted hidden).
     initialRect: { width: 0, height: window.innerHeight },
     // A hidden tab (display: none) reports zero size: keep the last size and measurements, restore the position when shown.
@@ -71,7 +70,8 @@ export function VirtualTimeline<T>({
     const onScroll = () => {
       if (!el.clientHeight) return;
       const top = el.scrollTop;
-      const next = el.scrollHeight - el.clientHeight - top <= END_THRESHOLD || (pin.current && top >= offset.current);
+      const dist = el.scrollHeight - el.clientHeight - top;
+      const next = dist <= 1 || (top >= offset.current && (pin.current || dist <= END_THRESHOLD));
       offset.current = top;
       if (next !== pin.current) setPinned((pin.current = next));
     };
@@ -87,7 +87,10 @@ export function VirtualTimeline<T>({
   // last item, the Thinking row.
   useLayoutEffect(() => {
     const el = scrollRef.current!;
-    if (pin.current && !hidden.current && el.clientHeight) el.scrollTop = el.scrollHeight;
+    if (!pin.current || hidden.current || !el.clientHeight) return;
+    el.scrollTop = el.scrollHeight;
+    // A user scroll up before this scroll's event still compares with the followed position.
+    offset.current = el.scrollTop;
   });
   useLayoutEffect(() => {
     const i = reveal ? items.findIndex((item) => itemKey(item) === reveal.key) : -1;
@@ -115,19 +118,18 @@ export function VirtualTimeline<T>({
           {footer && <div className="mt-3">{footer}</div>}
         </div>
       </div>
-      {/* OpenCode "Jump to latest": 32x28 raised button 32px above the bottom (44px on touch screens). */}
-      {!pinned && (
-        <button
-          type="button"
-          aria-label="Jump to latest"
-          title="Jump to latest"
-          data-testid="scroll-to-bottom"
-          className="absolute bottom-8 left-1/2 z-10 flex h-7 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-lg bg-background/90 text-foreground shadow-raised outline-none backdrop-blur-[2px] hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:size-11"
-          onClick={() => v.scrollToEnd({ behavior: matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })}
-        >
-          <ArrowDownIcon aria-hidden className="size-4" />
-        </button>
-      )}
+      {/* OpenCode "Jump to latest": 32x28 raised button 32px above the bottom (44px on touch screens), fades and scales in. */}
+      <button
+        type="button"
+        aria-label="Jump to latest"
+        title="Jump to latest"
+        data-testid="scroll-to-bottom"
+        inert={pinned}
+        className={`absolute bottom-8 left-1/2 z-10 flex h-7 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-lg bg-background/90 text-foreground shadow-raised outline-none backdrop-blur-[2px] transition-[opacity,scale,translate] duration-200 ease-out hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info motion-reduce:transition-none pointer-coarse:size-11 ${pinned ? "pointer-events-none translate-y-2 scale-[0.8] opacity-0" : ""}`}
+        onClick={() => v.scrollToEnd({ behavior: matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })}
+      >
+        <ArrowDownIcon aria-hidden className="size-4" />
+      </button>
     </div>
   );
 }

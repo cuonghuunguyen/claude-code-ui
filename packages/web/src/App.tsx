@@ -49,7 +49,7 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withSubscribe, type SessionView, type ToolCall } from "./store.ts";
+import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
@@ -1137,6 +1137,8 @@ export type StartOptions = { model: string; mode: PermissionMode; effort: Effort
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
 const NEW_DRAFT: StartOptions = { model: "default", mode: "default", effort: "default" };
 
+const timelineKey = (item: TimelineItem) => (item.kind === "context" ? item.id : item.part.id);
+
 export function SessionPane({
   scrollKey,
   run,
@@ -1280,7 +1282,7 @@ export function SessionPane({
         <VirtualTimeline
           key={scrollKey}
           items={items}
-          itemKey={(item) => (item.kind === "context" ? item.id : item.part.id)}
+          itemKey={timelineKey}
           reveal={reveal}
           footer={thinking}
           renderItem={(item, index) =>
