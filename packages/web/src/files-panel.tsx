@@ -56,7 +56,10 @@ export function FilesPanel({
       const r = await client.request<FsReadResult>({ type: "fs.read", path });
       update(path, (t) => diskChanged(t, r));
     } catch (e) {
-      if ((e as Error).message !== "disconnected") update(path, (t) => ({ ...t, error: readFailure(e as RequestError).text }));
+      if ((e as Error).message === "disconnected") return;
+      const f = readFailure(e as RequestError);
+      // A clean tab shows the state instead of its stale text; a dirty one keeps its edits and shows the line.
+      update(path, (t) => (f.notice && !isDirty(t) ? { ...t, error: undefined, notice: f.text } : { ...t, error: f.text }));
     }
   }
 
@@ -127,6 +130,7 @@ export function FilesPanel({
 
   const shown = paths.filter((p) => inDir(p, cwd));
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
+  const refused = notice ?? (active?.notice ? { path: active.path, text: active.notice } : undefined);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="files-panel">
@@ -169,9 +173,9 @@ export function FilesPanel({
               <div
                 key={p}
                 role="tab"
-                aria-selected={t === active}
+                aria-selected={t === active && !notice}
                 data-testid="editor-tab"
-                className={`flex shrink-0 items-center gap-1 border-r pl-2 ${t === active ? "bg-muted" : ""}`}
+                className={`flex shrink-0 items-center gap-1 border-r pl-2 ${t === active && !notice ? "bg-muted" : ""}`}
                 title={p}
               >
                 <button className="py-1.5" onClick={() => (setNotice(undefined), setActivePath(p))}>
@@ -191,12 +195,12 @@ export function FilesPanel({
           })}
         </div>
       )}
-      {notice ? (
-        <p className="m-auto max-w-full p-4 text-center text-muted-foreground text-sm" data-testid="file-notice">
-          <span className="block truncate font-mono text-xs" title={notice.path}>
-            {notice.path.slice(cwd.length + 1) || notice.path}
+      {refused ? (
+        <p className="m-auto max-w-full p-4 text-center text-muted-foreground text-sm" data-testid="file-notice" role="status">
+          <span className="block truncate font-mono text-xs" title={refused.path}>
+            {refused.path.slice(cwd.length + 1) || refused.path}
           </span>
-          {notice.text}
+          {refused.text}
         </p>
       ) : active ? (
         <div className="flex min-h-0 flex-1 flex-col">

@@ -112,7 +112,11 @@ export function ChangesPanel({
       client
         .request<FsReadResult>({ type: "fs.read", path })
         .then((r): Disk => ({ content: r.content }))
-        .catch((e: RequestError): Disk => (e.code === "not_found" ? { content: "", deleted: true } : { error: readFailure(e).text, notice: readFailure(e).notice }))
+        .catch((e: RequestError): Disk => {
+          if (e.code === "not_found") return { content: "", deleted: true };
+          const f = readFailure(e);
+          return { error: f.text, notice: f.notice };
+        })
         .then((d) => live && setDisk((x) => ({ ...x, [path]: d })));
     return () => void (live = false);
   }, [key, reload]);

@@ -61,8 +61,62 @@ it("opening a binary, too large or not UTF-8 file shows its state in the viewer,
     expect(el.textContent).not.toMatch(/raw:|too_large|not_utf8/);
   }
   expect(el.querySelectorAll("[data-testid=editor-tab]")).toHaveLength(1);
+  expect(el.querySelector("[data-testid=file-notice]")!.getAttribute("role")).toBe("status");
+  // The notice is the current view: the tab strip does not mark the previous tab as selected.
+  expect(el.querySelector("[data-testid=editor-tab]")!.getAttribute("aria-selected")).toBe("false");
   // Choosing the open tab again replaces the notice with its editor.
   await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=editor-tab] button")!.click(), undefined));
+  expect(el.querySelector("[data-testid=file-notice]")).toBeNull();
+  act(() => root.render(null));
+});
+
+it("an open clean tab whose file turns binary shows the notice instead of the stale text; a dirty one keeps its edits and shows the line", async () => {
+  let binary = false;
+  let changed = (_: { path: string }) => {};
+  const request = vi.fn(async (m: { type: string; path?: string }) => {
+    if (m.type === "fs.list") return { entries: [] };
+    if (m.type !== "fs.read") return {};
+    if (binary) throw Object.assign(new Error("binary raw"), { code: "binary", size: 2048 });
+    return { content: "export const x = 1;", mtime: 1 };
+  });
+  const client = { request, onFsChanged: (f: typeof changed) => ((changed = f), () => {}) } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  const root = createRoot(el);
+  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} openPath="/p/main.ts" />));
+  expect(el.querySelector("[data-testid=code-editor]")).not.toBeNull();
+  binary = true;
+  await act(async () => changed({ path: "/p/main.ts" }));
+  expect(el.querySelector("[data-testid=file-notice]")!.textContent).toContain("Binary file, not shown (2 KB)");
+  expect(el.querySelector("[data-testid=code-editor]")).toBeNull();
+  expect(el.textContent).not.toContain("export const x");
+  // Back to text: the editor returns with the new content.
+  binary = false;
+  await act(async () => changed({ path: "/p/main.ts" }));
+  expect(el.querySelector("[data-testid=file-notice]")).toBeNull();
+  expect(el.querySelector("[data-testid=code-editor]")).not.toBeNull();
+  act(() => root.render(null));
+});
+
+it("a dirty tab whose file turns binary keeps the editor and its draft, with the state as a line", async () => {
+  let binary = false;
+  let changed = (_: { path: string }) => {};
+  const request = vi.fn(async (m: { type: string }) => {
+    if (m.type === "fs.list") return { entries: [] };
+    if (m.type !== "fs.read") return {};
+    if (binary) throw Object.assign(new Error("binary raw"), { code: "binary", size: 2048 });
+    return { content: "one", mtime: 1 };
+  });
+  const client = { request, onFsChanged: (f: typeof changed) => ((changed = f), () => {}) } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  const root = createRoot(el);
+  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} openPath="/p/main.ts" />));
+  const { EditorView } = await import("@codemirror/view");
+  const view = EditorView.findFromDOM(el.querySelector<HTMLElement>("[data-testid=code-editor] .cm-editor")!)!;
+  await act(async () => view.dispatch({ changes: { from: 3, insert: "!" } }));
+  binary = true;
+  await act(async () => changed({ path: "/p/main.ts" }));
+  expect(el.querySelector("[data-testid=code-editor]")).not.toBeNull();
+  expect(el.textContent).toContain("Binary file, not shown (2 KB)");
   expect(el.querySelector("[data-testid=file-notice]")).toBeNull();
   act(() => root.render(null));
 });

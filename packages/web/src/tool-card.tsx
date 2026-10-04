@@ -1,5 +1,5 @@
 // Tool cards, context groups and thinking blocks (docs/spec.md "Message model", "Session view UX").
-import type { Part, ToolStatus } from "@claude-ui/protocol";
+import { isPromptImage, type Part, type ToolStatus } from "@claude-ui/protocol";
 import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { useDark } from "./theme.ts";
@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
 import { relPath } from "./paths.ts";
+import { fileSize } from "./files.ts";
 import { diffStats, editFiles, filePath, readRange, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
@@ -29,7 +30,21 @@ const STATE: Record<ToolStatus, ToolUIPart["state"]> = {
 /** Labels that differ from the state's own. */
 const LABEL: Partial<Record<ToolStatus, string>> = { stopped: "Stopped" };
 
-const text = (output: unknown) => (typeof output === "string" ? output : JSON.stringify(output, null, 2));
+/** Base64 content block of a tool result (Read of an image or PDF): the data is not text, so cards show it as an image or one line. */
+const mediaBlock = (b: unknown) => {
+  const { type, source } = (b ?? {}) as { type?: unknown; source?: { data?: unknown; media_type?: unknown } };
+  if ((type !== "image" && type !== "document") || typeof source?.data !== "string") return;
+  const media = typeof source.media_type === "string" ? source.media_type : type;
+  return { media, size: fileSize(Math.floor((source.data.length * 3) / 4)), src: type === "image" && isPromptImage(media) ? `data:${media};base64,${source.data}` : undefined };
+};
+const note = (b: unknown) => {
+  const m = mediaBlock(b);
+  return m && `[${m.media}, ${m.size}]`;
+};
+/** The output with each base64 block replaced by its one-line note. */
+const redact = (output: unknown) => (Array.isArray(output) ? output.map((b) => note(b) ?? b) : output);
+
+const text = (output: unknown) => (typeof output === "string" ? output : JSON.stringify(redact(output), null, 2));
 
 // themeType follows the app theme (`.dark` on <html>), not the OS: "system" would ignore the theme toggle.
 export const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {
@@ -130,16 +145,27 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
           {output}
         </div>
       );
-    case "Read":
+    case "Read": {
+      const media = Array.isArray(result?.output) ? result.output.map(mediaBlock).filter((m) => m !== undefined) : [];
       return (
         <div className="space-y-2">
           <div data-testid="read-path" className="font-mono text-xs">
             {field(call.input, "file_path")}
             <span className="text-muted-foreground"> {readRange(call.input, result?.output)}</span>
           </div>
-          {output}
+          {media.length && !result?.isError ? (
+            media.map((m, i) => (
+              <figure key={i} className="space-y-1" data-testid="read-media">
+                {m.src && <img src={m.src} alt={field(call.input, "file_path")} className="max-h-80 max-w-full rounded-md border object-contain" />}
+                <figcaption className="text-muted-foreground text-xs">{`${m.media}, ${m.size}`}</figcaption>
+              </figure>
+            ))
+          ) : (
+            output
+          )}
         </div>
       );
+    }
     case "Grep":
     case "Glob": {
       const scope = [field(call.input, "path"), field(call.input, "glob")].filter(Boolean).join(" ");
@@ -174,7 +200,7 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
     <>
       <ToolInput input={call.input} />
       {result && (
-        <ToolOutput output={result.isError ? undefined : result.output} errorText={result.isError ? text(result.output) : undefined} />
+        <ToolOutput output={result.isError ? undefined : redact(result.output)} errorText={result.isError ? text(result.output) : undefined} />
       )}
     </>
   );
