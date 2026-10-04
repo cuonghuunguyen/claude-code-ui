@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { inDir } from "./paths.ts";
-import { diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention } from "./files.ts";
+import { readFailure, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -109,5 +109,18 @@ describe("selectionMention", () => {
   it("keeps a path outside cwd absolute and quotes a path with spaces, range inside the quotes", () => {
     expect(selectionMention(at(doc, 0, 2), "/q/a.ts", "/p")).toBe("@/q/a.ts#L1");
     expect(selectionMention(at(doc, 0, 2), "/p/my file.md", "/p")).toBe('@"my file.md#L1"');
+  });
+});
+
+describe("readFailure", () => {
+  const fail = (code: string, size?: number) => readFailure(Object.assign(new Error(`${code}: /p/x raw`), { code, size }));
+  it("words each unshowable file, with its size, without the raw code", () => {
+    expect(fail("binary", 1536)).toEqual({ text: "Binary file, not shown (1.5 KB)", notice: true });
+    expect(fail("too_large", 3 * 1024 ** 2)).toEqual({ text: "File too large to show (3 MB)", notice: true });
+    expect(fail("not_utf8", 6)).toEqual({ text: "File is not UTF-8 text, not shown (6 B)", notice: true });
+    expect(fail("binary")).toEqual({ text: "Binary file, not shown", notice: true });
+  });
+  it("passes a real error through", () => {
+    expect(fail("fs_error")).toEqual({ text: "fs_error: /p/x raw", notice: false });
   });
 });

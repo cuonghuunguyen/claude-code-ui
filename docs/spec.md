@@ -307,6 +307,8 @@ React + AI Elements (shadcn look), layout and UX from OpenCode's new web UI.
 - CodeMirror 6 (touch-friendly), editable, saved through `fs.write`, restricted to allowlisted roots.
 - A file changed by Claude reloads when clean; with unsaved edits the editor shows a conflict.
 - "Send selection to Claude" inserts path + line range into the prompt box.
+- `fs.read` refuses a file that is not shown as text with an error carrying the file `size`: `too_large` (over 2 MiB, checked before reading), `binary` (a NUL byte), `not_utf8` (invalid UTF-8, or a UTF-16 BOM). The files tab shows "Binary file, not shown (size)", "File too large to show (size)" or "File is not UTF-8 text, not shown (size)" in place of the editor, the changes tab shows the same in the file's row; images are not rendered.
+- A request handler that throws fails its request with `internal_error` and is logged; the daemon keeps running.
 - Diffs in chat and the changes tab: `@pierre/diffs`.
 
 ### Components

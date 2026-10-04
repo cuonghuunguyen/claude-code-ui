@@ -9,10 +9,10 @@ import { languages } from "@codemirror/language-data";
 import type { FsEntry, FsListResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
 import { ChevronDownIcon, ChevronRightIcon, RotateCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { connect, ConnectionStatus } from "./client.ts";
+import type { connect, ConnectionStatus, RequestError } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { baseName, inDir } from "./paths.ts";
-import { diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
+import { diskChanged, docText, isDirty, lineBreaks, opened, reload, readFailure, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -44,6 +44,8 @@ export function FilesPanel({
   const [showTree, setShowTree] = useState(true);
   const [treeKey, setTreeKey] = useState(0);
   const [error, setError] = useState<string>();
+  /** The last opened file that cannot be shown (binary, too large, not UTF-8); it replaces the editor until a tab is chosen. */
+  const [notice, setNotice] = useState<{ path: string; text: string }>();
   const editor = useRef<EditorView>(undefined);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
@@ -54,18 +56,23 @@ export function FilesPanel({
       const r = await client.request<FsReadResult>({ type: "fs.read", path });
       update(path, (t) => diskChanged(t, r));
     } catch (e) {
-      if ((e as Error).message !== "disconnected") update(path, (t) => ({ ...t, error: (e as Error).message }));
+      if ((e as Error).message === "disconnected") return;
+      const f = readFailure(e as RequestError);
+      // A clean tab shows the state instead of its stale text; a dirty one keeps its edits and shows the line.
+      update(path, (t) => (f.notice && !isDirty(t) ? { ...t, error: undefined, notice: f.text } : { ...t, error: f.text }));
     }
   }
 
   async function open(path: string) {
     setError(undefined);
+    setNotice(undefined);
     if (!tabsRef.current[path]) {
       try {
         const r = await client.request<FsReadResult>({ type: "fs.read", path });
         setTabs((ts) => ({ ...ts, [path]: ts[path] ?? opened(path, r) }));
       } catch (e) {
-        return setError((e as Error).message);
+        const f = readFailure(e as RequestError);
+        return f.notice ? setNotice({ path, text: f.text }) : setError(f.text);
       }
     }
     setActivePath(path);
@@ -123,6 +130,7 @@ export function FilesPanel({
 
   const shown = paths.filter((p) => inDir(p, cwd));
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
+  const refused = notice ?? (active?.notice ? { path: active.path, text: active.notice } : undefined);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="files-panel">
@@ -165,12 +173,12 @@ export function FilesPanel({
               <div
                 key={p}
                 role="tab"
-                aria-selected={t === active}
+                aria-selected={t === active && !notice}
                 data-testid="editor-tab"
-                className={`flex shrink-0 items-center gap-1 border-r pl-2 ${t === active ? "bg-muted" : ""}`}
+                className={`flex shrink-0 items-center gap-1 border-r pl-2 ${t === active && !notice ? "bg-muted" : ""}`}
                 title={p}
               >
-                <button className="py-1.5" onClick={() => setActivePath(p)}>
+                <button className="py-1.5" onClick={() => (setNotice(undefined), setActivePath(p))}>
                   {baseName(p)}
                   {isDirty(t) && <span aria-label="unsaved"> ●</span>}
                   {t.conflict && <span className="text-warning"> !</span>}
@@ -187,7 +195,14 @@ export function FilesPanel({
           })}
         </div>
       )}
-      {active ? (
+      {refused ? (
+        <p className="m-auto max-w-full p-4 text-center text-muted-foreground text-sm" data-testid="file-notice" role="status">
+          <span className="block truncate font-mono text-xs" title={refused.path}>
+            {refused.path.slice(cwd.length + 1) || refused.path}
+          </span>
+          {refused.text}
+        </p>
+      ) : active ? (
         <div className="flex min-h-0 flex-1 flex-col">
           {active.conflict && (
             <div

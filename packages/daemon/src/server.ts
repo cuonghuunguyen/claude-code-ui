@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { createServer, type IncomingMessage } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { createAdapter, EFFORTS, imageBlock, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
@@ -703,7 +703,7 @@ export function createDaemon(opts: {
       attached.forEach((d) => d());
       focused.delete(ws);
     });
-    ws.on("message", async (data) => {
+    const onMessage = async (data: RawData) => {
       let msg: ClientMessage;
       try {
         msg = JSON.parse(String(data));
@@ -713,7 +713,7 @@ export function createDaemon(opts: {
       if (typeof msg !== "object" || msg === null || Array.isArray(msg))
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
       const reply = (result: unknown) => send(ws, { type: "reply", reqId: msg.reqId, result });
-      const fail = (code: string, message: string) => send(ws, { type: "error", reqId: msg.reqId, code, message });
+      const fail = (code: string, message: string, size?: number) => send(ws, { type: "error", reqId: msg.reqId, code, message, size });
       const find = async (id: string) => (await findSession(id)) ?? void fail("unknown_session", `no session ${id}`);
 
       switch (msg.type) {
@@ -969,15 +969,17 @@ export function createDaemon(opts: {
           try {
             const st = statSync(file);
             if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
-            if (st.size > MAX_FILE_BYTES) return fail("too_large", `larger than ${MAX_FILE_BYTES} bytes: ${msg.path}`);
+            if (st.size > MAX_FILE_BYTES) return fail("too_large", `larger than ${MAX_FILE_BYTES} bytes: ${msg.path}`, st.size);
             const buf = readFileSync(file);
-            if (buf.includes(0)) return fail("binary", `binary file: ${msg.path}`);
+            // UTF-16 text has NUL bytes: its BOM says text, not binary. Not UTF-8 either way.
+            if ((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff)) return fail("not_utf8", `not UTF-8 text: ${msg.path}`, st.size);
+            if (buf.includes(0)) return fail("binary", `binary file: ${msg.path}`, st.size);
             let content: string;
             try {
               // Fatal: a lossy decode would turn invalid bytes into U+FFFD and a save would write that back. ignoreBOM keeps the BOM in the content.
               content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buf);
             } catch {
-              return fail("not_utf8", `not UTF-8 text: ${msg.path}`);
+              return fail("not_utf8", `not UTF-8 text: ${msg.path}`, st.size);
             }
             return reply({ content, mtime: st.mtimeMs });
           } catch (err) {
@@ -1108,7 +1110,18 @@ export function createDaemon(opts: {
         default:
           return fail("unknown_type", `unknown message type ${(msg as { type?: string }).type}`);
       }
-    });
+    };
+    // A handler that throws fails its request: a rejected promise nobody awaits would end the process (Node's default).
+    ws.on("message", (data) =>
+      onMessage(data).catch((err) => {
+        console.error("request handler failed:", err);
+        let reqId: unknown;
+        try {
+          reqId = JSON.parse(String(data)).reqId;
+        } catch {}
+        send(ws, { type: "error", reqId: typeof reqId === "string" ? reqId : undefined, code: "internal_error", message: "request failed" });
+      }),
+    );
   });
 
   return http;

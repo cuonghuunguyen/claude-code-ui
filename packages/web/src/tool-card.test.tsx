@@ -262,3 +262,25 @@ describe("SubagentGroup", () => {
   });
 });
 
+
+describe("Read of an image or PDF", () => {
+  const b64 = "iVBORw0KGgo".repeat(200);
+  const read = (output: unknown) =>
+    renderToStaticMarkup(<ToolBody call={done("Read", { file_path: "/w/a.png" })} result={{ type: "tool_result", toolUseId: "t1", output, isError: false } as never} />);
+
+  it("shows the image, with no base64 JSON", () => {
+    const html = read([{ type: "image", source: { type: "base64", media_type: "image/png", data: b64 } }]);
+    expect(html).toContain(`<img src="data:image/png;base64,${b64}"`);
+    expect(html).toContain("image/png, 1.6 KB");
+    expect(html).not.toContain("&quot;data&quot;");
+    expect(html).not.toContain("<pre");
+  });
+
+  it("shows a short notice for a PDF (and for any binary block in a generic card), not the base64", () => {
+    const pdf = [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }];
+    const html = read(pdf);
+    expect(html).toContain("application/pdf, 1.6 KB");
+    expect(html).not.toContain(b64);
+    expect(renderToStaticMarkup(<ToolBody call={done("mcp__x__shot", {})} result={{ type: "tool_result", toolUseId: "t1", output: pdf, isError: false } as never} />)).not.toContain(b64);
+  });
+});

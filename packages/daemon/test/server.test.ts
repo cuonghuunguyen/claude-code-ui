@@ -811,6 +811,33 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "bin") })).toMatchObject({ code: "binary" });
   });
 
+  it("fs.read: binary, too large, UTF-16 and invalid UTF-8 files fail with their own code and the size; empty and just-under-limit files read", async () => {
+    const dir = join(webRoot, "proj");
+    mkdirSync(dir, { recursive: true });
+    const put = (name: string, data: Buffer) => (writeFileSync(join(dir, name), data), join(dir, name));
+    const MAX = 2 * 1024 * 1024;
+    const png = put("a.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d]));
+    const utf16 = put("u16.txt", Buffer.from("\ufeffhi", "utf16le"));
+    const utf16be = put("u16be.txt", Buffer.from([0xfe, 0xff, 0, 0x68]));
+    const bad = put("bad.txt", Buffer.from([0x68, 0x69, 0xff, 0xfe, 0x20]));
+    const over = put("over.bin", Buffer.alloc(MAX + 1, 0x61));
+    const overBinary = put("over.zip", Buffer.alloc(MAX + 1, 0));
+    const under = put("under.txt", Buffer.alloc(MAX, 0x61));
+    const empty = put("empty", Buffer.alloc(0));
+    const c = await client();
+    expect(await c.request({ type: "fs.read", path: png })).toMatchObject({ code: "binary", size: 12 });
+    expect(await c.request({ type: "fs.read", path: utf16 })).toMatchObject({ code: "not_utf8", size: 6 });
+    expect(await c.request({ type: "fs.read", path: utf16be })).toMatchObject({ code: "not_utf8", size: 4 });
+    expect(await c.request({ type: "fs.read", path: bad })).toMatchObject({ code: "not_utf8", size: 5 });
+    expect(await c.request({ type: "fs.read", path: over })).toMatchObject({ code: "too_large", size: MAX + 1 });
+    expect(await c.request({ type: "fs.read", path: overBinary })).toMatchObject({ code: "too_large", size: MAX + 1 });
+    expect(await c.request({ type: "fs.read", path: under })).toMatchObject({ result: { content: "a".repeat(MAX) } });
+    expect(await c.request({ type: "fs.read", path: empty })).toMatchObject({ result: { content: "" } });
+    // The daemon still answers on the same and on a new connection.
+    expect(await c.request({ type: "session.create", cwd: "/nonexistent" })).toMatchObject({ code: "bad_cwd" });
+    expect(await (await client()).request({ type: "fs.read", path: empty })).toMatchObject({ result: { content: "" } });
+  });
+
   it("fs.read of a deleted file inside a root replies not_found, outside a root still path_not_allowed", async () => {
     mkdirSync(join(webRoot, "proj"), { recursive: true });
     const file = join(webRoot, "proj", "gone.txt");
@@ -1927,6 +1954,18 @@ describe("push", () => {
     const none = await daemon();
     expect(await none.c.request({ type: "push.key" })).toMatchObject({ code: "push_unavailable" });
     none.d.close();
+  });
+
+  it("a request handler that throws fails that request (internal_error) and the daemon keeps running", async () => {
+    const f = fakePush();
+    const { d, c } = await daemon({ ...f.push, subscribe: (_s: unknown): _s is {} => { throw new Error("boom"); } });
+    try {
+      const sub = { endpoint: "https://push.example/x", keys: { p256dh: "p", auth: "a" } };
+      expect(await c.request({ type: "push.subscribe", subscription: sub })).toMatchObject({ type: "error", code: "internal_error" });
+      expect(await c.request({ type: "push.key" })).toMatchObject({ result: { publicKey: "BPUBLIC" } });
+    } finally {
+      d.close();
+    }
   });
 
   it("pushes needs input with the session title fallback and tool command; suppressed while a focused tab shows the session", async () => {

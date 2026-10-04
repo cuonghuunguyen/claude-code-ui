@@ -382,3 +382,20 @@ it("reports the listed file count to the pane tab (a created and deleted file is
   await act(async () => void document.body.dispatchEvent(key));
   expect(key.defaultPrevented).toBe(false);
 });
+
+it("a changed file that is binary, too large or not UTF-8 shows its state, not a raw error", async () => {
+  const states: Record<string, [string, number]> = { "/p/a.png": ["binary", 2048], "/p/big.log": ["too_large", 5 * 1024 ** 2], "/p/u16.txt": ["not_utf8", 10] };
+  const client = fakeClient({});
+  (client.request as unknown as ReturnType<typeof vi.fn>).mockImplementation((async (m: { path: string }) => {
+    const [code, size] = states[m.path]!;
+    throw Object.assign(new Error(`${code} file: ${m.path}`), { code, size });
+  }) as never);
+  const parts = Object.keys(states).map((p, i) => edit(`e${i}`, p, "a", "b"));
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  for (const [path, text] of [["/p/a.png", "Binary file, not shown (2 KB)"], ["/p/big.log", "File too large to show (5 MB)"], ["/p/u16.txt", "File is not UTF-8 text, not shown (10 B)"]]) {
+    await act(async () => (el.querySelector<HTMLButtonElement>(`[data-testid=changed-file][aria-label*="${path.slice(3)}"]`)!.click(), undefined));
+    expect(el.querySelector("[data-testid=file-diff]")!.textContent).toContain(text);
+  }
+  expect(el.textContent).not.toMatch(/too_large|not_utf8|binary file:/);
+});

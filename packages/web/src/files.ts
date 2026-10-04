@@ -1,6 +1,7 @@
 // Editor tab state (docs/spec.md "Editor"): the disk version the tab is based on, the user's draft, and a pending conflict.
 import { Compartment, EditorState, Text, type TransactionSpec } from "@codemirror/state";
 import type { FsReadResult } from "@claude-ui/protocol";
+import type { RequestError } from "./client.ts";
 import { mentionPath } from "./mentions.ts";
 import { isWinPath, relPath } from "./paths.ts";
 
@@ -13,6 +14,8 @@ export type Tab = {
   /** A newer disk version that arrived while the draft had unsaved edits. */
   conflict?: FsReadResult;
   error?: string;
+  /** The file turned into one that cannot be shown (binary, too large, not UTF-8) while the tab had no edits: shown in place of the editor. */
+  notice?: string;
 };
 
 export const opened = (path: string, r: FsReadResult): Tab => ({ path, disk: r.content, mtime: r.mtime, draft: r.content });
@@ -21,6 +24,7 @@ export const isDirty = (t: Tab) => t.draft !== t.disk;
 
 /** A disk version read after a change: a clean tab reloads, a dirty one gets a conflict. */
 export function diskChanged(t: Tab, r: FsReadResult): Tab {
+  if (t.notice) return { ...t, disk: r.content, draft: r.content, mtime: r.mtime, conflict: undefined, error: undefined, notice: undefined };
   if (r.mtime === t.mtime) return t;
   if (r.content === t.disk) return { ...t, mtime: r.mtime, conflict: undefined };
   if (!isDirty(t)) return { ...t, disk: r.content, draft: r.content, mtime: r.mtime, conflict: undefined, error: undefined };
@@ -79,4 +83,23 @@ export function selectionMention(state: EditorState, path: string, cwd: string) 
   // A selection that ends at the start of a line (whole lines selected) does not include that line.
   const last = end.number > start.number && to === end.from ? end.number - 1 : end.number;
   return mentionPath(`${rel}#L${start.number}${last > start.number ? `-${last}` : ""}`);
+}
+
+export const fileSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${+(n / 1024).toFixed(1)} KB` : `${+(n / 1024 ** 2).toFixed(1)} MB`);
+
+/** What the viewer says about a failed fs.read: `notice` for a file that cannot be shown (not an error), no raw error code. */
+export function readFailure(e: RequestError): { text: string; notice: boolean } {
+  const size = e.size === undefined ? "" : ` (${fileSize(e.size)})`;
+  switch (e.code) {
+    case "binary":
+      return { text: `Binary file, not shown${size}`, notice: true };
+    case "too_large":
+      return { text: `File too large to show${size}`, notice: true };
+    case "not_utf8":
+      return { text: `File is not UTF-8 text, not shown${size}`, notice: true };
+    case "not_a_file":
+      return { text: "Not a file", notice: true };
+    default:
+      return { text: e.message, notice: false };
+  }
 }
