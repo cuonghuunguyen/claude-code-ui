@@ -371,17 +371,13 @@ it("the context meter sits in the prompt box toolbar once the session reports it
   expect($2("prompt-toolbar")!.contains($2("context-meter"))).toBe(true);
 });
 
-it("the rewind panel scrolls into view once when it opens, not again on each keystroke in the prompt box", async () => {
+it("the rewind panel opened from the palette stays open while typing in the prompt box", async () => {
   const view = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "user_text", id: "u1", text: "hello", images: [] } });
-  // Current Chromium returns a Promise; an effect must not hand it to React as its cleanup.
-  const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => Promise.resolve() as never);
   const { $, box } = await render({ rewindTo: "u1" }, view);
   expect($("rewind-panel")).not.toBeNull();
-  const opened = scroll.mock.contexts.filter((c) => c === $("rewind-panel")).length;
-  expect(opened).toBe(1);
   await type(box, "a");
   await type(box, "ab");
-  expect(scroll.mock.contexts.filter((c) => c === $("rewind-panel")).length).toBe(1);
+  expect($("rewind-panel")).not.toBeNull();
   const errors: unknown[] = [];
   const onError = (e: ErrorEvent) => (errors.push(e.error), e.preventDefault());
   window.addEventListener("error", onError);
@@ -389,18 +385,6 @@ it("the rewind panel scrolls into view once when it opens, not again on each key
   unmount = noop;
   window.removeEventListener("error", onError);
   expect(errors).toEqual([]);
-  scroll.mockRestore();
-});
-
-it("the rewind panel leaves stick-to-bottom when it opens, so the timeline growing does not scroll it out of view", async () => {
-  const view = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "user_text", id: "u1", text: "hello", images: [] } });
-  const { el, $, rerender } = await render({}, view);
-  // The "scroll to bottom" button shows only when the timeline does not stick to the bottom.
-  const scrollButton = () => el.querySelector("button.rounded-full");
-  expect(scrollButton()).toBeNull();
-  await rerender({ rewindTo: "u1" });
-  expect($("rewind-panel")).not.toBeNull();
-  expect(scrollButton()).not.toBeNull();
 });
 
 it("the @-mention picker searches again once the daemon reconnects", async () => {

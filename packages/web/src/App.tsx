@@ -30,7 +30,6 @@ import type {
 } from "@claude-ui/protocol";
 import { isPromptImage, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
-import { useStickToBottomContext } from "use-stick-to-bottom";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
@@ -50,8 +49,9 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withSubscribe, type SessionView, type ToolCall } from "./store.ts";
-import { ContextGroup, CwdContext, SubagentGroup, ToolCard } from "./tool-card.tsx";
+import { applyEvent, awaitingPermission, emptySession, pendingPermission, pendingQuestion, timeline, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { ContextGroup, CwdContext, SubagentGroup, ToolCard, useExpanded } from "./tool-card.tsx";
+import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { relPath } from "./tools.ts";
 import { FilesPanel } from "./files-panel.tsx";
@@ -1137,6 +1137,8 @@ export type StartOptions = { model: string; mode: PermissionMode; effort: Effort
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
 const NEW_DRAFT: StartOptions = { model: "default", mode: "default", effort: "default" };
 
+const timelineKey = (item: TimelineItem) => (item.kind === "context" ? item.id : item.part.id);
+
 export function SessionPane({
   scrollKey,
   run,
@@ -1224,11 +1226,23 @@ export function SessionPane({
     return () => window.removeEventListener("keydown", onEsc);
   }, [escStops]);
   const [rewinding, setRewinding] = useState<string>();
+  // Palette Rewind: the timeline scrolls to the message first (it can be outside the rendered window), then its panel opens.
+  const [reveal, setReveal] = useState<{ key: string }>();
   useEffect(() => {
     if (!rewindTo) return;
+    setReveal({ key: rewindTo });
     setRewinding(rewindTo);
     onRewindShown?.();
   }, [rewindTo]);
+  const items = useMemo(() => timeline(view), [view]);
+  // Reasoning text stays hidden (OpenCode default); this row shows the turn (or the shown run) is working.
+  const thinking = view.state === "running" && (!current || current.status === "running") && (
+    <div data-testid="thinking">
+      <Shimmer as="span" className="font-medium text-sm">
+        Thinking
+      </Shimmer>
+    </div>
+  );
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
 
   return (
@@ -1256,14 +1270,27 @@ export function SessionPane({
         )}
       </header>
       )}
-      <Conversation key={`${scrollKey}:${current?.id ?? ""}`} className="flex-1">
-        <ConversationContent className="timeline mx-auto w-full max-w-[800px] 2xl:max-w-[1000px]">
-          {current ? <Timeline view={view} parentId={current.id} /> : timeline(view).map((item) =>
+      {current ? (
+        <Conversation key={`${scrollKey}:${current.id}`} className="flex-1">
+          <ConversationContent className="timeline mx-auto w-full max-w-[800px] 2xl:max-w-[1000px]">
+            <Timeline view={view} parentId={current.id} />
+            {thinking}
+          </ConversationContent>
+          <ConversationScrollButton />
+        </Conversation>
+      ) : (
+        <VirtualTimeline
+          key={scrollKey}
+          items={items}
+          itemKey={timelineKey}
+          reveal={reveal}
+          footer={thinking}
+          renderItem={(item, index) =>
             item.kind === "context" ? (
-              <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
+              <ContextGroup calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
             ) : item.part.type === "user_text" ? (
-              // 12px timeline gap + 12px = OpenCode 24px turn gap.
-              <div key={item.part.id} className="group flex flex-col gap-1 not-first:mt-3" data-testid="user-message">
+              // 12px item gap + 12px = OpenCode 24px turn gap.
+              <div className={`group flex flex-col gap-1 ${index ? "mt-3" : ""}`} data-testid="user-message">
                 <PartView part={item.part} view={view} />
                 {/* Shown on hover or keyboard focus (OpenCode user bubble). */}
                 <MessageActions className="ml-auto opacity-0 transition-opacity motion-reduce:transition-none group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100">
@@ -1295,20 +1322,11 @@ export function SessionPane({
                 )}
               </div>
             ) : (
-              <PartView key={item.part.id} part={item.part} view={view} />
-            ),
-          )}
-          {/* Reasoning text stays hidden (OpenCode default); this row shows the turn (or the shown run) is working. */}
-          {view.state === "running" && (!current || current.status === "running") && (
-            <div data-testid="thinking">
-              <Shimmer as="span" className="font-medium text-sm">
-                Thinking
-              </Shimmer>
-            </div>
-          )}
-        </ConversationContent>
-        <ConversationScrollButton />
-      </Conversation>
+              <PartView part={item.part} view={view} />
+            )
+          }
+        />
+      )}
       <div
         className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4"
       >
@@ -1711,14 +1729,6 @@ function RewindPanel(props: {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   useEffect(() => void props.preview().then(setPreview, (e: Error) => setError(e.message)), []);
-  // Once, on open: opened from the palette, the message can be far up the timeline.
-  // Leave stick-to-bottom first, or the timeline growing (preview loaded) scrolls back to the bottom.
-  const self = useRef<HTMLDivElement>(null);
-  const { stopScroll } = useStickToBottomContext();
-  useEffect(() => {
-    stopScroll();
-    self.current?.scrollIntoView?.({ block: "nearest" });
-  }, []);
   const run = async (mode: RewindMode) => {
     setBusy(true);
     setError(undefined);
@@ -1735,7 +1745,6 @@ function RewindPanel(props: {
     <div
       className="ml-auto flex w-full max-w-md flex-col gap-2 rounded-lg border p-3 text-sm"
       data-testid="rewind-panel"
-      ref={self}
     >
       {!preview && !error && <p className="text-muted-foreground">Checking file changes…</p>}
       {preview && preview.filesChanged.length > 0 && (
@@ -1812,7 +1821,7 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
     case "turn_result":
       return <TurnFooter part={part} />;
     case "compaction":
-      return <CompactionDivider summary={part.summary} />;
+      return <CompactionDivider id={part.id} summary={part.summary} />;
     case "turn_interrupted":
       return (
         <div className="text-muted-foreground text-xs" data-testid="turn-interrupted">
@@ -1820,16 +1829,21 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
         </div>
       );
     case "raw":
-      return (
-        // Collapsed: an SDK message the adapter does not know yet, useful only when debugging.
-        <details className="rounded bg-muted p-2 text-xs" data-testid="raw-part">
-          <summary className="cursor-pointer text-muted-foreground">{rawLabel(part.message)}</summary>
-          <pre className="overflow-x-auto">{JSON.stringify(part.message, null, 2)}</pre>
-        </details>
-      );
+      return <RawPart id={part.id} message={part.message} />;
     default:
       return null;
   }
+}
+
+/** Collapsed: an SDK message the adapter does not know yet, useful only when debugging. */
+function RawPart({ id, message }: { id: string; message: unknown }) {
+  const { open, onOpenChange } = useExpanded(`raw:${id}`);
+  return (
+    <details className="rounded bg-muted p-2 text-xs" data-testid="raw-part" open={open} onToggle={(e) => onOpenChange(e.currentTarget.open)}>
+      <summary className="cursor-pointer text-muted-foreground">{rawLabel(message)}</summary>
+      <pre className="overflow-x-auto">{JSON.stringify(message, null, 2)}</pre>
+    </details>
+  );
 }
 
 /** "type/subtype" of an SDK message, e.g. "system/task_updated". */
@@ -1839,7 +1853,9 @@ function rawLabel(m: unknown) {
 }
 
 /** OpenCode compaction divider (line, label, line, 10px block padding); the summary Claude continues from, collapsed below it. */
-function CompactionDivider({ summary }: { summary?: string }) {
+function CompactionDivider({ id, summary }: { id: string; summary?: string }) {
+  // Outside the item: an item leaving the rendered window keeps its open summary.
+  const { open, onOpenChange } = useExpanded(`compaction:${id}`);
   return (
     <div data-testid="compaction" className="flex flex-col">
       <div className="flex items-center gap-3 py-2.5 text-muted-foreground text-xs">
@@ -1848,7 +1864,7 @@ function CompactionDivider({ summary }: { summary?: string }) {
         <span className="h-px flex-1 bg-border" aria-hidden />
       </div>
       {summary && (
-        <details className="group text-sm" data-testid="compaction-summary">
+        <details className="group text-sm" data-testid="compaction-summary" open={open} onToggle={(e) => onOpenChange(e.currentTarget.open)}>
           <summary className="mx-auto flex min-h-6 w-fit cursor-pointer items-center rounded px-2 text-muted-foreground text-xs hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
             Summary
           </summary>

@@ -162,14 +162,15 @@ it("timeline rhythm like OpenCode: 12px between tool rows, text 24px further dow
       { type: "user_text", id: "u2", text: "again", images: [] },
     ]),
   );
-  // ConversationContent gap-3 (12px) between all rows; tool rows add no margin.
-  expect(el.querySelector('[data-testid="tool-card"]')!.parentElement!.className).toContain("gap-3");
+  // 12px between all rows: each timeline item but the first has pt-3 inside its measured box; tool rows add no margin.
+  expect(cards().map((c) => c.parentElement!.className.match(/\bpt-3\b/)?.[0])).toEqual(["pt-3", "pt-3"]);
+  expect(el.querySelector('[data-testid="user-message"]')!.parentElement!.className).not.toMatch(/\bpt-3\b/);
   expect(cards()[1]!.className).not.toMatch(/\bmt-/);
   // Text part: 12px gap + 24px margin (message-part.css text part margin-top).
   expect(el.querySelector('[data-testid="assistant-text"]')!.className).toMatch(/\bmt-6\b/);
   // Turn gap: 12px gap + 12px margin = 24px (TurnGap h-6); the first prompt has no top margin.
   const users = [...el.querySelectorAll<HTMLElement>('[data-testid="user-message"]')];
-  expect(users.map((u) => u.className.match(/\S*mt-3\b/)?.[0])).toEqual(["not-first:mt-3", "not-first:mt-3"]);
+  expect(users.map((u) => u.className.match(/\S*mt-3\b/)?.[0])).toEqual([undefined, "mt-3"]);
 });
 
 it("TodoWrite: the timeline card stays collapsed, the dock above the prompt shows the latest list while the turn runs", async () => {
