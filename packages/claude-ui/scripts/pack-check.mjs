@@ -1,6 +1,6 @@
 // Proves the package: npm pack, install the tarball in a temp dir, run --version / --help, start it on a free port,
 // GET / (200) and open a WebSocket with the pairing token. Needs the npm registry (installs the runtime dependencies).
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
@@ -11,7 +11,11 @@ import pkg from "../package.json" with { type: "json" };
 
 const pkgDir = fileURLToPath(new URL("..", import.meta.url));
 const tmp = mkdtempSync(join(tmpdir(), "claude-ui-pack-"));
-const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+// Windows: npm and the bin are .cmd shims, which only start through a shell.
+// A shell joins the arguments with spaces and no quoting: quote the ones with spaces (C:\Users\First Last\...).
+const shell = process.platform === "win32";
+const q = (a) => (shell && /\s/.test(a) ? `"${a}"` : a);
+const run = (cmd, args, cwd) => execFileSync(q(cmd), args.map(q), { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], shell });
 const step = (m) => console.log(`\n== ${m}`);
 const assert = (ok, m) => {
   if (!ok) throw new Error(m);
@@ -40,7 +44,7 @@ try {
   mkdirSync(app);
   writeFileSync(join(app, "package.json"), "{}");
   run("npm", ["install", "--no-audit", "--no-fund", join(tmp, readdirSync(tmp).find((f) => f.endsWith(".tgz")))], app);
-  const bin = join(app, "node_modules", ".bin", "claude-ui");
+  const bin = join(app, "node_modules", ".bin", shell ? "claude-ui.cmd" : "claude-ui");
 
   step("claude-ui --version / --help");
   const version = run(bin, ["--version"], app).trim();
@@ -57,7 +61,7 @@ try {
   step("start, GET /, WebSocket with token");
   const port = await freePort();
   const out = [];
-  child = spawn(bin, ["--port", String(port)], { cwd: app, env: { ...process.env, XDG_CONFIG_HOME: join(tmp, "config") } });
+  child = spawn(q(bin), ["--port", String(port)], { cwd: app, env: { ...process.env, XDG_CONFIG_HOME: join(tmp, "config") }, shell });
   child.stdout.on("data", (d) => out.push(String(d)));
   child.stderr.on("data", (d) => out.push(String(d)));
   const token = await new Promise((res, rej) => {
@@ -80,6 +84,13 @@ try {
   assert(protocol === "claude-ui", "WebSocket /ws opens with the pairing token");
   console.log("\nPACK CHECK PASSED");
 } finally {
-  child?.kill();
-  rmSync(tmp, { recursive: true, force: true });
+  // The shell's kill would leave the daemon running on Windows: end the whole tree.
+  if (child && shell) spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+  else child?.kill();
+  try {
+    rmSync(tmp, { recursive: true, force: true });
+  } catch (e) {
+    // Windows: the killed processes may still hold the folder (EBUSY); a left temp dir does not fail the check.
+    console.warn(`could not remove ${tmp}: ${e.code}`);
+  }
 }

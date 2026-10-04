@@ -1,7 +1,7 @@
 // Manage Plugins dialog (docs/spec.md "Config dialogs: plugins", same as the VS Code extension 2.1.283): `claude plugin …` through
 // the CLI runner in the project cwd; after each write the daemon reloads plugins in every live query and broadcasts config.changed.
 import { readFileSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import type {
   AvailablePlugin,
   ClientMessage,
@@ -86,7 +86,8 @@ export function toList(raw: { installed: RawInstalled[]; available: RawAvailable
   const here = resolve(cwd);
   // Local and project rows of other projects are not this project's plugins (the CLI lists every project's).
   const installed: InstalledPlugin[] = raw.installed
-    .filter((p) => !p.projectPath || resolve(p.projectPath) === here)
+    // relative(): on Windows the same folder in another case or with "/" separators is "".
+    .filter((p) => !p.projectPath || relative(resolve(p.projectPath), here) === "")
     .map((p) => ({
       id: p.id,
       ...(p.version !== undefined && { version: p.version }),

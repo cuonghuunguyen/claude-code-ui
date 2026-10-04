@@ -2,7 +2,10 @@ import { closeSync, fstatSync, mkdtempSync, openSync, readFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createTerminals, MAX_PENDING_INPUT_BYTES, PAUSE_BYTES, trimScrollback } from "../src/terminals.ts";
+import { createTerminals, MAX_PENDING_INPUT_BYTES, PAUSE_BYTES, shell, trimScrollback } from "../src/terminals.ts";
+
+// POSIX-only assertions (file modes, PTY fds, sh syntax) are skipped on Windows.
+const posix = process.platform !== "win32";
 
 describe("terminal scrollback trim", () => {
   it("cuts after a line break, so the replay never starts inside an escape sequence", () => {
@@ -18,8 +21,32 @@ describe("terminal scrollback trim", () => {
   });
 });
 
+describe("terminal shell", () => {
+  const found = (...paths: string[]) => (p: string) => paths.includes(p);
+
+  it("is SHELL when set, else bash outside Windows", () => {
+    expect(shell({ SHELL: "/bin/zsh" }, "linux")).toBe("/bin/zsh");
+    expect(shell({}, "linux")).toBe("bash");
+    expect(shell({}, "darwin")).toBe("bash");
+  });
+
+  it("on Windows without SHELL: pwsh on PATH, else Windows PowerShell, else COMSPEC", () => {
+    const env = { Path: "C:\\Windows\\System32;C:\\Program Files\\PowerShell\\7", COMSPEC: "C:\\Windows\\system32\\cmd.exe" };
+    const ps5 = "C:\\Windows\\System32\\powershell.exe";
+    expect(shell(env, "win32", found(ps5, "C:\\Program Files\\PowerShell\\7\\pwsh.exe"))).toBe("C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    expect(shell(env, "win32", found(ps5))).toBe(ps5);
+    expect(shell(env, "win32", found())).toBe("C:\\Windows\\system32\\cmd.exe");
+    expect(shell({}, "win32", found())).toBe("cmd.exe");
+  });
+
+  it("on Windows a SHELL that is not a Windows file (Git Bash's /usr/bin/bash) is skipped", () => {
+    expect(shell({ SHELL: "/usr/bin/bash", COMSPEC: "cmd.exe" }, "win32", found())).toBe("cmd.exe");
+    expect(shell({ SHELL: "C:\\Program Files\\Git\\bin\\bash.exe" }, "win32", found("C:\\Program Files\\Git\\bin\\bash.exe"))).toBe("C:\\Program Files\\Git\\bin\\bash.exe");
+  });
+});
+
 describe("terminal backpressure", () => {
-  it("pauses the shell while a connection's unsent output is above the limit, resumes once it drained", async () => {
+  it("pauses the shell while a connection's unsent output is above the limit, resumes once it drained", { timeout: 30_000 }, async () => {
     process.env.SHELL = "/bin/sh";
     const terms = createTerminals();
     const info = terms.create(tmpdir(), 80, 24, {});
@@ -35,7 +62,8 @@ describe("terminal backpressure", () => {
     backlog = 0;
     await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
     t.pty.write("echo again\r");
-    await vi.waitFor(() => expect(got).toContain("again"));
+    // PowerShell on Windows takes seconds to start.
+    await vi.waitFor(() => expect(got).toContain("again"), { timeout: 25_000 });
     // Its fd must be free before the next test takes the lowest free number.
     const exited = new Promise((r) => t.pty.onExit(r));
     terms.close(t);
@@ -56,7 +84,7 @@ async function sleeping(terminals: ReturnType<typeof createTerminals>, t: NonNul
 }
 
 // node-pty 1.1.0 retried queued input on the PTY fd after the shell exit closed it, into whatever reused that fd number.
-it("never writes queued input into a file that reuses the fd of a closed terminal", { timeout: 30_000 }, async () => {
+it.runIf(posix)("never writes queued input into a file that reuses the fd of a closed terminal", { timeout: 30_000 }, async () => {
   const terminals = createTerminals();
   const t = terminals.get(terminals.create(tmpdir(), 80, 24, {}).id)!;
   const fd = (t.pty as unknown as { fd: number }).fd;
@@ -84,7 +112,7 @@ it("never writes queued input into a file that reuses the fd of a closed termina
   expect(readFileSync(file, "utf8")).toBe("");
 });
 
-it("refuses input while MAX_PENDING_INPUT_BYTES wait for the shell to read", { timeout: 30_000 }, async () => {
+it.runIf(posix)("refuses input while MAX_PENDING_INPUT_BYTES wait for the shell to read", { timeout: 30_000 }, async () => {
   const terminals = createTerminals();
   const t = terminals.get(terminals.create(tmpdir(), 80, 24, {}).id)!;
   await sleeping(terminals, t);
@@ -101,7 +129,7 @@ it("refuses input while MAX_PENDING_INPUT_BYTES wait for the shell to read", { t
 });
 
 // Every PTY master has the inode of /dev/ptmx, so a check by fd number and inode took terminal B's master for A's.
-it("never sends input or a resize of a terminal whose master closed to the terminal that reuses its fd", { timeout: 30_000 }, async () => {
+it.runIf(posix)("never sends input or a resize of a terminal whose master closed to the terminal that reuses its fd", { timeout: 30_000 }, async () => {
   const terminals = createTerminals();
   const a = terminals.get(terminals.create(tmpdir(), 80, 24, {}).id)!;
   const fd = (a.pty as unknown as { fd: number }).fd;

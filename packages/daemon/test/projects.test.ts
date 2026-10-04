@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createProjects } from "../src/projects.ts";
 
+// File modes are POSIX: on Windows chmod only sets the read-only flag.
+const posix = process.platform !== "win32";
+
 const at = (cwd: string, lastActivity: number) => ({ cwd, lastActivity });
 
 describe("projects", () => {
@@ -65,7 +68,7 @@ describe("projects", () => {
     a.open("/r/gone");
     a.remove("/r/gone");
     expect(createProjects({ file }).list([])).toEqual(["/r/kept"]);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (posix) expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 
   it("a hand-edited file of the wrong shape is ignored like a truncated one", () => {

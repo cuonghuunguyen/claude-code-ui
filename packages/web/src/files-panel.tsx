@@ -11,11 +11,11 @@ import { ChevronDownIcon, ChevronRightIcon, RotateCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { connect, ConnectionStatus } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
-import { diskChanged, docText, inDir, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
+import { baseName, inDir } from "./paths.ts";
+import { diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
 
-const baseName = (path: string) => path.split("/").at(-1) ?? path;
 
 /**
  * Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. `onSend` gets an `@path#lines` mention.

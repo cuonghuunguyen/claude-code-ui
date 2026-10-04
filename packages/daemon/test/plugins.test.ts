@@ -25,7 +25,9 @@ write(join(pluginsDir, "ponytail/.mcp.json"), { docs: { command: "y" } });
 write(join(pluginsDir, "skill-creator/.mcp.json"), { mcpServers: { creator: { command: "z" } } });
 
 // Recorded from `claude plugin list --json --available` / `plugin marketplace list --json` (CLI 2.1.285), trimmed.
-const fixture = (f: string) => readFileSync(new URL(`fixtures/plugins/${f}`, import.meta.url), "utf8").replaceAll("__PROJECT__", project).replaceAll("__PLUGINS__", pluginsDir);
+/** A path as it appears inside a JSON string (Windows backslashes escaped). */
+const inJson = (p: string) => JSON.stringify(p).slice(1, -1);
+const fixture = (f: string) => readFileSync(new URL(`fixtures/plugins/${f}`, import.meta.url), "utf8").replaceAll("__PROJECT__", inJson(project)).replaceAll("__PLUGINS__", inJson(pluginsDir));
 const LIST = fixture("list-available.json");
 const MARKETS = fixture("marketplace-list.json");
 

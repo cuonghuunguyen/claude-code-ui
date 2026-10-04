@@ -74,7 +74,8 @@ const LOCAL_HOSTNAMES = ["127.0.0.1", "localhost"];
 /** Canonical path (symlinks resolved), or undefined when it does not exist. */
 function real(path: string) {
   try {
-    return realpathSync(path);
+    // Windows: only the native call gives the on-disk case (c:\users\me -> C:\Users\me), so one folder is one project.
+    return process.platform === "win32" ? realpathSync.native(path) : realpathSync(path);
   } catch {
     return undefined;
   }
@@ -368,6 +369,15 @@ export function createDaemon(opts: {
     return p && inRoots(p) ? p : undefined;
   };
 
+  /**
+   * A transcript's cwd as sessions and projects use it. The Windows CLI writes it as its caller typed it (VS Code: c:\users\me);
+   * the canonical path keeps that session in its project. Elsewhere as written: the transcript folder name derives from it.
+   */
+  const sessionCwd = (cwd: string) => (process.platform === "win32" && allowed(cwd)) || cwd;
+  /** The cwd a restored session's transcript was written under (as the CLI typed it): a junction or subst drive differs from sessionCwd in more than case. */
+  const transcriptCwds = new Map<string, string>();
+  const transcriptCwd = (id: string, cwd: string) => transcriptCwds.get(id) ?? cwd;
+
   /** A missing absolute path whose nearest existing ancestor is allowed: deleted inside the roots (outside them, existence stays hidden). */
   const missingInRoots = (path: unknown) => {
     if (typeof path !== "string" || !isAbsolute(path) || existsSync(path)) return false;
@@ -409,7 +419,8 @@ export function createDaemon(opts: {
    * Stat-gated: the main chain is rebuilt only after its file changed, from the lines appended since the last read; a run is
    * read again only after its file changed. A transcript not at the expected path (long cwd) is read whole by the SDK.
    */
-  async function readTranscript(id: string, cwd: string): Promise<Transcript> {
+  async function readTranscript(id: string, listedCwd: string): Promise<Transcript> {
+    const cwd = transcriptCwd(id, listedCwd);
     const cache = caches.get(id) ?? caches.set(id, { tail: new JsonlTail(), runs: new Map() }).get(id)!;
     const file = transcriptFile(projectsDir, cwd, id);
     // Taken before the read: a write during it changes the stamp, so the next read takes it.
@@ -468,7 +479,7 @@ export function createDaemon(opts: {
   function mirror(s: Session) {
     let m = mirrors.get(s.id);
     if (!m) {
-      const file = transcriptFile(projectsDir, s.cwd, s.id);
+      const file = transcriptFile(projectsDir, transcriptCwd(s.id, s.cwd), s.id);
       // Also called once with zeroed stats for a missing file: no change then.
       const sync = (stamp: string) => {
         if (stamps.get(s.id) === stamp) return;
@@ -553,7 +564,7 @@ export function createDaemon(opts: {
       if (!t.cwd || !allowed(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
       const title = CLEARED.test(t.summary) ? await clearedTitle(t.sessionId, t.cwd) : t.summary;
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: t.cwd, title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: sessionCwd(t.cwd), title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
@@ -597,6 +608,7 @@ export function createDaemon(opts: {
       p = (async () => {
         const info = await history.getSessionInfo(id);
         if (!info?.cwd || !allowed(info.cwd)) return undefined;
+        transcriptCwds.set(id, info.cwd);
         // Before the read: a write during it changes the stamp, so the first subscriber syncs it.
         stamps.set(id, statStamp(transcriptFile(projectsDir, info.cwd, id)));
         const { main: messages, runs } = await readTranscript(id, info.cwd);
@@ -611,7 +623,7 @@ export function createDaemon(opts: {
         const permissionMode = modes.includes(saved.permissionMode as never) ? (saved.permissionMode as SessionSettings["permissionMode"]) : undefined;
         const effort = EFFORTS.includes(saved.effort as never) ? (saved.effort as SessionSettings["effort"]) : undefined;
         // Each run's messages name the Agent call that started it (parent_tool_use_id), so after the main transcript they nest by it.
-        return track(Session.restore(id, info.cwd, [...messages, ...runs.flat()], sessionOpts({ model, permissionMode, effort })));
+        return track(Session.restore(id, sessionCwd(info.cwd), [...messages, ...runs.flat()], sessionOpts({ model, permissionMode, effort })));
       })()
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
         .finally(() => restoring.delete(id));

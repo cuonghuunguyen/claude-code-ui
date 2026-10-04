@@ -1,6 +1,7 @@
 // Terminal panel PTYs (docs/spec.md "Side panel"). They belong to the daemon, not to a connection: a reconnect re-attaches.
 import { randomUUID } from "node:crypto";
-import { writeSync } from "node:fs";
+import { lstatSync, writeSync } from "node:fs";
+import { win32 } from "node:path";
 import { spawn, type IPty } from "node-pty";
 import type { TerminalInfo } from "@claude-ui/protocol";
 
@@ -90,6 +91,32 @@ function stop(t: Terminal) {
 /** The daemon's own settings (PORT, CLAUDE_UI_*) stay out of the shell: `npm start` there must not bind the daemon's port. The rest is the user's env, like a VS Code terminal. */
 const shellEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "PORT" && !k.startsWith("CLAUDE_UI_"))) as Record<string, string>;
 
+/** Not existsSync: a Microsoft Store pwsh is a 0-byte App Execution Alias on PATH; stat fails on it, lstat and CreateProcess do not. */
+const onDisk = (path: string) => {
+  try {
+    return !!lstatSync(path);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * The terminal panel's shell: SHELL, else bash; on Windows without a usable SHELL, pwsh on PATH, else Windows PowerShell, else COMSPEC.
+ * On Windows SHELL counts only as an existing file: Git Bash sets it to "/usr/bin/bash", which ConPTY cannot start.
+ */
+export function shell(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, exists = onDisk) {
+  if (platform !== "win32") return env.SHELL || "bash";
+  if (env.SHELL && exists(env.SHELL)) return env.SHELL;
+  // Plain objects (tests, a copied env) keep Windows' key case ("Path", "ComSpec"); process.env ignores it.
+  const get = (key: string) => Object.entries(env).find(([k]) => k.toUpperCase() === key)?.[1];
+  const dirs = (get("PATH") ?? "").split(";").filter(Boolean);
+  for (const exe of ["pwsh.exe", "powershell.exe"]) {
+    const hit = dirs.map((d) => win32.join(d, exe)).find((p) => exists(p));
+    if (hit) return hit;
+  }
+  return get("COMSPEC") || "cmd.exe";
+}
+
 export function createTerminals() {
   const terminals = new Map<string, Terminal>();
 
@@ -98,8 +125,7 @@ export function createTerminals() {
     const used = new Set([...terminals.values()].filter((t) => t.cwd === cwd).map((t) => t.title));
     let n = 1;
     while (used.has(`Terminal ${n}`)) n++;
-    // ponytail: $SHELL or bash; Windows (powershell) not handled, the daemon targets Linux and macOS.
-    const pty = spawn(process.env.SHELL || "bash", [], {
+    const pty = spawn(shell(), [], {
       name: "xterm-256color",
       cols,
       rows,
@@ -156,6 +182,9 @@ export function createTerminals() {
     /** The error code when `data` is not written now or queued; undefined when it is. */
     write(t: Terminal, data: string): "unknown_terminal" | "input_backlog" | "write_failed" | undefined {
       if (!open(t)) return "unknown_terminal";
+      // ConPTY: input goes through node-pty's pipe socket, which has no fd reuse to guard against.
+      // ponytail: no MAX_PENDING_INPUT_BYTES there; the socket buffers in memory until the shell reads.
+      if (process.platform === "win32") return void t.pty.write(data);
       const chunk = Buffer.from(data);
       if (t.pending.reduce((sum, b) => sum + b.length, chunk.length) > MAX_PENDING_INPUT_BYTES) return "input_backlog";
       t.pending.push(chunk);

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { trapTab } from "./focus-trap.ts";
 import { browse, matchFolders } from "./folders.ts";
+import { sepOf, withSep } from "./paths.ts";
 import { timeAgo } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
 
@@ -112,7 +113,7 @@ function Browser({
       (r) => {
         setRoots(r);
         // One root: start inside it, so no absolute path needs typing.
-        if (r.length === 1) (toEnd.current = true), setValue(`${r[0]!.path.replace(/\/$/, "")}/`);
+        if (r.length === 1) (toEnd.current = true), setValue(withSep(r[0]!.path));
       },
       (e: Error) => setError(e.message),
     );
@@ -144,7 +145,7 @@ function Browser({
   };
   const descend = (e: Pick<FsEntry, "path">) => {
     toEnd.current = true;
-    edit(`${e.path.replace(/\/$/, "")}/`);
+    edit(withSep(e.path));
     input.current?.focus();
   };
   const pick = async (cwd: string) => {
@@ -243,7 +244,7 @@ function Browser({
                     <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />
                     <span className="truncate font-medium">
                       {dir ? row.entry!.name : row.path}
-                      <span className="font-normal text-faint">/</span>
+                      <span className="font-normal text-faint">{sepOf(row.path)}</span>
                     </span>
                   </li>
                 )}
