@@ -136,6 +136,37 @@ it("disabled server: only Enable; claude.ai server: no Remove", async () => {
   expect(d.button("Clear authentication")).toBeUndefined();
 });
 
+it("a failed Reconnect or Enable shows its failure text with the CLI's reason", async () => {
+  const fail = () => Promise.reject(new Error("Connection closed"));
+  const d = await render({ "mcp.reconnect": fail, "mcp.toggle": fail }, { server: "broken" });
+  await d.click(d.button("Reconnect"));
+  expect(d.q("banner-error")!.textContent).toBe("Failed to reconnect: Connection closed");
+  expect(d.q("banner-success")).toBeNull();
+  await d.click(d.button("← Back to list"));
+  await d.click(d.all("mcp-row").find((r) => r.textContent?.startsWith("off")));
+  await d.click(d.button("Enable"));
+  expect(d.q("banner-error")!.textContent).toBe("Failed to enable server: Connection closed");
+});
+
+it("Enable keeps its banner when the refreshed list shows the server connected", async () => {
+  let servers = structuredClone(SERVERS);
+  const d = await render({ "mcp.toggle": () => void (servers = servers.map((s) => (s.name === "off" ? { ...s, status: "connected" } : s))), "mcp.list": () => ({ servers }) }, { server: "off" });
+  await d.click(d.button("Enable"));
+  expect(d.q("banner-success")!.textContent).toBe("Enabled off");
+  expect(d.button("Disable")).toBeTruthy();
+});
+
+it("Disable from a filtered list returns to the whole list", async () => {
+  const d = await render();
+  await d.type(d.q("mcp-filter")!, "ctx");
+  expect(d.all("mcp-row")).toHaveLength(1);
+  await d.click(d.all("mcp-row")[0]);
+  await d.click(d.button("Disable"));
+  expect(d.q("banner-success")!.textContent).toBe("Disabled ctx");
+  expect(d.all("mcp-row")).toHaveLength(5);
+  expect((d.q("mcp-filter") as HTMLInputElement).value).toBe("");
+});
+
 it("Remove asks inline, then removes from its scope and returns to the list", async () => {
   const d = await render({}, { server: "auth" });
   await d.click(d.button("Remove"));
