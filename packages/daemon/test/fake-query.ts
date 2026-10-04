@@ -28,6 +28,8 @@ export const inputs: SDKUserMessage[] = [];
 export const rewinds: { id: string; dryRun?: boolean }[] = [];
 export const checkpointFiles: { files: string[] } = { files: ["/repo/a.ts"] };
 export let closed = 0;
+/** Options of each fakeQuery that was closed. */
+export const closedQueries: Options[] = [];
 /** getContextUsage() answer, shaped like the real one (trimmed; probe in development-docs/GH-27/probe.log). */
 export const fakeUsage = {
   totalTokens: 25815,
@@ -91,7 +93,7 @@ export function fakeQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMe
       rewinds.push({ id, ...o });
       return { canRewind: true, filesChanged: checkpointFiles.files, insertions: 1, deletions: 1 };
     },
-    close: () => void (closed++, q.return(undefined)),
+    close: () => void (closed++, closedQueries.push(options ?? {}), q.return(undefined)),
   });
 }
 
@@ -115,6 +117,8 @@ export const bashSuggestion: PermissionUpdate = {
 };
 export const permissionResults: PermissionResult[] = [];
 export const aborts: AbortController[] = [];
+/** Assistant messages permissionQuery yielded: what its CLI wrote to the transcript. */
+export const yielded: SDKMessage[] = [];
 
 /** Fake query(): each prompt starts a Bash tool call, asks canUseTool, records the answer, then ends the turn. */
 export function permissionQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
@@ -122,13 +126,15 @@ export function permissionQuery({ prompt, options }: { prompt: AsyncIterable<SDK
   const q = (async function* () {
     for await (const _ of prompt) {
       const toolUseID = randomUUID();
-      yield {
+      const call = {
         type: "assistant",
         uuid: randomUUID(),
         session_id: "x",
         parent_tool_use_id: null,
         message: { id: `msg_${toolUseID}`, content: [{ type: "tool_use", id: toolUseID, name: "Bash", input: { command: "npm test" } }] },
       } as never as SDKMessage;
+      yielded.push(call);
+      yield call;
       const abort = new AbortController();
       aborts.push(abort);
       const r = await options!.canUseTool!("Bash", { command: "npm test" }, {

@@ -67,6 +67,10 @@ The UI rendering of a `tool_call` merged with its `tool_result`, grouped by `too
 One Agent/Task call: a child agent with its own timeline, inside one turn of the parent session. Stored in the parent's transcript, not as a separate session.
 _Avoid_: child session, subtask
 
+**External turn**:
+A transcript entry on a session's main chain that the daemon's own `query()` did not produce in this daemon run, e.g. a terminal CLI turn. Identified by message UUID; synced into the event log as normal events.
+_Avoid_: CLI turn, foreign message
+
 **Permission mode**:
 The session setting that decides what happens before a tool runs: ask (default), accept edits, plan, auto (a classifier decides), don't ask (deny anything not pre-approved by a permission rule), bypass (allow everything). Same modes as Claude Code.
 _Avoid_: approval mode, auto-approve

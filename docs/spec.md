@@ -47,7 +47,25 @@ Browser (web app)  --WebSocket-->  Daemon  -->  Claude Agent SDK  -->  Anthropic
 - `settingSources: ['user', 'project']`, so CLAUDE.md, commands, skills and permission rules load like in Claude Code.
 - States: `idle`, `running`, `needs_input` (permission request or question pending), `error`, `closed`.
 - Session list = `listSessions()` filtered to cwds inside the allowlisted roots. Includes sessions started in the terminal CLI; they can be resumed. One scan at a time; the last result is reused while no transcript file changed (each `listSessions()` call grows the daemon RSS by ~3-4 MB natively, SDK 0.3.285). The web app re-lists on a live `session_state` change, not on replayed ones.
-- No protection when the terminal CLI and the daemon drive the same session at once (same as OpenCode).
+
+### Terminal CLI and web app on one session
+
+The transcript is the source of truth for external turns (turns the daemon's own `query()` did not produce). One sync step, used twice:
+
+- Sync: read the transcript (`getSessionMessages()` plus subagent run transcripts), take the main-chain messages after the last UUID the session knows (logged from the restore or streamed by its own `query()`), convert them like a restore and log them as normal events. Runs started by the daemon's own `query()` are skipped. Synced prompts get checkpoints. A sync that logged events refreshes context usage.
+- Fork: when the timeline's last message is no longer on the main chain (terminal CLI rewind) and the chain has new messages, a `rewind` event cuts the timeline back to the first prompt after the last common message, then the new branch follows. The main chain is the chain of the latest written leaf (`getSessionMessages()`, SDK 0.3.285).
+- External turns found: the live `query()` (which misses them) is closed like for a conversation rewind; the next prompt starts a fresh one with `resume` and the session's model, permission mode and effort.
+- Sync before prompt: `session.prompt` on an idle session syncs first.
+- Live mirror: while at least one connection is subscribed, the daemon polls the session's transcript file (stat, 1 s, like `fs.watch`); a changed size or mtime syncs. A first subscriber syncs when the file changed since the last sync or restore. Polling stops when the last subscriber leaves.
+- No sync while a turn runs, a permission request or question is pending, a rewind runs, a subagent run of the own `query()` runs, or the CLI runs its own turn after a task notification. A sync asked then runs when the turn ends. An unreadable transcript logs nothing.
+
+Rules:
+
+| Switch | Result |
+|---|---|
+| Terminal CLI, then web app | Synced: the CLI's turns appear within about a second; the next web prompt continues after them. |
+| Web app, then terminal CLI | Needs `claude --resume <id>`: an open terminal CLI does not re-read the transcript. |
+| Both prompting at the same time | Unsafe, not prevented (no lock): the transcript forks; the mirror shows the result after the daemon's turn ends. |
 
 ### Projects
 
