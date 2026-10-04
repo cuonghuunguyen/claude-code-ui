@@ -33,7 +33,7 @@ export function inRun(view: SessionView, toolUseId: string, runId: string) {
   return false;
 }
 
-const STATUS_LABEL: Record<ToolStatus, string> = { pending: "Running", running: "Running", done: "Done", error: "Failed", denied: "Denied" };
+const STATUS_LABEL: Record<ToolStatus, string> = { pending: "Running", running: "Running", done: "Done", error: "Failed", denied: "Denied", stopped: "Stopped" };
 
 /** 12s, 3m 05s, 1h 02m. */
 export function duration(ms: number) {
@@ -69,16 +69,19 @@ export function StatusMark({ run }: { run: Run }) {
   );
 }
 
-type Node = { run?: Run; level: number; parent?: number };
+/** `pos` / `size`: place among its siblings (aria-posinset / aria-setsize); `children`: number of runs it started. */
+type Node = { run?: Run; level: number; parent?: number; pos: number; size: number; children: number };
 
 /** Depth-first rows: the session (level 1), then every run under the run that started it. */
 function flatten(view: SessionView): Node[] {
-  const rows: Node[] = [{ level: 1 }];
+  const rows: Node[] = [{ level: 1, pos: 1, size: 1, children: 0 }];
   const walk = (parentId: string | undefined, level: number, parent: number) => {
-    for (const run of runsOf(view, parentId)) {
-      rows.push({ run, level, parent });
+    const runs = runsOf(view, parentId);
+    rows[parent]!.children = runs.length;
+    runs.forEach((run, i) => {
+      rows.push({ run, level, parent, pos: i + 1, size: runs.length, children: 0 });
       walk(run.id, level + 1, rows.length - 1);
-    }
+    });
   };
   walk(undefined, 2, 0);
   return rows;
@@ -174,6 +177,10 @@ function AgentTree({ view, current, onOpen, onClose }: { view: SessionView; curr
             ref={(el) => void (items.current[i] = el)}
             role="treeitem"
             aria-level={r.level}
+            aria-posinset={r.pos}
+            aria-setsize={r.size}
+            // Every node is always open: the map shows the whole tree.
+            aria-expanded={r.children ? true : undefined}
             aria-selected={selected}
             aria-label={status ? `${name}, ${status}` : name}
             tabIndex={i === at ? 0 : -1}
@@ -185,7 +192,9 @@ function AgentTree({ view, current, onOpen, onClose }: { view: SessionView; curr
             className={`flex min-h-8 cursor-pointer items-center gap-2 rounded-md pr-2 outline-none hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-info pointer-coarse:min-h-11 ${selected ? "bg-accent" : ""}`}
           >
             {r.run ? <StatusMark run={r.run} /> : <NetworkIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />}
-            <span className={`min-w-0 flex-1 truncate ${r.run ? "" : "font-medium"}`}>{name}</span>
+            <span title={name} className={`min-w-0 flex-1 truncate ${r.run ? "" : "font-medium"}`}>
+              {name}
+            </span>
             {r.run && (
               <span aria-hidden className="shrink-0 text-[12px] text-muted-foreground tabular-nums">
                 {STATUS_LABEL[r.run.status]} · {runDuration(r.run, now)}
@@ -241,7 +250,9 @@ export function SubagentBar({ view, run, onOpen }: { view: SessionView; run: Run
                     className="flex h-7 cursor-pointer items-center gap-2 rounded-sm px-3 outline-none data-highlighted:bg-accent pointer-coarse:h-11"
                   >
                     <StatusMark run={c} />
-                    <span className="min-w-0 flex-1 truncate">{c.description || "Subagent run"}</span>
+                    <span title={c.description || "Subagent run"} className="min-w-0 flex-1 truncate">
+                      {c.description || "Subagent run"}
+                    </span>
                     <span className="shrink-0 text-[12px] text-muted-foreground tabular-nums">{runDuration(c, now)}</span>
                   </Menu.Item>
                 ))}
@@ -255,8 +266,25 @@ export function SubagentBar({ view, run, onOpen }: { view: SessionView; run: Run
   );
 }
 
-/** Replaces the prompt box in the subagent view (OpenCode "Subagent sessions cannot be prompted."): Back and, while it runs, Stop agent. */
-export function NotPromptable({ view, run, onOpen, onStop }: { view: SessionView; run: Run; onOpen: (id?: string) => void; onStop: (id: string) => void }) {
+/**
+ * Replaces the prompt box in the subagent view (OpenCode "Subagent sessions cannot be prompted."): Back and, while it runs, Stop agent.
+ * `stopping`: a stop request of this run is in flight or done and the run did not end yet; `error`: the failed stop request's message.
+ */
+export function NotPromptable({
+  view,
+  run,
+  onOpen,
+  onStop,
+  stopping = false,
+  error,
+}: {
+  view: SessionView;
+  run: Run;
+  onOpen: (id?: string) => void;
+  onStop: (id: string) => void;
+  stopping?: boolean;
+  error?: string;
+}) {
   const parent = runOf(view, run.parentId);
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-muted p-3 text-sm text-muted-foreground" data-testid="not-promptable">
@@ -267,10 +295,15 @@ export function NotPromptable({ view, run, onOpen, onStop }: { view: SessionView
         </button>
       </p>
       {isRunning(run) && (
-        <button type="button" data-testid="stop-agent" className={`${GHOST} flex shrink-0 items-center text-foreground!`} onClick={() => onStop(run.id)}>
+        <button type="button" data-testid="stop-agent" disabled={stopping} className={`${GHOST} flex shrink-0 items-center text-foreground! disabled:opacity-50`} onClick={() => onStop(run.id)}>
           <SquareIcon aria-hidden className="size-3 fill-current" />
-          Stop agent
+          {stopping ? "Stopping…" : "Stop agent"}
         </button>
+      )}
+      {error && isRunning(run) && (
+        <p role="alert" className="basis-full text-right text-destructive text-xs">
+          {error}
+        </p>
       )}
     </div>
   );

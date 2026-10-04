@@ -15,7 +15,7 @@ function callPart(id: string, tool: string, input: unknown, status: ToolStatus, 
   return { type: "subagent", id, toolUseId: id, description: typeof description === "string" ? description : "", status, startedAt };
 }
 
-const ENDED = new Set<ToolStatus>(["done", "error", "denied"]);
+const ENDED = new Set<ToolStatus>(["done", "error", "denied", "stopped"]);
 
 // Known SDK messages the UI does not show. Anything else unhandled becomes a `raw` part.
 const IGNORED = new Set([
@@ -78,6 +78,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   const background = new Set<string>();
   // Background task ID -> its tool_use_id, for a notification that names only the task.
   const tasks = new Map<string, string>();
+  // Subagent run ID -> time of its latest message, the end of a run that stopped without a notice.
+  const lastSeen = new Map<string, number>();
   // Paths whose original file was already sent: the changes tab needs only the first one.
   const originals = new Set<string>();
   // total_cost_usd is cumulative per query; a turn's cost is the difference to the previous result. Undefined = unknown.
@@ -105,7 +107,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   /** A background task's notification (live or from a transcript) ends its call. */
   function taskEnded(taskId: string | undefined, toolUseId: string | undefined, status: string | undefined): Part[] {
     const id = toolUseId ?? (taskId ? tasks.get(taskId) : undefined);
-    return id ? setStatus(id, status === "completed" ? "done" : "error", true) : [];
+    return id ? setStatus(id, status === "completed" ? "done" : status === "stopped" ? "stopped" : "error", true) : [];
   }
 
   function deny(toolUseId: string): Part[] {
@@ -138,6 +140,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     const parts = convertMessage(m);
     const parentId = "parent_tool_use_id" in m ? m.parent_tool_use_id : null;
     if (!parentId) return parts;
+    lastSeen.set(parentId, now);
     return parts.map((p) => {
       const tagged = { ...p, parentId };
       if (calls.get(p.id) === p) calls.set(p.id, tagged as Call);
@@ -234,7 +237,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
             background.add(b.tool_use_id);
             tasks.set(launched[1]!, b.tool_use_id);
           }
-          if (!background.has(b.tool_use_id))
+          // A stopped run's tool_result is an error ("Agent stopped"); it stays stopped.
+          if (!background.has(b.tool_use_id) && call?.status !== "stopped")
             parts.push(...setStatus(b.tool_use_id, denied.has(b.tool_use_id) ? "denied" : isError ? "error" : "done"));
           return false;
         });
@@ -306,6 +310,16 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     return [next];
   }
 
+  /** Ends every call still pending or running as stopped (a run at its last message): no query runs it any more. */
+  function endCalls(): Part[] {
+    return [...calls.values()].flatMap((c) => {
+      if (ENDED.has(c.status)) return [];
+      const next: Call = c.type === "subagent" ? { ...c, status: "stopped", endedAt: lastSeen.get(c.id) ?? c.startedAt } : { ...c, status: "stopped" };
+      calls.set(c.id, next);
+      return [next];
+    });
+  }
+
   /** deny: marks a tool call denied now; its later tool_result keeps status denied. */
-  return { convert, commands, deny, edit };
+  return { convert, commands, deny, edit, endCalls };
 }

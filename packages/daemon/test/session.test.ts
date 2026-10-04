@@ -907,3 +907,71 @@ describe("Session context usage", () => {
     err.mockRestore();
   });
 });
+
+describe("Session subagent runs", () => {
+  // Shapes of getSessionMessages() + getSubagentMessages() for a background run whose CLI exited mid-run (no <task-notification>; SDK 0.3.285).
+  const at = (s: number) => new Date(Date.UTC(2026, 8, 17, 10, 0, 0) + s * 1000).toISOString();
+  const msg = (type: string, s: number, content: unknown, parent: string | null = null) =>
+    ({ type, uuid: `u${s}${type}`, session_id: "x", parent_tool_use_id: parent, parent_agent_id: null, timestamp: at(s), message: { id: `m${s}`, role: type, content } }) as never;
+  const orphan = [
+    msg("user", 0, "sweep in the background"),
+    msg("assistant", 1, [{ type: "tool_use", id: "toolu_sweep", name: "Agent", input: { description: "Second widgets feature sweep", run_in_background: true } }]),
+    msg("user", 2, [
+      { type: "tool_result", tool_use_id: "toolu_sweep", content: [{ type: "text", text: "Async agent launched successfully. (This tool result is internal metadata.)\nagentId: a94a5abed25d4dbd3 (internal ID - do not mention to user.)\nThe agent is working in the background." }] },
+    ]),
+    msg("user", 3, "Sweep the widgets", "toolu_sweep"),
+    msg("assistant", 40, [{ type: "text", text: "Looking at widgets" }], "toolu_sweep"),
+    msg("assistant", 41, [{ type: "tool_use", id: "toolu_grep", name: "Grep", input: { pattern: "rowHeight" } }], "toolu_sweep"),
+  ];
+  const run = (events: Event[]) => lastPart(events, "toolu_sweep") as Extract<Event["part"], { type: "subagent" }>;
+
+  it("a restored run without a task notification ends stopped at its last transcript entry, with its open calls; nothing to stop", async () => {
+    const s = Session.restore(randomUUID(), "/tmp", orphan, { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    expect(run(events)).toMatchObject({ status: "stopped", startedAt: Date.parse(at(1)), endedAt: Date.parse(at(41)) });
+    // Its call without a result does not spin either.
+    expect(lastPart(events, "toolu_grep")).toMatchObject({ type: "tool_call", status: "stopped" });
+    expect(await s.stopSubagent("toolu_sweep")).toBe(false);
+  });
+
+  it("a live task notification after a resume reaches a restored run (one adapter for history and live)", async () => {
+    let send!: (m: unknown) => void;
+    const query = () =>
+      Object.assign(
+        (async function* () {
+          for (;;) yield await new Promise((r) => (send = r));
+        })(),
+        { supportedCommands: async () => [], close() {} },
+      );
+    const s = Session.restore(randomUUID(), "/tmp", orphan, { query: query as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("go on");
+    await until(events, () => !!send);
+    send({ type: "system", subtype: "task_notification", uuid: randomUUID(), session_id: "x", task_id: "a94a5abed25d4dbd3", status: "completed", output_file: "", summary: "" });
+    await until(events, (e) => e.part.id === "toolu_sweep" && (e.part as { status?: string }).status === "done");
+  });
+
+  it("a run the live query still runs when the CLI exits ends stopped; Stop agent has nothing to stop", async () => {
+    let exit!: () => void;
+    const query = () =>
+      Object.assign(
+        (async function* () {
+          yield { type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { id: "msg_a", content: [{ type: "tool_use", id: "agent-1", name: "Agent", input: { description: "Run tests" } }] } };
+          yield { type: "system", subtype: "task_started", uuid: randomUUID(), session_id: "x", task_id: "task-1", tool_use_id: "agent-1", description: "Run tests" };
+          await new Promise<void>((r) => (exit = r));
+        })(),
+        { supportedCommands: async () => [], stopTask: async () => {}, close() {} },
+      );
+    const s = started({ query: query as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await until(events, () => !!exit);
+    expect(run2(events).status).toBe("running");
+    exit();
+    await until(events, (e) => e.part.id === "agent-1" && (e.part as { status?: string }).status === "stopped");
+    expect(await s.stopSubagent("agent-1")).toBe(false);
+  });
+  const run2 = (events: Event[]) => lastPart(events, "agent-1") as Extract<Event["part"], { type: "subagent" }>;
+});

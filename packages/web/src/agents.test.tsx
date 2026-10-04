@@ -45,7 +45,7 @@ const { App } = await import("./App.tsx");
 
 let seq = 0;
 const send = (part: Part) => act(async () => emit({ type: "event", sessionId: ID, seq: ++seq, part }));
-const run = (id: string, description: string, status: "running" | "done" | "error", parentId?: string): Part => ({
+const run = (id: string, description: string, status: "running" | "done" | "error" | "stopped", parentId?: string): Part => ({
   type: "subagent",
   id,
   toolUseId: id,
@@ -242,4 +242,60 @@ it("a permission request inside a run shows in its subagent view and in the sess
   await send({ ...request, settled: true, decision: "allow" } as Part);
   expect($("permission-panel")).toBeNull();
   expect($("not-promptable")).not.toBeNull();
+});
+
+it("Esc in a subagent view stops only that run; Esc in the session view stops the turn", async () => {
+  await mount(`#${ID}/agent/a1`);
+  await threeRuns();
+  await send({ type: "session_state", id: "session_state", state: "running" });
+  await key(document.body, "Escape");
+  expect(sent.filter((m) => m.type === "session.stopSubagent")).toEqual([expect.objectContaining({ sessionId: ID, subagentId: "a1" })]);
+  expect(sent.some((m) => m.type === "session.interrupt")).toBe(false);
+  // An ended run has nothing to stop; Esc does not stop the turn either.
+  await send(run("a1", "Outer", "stopped"));
+  await key(document.body, "Escape");
+  expect(sent.filter((m) => m.type === "session.stopSubagent" || m.type === "session.interrupt")).toHaveLength(1);
+  await click($("not-promptable-back")!);
+  await key(document.body, "Escape");
+  expect(sent.filter((m) => m.type === "session.interrupt")).toHaveLength(1);
+});
+
+it("a stopped run reads Stopped in the map, the top bar and the inline group", async () => {
+  await mount(`#${ID}/agent/a1`);
+  await threeRuns();
+  await send(run("a1", "Outer", "stopped"));
+  expect($("subagent-status")!.textContent).toMatch(/^Stopped/);
+  await click($("agents-button")!);
+  expect(nodes()[1]!.getAttribute("aria-label")).toMatch(/^Outer, Stopped/);
+  await click(nodes()[0]!);
+  expect($$("subagent")[0]!.textContent).toContain("Stopped");
+});
+
+it("tree items carry aria-expanded, aria-posinset and aria-setsize; truncated names have a tooltip", async () => {
+  await mount();
+  await threeRuns();
+  await click($("agents-button")!);
+  expect(nodes().map((n) => [n.getAttribute("aria-expanded"), n.getAttribute("aria-posinset"), n.getAttribute("aria-setsize")])).toEqual([
+    ["true", "1", "1"],
+    ["true", "1", "2"],
+    [null, "1", "1"],
+    [null, "2", "2"],
+  ]);
+  expect(nodes()[1]!.querySelector("[title]")!.getAttribute("title")).toBe("Outer");
+});
+
+it("Stop agent shows its pending state and its error next to the button", async () => {
+  await mount(`#${ID}/agent/a1`);
+  let fail!: (e: Error) => void;
+  replies["session.stopSubagent"] = new Promise((_, r) => (fail = r));
+  try {
+    await threeRuns();
+    await click($("stop-agent")!);
+    expect($("stop-agent")!.hasAttribute("disabled")).toBe(true);
+    await act(async () => fail(new Error("no running subagent run with that ID")));
+    expect($("stop-agent")!.hasAttribute("disabled")).toBe(false);
+    expect($("not-promptable")!.querySelector('[role="alert"]')!.textContent).toBe("no running subagent run with that ID");
+  } finally {
+    delete replies["session.stopSubagent"];
+  }
 });

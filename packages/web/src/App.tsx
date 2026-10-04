@@ -1,4 +1,4 @@
-import { Activity, lazy, Suspense, use, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Activity, lazy, Suspense, use, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { CheckIcon, ChevronDownIcon, CopyIcon, FolderPlusIcon, MenuIcon, MonitorIcon, MoonIcon, RotateCcwIcon, SearchIcon, SquareIcon, SquareTerminalIcon, SunIcon } from "lucide-react";
 import type {
   ContextUsage,
@@ -62,7 +62,7 @@ import { appCommands, shortcutFor } from "./app-commands.ts";
 import { KEYS, matchesKey } from "./shortcuts.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { NEW_TAB, avatarColors, closeTab, loadTabs, moveTab, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
-import { AgentsButton, inRun, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
+import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -741,9 +741,7 @@ export function App() {
                         rewindTo={id === activeId ? rewindTo : undefined}
                         run={id === activeId ? run : undefined}
                         onOpenRun={(r) => openRun(s.id, r)}
-                        onStopRun={(subagentId) =>
-                          client.current!.request({ type: "session.stopSubagent", sessionId: s.id, subagentId }).catch((e) => setError((e as Error).message))
-                        }
+                        onStopRun={(subagentId) => client.current!.request({ type: "session.stopSubagent", sessionId: s.id, subagentId })}
                         onRewindShown={() => setRewindTo(undefined)}
                         session={s}
                         view={v}
@@ -1137,7 +1135,7 @@ export function SessionPane({
   scrollKey,
   run,
   onOpenRun = () => {},
-  onStopRun = () => {},
+  onStopRun = async () => {},
   insert,
   onInserted,
   rewindTo,
@@ -1165,8 +1163,8 @@ export function SessionPane({
   run?: string;
   /** Opens a run's subagent view; undefined: the session view. */
   onOpenRun?: (id?: string) => void;
-  /** Stop agent: stops that subagent run only. */
-  onStopRun?: (id: string) => void;
+  /** Stop agent: stops that subagent run only; rejects with the daemon's error. */
+  onStopRun?: (id: string) => Promise<unknown>;
   insert?: string;
   onInserted: () => void;
   /** Opens the rewind panel of this user message (palette Rewind). */
@@ -1202,14 +1200,23 @@ export function SessionPane({
   const question = pendingAsk && (!current || inRun(view, pendingAsk.toolUseId, current.id)) ? pendingAsk : undefined;
   // Waiting for a permission answer is part of the running turn.
   const turnRunning = view.state === "running" || view.state === "needs_input";
-  // Esc stops the turn, like Claude Code; the command picker handles its own Esc first (preventDefault), and an open modal dialog owns Esc.
+  // Stop agent of the shown run: pending until the run ends, or the request's error next to the button.
+  const [stop, setStop] = useState<{ run: string; error?: string }>();
+  const stopRun = (id: string) => {
+    setStop({ run: id });
+    onStopRun(id).catch((e: Error) => setStop({ run: id, error: e.message }));
+  };
+  const stopOf = current && stop?.run === current.id ? stop : undefined;
+  // Esc stops the turn, like Claude Code; in a subagent view it stops only that run, like Stop agent. The command picker handles
+  // its own Esc first (preventDefault), and an open modal dialog owns Esc.
+  const escStops = current ? isRunning(current) && !(stopOf && !stopOf.error) : turnRunning;
+  const onEscape = useEffectEvent(() => (current ? stopRun(current.id) : onInterrupt()));
   useEffect(() => {
-    if (!turnRunning) return;
-    const onEsc = (e: globalThis.KeyboardEvent) =>
-      e.key === "Escape" && !e.defaultPrevented && !document.querySelector('[aria-modal="true"]') && onInterrupt();
+    if (!escStops) return;
+    const onEsc = (e: globalThis.KeyboardEvent) => e.key === "Escape" && !e.defaultPrevented && !document.querySelector('[aria-modal="true"]') && onEscape();
     window.addEventListener("keydown", onEsc);
     return () => window.removeEventListener("keydown", onEsc);
-  }, [turnRunning, onInterrupt]);
+  }, [escStops]);
   const [rewinding, setRewinding] = useState<string>();
   useEffect(() => {
     if (!rewindTo) return;
@@ -1304,7 +1311,7 @@ export function SessionPane({
         ) : question ? (
           <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} onDismiss={onInterrupt} />
         ) : current ? (
-          <NotPromptable view={view} run={current} onOpen={onOpenRun} onStop={onStopRun} />
+          <NotPromptable view={view} run={current} onOpen={onOpenRun} onStop={stopRun} stopping={!!stopOf && !stopOf.error} error={stopOf?.error} />
         ) : (
           <>
             <PromptBox
