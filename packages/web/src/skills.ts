@@ -1,31 +1,31 @@
-// "Slash commands" dialog logic, copied from the Claude Code VS Code extension 2.1.283 (texts verbatim, development-docs/GH-42/vscode-research.md §4).
+// "Slash commands" dialog logic, same behaviour as the Claude Code VS Code extension, own texts.
 import type { SkillRow, SkillState, SlashCommand } from "@claude-ui/protocol";
 
 export const STATES: SkillState[] = ["on", "name-only", "user-invocable-only", "off"];
 export const STATE_LABEL: Record<SkillState, string> = { on: "On", "name-only": "Name only", "user-invocable-only": "User only", off: "Off" };
 export const STATE_HINT: Record<SkillState, string> = {
-  on: "Listed for Claude, and yours to invoke",
-  "name-only": "Listed for Claude by name only, without its description",
-  "user-invocable-only": "Yours to invoke; Claude does not see it",
-  off: "Hidden from Claude and from the command list",
+  on: "Claude sees it and you can invoke it",
+  "name-only": "Claude sees only its name",
+  "user-invocable-only": "Only you can invoke it; hidden from Claude",
+  off: "Not shown to Claude or in the command list",
 };
 /** An unknown state (newer CLI) shows as sent and cycles to On. */
 export const stateLabel = (s: string) => STATE_LABEL[s as SkillState] ?? s;
 export const stateHint = (s: string) => STATE_HINT[s as SkillState] ?? s;
 export const nextState = (s: string): SkillState => STATES[(STATES.indexOf(s as SkillState) + 1) % STATES.length]!;
 
-const HIGHER = "Set by a higher-priority configuration";
+const HIGHER = "Overridden by a higher-priority setting";
 const LOCKS: Record<string, string> = {
-  plugin: "Managed with its plugin",
-  author: "Set in the skill's own file",
+  plugin: "Controlled by its plugin",
+  author: "Fixed in the skill file",
   policy: HIGHER,
   flag: HIGHER,
-  "reserved-name": "Settings can't store an entry with this name; rename the skill's folder or file to configure it",
+  "reserved-name": "This name can't be saved in settings; rename the skill's folder or file to change it",
 };
 export const lockText = (lockedBy: string) => LOCKS[lockedBy] ?? HIGHER;
 
-export const NOTICE_SLOW = "Claude Code took too long to confirm the change, and this session still shows the previous state. Try again, or reopen this dialog to check.";
-export const NOTICE_UNCONFIRMED = "Saved, but this session still shows the previous state. It may not have picked the change up yet; reopen this dialog to check.";
+export const NOTICE_SLOW = "No confirmation from Claude Code in time; this session still has the old state. Retry, or reopen the dialog to check.";
+export const NOTICE_UNCONFIRMED = "Saved. This session still has the old state and may not have reloaded yet; reopen the dialog to check.";
 
 export const tokenText = (n: number) => (n < 20 ? "< 20" : `~${n}`);
 export const skillMeta = (s: SkillRow) => `${s.source} · ${tokenText(s.tokens)} tokens`;

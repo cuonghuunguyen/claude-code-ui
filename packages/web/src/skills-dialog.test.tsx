@@ -89,7 +89,7 @@ it("state button: tooltip, cycle to the next state, 'Saving…' while saving, th
   let release!: (v: unknown) => void;
   const d = await render({ "skills.setState": () => new Promise((r) => (release = r)) });
   const btn = d.state("/probe: On");
-  expect(btn.title).toBe("Listed for Claude, and yours to invoke. Click to change.");
+  expect(btn.title).toBe("Claude sees it and you can invoke it. Click to change.");
   await d.click(btn);
   expect(d.calls.at(-1)).toEqual({ type: "skills.setState", cwd: "/p", sessionId: "s1", name: "probe", state: "name-only", handles: {} });
   expect(btn.textContent).toBe("Saving…");
@@ -97,7 +97,7 @@ it("state button: tooltip, cycle to the next state, 'Saving…' while saving, th
   expect(d.all("skills-state").every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
   await act(async () => release({ skills: SKILLS.map((s) => (s.name === "probe" ? { ...s, state: "name-only" } : s)), confirmed: true }));
   expect(d.state("/probe: Name only").textContent).toBe("Name only");
-  expect(d.state("/probe: Name only").title).toBe("Listed for Claude by name only, without its description. Click to change.");
+  expect(d.state("/probe: Name only").title).toBe("Claude sees only its name. Click to change.");
   expect(d.q("banner-success")).toBeNull();
 });
 
@@ -120,8 +120,8 @@ it("locked rows have no button and the reason as tooltip", async () => {
   const d = await render();
   const locks = d.all("skills-lock");
   expect(locks.map((l) => [l.textContent, l.title])).toEqual([
-    ["On · locked", "Managed with its plugin"],
-    ["Name only · locked", "Settings can't store an entry with this name; rename the skill's folder or file to configure it"],
+    ["On · locked", "Controlled by its plugin"],
+    ["Name only · locked", "This name can't be saved in settings; rename the skill's folder or file to change it"],
   ]);
   expect(d.state("/ponytail:ponytail: On")).toBeNull();
 });
@@ -129,12 +129,12 @@ it("locked rows have no button and the reason as tooltip", async () => {
 it("an unconfirmed save shows the 'Saved, but…' notice with the daemon's rows; a CLI timeout the 'took too long' one", async () => {
   const d = await render({ "skills.setState": () => ({ skills: SKILLS, confirmed: false }) });
   await d.click(d.state("/probe: On"));
-  expect(d.q("banner-success")!.textContent).toBe("Saved, but this session still shows the previous state. It may not have picked the change up yet; reopen this dialog to check.");
+  expect(d.q("banner-success")!.textContent).toBe("Saved. This session still has the old state and may not have reloaded yet; reopen the dialog to check.");
   expect(d.state("/probe: On")).toBeTruthy();
   await act(async () => root!.unmount());
   const slow = await render({ "skills.setState": () => Promise.reject(Object.assign(new Error("Claude CLI timed out after 30s"), { code: "cli_timeout" })) });
   await slow.click(slow.state("/probe: On"));
-  expect(slow.q("banner-success")!.textContent).toBe("Claude Code took too long to confirm the change, and this session still shows the previous state. Try again, or reopen this dialog to check.");
+  expect(slow.q("banner-success")!.textContent).toBe("No confirmation from Claude Code in time; this session still has the old state. Retry, or reopen the dialog to check.");
   expect(slow.calls.filter((c) => c.type === "skills.list")).toHaveLength(2);
 });
 

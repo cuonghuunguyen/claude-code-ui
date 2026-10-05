@@ -76,13 +76,13 @@ it("shows tabs with counts and installed rows with dot, id, description, MCP chi
   expect(d.all("plugin-mcp").map((c) => c.title)).toEqual(["lazy: connected", "docs: failed - boom"]);
   const sw = d.all("plugin-switch");
   expect(sw.map((s) => [s.getAttribute("aria-label"), s.getAttribute("aria-checked"), s.title])).toEqual([
-    ["Enable ponytail@ponytail", "true", "Disable plugin (stays installed but will not load)"],
+    ["Enable ponytail@ponytail", "true", "Turn off (stays installed, does not load)"],
     ["Enable notes@synced", "false", "Enable plugin"],
   ]);
   // Update only for the user-scope marketplace plugin, not for the synced one.
-  expect(pony!.querySelector('[aria-label="Update plugin"]')?.getAttribute("title")).toBe("Update plugin to the latest version");
+  expect(pony!.querySelector('[aria-label="Update plugin"]')?.getAttribute("title")).toBe("Update to the newest version");
   expect(notes!.querySelector('[aria-label="Update plugin"]')).toBeNull();
-  expect(notes!.querySelector('[aria-label="Uninstall notes@synced"]')?.getAttribute("title")).toBe("Uninstall and remove plugin");
+  expect(notes!.querySelector('[aria-label="Uninstall notes@synced"]')?.getAttribute("title")).toBe("Uninstall");
 });
 
 it("toggles and uninstalls, then refreshes the list", async () => {
@@ -111,11 +111,11 @@ it("lists available plugins by installs with source and official badge, filters 
   expect(d.all("plugin-available").length).toBe(1);
   await d.click(d.all("plugin-available")[0]!.querySelector("button"));
   const picker = d.q("plugin-scopes")!;
-  expect(picker.textContent).toContain("Make sure you trust a plugin before installing, updating, or using it.");
+  expect(picker.textContent).toContain("Install, update and use only plugins you trust.");
   expect([...picker.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
-    "Install for youAvailable in all your projects",
-    "Install for this projectShared with all collaborators",
-    "Install locallyOnly for you, only in this repo",
+    "Install for youYou, in every project",
+    "Install for this projectEveryone on this project",
+    "Install locallyOnly you, only this project",
     "Cancel",
   ]);
   await d.click([...picker.querySelectorAll("button")][2]);
@@ -126,7 +126,7 @@ it("shows progress while a plugin installs (a git clone can take minutes) and bl
   let finish!: (v: unknown) => void;
   const d = await render({ "plugins.install": () => new Promise((r) => (finish = r)) });
   await d.click(d.all("plugin-available")[0]!.querySelector("button"));
-  await d.click(d.button("Install for youAvailable in all your projects"));
+  await d.click(d.button("Install for youYou, in every project"));
   expect(d.q("plugins-installing")!.textContent).toBe("Installing big@claude-plugins-official…");
   expect(d.all("plugin-available").flatMap((r) => [...r.querySelectorAll("button")]).every((b) => b.disabled)).toBe(true);
   await act(async () => finish(OK));
@@ -140,7 +140,7 @@ it("shows the install error line", async () => {
     },
   });
   await d.click(d.all("plugin-available")[0]!.querySelector("button"));
-  await d.click(d.button("Install for youAvailable in all your projects"));
+  await d.click(d.button("Install for youYou, in every project"));
   expect(d.q("banner-error")!.textContent).toBe('Plugin "big" is already installed.');
 });
 
@@ -149,30 +149,30 @@ it("updates: a notice when nothing changed, a dialog per failure kind with its a
   const d = await render({ "plugins.update": () => next });
   await d.click(d.button("Update plugin"));
   expect(d.calls).toContainEqual({ type: "plugins.update", cwd: "/p", pluginId: "ponytail@ponytail", scope: "user" });
-  expect(d.q("banner-success")!.textContent).toBe("ponytail is already at the latest version.");
+  expect(d.q("banner-success")!.textContent).toBe("ponytail is up to date.");
   next = { outcome: "failed", kind: "not_found", message: 'Plugin "ponytail" not found' };
   await d.click(d.button("Update plugin"));
-  expect(d.q("plugins-update-failure")!.textContent).toContain("ponytail isn't in your copy of ponytail");
+  expect(d.q("plugins-update-failure")!.textContent).toContain("ponytail (local copy) has no ponytail");
   next = { outcome: "ok", reload: OK.reload };
-  await d.click(d.button("Refresh the marketplace and retry"));
+  await d.click(d.button("Update marketplace and retry"));
   expect(d.calls).toContainEqual({ type: "marketplace.update", cwd: "/p", name: "ponytail" });
   expect(d.calls.filter((c) => c.type === "plugins.update").length).toBe(3);
   expect(d.q("plugins-update-failure")).toBeNull();
   next = { outcome: "failed", kind: "policy", message: "blocked" };
   await d.click(d.button("Update plugin"));
-  expect(d.q("plugins-update-failure")!.textContent).toBe("ponytail can't be updated hereYour organization's settings block updating this plugin.OK");
+  expect(d.q("plugins-update-failure")!.textContent).toBe("Updating ponytail is not allowedA policy from your organization prevents this update.OK");
   await d.click(d.button("OK"));
   // "Turned off" for a plugin that is on reads as the generic failure.
   next = { outcome: "failed", kind: "disabled", message: "x" };
   await d.click(d.button("Update plugin"));
-  expect(d.q("plugins-update-failure")!.textContent).toContain("Something went wrong while updating ponytail");
+  expect(d.q("plugins-update-failure")!.textContent).toContain("Could not update ponytail");
   expect(d.button("Copy error")).toBeDefined();
 });
 
 it("shows the reload-failed dialog after a change, and Restart restarts those sessions", async () => {
   const d = await render({ "plugins.setEnabled": () => ({ reload: { reloaded: 0, failed: ["s1"], errorCount: 0 } }) });
   await d.click(d.all("plugin-switch")[1]);
-  expect(d.q("plugins-reload-failed")!.textContent).toBe("Reload pluginsThis session couldn't reload its plugins.Try againRestartCancel");
+  expect(d.q("plugins-reload-failed")!.textContent).toBe("Reload pluginsReloading plugins failed in this session.Try againRestartCancel");
   await d.click(d.button("Restart"));
   expect(d.calls).toContainEqual({ type: "plugins.restart", cwd: "/p", sessionId: "s1" });
   expect(d.onRestarted).toHaveBeenCalledWith(["s1"]);
@@ -181,7 +181,7 @@ it("shows the reload-failed dialog after a change, and Restart restarts those se
 
 it("shows the restart banner for a session whose reload failed", async () => {
   const d = await render({}, { sessionId: "s1", reloadFailed: true });
-  expect(d.q("plugins-restart-banner")!.textContent).toBe("Restart Claude to apply plugin changesRestart");
+  expect(d.q("plugins-restart-banner")!.textContent).toBe("Plugin changes apply after Claude restartsRestart");
   await d.click(d.q("plugins-restart-banner")!.querySelector("button"));
   expect(d.calls).toContainEqual({ type: "plugins.restart", cwd: "/p", sessionId: "s1" });
 });
@@ -193,9 +193,9 @@ it("explains loading, failure and empty states", async () => {
   await d.click(d.q("plugins-tab-marketplaces"));
   expect(d.text()).toContain("Loading marketplaces…");
   await act(async () => resolve({ installed: [], available: [], marketplaces: [] }));
-  expect(d.text()).toContain("No marketplaces configured. Add one above to discover plugins.");
+  expect(d.text()).toContain("No marketplaces yet. Add one above.");
   await d.click(d.q("plugins-tab-plugins"));
-  expect(d.text()).toContain("No plugins available. Add a marketplace to discover plugins.");
+  expect(d.text()).toContain("No plugins yet. Add a marketplace to find some.");
   act(() => root?.unmount());
   document.body.innerHTML = "";
   const e = await render({

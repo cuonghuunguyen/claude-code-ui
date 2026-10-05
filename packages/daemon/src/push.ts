@@ -1,4 +1,4 @@
-// Web Push (docs/spec.md "Push notifications"): VAPID keys and subscriptions in the config dir, rules copied from Orca.
+// Web Push (docs/spec.md "Push notifications"): VAPID keys and subscriptions in the config dir, same rules as Orca (MIT; behaviour only, no code).
 // The payload is encrypted for the subscribing browser only (ADR 0003); the push service sees ciphertext.
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

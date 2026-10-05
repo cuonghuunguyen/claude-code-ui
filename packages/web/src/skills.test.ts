@@ -9,18 +9,18 @@ describe("state", () => {
   it("cycles on → name-only → user-invocable-only → off → on", () => {
     expect(["on", "name-only", "user-invocable-only", "off", "on"].slice(0, 4).map(nextState)).toEqual(["name-only", "user-invocable-only", "off", "on"]);
   });
-  it("labels and hints are the extension's", () => {
+  it("labels and hints", () => {
     expect(STATE_LABEL).toEqual({ on: "On", "name-only": "Name only", "user-invocable-only": "User only", off: "Off" });
-    expect(STATE_HINT["user-invocable-only"]).toBe("Yours to invoke; Claude does not see it");
-    expect(STATE_HINT.off).toBe("Hidden from Claude and from the command list");
+    expect(STATE_HINT["user-invocable-only"]).toBe("Only you can invoke it; hidden from Claude");
+    expect(STATE_HINT.off).toBe("Not shown to Claude or in the command list");
   });
   it("lock reasons", () => {
-    expect(lockText("plugin")).toBe("Managed with its plugin");
-    expect(lockText("author")).toBe("Set in the skill's own file");
-    expect(lockText("policy")).toBe("Set by a higher-priority configuration");
-    expect(lockText("flag")).toBe("Set by a higher-priority configuration");
-    expect(lockText("reserved-name")).toBe("Settings can't store an entry with this name; rename the skill's folder or file to configure it");
-    expect(lockText("other")).toBe("Set by a higher-priority configuration");
+    expect(lockText("plugin")).toBe("Controlled by its plugin");
+    expect(lockText("author")).toBe("Fixed in the skill file");
+    expect(lockText("policy")).toBe("Overridden by a higher-priority setting");
+    expect(lockText("flag")).toBe("Overridden by a higher-priority setting");
+    expect(lockText("reserved-name")).toBe("This name can't be saved in settings; rename the skill's folder or file to change it");
+    expect(lockText("other")).toBe("Overridden by a higher-priority setting");
   });
 });
 

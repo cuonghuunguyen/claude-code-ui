@@ -34,7 +34,7 @@ const redact = (text: string) => text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]
 const marketplaceOf = (id: string) => (id.includes("@") ? id.slice(id.lastIndexOf("@") + 1) : undefined);
 const official = (m: RawMarketplace) => m.source === "github" && m.repo === OFFICIAL_REPO;
 
-/** The extension's rule (`RA0`): a marketplace plugin installed at user, project, local or managed scope of this project. */
+/** The extension's rule: a marketplace plugin installed at user, project, local or managed scope of this project. */
 export const updatable = (p: { id: string; scope: string }) => {
   const m = marketplaceOf(p.id);
   return m !== undefined && !NOT_UPDATABLE.includes(m) && UPDATE_SCOPES.includes(p.scope);
@@ -145,7 +145,7 @@ function errorOf(r: { code: number; stdout: string; stderr: string }) {
   return redact((resultLine(r.stdout)?.message || line.replace(/^[✘✗×]\s*Failed to [^:]*:\s*/, "") || `claude exited with code ${r.code}`).replace(/^[✘✗×]\s*/, ""));
 }
 
-/** The extension's update failure kinds (`bX5`): the CLI's failureCode first, else its message patterns. */
+/** The extension's update failure kinds: the CLI's failureCode first, else its message patterns. */
 export function failureKind(message: string, failureCode?: string): PluginUpdateFailure {
   if (failureCode === "not_found") return "not_found";
   if (failureCode === "not_installed" || failureCode === "not_installed_at_scope") return "not_installed";
@@ -170,7 +170,7 @@ export function failureKind(message: string, failureCode?: string): PluginUpdate
   return "other";
 }
 
-/** The extension's test (`EA0`): an update that changed nothing needs no reload. */
+/** The extension's test: an update that changed nothing needs no reload. */
 const unchanged = (message: string) => /^[^\s"]+ is already at the latest version (?:\(|satisfying )/.test(message) || /^Skipped — /.test(message);
 
 /** A plugin id or marketplace name as the dialog sends it; after "--" so "-x" is no option, but never empty or multi-line. */

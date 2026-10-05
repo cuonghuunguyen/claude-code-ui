@@ -1,4 +1,4 @@
-// "Slash commands" dialog (/skills), a copy of the Claude Code VS Code extension's: every command, and for skills their source,
+// "Slash commands" dialog (/skills), behaves like the Claude Code VS Code extension's: every command, and for skills their source,
 // token cost and state button. Logic and texts in skills.ts.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SearchIcon } from "lucide-react";

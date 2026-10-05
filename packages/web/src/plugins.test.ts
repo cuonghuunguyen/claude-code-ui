@@ -39,12 +39,12 @@ describe("plugins", () => {
   });
 
   it("words the update notices and failure dialogs", () => {
-    expect(updateNotice("p@m", "p is already at the latest version (1.0.0).")).toBe("p is already at the latest version.");
-    expect(updateNotice("p@m", "Skipped — q needs 1.0")).toBe("p was not updated because another plugin needs the version it has.");
-    expect(updateNotice("p@m", "p is at 1.0 — version shown may be stale.")).toBe("p may already be at the latest version; the marketplace couldn't be checked.");
-    expect(failureDialog("not_found", "p@market")).toMatchObject({ title: "p isn't in your copy of market", actions: [{ label: "Refresh the marketplace and retry" }] });
-    expect(failureDialog("policy", "p@m")).toMatchObject({ title: "p can't be updated here", actions: [], close: "OK" });
+    expect(updateNotice("p@m", "p is already at the latest version (1.0.0).")).toBe("p is up to date.");
+    expect(updateNotice("p@m", "Skipped — q needs 1.0")).toBe("p kept its version: another plugin depends on it.");
+    expect(updateNotice("p@m", "p is at 1.0 — version shown may be stale.")).toBe("p looks up to date, but the marketplace could not be reached to confirm.");
+    expect(failureDialog("not_found", "p@market")).toMatchObject({ title: "market (local copy) has no p", actions: [{ label: "Update marketplace and retry" }] });
+    expect(failureDialog("policy", "p@m")).toMatchObject({ title: "Updating p is not allowed", actions: [], close: "OK" });
     expect(failureDialog("network", "p@m").actions.map((a) => a.label)).toEqual(["Try again", "Copy error"]);
-    expect(failureDialog("disabled", "p@m")).toMatchObject({ title: "p is turned off", actions: [{ label: "Turn on and update" }] });
+    expect(failureDialog("disabled", "p@m")).toMatchObject({ title: "p is disabled", actions: [{ label: "Enable and update" }] });
   });
 });

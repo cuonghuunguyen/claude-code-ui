@@ -87,12 +87,12 @@ export function mcpAddArgs(name: unknown, scope: unknown, config: unknown): stri
   const c = config as McpAddConfig;
   if (typeof c !== "object" || c === null) throw bad("config required");
   if (c.transport === "stdio") {
-    if (typeof c.command !== "string" || !c.command.trim()) throw bad("Command is required.");
+    if (typeof c.command !== "string" || !c.command.trim()) throw bad("Enter a command.");
     if (!isStrings(c.args) || !isStrings(c.env) || c.env.some((e) => e.indexOf("=") <= 0)) throw bad("Environment variables must be KEY=value.");
     return ["mcp", "add", "--scope", scope as string, "--transport", "stdio", ...c.env.flatMap((e) => ["--env", e]), "--", name, c.command, ...c.args];
   }
   if (c.transport === "http" || c.transport === "sse") {
-    if (typeof c.url !== "string" || !c.url.trim()) throw bad("URL is required.");
+    if (typeof c.url !== "string" || !c.url.trim()) throw bad("Enter a URL.");
     if (!isStrings(c.headers) || c.headers.some((h) => h.indexOf(":") <= 0)) throw bad('Headers must be "Header-Name: value".');
     return ["mcp", "add", "--scope", scope as string, "--transport", c.transport, ...c.headers.flatMap((h) => ["--header", h]), "--", name, c.url];
   }

@@ -24,7 +24,7 @@ describe("MCP servers dialog logic", () => {
     expect(groupServers(servers, "nothing")).toEqual([]);
   });
 
-  it("labels each status with the extension's icon and text", () => {
+  it("labels each status with an icon and text", () => {
     expect(["connected", "failed", "needs-auth", "pending", "disabled", "odd"].map((x) => `${statusIcon(x)} ${statusLabel(x)}`)).toEqual(["✓ Connected", "✗ Failed", "⚠ Needs Auth", "◐ Connecting…", "○ Disabled", "? odd"]);
   });
 
@@ -51,17 +51,17 @@ describe("MCP servers dialog logic", () => {
     expect(errorLine("x".repeat(250))).toBe(`${"x".repeat(200)}…`);
   });
 
-  it("validates the add form with the extension's texts and line numbers", () => {
+  it("validates the add form with line numbers", () => {
     const f: AddForm = { name: "tools", transport: "stdio", command: " npx ", args: "-y\n\n pkg ", env: " A = 1 \n\nB=x=y", url: "", headers: "" };
     expect(buildAdd(f)).toEqual({ name: "tools", config: { transport: "stdio", command: "npx", args: ["-y", "pkg"], env: ["A=1", "B=x=y"] } });
-    expect(buildAdd({ ...f, name: " " })).toEqual({ error: "Server name is required." });
-    expect(buildAdd({ ...f, name: "a b" })).toEqual({ error: "Invalid name a b. Names can only contain letters, numbers, hyphens, and underscores." });
-    expect(buildAdd({ ...f, command: "" })).toEqual({ error: "Command is required." });
-    expect(buildAdd({ ...f, env: "A=1\n\nnovalue" })).toEqual({ error: "Environment variables must be KEY=value (line 3)." });
+    expect(buildAdd({ ...f, name: " " })).toEqual({ error: "Enter a server name." });
+    expect(buildAdd({ ...f, name: "a b" })).toEqual({ error: "a b is not a valid name: use only letters, digits, - and _." });
+    expect(buildAdd({ ...f, command: "" })).toEqual({ error: "Enter a command." });
+    expect(buildAdd({ ...f, env: "A=1\n\nnovalue" })).toEqual({ error: "Line 3: write environment variables as KEY=value." });
     const h: AddForm = { ...f, transport: "http", url: " https://x/mcp ", headers: "Authorization: Bearer t\n" };
     expect(buildAdd(h)).toEqual({ name: "tools", config: { transport: "http", url: "https://x/mcp", headers: ["Authorization: Bearer t"] } });
-    expect(buildAdd({ ...h, transport: "sse", url: "" })).toEqual({ error: "URL is required." });
-    expect(buildAdd({ ...h, headers: "ok: 1\n: no" })).toEqual({ error: 'Headers must be "Header-Name: value" (line 2).' });
+    expect(buildAdd({ ...h, transport: "sse", url: "" })).toEqual({ error: "Enter a URL." });
+    expect(buildAdd({ ...h, headers: "ok: 1\n: no" })).toEqual({ error: 'Line 2: write headers as Name: value.' });
   });
 
   it("orders palette rows needs-auth first", () => {

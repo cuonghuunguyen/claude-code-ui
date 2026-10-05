@@ -16,7 +16,7 @@ const text = (t: string) => ev({ type: "assistant_text", id: "a1", text: t, stre
 const permission = (input: unknown) =>
   ev({ type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input, suggestions: [], settled: false });
 
-describe("notifier (rules copied from Orca)", () => {
+describe("notifier (same rules as Orca)", () => {
   let pushed: { sessionId: string; body: string }[];
   let watched: Set<string>;
   let n: ReturnType<typeof createNotifier>;

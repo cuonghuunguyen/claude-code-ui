@@ -1,4 +1,4 @@
-// MCP servers dialog logic, copied from the Claude Code VS Code extension 2.1.283 (texts verbatim, development-docs/GH-42/vscode-research.md §2).
+// MCP servers dialog logic, same behaviour as the Claude Code VS Code extension, own texts.
 import type { ConfigScope, McpAddConfig, McpServerInfo } from "@claude-ui/protocol";
 
 const ICONS: Record<string, string> = { connected: "✓", failed: "✗", "needs-auth": "⚠", pending: "◐", disabled: "○" };
@@ -92,51 +92,51 @@ export const resultText = {
   enable: (n: string) => `Enabled ${n}`,
   authenticate: () => "Authenticated successfully",
   clearAuth: (n: string) => `Cleared authentication for ${n}`,
-  remove: (n: string, scope: string) => `Removed ${n} from ${scope} config. Running sessions keep it until restarted.`,
-  add: (n: string, scope: string) => `Added ${n} to ${scope} config. It will be available in new sessions.`,
+  remove: (n: string, scope: string) => `${n} removed from the ${scope} config. Sessions already running still use it until they restart.`,
+  add: (n: string, scope: string) => `${n} saved to the ${scope} config. New sessions will load it.`,
 };
 
 export const TRANSPORTS = [
-  { value: "stdio", label: "Local command (stdio)", description: "Runs a command on your machine" },
-  { value: "http", label: "HTTP (remote)", description: "Connects to a server by URL" },
-  { value: "sse", label: "SSE (remote, legacy)", description: "Older remote protocol; prefer HTTP" },
+  { value: "stdio", label: "Local command (stdio)", description: "Starts a local process" },
+  { value: "http", label: "HTTP (remote)", description: "Remote server at a URL" },
+  { value: "sse", label: "SSE (remote, legacy)", description: "Legacy remote transport; use HTTP when possible" },
 ] as const;
 export type Transport = (typeof TRANSPORTS)[number]["value"];
 export const SCOPES = [
-  { value: "local", label: "Local", description: "Private to you in this project" },
-  { value: "user", label: "User", description: "Available in all your projects" },
-  { value: "project", label: "Project", description: "Shared via .mcp.json in this project" },
+  { value: "local", label: "Local", description: "Only you, only this project" },
+  { value: "user", label: "User", description: "You, in every project" },
+  { value: "project", label: "Project", description: "Everyone on this project, via .mcp.json" },
 ] as const satisfies readonly { value: ConfigScope; label: string; description: string }[];
 export const PROJECT_SCOPE_WARNING =
-  "Saved to .mcp.json and shared with everyone who opens this project. In IDE sessions, project servers connect without a separate approval step. If no folder is open, this writes to your home directory.";
+  "Written to .mcp.json, so everyone who opens this project gets this server. IDE sessions start project servers without asking first. Without an open folder, the file goes to your home directory.";
 
 export type AddForm = { name: string; transport: Transport; command: string; args: string; env: string; url: string; headers: string };
 
-/** The add form's values as `mcp.add` takes them, or the first error, with the extension's texts and line numbers. */
+/** The add form's values as `mcp.add` takes them, or the first error, with line numbers. */
 export function buildAdd(f: AddForm): { name: string; config: McpAddConfig } | { error: string } {
   const name = f.name.trim();
-  if (name === "") return { error: "Server name is required." };
-  if (/[^a-zA-Z0-9_-]/.test(name)) return { error: `Invalid name ${name}. Names can only contain letters, numbers, hyphens, and underscores.` };
+  if (name === "") return { error: "Enter a server name." };
+  if (/[^a-zA-Z0-9_-]/.test(name)) return { error: `${name} is not a valid name: use only letters, digits, - and _.` };
   const lines = (t: string) => t.split("\n").map((l, i) => [l.trim(), i + 1] as const);
   if (f.transport === "stdio") {
     const command = f.command.trim();
-    if (command === "") return { error: "Command is required." };
+    if (command === "") return { error: "Enter a command." };
     const env: string[] = [];
     for (const [l, n] of lines(f.env)) {
       if (!l) continue;
       const at = l.indexOf("=");
       const key = at >= 0 ? l.slice(0, at).trim() : "";
-      if (!key) return { error: `Environment variables must be KEY=value (line ${n}).` };
+      if (!key) return { error: `Line ${n}: write environment variables as KEY=value.` };
       env.push(`${key}=${l.slice(at + 1).trim()}`);
     }
     return { name, config: { transport: "stdio", command, args: lines(f.args).flatMap(([l]) => (l ? [l] : [])), env } };
   }
   const url = f.url.trim();
-  if (url === "") return { error: "URL is required." };
+  if (url === "") return { error: "Enter a URL." };
   const headers: string[] = [];
   for (const [l, n] of lines(f.headers)) {
     if (!l) continue;
-    if (l.indexOf(":") <= 0) return { error: `Headers must be "Header-Name: value" (line ${n}).` };
+    if (l.indexOf(":") <= 0) return { error: `Line ${n}: write headers as Name: value.` };
     headers.push(l);
   }
   return { name, config: { transport: f.transport, url, headers } };

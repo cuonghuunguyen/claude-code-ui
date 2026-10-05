@@ -1,4 +1,4 @@
-// "MCP servers" dialog (/mcp), a copy of the Claude Code VS Code extension's: list by config scope, detail with the actions the
+// "MCP servers" dialog (/mcp), behaves like the Claude Code VS Code extension's: list by config scope, detail with the actions the
 // status allows, OAuth with paste-back, tools, add form, remove. Logic and texts in mcp.ts.
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { SearchIcon } from "lucide-react";
@@ -352,13 +352,13 @@ export function McpDialog({
           {waiting === current.name && current.status !== "connected" && (
             <div className="flex w-full flex-col gap-2 rounded-md bg-secondary/60 p-3 text-sm" data-testid="mcp-auth-wait">
               <div className="flex flex-wrap items-center gap-2">
-                <span>Completing authentication in browser…</span>
+                <span>Waiting for sign-in in the browser…</span>
                 <Button variant="secondary" size="sm" className="max-md:h-11" onClick={() => checkConnection(current.name)}>
                   Check connection
                 </Button>
               </div>
               {/* The CLI's redirect listener is on the daemon machine: a phone's redirect fails, so its URL is pasted here. */}
-              <strong className="font-medium">If the redirect page shows a connection error, paste the URL from your browser's address bar:</strong>
+              <strong className="font-medium">Browser shows a connection error after sign-in? Copy that page's address and paste it here:</strong>
               <div className="flex gap-2">
                 <input
                   type="text"

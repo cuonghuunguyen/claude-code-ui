@@ -1,4 +1,4 @@
-// "Manage Plugins" dialog (/plugins), a copy of the Claude Code VS Code extension 2.1.283's: tab Plugins (installed with switch,
+// "Manage Plugins" dialog (/plugins), behaves like the Claude Code VS Code extension's: tab Plugins (installed with switch,
 // Update, Uninstall, MCP chips; available with search and Install behind the scope picker), tab Marketplaces. Logic in plugins.ts.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Dialog } from "@base-ui/react/dialog";
@@ -247,7 +247,7 @@ export function PluginsDialog({
     if (loading) return <Status>Loading plugins…</Status>;
     if (adding) return <Status>Adding marketplace…</Status>;
     if (loadError) return <Banner kind="error">Failed to load plugins: {loadError}</Banner>;
-    if (!installed.length && !shown.length && !search) return <Status>No plugins available. Add a marketplace to discover plugins.</Status>;
+    if (!installed.length && !shown.length && !search) return <Status>No plugins yet. Add a marketplace to find some.</Status>;
     return (
       <>
         {lines}
@@ -292,11 +292,11 @@ export function PluginsDialog({
                 <div className="flex shrink-0 items-center gap-1">
                   <Switch on={p.enabled} label={`Enable ${p.id}`} held={working} onToggle={(on) => void setEnabled(p.id, on)} />
                   {p.updatable && (
-                    <IconButton label={updating === p.id ? "Updating…" : "Update plugin"} title={updating === p.id ? "Updating…" : "Update plugin to the latest version"} disabled={working} onClick={() => void update(p)}>
+                    <IconButton label={updating === p.id ? "Updating…" : "Update plugin"} title={updating === p.id ? "Updating…" : "Update to the newest version"} disabled={working} onClick={() => void update(p)}>
                       <RefreshCwIcon className={cn(updating === p.id && "motion-safe:animate-spin")} />
                     </IconButton>
                   )}
-                  <IconButton label={`Uninstall ${p.id}`} title="Uninstall and remove plugin" disabled={working} onClick={() => void uninstall(p)}>
+                  <IconButton label={`Uninstall ${p.id}`} title="Uninstall" disabled={working} onClick={() => void uninstall(p)}>
                     <Trash2Icon />
                   </IconButton>
                 </div>
@@ -385,7 +385,7 @@ export function PluginsDialog({
           </Button>
         </div>
         {!marketplaces.length ? (
-          <Status>No marketplaces configured. Add one above to discover plugins.</Status>
+          <Status>No marketplaces yet. Add one above.</Status>
         ) : (
           <ul className="flex flex-col gap-px">
             {marketplaces.map((m) => {
@@ -441,7 +441,7 @@ export function PluginsDialog({
     <ConfigDialog title="Manage Plugins" open={open} onClose={onClose} busy={!!removing} testId="plugins-dialog">
       {reloadFailed && sessionId && (
         <div role="status" className="flex flex-wrap items-center gap-2 rounded-md bg-warning/10 px-3 py-2 text-sm" data-testid="plugins-restart-banner">
-          <span className="flex-1">Restart Claude to apply plugin changes</span>
+          <span className="flex-1">Plugin changes apply after Claude restarts</span>
           <Button size="sm" className="max-md:h-11" onClick={() => void restart([sessionId])}>
             Restart
           </Button>
@@ -484,7 +484,7 @@ export function PluginsDialog({
         </SmallDialog>
       )}
       {failedReload && (
-        <SmallDialog title="Reload plugins" message="This session couldn't reload its plugins." close="Cancel" onClose={() => setFailedReload(undefined)} testId="plugins-reload-failed">
+        <SmallDialog title="Reload plugins" message="Reloading plugins failed in this session." close="Cancel" onClose={() => setFailedReload(undefined)} testId="plugins-reload-failed">
           <Button className="max-md:h-11" onClick={() => void retryReload()}>
             Try again
           </Button>
@@ -533,7 +533,7 @@ function Switch({ on, label, held, onToggle }: { on: boolean; label: string; hel
       aria-checked={on}
       aria-label={label}
       aria-disabled={held}
-      title={on ? "Disable plugin (stays installed but will not load)" : "Enable plugin"}
+      title={on ? "Turn off (stays installed, does not load)" : "Enable plugin"}
       onClick={() => !held && onToggle(!on)}
       className="group grid size-7 place-items-center rounded-md outline-none max-md:size-11"
       data-testid="plugin-switch"
