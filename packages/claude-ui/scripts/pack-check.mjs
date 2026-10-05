@@ -38,6 +38,7 @@ try {
   console.log(files.filter((f) => !f.startsWith("dist/web/assets/")).join("\n"), `\n(${files.length} files)`);
   assert(files.every((f) => /^(dist\/|package\.json$|THIRD_PARTY_NOTICES\.md$)/.test(f)), "tarball holds only dist/, package.json, notices (no tests, sources, dev-docs)");
   assert(files.includes("dist/cli.js") && files.includes("dist/web/index.html"), "tarball holds dist/cli.js and dist/web/index.html");
+  assert(files.includes("THIRD_PARTY_NOTICES.md") && files.includes("dist/web/THIRD_PARTY_LICENSES.txt"), "tarball holds the third-party notices and bundled license texts");
 
   step("npm install <tarball> in a temp dir");
   const app = join(tmp, "app");

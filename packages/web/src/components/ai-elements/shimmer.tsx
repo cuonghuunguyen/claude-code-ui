@@ -1,4 +1,5 @@
 "use client";
+// Derived from AI Elements (Apache-2.0, Copyright 2023 Vercel, Inc.), modified; see THIRD_PARTY_NOTICES.md.
 
 import { cn } from "@/lib/utils";
 import type { MotionProps } from "motion/react";

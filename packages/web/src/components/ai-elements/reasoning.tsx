@@ -1,4 +1,5 @@
 "use client";
+// Derived from AI Elements (Apache-2.0, Copyright 2023 Vercel, Inc.), modified; see THIRD_PARTY_NOTICES.md.
 
 import { useControllableState } from "@radix-ui/react-use-controllable-state";
 import {
