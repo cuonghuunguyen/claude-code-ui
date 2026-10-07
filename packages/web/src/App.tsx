@@ -41,6 +41,7 @@ import { Conversation, ConversationContent, ConversationScrollButton } from "@/c
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePhone } from "./lib/use-narrow.ts";
+import { useHideOnScroll } from "./lib/hide-on-scroll.ts";
 import { cancelFlight, launchFlight, useLanding } from "./flight.ts";
 import { addPending, dropPending, movePending, pendingKey, promptedIds, pruneEchoed, titleLoading, unechoed, type Pending } from "./optimistic.ts";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
@@ -1667,7 +1668,7 @@ function StartingSession({ cwd, place, pending }: { cwd: string; place?: string;
           </>
         }
       />
-      <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4">
+      <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4 max-sm:px-2 max-sm:py-2">
         <Skeleton className="h-[104px] w-full rounded-lg" data-testid="prompt-skeleton" />
       </div>
     </div>
@@ -2029,6 +2030,12 @@ export function SessionPane({
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
   const prompt = useRef<HTMLTextAreaElement>(null);
   const dock = useRef<HTMLDivElement>(null);
+  // Phone: scrolling up through an idle transcript hides the prompt dock for reading space; scrolling down or the end brings it back (GH-166).
+  // Never while a turn or shell runs (Stop), a panel waits for an answer, or the dock has focus (typing).
+  const card = useRef<HTMLElement | null>(null);
+  useEffect(() => void (card.current = dock.current?.parentElement ?? null), []);
+  const [dockFocused, setDockFocused] = useState(false);
+  const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
 
   return (
     <CwdContext value={session.cwd}>
@@ -2151,7 +2158,10 @@ export function SessionPane({
       )}
       <div
         ref={dock}
-        className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4"
+        className={`relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4 max-sm:px-2 max-sm:py-2 ${dockHidden ? "hidden" : ""}`}
+        data-hidden={dockHidden || undefined}
+        onFocus={() => setDockFocused(true)}
+        onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setDockFocused(false)}
       >
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} mode={modePicker} onStop={onInterrupt} />
@@ -2189,7 +2199,7 @@ export function SessionPane({
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
               inputRef={prompt}
-              placeholder={turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
+              placeholder={phone ? (turnRunning ? "Claude is working…" : "Ask Claude…") : turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
             />
           </>
         )}
@@ -2286,6 +2296,7 @@ function PromptBox({
   blockedIcon?: React.ReactNode;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
+  const phone = usePhone();
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
   const [selected, setSelected] = useState(0);
@@ -2584,8 +2595,8 @@ function PromptBox({
         aria-controls="command-picker"
         aria-activedescendant={pickerOpen ? `command-${selected}` : undefined}
         aria-label={bash ? "Shell command" : label}
-        className={`field-sizing-content max-h-[min(240px,40dvh)] min-h-[calc(2lh+1.5rem)] w-full resize-none bg-transparent pt-4 pb-2 text-sm outline-none pointer-coarse:text-base ${bash ? "pr-4 pl-8 font-mono" : "px-4"}`}
-        rows={2}
+        className={`field-sizing-content max-h-[min(240px,40dvh)] min-h-[calc(2lh+1.5rem)] max-sm:min-h-[calc(1lh+1.5rem)] w-full resize-none bg-transparent pt-4 pb-2 text-sm outline-none pointer-coarse:text-base ${bash ? "pr-4 pl-8 font-mono" : "px-4"}`}
+        rows={phone ? 1 : 2}
         placeholder={bash ? "Run a shell command (Esc to exit)" : placeholder}
         autoFocus={autoFocus}
         disabled={disabled}

@@ -14,8 +14,8 @@ const list = (query: string) => {
 const watch = (query: string) => ({
   subscribe: (cb: () => void) => {
     const mq = list(query);
-    mq?.addEventListener("change", cb);
-    return () => mq?.removeEventListener("change", cb);
+    mq?.addEventListener?.("change", cb);
+    return () => mq?.removeEventListener?.("change", cb);
   },
   snapshot: () => !!list(query)?.matches,
 });
