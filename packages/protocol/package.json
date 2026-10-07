@@ -1,0 +1,15 @@
+{
+  "name": "@claude-ui/protocol",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.285",
+    "@types/node": "^26.6.3"
+  }
+}

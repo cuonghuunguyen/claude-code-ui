@@ -1,0 +1,334 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FsEntry, RecentProject, SideInfo } from "@claude-ui/protocol";
+import { OpenProjectDialog } from "./open-project.tsx";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const tree: Record<string, string[]> = { "/home/u": ["claude-ui", "api", ".git", "notes.txt"], "/home/u/claude-ui": ["packages", "docs"] };
+const list = vi.fn(async (path?: string): Promise<FsEntry[]> => {
+  if (!path) return [{ name: "/home/u", path: "/home/u", isDir: true }];
+  const names = tree[path];
+  if (!names) throw new Error("ENOENT");
+  return names.map((name) => ({ name, path: `${path}/${name}`, isDir: !name.includes(".txt") }));
+});
+
+let root: ReturnType<typeof createRoot> | undefined;
+afterEach(() => root?.unmount());
+
+async function render(onPick = vi.fn(async () => {}), recent?: RecentProject[]) {
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={list} onPick={onPick} recent={recent} />));
+  const input = () => document.querySelector<HTMLInputElement>('[data-testid="folder-input"]')!;
+  const rows = () => [...document.querySelectorAll<HTMLElement>('[data-testid="folder-row"]')].map((r) => r.textContent);
+  const type = async (v: string) => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      set.call(input(), v);
+      input().dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  const key = (k: string) => act(async () => void input().dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
+  const recents = () => [...document.querySelectorAll<HTMLElement>('[data-testid="recent-row"]')];
+  return { input, rows, type, key, onPick, recents };
+}
+
+// The first dialog render loads Base UI cold (~2 s alone); under the full parallel suite it took over the 5 s default.
+it("starts inside the only root and lists its folders, no dot folders, no files", { timeout: 20_000 }, async () => {
+  const { input, rows } = await render();
+  expect(input().value).toBe("/home/u/");
+  expect(rows()).toEqual(["claude-ui/", "api/"]);
+});
+
+it("type-ahead filters, Tab lists the highlighted folder's subfolders, Enter picks the listed folder", async () => {
+  const { rows, type, key, input, onPick } = await render();
+  await type("/home/u/cl");
+  expect(rows()).toEqual(["claude-ui/"]);
+  await key("Tab");
+  expect(input().value).toBe("/home/u/claude-ui/");
+  expect(rows()).toEqual(["packages/", "docs/"]);
+  await key("Enter");
+  expect(onPick).toHaveBeenCalledWith("/home/u/claude-ui");
+});
+
+it("Enter with a filter picks the best match; clicking a row lists its subfolders, Open picks the listed folder", async () => {
+  const { rows, type, key, onPick } = await render();
+  await type("/home/u/a");
+  await key("Enter");
+  expect(onPick).toHaveBeenLastCalledWith("/home/u/api");
+  await type("/home/u/");
+  await act(async () => document.querySelectorAll<HTMLElement>('[data-testid="folder-row"]')[0]!.click());
+  expect(rows()).toEqual(["packages/", "docs/"]);
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="open-folder"]')!.click());
+  expect(onPick).toHaveBeenLastCalledWith("/home/u/claude-ui");
+});
+
+it("shows the daemon's refusal and an empty match", async () => {
+  const { type, key } = await render(vi.fn(async () => Promise.reject(new Error("outside the allowlisted roots"))));
+  await type("/home/u/zzz");
+  expect(document.body.textContent).toContain('No folder matches "zzz"');
+  await type("/home/u/");
+  await key("Enter");
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe("outside the allowlisted roots");
+});
+
+it("Tab and Shift+Tab wrap inside the dialog: focus never reaches the page behind it", async () => {
+  const { input } = await render();
+  const close = document.querySelector<HTMLElement>('[aria-label="Close"]')!;
+  const openButton = document.querySelector<HTMLElement>('[data-testid="open-folder"]')!;
+  const tab = (from: HTMLElement, shiftKey = false) =>
+    act(async () => void from.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true })));
+  input().focus();
+  await tab(input(), true);
+  expect(document.activeElement).toBe(close);
+  await tab(close, true);
+  expect(document.activeElement).toBe(openButton);
+  await tab(openButton);
+  expect(document.activeElement).toBe(close);
+  await tab(close);
+  expect(document.activeElement).toBe(input());
+});
+
+it("closing without a pick gives the focus back to the opener; after a pick the focus goes to finalFocus", async () => {
+  const trigger = document.createElement("button");
+  const prompt = document.createElement("textarea");
+  document.body.append(trigger, prompt);
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  const show = (open: boolean, onPick = async () => {}) =>
+    act(async () => root!.render(<OpenProjectDialog open={open} onOpenChange={() => {}} list={list} onPick={onPick} finalFocus={{ current: prompt }} />));
+  trigger.focus();
+  await show(true);
+  await show(false);
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(trigger);
+  trigger.focus();
+  await show(true);
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="open-folder"]')!.click());
+  await show(false);
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(prompt);
+  trigger.remove(), prompt.remove();
+});
+
+const now = Date.now();
+const recent: RecentProject[] = [
+  { cwd: "/home/u/api", sessionCount: 3, lastActivity: now - 5 * 60_000 },
+  { cwd: "/home/u/old-one", sessionCount: 1, lastActivity: now - 3 * 3_600_000 },
+  ...["a", "b", "c", "d"].map((n, i) => ({ cwd: `/home/u/${n}-proj`, sessionCount: 2, lastActivity: now - (i + 5) * 86_400_000 })),
+];
+
+it("suggests the first 5 recent projects with session count and age; one click adds one", async () => {
+  const { recents, onPick } = await render(undefined, recent);
+  expect(document.body.textContent).toContain("Recent projects");
+  expect(recents().map((r) => r.textContent)).toEqual([
+    expect.stringMatching(/^api\/home\/u\/api3 sessions · 5m ago$/),
+    expect.stringMatching(/^old-one\/home\/u\/old-one1 session · 3h ago$/),
+    expect.stringContaining("a-proj"),
+    expect.stringContaining("b-proj"),
+    expect.stringContaining("c-proj"),
+  ]);
+  await act(async () => recents()[1]!.click());
+  expect(onPick).toHaveBeenCalledWith("/home/u/old-one");
+});
+
+it("typing filters the recent projects by name; Tab and Enter still act on the typed folder, never on a recent", async () => {
+  const withMatch = [{ cwd: "/home/u/old-api-2", sessionCount: 1, lastActivity: now }, ...recent];
+  const { recents, rows, type, key, input, onPick } = await render(undefined, withMatch);
+  await type("/home/u/api");
+  expect(recents().map((r) => r.textContent)).toEqual([expect.stringContaining("old-api-2"), expect.stringContaining("api/home/u/api")]);
+  expect(rows()).toEqual(["api/"]);
+  await key("Tab");
+  expect(input().value).toBe("/home/u/api/");
+  await type("/home/u/api");
+  await key("Enter");
+  expect(onPick).toHaveBeenCalledWith("/home/u/api");
+  await type("/home/u/old");
+  expect(recents().map((r) => r.textContent)).toEqual([expect.stringContaining("old-api-2"), expect.stringContaining("old-one")]);
+  await key("Enter");
+  expect(onPick).toHaveBeenLastCalledWith("/home/u");
+  await type("/home/u/zzz");
+  expect(recents()).toHaveLength(0);
+});
+
+it("recent projects show only at the start level, not in a browsed directory", async () => {
+  const { recents, type, rows } = await render(undefined, recent);
+  expect(recents().length).toBeGreaterThan(0);
+  await type("/home/u/claude-ui/");
+  expect(rows()).toEqual(["packages/", "docs/"]);
+  expect(recents()).toHaveLength(0);
+  expect(document.body.textContent).not.toContain("Recent projects");
+  await type("/home/u/");
+  expect(recents().length).toBeGreaterThan(0);
+});
+
+it("in the start state Tab descends into the first folder, not a recent project", async () => {
+  const { input, key } = await render(undefined, recent);
+  await key("Tab");
+  expect(input().value).toBe("/home/u/claude-ui/");
+});
+
+it("a recent project is picked with Enter only after ArrowDown selects it", async () => {
+  const { key, onPick } = await render(undefined, recent);
+  await key("Enter");
+  expect(onPick).toHaveBeenLastCalledWith("/home/u");
+  await key("ArrowDown");
+  await key("Enter");
+  expect(onPick).toHaveBeenLastCalledWith("/home/u/api");
+});
+
+it("recent-row path and meta text use the muted token (4.5:1), not the icon-only faint one", async () => {
+  const { recents } = await render(undefined, recent);
+  const text = [...recents()[0]!.querySelectorAll("span")].slice(1);
+  expect(text).toHaveLength(2);
+  for (const s of text) expect(s.className).toContain("text-muted-foreground");
+});
+
+it("without recent projects the dialog shows no recent section", async () => {
+  await render(undefined, []);
+  expect(document.body.textContent).not.toContain("Recent projects");
+});
+
+describe("side chooser (Windows with WSL)", () => {
+  const sides = (wsl: SideInfo["state"] = "off", message?: string): SideInfo[] => [
+    { id: "local", label: "Windows", state: "ready" },
+    { id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: wsl, ...(message && { message }) },
+  ];
+  const winTree: Record<string, string[]> = { "C:\\Users\\me": ["proj"], "C:\\Users\\me\\proj": [] };
+  const sideList = vi.fn(async (path?: string, side?: string): Promise<FsEntry[]> => {
+    if (side === "wsl:Ubuntu") return list(path);
+    if (!path) return [{ name: "C:\\Users\\me", path: "C:\\Users\\me", isDir: true }];
+    return (winTree[path] ?? []).map((name) => ({ name, path: `${path}\\${name}`, isDir: true }));
+  });
+  async function renderSides(s: SideInfo[], onStartSide = vi.fn(async () => {})) {
+    localStorage.clear();
+    const onPick = vi.fn(async () => {});
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    const recent: RecentProject[] = [{ cwd: "/home/u/api", sessionCount: 2, lastActivity: Date.now() }];
+    await act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={sideList} onPick={onPick} sides={s} onStartSide={onStartSide} recent={recent} sideOf={(c) => (c.startsWith("/") ? "wsl:Ubuntu" : "local")} />));
+    const input = () => document.querySelector<HTMLInputElement>('[data-testid="folder-input"]');
+    const options = () => [...document.querySelectorAll<HTMLElement>('[data-testid="side-option"]')];
+    const status = () => document.querySelector('[data-testid="side-status"]')?.textContent;
+    const type = async (v: string) => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      await act(async () => {
+        set.call(input(), v);
+        input()!.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+    return { input, options, status, type, onPick, onStartSide };
+  }
+
+  it("starts on Windows; choosing a WSL side sets it up, then browses its home folder and picks on that side", async () => {
+    let done!: () => void;
+    const { input, options, status, onPick, onStartSide } = await renderSides(sides(), vi.fn(() => new Promise<void>((r) => (done = r))));
+    expect(options().map((o) => [o.textContent, o.getAttribute("aria-checked")])).toEqual([["Windows", "true"], ["WSL: Ubuntu", "false"]]);
+    expect(input()!.value).toBe("C:\\Users\\me\\");
+    await act(async () => options()[1]!.click());
+    expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu");
+    expect(status()).toBe("Setting up WSL: Ubuntu…");
+    await act(async () => done());
+    expect(input()!.value).toBe("/home/u/");
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="open-folder"]')!.click());
+    expect(onPick).toHaveBeenCalledWith("/home/u", "wsl:Ubuntu");
+    // The last used side comes back next time.
+    expect(localStorage.getItem("claude-ui.side")).toBe("wsl:Ubuntu");
+  });
+
+  it("a side that cannot start says what to do; Retry starts it again", async () => {
+    const msg = "Node.js 22 or newer is not installed in WSL: Ubuntu. Install it there (e.g. nvm install 22), then retry.";
+    const onStartSide = vi.fn(async () => {}).mockRejectedValueOnce(new Error(msg));
+    const { options, status, input } = await renderSides(sides(), onStartSide);
+    await act(async () => options()[1]!.click());
+    expect(status()).toBe(`${msg}Retry`);
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="side-retry"]')!.click());
+    expect(onStartSide).toHaveBeenCalledTimes(2);
+    expect(input()!.value).toBe("/home/u/");
+  });
+
+  it("a typed path picks its side: /home goes to WSL, C:\\ back to Windows, \\\\wsl.localhost\\Ubuntu to that distro", async () => {
+    const { input, options, type } = await renderSides(sides("ready"));
+    await type("/home/u/cl");
+    expect(options()[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(input()!.value).toBe("/home/u/cl");
+    await type("C:\\Users\\me\\p");
+    expect(options()[0]!.getAttribute("aria-checked")).toBe("true");
+    expect(input()!.value).toBe("C:\\Users\\me\\p");
+    await type("\\\\wsl.localhost\\Ubuntu\\home\\u\\");
+    expect(options()[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(input()!.value).toBe("/home/u/");
+  });
+
+  it("a typed POSIX path on Windows goes to a WSL distro before a container", async () => {
+    const { options, type } = await renderSides([
+      { id: "local", label: "Windows", state: "ready" },
+      { id: "docker:dev", label: "Docker: dev", state: "ready" },
+      { id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: "ready" },
+    ]);
+    await type("/home/u/cl");
+    const checked = options().filter((o) => o.getAttribute("aria-checked") === "true");
+    expect(checked.map((o) => o.textContent)).toEqual(["WSL: Ubuntu"]);
+  });
+
+  it("recent projects of every side show their side; a /mnt/c folder offers to open it on Windows", async () => {
+    const { type, options, input } = await renderSides(sides("ready"));
+    await act(async () => options()[1]!.click());
+    expect(document.querySelector('[data-testid="recent-row"]')!.textContent).toContain("api");
+    await type("/mnt/c/Users/me/proj/");
+    const hint = document.querySelector<HTMLElement>('[data-testid="open-as-windows"]')!;
+    expect(hint.textContent).toBe("Open C:\\Users\\me\\proj on Windows");
+    await act(async () => hint.click());
+    expect(options()[0]!.getAttribute("aria-checked")).toBe("true");
+    expect(input()!.value).toBe("C:\\Users\\me\\proj");
+  });
+});
+
+describe("side chooser (Linux with Docker)", () => {
+  const sides: SideInfo[] = [
+    { id: "local", label: "Linux", state: "ready" },
+    { id: "docker:dev", label: "Docker: dev", state: "ready" },
+  ];
+  it("a typed POSIX path stays on the chosen side; no Windows hint in a container", async () => {
+    localStorage.clear();
+    const onStartSide = vi.fn(async () => {});
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    await act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={async (p?: string) => list(p)} onPick={vi.fn(async () => {})} sides={sides} onStartSide={onStartSide} sideOf={() => "local"} />));
+    const input = () => document.querySelector<HTMLInputElement>('[data-testid="folder-input"]');
+    const options = () => [...document.querySelectorAll<HTMLElement>('[data-testid="side-option"]')];
+    const type = async (v: string) => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      await act(async () => {
+        set.call(input(), v);
+        input()!.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+    await type("/home/u/cl");
+    expect(options()[0]!.getAttribute("aria-checked")).toBe("true");
+    expect(onStartSide).not.toHaveBeenCalled();
+    await act(async () => options()[1]!.click());
+    await type("/mnt/c/Users/x/");
+    expect(document.querySelector('[data-testid="mnt-hint"]')).toBeNull();
+  });
+});
+
+it("Enter, Tab and arrows while an input method composes the folder name go to the IME", async () => {
+  const { type, input, onPick, key } = await render();
+  await type("/home/u/api");
+  for (const k of ["Enter", "Tab", "ArrowDown"]) {
+    const e = new KeyboardEvent("keydown", { key: k, keyCode: 229, isComposing: true, bubbles: true, cancelable: true });
+    await act(async () => void input().dispatchEvent(e));
+  }
+  expect(onPick).not.toHaveBeenCalled();
+  expect(input().value).toBe("/home/u/api");
+  await key("Enter");
+  expect(onPick).toHaveBeenCalled();
+});

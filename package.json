@@ -1,0 +1,22 @@
+{
+  "name": "claude-ui",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @claude-ui/web",
+    "prestart": "npm run build -w claude-code-ui",
+    "start": "tsx packages/daemon/src/main.ts",
+    "dev": "npm run dev -w @claude-ui/daemon & npm run dev -w @claude-ui/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

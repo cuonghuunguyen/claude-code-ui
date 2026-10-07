@@ -1,0 +1,103 @@
+{
+  "installed": [
+    {
+      "id": "claude-notebook@claude-notebook",
+      "version": "0.1.0",
+      "scope": "local",
+      "enabled": false,
+      "installPath": "__PLUGINS__/claude-notebook",
+      "installedAt": "2026-08-27T11:50:59.700Z",
+      "lastUpdated": "2026-08-27T11:50:59.700Z",
+      "projectPath": "/elsewhere/other-project",
+      "projectEnabled": false
+    },
+    {
+      "id": "mattpocock-skills@claude-plugins-official",
+      "version": "1.2.3",
+      "scope": "project",
+      "enabled": false,
+      "installPath": "__PLUGINS__/mattpocock-skills",
+      "installedAt": "2026-09-28T12:26:50.699Z",
+      "lastUpdated": "2026-09-28T12:26:50.699Z",
+      "projectPath": "__PROJECT__",
+      "projectEnabled": false
+    },
+    {
+      "id": "ponytail@ponytail",
+      "version": "4.9.0",
+      "scope": "user",
+      "enabled": true,
+      "installPath": "__PLUGINS__/ponytail",
+      "installedAt": "2026-08-25T03:54:31.316Z",
+      "lastUpdated": "2026-08-25T03:54:31.316Z",
+      "projectEnabled": false
+    },
+    {
+      "id": "skill-creator@claude-plugins-official",
+      "version": "d182ca456ca0",
+      "scope": "user",
+      "enabled": true,
+      "installPath": "__PLUGINS__/skill-creator",
+      "installedAt": "2026-03-09T04:08:21.009Z",
+      "lastUpdated": "2026-10-04T05:23:11.402Z",
+      "projectEnabled": false
+    },
+    {
+      "id": "cowork-plugin-management@synced",
+      "version": "0.2.2",
+      "scope": "synced",
+      "enabled": true,
+      "installPath": "__PLUGINS__/cowork-plugin-management"
+    }
+  ],
+  "available": [
+    {
+      "pluginId": "42crunch-api-security-testing@claude-plugins-official",
+      "name": "42crunch-api-security-testing",
+      "description": "Automate API security directly in Claude Code with 42Crunch - automatically audit OpenAPI specs, detect vulnerabilities aligned with OWASP API Security risks (including BOLA/BFLA), and apply AI-powered fixes. Designed for AI-assisted development workflows, it provides continuous guardrails through an audit->scan->remediate->validate loop, ensuring APIs meet enterprise security standards before deployment.",
+      "marketplaceName": "claude-plugins-official",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/42Crunch-AI/claude-plugins.git",
+        "path": "plugins/api-security-testing",
+        "ref": "v1.5.5",
+        "sha": "faf5305385de8afed9468904e8639be737aff39e"
+      },
+      "installCount": 3448
+    },
+    {
+      "pluginId": "adobe-for-creativity@claude-plugins-official",
+      "name": "adobe-for-creativity",
+      "description": "Harness Adobe's creative AI-powered tools to edit images, automate design workflows, and bring creative visions to life \u2014 from background removal to vectorization and professional retouching.",
+      "marketplaceName": "claude-plugins-official",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/adobe/skills.git",
+        "path": "plugins/creative-cloud/adobe-for-creativity",
+        "ref": "main",
+        "sha": "acb6d76475e6c522a5b109d2df7c8a794ee74ea7"
+      },
+      "installCount": 3952
+    },
+    {
+      "pluginId": "mattpocock-skills@claude-plugins-official",
+      "name": "mattpocock-skills",
+      "description": "Matt Pocock's agent skills for real engineering \u2014 grilling, spec/ticket flows, TDD, code review, domain modelling and more. Plug-and-play, not vibe coding.",
+      "marketplaceName": "claude-plugins-official",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/mattpocock/skills.git",
+        "sha": "c55ee46073ed923f86ce59a5eb3b6d895095d1b7"
+      },
+      "installCount": 59289
+    },
+    {
+      "pluginId": "agent-sdk-dev@claude-plugins-official",
+      "name": "agent-sdk-dev",
+      "description": "Development kit for working with the Claude Agent SDK",
+      "marketplaceName": "claude-plugins-official",
+      "source": "./plugins/agent-sdk-dev",
+      "installCount": 70642
+    }
+  ]
+}

@@ -1,0 +1,197 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+
+/* Streamdown (AI Elements MessageResponse) ships Tailwind classes in its dist. */
+@source "../../../node_modules/streamdown/dist/*.js";
+
+/* Dark = `.dark` on <html>, set by theme.ts (system / light / dark). */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    /* OpenCode chrome: Inter 13px/440, emphasis 530, small 11px; timeline 14px/160% system sans. */
+    --font-heading: var(--font-sans);
+    --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+    --font-timeline: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --text-sm: 13px;
+    --text-sm--line-height: 20px;
+    --text-xs: 11px;
+    --text-xs--line-height: 16px;
+    --font-weight-normal: 440;
+    --font-weight-medium: 530;
+    --font-weight-semibold: 530;
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-success: var(--success);
+    --color-warning: var(--warning);
+    --color-info: var(--info);
+    --color-ref-local: var(--ref-local);
+    --color-ref-remote: var(--ref-remote);
+    --color-ref-head: var(--ref-head);
+    --color-faint: var(--faint);
+    --color-ring-track: var(--ring-track);
+    --color-ring-progress: var(--ring-progress);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-tab-separator: var(--tab-separator);
+    --color-kbd: var(--kbd);
+    --color-send: var(--send);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --color-overlay: var(--overlay);
+    /* 4 small control, 6 control/row, 8, 10 panel/prompt, 12 dialog/dock (OpenCode tw.css:59-63). */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 10px;
+    --radius-2xl: 12px;
+    --shadow-raised: var(--elevation-raised);
+    --shadow-floating: var(--elevation-floating);
+    --shadow-button-contrast: var(--elevation-button-contrast);
+}
+
+/* In-progress todo dot (OpenCode --animate-pulse-scale). */
+@keyframes pulse-scale {
+    50% {
+        transform: scale(0.6666667);
+    }
+}
+
+/*
+ * OpenCode oc-2 tokens on shadcn names (development reference: opencode-parity/reference.md A3).
+ * Deviations for WCAG 4.5:1 text contrast (theme.test.ts): light success/warning are darker; --faint (3.95:1) is for icons only; inactive tab titles use --muted-foreground (OpenCode uses text-faint, below 4.5:1 in light).
+ */
+:root {
+    --radius: 0.375rem;
+    --background: #fafafa;
+    --card: #ffffff;
+    --popover: #ffffff;
+    --foreground: #161616;
+    --card-foreground: #161616;
+    --popover-foreground: #161616;
+    --muted: #fafafa;
+    --muted-foreground: #5c5c5c;
+    --faint: #808080;
+    /* Context ring (OpenCode ProgressCircle v2): track bg-layer-04, progress icon-base. */
+    --ring-track: #dbdbdb;
+    --ring-progress: #3a3a3a;
+    /* Context breakdown categories: OpenCode syntax tokens (v2 primitive, keyword, type; v1 string, primitive, info), 3:1 on popover and bar track. */
+    /* Code editor syntax: OpenCode --syntax-* (oc-2); keyword, string, property one shade darker for 4.5:1 on the active line. */
+    --syntax-comment: #5c5c5c; --syntax-keyword: #aa3576; --syntax-string: #1d783c; --syntax-property: #b35624; --syntax-type: #5230c2; --syntax-constant: #007b80; --syntax-critical: #b82d35;
+    --context-1: #034cff; --context-2: #a753ae; --context-3: #006656; --context-4: #fb4804; --context-5: #8a6f00; --context-6: #0092a8;
+    /* Commit graph lanes (8 colors, 3:1 on card, background, secondary and a hovered row). */
+    --graph-1: #034cff; --graph-2: #a753ae; --graph-3: #006656; --graph-4: #d24a04; --graph-5: #8a6f00; --graph-6: #0086a0; --graph-7: #b82d35; --graph-8: #5230c2;
+    --secondary: #f2f2f2;
+    --tab-separator: #eeeeee; /* OpenCode bg-layer-03 */
+    --kbd: #eeeeee; /* keybind chip: OpenCode bg-layer-03 */
+    --secondary-foreground: #161616;
+    --accent: #0000000a;
+    --accent-foreground: #161616;
+    --primary: #242424;
+    --send: #242424; /* send button: --primary */
+    --primary-foreground: #ffffff;
+    --destructive: #b82d35;
+    --success: #167a3b;
+    --warning: #8a6100;
+    --info: #2c47c8;
+    /* Graph ref chips: text, tinted 18% as background (theme.test.ts: 4.5:1 on every row surface). */
+    --ref-local: #0f6a30; --ref-remote: #6a2fc0; --ref-head: #6e4c00;
+    --border: #0000001a;
+    --input: #0000001a;
+    --ring: #6485f6;
+    --overlay: #00000066;
+    --elevation-raised: 0 2px 4px #0000000a, 0 1px 2px -1px #00000014, 0 0 0 0.5px #0000001f;
+    --elevation-floating: 0 8px 16px #0000000a, 0 4px 8px #00000014, 0 0 0 0.5px #0000001f;
+    --elevation-button-contrast: 0 1px 1.5px #00000033, 0 0 0 0.5px #3a3a3a, inset 0 1px 2px #ffffff24, inset 0 -1px 2px #0000000f;
+    /* Project avatars: bg / letter; dark letters where white fails 4.5:1. */
+    --avatar-orange: #ee7330; --avatar-orange-fg: #161616;
+    --avatar-yellow: #e7af36; --avatar-yellow-fg: #161616;
+    --avatar-cyan: #0096b8; --avatar-cyan-fg: #161616;
+    --avatar-green: #2eaf5a; --avatar-green-fg: #161616;
+    --avatar-red: #d92e3c; --avatar-red-fg: #ffffff;
+    --avatar-pink: #e4429e; --avatar-pink-fg: #161616;
+    --avatar-blue: #3250df; --avatar-blue-fg: #ffffff;
+    --avatar-purple: #623be2; --avatar-purple-fg: #ffffff;
+    --avatar-gray: #5c5c5c; --avatar-gray-fg: #ffffff;
+}
+
+.dark {
+    color-scheme: dark;
+    --background: #080808;
+    --card: #161616;
+    --popover: #161616;
+    --foreground: #fafafa;
+    --card-foreground: #fafafa;
+    --popover-foreground: #fafafa;
+    --muted: #242424;
+    --muted-foreground: #aeaeae;
+    --faint: #808080;
+    --ring-track: #5c5c5c;
+    --ring-progress: #dbdbdb;
+    --syntax-comment: #aeaeae; --syntax-keyword: #f799c6; --syntax-string: #96e3a6; --syntax-property: #ffc1a4; --syntax-type: #9e99f7; --syntax-constant: #93e9f6; --syntax-critical: #f29b96;
+    --context-1: #8cb0ff; --context-2: #edb2f1; --context-3: #00ceb9; --context-4: #fab283; --context-5: #fcd53a; --context-6: #35c02d;
+    --graph-1: #8cb0ff; --graph-2: #edb2f1; --graph-3: #00ceb9; --graph-4: #fab283; --graph-5: #fcd53a; --graph-6: #35c02d; --graph-7: #f29b96; --graph-8: #9e99f7;
+    --secondary: #2e2e2e;
+    --tab-separator: #2e2e2e; /* OpenCode dark uses bg-layer-02 */
+    --kbd: #3a3a3a;
+    --secondary-foreground: #fafafa;
+    --accent: #ffffff0f;
+    --accent-foreground: #fafafa;
+    --primary: #5c5c5c;
+    --send: #6b6b6b; /* lighter than --primary: 3:1 against the prompt box (#161616) */
+    --primary-foreground: #ffffff;
+    --destructive: #f17471;
+    --success: #6bd586;
+    --warning: #f2cf76;
+    --info: #7698fd;
+    --ref-local: #6bd586; --ref-remote: #c9adff; --ref-head: #f2cf76;
+    --border: #ffffff1a;
+    --input: #ffffff1a;
+    --ring: #7698fd;
+    --overlay: #000000a3;
+    --elevation-raised: 0 2px 4px #0000004d, 0 1px 2px #0000004d, 0 0 0 0.5px #ffffff29, 0 -0.5px 0 #ffffff0f;
+    --elevation-floating: 0 8px 16px #0000004d, 0 4px 8px #0000004d, 0 0 0 0.5px #ffffff29, 0 -0.5px 0 #ffffff0f;
+    --elevation-button-contrast: 0 1px 2px #00000066, 0 0 0 0.5px #ffffff66, 0 -0.5px 0 #ffffff4d;
+    --avatar-orange: #723d22; --avatar-orange-fg: #ffffff;
+    --avatar-yellow: #68552b; --avatar-yellow-fg: #ffffff;
+    --avatar-cyan: #005a6e; --avatar-cyan-fg: #ffffff;
+    --avatar-green: #196130; --avatar-green-fg: #ffffff;
+    --avatar-red: #7a1f23; --avatar-red-fg: #ffffff;
+    --avatar-pink: #8c2d61; --avatar-pink-fg: #ffffff;
+    --avatar-blue: #263fa9; --avatar-blue-fg: #ffffff;
+    --avatar-purple: #361f83; --avatar-purple-fg: #ffffff;
+    --avatar-gray: #5c5c5c; --avatar-gray-fg: #ffffff;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground text-sm;
+    letter-spacing: -0.04px;
+    }
+  html {
+    @apply font-sans;
+    }
+}
+
+/* Session timeline text (OpenCode markdown.css): system sans 14px / 160%. */
+.timeline {
+  font-family: var(--font-timeline);
+  font-size: 14px;
+  line-height: 1.6;
+}
