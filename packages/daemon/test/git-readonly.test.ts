@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { gitReadOnly, oneDecision, repoSafety } from "../src/git-readonly.ts";
-import { tier } from "../src/risk-tier.ts";
+import { gitReadOnly, repoSafety, repoSafetyAsync } from "../src/git-readonly.ts";
+import { tier, tierAsync } from "../src/risk-tier.ts";
 
 // No symlinks here: this file runs on Windows too (risk-tier.test.ts holds the symlink rows).
 const root = realpathSync(mkdtempSync(join(tmpdir(), "gro-")));
@@ -243,10 +243,38 @@ describe("gitReadOnly", () => {
       git(d, "config", "core.hooksPath", ".hk");
       expect(repoSafety(d).unsafe).toBe(true);
       expect(gitReadOnly({ command: "git status" }, d)).toBe(false);
-      // Only one synchronous decision shares a read.
-      oneDecision(() => expect(repoSafety(d)).toBe(repoSafety(d)));
-      expect(repoSafety(d)).not.toBe(repoSafety(d));
     });
+
+    it("the async read gives the same facts, shares a scan in flight, keeps nothing after it and leaves the event loop free", async () => {
+      const d = withConfig("async");
+      expect(await repoSafetyAsync(d)).toEqual(repoSafety(d));
+      const a = repoSafetyAsync(d);
+      expect(repoSafetyAsync(d)).toBe(a);
+      let ticks = 0;
+      const timer = setInterval(() => ticks++, 1);
+      await a;
+      clearInterval(timer);
+      // Timers ran while git did: the scan did not hold the loop.
+      expect(ticks).toBeGreaterThan(0);
+      expect(repoSafetyAsync(d)).not.toBe(a);
+      // A scan in flight that started before a change the caller knows of is not shared.
+      const before = repoSafetyAsync(d);
+      git(d, "config", "core.hooksPath", ".hk");
+      const after = repoSafetyAsync(d, performance.now());
+      expect(after).not.toBe(before);
+      expect((await after).unsafe).toBe(true);
+      await before;
+      expect(await tierAsync("Bash", { command: "git status" }, { cwd: d, bashCwdPinned: true })).toBe("high");
+      expect(await tierAsync("Write", { file_path: "src/x.ts" }, { cwd: d })).toBe("high");
+      expect(await repoSafetyAsync(join(root, "gone"))).toMatchObject({ unsafe: true, failed: true });
+      expect(await tierAsync("Write", { file_path: "x.ts" }, { cwd: join(root, "gone") })).toBe("high");
+    });
+
+    it("tierAsync matches tier for every low and high row", async () => {
+      for (const command of [...low, ...high.filter((h) => typeof h === "string")] as string[]) {
+        expect(await tierAsync("Bash", { command }, { cwd, bashCwdPinned: true }), command).toBe(tier("Bash", { command }, { cwd, bashCwdPinned: true }));
+      }
+    }, 300_000);
 
     it("an include.path into the worktree, a relative gpg.program and a relative hooksPath written as an absolute path inside are refused", () => {
       for (const [k, v] of [["include.path", "../extra.cfg"], ["gpg.program", "./gpg.sh"]] as const) {

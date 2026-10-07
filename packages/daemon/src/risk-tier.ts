@@ -2,7 +2,7 @@
 // coordinator may settle a `low` request, every other request is the user's. Unknown -> high. Any error -> high.
 import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { gitReadOnly, repoSafety } from "./git-readonly.ts";
+import { gitReadOnly, repoSafety, repoSafetyAsync, type RepoSafety } from "./git-readonly.ts";
 
 export type Tier = "low" | "high";
 export type TierContext = {
@@ -12,6 +12,10 @@ export type TierContext = {
   requiresUserInteraction?: boolean;
   /** The CLI runs with CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1: every Bash command starts in `cwd`, so a read-only git command is judged by it. */
   bashCwdPinned?: boolean;
+  /** The repository facts for this decision (repoSafetyAsync, via tierAsync). Absent: read synchronously (tests, direct calls). */
+  safety?: RepoSafety;
+  /** tierAsync: share a repository scan in flight only if it started after this (performance.now()). */
+  since?: number;
 };
 
 /** Read-only tools and the input field holding their path (absent field = the cwd for Glob; Grep needs one). */
@@ -73,7 +77,7 @@ const dotdot = (p: string) => p.split(/[/\\]/).includes("..");
  * needs the write itself to go through the daemon. `cwdOk`: the cwd itself passes (a read; not a write, not a Grep of every file).
  * A `~` path is never expanded here: its first segment holds `~`, which the deny rule refuses.
  */
-export function pathLow(p: unknown, cwd: string, write: boolean, cwdOk = !write, roots: string[] = [cwd]): boolean {
+export function pathLow(p: unknown, cwd: string, write: boolean, cwdOk = !write, roots: string[] = [cwd], safety?: RepoSafety): boolean {
   if (typeof p !== "string" || !p || p.includes("\0") || dotdot(p)) return false;
   const target = resolve(cwd, p);
   let base = target;
@@ -101,7 +105,7 @@ export function pathLow(p: unknown, cwd: string, write: boolean, cwdOk = !write,
     // would be repo config: core.fsmonitor, diff.external run on a later git command the user approves).
     // Git's control files and hook folders by name, at any depth (a submodule's `sub/.husky/_` too); then no Write is low in a
     // repository that is not plain (hooks, programs or includes in its config, submodules, nested repositories, unreadable), nor into what its config names.
-    if ([...segs0, ...rawSegs].some(gitControl) || gitRunsIt(real, cwd)) return false;
+    if ([...segs0, ...rawSegs].some(gitControl) || gitRunsIt(real, cwd, safety)) return false;
     const has = (dir: string, n: string) => !!lstatSync(join(dir, n), { throwIfNoEntry: false });
     const segs = segs0;
     for (let i = 0; i < segs.length; i++) {
@@ -139,8 +143,8 @@ const gitControl = (seg: string) => {
   return g === "hooks" || g.startsWith(".husky") || g === ".lfsconfig" || (g.startsWith(".git") && g !== ".github" && !g.startsWith(".gitlab"));
 };
 /** Whether a Write must be high because git could run it: the repository is not plain (repoSafety), or its config names the path. */
-function gitRunsIt(real: string, cwd: string): boolean {
-  const s = repoSafety(cwd);
+function gitRunsIt(real: string, cwd: string, safety?: RepoSafety): boolean {
+  const s = safety ?? repoSafety(cwd);
   return (
     s.unsafe ||
     s.protectedPaths.some((d) => {
@@ -165,10 +169,10 @@ function classify(tool: string, input: Record<string, unknown>, ctx: TierContext
       tool === "Glob" ? input.pattern !== undefined && globLow(input.pattern) : tool === "Grep" ? input.glob === undefined || (globLow(input.glob) && !(input.glob as string).split(/[/\\]/).some(denied)) : true;
     return pathOk && globOk ? "low" : "high";
   }
-  if (Object.hasOwn(WRITE_FIELD, tool)) return pathLow(input[WRITE_FIELD[tool]!], ctx.cwd, true) ? "low" : "high";
+  if (Object.hasOwn(WRITE_FIELD, tool)) return pathLow(input[WRITE_FIELD[tool]!], ctx.cwd, true, false, [ctx.cwd], ctx.safety) ? "low" : "high";
   // Bash: only a read-only git command, and only when the CLI's shell cwd is pinned to the cwd (git-readonly.ts). Every other
   // command can run code the worker wrote. mcp__*, ExitPlanMode, Agent, WebFetch, Skill and every unknown name: high.
-  if (tool === "Bash") return ctx.bashCwdPinned === true && gitReadOnly(input, ctx.cwd) ? "low" : "high";
+  if (tool === "Bash") return ctx.bashCwdPinned === true && gitReadOnly(input, ctx.cwd, ctx.safety) ? "low" : "high";
   return "high";
 }
 
@@ -176,6 +180,20 @@ export function tier(tool: string, input: unknown, ctx: TierContext): Tier {
   try {
     if (!input || typeof input !== "object" || Array.isArray(input)) return "high";
     return classify(tool, input as Record<string, unknown>, ctx);
+  } catch {
+    return "high";
+  }
+}
+
+/**
+ * tier() with the repository facts read off the event loop (repoSafetyAsync) when the tool needs them (a write, a pinned Bash).
+ * Never rejects: any error is high. What the daemon calls; tier() with `ctx.safety` then decides synchronously.
+ */
+export async function tierAsync(tool: string, input: unknown, ctx: TierContext): Promise<Tier> {
+  try {
+    const needs = Object.hasOwn(WRITE_FIELD, tool) || (tool === "Bash" && ctx.bashCwdPinned === true);
+    const safety = needs && !ctx.safety ? await repoSafetyAsync(ctx.cwd, ctx.since) : ctx.safety;
+    return tier(tool, input, { ...ctx, ...(safety ? { safety } : {}) });
   } catch {
     return "high";
   }

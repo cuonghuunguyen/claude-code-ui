@@ -164,6 +164,32 @@ export function permissionQuery({ prompt, options }: { prompt: AsyncIterable<SDK
   return Object.assign(q, { supportedCommands: async () => [], close: () => void q.return(undefined) });
 }
 
+/** Fake query(): a prompt of JSON `{calls: [{tool, input}, ...]}` makes one assistant message with all those tool calls and asks canUseTool for each at once (parallel tool use). */
+export function parallelPermissionQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
+  calls.push(options ?? {});
+  const q = (async function* () {
+    for await (const m of prompt) {
+      const { calls: tools } = JSON.parse(m.message.content as string) as { calls: { tool: string; input: Record<string, unknown> }[] };
+      const ids = tools.map(() => randomUUID());
+      yield {
+        type: "assistant",
+        uuid: randomUUID(),
+        session_id: "x",
+        parent_tool_use_id: null,
+        message: { id: `msg_${ids[0]}`, content: tools.map((t, i) => ({ type: "tool_use", id: ids[i], name: t.tool, input: t.input })) },
+      } as never as SDKMessage;
+      const rs = await Promise.all(
+        tools.map((t, i) =>
+          options!.canUseTool!(t.tool, t.input, { signal: new AbortController().signal, suggestions: [], toolUseID: ids[i]!, requestId: randomUUID() } as never),
+        ),
+      );
+      permissionResults.push(...(rs as PermissionResult[]));
+      yield turns[0]!.at(-1)!;
+    }
+  })();
+  return Object.assign(q, { supportedCommands: async () => [], close: () => void q.return(undefined) });
+}
+
 export const askInput = {
   questions: [
     {

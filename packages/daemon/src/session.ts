@@ -39,7 +39,7 @@ import type { PlanTracker } from "./plan-usage.ts";
 import { runBash, type BashRun } from "./bash.ts";
 import { PartIndex } from "./part-index.ts";
 import { interleaveRuns } from "./transcript.ts";
-import { tier, type Tier, type TierContext } from "./risk-tier.ts";
+import { tierAsync, type Tier, type TierContext } from "./risk-tier.ts";
 
 type Listener = (e: Event) => void;
 // Claude Code's wording, so Claude reads the feedback as the user's instruction rather than as tool output.
@@ -85,6 +85,8 @@ type SessionOpts = Partial<SessionSettings> & {
   runBash?: typeof runBash;
   toolPolicy?: (tool: string, mcpServer?: { name: string; source: string }) => "allow" | "no_rules" | undefined;
   /** Host rewrite of a permission card (orchestration.ts worker_start): the input shown and returned on allow, and its title. */
+  /** Test seam for the permission tier (risk-tier.ts tierAsync). */
+  tier?: typeof tierAsync;
   /** Whether the session is a worker (linked to a coordinator): its CLI runs with the shell cwd pinned, which lets read-only git be `low` (risk-tier.ts). */
   worker?: (id: string) => boolean;
   permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => { input: Record<string, unknown>; title?: string; onAllow?: () => void } | undefined;
@@ -137,7 +139,19 @@ export class Session {
   private grants: PermissionUpdate[] = [];
   /** Pending permission requests and questions by requestId (docs/spec.md "Permission bridge", "Questions"). */
   /** `ctx`: the SDK's request flags the permission tier reads (blockedPath, defaultToNo, requiresUserInteraction). */
-  private readonly pending = new Map<string, { part: PermissionPart | QuestionPart; resolve: (r: PermissionResult) => void; ctx?: Omit<TierContext, "cwd">; onAllow?: () => void }>();
+  private readonly pending = new Map<
+    string,
+    { part: PermissionPart | QuestionPart; resolve: (r: PermissionResult) => void; ctx?: Omit<TierContext, "cwd">; onAllow?: () => void; tier?: { epoch: number; value: Promise<Tier> } }
+  >();
+  /**
+   * Bumped by whatever may change files in the cwd: an allowed request, a tool call or bash command that ended. A request's tier
+   * read before the last bump is stale and read again (permissionTier).
+   */
+  private epoch = 0;
+  /** When the epoch last moved (performance.now()): a repository scan started before it is not shared (repoSafetyAsync). */
+  private epochAt = performance.now();
+  /** Coordinator settles of this session, one at a time (coordinatorRespond). */
+  private settling: Promise<unknown> = Promise.resolve();
   /** SDK task ID of each running subagent run by its Agent call's toolUseId (task_started, a resume's too; dropped at task_notification). */
   private tasks = new Map<string, string>();
   /** Bumped per refreshUsage(): an older answer that arrives later is dropped. */
@@ -722,20 +736,29 @@ export class Session {
     return this.pending.get(requestId)?.part;
   }
 
-  /** The permission tier of a pending permission request, computed now (docs/spec.md "Permission tiers"); undefined for a question or unknown ID. */
-  permissionTier(requestId: string): Tier | undefined {
+  /**
+   * The permission tier of a pending permission request (docs/spec.md "Permission tiers"); undefined for a question or unknown ID.
+   * Read once per request off the event loop (tierAsync: git runs as a child process) and reused for the permission event, the
+   * coordinator's check and the settle-time check, until the session's epoch moves (an allow, a tool that ended): then read again.
+   */
+  permissionTier(requestId: string): Promise<Tier | undefined> {
     const req = this.pending.get(requestId);
-    return req?.part.type === "permission_request" ? tier(req.part.tool, req.part.input, { cwd: this.cwd, bashCwdPinned: this.bashPinned, ...req.ctx }) : undefined;
+    if (req?.part.type !== "permission_request") return Promise.resolve(undefined);
+    if (req.tier?.epoch !== this.epoch) {
+      const read = this.opts.tier ?? tierAsync;
+      const { tool, input } = req.part;
+      req.tier = { epoch: this.epoch, value: Promise.resolve().then(() => read(tool, input, { cwd: this.cwd, bashCwdPinned: this.bashPinned, since: this.epochAt, ...req.ctx })).catch(() => "high" as const) };
+    }
+    return req.tier.value;
   }
 
   /**
    * Answers a pending permission request. False when it is already settled or unknown: the first answer wins. `by`: set only
    * by orchestration; it settles a `low` request only, allow once (no rule, no edit) or deny, with its reason in `message`.
    */
-  respond(requestId: string, answer: Answer, by?: "coordinator"): boolean {
+  respond(requestId: string, answer: Answer): boolean {
     const req = this.pending.get(requestId);
     if (req?.part.type !== "permission_request") return false;
-    if (by) return this.coordinatorSettle(requestId, req.part, answer);
     const { decision, ruleIndex, message, updatedInput } = answer;
     const { input, suggestions, toolUseId } = req.part;
     const text = message?.trim();
@@ -767,12 +790,34 @@ export class Session {
     );
   }
 
-  /** The security boundary of worker_permission: the tier is checked here, at settle time, whatever the caller checked. */
-  private coordinatorSettle(requestId: string, part: PermissionPart, { decision, ruleIndex, message, updatedInput }: Answer): boolean {
-    const reason = message?.trim();
-    if (!reason || (decision !== "allow" && decision !== "deny") || ruleIndex !== undefined || updatedInput !== undefined || part.escalated) return false;
-    if (this.permissionTier(requestId) !== "low") return false;
-    for (const p of this.adapter.byCoordinator(part.toolUseId, decision, reason)) this.emit(p);
+  /**
+   * The security boundary of worker_permission: the tier is checked here, at settle time, whatever the caller checked. False:
+   * refused or answered meanwhile, nothing settles. Atomic per request and serial per session: settles of one worker run one at
+   * a time, and after the tier is read the request is looked up again and settled in the same synchronous step (no await
+   * between). The worker's CLI is blocked on this request, so the worker itself writes nothing while it is decided; another
+   * request of the same worker (parallel tool use) is decided only after this one settled, with its tier read again when this
+   * allow moved the epoch.
+   */
+  coordinatorRespond(requestId: string, answer: Answer): Promise<boolean> {
+    const run = this.settling.then(async () => {
+      if (!this.coordinatorAnswerOk(requestId, answer)) return false;
+      const t = await this.permissionTier(requestId);
+      const part = this.pending.get(requestId)?.part;
+      if (t !== "low" || part?.type !== "permission_request" || !this.coordinatorAnswerOk(requestId, answer)) return false;
+      return this.coordinatorSettle(requestId, part, answer);
+    });
+    this.settling = run.catch(() => undefined);
+    return run;
+  }
+
+  private coordinatorAnswerOk(requestId: string, { decision, ruleIndex, message, updatedInput }: Answer): boolean {
+    const part = this.pending.get(requestId)?.part;
+    return part?.type === "permission_request" && !!message?.trim() && (decision === "allow" || decision === "deny") && ruleIndex === undefined && updatedInput === undefined && !part.escalated;
+  }
+
+  private coordinatorSettle(requestId: string, part: PermissionPart, { decision, message }: Answer): boolean {
+    const reason = message!.trim();
+    for (const p of this.adapter.byCoordinator(part.toolUseId, decision as "allow" | "deny", reason)) this.emit(p);
     const done = { decision, by: "coordinator" as const, message: reason };
     if (decision === "allow") return this.settle(requestId, done, { behavior: "allow", updatedInput: part.input as Record<string, unknown> });
     for (const p of this.adapter.deny(part.toolUseId)) this.emit(p);
@@ -807,6 +852,7 @@ export class Session {
     const req = this.pending.get(requestId);
     if (!req) return false;
     this.pending.delete(requestId);
+    if (result.behavior === "allow") this.bump();
     this.emit({ ...req.part, ...done, settled: true } as Part);
     if (!this.pending.size && this.state === "needs_input") this.setState("running");
     req.resolve(result);
@@ -988,7 +1034,14 @@ export class Session {
     this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}) });
   }
 
+  private bump() {
+    this.epoch++;
+    this.epochAt = performance.now();
+  }
+
   private emit(part: Part) {
+    // A tool call or bash command that ended may have changed files: pending tiers are stale.
+    if ((part.type === "tool_call" || part.type === "bash") && part.status !== "running" && part.status !== "pending") this.bump();
     const seq = ++this.lastSeq;
     const pos = this.index.apply({ type: "event", sessionId: this.id, seq, part });
     const e: Event = { type: "event", sessionId: this.id, seq, ...(pos !== undefined && { pos }), part };

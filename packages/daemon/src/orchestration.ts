@@ -6,7 +6,6 @@ import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from "@
 import { z } from "zod";
 import { EFFORTS, ORCHESTRATION_NOTICE, type Event, type ModelInfo, type Part, type PermissionMode, type Settings } from "@claude-ui/protocol";
 import { WorktreeError, type CreateWorktreeOptions } from "./git.ts";
-import { oneDecision } from "./git-readonly.ts";
 import type { Tier } from "./risk-tier.ts";
 import type { Session, SessionSettings } from "./session.ts";
 import type { Link, SessionSettingsStore } from "./session-settings.ts";
@@ -246,14 +245,31 @@ export function createOrchestration(deps: OrchestrationDeps) {
       e.requestId = p.requestId;
       e.tool = p.tool;
       e.input = cut(JSON.stringify(p.input) ?? "");
-      e.tier = s.permissionTier(p.requestId);
-      e.mayAnswer = e.tier === "low" && deps.settings().coordinatorPermissions;
+      const coordinator = l.coordinatorId;
+      // The tier is read off the event loop (git child processes): this worker's later events wait behind it, in order.
+      return inOrder(s.id, async () => {
+        e.tier = await s.permissionTier(p.requestId);
+        e.mayAnswer = e.tier === "low" && deps.settings().coordinatorPermissions;
+        deliver(coordinator, e);
+      });
     } else if (p.type === "tool_call") {
       e.toolUseId = p.toolUseId;
       e.tool = p.tool;
       e.input = cut(JSON.stringify(p.input) ?? "");
     }
-    deliver(l.coordinatorId, e);
+    const coordinator = l.coordinatorId;
+    if (ordered.has(s.id)) inOrder(s.id, async () => deliver(coordinator, e));
+    else deliver(coordinator, e);
+  }
+
+  /** Per worker: events queued behind a permission event whose tier is still being read. Empty = deliver at once. */
+  const ordered = new Map<string, Promise<void>>();
+  function inOrder(sessionId: string, step: () => Promise<void>) {
+    const next = (ordered.get(sessionId) ?? Promise.resolve()).then(step).catch((err) => console.warn(`orchestration: event of ${sessionId} not delivered: ${err}`));
+    ordered.set(sessionId, next);
+    void next.then(() => {
+      if (ordered.get(sessionId) === next) ordered.delete(sessionId);
+    });
   }
 
   /** A question or permission event whose request is settled or gone is no longer news. */
@@ -418,12 +434,14 @@ export function createOrchestration(deps: OrchestrationDeps) {
           if (p?.type !== "permission_request") throw new ToolError(`No pending permission request ${a.id} on worker ${a.name}: already answered, cancelled, unknown or a question.`);
           if (p.escalated) throw new ToolError(`Permission request ${a.id} is escalated to the user: only the user answers it.`);
           const decision = a.allow ? "allow" : "deny";
-          // One read of the repository for this check and the settle-time check in respond(): each costs git processes.
-          oneDecision(() => {
-            if (s.permissionTier(a.id) !== "low")
-              throw new ToolError(`Permission request ${a.id} (${p.tool}) is high risk: only the user answers it. Leave it, or hand it over with worker_escalate and a reason.`);
-            if (!s.respond(a.id, { decision, message: a.reason }, "coordinator")) throw new ToolError(`Permission request ${a.id} was answered meanwhile.`);
-          });
+          // The tier the permission event read, reused unless the worker's session changed since; coordinatorRespond checks it again at settle.
+          if ((await s.permissionTier(a.id)) !== "low")
+            throw new ToolError(`Permission request ${a.id} (${p.tool}) is high risk: only the user answers it. Leave it, or hand it over with worker_escalate and a reason.`);
+          if (!(await s.coordinatorRespond(a.id, { decision, message: a.reason }))) {
+            // Refused at settle: answered meanwhile, or its tier is no longer low.
+            if (s.pendingRequest(a.id)) throw new ToolError(`Permission request ${a.id} (${p.tool}) is high risk now: only the user answers it. Leave it, or hand it over with worker_escalate and a reason.`);
+            throw new ToolError(`Permission request ${a.id} was answered meanwhile.`);
+          }
           return { name: a.name, id: a.id, decision };
         },
       ),

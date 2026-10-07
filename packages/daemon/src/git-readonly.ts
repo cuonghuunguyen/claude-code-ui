@@ -1,7 +1,9 @@
 // Whether a Bash tool call is only read-only git (docs/spec.md "Permission tiers"): the one Bash shape a coordinator may settle.
 // An allowlist grammar: one fixed program (git), no quoting, no expansion, no redirection, exact option names. Any doubt = false.
-import { execFileSync } from "node:child_process";
-import { lstatSync, readdirSync, realpathSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { lstatSync, readdirSync, realpathSync, type Dirent } from "node:fs";
+import { readdir } from "node:fs/promises";
+import { Worker } from "node:worker_threads";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { deniedRead, pathLow } from "./risk-tier.ts";
@@ -80,9 +82,8 @@ const TABLES: Record<Cmd, Record<string, Opt>> = {
  * - PATH has an empty or relative entry (a bare program name could then resolve into the cwd);
  * - any of it cannot be read in time (`failed`: fail closed).
  * Then git status, diff, log and show are high and so is every Write in the cwd. `protectedPaths`: what a config value names
- * inside the cwd (always high to Write). Read anew on every decision: no cache, a worker's last Write is always seen (oneDecision
- * shares one read between the checks of a single synchronous decision). Synchronous on purpose: the settle-time check
- * (Session.coordinatorSettle) decides and settles in one step, with no await in between.
+ * inside the cwd (always high to Write). No result cache: every read looks again.
+ * The daemon uses repoSafetyAsync (git runs off the event loop); repoSafety (synchronous) is for tests and direct tier() calls.
  */
 export type RepoSafety = { unsafe: boolean; failed: boolean; why: string[]; protectedPaths: string[] };
 
@@ -98,6 +99,8 @@ const RUNS = /^(core\.hookspath|core\.fsmonitor|diff\.external|diff\..+\.(textco
 const INCLUDE = /^(include\.path|includeif\..+\.path)$/;
 /** A full walk of a big tree costs more than a tier decision may: past this many entries, unsafe. */
 const WALK_LIMIT = 50_000;
+/** Per git process; past it the scan fails, and a failed scan is unsafe. */
+const GIT_TIMEOUT_MS = 5000;
 
 /** The real path of `p`, a missing tail resolved through its nearest existing ancestor (8.3 short names and symlinks expand); `/c/x` is `C:/x` on Windows. */
 function realish(p: string): string {
@@ -116,15 +119,83 @@ function realish(p: string): string {
 const expandHome = (v: string) => (v === "~" || /^~[/\\]/.test(v) ? join(homedir(), v.slice(1)) : v);
 const absolute = (v: string) => isAbsolute(v) || /^[A-Za-z]:[\\/]/.test(v) || (process.platform === "win32" && /^[/\\][A-Za-z][/\\]/.test(v));
 
-const git = (cwd: string, args: string[]) =>
-  execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    timeout: 5000,
-    windowsHide: true,
-    maxBuffer: 1 << 30,
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
-    stdio: ["ignore", "pipe", "ignore"],
+const gitOpts = (cwd: string) => ({
+  cwd,
+  encoding: "utf8" as const,
+  timeout: GIT_TIMEOUT_MS,
+  windowsHide: true,
+  maxBuffer: 1 << 30,
+  env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+});
+const CONFIG_ARGS = ["config", "--list", "-z", "--show-scope", "--show-origin"];
+const LS_ARGS = ["ls-files", "-z", "--format=%(objectmode)"];
+const gitSync = (cwd: string, args: string[]) => execFileSync("git", args, { ...gitOpts(cwd), stdio: ["ignore", "pipe", "ignore"] });
+/**
+ * Git off the event loop. Even an async spawn creates the process on the main thread, and on Windows under load (antivirus)
+ * that alone held the loop for hundreds of ms; so git runs in a worker thread (plain JS, eval'd: nothing to bundle), which
+ * blocks only itself. Calls queue there one at a time. If the thread cannot start or dies, an async execFile is the fallback.
+ */
+const GIT_THREAD = `
+const { parentPort } = require("node:worker_threads");
+const { execFileSync } = require("node:child_process");
+parentPort.on("message", ({ id, args, opts }) => {
+  try {
+    parentPort.postMessage({ id, out: execFileSync("git", args, { ...opts, stdio: ["ignore", "pipe", "ignore"] }) });
+  } catch (e) {
+    parentPort.postMessage({ id, error: String((e && e.message) || e) });
+  }
+});`;
+let thread: Worker | undefined;
+let threadBroken = false;
+let nextCall = 0;
+const calls = new Map<number, { ok: (out: string) => void; fail: (e: Error) => void; timer: NodeJS.Timeout }>();
+function gitThread(): Worker | undefined {
+  if (thread || threadBroken) return thread;
+  try {
+    const w = new Worker(GIT_THREAD, { eval: true });
+    w.on("message", ({ id, out, error }: { id: number; out?: string; error?: string }) => {
+      const c = calls.get(id);
+      if (!c) return;
+      calls.delete(id);
+      clearTimeout(c.timer);
+      if (error === undefined) c.ok(out ?? "");
+      else c.fail(new Error(error));
+    });
+    const down = (e: unknown) => {
+      if (thread === w) thread = undefined;
+      for (const [id, c] of calls) {
+        calls.delete(id);
+        clearTimeout(c.timer);
+        c.fail(new Error(`git thread stopped: ${String(e)}`));
+      }
+    };
+    w.on("error", down);
+    w.on("exit", down);
+    // After the listeners: a listener added later refs the port again, and the thread would keep the daemon from exiting.
+    w.unref();
+    thread = w;
+  } catch {
+    threadBroken = true;
+  }
+  return thread;
+}
+const gitAsync = (cwd: string, args: string[]) =>
+  new Promise<string>((ok, fail) => {
+    const w = gitThread();
+    if (!w) {
+      const child = execFile("git", args, gitOpts(cwd), (err, stdout) => (err ? fail(err) : ok(stdout)));
+      child.stdin?.end();
+      return;
+    }
+    const id = ++nextCall;
+    // Queued calls wait their turn in the thread: allow for the queue, then fail closed.
+    const timer = setTimeout(() => {
+      calls.delete(id);
+      fail(new Error("git timed out"));
+    }, 4 * GIT_TIMEOUT_MS);
+    timer.unref();
+    calls.set(id, { ok, fail, timer });
+    w.postMessage({ id, args, opts: gitOpts(cwd) });
   });
 
 /** Whether some folder from `dir` up holds a `.git`: git would find a repository there. */
@@ -135,101 +206,154 @@ function inRepo(dir: string): boolean {
   }
 }
 
-let memo: Map<string, RepoSafety> | undefined;
-/** Runs `fn` (synchronous) with one repoSafety read per cwd: a coordinator's check and its settle-time check see the same facts. */
-export function oneDecision<T>(fn: () => T): T {
-  if (memo) return fn();
-  memo = new Map();
-  try {
-    return fn();
-  } finally {
-    memo = undefined;
-  }
-}
-
-export function repoSafety(cwd: string): RepoSafety {
-  const hit = memo?.get(cwd);
-  if (hit) return hit;
+/** The steps both readers share; only how git runs and how folders are listed differ. */
+type Scan = { top: string; out: RepoSafety; flag: (why: string) => void; inside: (p: string) => boolean };
+function begin(cwd: string): Scan {
   const out: RepoSafety = { unsafe: false, failed: false, why: [], protectedPaths: [] };
   const flag = (why: string) => {
     out.unsafe = true;
     out.why.push(why);
   };
-  try {
-    const top = realpathSync(cwd);
-    const inside = (p: string) => {
-      const rel = relative(top, realish(p));
-      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-    };
-    const pathEntries = (process.env.PATH ?? "").split(delimiter);
-    // A trailing `;` is common on Windows and names nothing; elsewhere an empty entry is the current folder.
-    const pathBad = pathEntries.some((e, i) => (e === "" ? !(process.platform === "win32" && i === pathEntries.length - 1) : !absolute(e)));
-    if (pathBad) flag("PATH has a relative entry");
+  const top = realpathSync(cwd);
+  const inside = (p: string) => {
+    const rel = relative(top, realish(p));
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  const pathEntries = (process.env.PATH ?? "").split(delimiter);
+  // A trailing `;` is common on Windows and names nothing; elsewhere an empty entry is the current folder.
+  if (pathEntries.some((e, i) => (e === "" ? !(process.platform === "win32" && i === pathEntries.length - 1) : !absolute(e)))) flag("PATH has a relative entry");
+  return { top, out, flag, inside };
+}
 
-    // Output: scope NUL origin NUL key NL value NUL, repeated. Includes are expanded: their keys are listed too.
-    const fields = git(top, ["config", "--list", "-z", "--show-scope", "--show-origin"]).split("\u0000");
-    for (let i = 0; i + 2 < fields.length; i += 3) {
-      const scope = fields[i]!;
-      const origin = fields[i + 1]!;
-      const entry = fields[i + 2]!;
-      const nl = entry.indexOf("\n");
-      const key = (nl < 0 ? entry : entry.slice(0, nl)).toLowerCase();
-      const value = nl < 0 ? "" : entry.slice(nl + 1);
-      const v = value.trim();
-      const originDir = origin.startsWith("file:") ? dirname(resolve(top, origin.slice(5))) : undefined;
-      // What a value names inside the cwd: a Write there is always high. A program's or an include's path-like words, and the
-      // whole value of a key that names a file or folder (core.attributesFile, core.excludesFile, commit.template ...).
-      const named = RUNS.test(key) || INCLUDE.test(key) ? v.split(/\s+/).filter((t) => absolute(t) || t.startsWith("~") || t.startsWith(".") || /[/\\]/.test(t)) : /(file|template)$/.test(key) && v && !BOOL.test(v) ? [v] : [];
-      for (const tok of named) {
-        const p = resolve(INCLUDE.test(key) && originDir ? originDir : top, expandHome(tok));
-        if (inside(p)) out.protectedPaths.push(realish(p));
-      }
-      if (INCLUDE.test(key)) {
-        // A relative include is relative to the file that holds it; an included file inside the cwd is worker-writable config.
-        if (!v) continue;
-        const target = expandHome(v);
-        if (absolute(target) ? inside(target) : !originDir || inside(resolve(originDir, target))) flag(`${key} into the worktree`);
-      } else if (RUNS.test(key)) {
-        // core.fsmonitor takes a boolean (git's own daemon); an empty program value names none (an empty hooksPath is the top folder).
-        if ((v === "" && key !== "core.hookspath") || (key === "core.fsmonitor" && BOOL.test(v))) continue;
-        if ((scope === "system" || scope === "global") && KNOWN[key] === v) continue;
-        const one = expandHome(v);
-        // A program: one token (arguments could name a file the worker wrote). A hooks folder: any absolute path.
-        if ((key === "core.hookspath" || /^[^\s'"]+$/.test(v)) && absolute(one) && !inside(one)) continue;
-        flag(`${scope} ${key}`);
-      }
+/** `git config --list -z --show-scope --show-origin`: scope NUL origin NUL key NL value NUL, repeated (includes expanded). */
+function readConfig({ top, out, flag, inside }: Scan, text: string) {
+  const fields = text.split("\u0000");
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const scope = fields[i]!;
+    const origin = fields[i + 1]!;
+    const entry = fields[i + 2]!;
+    const nl = entry.indexOf("\n");
+    const key = (nl < 0 ? entry : entry.slice(0, nl)).toLowerCase();
+    const v = (nl < 0 ? "" : entry.slice(nl + 1)).trim();
+    const originDir = origin.startsWith("file:") ? dirname(resolve(top, origin.slice(5))) : undefined;
+    // What a value names inside the cwd: a Write there is always high. A program's or an include's path-like words, and the
+    // whole value of a key that names a file or folder (core.attributesFile, core.excludesFile, commit.template ...).
+    const named = RUNS.test(key) || INCLUDE.test(key) ? v.split(/\s+/).filter((t) => absolute(t) || t.startsWith("~") || t.startsWith(".") || /[/\\]/.test(t)) : /(file|template)$/.test(key) && v && !BOOL.test(v) ? [v] : [];
+    for (const tok of named) {
+      const p = resolve(INCLUDE.test(key) && originDir ? originDir : top, expandHome(tok));
+      if (inside(p)) out.protectedPaths.push(realish(p));
     }
+    if (INCLUDE.test(key)) {
+      // A relative include is relative to the file that holds it; an included file inside the cwd is worker-writable config.
+      if (!v) continue;
+      const target = expandHome(v);
+      if (absolute(target) ? inside(target) : !originDir || inside(resolve(originDir, target))) flag(`${key} into the worktree`);
+    } else if (RUNS.test(key)) {
+      // core.fsmonitor takes a boolean (git's own daemon); an empty program value names none (an empty hooksPath is the top folder).
+      if ((v === "" && key !== "core.hookspath") || (key === "core.fsmonitor" && BOOL.test(v))) continue;
+      if ((scope === "system" || scope === "global") && KNOWN[key] === v) continue;
+      const one = expandHome(v);
+      // A program: one token (arguments could name a file the worker wrote). A hooks folder: any absolute path.
+      if ((key === "core.hookspath" || /^[^\s'"]+$/.test(v)) && absolute(one) && !inside(one)) continue;
+      flag(`${scope} ${key}`);
+    }
+  }
+}
 
-    // The worktree's shape: submodules and nested repositories have their own config and hooks.
-    let seen = 0;
+/** One folder's entries during the walk: false = stop (flagged). node_modules is not entered: git never runs anything from a
+ * nested repository there unless it is a gitlink (the index check), and a low Write cannot create a `.git` or `.gitmodules`. */
+function visit({ top, flag }: Scan, d: string, depth: number, entries: Dirent[], seen: { n: number }, down: (dir: string) => void): boolean {
+  for (const e of entries) {
+    if (++seen.n > WALK_LIMIT) return (flag("worktree too large to check"), false);
+    const n = e.name.toLowerCase();
+    if (n === ".git" && depth > 0) return (flag(`nested repository ${relative(top, d) || "."}`), false);
+    if (n === ".gitmodules") return (flag(relative(top, join(d, e.name))), false);
+    if (e.isDirectory() && !(depth === 0 && n === ".git") && n !== "node_modules") down(join(d, e.name));
+  }
+  return true;
+}
+
+const failClosed = (s: Scan | undefined): RepoSafety => {
+  const out = s?.out ?? { unsafe: false, failed: false, why: [], protectedPaths: [] };
+  out.failed = out.unsafe = true;
+  out.why.push("could not read the repository's config or index");
+  return out;
+};
+const gitlinks = (s: Scan, modes: string) => {
+  if (modes.split("\u0000").includes("160000")) s.flag("a submodule (gitlink) in the index");
+};
+
+/** Synchronous read: blocks the event loop for two git processes. Tests and direct tier() calls only; the daemon awaits repoSafetyAsync. */
+export function repoSafety(cwd: string): RepoSafety {
+  let s: Scan | undefined;
+  try {
+    s = begin(cwd);
+    readConfig(s, gitSync(s.top, CONFIG_ARGS));
+    const seen = { n: 0 };
     const walk = (d: string, depth: number): boolean => {
-      for (const e of readdirSync(d, { withFileTypes: true })) {
-        if (++seen > WALK_LIMIT) return (flag("worktree too large to check"), false);
-        const n = e.name.toLowerCase();
-        if (n === ".git" && depth > 0) return (flag(`nested repository ${relative(top, d) || "."}`), false);
-        if (n === ".gitmodules") return (flag(`${relative(top, join(d, e.name))}`), false);
-        // node_modules: git never runs anything from a nested repository there unless it is a gitlink (the index check below),
-        // and a low Write cannot create a `.git` or `.gitmodules` at any depth.
-        if (e.isDirectory() && !(depth === 0 && n === ".git") && n !== "node_modules" && !walk(join(d, e.name), depth + 1)) return false;
-      }
-      return true;
+      const subs: string[] = [];
+      if (!visit(s!, d, depth, readdirSync(d, { withFileTypes: true }), seen, (x) => subs.push(x))) return false;
+      return subs.every((x) => walk(x, depth + 1));
     };
-    if (!out.unsafe) walk(top, 0);
-    if (!out.unsafe) {
+    if (!s.out.unsafe) walk(s.top, 0);
+    if (!s.out.unsafe) {
       let modes = "";
       try {
-        modes = git(top, ["ls-files", "-z", "--format=%(objectmode)"]);
+        modes = gitSync(s.top, LS_ARGS);
       } catch (e) {
-        if (inRepo(top)) throw e;
+        if (inRepo(s.top)) throw e;
       }
-      if (modes.split("\u0000").includes("160000")) flag("a submodule (gitlink) in the index");
+      gitlinks(s, modes);
     }
+    return s.out;
   } catch {
-    out.failed = true;
-    flag("could not read the repository's config or index");
+    return failClosed(s);
   }
-  memo?.set(cwd, out);
-  return out;
+}
+
+/** A scan in flight is shared for at most this long: a request that arrives later gets a scan of its own. */
+const SHARE_MS = 1000;
+const inFlight = new Map<string, { at: number; p: Promise<RepoSafety> }>();
+/**
+ * The same facts as repoSafety, with git and the walk off the event loop. Never rejects: any failure, and a git process past
+ * 5 s, is a failed (unsafe) result. A read shares the scan of the same cwd in flight only when that scan started after `since`
+ * (performance.now(); default: 1 s ago), so a change the caller knows of (Session's epoch) is never answered by an older scan.
+ * Nothing is kept after a scan completes.
+ */
+export function repoSafetyAsync(cwd: string, since = performance.now() - SHARE_MS): Promise<RepoSafety> {
+  const running = inFlight.get(cwd);
+  if (running && running.at > Math.max(since, performance.now() - SHARE_MS)) return running.p;
+  const p = (async () => {
+    let s: Scan | undefined;
+    try {
+      s = begin(cwd);
+      readConfig(s, await gitAsync(s.top, CONFIG_ARGS));
+      const seen = { n: 0 };
+      const walk = async (d: string, depth: number): Promise<boolean> => {
+        const subs: string[] = [];
+        if (!visit(s!, d, depth, await readdir(d, { withFileTypes: true }), seen, (x) => subs.push(x))) return false;
+        for (const x of subs) if (!(await walk(x, depth + 1))) return false;
+        return true;
+      };
+      if (!s.out.unsafe) await walk(s.top, 0);
+      if (!s.out.unsafe) {
+        let modes = "";
+        try {
+          modes = await gitAsync(s.top, LS_ARGS);
+        } catch (e) {
+          if (inRepo(s.top)) throw e;
+        }
+        gitlinks(s, modes);
+      }
+      return s.out;
+    } catch {
+      return failClosed(s);
+    }
+  })().finally(() => {
+    if (inFlight.get(cwd)?.p === p) inFlight.delete(cwd);
+  });
+  inFlight.set(cwd, { at: performance.now(), p });
+  return p;
 }
 
 const MAX_COMMAND = 1000;
@@ -318,8 +442,11 @@ function segmentOk(seg: string, cwd: string, execUnsafe: () => boolean): boolean
   return true;
 }
 
-/** Whether the Bash tool input is a chain (`&&`, `||`, `;`) of read-only git commands to run in `cwd`, which holds a `.git`. */
-export function gitReadOnly(input: unknown, cwd: string): boolean {
+/**
+ * Whether the Bash tool input is a chain (`&&`, `||`, `;`) of read-only git commands to run in `cwd`, which holds a `.git`.
+ * `safety`: the repository facts already read for this decision (repoSafetyAsync); absent, they are read synchronously.
+ */
+export function gitReadOnly(input: unknown, cwd: string, safety?: RepoSafety): boolean {
   try {
     if (!input || typeof input !== "object" || Array.isArray(input)) return false;
     const o = input as Record<string, unknown>;
@@ -331,7 +458,7 @@ export function gitReadOnly(input: unknown, cwd: string): boolean {
     const segs = cmd.split(/\s*(?:&&|\|\||;)\s*/);
     if (segs.length > MAX_SEGMENTS) return false;
     let unsafe: boolean | undefined;
-    const execUnsafe = () => (unsafe ??= repoSafety(cwd).unsafe);
+    const execUnsafe = () => (unsafe ??= (safety ?? repoSafety(cwd)).unsafe);
     return segs.every((s) => s.trim() !== "" && !/[&|]/.test(s) && segmentOk(s, cwd, execUnsafe));
   } catch {
     return false;

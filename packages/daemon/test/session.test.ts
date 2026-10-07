@@ -7,7 +7,7 @@ import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Event } from "@claude-ui/protocol";
 import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, queuedQuery, Session, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
-import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -498,8 +498,8 @@ describe("coordinator settle", () => {
   it("a coordinator allow on a low request settles once with by, its reason and the original input, without updatedPermissions", async () => {
     const { s, events, req, answered } = await ask("Edit", edit);
     expect(req.suggestions).toEqual([bashSuggestion]);
-    expect(s.permissionTier(req.requestId)).toBe("low");
-    expect(s.respond(req.requestId, { decision: "allow", message: "r" }, "coordinator")).toBe(true);
+    expect(await s.permissionTier(req.requestId)).toBe("low");
+    expect(await s.coordinatorRespond(req.requestId, { decision: "allow", message: "r" })).toBe(true);
     const r = await answered();
     expect(r).toEqual({ behavior: "allow", updatedInput: edit });
     expect(r).not.toHaveProperty("updatedPermissions");
@@ -510,7 +510,7 @@ describe("coordinator settle", () => {
 
   it("a coordinator deny sends its reason in coordinator wording, does not interrupt, and marks the tool card", async () => {
     const { s, events, req, answered } = await ask("Edit", edit);
-    expect(s.respond(req.requestId, { decision: "deny", message: "  wrong file  " }, "coordinator")).toBe(true);
+    expect(await s.coordinatorRespond(req.requestId, { decision: "deny", message: "  wrong file  " })).toBe(true);
     const r = await answered();
     expect(r).toEqual({ behavior: "deny", message: "The coordinator session denied this tool use; it was not run. Its reason:\nwrong file" });
     expect(lastPart(events, req.id)).toMatchObject({ settled: true, decision: "deny", by: "coordinator", message: "wrong file" });
@@ -532,14 +532,14 @@ describe("coordinator settle", () => {
     ];
     for (const [tool, input, extra, answer] of tries) {
       const { s, req, answered } = await ask(tool, input, extra);
-      expect(s.respond(req.requestId, answer as never, "coordinator")).toBe(false);
+      expect(await s.coordinatorRespond(req.requestId, answer as never)).toBe(false);
       expect(s.info().state).toBe("needs_input");
       expect(s.respond(req.requestId, { decision: "allow" })).toBe(true);
       expect(await answered()).toMatchObject({ behavior: "allow" });
     }
     const { s, req } = await ask("Edit", edit);
     s.escalate(req.requestId, "blocking");
-    expect(s.respond(req.requestId, { decision: "allow", message: "r" }, "coordinator")).toBe(false);
+    expect(await s.coordinatorRespond(req.requestId, { decision: "allow", message: "r" })).toBe(false);
     expect(s.respond(req.requestId, { decision: "deny", message: "no" })).toBe(true);
   });
 });
@@ -1840,5 +1840,83 @@ describe("Session background work", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("coordinator settle off the event loop (GH-163 round 5)", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "coord-async-"));
+  const edit = (file_path: string) => ({ tool: "Edit", input: { file_path, old_string: "a", new_string: "b" } });
+  /** A session with two parallel pending Edit requests; `tier` is the test seam that records each decision. */
+  const twoPending = async (delayMs: number) => {
+    const log: string[] = [];
+    const tier = async (_tool: string, input: unknown) => {
+      const f = (input as { file_path: string }).file_path;
+      log.push(`start ${f}`);
+      await new Promise((r) => setTimeout(r, delayMs));
+      log.push(`end ${f}`);
+      return "low" as const;
+    };
+    const s = new Session(cwd, { query: parallelPermissionQuery as never, tier });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.subscribe(0, (e) => {
+      if (e.part.type === "permission_request" && e.part.settled) log.push(`settled ${(e.part.input as { file_path: string }).file_path}`);
+    });
+    s.prompt(JSON.stringify({ calls: [edit("a.ts"), edit("b.ts")] }));
+    await until(events, () => events.filter((e) => e.part.type === "permission_request").length >= 2);
+    const reqs = events.filter((e) => e.part.type === "permission_request").map((e) => e.part as Extract<Event["part"], { type: "permission_request" }>);
+    return { s, log, reqs, events };
+  };
+
+  it("two concurrent coordinator settles of one worker run one after the other, each decided after the other settled", async () => {
+    const { s, log, reqs } = await twoPending(30);
+    const [a, b] = await Promise.all([
+      s.coordinatorRespond(reqs[0]!.requestId, { decision: "allow", message: "r" }),
+      s.coordinatorRespond(reqs[1]!.requestId, { decision: "allow", message: "r" }),
+    ]);
+    expect([a, b]).toEqual([true, true]);
+    // B's decision starts only after A settled: A's allow may change the files B's tier depends on.
+    expect(log).toEqual(["start a.ts", "end a.ts", "settled a.ts", "start b.ts", "end b.ts", "settled b.ts"]);
+  });
+
+  it("a request's tier is read once and reused until something in the session changes", async () => {
+    const { s, log, reqs } = await twoPending(1);
+    expect(await s.permissionTier(reqs[1]!.requestId)).toBe("low");
+    expect(await s.permissionTier(reqs[1]!.requestId)).toBe("low");
+    expect(await s.coordinatorRespond(reqs[1]!.requestId, { decision: "deny", message: "no" })).toBe(true);
+    // One read for the event, the coordinator check and the settle-time check.
+    expect(log.filter((l) => l === "start b.ts")).toHaveLength(1);
+    expect(await s.permissionTier(reqs[0]!.requestId)).toBe("low");
+    // A deny changes nothing on disk: the tier read for the coordinator check is reused at settle.
+    expect(await s.coordinatorRespond(reqs[0]!.requestId, { decision: "allow", message: "r" })).toBe(true);
+    expect(log.filter((l) => l === "start a.ts")).toHaveLength(1);
+  });
+
+  it("an allow in the session makes a pending request's tier stale: it is read again before the coordinator settles it", async () => {
+    const { s, log, reqs } = await twoPending(1);
+    expect(await s.permissionTier(reqs[1]!.requestId)).toBe("low");
+    expect(s.respond(reqs[0]!.requestId, { decision: "allow" })).toBe(true);
+    expect(await s.coordinatorRespond(reqs[1]!.requestId, { decision: "allow", message: "r" })).toBe(true);
+    expect(log.filter((l) => l === "start b.ts")).toHaveLength(2);
+  });
+
+  it("the user answering while the tier is read wins: the coordinator's settle is refused, nothing settles twice", async () => {
+    const { s, reqs, events } = await twoPending(50);
+    const coord = s.coordinatorRespond(reqs[0]!.requestId, { decision: "allow", message: "r" });
+    expect(s.respond(reqs[0]!.requestId, { decision: "deny", message: "mine" })).toBe(true);
+    expect(await coord).toBe(false);
+    expect(events.filter((e) => e.part.id === reqs[0]!.id && e.part.type === "permission_request" && e.part.settled)).toHaveLength(1);
+  });
+
+  it("a tier that is not low refuses the settle; a failing tier is high", async () => {
+    const s = new Session(cwd, { query: parallelPermissionQuery as never, tier: async () => { throw new Error("boom"); } });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt(JSON.stringify({ calls: [edit("a.ts")] }));
+    await until(events, (e) => e.part.type === "permission_request");
+    const req = events.find((e) => e.part.type === "permission_request")!.part as Extract<Event["part"], { type: "permission_request" }>;
+    expect(await s.permissionTier(req.requestId)).toBe("high");
+    expect(await s.coordinatorRespond(req.requestId, { decision: "allow", message: "r" })).toBe(false);
+    expect(s.info().state).toBe("needs_input");
   });
 });
