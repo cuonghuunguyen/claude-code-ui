@@ -186,13 +186,14 @@ export function timeline(s: SessionView, parentId?: string): TimelineItem[] {
   return items;
 }
 
-/** The assistant text of the turn that item `index` ends (back to its prompt), blocks joined by a blank line; tool calls and reasoning are not text parts. */
+/** The assistant text of the turn up to and including item `index` (back to its prompt), blocks joined by a blank line; tool calls and reasoning are not text parts. */
 export function turnText(items: TimelineItem[], index: number): string {
   const texts: string[] = [];
-  for (let i = index - 1; i >= 0; i--) {
+  for (let i = index; i >= 0; i--) {
     const item = items[i]!;
     if (item.kind !== "part") continue;
-    if (item.part.type === "user_text" || item.part.type === "turn_result") break;
+    if (item.part.type === "user_text") break;
+    if (item.part.type === "assistant_text" && item.part.streaming) return "";
     if (item.part.type === "assistant_text" && item.part.text) texts.unshift(item.part.text);
   }
   return texts.join("\n\n");

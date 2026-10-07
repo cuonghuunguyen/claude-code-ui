@@ -89,6 +89,7 @@ it("a finished turn has one Copy response action that copies its assistant text 
   expect(copies()).toHaveLength(2);
   const b = copies()[0]!;
   expect(b.className).toContain("pointer-coarse:size-11");
+  expect(b.className).toContain("max-md:size-11");
   expect(b.disabled).toBe(false);
   await act(async () => b.click());
   expect(writeText).toHaveBeenCalledExactlyOnceWith("First **block**\n\n```ts\nlet x = 1;\n```");
@@ -102,4 +103,17 @@ it("a turn that is still running has no Copy response yet; a turn without text h
   expect(copies()).toHaveLength(0);
   await render(view([{ type: "user_text", id: "u1", text: "go", images: [] }, call("b1", "Bash", { command: "ls" }), turnResult()]));
   expect(copies()).toHaveLength(0);
+});
+
+it("a restored turn (no turn_result, so no usage footer) still has Copy response; the last turn too, unless running (GH-151)", async () => {
+  const parts: Part[] = [
+    { type: "user_text", id: "u1", text: "go", images: [] },
+    text("m1:0", "old answer"),
+    { type: "user_text", id: "u2", text: "again", images: [] },
+    text("m2:0", "new answer"),
+  ];
+  await render(view(parts));
+  expect(copies()).toHaveLength(2);
+  await render(view([...parts, { type: "session_state", id: "st", state: "running" }]));
+  expect(copies()).toHaveLength(1);
 });

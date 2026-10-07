@@ -2098,7 +2098,11 @@ export function SessionPane({
           }
           onReachTop={view.older && onLoadOlder ? (user) => onLoadOlder({ user }) : undefined}
           loadingOlder={loadingOlder}
-          renderItem={(item, index) =>
+          renderItem={(item, index) => {
+            // A finished turn (not running; the next top-level item is a prompt, or it is the last) ends with Copy response, with or without a usage footer: a restored transcript has none.
+            const next = items[index + 1];
+            const copyText = (next ? next.kind === "part" && next.part.type === "user_text" : !turnRunning) ? turnText(items, index) : "";
+            const row = (
             item.kind === "context" ? (
               <ContextGroup calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
             ) : item.part.type === "user_text" && coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE) ? (
@@ -2147,18 +2151,21 @@ export function SessionPane({
                   />
                 )}
               </UserMessage>
-            ) : item.part.type === "turn_result" && turnText(items, index) ? (
-              // The turn's end: Copy response sits beside the usage footer. A running turn has no turn_result yet, so no Copy.
-              <div className="flex items-center gap-2">
-                <PartView part={item.part} view={view} />
-                <MessageActions>
-                  <CopyAction text={turnText(items, index)} label="Copy response" />
-                </MessageActions>
-              </div>
             ) : (
               <PartView part={item.part} view={view} />
             )
-          }
+            );
+            return copyText ? (
+              <>
+                {row}
+                <MessageActions className="mt-1">
+                  <CopyAction text={copyText} label="Copy response" className="max-md:size-11" />
+                </MessageActions>
+              </>
+            ) : (
+              row
+            );
+          }}
         />
       )}
       <div
@@ -2655,7 +2662,7 @@ function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) 
   );
 }
 
-function CopyAction({ text, label = "Copy message" }: { text: string; label?: string }) {
+function CopyAction({ text, label = "Copy message", className = "" }: { text: string; label?: string; className?: string }) {
   const [copied, setCopied] = useState(false);
   // navigator.clipboard is undefined on a non-secure origin (http://<LAN IP>), so Copy does nothing there.
   const copy = () =>
@@ -2667,7 +2674,7 @@ function CopyAction({ text, label = "Copy message" }: { text: string; label?: st
       () => {},
     );
   return (
-    <MessageAction title="Copy" label={label} className="pointer-coarse:size-11" onClick={copy}>
+    <MessageAction title="Copy" label={label} className={`pointer-coarse:size-11 ${className}`} onClick={copy}>
       {copied ? <CheckIcon /> : <CopyIcon />}
     </MessageAction>
   );
