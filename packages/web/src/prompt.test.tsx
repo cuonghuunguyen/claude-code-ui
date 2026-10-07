@@ -521,11 +521,11 @@ it("a pick that leaves the text as it was still moves the caret out of the token
   expect(box.selectionStart).toBe(14);
 });
 
-it('user bubble: "> " lines render as a blockquote, the rest stays plain text', async () => {
+it('user bubble: "> " lines render as a markdown blockquote, the rest as a paragraph', async () => {
   const user = (text: string) => applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "user_text", id: "u1", text, images: [] } });
   const d = await render({}, user("> first\n> second\n\nmy reply"));
-  expect(d.el.querySelector("blockquote")?.textContent).toBe("first\nsecond");
-  expect(d.$("user-message")?.textContent).toContain("my reply");
+  expect(d.el.querySelector("blockquote")?.textContent?.trim()).toBe("first\nsecond");
+  expect([...d.el.querySelectorAll("p")].some((p) => p.textContent === "my reply")).toBe(true);
   await d.rerender({ view: user("no quote") });
   expect(d.el.querySelector("blockquote")).toBeNull();
 });

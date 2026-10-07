@@ -114,3 +114,15 @@ it("Esc closes the dialog and the focus returns to the prompt box", async () => 
   expect(q("settings-dialog")).toBeNull();
   expect(document.activeElement).toBe(prompt);
 });
+
+it("Default diff view is a per-browser choice: picking Uncommitted saves it and sends no settings.set", async () => {
+  localStorage.removeItem("claude-ui.diffMode");
+  const { q, calls } = await render();
+  expect(q("settings-diff-mode")?.textContent).toContain("Session changes");
+  await act(async () => q("settings-diff-mode")!.click());
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-diff-mode-uncommitted]")!.click());
+  expect(localStorage.getItem("claude-ui.diffMode")).toBe("uncommitted");
+  expect(q("settings-diff-mode")?.textContent).toContain("Uncommitted");
+  expect(calls.some((c) => c.type === "settings.set")).toBe(false);
+  localStorage.removeItem("claude-ui.diffMode");
+});
