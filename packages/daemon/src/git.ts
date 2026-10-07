@@ -1,9 +1,10 @@
 // Git branch and diff size of a session cwd, for the status bar (`git.status`).
 import { execFile } from "node:child_process";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
+import { lstat, open } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
-import { GIT_LOG_MAX_LIMIT, worktreeNameError, type GitCommit, type GitCommitDetail, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
+import { GIT_LOG_MAX_LIMIT, worktreeNameError, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
 
 const exec = promisify(execFile);
 // Read-only calls on a repository's own config: no fsmonitor hook (a program from .git/config), no transport (a partial clone's lazy fetch runs core.sshCommand), on any git version.
@@ -381,11 +382,7 @@ export async function gitLog(cwd: string, o: GitLogOptions): Promise<GitLog | nu
   const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   let ref: string | undefined;
-  if (o.ref !== undefined) {
-    if (o.ref === "HEAD") ref = o.ref;
-    else if (typeof o.ref !== "string" || o.ref.length > 255 || !/^refs\/(heads|remotes)\//.test(o.ref) || !(await gok(top, "check-ref-format", o.ref)) || !(await gok(top, "show-ref", "--verify", "-q", "--", o.ref))) throw bad("Unknown branch");
-    else ref = o.ref;
-  }
+  if (o.ref !== undefined) ref = o.ref === "HEAD" ? o.ref : await checkBranchRef(top, o.ref);
   if (ref === "HEAD" && !(await gok(top, "rev-parse", "--verify", "-q", "HEAD^{commit}"))) return { commits: [], more: false, ...(skip === 0 && { branches: await branchList(top) }) };
   const format = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s";
   let args: string[];
@@ -413,12 +410,9 @@ export async function gitLog(cwd: string, o: GitLogOptions): Promise<GitLog | nu
   return log;
 }
 
-/** Files of a commit against its first parent (a root commit: against nothing). */
-async function commitFiles(top: string, hash: string, base: string | undefined): Promise<{ files: GitFileChange[]; truncated?: boolean }> {
-  const tail = base ? [base, hash] : ["--root", hash];
-  const pre = ["diff-tree", "-r", "-z", "-M", "--no-commit-id", "--no-ext-diff", "--no-textconv"];
-  const [names, nums] = await Promise.all([g(top, [...pre, "--name-status", ...tail]), g(top, [...pre, "--numstat", ...tail])]);
-  const n = names.split("\0");
+/** `diff -z --name-status` output; a copy counts as a rename. */
+function parseNameStatus(z: string): GitFileChange[] {
+  const n = z.split("\0");
   const files: GitFileChange[] = [];
   for (let i = 0; i < n.length && n[i]; ) {
     const st = n[i++]!;
@@ -426,8 +420,12 @@ async function commitFiles(top: string, hash: string, base: string | undefined):
       files.push({ status: "R", oldPath: n[i++]!, path: n[i++]! });
     } else files.push({ status: st[0] === "A" || st[0] === "D" ? st[0] : "M", path: n[i++]! });
   }
+  return files;
+}
+/** `diff -z --numstat` output by (new) path; a binary file has no counts. */
+function parseNumstat(z: string): Map<string, { added?: number; removed?: number }> {
   const stats = new Map<string, { added?: number; removed?: number }>();
-  const m = nums.split("\0");
+  const m = z.split("\0");
   for (let i = 0; i < m.length && m[i]; i++) {
     const [a, r, p] = m[i]!.split("\t");
     let path = p!;
@@ -437,6 +435,16 @@ async function commitFiles(top: string, hash: string, base: string | undefined):
     }
     stats.set(path, a === "-" ? {} : { added: Number(a), removed: Number(r) });
   }
+  return stats;
+}
+
+/** Files of a commit against its first parent (a root commit: against nothing). */
+async function commitFiles(top: string, hash: string, base: string | undefined): Promise<{ files: GitFileChange[]; truncated?: boolean }> {
+  const tail = base ? [base, hash] : ["--root", hash];
+  const pre = ["diff-tree", "-r", "-z", "-M", "--no-commit-id", "--no-ext-diff", "--no-textconv"];
+  const [names, nums] = await Promise.all([g(top, [...pre, "--name-status", ...tail]), g(top, [...pre, "--numstat", ...tail])]);
+  const files = parseNameStatus(names);
+  const stats = parseNumstat(nums);
   const cut = files.length > MAX_COMMIT_FILES;
   const list = files.slice(0, MAX_COMMIT_FILES).map((f) => ({ ...f, ...stats.get(f.path) }));
   return { files: list, ...(cut && { truncated: true }) };
@@ -471,4 +479,92 @@ export async function gitFileAt(cwd: string, hash: string, path: string, allowed
   } catch (e) {
     throw new WorktreeError("git_failed", (e as Error).message.split("\n")[0]!);
   }
+}
+
+/** `refs/heads/x` / `refs/remotes/o/x` to `x` / `o/x`. */
+const shortRef = (r: string) => r.replace(/^refs\/(heads|remotes)\//, "");
+/** A full branch ref the caller named: refs/heads or refs/remotes, a valid name, existing. */
+async function checkBranchRef(top: string, ref: unknown): Promise<string> {
+  if (typeof ref !== "string" || ref.length > 255 || !/^refs\/(heads|remotes)\//.test(ref) || !(await gok(top, "check-ref-format", ref)) || !(await gok(top, "show-ref", "--verify", "-q", "--", ref))) throw bad("Unknown branch");
+  return ref;
+}
+/** origin/HEAD's target, else main, else master (local); no fetch. */
+async function defaultBranch(top: string): Promise<string | undefined> {
+  const remote = await g(top, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).catch(() => "");
+  for (const ref of [remote, "refs/heads/main", "refs/heads/master"]) if (ref && (await gok(top, "show-ref", "--verify", "-q", "--", ref))) return ref;
+  return undefined;
+}
+
+const MAX_UNTRACKED_STATS = 1000;
+const MAX_UNTRACKED_BYTES = 1 << 20;
+/** Lines of an untracked text file; undefined for a binary, large or non-regular file (git's NUL-in-the-first-8000-bytes rule). */
+async function untrackedLines(top: string, path: string): Promise<number | undefined> {
+  try {
+    const p = join(top, path);
+    const st = await lstat(p);
+    if (!st.isFile() || st.size > MAX_UNTRACKED_BYTES) return undefined;
+    const fh = await open(p, "r");
+    try {
+      const b = Buffer.alloc(st.size);
+      const { bytesRead } = await fh.read(b, 0, st.size, 0);
+      const t = b.subarray(0, bytesRead);
+      if (t.subarray(0, 8000).includes(0)) return undefined;
+      let n = 0;
+      for (const c of t) if (c === 10) n++;
+      return t.length > 0 && t[t.length - 1] !== 10 ? n + 1 : n;
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+export type GitDiffOptions = { base: unknown; ref?: unknown; allowed: (p: string) => boolean };
+/** The working tree (staged, unstaged, untracked) against HEAD or a merge base (docs/spec.md "Layout", changes tab); null outside a git work tree. */
+export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff | null> {
+  if (o.base !== "head" && o.base !== "branch") throw bad("Invalid base");
+  if (o.ref !== undefined && typeof o.ref !== "string") throw bad("Invalid ref");
+  const top = await topIn(cwd, o.allowed);
+  if (!top) return null;
+  const prefix = await g(cwd, ["rev-parse", "--show-prefix"]);
+  const head = await g(top, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]).catch(() => "");
+  let base: string | undefined;
+  let ref: string | undefined;
+  let branches: string[] | undefined;
+  if (o.base === "head") base = head || undefined;
+  else {
+    if (!head) throw new WorktreeError("bad_base", "No commits yet");
+    ref = o.ref === undefined ? await defaultBranch(top) : await checkBranchRef(top, o.ref);
+    if (!ref) throw new WorktreeError("bad_base", "No default branch (origin/HEAD, main or master): pick a branch");
+    const target = ref;
+    base = await g(top, ["merge-base", "--end-of-options", head, target]).catch(() => {
+      throw new WorktreeError("bad_base", `No common history with ${shortRef(target)}`);
+    });
+    branches = await branchList(top);
+  }
+  const target = base ?? (await g(top, ["hash-object", "-t", "tree", "/dev/null"]));
+  const pre = ["diff", "-M", "-z", "--no-ext-diff", "--no-textconv", "--no-color"];
+  const [names, nums, others] = await Promise.all([
+    g(top, [...pre, "--name-status", target, "--"]),
+    g(top, [...pre, "--numstat", target, "--"]),
+    g(top, ["ls-files", "--others", "--exclude-standard", "-z", "--full-name"]),
+  ]);
+  const stats = parseNumstat(nums);
+  const files: GitFileChange[] = parseNameStatus(names).map((f) => ({ ...f, ...stats.get(f.path) }));
+  const byPath = (x: GitFileChange, y: GitFileChange) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
+  files.sort(byPath);
+  // Tracked files first: a flood of untracked files is cut before any edit.
+  const untracked = others.split(" ").filter(Boolean).sort();
+  const room = Math.max(0, MAX_COMMIT_FILES - files.length);
+  const cut = files.length + untracked.length > MAX_COMMIT_FILES;
+  const kept = untracked.slice(0, room);
+  // Line counts in small batches, off the event loop (up to 1000 files of 1 MiB).
+  for (let i = 0; i < kept.length; i += 16) {
+    const batch = kept.slice(i, i + 16);
+    const counts = await Promise.all(batch.map((path, j) => (i + j < MAX_UNTRACKED_STATS ? untrackedLines(top, path) : undefined)));
+    batch.forEach((path, j) => files.push({ status: "A", path, untracked: true, ...(counts[j] !== undefined && { added: counts[j], removed: 0 }) }));
+  }
+  files.sort(byPath);
+  return { prefix, ...(base && { base }), ...(ref && { ref }), files: files.slice(0, MAX_COMMIT_FILES), ...(branches && { branches }), ...(cut && { truncated: true }) };
 }
