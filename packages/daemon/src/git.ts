@@ -1,6 +1,7 @@
 // Git branch and diff size of a session cwd, for the status bar (`git.status`).
 import { execFile } from "node:child_process";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
+import { lstat, open } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { GIT_LOG_MAX_LIMIT, worktreeNameError, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
@@ -497,16 +498,23 @@ async function defaultBranch(top: string): Promise<string | undefined> {
 const MAX_UNTRACKED_STATS = 1000;
 const MAX_UNTRACKED_BYTES = 1 << 20;
 /** Lines of an untracked text file; undefined for a binary, large or non-regular file (git's NUL-in-the-first-8000-bytes rule). */
-function untrackedLines(top: string, path: string): number | undefined {
+async function untrackedLines(top: string, path: string): Promise<number | undefined> {
   try {
     const p = join(top, path);
-    const st = lstatSync(p);
+    const st = await lstat(p);
     if (!st.isFile() || st.size > MAX_UNTRACKED_BYTES) return undefined;
-    const b = readFileSync(p);
-    if (b.subarray(0, 8000).includes(0)) return undefined;
-    let n = 0;
-    for (const c of b) if (c === 10) n++;
-    return b.length > 0 && b[b.length - 1] !== 10 ? n + 1 : n;
+    const fh = await open(p, "r");
+    try {
+      const b = Buffer.alloc(st.size);
+      const { bytesRead } = await fh.read(b, 0, st.size, 0);
+      const t = b.subarray(0, bytesRead);
+      if (t.subarray(0, 8000).includes(0)) return undefined;
+      let n = 0;
+      for (const c of t) if (c === 10) n++;
+      return t.length > 0 && t[t.length - 1] !== 10 ? n + 1 : n;
+    } finally {
+      await fh.close();
+    }
   } catch {
     return undefined;
   }
@@ -544,14 +552,19 @@ export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff |
   ]);
   const stats = parseNumstat(nums);
   const files: GitFileChange[] = parseNameStatus(names).map((f) => ({ ...f, ...stats.get(f.path) }));
-  others
-    .split("\0")
-    .filter(Boolean)
-    .forEach((path, i) => {
-      const added = i < MAX_UNTRACKED_STATS ? untrackedLines(top, path) : undefined;
-      files.push({ status: "A", path, untracked: true, ...(added !== undefined && { added, removed: 0 }) });
-    });
-  files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  const cut = files.length > MAX_COMMIT_FILES;
+  const byPath = (x: GitFileChange, y: GitFileChange) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
+  files.sort(byPath);
+  // Tracked files first: a flood of untracked files is cut before any edit.
+  const untracked = others.split(" ").filter(Boolean).sort();
+  const room = Math.max(0, MAX_COMMIT_FILES - files.length);
+  const cut = files.length + untracked.length > MAX_COMMIT_FILES;
+  const kept = untracked.slice(0, room);
+  // Line counts in small batches, off the event loop (up to 1000 files of 1 MiB).
+  for (let i = 0; i < kept.length; i += 16) {
+    const batch = kept.slice(i, i + 16);
+    const counts = await Promise.all(batch.map((path, j) => (i + j < MAX_UNTRACKED_STATS ? untrackedLines(top, path) : undefined)));
+    batch.forEach((path, j) => files.push({ status: "A", path, untracked: true, ...(counts[j] !== undefined && { added: counts[j], removed: 0 }) }));
+  }
+  files.sort(byPath);
   return { prefix, ...(base && { base }), ...(ref && { ref }), files: files.slice(0, MAX_COMMIT_FILES), ...(branches && { branches }), ...(cut && { truncated: true }) };
 }

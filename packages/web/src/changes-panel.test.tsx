@@ -742,3 +742,45 @@ it("wide: the mode select keeps its width (no clipped label) and the header wrap
   expect(mode().className).toContain("shrink-0");
   expect(mode().parentElement!.className).toContain("flex-wrap");
 });
+
+
+it("a hidden panel does not read git.diff; showing it does, and later state changes read again", async () => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({ "/p/a.ts": "a\n" }, { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "" } });
+  await act(async () => root.render(panel(client, { hidden: true })));
+  await flush();
+  await act(async () => root.render(panel(client, { hidden: true, view: { ...view([]), state: "running" } })));
+  await flush();
+  expect(gitCalls(client, "git.diff")).toHaveLength(0);
+  await act(async () => root.render(panel(client, { view: { ...view([]), state: "running" } })));
+  await flush();
+  expect(gitCalls(client, "git.diff")).toHaveLength(1);
+});
+
+it("a late git.diff reply of an older read is dropped", async () => {
+  saveDiffMode("uncommitted");
+  const replies: ((r: unknown) => void)[] = [];
+  const client = fakeClient({ "/p/a.ts": "a\n" }, { status: REPO });
+  const inner = client.calls.getMockImplementation()!;
+  client.calls.mockImplementation(((m: { type: string }) => (m.type === "git.diff" ? new Promise((res) => replies.push(res)) : inner(m as never))) as never);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  await act(async () => (el.querySelector<HTMLButtonElement>("button[aria-label='Reload from disk']")!.click(), undefined));
+  await flush();
+  expect(replies).toHaveLength(2);
+  await act(async () => replies[1]!({ diff: D([{ status: "M", path: "new.ts", added: 1, removed: 0 }]) }));
+  await act(async () => replies[0]!({ diff: D([{ status: "M", path: "old.ts", added: 1, removed: 0 }]) }));
+  await flush();
+  expect(rows()).toHaveLength(1);
+  expect(rows()[0]).toContain("new.ts");
+});
+
+it("a change that is only the line endings stays visible (LF in git, CRLF on disk, git counts lines)", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 2, removed: 2 }]), at: { [`${BASE}:a.ts`]: "one\ntwo\n" } };
+  let files: { newFile: { contents: string } } | undefined;
+  diff.onFiles = (p) => (files = p as typeof files);
+  await act(async () => root.render(panel(fakeClient({ "/p/a.ts": "one\r\ntwo\r\n" }, git))));
+  await flush();
+  expect(files!.newFile.contents).toBe("one\r\ntwo\r\n");
+});

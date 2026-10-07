@@ -831,3 +831,21 @@ describe("gitDiff", { timeout: 90_000 }, () => {
     if (process.platform !== "win32") expect(f("link")).toEqual({ status: "A", path: "link", untracked: true });
   });
 });
+
+describe("gitDiff truncation", { timeout: 120_000 }, () => {
+  it("lists tracked edits first: untracked files are cut before tracked ones", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "gdt-")));
+    const sh = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: dir, stdio: "ignore" });
+    sh("init", "-q", "-b", "main");
+    writeFileSync(join(dir, "zzz.txt"), "1\n");
+    sh("add", ".");
+    sh("commit", "-qm", "x");
+    writeFileSync(join(dir, "zzz.txt"), "2\n");
+    mkdirSync(join(dir, "u"));
+    for (let i = 0; i < 3100; i++) writeFileSync(join(dir, "u", `f${i}.txt`), "x\n");
+    const d = (await gitDiff(dir, { base: "head", allowed: () => true }))!;
+    expect(d.truncated).toBe(true);
+    expect(d.files).toHaveLength(3000);
+    expect(d.files.find((f) => f.path === "zzz.txt")).toMatchObject({ status: "M", added: 1, removed: 1 });
+  });
+});

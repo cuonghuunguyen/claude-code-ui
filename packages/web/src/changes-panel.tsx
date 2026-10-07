@@ -184,23 +184,27 @@ export function ChangesPanel({
   const effective: DiffMode = git === false ? "session" : mode;
   const gitMode = effective !== "session";
   const refChoice = choice?.ref;
+  const diffSeq = useRef(0);
   const [gd, setGd] = useState<{ mode?: DiffMode; diff?: GitDiff; error?: string }>({});
   const [branches, setBranches] = useState<string[]>([]);
   // Bumped by every git.diff reply: the before/after sides of the files on screen are read again.
   const [gen, setGen] = useState(0);
   useEffect(() => {
-    if (!gitMode) return;
+    // Read when the panel is shown; a panel behind another pane waits.
+    if (!gitMode || hidden) return;
     let live = true;
+    const seq = ++diffSeq.current;
     client.request<GitDiffResult>({ type: "git.diff", cwd, base: effective === "uncommitted" ? "head" : "branch", ...(refChoice && { ref: refChoice }) }).then(
       (r) => {
-        if (!live) return;
+        // A reply of an older read (another mode, branch or reload since) is dropped.
+        if (!live || seq !== diffSeq.current) return;
         if (r.diff === null) return setGit(false);
         setGd({ mode: effective, diff: r.diff });
         if (r.diff.branches) setBranches(r.diff.branches);
         setGen((n) => n + 1);
       },
       (e: Error) => {
-        if (!live) return;
+        if (!live || seq !== diffSeq.current) return;
         setGd({ mode: effective, error: e.message });
         // No branch list without a diff ("No default branch: pick one"): the graph's first page has it.
         if (effective === "branch") client.request<GitLogResult>({ type: "git.log", cwd, limit: 1 }).then((l) => live && l.log?.branches && setBranches(l.log.branches), () => {});
@@ -264,7 +268,9 @@ export function ChangesPanel({
         r.kind === "D" ? "" : client.request<FsReadResult>({ type: "fs.read", path: r.path }).then((x) => x.content),
       ]).then(
         ([before, rawAfter]) => {
-          const after = gitEol(before, rawAfter);
+          // A change that is only the line endings (git counted lines, LF against CRLF) stays visible.
+          const norm = gitEol(before, rawAfter);
+          const after = norm === before && rawAfter !== before && r.stats && r.stats.added + r.stats.removed > 0 ? rawAfter : norm;
           setSides((x) => ({ ...x, [r.path]: { base: d.base, before, after, stats: r.stats ? undefined : fileStats(before, after, r.path) } }));
         },
         (e: RequestError) => {
