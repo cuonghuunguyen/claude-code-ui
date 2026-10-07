@@ -1,5 +1,6 @@
 // Test-only launcher (GH-164 acceptance): a daemon over a fake SDK where a prompt starting with `limit` hits a usage limit
 // that resets in LIMIT_IN_S seconds (default 60). Never imported by production code.
+// LIMIT_REPEAT_EVENT=0: a second hit of the same limit comes without the rejected event. `limit-warn`: only an allowed_warning event.
 // Start: PORT=4316 ROOT=<project dir> LIMIT_IN_S=60 npx tsx packages/daemon/test/limit-daemon.ts (after `npm run build`).
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -14,6 +15,8 @@ const port = Number(process.env.PORT ?? 4316);
 const root = process.env.ROOT;
 if (!root) throw new Error("set ROOT to a project directory");
 limitState.inSeconds = Number(process.env.LIMIT_IN_S ?? 60);
+limitState.repeatEvent = process.env.LIMIT_REPEAT_EVENT !== "0";
+limitState.continueHits = process.env.LIMIT_CONTINUE_HITS === "1"; // the continue turn hits the limit again (server not rolled over)
 const claudeDir = join(root, "..", "claude-dir");
 mkdirSync(claudeDir, { recursive: true });
 const http = createDaemon({ claudeDir, projects: createProjects(), webRoot: fileURLToPath(new URL("../../web/dist", import.meta.url)), token, roots: [root], query: limitQuery as never, idleCloseMs: 0 });

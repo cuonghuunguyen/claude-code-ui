@@ -383,7 +383,7 @@ export function clearQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserM
 export const CLEAR_RECORD = "<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>";
 
 /** Shared reset of the fake account limit (GH-164): `resetsAt` (s) stays until it passes; a new hit then resets `inSeconds` later. */
-export const limitState: { resetsAt: number; inSeconds: number } = { resetsAt: 0, inSeconds: 60 };
+export const limitState: { resetsAt: number; inSeconds: number; repeatEvent: boolean; continueHits: boolean } = { resetsAt: 0, inSeconds: 60, repeatEvent: true, continueHits: false };
 
 const promptText = (m: SDKUserMessage) => {
   const c = m.message.content;
@@ -401,14 +401,18 @@ export function limitQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserM
       inputs.push(m);
       if (m.shouldQuery === false) continue;
       const text = promptText(m);
-      if (!text.startsWith("limit")) {
+      if (!text.startsWith("limit") && !(limitState.continueHits && text === "continue")) {
         yield* turns[0]!;
         continue;
       }
-      if (limitState.resetsAt * 1000 <= Date.now()) limitState.resetsAt = Math.floor(Date.now() / 1000) + limitState.inSeconds;
+      // Like the CLI, which sends the rejected event once per reset time: `repeatEvent` false leaves a second hit without it.
+      const isNew = limitState.resetsAt * 1000 <= Date.now();
+      if (isNew) limitState.resetsAt = Math.floor(Date.now() / 1000) + limitState.inSeconds;
       const resetsAt = limitState.resetsAt;
       yield { type: "system", subtype: "init", uuid: randomUUID(), session_id: "x" } as never;
-      if (text !== "limit-noevent")
+      if (text === "limit-warn")
+        yield { type: "rate_limit_event", uuid: randomUUID(), session_id: "x", rate_limit_info: { status: "allowed_warning", resetsAt, rateLimitType: "five_hour" } } as never;
+      else if (text !== "limit-noevent" && (isNew || limitState.repeatEvent))
         yield { type: "rate_limit_event", uuid: randomUUID(), session_id: "x", rate_limit_info: { status: "rejected", resetsAt, rateLimitType: "five_hour" } } as never;
       yield {
         type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, error: "rate_limit",

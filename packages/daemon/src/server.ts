@@ -326,7 +326,8 @@ export function createDaemon(opts: {
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
     plan,
-    onLimitStop: (id: string, resetsAt: number | undefined) => autoContinue.schedule(id, resetsAt ?? plan.current()?.statusResetsAt),
+    // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
+    onLimitStop: (id: string, resetsAt: number | undefined) => autoContinue.schedule(id, resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined)),
     allowBypass: opts.allowBypass,
     supportsAuto,
     uploadDir: uploadParent,
@@ -356,10 +357,10 @@ export function createDaemon(opts: {
     ...opts.autoContinue,
     enabled: () => appSettings.get().usageLimit.autoContinue,
     show: (id, at) => sessions.get(id)?.setContinueAt(at),
-    send: async (id) => {
+    send: async (id, wanted) => {
       const s = sessions.get(id);
       if (!s || s.info().state !== "idle") return false;
-      const err = await sendPrompt(s, CONTINUE_PROMPT);
+      const err = await sendPrompt(s, CONTINUE_PROMPT, [], wanted);
       if (!err) console.log(`session ${id}: sent continue after the usage limit reset`);
       return !err;
     },
@@ -624,12 +625,14 @@ export function createDaemon(opts: {
   }
 
   /** session.prompt's checks and send; the reason when the prompt is not taken. `images`: checked with imageBlock(). */
-  async function sendPrompt(s: Session, text: string, images: string[] = []): Promise<{ code: string; message: string } | undefined> {
+  async function sendPrompt(s: Session, text: string, images: string[] = [], stillWanted?: () => boolean): Promise<{ code: string; message: string } | undefined> {
     const notLive = () => ({ code: "session_not_live", message: `session ${s.id} is ${s.info().state}` });
     if (!s.isLive()) return notLive();
     // Sync before prompt: the prompt continues after the terminal CLI's turns (a running turn is steered as is).
     if (s.info().state === "idle") await s.sync();
     if (!s.isLive()) return notLive();
+    // A message the user sent while the sync ran cancelled an automatic continue: send nothing (GH-164).
+    if (stillWanted && !stillWanted()) return { code: "cancelled", message: "cancelled" };
     // The web app holds the prompt while it shows the external turn; this covers a client that has not seen it yet.
     if (s.externalTurnRunning()) return { code: "external_turn", message: "A terminal CLI turn is running in this session" };
     if (s.bashRunning()) return { code: "bash_running", message: "A shell command is running in this session; stop it first" };
@@ -1278,6 +1281,7 @@ export function createDaemon(opts: {
           const s = await find(msg.sessionId);
           if (!s) return;
           if (msg.type === "session.rewind" && !REWIND_MODES.includes(msg.mode)) return fail("bad_mode", `unknown rewind mode ${msg.mode}`);
+          if (msg.type === "session.rewind") autoContinue.cancel(s.id);
           try {
             return reply(msg.type === "session.rewind" ? (await s.rewind(msg.userMessageId, msg.mode), {}) : await s.previewRewind(msg.userMessageId));
           } catch (err) {

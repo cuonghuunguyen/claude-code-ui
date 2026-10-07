@@ -3,7 +3,7 @@ import { createAutoContinue } from "../src/auto-continue.ts";
 
 const T0 = Date.UTC(2026, 9, 8, 12, 0, 0);
 function setup(enabled = { on: true }, sendResult = true) {
-  const send = vi.fn(async (_id: string) => sendResult);
+  const send = vi.fn(async (_id: string, _wanted: () => boolean) => sendResult);
   const show = vi.fn((_id: string, _at: number | null) => {});
   const ac = createAutoContinue({ enabled: () => enabled.on, send, show });
   return { ac, send, show, enabled };
@@ -37,14 +37,14 @@ describe("auto-continue", () => {
     expect(send).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send).toHaveBeenCalledWith("a");
+    expect(send).toHaveBeenCalledWith("a", expect.any(Function));
     expect(show).toHaveBeenLastCalledWith("a", null);
   });
 
   it("spaces sessions stopped by the same limit 5 s apart, in stop order", async () => {
     const { ac, send } = setup();
     const at: Record<string, number> = {};
-    send.mockImplementation(async (id) => ((at[id] = Date.now() - T0), true));
+    send.mockImplementation(async (id: string) => ((at[id] = Date.now() - T0), true));
     for (const id of ["a", "b", "c"]) ac.schedule(id, T0 + 60_000);
     await vi.advanceTimersByTimeAsync(80_000);
     expect(send.mock.calls.map((c) => c[0])).toEqual(["a", "b", "c"]);
@@ -105,6 +105,46 @@ describe("auto-continue", () => {
     const next = Date.now() + 3_600_000;
     ac.schedule("a", next);
     expect(ac.scheduled().get("a")).toBe(next + 10_000);
+  });
+
+  it("a limit hit without a reset time right after a sent continue retries with the remembered reset time", async () => {
+    const { ac, send } = setup();
+    ac.schedule("a", T0 + 60_000);
+    await vi.advanceTimersByTimeAsync(70_000);
+    ac.schedule("a", undefined);
+    expect(ac.scheduled().get("a")).toBe(Date.now() + 60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("without a reset time and no continue sent before, nothing is scheduled", () => {
+    const { ac } = setup();
+    ac.schedule("a", undefined);
+    expect(ac.scheduled().size).toBe(0);
+  });
+
+  it("tries count when the continue is sent: scheduling the same reset twice before it fires is one try", async () => {
+    const { ac, send } = setup();
+    ac.schedule("a", T0 + 60_000);
+    ac.schedule("a", T0 + 60_000);
+    ac.schedule("a", T0 + 60_000);
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(send).toHaveBeenCalledTimes(1);
+    ac.schedule("a", T0 + 60_000);
+    expect(ac.scheduled().size).toBe(1);
+  });
+
+  it("a cancel while the send runs makes wanted() false", async () => {
+    const { ac, send } = setup();
+    let wanted!: () => boolean;
+    let release!: () => void;
+    send.mockImplementation((_id, w) => ((wanted = w), new Promise<boolean>((r) => (release = () => r(true)))));
+    ac.schedule("a", T0 + 60_000);
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(wanted()).toBe(true);
+    ac.cancel("a");
+    expect(wanted()).toBe(false);
+    release();
   });
 
   it("a reset already past schedules at now + 10 s", () => {
