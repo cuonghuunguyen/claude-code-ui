@@ -50,7 +50,8 @@ vi.mock("@xterm/xterm", () => ({
       this.t.parent = parent;
     }
     focus() {
-      this.t.focused++;
+      // xterm 6: focus() before open() does nothing (no textarea yet).
+      if (this.t.parent) this.t.focused++;
     }
     write(d: string) {
       this.t.written.push(d);
@@ -387,7 +388,21 @@ it("re-measures and refits when the font arrives after the wait timed out", asyn
     expect(t.fontSets.at(-1)).toBe(TERMINAL_FONT);
     expect(t.fontSets[0]).not.toBe(TERMINAL_FONT);
     expect(fitted.n).toBeGreaterThan(fits);
+    expect(t.options!.fontFamily).toBe(TERMINAL_FONT);
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("gives the shell the keyboard focus when the terminal opens after the icon font loaded", async () => {
+  let loaded!: () => void;
+  Object.defineProperty(document, "fonts", { value: { load: () => new Promise<void>((r) => (loaded = r)) }, configurable: true });
+  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+  await render(client);
+  await flush();
+  expect(xterm.all[0]!.focused).toBe(0);
+  await act(async () => loaded());
+  await flush();
+  expect(xterm.all[0]!.parent).toBeDefined();
+  expect(xterm.all[0]!.focused).toBeGreaterThan(0);
 });

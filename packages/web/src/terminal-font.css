@@ -1,9 +1,9 @@
-/* Symbols Nerd Font Mono 3.5.1 (https://github.com/ryanoasis/nerd-fonts, NerdFontsSymbolsOnly.zip, MIT, see THIRD_PARTY_NOTICES.md),
-   TTF converted to woff2. An installed copy wins; only the Private Use Area comes from this file, so letters never do.
-   Imported by terminal-panel.tsx only: the file is fetched with the first terminal, not with the app. */
+/* Symbols Nerd Font Mono 3.5.1 (https://github.com/ryanoasis/nerd-fonts, NerdFontsSymbolsOnly.zip), TTF converted to woff2.
+   SIL OFL 1.1, Copyright (c) 2016, Ryan McIntyre, with icon sets under their own licenses: see THIRD_PARTY_NOTICES.md.
+   An installed copy wins; only icons come from this file (its glyphs are the Private Use Area and 14 symbols from U+23FB up), so letters never do. Imported by terminal-panel.tsx only: fetched with the first terminal, not with the app. */
 @font-face {
   font-family: "Symbols Nerd Font Mono";
   src: local("Symbols Nerd Font Mono"), url("./assets/SymbolsNerdFontMono-Regular.woff2") format("woff2");
-  unicode-range: U+E000-F8FF, U+F0000-FFFFD;
+  unicode-range: U+23FB-23FE, U+2630, U+2665, U+26A1, U+276C-2771, U+2B58, U+E000-F8FF, U+F0000-FFFFD;
   font-display: block;
 }

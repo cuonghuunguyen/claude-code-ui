@@ -188,6 +188,8 @@ function TerminalView({
   const box = useRef<HTMLDivElement>(null);
   const term = useRef<{ t: Terminal; show: () => void }>(undefined);
   const connected = useRef(false);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   connected.current = status === "connected";
   const dark = useDark();
 
@@ -212,6 +214,8 @@ function TerminalView({
     void loadTerminalFont().then(() => {
       fontReady = true;
       show();
+      // The focus asked for before the open (a new or clicked tab) did nothing: xterm has no textarea until it is open.
+      if (activeRef.current && focusShell.current && t.element) t.focus();
       // The wait ran out before the font did: measure again once it is there (xterm only does when the option changes) and refit.
       if (!settled && !disposed) void terminalFontSettled().then(() => !disposed && late());
     });
