@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,12 @@ import { tier } from "../src/risk-tier.ts";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "gro-")));
 const cwd = join(root, "repo");
 const bare = join(root, "norepo");
-for (const d of ["src", ".git", ".claude/skills/x", bare]) mkdirSync(d.startsWith(root) ? d : join(cwd, d), { recursive: true });
+const git = (dir: string, ...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+/** A real repository: the exec-config check asks git for its effective config. */
+const repo = (dir: string) => (mkdirSync(dir, { recursive: true }), git(dir, "init", "-q"), dir);
+for (const d of ["src", ".claude/skills/x"]) mkdirSync(join(cwd, d), { recursive: true });
+repo(cwd);
+mkdirSync(bare);
 for (const f of ["src/a.ts", ".env", "CLAUDE.md", ".claude/settings.json", ".claude/skills/x/SKILL.md"]) writeFileSync(join(cwd, f), "x");
 
 const low = [
@@ -35,6 +41,7 @@ const low = [
   "git log --format=%h",
   "git log --pretty=format:%h%x20%s",
   "git log --since=2.weeks --author=bob",
+  "git log --branches --tags --oneline",
   "git show HEAD",
   "git show HEAD^:src/a.ts",
   "git show HEAD:CLAUDE.md",
@@ -133,6 +140,16 @@ const high = [
   "git show HEAD:.claude/settings.json",
   "git diff .claude/settings.json",
   "git log -- :/",
+  // Refs-wide and stash reads print untracked files a stash -u keeps in the shared refs (GH-163 review).
+  "git show stash@{0}^3",
+  "git show stash@{0}",
+  "git diff stash@{1}",
+  "git log refs/stash",
+  "git log STASH",
+  "git log --all",
+  "git log --all -p",
+  "git log --all --oneline",
+  "git show refs/heads/main",
   // Write and other subcommands.
   "git add .",
   "git commit -m m",
@@ -175,6 +192,54 @@ describe("gitReadOnly", () => {
   it("a cwd without its own .git is refused: git would find a parent repository", () => {
     expect(gitReadOnly({ command: "git status" }, bare)).toBe(false);
     expect(gitReadOnly({ command: "git status" }, join(root, "gone"))).toBe(false);
+  });
+
+  describe("repository config that names a program or hook folder inside the worktree (GH-163 review)", () => {
+    const withConfig = (name: string, ...kv: string[]) => {
+      const d = repo(join(root, name));
+      for (let i = 0; i < kv.length; i += 2) git(d, "config", kv[i]!, kv[i + 1]!);
+      return d;
+    };
+    const runsCode = ["git status", "git diff", "git log", "git log -p", "git show HEAD", "git --no-optional-locks status", "git status; git log"];
+    const safe = ["git rev-parse HEAD", "git branch --show-current", "git rev-parse --show-toplevel; git branch --show-current"];
+    const unsafeConfigs: [string, string[]][] = [
+      ["relative core.hooksPath (husky v9)", ["core.hooksPath", ".husky/_"]],
+      ["relative core.hooksPath ./hooks", ["core.hooksPath", "./hooks"]],
+      ["core.hooksPath = .", ["core.hooksPath", "."]],
+      ["core.hooksPath absolute inside", ["core.hooksPath", "%CWD%/hk"]],
+      ["core.fsmonitor program", ["core.fsmonitor", "./fsm.sh"]],
+      ["core.fsmonitor absolute with args", ["core.fsmonitor", "/usr/bin/x ./fsm.sh"]],
+      ["diff.external relative", ["diff.external", "./diff.sh"]],
+      ["textconv", ["diff.x.textconv", "./conv.sh"]],
+      ["diff driver command", ["diff.x.command", "./d.sh"]],
+      ["filter clean", ["filter.x.clean", "./c.sh"]],
+      ["filter smudge", ["filter.x.smudge", "./s.sh"]],
+      ["filter process", ["filter.x.process", "./p.sh"]],
+    ];
+    it.each(unsafeConfigs)("%s: status, diff, log and show are refused; rev-parse and branch --show-current stay", (name, kv) => {
+      const d = withConfig(`cfg-${name.replace(/\W+/g, "-")}`, ...kv.map((v) => v.replace("%CWD%", "")));
+      if (kv[1]!.startsWith("%CWD%")) git(d, "config", "core.hooksPath", `${d.replaceAll("\\", "/")}/hk`);
+      for (const c of runsCode) expect(gitReadOnly({ command: c }, d), c).toBe(false);
+      for (const c of safe) expect(gitReadOnly({ command: c }, d), c).toBe(true);
+    });
+
+    it("harmless config stays low: hooksPath outside the worktree, boolean fsmonitor, no program", () => {
+      const outside = join(root, "elsewhere-hooks").replaceAll("\\", "/");
+      for (const kv of [["core.hooksPath", outside], ["core.fsmonitor", "false"], ["core.fsmonitor", "true"], ["diff.external", ""], ["core.autocrlf", "true"]] as const) {
+        const d = withConfig(`ok-${kv[0]}-${kv[1].length}`, kv[0], kv[1]);
+        expect(gitReadOnly({ command: "git status" }, d), kv.join("=")).toBe(true);
+        expect(gitReadOnly({ command: "git log -p" }, d), kv.join("=")).toBe(true);
+      }
+    }, 120_000);
+
+    it("a program outside the worktree as one absolute path is the user's own and stays low", () => {
+      const d = withConfig("ok-prog", "diff.external", join(root, "bin", "mydiff").replaceAll("\\", "/"));
+      expect(gitReadOnly({ command: "git diff" }, d)).toBe(true);
+    });
+
+    it("a directory that git cannot read config in is refused", () => {
+      expect(gitReadOnly({ command: "git status" }, join(root, "gone"))).toBe(false);
+    });
   });
 
   it("through tier(): low only with the shell cwd pinned", () => {

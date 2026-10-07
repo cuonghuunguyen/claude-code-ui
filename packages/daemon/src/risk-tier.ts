@@ -1,8 +1,8 @@
 // The only boundary between a coordinator model and a worker's permission request (docs/spec.md "Permission tiers"): a
 // coordinator may settle a `low` request, every other request is the user's. Unknown -> high. Any error -> high.
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { gitReadOnly } from "./git-readonly.ts";
+import { gitExecConfig, gitReadOnly } from "./git-readonly.ts";
 
 export type Tier = "low" | "high";
 export type TierContext = {
@@ -20,7 +20,8 @@ const WRITE_FIELD: Record<string, string> = { Edit: "file_path", Write: "file_pa
 /** Agent config, git internals (hooks, core.fsmonitor), editor tasks, secrets: high at any depth, any case. */
 const DENY_DIRS = new Set([".git", ".claude", ".vscode", ".idea"]);
 // HEAD, packed-refs, commondir, gitdir: git repo control files; with objects/ and refs/ they make a folder a repo for a later git command.
-const DENY_NAMES = new Set([".mcp.json", "claude.md", "claude.local.md", "agents.md", ".envrc", ".npmrc", "head", "packed-refs", "commondir", "gitdir"]);
+const DENY_NAMES = new Set([".mcp.json", "claude.md", "claude.local.md", "agents.md", ".envrc", ".npmrc", "head", "packed-refs", "commondir", "gitdir", "token", "vapid.json", "push-subscriptions.json"]);
+// token, vapid.json, push-subscriptions.json: the daemon config folder (a test daemon with XDG_CONFIG_HOME in a scratch folder): its token controls the daemon, and WebSearch (low) could carry a read secret out.
 const GIT_LAYOUT = new Set(["head", "packed-refs", "commondir", "gitdir"]);
 /** Agent docs: readable although `.claude` and `claude.md` / `agents.md` are denied (reads only, GH-163). */
 const AGENT_DOCS = new Set(["claude.md", "agents.md"]);
@@ -94,9 +95,11 @@ export function pathLow(p: unknown, cwd: string, write: boolean, cwdOk = !write,
     const raw = relative(root, target);
     const rawSegs = raw.startsWith("..") || isAbsolute(raw) ? [] : raw.split(sep);
     if (write ? [...rel.split(sep), ...rawSegs].some(denied) : deniedRead(rel.split(sep)) || (rawSegs.length > 0 && deniedRead(rawSegs))) return false;
-    if (!write) return true;
+    if (!write) return !(isDir(real) && treeHasDenied(real));
     // A repo layout: `config` next to HEAD, objects or refs, or objects/refs next to a `config` (in either order the config
     // would be repo config: core.fsmonitor, diff.external run on a later git command the user approves).
+    // core.hooksPath inside the worktree (husky v9: .husky/_): a hook planted there runs on a later git status.
+    if (hooksUnder(real, cwd)) return false;
     const has = (dir: string, n: string) => !!lstatSync(join(dir, n), { throwIfNoEntry: false });
     const segs = rel.split(sep);
     for (let i = 0; i < segs.length; i++) {
@@ -109,6 +112,28 @@ export function pathLow(p: unknown, cwd: string, write: boolean, cwdOk = !write,
     return !(!rest.length && lstatSync(real).nlink > 1);
   }
   return false;
+}
+
+const isDir = (p: string) => lstatSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
+const TREE_LIMIT = 3000;
+/** Whether the folder holds (below it) an entry on the deny list, or too many to look: a Grep of it would read those files. */
+function treeHasDenied(dir: string): boolean {
+  let seen = 0;
+  const walk = (d: string): boolean => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (++seen > TREE_LIMIT || deniedName(e.name, true) && !AGENT_DOCS.has(e.name.toLowerCase())) return true;
+      if (e.isDirectory() && walk(join(d, e.name))) return true;
+    }
+    return false;
+  };
+  return walk(dir);
+}
+/** Whether a write path (real) is the folder core.hooksPath names inside its worktree, or below it. */
+function hooksUnder(real: string, cwd: string): boolean {
+  return gitExecConfig(cwd).hooksDirs.some((d) => {
+    const rel = relative(d, real);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  });
 }
 
 /** A glob relative to the cwd: no absolute start, no `..`, no `~`. */

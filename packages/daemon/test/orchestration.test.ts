@@ -1038,7 +1038,9 @@ describe("orchestration", () => {
   const respond = (requestId: string, decision: string, extra: object = {}) => c.request({ type: "permission.respond", requestId, decision, ...extra });
   /** Closes every idle worker of earlier tests: they count toward the cap. */
   const closeAll = async () => {
-    for (const l of Object.values(JSON.parse(readFileSync(settingsFile, "utf8")) as Record<string, { coordinatorId?: string; name?: string }>))
+    // The links file exists only after an earlier test linked a worker: a test run alone has none.
+    const links = existsSync(settingsFile) ? (JSON.parse(readFileSync(settingsFile, "utf8")) as Record<string, { coordinatorId?: string; name?: string }>) : {};
+    for (const l of Object.values(links))
       if (l.coordinatorId) await call(l.coordinatorId, "worker_close", { name: l.name! });
   };
   const lastEvent = (sid: string, id: string) => [...c.inbox].reverse().find((m) => m.type === "event" && m.sessionId === sid && m.part.id === id) as any;
@@ -1068,8 +1070,8 @@ describe("orchestration", () => {
   });
 
   it("a worker's read-only git request has tier low and mayAnswer true; a redirected one is high", async () => {
+    // Needs no earlier test's state: its own coordinator, worker and repository.
     enable();
-    await closeAll();
     const coord = await coordinator();
     const repo = gitRepo(join(root, "gro-a"));
     await call(coord, "worker_start", { name: "gr", cwd: repo, prompt: perm("Bash", { command: "git log --oneline -3; git status --short" }) });

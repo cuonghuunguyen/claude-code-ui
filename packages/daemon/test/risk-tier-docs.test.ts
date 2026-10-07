@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,7 +75,7 @@ describe("reads of agent docs and the main checkout", () => {
     ["Read worktree skill", "Read", rd(join(wt, ".claude/skills/implement-issue/SKILL.md"))],
     ["Read relative skill reference", "Read", rd(".claude/skills/implement-issue/references/x.md")],
     ["LS .claude/skills", "LS", { path: ".claude/skills" }],
-    ["Glob in main skills", "Glob", { path: join(main, ".claude/skills"), pattern: "**/*.md" }],
+    ["Glob in main skills", "Glob", { path: join(main, ".claude/skills/implement-issue"), pattern: "**/*.md" }],
     ["Grep in main docs", "Grep", { pattern: "x", path: join(main, "docs") }],
     ["Read main CLAUDE.md", "Read", rd(join(main, "CLAUDE.md"))],
     ["Read CLAUDE.md", "Read", rd("CLAUDE.md")],
@@ -136,10 +137,48 @@ describe("reads of agent docs and the main checkout", () => {
 });
 
 describe("Bash with the shell cwd pinned", () => {
-  it("read-only git is low in a worktree, only while pinned", () => {
-    expect(t("Bash", { command: "git status" }, { bashCwdPinned: true })).toBe("low");
-    expect(t("Bash", { command: "git status" })).toBe("high");
-    expect(t("Bash", { command: "git status" }, { bashCwdPinned: true, blockedPath: "x" })).toBe("high");
-    expect(t("Bash", { command: "git status > x.txt" }, { bashCwdPinned: true })).toBe("high");
+  it("read-only git is low in a repository, only while pinned", () => {
+    const repo = join(top, "plainrepo");
+    mkdirSync(repo, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    const b = (command: string, ctx: Partial<TierContext> = {}) => tier("Bash", { command }, { cwd: repo, ...ctx });
+    expect(b("git status", { bashCwdPinned: true })).toBe("low");
+    expect(b("git status")).toBe("high");
+    expect(b("git status", { bashCwdPinned: true, blockedPath: "x" })).toBe("high");
+    expect(b("git status > x.txt", { bashCwdPinned: true })).toBe("high");
+    // A worktree whose .git file points nowhere has no readable config: high.
+    expect(t("Bash", { command: "git status" }, { bashCwdPinned: true })).toBe("high");
+  });
+});
+
+describe("secrets of the main checkout and hook folders (GH-163 review)", () => {
+  const cfgDir = join(main, "development-docs", "GH-1", "ui-cfg", "claude-ui");
+  mkdirSync(cfgDir, { recursive: true });
+  for (const f of ["token", "vapid.json", "push-subscriptions.json", "settings.json", "sessions.json"]) writeFileSync(join(cfgDir, f), "secret");
+  mkdirSync(join(main, ".config", "claude-ui"), { recursive: true });
+  writeFileSync(join(main, ".config", "claude-ui", "token"), "secret");
+  writeFileSync(join(main, "development-docs", "GH-1", "vapid.json"), "secret");
+
+  it("a daemon config folder, vapid.json and push-subscriptions.json are high to read, also by Grep and Glob", () => {
+    for (const f of ["token", "vapid.json", "push-subscriptions.json"]) expect(t("Read", rd(join(cfgDir, f))), f).toBe("high");
+    expect(t("Read", rd(join(main, ".config/claude-ui/token")))).toBe("high");
+    expect(t("Read", rd(join(main, "development-docs/GH-1/vapid.json")))).toBe("high");
+    expect(t("Grep", { pattern: "x", path: join(main, "development-docs", "GH-1", "ui-cfg") })).toBe("high");
+    expect(t("LS", { path: cfgDir })).toBe("high");
+    expect(t("Read", rd(join(main, "development-docs/GH-1/plan.md")))).toBe("low");
+  });
+
+  it("a Write into the folder core.hooksPath names inside the worktree is high; elsewhere stays low", () => {
+    const repo = join(top, "hooked");
+    mkdirSync(join(repo, ".husky", "_"), { recursive: true });
+    mkdirSync(join(repo, "src"), { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    execFileSync("git", ["config", "core.hooksPath", ".husky/_"], { cwd: repo });
+    const w = (p: string) => tier("Write", { file_path: p }, { cwd: repo });
+    expect(w(".husky/_/post-index-change")).toBe("high");
+    expect(w(".husky/_/sub/x")).toBe("high");
+    expect(w(join(repo, ".husky/_/post-index-change"))).toBe("high");
+    expect(w("src/a.ts")).toBe("low");
+    expect(tier("Write", { file_path: ".husky/_/x" }, { cwd: plain })).toBe("low");
   });
 });

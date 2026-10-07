@@ -1,7 +1,8 @@
 // Whether a Bash tool call is only read-only git (docs/spec.md "Permission tiers"): the one Bash shape a coordinator may settle.
 // An allowlist grammar: one fixed program (git), no quoting, no expansion, no redirection, exact option names. Any doubt = false.
-import { lstatSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { lstatSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { deniedRead, pathLow } from "./risk-tier.ts";
 
 /** One option: `value` absent = takes none; else the value must match (when `optional`, the bare option is fine too). */
@@ -42,7 +43,7 @@ export const DIFF: Record<string, Opt> = Object.fromEntries([
 
 export const LOG: Record<string, Opt> = Object.fromEntries([
   ...entries(
-    ["--oneline", "--graph", "--no-decorate", "--abbrev-commit", "--no-abbrev-commit", "--all", "--branches", "--tags", "--remotes", "--no-merges", "--merges", "--first-parent", "--reverse", "--topo-order", "--date-order", "--follow", "--left-right", "--cherry-pick", "--boundary", "-i", "--regexp-ignore-case"],
+    ["--oneline", "--graph", "--no-decorate", "--abbrev-commit", "--no-abbrev-commit", "--branches", "--tags", "--remotes", "--no-merges", "--merges", "--first-parent", "--reverse", "--topo-order", "--date-order", "--follow", "--left-right", "--cherry-pick", "--boundary", "-i", "--regexp-ignore-case"],
     FLAG,
   ),
   ["--decorate", val(words("short", "full", "auto", "no"), true)],
@@ -66,6 +67,52 @@ const TABLES: Record<Cmd, Record<string, Opt>> = {
   show: { ...DIFF, ...LOG },
   diff: { ...DIFF, ...DIFF_ONLY },
 };
+
+/**
+ * The repository's effective config (`git config --list`: runs nothing) can name code git itself runs on status, diff, log and
+ * show: a hook folder (`core.hooksPath`, run by an index refresh), `core.fsmonitor`, `diff.external`, textconv, diff and filter
+ * programs. Where they lie inside the cwd, a worker's low Write can plant what they run (husky v9: core.hooksPath=.husky/_).
+ * `unsafe`: such a value lies, or may lie, inside the cwd (a program that is not one absolute path outside it, any error);
+ * `hooksDirs`: the hooks folders inside the cwd, which a Write must not reach.
+ */
+export function gitExecConfig(cwd: string): { unsafe: boolean; hooksDirs: string[] } {
+  const hooksDirs: string[] = [];
+  let unsafe = false;
+  try {
+    const real = realpathSync(cwd);
+    const inside = (p: string) => {
+      const rel = relative(real, resolve(real, p));
+      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    };
+    const out = execFileSync("git", ["config", "--list", "-z", "--show-scope"],{ cwd, encoding: "utf8", timeout: 5000, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" }, stdio: ["ignore", "pipe", "ignore"] });
+    const fields = out.split("\u0000");
+    // Output: scope NUL key NL value NUL, repeated.
+    for (let i = 0; i + 1 < fields.length; i += 2) {
+      const own = ["local", "worktree", "command"].includes(fields[i]!);
+      const entry = fields[i + 1]!;
+      const nl = entry.indexOf("\n");
+      const key = (nl < 0 ? entry : entry.slice(0, nl)).toLowerCase();
+      const value = nl < 0 ? "" : entry.slice(nl + 1);
+      if (key === "core.hookspath") {
+        // `~` is the user's home; a relative path is relative to the worktree's top.
+        if (value.startsWith("~") || (value && !inside(value))) continue;
+        unsafe = true;
+        hooksDirs.push(resolve(real, value || "."));
+      } else if (key === "core.fsmonitor" || key === "diff.external" || /^diff\..+\.(textconv|command)$/.test(key) || /^filter\..+\.(clean|smudge|process)$/.test(key)) {
+        const v = value.trim();
+        // core.fsmonitor takes a boolean (the built-in daemon); every other value is a program, and an empty one names none.
+        const noProgram = v === "" || (key === "core.fsmonitor" && /^(true|false|yes|no|on|off|0|1)$/i.test(v));
+        // Safe only as a single absolute path outside the worktree: arguments or a relative path could name a file the worker wrote.
+        const outside = /^[^\s'"]+$/.test(v) && (isAbsolute(v) || /^[A-Za-z]:[\\/]/.test(v)) && !inside(v);
+        // The user's system and global config (git-lfs: `git-lfs clean -- %f`) is not worker-writable and runs through PATH: unsafe only when it names a path relative to the cwd.
+        if (own ? !noProgram && !outside : !noProgram && /(^|[\s'"=])\.{1,2}([\\/]|$)/.test(v)) unsafe = true;
+      }
+    }
+  } catch {
+    unsafe = true;
+  }
+  return { unsafe, hooksDirs };
+}
 
 const MAX_COMMAND = 1000;
 const MAX_SEGMENTS = 5;
@@ -103,6 +150,8 @@ function optionOk(tok: string, cmd: Cmd): boolean {
  * `isPath`: after `--`, so the whole token is a path.
  */
 function positionalOk(tok: string, cwd: string, isPath: boolean): boolean {
+  // Refs are shared by every worktree: a stash (stash -u keeps untracked files, `.env` included, in its ^3 tree) and raw ref names are not for a worker.
+  if (!isPath && /stash|refs\//i.test(tok)) return false;
   if (!tok || /^[~:/\\]/.test(tok) || /^[A-Za-z]:/.test(tok)) return false;
   for (let i = 0; i < tok.length; i++) if (tok[i] === "~" && !(i > 0 && /[A-Za-z0-9_^}]/.test(tok[i - 1]!))) return false;
   // `@{u}`, `HEAD@{1}`, `@{-1}`; `{1..3}` would be a brace expansion.
@@ -121,7 +170,7 @@ function positionalOk(tok: string, cwd: string, isPath: boolean): boolean {
   return true;
 }
 
-function segmentOk(seg: string, cwd: string): boolean {
+function segmentOk(seg: string, cwd: string, execUnsafe: () => boolean): boolean {
   const w = seg.trim().split(/ +/);
   if (w[0] !== "git") return false;
   let i = 1;
@@ -134,6 +183,8 @@ function segmentOk(seg: string, cwd: string): boolean {
   if (sub === "branch") return rest.length === 1 && rest[0] === "--show-current";
   if (sub === "rev-parse") return rest.length > 0 && rest.every((a) => REV_PARSE.has(a));
   if (sub !== "status" && sub !== "log" && sub !== "show" && sub !== "diff") return false;
+  // These run config-defined programs and hooks: not while the config points into the worktree.
+  if (execUnsafe()) return false;
   let dashes = false;
   for (let k = 0; k < rest.length; k++) {
     const tok = rest[k]!;
@@ -161,7 +212,9 @@ export function gitReadOnly(input: unknown, cwd: string): boolean {
     if (!lstatSync(join(cwd, ".git"), { throwIfNoEntry: false })) return false;
     const segs = cmd.split(/\s*(?:&&|\|\||;)\s*/);
     if (segs.length > MAX_SEGMENTS) return false;
-    return segs.every((s) => s.trim() !== "" && !/[&|]/.test(s) && segmentOk(s, cwd));
+    let unsafe: boolean | undefined;
+    const execUnsafe = () => (unsafe ??= gitExecConfig(cwd).unsafe);
+    return segs.every((s) => s.trim() !== "" && !/[&|]/.test(s) && segmentOk(s, cwd, execUnsafe));
   } catch {
     return false;
   }
