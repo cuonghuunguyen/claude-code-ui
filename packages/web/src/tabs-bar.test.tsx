@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { TabsBar, useGroupedTabs, type TabInfo } from "./tabs-bar.tsx";
 import { NEW_TAB, closeTab, moveTab } from "./tabs.ts";
+import { SideLabel } from "./sides.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // One context menu per rendered tab: counts the tabs' renders.
@@ -26,12 +27,12 @@ const INFO: Record<string, TabInfo> = {
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => root?.unmount());
 
-async function render(props: Partial<Parameters<typeof TabsBar>[0]> = {}) {
+async function render(props: Partial<Parameters<typeof TabsBar>[0]> = {}, side: (cwd: string) => { label: string; short: string } | undefined = () => undefined) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
   const handlers = { onSelect: vi.fn(), onClose: vi.fn(), onMove: vi.fn(), onMoveGroup: vi.fn(), onMoveGroupTo: vi.fn(), onNew: vi.fn(), onAction: vi.fn(), onRenamed: vi.fn() };
-  await act(async () => root!.render(<TabsBar tabs={["a", "b", "c", "d", NEW_TAB]} activeId="c" info={(id) => INFO[id]!} {...handlers} {...props} />));
+  await act(async () => root!.render(<SideLabel value={side}><TabsBar tabs={["a", "b", "c", "d", NEW_TAB]} activeId="c" info={(id) => INFO[id]!} {...handlers} {...props} /></SideLabel>));
   const tab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
   return { el, tab, ...handlers };
 }
@@ -105,10 +106,33 @@ it("+ opens a new-session tab; the narrow switcher lists the tabs with their sta
   expect(sw.getAttribute("aria-label")).toBe("Switch tab");
   await act(async () => sw.click());
   const options = [...document.querySelectorAll<HTMLElement>("[role=option]")];
-  expect(options.map((o) => o.textContent)).toEqual(["Fix loginrunning", "Docsneeds input", "ARefactorunread", "AOld", "New session"]);
+  expect(options.map((o) => o.textContent)).toEqual(["Fix loginwebrunning", "Docsdocsneeds input", "ARefactorapiunread", "AOldapiclosed", "New session"]);
   expect(options[2]!.getAttribute("aria-selected")).toBe("true");
   await act(async () => options[1]!.click());
   expect(onSelect).toHaveBeenCalledWith("b");
+});
+
+it("phone: the switcher shows '<project or project · branch> · <side>' under the title, in the trigger and the rows (GH-165)", async () => {
+  const lookup = (cwd: string) => (cwd.startsWith("/home/u/web") ? { label: "WSL: Ubuntu", short: "WSL" } : undefined);
+  const info = (id: string) => (id === "a" ? { ...INFO.a!, cwd: "/home/u/web-wt", worktree: "web · feature-x" } : INFO[id]!);
+  const { el } = await render({ info, activeId: "a" }, lookup);
+  const sw = el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!;
+  expect(sw.querySelector('[data-slot="tab-switcher-place"]')!.textContent).toBe("web · feature-x · WSL: Ubuntu");
+  await act(async () => sw.click());
+  const rows = [...document.querySelectorAll<HTMLElement>("[role=option]")];
+  expect(rows[0]!.textContent).toBe("Fix loginweb · feature-x · WSL: Ubunturunning");
+  // One side: no side label; a project without a worktree shows its name; the new-session tab has no line.
+  expect(rows[1]!.textContent).toBe("Docsdocsneeds input");
+  expect(rows[4]!.textContent).toBe("New session");
+});
+
+it("phone: error and closed sessions say so in the switcher (their header chip is gone below sm) (GH-165)", async () => {
+  const { el } = await render({ info: (id) => (id === "c" ? { ...INFO.c!, state: "error" } : INFO[id]!) });
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!.click());
+  const rows = [...document.querySelectorAll<HTMLElement>("[role=option]")];
+  expect(rows[2]!.textContent).toContain("error");
+  expect(rows[3]!.textContent).toContain("closed");
+  expect(rows[0]!.textContent).not.toMatch(/error|closed/);
 });
 
 it("below md the titlebar controls have a 44px hit area and 8px gaps (touch-target-size, touch-spacing)", async () => {

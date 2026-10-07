@@ -269,7 +269,7 @@ it("send button sends; while a turn runs with nothing typed it is a stop button"
   await act(async () => $("toolbar-stop")!.click());
   expect(onInterrupt).toHaveBeenCalled();
   await type(box, "steer");
-  expect($("toolbar-stop")).toBeNull();
+  expect($("toolbar-stop")).not.toBeNull();
   await act(async () => $("send")!.click());
   expect(onPrompt).toHaveBeenCalledWith("steer", []);
 });
@@ -651,4 +651,68 @@ it("without CSS field-sizing the prompt box height follows its content and retur
     if (desc) Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", desc);
     else delete (HTMLTextAreaElement.prototype as { scrollHeight?: number }).scrollHeight;
   }
+});
+
+// GH-165: one Stop (the prompt box's), no running chip in the session header, no header row on a phone.
+const phone = (on: boolean) => {
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ matches: on && q.includes("40rem"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  return () => void (window.matchMedia = mm);
+};
+
+it("GH-165: a running turn has exactly one Stop, in the prompt box; the header has none and no state chip", async () => {
+  const onInterrupt = vi.fn();
+  const { el, $ } = await render({ onInterrupt }, { ...emptySession(), state: "running" });
+  expect($("stop")).toBeNull();
+  expect($("session-state")).toBeNull();
+  expect([...el.querySelectorAll("button")].filter((b) => /^Stop\b/.test(b.textContent ?? "") || /Stop/.test(b.title))).toHaveLength(1);
+  expect(el.querySelectorAll('[data-testid="toolbar-stop"]')).toHaveLength(1);
+  expect($("session-header")).not.toBeNull();
+});
+
+it("GH-165: no state chip for idle, running or needs_input; error and closed keep theirs", async () => {
+  for (const state of ["idle", "running", "needs_input"] as const) {
+    const d = await render({}, { ...emptySession(), state });
+    expect(d.$("session-state"), state).toBeNull();
+    unmount();
+  }
+  for (const state of ["error", "closed"] as const) {
+    const d = await render({}, { ...emptySession(), state });
+    expect(d.$("session-state")!.textContent).toBe(state);
+    unmount();
+  }
+});
+
+it("GH-165: below sm there is no session header row", async () => {
+  const back = phone(true);
+  try {
+    const { $ } = await render({}, { ...emptySession(), state: "error" });
+    expect($("session-header")).toBeNull();
+    expect($("session-project")).toBeNull();
+    expect($("session-state")).toBeNull();
+  } finally {
+    back();
+  }
+});
+
+it("GH-165: while steering (running, text typed) a separate Stop sits beside Steer and stops without sending", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onInterrupt = vi.fn();
+  const { $, box } = await render({ onPrompt, onInterrupt }, { ...emptySession(), state: "running" });
+  await type(box, "also do X");
+  expect($("send")).not.toBeNull();
+  expect($("toolbar-stop")).not.toBeNull();
+  expect($("toolbar-stop")!.getAttribute("aria-label")).toBe("Stop");
+  await act(async () => $("toolbar-stop")!.click());
+  expect(onInterrupt).toHaveBeenCalledTimes(1);
+  expect(onPrompt).not.toHaveBeenCalled();
+});
+
+it("GH-165: a permission request has its own Stop that interrupts the turn", async () => {
+  const onInterrupt = vi.fn();
+  const view = applyEvent({ ...emptySession(), state: "needs_input" }, { type: "event", sessionId: "s1", seq: 1, part: { type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "ls" }, suggestions: [], settled: false } });
+  const { $ } = await render({ onInterrupt }, view);
+  expect($("permission-stop")).not.toBeNull();
+  await act(async () => $("permission-stop")!.click());
+  expect(onInterrupt).toHaveBeenCalledTimes(1);
 });

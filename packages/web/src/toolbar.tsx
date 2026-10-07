@@ -249,6 +249,13 @@ function SendButton({ state, hasInput, onSend, onStop, onFocusLost }: { state: S
         : [`${state === "running" ? "Claude is working" : "Claude needs your input"}. ${steer ? "Steer" : "Stop"}`, steer ? " (Enter)" : " (Esc)"];
   const Icon = state === "disconnected" ? WifiOffIcon : busy && !steer ? SquareIcon : ArrowUpIcon;
   return (
+    <>
+    {/* Steering: the send button is Steer, so Stop (Esc, which a phone has not) gets its own button (GH-165). */}
+    {steer && (
+      <button type="button" aria-label="Stop" title="Stop (Esc)" data-testid="toolbar-stop" className={`${SEND_BASE} bg-secondary text-secondary-foreground`} onClick={onStop}>
+        <SquareIcon aria-hidden className="size-2.5 fill-current" />
+      </button>
+    )}
     <button
       type="button"
       aria-label={label}
@@ -267,5 +274,6 @@ function SendButton({ state, hasInput, onSend, onStop, onFocusLost }: { state: S
         <Icon aria-hidden className={Icon === SquareIcon ? "size-2.5 fill-current" : state === "running" ? "size-3" : "size-4"} />
       )}
     </button>
+    </>
   );
 }
