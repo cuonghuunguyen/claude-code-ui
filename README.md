@@ -11,6 +11,11 @@ npx claude-code-ui
 
 It prints a pairing URL and a QR code. Open the URL (or scan the QR) to use the app.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cuonghuunguyen/claude-code-ui/main/docs/screenshots/workspace-dark.png">
+  <img alt="claude-code-ui: projects and sessions in the sidebar, a finished session in the middle, file tree and terminal on the right" src="https://raw.githubusercontent.com/cuonghuunguyen/claude-code-ui/main/docs/screenshots/workspace-light.png">
+</picture>
+
 ## Features
 
 - **Sessions**: start, resume and steer Claude Code sessions in any allowed folder. Sessions keep running when the browser disconnects; reconnecting catches up without losing or duplicating messages.
@@ -22,6 +27,22 @@ It prints a pairing URL and a QR code. Open the URL (or scan the QR) to use the 
 - **Push notifications** when Claude needs input or finishes (HTTPS needed; iOS 16.4+ with the app on the Home Screen); without HTTPS the daemon's machine shows a desktop notification (Linux `notify-send`, macOS, Windows toast).
 - **Windows + WSL, Docker**: one install also runs sessions in your WSL distros and in running Docker containers.
 - **Private**: no hosting, no cloud relay. The daemon listens on `127.0.0.1` only unless `--lan`; every connection needs the pairing token.
+
+<details>
+<summary>More screenshots</summary>
+
+A session with tool calls and rendered Markdown:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cuonghuunguyen/claude-code-ui/main/docs/screenshots/session-dark.png">
+  <img alt="A session: the prompt, two Bash tool calls and an answer with a table" src="https://raw.githubusercontent.com/cuonghuunguyen/claude-code-ui/main/docs/screenshots/session-light.png">
+</picture>
+
+Git graph in the side panel:
+
+<img alt="Git graph panel with branches, tags and commits" src="https://raw.githubusercontent.com/cuonghuunguyen/claude-code-ui/main/docs/screenshots/git-graph.png">
+
+</details>
 
 ## Requirements
 
