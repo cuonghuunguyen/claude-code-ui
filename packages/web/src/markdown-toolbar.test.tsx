@@ -102,7 +102,7 @@ it("Ctrl+B / Ctrl+I / Ctrl+E format the selection and are default-prevented, so 
   const spy = (e: KeyboardEvent) => void seen.push(e.defaultPrevented);
   window.addEventListener("keydown", spy);
   try {
-    for (const [k, out] of [["b", "**hi**"], ["i", "_hi_"], ["e", "`hi`"]] as const) {
+    for (const [k, out] of [["b", "**hi**"], ["i", "*hi*"], ["e", "`hi`"]] as const) {
       const { box } = await render();
       await type(box, "hi");
       await select(box, 0, 2);

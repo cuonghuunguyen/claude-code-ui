@@ -112,14 +112,6 @@ describe("first prompt", () => {
     expect(one('[data-testid="user-message"][data-pending] [data-streamdown="strong"]')?.textContent).toBe("hi");
   });
 
-  it("a pending prompt renders markdown like a sent one", async () => {
-    replies["session.create"] = () => defer<unknown>().promise;
-    await mount("#new");
-    await type("**hi**");
-    await enter();
-    expect(one('[data-testid="user-message"][data-pending] [data-streamdown="strong"]')?.textContent).toBe("hi");
-  });
-
   it("after the echo the session tab shows the prompt once, not pending, with no blank card in between", async () => {
     const create = defer<unknown>();
     const prompt = defer<unknown>();

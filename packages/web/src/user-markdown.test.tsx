@@ -71,6 +71,21 @@ it("a single newline is a line break and the bubble does not use pre-wrap", asyn
   expect(bubble.innerHTML).not.toContain("whitespace-pre-wrap");
 });
 
+it("a paragraph starting with a tag (HTML block) keeps its line breaks and shows as text", async () => {
+  const a = await render(["<Button>", "a", "b"].join("\n"));
+  expect(a.bubble.querySelectorAll("br")).toHaveLength(2);
+  expect(a.bubble.textContent).toContain("<Button>");
+  unmount();
+  const b = await render(["<div> x", "y"].join("\n"));
+  expect(b.bubble.querySelectorAll("br")).toHaveLength(1);
+  expect(b.bubble.textContent).toContain("<div> x");
+  unmount();
+  const c = await render(["<script>alert(1)</script>", "z"].join("\n"));
+  expect(c.bubble.querySelector("script")).toBeNull();
+  expect(c.bubble.textContent).toContain("<script>alert(1)</script>");
+  expect(c.bubble.textContent).toContain("z");
+});
+
 it("Copy copies the raw markdown", async () => {
   const writeText = vi.fn(async () => {});
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

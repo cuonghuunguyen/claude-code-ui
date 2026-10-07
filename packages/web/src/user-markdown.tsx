@@ -6,9 +6,15 @@ type Plugins<K extends "remarkPlugins" | "rehypePlugins"> = NonNullable<Componen
 type MdNode = { type: string; value?: string; children?: MdNode[] };
 
 /** A single newline in a prompt stays a line break (what the bubble always showed): text nodes split on "\n" into text + break nodes. */
+const FLOW = new Set(["root", "blockquote", "listItem"]);
 function splitNewlines(node: MdNode) {
   if (!node.children || node.type === "code") return;
   node.children = node.children.flatMap((c): MdNode[] => {
+    // A paragraph starting with a tag is an HTML block (no `raw` plugin: shown as text); make it text first so its newlines split too.
+    if (c.type === "html") {
+      const text: MdNode = { type: "text", value: (c.value ?? "").trimEnd() };
+      c = FLOW.has(node.type) ? { type: "paragraph", children: [text] } : text;
+    }
     if (c.type !== "text" || !c.value?.includes("\n")) return (splitNewlines(c), [c]);
     return c.value.split("\n").flatMap((v, i): MdNode[] => [...(i ? [{ type: "break" }] : []), ...(v ? [{ type: "text", value: v }] : [])]);
   });

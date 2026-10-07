@@ -20,10 +20,10 @@ describe("formatEdit", () => {
     expect(run("**hi**", 0, 6, "bold")).toEqual({ text: "hi", sel: [0, 2] });
   });
 
-  it("italic uses _ and unwraps; it does not unwrap inside **", () => {
-    expect(run("hi", 0, 2, "italic")).toEqual({ text: "_hi_", sel: [1, 3] });
-    expect(run("_hi_", 1, 3, "italic")).toEqual({ text: "hi", sel: [0, 2] });
-    expect(run("**hi**", 2, 4, "italic")).toEqual({ text: "**_hi_**", sel: [3, 5] });
+  it("italic uses * and unwraps; it does not unwrap inside **", () => {
+    expect(run("hi", 0, 2, "italic")).toEqual({ text: "*hi*", sel: [1, 3] });
+    expect(run("*hi*", 1, 3, "italic")).toEqual({ text: "hi", sel: [0, 2] });
+    expect(run("**hi**", 2, 4, "italic")).toEqual({ text: "***hi***", sel: [3, 5] });
   });
 
   it("inline code: backtick fence longer than the selection's runs; multi-line becomes a code block", () => {

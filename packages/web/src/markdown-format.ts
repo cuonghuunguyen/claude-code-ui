@@ -20,10 +20,11 @@ function wrap(text: string, start: number, end: number, m: string): FormatEdit {
   const s = text.slice(start, end);
   const before = text.slice(start - m.length, start);
   const after = text.slice(end, end + m.length);
-  // `_` and `*` runs of a different kind (`__x__`) are not ours to remove.
-  const beyondOk = m[0] === "_" ? text[start - m.length - 1] !== "_" && text[end + m.length] !== "_" : true;
+  // A single `*` next to another `*` is part of `**`: not ours to remove.
+  const beyondOk = m !== "*" || (text[start - 2] !== "*" && text[end + 1] !== "*");
+  const innerOk = m !== "*" || (!s.startsWith("**") && !s.endsWith("**"));
   if (start >= m.length && before === m && after === m && beyondOk) return edit(start - m.length, end + m.length, s, 0, s.length);
-  if (s.length >= 2 * m.length && s.startsWith(m) && s.endsWith(m)) return edit(start, end, s.slice(m.length, -m.length), 0, s.length - 2 * m.length);
+  if (s.length >= 2 * m.length && s.startsWith(m) && s.endsWith(m) && innerOk) return edit(start, end, s.slice(m.length, -m.length), 0, s.length - 2 * m.length);
   return edit(start, end, m + s + m, m.length, m.length + s.length);
 }
 
@@ -82,7 +83,7 @@ export function formatEdit(text: string, start: number, end: number, format: Mar
     case "bold":
       return wrap(text, start, end, "**");
     case "italic":
-      return wrap(text, start, end, "_");
+      return wrap(text, start, end, "*");
     case "code":
       return inlineCode(text, start, end);
     case "codeBlock":
