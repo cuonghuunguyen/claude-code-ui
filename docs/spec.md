@@ -346,7 +346,7 @@ The daemon converts raw SDK messages into one normalized model; the UI renders o
 | Part type | Key fields | Rendered as |
 | --- | --- | --- |
 | `user_text` | `id`, `text`, `images[]` | User bubble, with copy and rewind actions (shown on hover or focus) |
-| `assistant_text` | `id`, `text`, `streaming` | Markdown, streamed at a steady pace |
+| `assistant_text` | `id`, `text`, `streaming` | Markdown, streamed at a steady pace; a finished turn (a prompt or bash card follows, or it is the last and nothing runs) ends with a Copy response action: its text blocks as markdown joined by a blank line, no tool calls or reasoning |
 | `thinking` | `id`, `text` | Not shown; a "Thinking" row shows while the turn runs |
 | `tool_call` | `toolUseId`, `tool`, `input`, `status` (pending / running / done / error / denied / stopped; stopped: a stopped background task or subagent run, or a call whose query ended without its result) | Tool card, by tool type |
 | `tool_result` | `toolUseId`, `output`, `isError`, `original?` (file before the first Edit/Write of a path, live only) | Merged into its tool card; `original` feeds the changes tab |

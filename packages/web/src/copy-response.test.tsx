@@ -22,16 +22,6 @@ const call = (id: string, tool: string, input: unknown, status: "running" | "don
   input,
   status,
 });
-const permission = (toolUseId: string, settled = false): Part => ({
-  type: "permission_request",
-  id: `p-${toolUseId}`,
-  requestId: `p-${toolUseId}`,
-  toolUseId,
-  tool: "Bash",
-  input: { command: "rm x" },
-  suggestions: [],
-  settled,
-});
 const view = (parts: Part[]): SessionView =>
   parts.reduce((s, part, i) => applyEvent(s, { type: "event", sessionId: "s1", seq: i + 1, part }), emptySession());
 
@@ -116,4 +106,28 @@ it("a restored turn (no turn_result, so no usage footer) still has Copy response
   expect(copies()).toHaveLength(2);
   await render(view([...parts, { type: "session_state", id: "st", state: "running" }]));
   expect(copies()).toHaveLength(1);
+});
+
+it("no Copy while a terminal-CLI turn runs (externalTurn); a bash card ends the previous turn; subagent text and steered prompts (GH-151)", async () => {
+  const done: Part[] = [{ type: "user_text", id: "u1", text: "go", images: [] }, text("m1:0", "answer")];
+  await render(view([...done, { type: "external_turn", id: "external_turn", running: true }]));
+  expect(copies()).toHaveLength(0);
+  const bash: Part = { type: "bash", id: "sh1", command: "ls", stdout: "", stderr: "", status: "running" };
+  await render(view([...done, bash]));
+  expect(copies()).toHaveLength(1);
+  await act(async () => (Object.defineProperty(navigator, "clipboard", { value: { writeText: (globalThis as { w?: unknown }).w = vi.fn(async () => {}) }, configurable: true }), copies()[0]!.click()));
+  expect((globalThis as { w?: ReturnType<typeof vi.fn> }).w).toHaveBeenCalledWith("answer");
+  // Subagent text is not the turn's text; a prompt steered mid-turn splits it in two.
+  await render(
+    view([
+      ...done,
+      { type: "subagent", id: "t1", toolUseId: "t1", description: "d", status: "done", startedAt: 0 },
+      { ...text("s1:0", "child text"), parentId: "t1" } as Part,
+      { type: "user_text", id: "u2", text: "steer", images: [] },
+      text("m2:0", "after steer"),
+    ]),
+  );
+  expect(copies()).toHaveLength(2);
+  await act(async () => copies()[0]!.click());
+  expect((globalThis as { w?: ReturnType<typeof vi.fn> }).w).toHaveBeenLastCalledWith("answer");
 });

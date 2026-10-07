@@ -2101,7 +2101,7 @@ export function SessionPane({
           renderItem={(item, index) => {
             // A finished turn (not running; the next top-level item is a prompt, or it is the last) ends with Copy response, with or without a usage footer: a restored transcript has none.
             const next = items[index + 1];
-            const copyText = (next ? next.kind === "part" && next.part.type === "user_text" : !turnRunning) ? turnText(items, index) : "";
+            const copyText = (next ? next.kind === "part" && (next.part.type === "user_text" || next.part.type === "bash") : !turnRunning && !view.externalTurn) ? turnText(items, index) : "";
             const row = (
             item.kind === "context" ? (
               <ContextGroup calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />

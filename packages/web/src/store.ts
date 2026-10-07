@@ -192,7 +192,7 @@ export function turnText(items: TimelineItem[], index: number): string {
   for (let i = index; i >= 0; i--) {
     const item = items[i]!;
     if (item.kind !== "part") continue;
-    if (item.part.type === "user_text") break;
+    if (item.part.type === "user_text" || item.part.type === "bash") break;
     if (item.part.type === "assistant_text" && item.part.streaming) return "";
     if (item.part.type === "assistant_text" && item.part.text) texts.unshift(item.part.text);
   }
