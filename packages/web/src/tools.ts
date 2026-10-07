@@ -55,3 +55,42 @@ export function diffStats(tool: string, input: unknown): { added: number; remove
   const { hunks } = parseDiffFromFile(files.oldFile, files.newFile);
   return { added: hunks.reduce((n, h) => n + h.additionLines, 0), removed: hunks.reduce((n, h) => n + h.deletionLines, 0) };
 }
+
+/** The Artifact tools (publish, read and comment on claude.ai artifacts, artifact database); each has a card body of its own. */
+export const ARTIFACT_TOOLS = new Set(["Artifact", "ArtifactComments", "ArtifactData"]);
+
+const CLAUDE_URL = /^https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9_-]+$/;
+
+/** True for an artifact link that may be rendered as an anchor: https://claude.ai/artifact/<id> or /code/artifact/<id>, nothing else. */
+export const isClaudeUrl = (url: unknown): url is string => typeof url === "string" && CLAUDE_URL.test(url);
+
+/** First claude.ai artifact URL in a text (a tool result); undefined when there is none. */
+export function claudeUrl(text: unknown): string | undefined {
+  if (typeof text !== "string") return undefined;
+  for (const m of text.matchAll(/https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9_-]+/g)) {
+    if (isClaudeUrl(m[0])) return m[0];
+  }
+  return undefined;
+}
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** Header summary of an Artifact* call: the title (or file name) of a publish, else `<Action> <target>`; never the long file path. */
+export function artifactSummary(tool: string, input: unknown): string {
+  const i = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const str = (k: string) => (typeof i[k] === "string" ? (i[k] as string) : "");
+  const action = str("action");
+  if (tool === "Artifact" && (action === "" || action === "publish")) {
+    const title = str("title");
+    if (title) return title.split("\n")[0]!;
+    const file = str("file_path");
+    return file.slice(Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\")) + 1);
+  }
+  const verb = cap(action);
+  if (tool === "ArtifactData") {
+    const target = [str("collection"), str("doc_id")].filter(Boolean).join("/");
+    return [verb, target].filter(Boolean).join(" ");
+  }
+  if (tool === "Artifact" && action === "quickstart") return str("intent") ? `${verb}: ${str("intent")}` : verb;
+  return [verb, str("url")].filter(Boolean).join(" ");
+}

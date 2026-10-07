@@ -15,7 +15,7 @@ import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
 import { relPath } from "./paths.ts";
 import { fileSize } from "./files.ts";
-import { diffStats, editFiles, filePath, readRange, toolSummary } from "./tools.ts";
+import { ARTIFACT_TOOLS, artifactSummary, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 
@@ -78,7 +78,9 @@ export function useExpanded(id: string, force = false) {
 export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: ToolResult; awaiting?: boolean }) {
   const range = call.tool === "Read" ? readRange(call.input, result?.output) : "";
   const stats = useMemo(() => diffStats(call.tool, call.input), [call.tool, call.input]);
-  const path = field(call.input, "file_path") || field(call.input, "notebook_path");
+  const artifact = ARTIFACT_TOOLS.has(call.tool);
+  // An Artifact publish names the long scratchpad file_path: the row shows the title instead.
+  const path = artifact ? "" : field(call.input, "file_path") || field(call.input, "notebook_path");
   const decided = call.coordinator && (call.coordinator.decision === "allow" ? "Approved by coordinator" : "Denied by coordinator");
   return (
     <Tool data-testid="tool-card" data-status={call.status} {...useExpanded(call.id, awaiting && !stats)}>
@@ -89,7 +91,7 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
         statusLabel={awaiting ? undefined : LABEL[call.status]}
         // Next to the tool name, which is never truncated like the summary.
         title={call.editedByUser ? `${call.tool} · edited by you` : decided ? `${call.tool} · ${decided}` : undefined}
-        summary={path ? <FileSummary path={path} range={range} /> : toolSummary(call.input)}
+        summary={path ? <FileSummary path={path} range={range} /> : artifact ? artifactSummary(call.tool, call.input) : toolSummary(call.input)}
         tooltip={path || undefined}
         meta={
           stats && (
@@ -192,6 +194,10 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
     case "Edit":
     case "Write":
       return <EditDiff call={call} result={result} />;
+    case "Artifact":
+    case "ArtifactComments":
+    case "ArtifactData":
+      return <ArtifactBody call={call} result={result} />;
     case "ExitPlanMode": {
       // The plan as the approval panel shows it; the JSON view until the input has streamed in.
       const plan = field(call.input, "plan");
@@ -213,6 +219,83 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
         <ToolOutput output={result.isError ? undefined : redact(result.output)} errorText={result.isError ? text(result.output) : undefined} />
       )}
     </>
+  );
+}
+
+/** A claude.ai artifact link opening in a new tab; any other URL is plain text (a result is not trusted). */
+function ArtifactLink({ url }: { url: string }) {
+  if (!isClaudeUrl(url)) return <span className="break-all font-mono text-xs">{url}</span>;
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" title={url} className="inline-flex min-h-11 items-center break-all text-primary text-xs underline md:min-h-0">
+      {url}
+    </a>
+  );
+}
+
+/** Bodies of Artifact, ArtifactComments and ArtifactData calls: summary fields from the input, the result as plain text
+ *  (comment text is written by viewers: never markdown or HTML). Result formats are unverified, so nothing is parsed
+ *  beyond the claude.ai URL; the result text is always shown when there is no better field. */
+function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult }) {
+  const out = text(result?.output);
+  const failed = result?.isError === true;
+  const output = result && <Lines id={call.id} text={out} error={failed} />;
+  const action = field(call.input, "action") || (call.tool === "Artifact" ? "publish" : "");
+  const url = field(call.input, "url");
+  if (call.tool === "ArtifactData") {
+    const data = (call.input as Record<string, unknown> | null)?.data ?? (call.input as Record<string, unknown> | null)?.writes;
+    return (
+      <div className="space-y-2">
+        <div data-testid="artifact-summary" className="font-mono text-xs">
+          {artifactSummary(call.tool, call.input)}
+        </div>
+        {data !== undefined && <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 font-mono text-xs">{JSON.stringify(data, null, 2)}</pre>}
+        {result && <ToolOutput output={failed ? undefined : out} errorText={failed ? out : undefined} />}
+      </div>
+    );
+  }
+  if (call.tool === "ArtifactComments") {
+    const thread = field(call.input, "thread_id");
+    return (
+      <div className="space-y-2">
+        {url && <ArtifactLink url={url} />}
+        {action === "reply" && (
+          <div data-testid="artifact-reply" className="space-y-1">
+            {thread && <div className="text-muted-foreground text-xs">Reply to thread {thread}</div>}
+            <p className="whitespace-pre-wrap break-words rounded-md border p-2 text-sm">{field(call.input, "text")}</p>
+          </div>
+        )}
+        {action === "resolve" && !failed && <div className="text-xs">Resolved thread {thread}</div>}
+        {(failed || action === "read" || action === "watch" || action === "reply") && output}
+      </div>
+    );
+  }
+  if (action === "publish") {
+    // The input URL (update in place) first, else the one in the result; none for a failed call.
+    const link = failed ? undefined : isClaudeUrl(url) ? url : claudeUrl(out);
+    const title = field(call.input, "title");
+    const description = field(call.input, "description");
+    const file = field(call.input, "file_path");
+    return (
+      <div className="space-y-2">
+        <div data-testid="artifact-publish" className="space-y-1">
+          {title && <div className="font-medium text-sm">{title}</div>}
+          {description && <p className="whitespace-pre-wrap text-muted-foreground text-xs">{description}</p>}
+          {link && <ArtifactLink url={link} />}
+          {file && (
+            <div title={file} className="break-all font-mono text-muted-foreground text-xs">
+              {file}
+            </div>
+          )}
+        </div>
+        {(failed || (result && !link)) && output}
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      {isClaudeUrl(url) && <ArtifactLink url={url} />}
+      {output}
+    </div>
   );
 }
 

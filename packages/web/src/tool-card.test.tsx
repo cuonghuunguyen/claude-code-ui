@@ -311,3 +311,59 @@ describe("failed Read card", () => {
     expect(html).not.toContain("tool_use_error");
   });
 });
+
+describe("Artifact cards", () => {
+  const URL = "https://claude.ai/artifact/PoBGcADWcBidR9fyEttcXn";
+  const publish = { file_path: "/tmp/claude/scratchpad/page.html", title: "GH-101 test", description: "Says hello" };
+  const open = (c: ToolCall, r?: ReturnType<typeof result>) => renderToStaticMarkup(<ToolCard call={c} result={r} awaiting />);
+
+  it("a publish row shows the title, not the scratchpad path", () => {
+    const html = renderToStaticMarkup(<ToolCard call={done("Artifact", publish)} />);
+    expect(html).toContain("GH-101 test");
+    expect(html).not.toContain("scratchpad");
+    expect(html).not.toContain("Parameters");
+  });
+  it("a publish body shows description, file path and the claude.ai link", () => {
+    const html = open(done("Artifact", publish), result(`Published ${URL} (private)`));
+    expect(html).toContain("Says hello");
+    expect(html).toContain("/tmp/claude/scratchpad/page.html");
+    expect(html).toMatch(new RegExp(`<a [^>]*href="${URL}"`));
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).not.toContain("Parameters");
+  });
+  it("only claude.ai URLs become links; an error shows the text and no link", () => {
+    expect(open(done("Artifact", { action: "read", url: "javascript:alert(1)" }), result("ok"))).not.toContain("<a ");
+    expect(open(done("Artifact", { action: "read", url: "https://evil.example/artifact/x" }), result("ok"))).not.toContain("<a ");
+    const html = open({ ...done("Artifact", publish), status: "error" }, result(`<tool_use_error>File not found ${URL}</tool_use_error>`, true));
+    expect(html).toContain("File not found");
+    expect(html).not.toContain("<a ");
+  });
+  it("other actions show the result as plain lines", () => {
+    const html = open(done("Artifact", { action: "list" }), result(`2 published artifacts\n- <b>x</b> — ${URL}`));
+    expect(html).toContain("2 published artifacts");
+    expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
+    expect(html).not.toContain("Parameters");
+  });
+  it("a streaming call with empty input does not crash", () => {
+    expect(renderToStaticMarkup(<ToolCard call={{ ...done("Artifact", {}), status: "pending" }} />)).toContain("Artifact");
+  });
+  it("comments: read shows result as plain text, reply shows the reply text, resolve names the thread", () => {
+    const read = open(done("ArtifactComments", { action: "read", url: URL }), result("No comment threads on this artifact yet. <i>x</i> **b**"));
+    expect(read).toContain("No comment threads");
+    expect(read).toContain("&lt;i&gt;x&lt;/i&gt; **b**");
+    expect(read).not.toContain("Parameters");
+    const reply = open(done("ArtifactComments", { action: "reply", url: URL, thread_id: "t9", text: "Done <b>**ok**</b>" }), result("Replied"));
+    expect(reply).toContain("t9");
+    expect(reply).toContain("Done &lt;b&gt;**ok**&lt;/b&gt;");
+    const resolve = open(done("ArtifactComments", { action: "resolve", url: URL, thread_id: "t9" }), result("Resolved"));
+    expect(resolve).toContain("Resolved thread t9");
+  });
+  it("data: summary in the row, input data and result as JSON", () => {
+    const c = done("ArtifactData", { action: "set", url: URL, collection: "votes", doc_id: "d1", data: { n: 1 } });
+    expect(renderToStaticMarkup(<ToolCard call={c} />)).toContain("Set votes/d1");
+    const html = open(c, result('{"n":1,"version":2}'));
+    expect(html).toContain("&quot;n&quot;");
+    expect(html).toContain("Result");
+  });
+});
