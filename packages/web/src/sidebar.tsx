@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
-import { byDay, groupByCwd, limitSessions, loadCollapsed, MORE, removableWorktree, SHOWN, saveCollapsed, nestWorkers, timeAgo, worktreeName, type WorktreeRow } from "./sessions.ts";
+import { byDay, groupByCwd, limitSessions, loadCollapsed, MORE, removableWorktree, SHOWN, saveCollapsed, nestWorkers, parseSessionQuery, timeAgo, worktreeName, type WorktreeRow } from "./sessions.ts";
 import { useNow } from "./plan-meter.tsx";
 import { projectName } from "./tabs.ts";
 import { IconButton, ProjectAvatar } from "./tabs-bar.tsx";
@@ -57,6 +57,15 @@ const WORKER_STATE: Record<SessionState, string> = { running: "running", idle: "
 const PAD = ["pl-7", "pl-12", "pl-17"] as const;
 type Depth = 0 | 1 | 2;
 
+/** The empty-list text for a search: names the project of an `@project=` token. */
+function emptySearch(query: string, archived: boolean, projects: string[]) {
+  const { project, text } = parseSessionQuery(query);
+  const kind = archived ? "archived session" : "session";
+  if (!project) return `No ${kind} title, project or branch matches "${text}".`;
+  if (!projects.some((p) => projectName(p).toLowerCase() === project.toLowerCase())) return `No project named "${project}".`;
+  return text ? `No ${kind} in ${project} matches "${text}".` : `No ${kind} in ${project}.`;
+}
+
 export function SessionList({
   list,
   projects,
@@ -74,6 +83,7 @@ export function SessionList({
   renaming,
   onAction,
   onRenamed,
+  search,
 }: {
   list: SessionListItem[];
   /** Known project cwds from the daemon, newest first; a project with no session still gets a group. */
@@ -101,6 +111,8 @@ export function SessionList({
   onAction: (id: string, a: SessionAction) => void;
   /** New title, or undefined when the edit was cancelled. */
   onRenamed: (id: string, title: string | undefined) => void;
+  /** `/resume` (GH-100): each new `seq` puts `text` into the search box, focuses it and puts the caret at the end. */
+  search?: { text: string; seq: number };
 }) {
   const narrow = useNarrow();
   const sideOf = use(SideLabel);
@@ -109,6 +121,15 @@ export function SessionList({
   // Relative times and day groups move on without a list refresh; a row re-renders only when its label changes.
   const now = useNow(60_000, true);
   const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!search) return;
+    setQuery(search.text);
+    const input = searchRef.current;
+    input?.focus();
+    input?.setSelectionRange(search.text.length, search.text.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search?.seq]);
   const [archived, setArchived] = useState(false);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
   const toggle = (cwd: string) =>
@@ -228,10 +249,11 @@ export function SessionList({
           <SearchIcon className="pointer-events-none absolute left-2 size-4 text-faint" aria-hidden />
           <input
             type="search"
+            ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search sessions"
-            aria-label="Search sessions by title, project or branch"
+            aria-label="Search sessions by title, project or branch (@project=name for one project)"
             className="h-8 w-full rounded-md bg-secondary/60 pr-2 pl-8 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11"
             data-testid="session-search"
           />
@@ -254,7 +276,7 @@ export function SessionList({
         {!groups.length && (
           <p className="px-1.5 text-muted-foreground text-sm">
             {query.trim()
-              ? `No ${archived ? "archived " : ""}session title, project or branch matches "${query.trim()}".`
+              ? emptySearch(query, archived, projects)
               : archived
                 ? "No archived sessions."
                 : "All sessions are archived."}

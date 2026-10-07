@@ -46,14 +46,28 @@ export function worktreeName(cwd: string, worktrees: Record<string, Worktree[]> 
 export const repoOf = (cwd: string, worktrees: Record<string, Worktree[]> = {}) => worktrees[cwd]?.find((w) => w.main)?.path ?? cwd;
 
 /**
+ * The sidebar search: `@project=<name>` (quotes for spaces) anywhere in the query names a project; the rest is `text`.
+ * An empty value or a token inside a word is plain text.
+ */
+export function parseSessionQuery(query: string): { project?: string; text: string } {
+  const m = /(^|\s)@project=(?:"([^"]+)"|([^\s"]\S*))(?=\s|$)/.exec(query);
+  if (!m) return { text: query.trim() };
+  const text = (query.slice(0, m.index) + " " + query.slice(m.index + m[0].length)).replace(/\s+/g, " ").trim();
+  return { project: m[2] ?? m[3], text };
+}
+
+/**
  * One group per working directory (per repository with `worktrees`) whatever the input order; groups and sessions newest first.
+ * `@project=<name>` in the query (parseSessionQuery) keeps only the group of the project of that name (case-insensitive), worktree rows included.
  * A query keeps sessions whose title, project name or worktree branch contains it. Archived sessions show only with `archived`, and then only they.
  * With `projects` (the daemon's known projects): one group per project in that order, empty ones too (not with `archived`); other sessions
  * are dropped, except those of the projects' worktrees (`worktrees`: session.list's, docs/spec.md "Projects").
  * `workers` (nestWorkers): a coordinator also matches the query by the title or name of one of its workers.
  */
 export function groupByCwd(items: SessionListItem[], query = "", projects?: string[], archived = false, worktrees: Record<string, Worktree[]> = {}, workers?: Map<string, SessionListItem[]>): SessionGroup[] {
-  const q = query.trim().toLowerCase();
+  const { project, text } = parseSessionQuery(query);
+  const q = text.toLowerCase();
+  const inScope = (g: SessionGroup) => !project || projectName(g.cwd).toLowerCase() === project.toLowerCase();
   const has = (text: string | undefined) => !!text && text.toLowerCase().includes(q);
   const groups = new Map<string, SessionGroup>();
   // Session cwd → its group and worktree row.
@@ -78,10 +92,11 @@ export function groupByCwd(items: SessionListItem[], query = "", projects?: stri
     const cwd = projectCwd(s.cwd);
     const found = at.get(cwd) ?? (projects ? undefined : add(cwd));
     if (!found) continue;
+    if (!inScope(found.g)) continue;
     if (q && !has(s.title) && !has(projectName(found.g.cwd)) && !has(found.row?.branch) && !workers?.get(s.id)?.some((w) => has(w.title) || has(w.workerName))) continue;
     (found.row ?? found.g).sessions.push(s);
   }
-  return [...groups.values()].flatMap((g) => {
+  return [...groups.values()].filter(inScope).flatMap((g) => {
     const named = !q || has(projectName(g.cwd));
     // Empty rows show unless archived; while searching, only those the project name or branch matches.
     const rows = g.worktrees.filter((r) => r.sessions.length || (!archived && (named || has(r.branch))));

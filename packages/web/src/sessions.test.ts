@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, patchSession, projectOf, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
+import { byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, projectOf, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
   id,
@@ -77,6 +77,39 @@ describe("groupByCwd with projects", () => {
     const groups = (q: string) => groupByCwd([item("a", "/p/x", 30, "login")], q, ["/p/new", "/p/x"]).map((g) => g.cwd);
     expect(groups("new")).toEqual(["/p/new"]);
     expect(groups("login")).toEqual(["/p/x"]);
+  });
+});
+
+describe("parseSessionQuery", () => {
+  it("takes @project=<name> from anywhere; quotes allow spaces; the rest is the text", () => {
+    expect(parseSessionQuery("@project=foo bar")).toEqual({ project: "foo", text: "bar" });
+    expect(parseSessionQuery("bar @project=foo baz")).toEqual({ project: "foo", text: "bar baz" });
+    expect(parseSessionQuery('@project="my app" x')).toEqual({ project: "my app", text: "x" });
+    expect(parseSessionQuery("@project=foo ")).toEqual({ project: "foo", text: "" });
+    expect(parseSessionQuery("plain")).toEqual({ text: "plain" });
+  });
+  it("ignores an empty value and a token inside a word", () => {
+    expect(parseSessionQuery("@project= x")).toEqual({ text: "@project= x" });
+    expect(parseSessionQuery('@project="" x')).toEqual({ text: '@project="" x' });
+    expect(parseSessionQuery("a@project=foo")).toEqual({ text: "a@project=foo" });
+  });
+});
+
+describe("groupByCwd with @project=", () => {
+  const list = [item("a", "/p/foo", 30, "Fix login"), item("b", "/p/bar", 20, "Fix login"), item("c", "/p/foo-wt", 10, "Deploy"), item("d", "/p/foo", 5, "Docs"), item("e", "/p/foo", 4, "Old", true)];
+  const worktrees = { "/p/foo": [{ path: "/p/foo", branch: "main", main: true }, { path: "/p/foo-wt", branch: "feat", main: false }] } as never;
+  const ids = (q: string, archived = false) => groupByCwd(list, q, ["/p/foo", "/p/bar"], archived, worktrees).flatMap((g) => [...g.sessions, ...g.worktrees.flatMap((r) => r.sessions)].map((s) => s.id).sort());
+  it("keeps the project's whole repository group, worktree rows included, case-insensitively", () => {
+    expect(ids("@project=foo")).toEqual(["a", "c", "d"]);
+    expect(ids("@project=FOO")).toEqual(["a", "c", "d"]);
+  });
+  it("filters the project's sessions by the rest of the query", () => {
+    expect(ids("@project=foo login")).toEqual(["a"]);
+    expect(ids("deploy @project=foo")).toEqual(["c"]);
+  });
+  it("an unknown project gives no group; archived still shows only archived", () => {
+    expect(groupByCwd(list, "@project=nope", ["/p/foo", "/p/bar"], false, worktrees)).toEqual([]);
+    expect(ids("@project=foo", true)).toEqual(["e"]);
   });
 });
 
