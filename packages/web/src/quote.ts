@@ -38,35 +38,6 @@ export function appendQuote(
   return { text: t, caret: t.length };
 }
 
-export type QuoteSegment = { quote: boolean; text: string };
-
-/** Splits a user prompt into `> ` runs (quote: true, prefix removed) and the plain text between them. */
-export function splitQuotes(text: string): QuoteSegment[] {
-  const lines = text.split("\n");
-  // Only `> x` or a bare `>` is a quote line; lines inside a ``` fence of the prompt never are.
-  let fenced = false;
-  const isQuote = lines.map((l) => {
-    if (!fenced && /^>( |$)/.test(l)) return true;
-    if (/^\s*```/.test(l)) fenced = !fenced;
-    return false;
-  });
-  if (!isQuote.some(Boolean)) return [{ quote: false, text }];
-  const out: QuoteSegment[] = [];
-  let run: string[] = [];
-  let cur = false;
-  const flush = () => {
-    const t = cur ? run.join("\n") : run.join("\n").replace(/^\n+|\n+$/g, "");
-    if (run.length && t.trim()) out.push({ quote: cur, text: t });
-    run = [];
-  };
-  lines.forEach((l, i) => {
-    if (isQuote[i] !== cur) (flush(), (cur = isQuote[i]!));
-    run.push(cur ? l.slice(2) : l);
-  });
-  flush();
-  return out;
-}
-
 const elOf = (n: Node | null) => (n instanceof Element ? n : n?.parentElement);
 
 /** The quotable timeline element holding both ends of the selection (and being `within` when given); cheap, no text is read. */
