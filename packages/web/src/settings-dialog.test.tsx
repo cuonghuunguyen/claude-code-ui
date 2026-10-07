@@ -68,7 +68,7 @@ it("shows the Orchestration section with labelled controls, loaded from the daem
   expect(q("settings-orchestration-enabled")?.getAttribute("aria-label")).toBe("Enable orchestration");
   expect(desc("settings-orchestration-enabled")).toContain("start and supervise worker sessions");
   expect(desc("settings-orchestration-workerCap")).toContain("1 to 20");
-  expect(desc("settings-orchestration-coordinatorPermissions")).toContain("reads and file edits inside the worker folder. Commands and everything else wait for you");
+  expect(desc("settings-orchestration-coordinatorPermissions")).toContain("read-only git commands (status, log, diff, show). Other commands and everything else wait for you");
   expect(desc("settings-orchestration-coordinatorPermissions")).toContain("Edits can change code that commands you approve later will run.");
 });
 

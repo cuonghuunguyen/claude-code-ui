@@ -8,7 +8,7 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "tier-")));
 const cwd = join(root, "w");
 const outside = join(root, "o");
 const cwdLink = join(root, "wl");
-for (const d of ["src", ".git", ".claude", "sub", "bare/objects", "barer/refs", "bareh", "cfg"]) mkdirSync(join(cwd, d), { recursive: true });
+for (const d of ["src", ".git", ".claude/skills", "sub", "bare/objects", "barer/refs", "bareh", "cfg"]) mkdirSync(join(cwd, d), { recursive: true });
 mkdirSync(outside);
 for (const f of ["bareh/HEAD", "cfg/config", "src/a.ts", ".git/config", ".claude/settings.json", "sub/CLAUDE.md", ".env.local", "id.pem"]) writeFileSync(join(cwd, f), "x");
 writeFileSync(join(outside, "secret.txt"), "s");
@@ -17,6 +17,8 @@ symlinkSync(join(outside, "secret.txt"), join(cwd, "outfile"));
 symlinkSync(join(root, "nope"), join(cwd, "dangling"));
 linkSync(join(outside, "secret.txt"), join(cwd, "hard"));
 symlinkSync(cwd, cwdLink);
+// A skills entry that leads out of `.claude/skills` to the permission config.
+symlinkSync(join(cwd, ".claude/settings.json"), join(cwd, ".claude/skills/link"));
 
 type Case = [string, string, unknown, Partial<TierContext>?];
 const bash = (command: string): Case => [`Bash ${JSON.stringify(command)}`, "Bash", { command }];
@@ -41,6 +43,14 @@ const low: Case[] = [
   file("Write", "src/objects/x"),
   file("Write", "src/refs/heads/main"),
   file("Write", "src/heading.md"),
+  // Agent docs read (GH-163): CLAUDE.md as the last segment, .claude/skills below the root.
+  file("Read", "sub/CLAUDE.md"),
+  file("Read", "CLAUDE.md"),
+  file("Read", ".claude/skills/x/SKILL.md"),
+  // Read-only git, only with the shell cwd pinned (bashCwdPinned); every command of git-readonly.test.ts is judged there.
+  ...["git status", "git status -sb", "git diff --stat", "git log --oneline -n 5", "git show HEAD^:src/a.ts", "git branch --show-current", "git --no-pager log", "git status --porcelain=v2"].map(
+    (c): Case => [...bash(c), { bashCwdPinned: true }] as unknown as Case,
+  ),
 ];
 
 const high: Case[] = [
@@ -112,14 +122,8 @@ const high: Case[] = [
   ["Grep in .claude", "Grep", { pattern: "x", path: ".claude" }],
   ["Grep glob .env*", "Grep", { pattern: "x", path: "src", glob: ".env*" }],
   ["Grep glob ../*", "Grep", { pattern: "x", path: "src", glob: "../*" }],
-  // Every Bash command, read-only git too.
+  // Bash: only the read-only git of git-readonly.ts, and only pinned (see low). Everything below is high pinned or not.
   ...[
-    "git status",
-    "git status -sb",
-    "git diff --stat",
-    "git log --oneline -n 5",
-    "git show HEAD^:src/a.ts",
-    "git branch --show-current",
     "git add src/a.ts",
     "git add .",
     "ls",
@@ -146,7 +150,6 @@ const high: Case[] = [
     "git --git-dir=x status",
     "git --work-tree=/ status",
     "git --exec-path=. status",
-    "git --no-pager log",
     "git push",
     "git push --force origin main",
     "git commit -m msg",
@@ -172,7 +175,6 @@ const high: Case[] = [
     "git branch --show-current x",
     "git log -n",
     "git log -n x",
-    "git status --porcelain=v2",
     "git checkout .",
     "git stash",
     "git",
@@ -192,7 +194,13 @@ const high: Case[] = [
     "git log ~",
     "git log !1",
   ].map(bash),
-  ["Bash git status without sandbox", "Bash", { command: "git status", dangerouslyDisableSandbox: true }],
+  ["Bash git status without sandbox", "Bash", { command: "git status", dangerouslyDisableSandbox: true }, { bashCwdPinned: true }],
+  ["Bash git status not pinned", "Bash", { command: "git status" }],
+  ["Bash git status pinned but blocked", "Bash", { command: "git status" }, { bashCwdPinned: true, blockedPath: "x" }],
+  // A symlink inside .claude/skills that leads out of it, and a symlinked directory in a git pathspec.
+  file("Read", ".claude/skills/link"),
+  ["git diff out (symlink to outside)", "Bash", { command: "git diff out" }, { bashCwdPinned: true }],
+  ["git diff outfile (symlink to outside)", "Bash", { command: "git diff outfile" }, { bashCwdPinned: true }],
   ["Bash with a number", "Bash", { command: 1 }],
   // Tools outside the list.
   ...["ExitPlanMode", "EnterPlanMode", "Agent", "Task", "WebFetch", "Skill", "BashOutput", "KillShell", "MultiEdit", "NoSuchTool", "mcp__github__get_issue", "mcp__orchestration__worker_list"].map(
@@ -209,6 +217,8 @@ const high: Case[] = [
 describe("tier", () => {
   it.each(low)("low: %s", (_, tool, input, ctx) => expect(tier(tool, input, { cwd, ...ctx })).toBe("low"));
   it.each(high)("high: %s", (_, tool, input, ctx) => expect(tier(tool, input, { cwd, ...ctx })).toBe("high"));
+  // The Bash rows stay high with the shell cwd pinned too.
+  it.each(high.filter((c) => c[1] === "Bash" && !c[0].includes("not pinned")))("high pinned: %s", (_, tool, input, ctx) => expect(tier(tool, input, { cwd, bashCwdPinned: true, ...ctx })).toBe("high"));
 
   it("a missing cwd or an fs error is high", () => {
     const gone = mkdtempSync(join(tmpdir(), "tier-gone-"));

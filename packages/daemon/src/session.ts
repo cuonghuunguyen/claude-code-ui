@@ -85,6 +85,8 @@ type SessionOpts = Partial<SessionSettings> & {
   runBash?: typeof runBash;
   toolPolicy?: (tool: string, mcpServer?: { name: string; source: string }) => "allow" | "no_rules" | undefined;
   /** Host rewrite of a permission card (orchestration.ts worker_start): the input shown and returned on allow, and its title. */
+  /** Whether the session is a worker (linked to a coordinator): its CLI runs with the shell cwd pinned, which lets read-only git be `low` (risk-tier.ts). */
+  worker?: (id: string) => boolean;
   permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => { input: Record<string, unknown>; title?: string; onAllow?: () => void } | undefined;
 };
 
@@ -142,6 +144,8 @@ export class Session {
   private usageRequest = 0;
   /** False until the first start(): the first query creates the transcript (sessionId), every later one resumes it. */
   private started: boolean;
+  /** The current query's CLI keeps every Bash command in the cwd (CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR). */
+  private bashPinned = false;
   /** Converts transcript messages (restore and sync); the live adapter converts the query's stream. */
   private readonly transcript = createAdapter();
   /** UUID of every transcript message the session logged or its own query streamed: the rest are external turns. */
@@ -206,6 +210,8 @@ export class Session {
     const owner = (this.owner = { session: this as Session });
     const dirs = [...(this.opts.uploadDir ? [this.opts.uploadDir] : []), ...sessionDirs(this.grants)];
     const rules = sessionRules(this.grants);
+    // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
+    this.bashPinned = !!this.opts.worker?.(this.id);
     const q = (this.query = (this.opts.query ?? sdkQuery)({
       prompt: this.input,
       options: {
@@ -229,7 +235,13 @@ export class Session {
         // ADR 0002: subscription login only. An inherited API key would take precedence and bill per token.
         // Todo tools are off by default on current models; TodoWrite (not the Task* tools) sends the whole list.
         // Artifact tools and skills are on in the TUI but off in SDK sessions; CLAUDE_CODE_ARTIFACT (undocumented) turns them on.
-        env: { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1", CLAUDE_CODE_ENABLE_TASKS: "0", CLAUDE_CODE_ARTIFACT: "1", ...withoutApiKeys(process.env) },
+        env: {
+          CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
+          CLAUDE_CODE_ENABLE_TASKS: "0",
+          CLAUDE_CODE_ARTIFACT: "1",
+          ...withoutApiKeys(process.env),
+          ...(this.bashPinned ? { CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1" } : {}),
+        },
         canUseTool: (tool, input, o) => owner.session.canUseTool(tool, input, o),
         mcpServers: this.opts.mcpServers?.(this.id),
       },
@@ -713,7 +725,7 @@ export class Session {
   /** The permission tier of a pending permission request, computed now (docs/spec.md "Permission tiers"); undefined for a question or unknown ID. */
   permissionTier(requestId: string): Tier | undefined {
     const req = this.pending.get(requestId);
-    return req?.part.type === "permission_request" ? tier(req.part.tool, req.part.input, { cwd: this.cwd, ...req.ctx }) : undefined;
+    return req?.part.type === "permission_request" ? tier(req.part.tool, req.part.input, { cwd: this.cwd, bashCwdPinned: this.bashPinned, ...req.ctx }) : undefined;
   }
 
   /**

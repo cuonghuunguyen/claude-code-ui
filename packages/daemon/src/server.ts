@@ -338,6 +338,7 @@ export function createDaemon(opts: {
       track(heir);
       broadcast({ type: "sessions.changed" });
     },
+    worker: (id: string) => !!settings.get(id)?.coordinatorId,
     mcpServers: (id: string) => orchestration.mcpServers(id),
     toolPolicy: (tool: string, mcpServer?: { name: string; source: string }) => orchestration.toolPolicy(tool, mcpServer),
     permissionCard: (id: string, tool: string, input: Record<string, unknown>, mcp?: { name: string; source: string }) => orchestration.permissionCard(id, tool, input, mcp),
