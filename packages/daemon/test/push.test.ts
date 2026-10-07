@@ -201,6 +201,102 @@ describe("fitPayload", () => {
   });
 });
 
+describe("notifier: workers of one coordinator blocked on the same request (GH-163)", () => {
+  type P = { sessionId: string; body: string; tag?: string; silent?: boolean; replace?: boolean; titleSession?: string };
+  let pushed: P[];
+  let n: ReturnType<typeof createNotifier>;
+  const group = (id: string) => ({ w1: "c1", w2: "c1", w3: "c1", w4: "c2" })[id];
+  beforeEach(() => {
+    vi.useFakeTimers();
+    pushed = [];
+    n = createNotifier({
+      push: (sessionId, body, extra) => void pushed.push({ sessionId, body, ...extra }),
+      replace: (sessionId, body, tag) => void pushed.push({ sessionId, body, tag, silent: true, replace: true }),
+      suppressed: () => false,
+      group,
+    });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const read = (path: string, requestId: string, extra: object = {}) =>
+    ({ type: "permission_request", id: requestId, requestId, toolUseId: `t-${requestId}`, tool: "Read", input: { file_path: path }, suggestions: [], settled: false, ...extra }) as Part;
+  const block = (sid: string, path = "/main/.claude/skills/implement-issue/SKILL.md", requestId = `r-${sid}`) => {
+    n.observe(state("running", sid));
+    n.observe(ev(read(path, requestId), sid));
+    n.observe(state("needs_input", sid));
+  };
+  const unblock = (sid: string, path = "/main/.claude/skills/implement-issue/SKILL.md", requestId = `r-${sid}`) => {
+    n.observe(ev(read(path, requestId, { settled: true, decision: "allow" }), sid));
+    n.observe(state("running", sid));
+  };
+
+  it("three workers of one coordinator blocked on the same Read push one tag; the bodies count 1, 2, 3", () => {
+    block("w1");
+    block("w2");
+    block("w3");
+    expect(pushed.map((p) => p.body)).toEqual([
+      "Needs input · Read: /main/.claude/skills/implement-issue/SKILL.md",
+      "2 workers need input · Read: …/implement-issue/SKILL.md",
+      "3 workers need input · Read: …/implement-issue/SKILL.md",
+    ]);
+    expect(new Set(pushed.map((p) => p.tag)).size).toBe(1);
+    expect(pushed[0]!.tag).toMatch(/^req-[0-9a-f]{16}$/);
+    // The first shows (also as a desktop toast); the updates only replace it, silently.
+    expect(pushed.map((p) => [p.silent ?? false, p.replace ?? false])).toEqual([[false, false], [true, true], [true, true]]);
+    // The notification carries the coordinator's title and opens the newest worker.
+    expect(pushed.map((p) => p.titleSession)).toEqual(["c1", "c1", "c1"]);
+    expect(pushed.map((p) => p.sessionId)).toEqual(["w1", "w2", "w3"]);
+  });
+
+  it("workers of different coordinators, or different requests, are not grouped", () => {
+    block("w1");
+    block("w4");
+    block("w2", "/main/docs/spec.md");
+    expect(pushed.map((p) => p.body)).toEqual(["Needs input · Read: /main/.claude/skills/implement-issue/SKILL.md", "Needs input · Read: /main/.claude/skills/implement-issue/SKILL.md", "Needs input · Read: /main/docs/spec.md"]);
+    expect(new Set(pushed.map((p) => p.tag)).size).toBe(3);
+  });
+
+  it("a worker leaving the group updates the count; the last one replaces it with No longer needs input", () => {
+    block("w1");
+    block("w2");
+    block("w3");
+    pushed.length = 0;
+    unblock("w2");
+    expect(pushed.map((p) => [p.body, p.replace])).toEqual([["2 workers need input · Read: …/implement-issue/SKILL.md", true]]);
+    unblock("w1");
+    expect(pushed.at(-1)!.body).toBe("Needs input · Read: /main/.claude/skills/implement-issue/SKILL.md");
+    unblock("w3");
+    expect(pushed.at(-1)).toMatchObject({ replace: true, silent: true });
+    expect(pushed.at(-1)!.body).toMatch(/^No longer needs input · /);
+    // Gone: nothing more for a repeated settle, and a new block starts over at 1.
+    const count = pushed.length;
+    unblock("w3");
+    expect(pushed).toHaveLength(count);
+    vi.advanceTimersByTime(6000);
+    block("w1", undefined, "r-again");
+    expect(pushed.at(-1)!.body).toMatch(/^Needs input · /);
+    expect(pushed.at(-1)!.replace).toBeUndefined();
+  });
+
+  it("an escalated request of a grouped worker keeps the group tag and replaces on settle", () => {
+    block("w1");
+    block("w2");
+    n.observe(ev(read("/main/.claude/skills/implement-issue/SKILL.md", "r-w2", { escalated: true, reason: "blocked" }), "w2"));
+    expect(pushed.at(-1)!.body).toMatch(/^2 workers need input/);
+    unblock("w2");
+    unblock("w1");
+    expect(pushed.at(-1)!.body).toMatch(/^No longer needs input/);
+    expect(new Set(pushed.map((p) => p.tag)).size).toBe(1);
+  });
+
+  it("non-worker sessions keep sessionId tags and push as before", () => {
+    n.observe(state("running", "plain"));
+    n.observe(ev(read("/x/y.ts", "r1"), "plain"));
+    n.observe(state("needs_input", "plain"));
+    expect(pushed).toEqual([{ sessionId: "plain", body: "Needs input · Read: /x/y.ts" }]);
+  });
+});
+
 describe("createPush", () => {
   const sub = (endpoint = "https://push.example/abc") => ({ endpoint, keys: { p256dh: "p", auth: "a" } });
 

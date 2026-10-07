@@ -478,9 +478,11 @@ export function createDaemon(opts: {
   };
   const notifier = createNotifier({
     suppressed: (id) => [...focused.values()].includes(id),
-    push: async (sessionId, body) => void (await opts.push?.send({ sessionId, title: await pushTitleOf(sessionId), body })),
+    // A group's push (workers blocked on the same request) carries its tag and the coordinator's title.
+    push: async (sessionId, body, { titleSession, ...extra } = {}) => void (await opts.push?.send({ sessionId, title: await pushTitleOf(titleSession ?? sessionId), body, ...extra })),
     // A request that settled: the same tag, silent (Web Push must show every push; one that only closes would show "updated in the background").
-    replace: async (sessionId, body) => void (await opts.push?.send({ sessionId, title: await pushTitleOf(sessionId), body, silent: true, replace: true })),
+    replace: async (sessionId, body, tag) => void (await opts.push?.send({ sessionId, title: await pushTitleOf(sessionId), body, ...(tag && { tag }), silent: true, replace: true })),
+    group: (id) => settings.get(id)?.coordinatorId,
   });
   /**
    * Per session: its transcript entries read so far (JsonlTail), the main chain built from them for a file stamp, and each
