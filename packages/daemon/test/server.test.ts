@@ -2210,6 +2210,61 @@ describe("daemon", () => {
 });
 
 describe("/clear", () => {
+  it("subscribing to the session a /clear went on in replies 'New session' without reading its transcript", async () => {
+    const leak = (id: string) => [{ type: "user", uuid: randomUUID(), session_id: id, message: { role: "user", content: "leaked prompt" }, parent_tool_use_id: null, parent_agent_id: null }];
+    const born = new Set<string>();
+    const getSessionInfo = vi.fn(async (id: string) => (born.has(id) ? { sessionId: id, summary: "/clear", cwd: webRoot } : undefined));
+    const getSessionMessages = vi.fn(async (id: string) => (born.has(id) ? leak(id) : []));
+    const d = createDaemon({ webRoot, roots: [webRoot], query: clearQuery as never, token, settingsFile: join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json"), history: { listSessions: (async () => []) as never, getSessionInfo: getSessionInfo as never, getSessionMessages: getSessionMessages as never } });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const { result } = (await c.request({ type: "session.create", cwd: webRoot, model: "haiku" })) as { result: { session: { id: string } } };
+      const old = result.session.id;
+      await c.request({ type: "session.subscribe", sessionId: old, sinceSeq: 0 });
+      await c.request({ type: "session.prompt", sessionId: old, text: "hi" });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+      await c.request({ type: "session.prompt", sessionId: old, text: "/clear" });
+      const cleared = (await c.waitFor((m) => m.type === "event" && m.part.type === "session_cleared")) as Extract<ServerMessage, { type: "event" }>;
+      const next = (cleared.part as { sessionId: string }).sessionId;
+      born.add(next);
+      getSessionInfo.mockClear();
+      getSessionMessages.mockClear();
+      expect(await c.request({ type: "session.subscribe", sessionId: next, sinceSeq: 0 })).toMatchObject({ result: { session: { id: next }, title: "New session" } });
+      expect(getSessionInfo.mock.calls.some((a) => (a as unknown[])[0] === next)).toBe(false);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.list titles a live /clear heir 'New session' without reading its transcript", async () => {
+    const leak = (id: string) => [{ type: "user", uuid: randomUUID(), session_id: id, message: { role: "user", content: "leaked prompt" }, parent_tool_use_id: null, parent_agent_id: null }];
+    const getSessionMessages = vi.fn(async (id: string) => (born.has(id) ? leak(id) : []));
+    const born = new Set<string>();
+    let listed = "";
+    const d = createDaemon({ webRoot, roots: [webRoot], projects: added(webRoot), query: clearQuery as never, token, settingsFile: join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json"), history: { listSessions: (async () => (listed ? [{ sessionId: listed, summary: "/clear", lastModified: 1, cwd: webRoot }] : [])) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: getSessionMessages as never, listSubagents: (async () => []) as never } });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const { result } = (await c.request({ type: "session.create", cwd: webRoot, model: "haiku" })) as { result: { session: { id: string } } };
+      const old = result.session.id;
+      await c.request({ type: "session.subscribe", sessionId: old, sinceSeq: 0 });
+      await c.request({ type: "session.prompt", sessionId: old, text: "hi" });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+      await c.request({ type: "session.prompt", sessionId: old, text: "/clear" });
+      const cleared = (await c.waitFor((m) => m.type === "event" && m.part.type === "session_cleared")) as Extract<ServerMessage, { type: "event" }>;
+      const next = (cleared.part as { sessionId: string }).sessionId;
+      listed = next;
+      born.add(next);
+      getSessionMessages.mockClear();
+      const titled = async () => ((await c.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string }[] } }).result.sessions.find((s) => s.id === next)?.title;
+      expect(await titled()).toBe("New session");
+      expect(getSessionMessages.mock.calls.some((a) => (a as unknown[])[0] === next)).toBe(false);
+    } finally {
+      d.close();
+    }
+  });
+
   it("the live query goes on as the CLI's new session: tabs see session_cleared, both sessions are listed, prompts reach the new one, settings are saved under its ID", async () => {
     const settingsFile = join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json");
     const d = createDaemon({ webRoot, roots: [webRoot], query: clearQuery as never, token, settingsFile, history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never } });

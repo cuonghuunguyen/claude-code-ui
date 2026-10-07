@@ -41,6 +41,7 @@ import { Conversation, ConversationContent, ConversationScrollButton } from "@/c
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cancelFlight, launchFlight, useLanding } from "./flight.ts";
+import { clearing, heirView } from "./clear.ts";
 import { addPending, dropPending, movePending, pendingKey, promptedIds, pruneEchoed, titleLoading, unechoed, type Pending } from "./optimistic.ts";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
@@ -233,6 +234,10 @@ export function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
   const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
+  /** React key of a session tab: a /clear moves it to the session the tab follows to, so its prompt box (text, images, focus) stays mounted. */
+  const [tabKeys, setTabKeys] = useState<Record<string, string>>({});
+  /** A session a tab followed to after /clear, until its subscribe reply: the session it replaced. */
+  const [heirOf, setHeirOf] = useState<Record<string, string>>({});
   /** Titles from subscribe replies: a tab of a session not (yet) in the list, e.g. the page-load hash session. */
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
@@ -450,6 +455,15 @@ export function App() {
 
   /** The tab of session `from` shows session `to` instead, in its place; the active one opens it, its prompt box keeps the focus. */
   function follow(from: string, to: string) {
+    if (tabsRef.current.includes(from)) {
+      setTabKeys((k) => ({ ...k, [to]: k[from] ?? from, [from]: pendingKey() }));
+      setHeirOf((h) => ({ ...h, [to]: from }));
+      // The event handler is a closure of the first render: the latest infos come from the updater, the list from its ref.
+      setInfos((i) => {
+        const old = i[from] ?? listRef.current.find((x) => x.id === from);
+        return i[to] || !old ? i : { ...i, [to]: { ...old, id: to } };
+      });
+    }
     setTabs((t) => (t.includes(from) ? replaceTab(t, from, to) : t));
     if (hashId() !== from) return;
     if (document.activeElement && document.activeElement === shownPrompt()) refocus.current = to;
@@ -471,6 +485,8 @@ export function App() {
     setOptimistic((o) => without(o, sessionId));
     setList((l) => l.filter((s) => s.id !== sessionId));
     setTabs((t) => t.filter((id) => id !== sessionId));
+    setHeirOf((h) => without(h, sessionId));
+    setTabKeys((k) => without(k, sessionId));
     if (hashId() === sessionId) {
       // Deleted like a closed tab: its neighbour becomes active.
       const next = deleted ? closeTab(tabsRef.current, sessionId, sessionId).active : undefined;
@@ -811,7 +827,10 @@ export function App() {
   useGroupedTabs(tabs, setTabs, groupOfTab);
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   // GH-133: a just-created session shows (with its pending prompt) before its subscribe reply.
-  const view = activeId ? (views[activeId] ?? (optimistic[activeId]?.length ? EMPTY_VIEW : undefined)) : undefined;
+  // A tab that followed a /clear shows the new session at once too: an empty timeline carrying the old one's settings.
+  const heirViews = useMemo(() => Object.fromEntries(Object.entries(heirOf).map(([to, from]) => [to, heirView(views[from])])), [heirOf, views]);
+  const viewOf = (id: string) => views[id] ?? heirViews[id] ?? (optimistic[id]?.length ? EMPTY_VIEW : undefined);
+  const view = activeId ? viewOf(activeId) : undefined;
   const shown = active && view ? active : undefined;
   // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
   useEffect(() => {
@@ -1225,10 +1244,10 @@ export function App() {
                   const s = id === NEW_TAB ? undefined : sessionOf(id);
                   const pend = optimistic[id];
                   // Just created: shown before its subscribe reply, so the card is never blank.
-                  const v = views[id] ?? (pend?.length ? EMPTY_VIEW : undefined);
+                  const v = viewOf(id);
                   if (!s || !v) return null;
                   return (
-                    <Activity key={id} mode={id === activeId ? "visible" : "hidden"}>
+                    <Activity key={tabKeys[id] ?? id} mode={id === activeId ? "visible" : "hidden"}>
                       <SessionTab
                         scrollKey={scrollKeys[id] ?? 0}
                         insert={id === activeId ? insert : undefined}
@@ -1976,6 +1995,7 @@ export function SessionPane({
   const modePicker = <ModePicker mode={view.permissionMode ?? session.permissionMode} modes={modesOf(session.permissionModes, view.model ?? session.model, models)} onMode={onMode} shortcut={false} />;
   // Waiting for a permission answer is part of the running turn.
   const turnRunning = view.state === "running" || view.state === "needs_input";
+  const isClearing = clearing(view, pending);
   // A bash mode command runs: Stop and Esc kill it.
   const shellRunning = bashRunning(view);
   // Stop agent of the shown run: pending until the run ends, or the request's error next to the button.
@@ -2189,7 +2209,8 @@ export function SessionPane({
               usage={view.contextUsage}
               stats={totals(view)}
               todos={showTodoDock(view.state, view.todos, false) ? view.todos : undefined}
-              blocked={view.externalTurn ? "A terminal CLI turn is running in this session" : undefined}
+              blocked={view.externalTurn ? "A terminal CLI turn is running in this session" : isClearing ? "Clearing the conversation…" : undefined}
+              blockedIcon={!view.externalTurn && isClearing ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
               inputRef={prompt}
