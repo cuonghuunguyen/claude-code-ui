@@ -123,6 +123,8 @@ function SidePicker({
   // Started here: ready before the next session list says so.
   const [started, setStarted] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<{ side: string; error?: string }>();
+  const [targetOpen, setTargetOpen] = useState(false);
+  const targetTrigger = useRef<HTMLButtonElement>(null);
   const kinds = kindsOf(sides);
   // A kind or container that left the list falls back: the machine itself, or the container list.
   const info = chosen.kind === "local" ? sides.find((s) => s.id === LOCAL_SIDE) : sides.find((s) => s.id === chosen.target && sideKind(s.id) === chosen.kind);
@@ -187,6 +189,14 @@ function SidePicker({
       </div>
     );
   };
+  // The popup is a portal outside the dialog: Tab there would leave it for the dialog's first control (Close). Close it, back to the trigger.
+  const onPopupKey = (e: KeyboardEvent) => {
+    if (e.key !== "Tab") return;
+    e.preventDefault();
+    e.stopPropagation();
+    setTargetOpen(false);
+    targetTrigger.current?.focus();
+  };
   const members = sides.filter((s) => sideKind(s.id) === kind);
   const stateWord = (s: SideInfo) => (isReady(s) ? undefined : status?.side === s.id ? (status.error ? "Error" : "Setting up…") : s.state === "error" ? "Error" : s.state === "starting" ? "Setting up…" : "Not set up");
   const kindLabel = (k: SideKind) => (k === "local" ? (sides.find((s) => s.id === LOCAL_SIDE)?.label ?? "This machine") : k === "wsl" ? "WSL" : "Docker");
@@ -195,11 +205,11 @@ function SidePicker({
       <div className="flex items-center gap-1 px-3 pb-2 max-md:flex-wrap">
         <KindRow kinds={kinds} kind={kind} label={kindLabel} onChoose={chooseKind} />
         {kind !== "local" && (
-          <Select value={side ?? null} onValueChange={(id) => id && choose(id)}>
-            <SelectTrigger aria-label={kind === "wsl" ? "WSL distro" : "Docker container"} size="sm" className="min-w-0 max-w-full max-md:h-11! max-md:flex-1" data-testid="side-target">
+          <Select value={side ?? null} onValueChange={(id) => id && choose(id)} open={targetOpen} onOpenChange={setTargetOpen}>
+            <SelectTrigger ref={targetTrigger} aria-label={kind === "wsl" ? "WSL distro" : "Docker container"} size="sm" className="min-w-0 max-w-full max-md:h-11! max-md:flex-1" data-testid="side-target">
               <span className={cn("truncate", !current && "text-muted-foreground")}>{current ? sideName(current) : "Choose container"}</span>
             </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] rounded-md p-0.5">
+            <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] rounded-md p-0.5" onKeyDown={onPopupKey}>
               {members.map((s) => (
                 <SelectItem key={s.id} value={s.id} className="h-8 max-md:h-11" data-testid="side-target-item">
                   <span className="min-w-0 flex-1 truncate">{sideName(s)}</span>

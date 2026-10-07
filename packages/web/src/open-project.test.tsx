@@ -356,13 +356,22 @@ describe("side chooser", () => {
     expect(document.activeElement).toBe(close);
   });
 
-  it("Tab inside the open distro dropdown does not jump to the dialog's Close button", async () => {
-    const { kind, click, target, items, press } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu"), S("wsl:Debian", "WSL: Debian")]);
+  it("Tab in the open distro dropdown (a portal outside the dialog) closes it and returns the focus to its trigger, never to Close", async () => {
+    const { kind, click, target, items } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu"), S("wsl:Debian", "WSL: Debian")]);
     await click(kind("WSL"));
-    await click(target()!);
-    const close = document.querySelector<HTMLElement>('[aria-label="Close"]')!;
-    await press(items()[0]!, "Tab");
-    expect(document.activeElement).not.toBe(close);
+    const trigger = document.querySelector<HTMLElement>('[data-testid="side-target"]')!;
+    await click(trigger);
+    const dialog = document.querySelector('[data-testid="open-project-dialog"]')!;
+    const option = items()[0]!;
+    expect(dialog.contains(option)).toBe(false);
+    option.focus();
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    await act(async () => void option.dispatchEvent(tab));
+    expect(tab.defaultPrevented).toBe(true);
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+    expect(target()!.textContent).toBe("Ubuntu");
   });
 
   it("a distro whose setup failed shows Error in the dropdown, not Setting up", async () => {
