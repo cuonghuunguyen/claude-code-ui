@@ -361,14 +361,33 @@ Live subscription: arming in the background.`));
     const reply = open(done("ArtifactComments", { action: "reply", url: URL, thread_id: "t9", text: "Done <b>**ok**</b>" }), result("Replied"));
     expect(reply).toContain("t9");
     expect(reply).toContain("Done &lt;b&gt;**ok**&lt;/b&gt;");
-    const resolve = open(done("ArtifactComments", { action: "resolve", url: URL, thread_id: "t9" }), result("Resolved"));
-    expect(resolve).toContain("Resolved thread t9");
+    const call = done("ArtifactComments", { action: "resolve", url: URL, thread_id: "t9" });
+    const ok = open(call, result("Resolved thread t9."));
+    expect(ok).toContain("Resolved thread t9");
+    const guidance = "This thread is NOT activated for Claude: ask the user to send it to Claude.";
+    const refused = open(call, result(guidance));
+    expect(refused).toContain("NOT activated");
+    expect(refused).not.toContain("Resolved thread t9");
+    const pending = open({ ...call, status: "running" });
+    expect(pending).toContain("Resolving thread t9");
+    expect(pending).not.toContain("Resolved thread");
   });
   it("data: summary in the row, input data and result as JSON", () => {
     const c = done("ArtifactData", { action: "set", url: URL, collection: "votes", doc_id: "d1", data: { n: 1 } });
     expect(renderToStaticMarkup(<ToolCard call={c} />)).toContain("Set votes/d1");
     const html = open(c, result('{"n":1,"version":2}'));
     expect(html).toContain("&quot;n&quot;");
-    expect(html).toContain("Result");
+    expect(html).toContain("version");
+  });
+  it("data results are cut to 20 lines with a show-all button", () => {
+    const html = open(done("ArtifactData", { action: "list", collection: "votes" }), result(Array.from({ length: 50 }, (_, i) => `line${i}`).join("\n")));
+    expect(html).toContain("line19");
+    expect(html).not.toContain("line20");
+    expect(html).toContain("Show all 50 lines");
+  });
+  it("a publish keeps its result text under the link", () => {
+    const html = open(done("Artifact", publish), result(`Published /tmp/p.html at ${URL} (Version 1)\n\nNewer version published elsewhere.`));
+    expect(html).toContain("Newer version published elsewhere.");
+    expect(html).toContain('href="' + URL);
   });
 });

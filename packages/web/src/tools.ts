@@ -84,9 +84,13 @@ export function artifactSummary(tool: string, input: unknown): string {
     const title = str("title");
     if (title) return title.split("\n")[0]!;
     const file = str("file_path");
-    return file.slice(Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\")) + 1);
+    if (file) return file.slice(Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\")) + 1);
+    if (Array.isArray(i.file_paths)) return `Artifact upload (${i.file_paths.length} files)`;
+    if (str("from_url")) return "Artifact copy";
+    if (str("type_url")) return "Artifact from type";
+    return "";
   }
-  const verb = cap(action);
+  const verb = cap(action.replace(/_/g, " "));
   if (tool === "ArtifactData") {
     const target = [str("collection"), str("doc_id")].filter(Boolean).join("/");
     return [verb, target].filter(Boolean).join(" ");

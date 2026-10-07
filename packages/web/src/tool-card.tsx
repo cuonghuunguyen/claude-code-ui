@@ -226,7 +226,7 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
 function ArtifactLink({ url }: { url: string }) {
   if (!isClaudeUrl(url)) return <span className="break-all font-mono text-xs">{url}</span>;
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer" title={url} className="inline-flex min-h-11 items-center break-all text-foreground text-xs underline md:min-h-0">
+    <a href={url} target="_blank" rel="noopener noreferrer" title={`${url} (opens in a new tab)`} className="inline-flex min-h-11 items-center break-all text-foreground text-xs underline md:min-h-0">
       {url}
     </a>
   );
@@ -249,12 +249,14 @@ function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult })
           {artifactSummary(call.tool, call.input)}
         </div>
         {data !== undefined && <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 font-mono text-xs">{JSON.stringify(data, null, 2)}</pre>}
-        {result && <ToolOutput output={failed ? undefined : out} errorText={failed ? out : undefined} />}
+        {output}
       </div>
     );
   }
   if (call.tool === "ArtifactComments") {
     const thread = field(call.input, "thread_id");
+    // A resolve of a thread not activated for Claude returns guidance without an error: only a result that says so confirms it.
+    const resolved = result !== undefined && !failed && /resolved/i.test(out) && !/activat/i.test(out);
     return (
       <div className="space-y-2">
         {url && <ArtifactLink url={url} />}
@@ -264,8 +266,8 @@ function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult })
             <p className="whitespace-pre-wrap break-words rounded-md border p-2 text-sm">{field(call.input, "text")}</p>
           </div>
         )}
-        {action === "resolve" && !failed && <div className="text-xs">Resolved thread {thread}</div>}
-        {(failed || action === "read" || action === "watch" || action === "reply") && output}
+        {action === "resolve" && <div className="text-xs">{!result ? `Resolving thread ${thread}…` : resolved ? `Resolved thread ${thread}` : ""}</div>}
+        {output}
       </div>
     );
   }
@@ -287,7 +289,7 @@ function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult })
             </div>
           )}
         </div>
-        {(failed || (result && !link)) && output}
+        {output}
       </div>
     );
   }
