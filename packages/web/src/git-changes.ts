@@ -20,3 +20,9 @@ export function gitRows(d: GitDiff, cwd: string): GitRow[] {
     ...(f.untracked && { untracked: true }),
   }));
 }
+
+/**
+ * The after side as git sees it: the repository stores LF (core.autocrlf, .gitattributes), the disk has CRLF, so every line would differ.
+ * A before side without any CR (or none at all) means the repository's text is LF: the disk's CRLF becomes LF.
+ */
+export const gitEol = (before: string, after: string): string => (before.includes("\r") ? after : after.replace(/\r\n/g, "\n"));

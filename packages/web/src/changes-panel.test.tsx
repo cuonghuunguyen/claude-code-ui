@@ -10,9 +10,9 @@ import { saveDiffMode, sessionDiffChoice } from "./diff-mode.ts";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
 // The diff library renders in a worker; the stub keeps the last options so a test can see them and finish the render.
-const diff = vi.hoisted(() => ({ options: undefined as undefined | { disableFileHeader?: boolean; onPostRender?: (...a: unknown[]) => void } }));
+const diff = vi.hoisted(() => ({ options: undefined as undefined | { disableFileHeader?: boolean; onPostRender?: (...a: unknown[]) => void }, onFiles: undefined as undefined | ((p: never) => void) }));
 vi.mock("@pierre/diffs/react", () => ({
-  MultiFileDiff: (p: { options: typeof diff.options }) => ((diff.options = p.options), <div data-testid="pierre-diff" />),
+  MultiFileDiff: (p: { options: typeof diff.options }) => ((diff.options = p.options), diff.onFiles?.(p as never), <div data-testid="pierre-diff" />),
 }));
 
 // Counts whole-file diffs, so a test can see that streaming does not re-parse them.
@@ -710,4 +710,35 @@ it("below md: the mode select and Reload share the first 44px row, the count and
   expect(first.textContent).not.toContain("Changed file");
   expect(el.querySelector("[data-testid=diff-scope-project]")!.className).toContain("max-md:h-11");
   expect(el.textContent).toContain("1 Changed file");
+});
+
+it("git modes: a CRLF file on disk against the repository's LF blob is not shown as changed line for line", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "one\ntwo\n" } };
+  const client = fakeClient({ "/p/a.ts": "one\r\ntwo\r\nthree\r\n" }, git);
+  let files: { oldFile: { contents: string }; newFile: { contents: string } } | undefined;
+  diff.onFiles = (p) => (files = p as typeof files);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(files!.oldFile.contents).toBe("one\ntwo\n");
+  expect(files!.newFile.contents).toBe("one\ntwo\nthree\n");
+});
+
+it("below md: Against branch gives the branch picker its own full-width 44px row", async () => {
+  narrow = true;
+  saveDiffMode("branch");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }], { ref: "refs/heads/main", branches: ["refs/heads/main"] }), at: { [`${BASE}:a.ts`]: "a\n" } };
+  await act(async () => root.render(panel(fakeClient({ "/p/a.ts": "a\nb\n" }, git))));
+  await flush();
+  const b = el.querySelector("[data-testid=diff-branch]")!;
+  expect(b.className).toContain("w-full");
+  expect(b.className).toContain("h-11");
+  expect(b.parentElement!.getAttribute("data-testid")).toBe("branch-row");
+  expect(b.textContent).toContain("main");
+});
+
+it("wide: the mode select keeps its width (no clipped label) and the header wraps", async () => {
+  await act(async () => root.render(panel(fakeClient({}, { status: REPO }))));
+  expect(mode().className).toContain("shrink-0");
+  expect(mode().parentElement!.className).toContain("flex-wrap");
 });

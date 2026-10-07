@@ -25,3 +25,10 @@ it("gitRows makes absolute paths under the repository root, kinds from status, s
   ]);
   expect(gitRows({ prefix: "", files: [{ status: "M", path: "x/y.ts" }] }, "C:\\p")[0]!.path).toBe("C:\\p\\x\\y.ts");
 });
+
+it("gitEol turns the disk's CRLF into the repository's LF so unchanged lines do not differ; a CRLF repository keeps its CRLF", async () => {
+  const { gitEol } = await import("./git-changes.ts");
+  expect(gitEol("a\nb\n", "a\r\nb\r\nc\r\n")).toBe("a\nb\nc\n");
+  expect(gitEol("", "x\r\n")).toBe("x\n");
+  expect(gitEol("a\r\nb\r\n", "a\r\nb\r\nc\r\n")).toBe("a\r\nb\r\nc\r\n");
+});

@@ -15,7 +15,7 @@ import { DIFF_OPTIONS, InputDiff } from "./tool-card.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { inDir, isWinPath, joinPath, relPath } from "./paths.ts";
 import { DIFF_MODES, loadDiffScope, repoRoot, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
-import { gitRows } from "./git-changes.ts";
+import { gitEol, gitRows } from "./git-changes.ts";
 import { readFailure, textFailure } from "./files.ts";
 import { filePath } from "./tools.ts";
 
@@ -263,7 +263,10 @@ export function ChangesPanel({
         r.kind === "A" || !d.base ? "" : fileAt(d.base, r.oldPath ?? r.rel),
         r.kind === "D" ? "" : client.request<FsReadResult>({ type: "fs.read", path: r.path }).then((x) => x.content),
       ]).then(
-        ([before, after]) => setSides((x) => ({ ...x, [r.path]: { base: d.base, before, after, stats: r.stats ? undefined : fileStats(before, after, r.path) } })),
+        ([before, rawAfter]) => {
+          const after = gitEol(before, rawAfter);
+          setSides((x) => ({ ...x, [r.path]: { base: d.base, before, after, stats: r.stats ? undefined : fileStats(before, after, r.path) } }));
+        },
         (e: RequestError) => {
           const f = readFailure(e);
           setSides((x) => ({ ...x, [r.path]: { base: d.base, error: f.text, notice: f.notice } }));
@@ -369,7 +372,7 @@ export function ChangesPanel({
 
   const modeSelect = (
     <Select value={mode} onValueChange={(v) => v && pick(v as DiffMode)}>
-      <SelectTrigger aria-label="Diff mode" data-testid="diff-mode" className={cn("min-w-0", narrow ? "flex-1 data-[size=default]:h-11" : "w-40 data-[size=default]:h-7")}>
+      <SelectTrigger aria-label="Diff mode" data-testid="diff-mode" className={cn("min-w-0", narrow ? "flex-1 data-[size=default]:h-11" : "w-40 shrink-0 data-[size=default]:h-7")}>
         <SelectValue>{(v: DiffMode) => DIFF_MODES.find((m) => m.value === v)?.label ?? v}</SelectValue>
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false} className="min-w-44">
@@ -391,7 +394,7 @@ export function ChangesPanel({
         aria-label="Compare against"
         title={gitDiff?.base ? `Merge base ${gitDiff.base.slice(0, 8)}` : undefined}
         data-testid="diff-branch"
-        className={cn("min-w-0", narrow ? "max-w-[55%] data-[size=default]:h-11" : "w-44 data-[size=default]:h-7")}
+        className={cn("min-w-0", narrow ? "w-full data-[size=default]:h-11" : "w-44 shrink-0 data-[size=default]:h-7")}
       >
         <SelectValue>{(v: string | null) => (v ? short(v) : "Pick a branch")}</SelectValue>
       </SelectTrigger>
@@ -457,19 +460,17 @@ export function ChangesPanel({
               </Button>
             </div>
           </div>
-          {(rows.length > 0 || scopeGroup || branchSelect) && (
+          {branchSelect && <div className="flex min-h-11 items-center border-t px-3" data-testid="branch-row">{branchSelect}</div>}
+          {(rows.length > 0 || scopeGroup) && (
             <div className="flex min-h-11 items-center gap-2 border-t px-3">
               {counts}
               {hiddenNote}
-              <div className="ml-auto flex items-center">
-                {scopeGroup}
-                {branchSelect}
-              </div>
+              <div className="ml-auto flex items-center">{scopeGroup}</div>
             </div>
           )}
         </div>
       ) : (
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+        <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-1">
           {modeSelect}
           {branchSelect}
           {counts}
