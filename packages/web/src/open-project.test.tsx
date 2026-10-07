@@ -335,6 +335,13 @@ describe("side chooser", () => {
     expect(kinds().map((k) => k.tabIndex)).toEqual([0, -1]);
   });
 
+  it("Tab treats the kind row as one stop: it skips the unchecked kinds (roving tabindex)", async () => {
+    const { kinds, press, input } = await renderSides(sides());
+    kinds()[0]!.focus();
+    await press(kinds()[0]!, "Tab");
+    expect(document.activeElement).toBe(input());
+  });
+
   describe("Docker", () => {
     const many = [S("local", "Linux"), ...docker("cui-alpine", "cui-nologin", "cui-node", "chat-solution-autoheal-1", "db1", "db2")];
     const names = ["cui-alpine", "cui-nologin", "cui-node", "chat-solution-autoheal-1", "db1", "db2"];
