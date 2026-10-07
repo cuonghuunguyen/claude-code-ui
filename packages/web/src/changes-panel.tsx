@@ -1,10 +1,11 @@
-// Changes tab (docs/spec.md "Layout"): files changed in the session, each with its diff, like OpenCode's review panel.
+// Changes tab (docs/spec.md "Layout"): files changed in the session, or in the working tree against HEAD or a branch, each with its diff, like OpenCode's review panel.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
-import type { FsReadResult } from "@claude-ui/protocol";
+import type { FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitStatusResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { connect, RequestError } from "./client.ts";
 import { baseline, callStats, fileStats, sessionChanges, type FileChange, type Stats } from "./changes.ts";
@@ -12,7 +13,9 @@ import type { SessionView } from "./store.ts";
 import { useDark } from "./theme.ts";
 import { DIFF_OPTIONS, InputDiff } from "./tool-card.tsx";
 import { FileIcon } from "./file-icon.tsx";
-import { inDir, isWinPath, relPath } from "./paths.ts";
+import { inDir, isWinPath, joinPath, relPath } from "./paths.ts";
+import { DIFF_MODES, loadDiffScope, repoRoot, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
+import { gitRows } from "./git-changes.ts";
 import { readFailure, textFailure } from "./files.ts";
 import { filePath } from "./tools.ts";
 
@@ -21,7 +24,8 @@ type DiffStyle = "unified" | "split";
 /** Disk content of a changed file: "" once deleted. */
 type Disk = { content?: string; deleted?: boolean; error?: string; notice?: boolean };
 /** `kind`: OpenCode's file badge, A(dded) / D(eleted) / M(odified). */
-type Row = { change: FileChange; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; kind: Kind };
+/** `change`: the session's calls on the file (session mode only). `oldPath` (relative to the repository top) and `oldShown` (as the list names it): a renamed file's before side (git modes). */
+type Row = { path: string; kind: Kind; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; change?: FileChange; oldPath?: string; oldShown?: string };
 export type Kind = "A" | "D" | "M" | "R";
 const KIND_TITLE = { A: "Added", D: "Deleted", M: "Modified", R: "Renamed" } as const;
 const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info", R: "text-warning" } as const;
@@ -49,10 +53,10 @@ type Folder = { name: string; path: string; folders: Folder[]; files: Row[] };
 function fileTree(rows: Row[], cwd: string): Folder {
   const root: Folder = { name: "", path: "", folders: [], files: [] };
   for (const r of rows) {
-    const { dir } = filePath(r.change.path, cwd);
+    const { dir } = filePath(r.path, cwd);
     // A file outside cwd keeps its absolute directory as one top-level folder.
     let at = root;
-    const win = isWinPath(r.change.path);
+    const win = isWinPath(r.path);
     for (const name of !dir ? [] : dir.startsWith("/") || (win && isWinPath(dir)) ? [dir] : dir.split(win ? /[\\/]/ : "/")) {
       let next = at.folders.find((f) => f.name === name);
       if (!next) at.folders.push((next = { name, path: at.path ? `${at.path}/${name}` : name, folders: [], files: [] }));
@@ -62,7 +66,7 @@ function fileTree(rows: Row[], cwd: string): Folder {
   }
   const sort = (f: Folder) => {
     f.folders.sort((a, b) => a.name.localeCompare(b.name)).forEach(sort);
-    f.files.sort((a, b) => a.change.path.localeCompare(b.change.path));
+    f.files.sort((a, b) => a.path.localeCompare(b.path));
   };
   sort(root);
   return root;
@@ -88,7 +92,7 @@ function cachedRows(change: FileChange, d: Disk | undefined): Row[] {
 function fileRows(change: FileChange, d: Disk | undefined): Row[] {
   if (d?.content === undefined) {
     // Only show call stats while reading (no error); if read failed, show error only.
-    return [{ change, error: d?.error, notice: d?.notice, stats: d?.error ? undefined : callStats(change), kind: "M" }];
+    return [{ change, path: change.path, error: d?.error, notice: d?.notice, stats: d?.error ? undefined : callStats(change), kind: "M" }];
   }
   const before = baseline(d.content, change);
   const old = before === undefined ? undefined : textFailure(before);
@@ -98,10 +102,10 @@ function fileRows(change: FileChange, d: Disk | undefined): Row[] {
   if (d.deleted && created) return [];
   const kind = d.deleted ? "D" : created ? "A" : "M";
   // If before side failed, show error with correct kind, no stats.
-  if (old) return [{ change, error: old.text, notice: old.notice, kind }];
+  if (old) return [{ change, path: change.path, error: old.text, notice: old.notice, kind }];
   // A deleted file with an unknown before has no net stats; the per-call sums would not count the deletion.
-  if (before === undefined) return [{ change, after: d.content, stats: d.deleted ? undefined : callStats(change), kind }];
-  return [{ change, before, after: d.content, stats: fileStats(before, d.content, change.path), kind }];
+  if (before === undefined) return [{ change, path: change.path, after: d.content, stats: d.deleted ? undefined : callStats(change), kind }];
+  return [{ change, path: change.path, before, after: d.content, stats: fileStats(before, d.content, change.path), kind }];
 }
 const treeOrder = (f: Folder): Row[] => [...f.folders.flatMap(treeOrder), ...f.files];
 
@@ -117,6 +121,7 @@ export function ChangesPanel({
   onOpen,
   hidden,
   onCount,
+  sessionId,
 }: {
   client: Client;
   view: SessionView;
@@ -124,6 +129,8 @@ export function ChangesPanel({
   onOpen: (path: string) => void;
   hidden?: boolean;
   onCount?: (n: number) => void;
+  /** Keys the panel's own diff mode choice (kept in memory while the page lives). */
+  sessionId?: string;
 }) {
   const fresh = useMemo(() => sessionChanges(view), [view.parts, view.aux]);
   // Same calls and results per path: the previous list, so streamed text does not re-parse every diff.
@@ -153,22 +160,121 @@ export function ChangesPanel({
   }, [key, reload]);
   useEffect(() => client.onFsChanged((m) => changes.some((c) => c.path === m.path) && setReload((n) => n + 1)), [client, key]);
 
-  const rows = useMemo(() => changes.flatMap((change) => cachedRows(change, disk[change.path])), [changes, disk]);
+  const sessionRows = useMemo(() => changes.flatMap((change) => cachedRows(change, disk[change.path])), [changes, disk]);
+
+  // The mode: the Settings default until this session's panel picked one.
+  const def = useDefaultDiffMode();
+  const [choice, setChoice] = useState(() => (sessionId ? sessionDiffChoice.get(sessionId) : undefined));
+  const mode: DiffMode = choice?.mode ?? def;
+  const pick = (m: DiffMode, ref?: string) => {
+    const c = { mode: m, ...((ref ?? choice?.ref) && { ref: ref ?? choice?.ref }) };
+    setChoice(c);
+    if (sessionId) sessionDiffChoice.set(sessionId, c);
+  };
+  // undefined while unknown: the git modes stay selectable until the daemon says otherwise.
+  const [git, setGit] = useState<boolean>();
+  useEffect(() => {
+    let live = true;
+    client.request<GitStatusResult>({ type: "git.status", cwd }).then(
+      (r) => live && setGit(r.status !== null),
+      () => {},
+    );
+    return () => void (live = false);
+  }, [client, cwd]);
+  const effective: DiffMode = git === false ? "session" : mode;
+  const gitMode = effective !== "session";
+  const refChoice = choice?.ref;
+  const [gd, setGd] = useState<{ mode?: DiffMode; diff?: GitDiff; error?: string }>({});
+  const [branches, setBranches] = useState<string[]>([]);
+  // Bumped by every git.diff reply: the before/after sides of the files on screen are read again.
+  const [gen, setGen] = useState(0);
+  useEffect(() => {
+    if (!gitMode) return;
+    let live = true;
+    client.request<GitDiffResult>({ type: "git.diff", cwd, base: effective === "uncommitted" ? "head" : "branch", ...(refChoice && { ref: refChoice }) }).then(
+      (r) => {
+        if (!live) return;
+        if (r.diff === null) return setGit(false);
+        setGd({ mode: effective, diff: r.diff });
+        if (r.diff.branches) setBranches(r.diff.branches);
+        setGen((n) => n + 1);
+      },
+      (e: Error) => {
+        if (!live) return;
+        setGd({ mode: effective, error: e.message });
+        // No branch list without a diff ("No default branch: pick one"): the graph's first page has it.
+        if (effective === "branch") client.request<GitLogResult>({ type: "git.log", cwd, limit: 1 }).then((l) => live && l.log?.branches && setBranches(l.log.branches), () => {});
+      },
+    );
+    return () => void (live = false);
+  }, [client, cwd, effective, refChoice, reload, view.state, key, hidden]);
+  const gitDiff = gd.mode === effective ? gd.diff : undefined;
+  const gitError = gitMode && gd.mode === effective ? gd.error : undefined;
+  const gitLoading = gitMode && gd.mode !== effective;
+  const gitList = useMemo(() => (gitDiff ? gitRows(gitDiff, cwd) : []), [gitDiff, cwd]);
+
+  // Sides of the git modes, read for the files on screen only: the before side from the base commit, the after side from the disk.
+  type Side = { base?: string; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats };
+  const [sides, setSides] = useState<Record<string, Side>>({});
+  const asked = useRef(new Set<string>());
+  const [scope, setScope] = useState<DiffScope>(loadDiffScope);
+  const chooseScope = (s: DiffScope) => (setScope(s), saveDiffScope(s));
+  const sessionShown = useMemo(() => (scope === "project" ? sessionRows.filter((r) => inDir(r.path, cwd)) : sessionRows), [sessionRows, scope, cwd]);
+  const gitFull = useMemo<Row[]>(() => {
+    const root = gitDiff ? repoRoot(cwd, gitDiff.prefix) : cwd;
+    return gitList.map((r) => {
+      const s = sides[r.path];
+      const ok = s && s.base === gitDiff?.base;
+      return {
+        path: r.path,
+        kind: r.kind,
+        ...(r.oldPath !== undefined && { oldPath: r.oldPath, oldShown: relPath(joinPath(root, r.oldPath), cwd) }),
+        stats: r.stats ?? (ok ? s.stats : undefined),
+        ...(ok && { before: s.before, after: s.after, error: s.error, notice: s.notice }),
+      };
+    });
+  }, [gitList, sides, gitDiff, cwd]);
+  const rows = gitMode ? gitFull : sessionShown;
+  const outside = gitMode ? 0 : sessionRows.length - sessionShown.length;
   const total = rows.reduce((t, r) => ({ added: t.added + (r.stats?.added ?? 0), removed: t.removed + (r.stats?.removed ?? 0) }), { added: 0, removed: 0 });
   const [filter, setFilter] = useState("");
   // No filter in the narrow accordion (OpenCode has none there).
   const q = narrow ? "" : filter.trim().toLowerCase();
-  const matched = q ? rows.filter((r) => relPath(r.change.path, cwd).toLowerCase().includes(q)) : rows;
+  const matched = q ? rows.filter((r) => relPath(r.path, cwd).toLowerCase().includes(q)) : rows;
   const tree = useMemo(() => fileTree(matched, cwd), [rows, q, cwd]);
   // The order on screen: the tree's on wide screens, by path in the narrow accordion (OpenCode's mobile review).
-  const shown = narrow ? [...matched].sort((a, b) => relPath(a.change.path, cwd).localeCompare(relPath(b.change.path, cwd))) : treeOrder(tree);
+  const shown = narrow ? [...matched].sort((a, b) => relPath(a.path, cwd).localeCompare(relPath(b.path, cwd))) : treeOrder(tree);
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const allExpanded = shown.length > 0 && shown.every((r) => expanded[r.change.path]);
-  const active = shown.find((r) => r.change.path === selected) ?? shown[0];
+  const allExpanded = shown.length > 0 && shown.every((r) => expanded[r.path]);
+  const active = shown.find((r) => r.path === selected) ?? shown[0];
   const index = active ? shown.indexOf(active) : -1;
+  const wanted = narrow ? shown.filter((r) => expanded[r.path]).map((r) => r.path) : active ? [active.path] : [];
+  const wantedKey = wanted.join("\n");
+  useEffect(() => {
+    if (!gitDiff) return;
+    const d = gitDiff;
+    for (const r of gitList) {
+      const id = `${gen}\n${d.base}\n${r.path}`;
+      if (!wantedKey.split("\n").includes(r.path) || asked.current.has(id)) continue;
+      asked.current.add(id);
+      const fileAt = (hash: string, path: string) => client.request<FsReadResult>({ type: "git.fileAt", cwd, hash, path }).then((x) => x.content);
+      Promise.all([
+        r.kind === "A" || !d.base ? "" : fileAt(d.base, r.oldPath ?? r.rel),
+        r.kind === "D" ? "" : client.request<FsReadResult>({ type: "fs.read", path: r.path }).then((x) => x.content),
+      ]).then(
+        ([before, after]) => setSides((x) => ({ ...x, [r.path]: { base: d.base, before, after, stats: r.stats ? undefined : fileStats(before, after, r.path) } })),
+        (e: RequestError) => {
+          const f = readFailure(e);
+          setSides((x) => ({ ...x, [r.path]: { base: d.base, error: f.text, notice: f.notice } }));
+        },
+      );
+    }
+  }, [client, cwd, gitDiff, gitList, wantedKey, gen]);
+  // A listed file changed on disk (Bash, another tool): the list and the sides are read again.
+  useEffect(() => (gitMode ? client.onFsChanged((m) => gitList.some((r) => r.path === m.path) && setReload((n) => n + 1)) : undefined), [client, gitMode, gitList]);
   // Previous/next file like OpenCode's review toolbar: cycles the listed files, also on ←/→ while focus is not in a text field.
-  const cycle = (step: number) => shown.length && setSelected(shown[(index + step + shown.length) % shown.length]!.change.path);
+  const cycle = (step: number) => shown.length && setSelected(shown[(index + step + shown.length) % shown.length]!.path);
   const cycleRef = useRef(cycle);
   cycleRef.current = cycle;
   // Only while the file list is on screen: not behind another pane, a closed side panel or the new-session tab (display: none).
@@ -189,7 +295,7 @@ export function ChangesPanel({
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  const label = (r: Row) => `${KIND_TITLE[r.kind]} ${relPath(r.change.path, cwd)}${r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
+  const label = (r: Row) => `${KIND_TITLE[r.kind]} ${relPath(r.path, cwd)}${r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
   const treeRow =
     "flex min-h-11 w-full cursor-pointer items-center gap-1.5 rounded-md pr-2 text-left text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:min-h-7";
   const pad = (depth: number) => ({ paddingLeft: `${depth * 16 + 8}px` });
@@ -212,18 +318,18 @@ export function ChangesPanel({
         </li>
       ))}
       {f.files.map((r) => (
-        <li key={r.change.path}>
+        <li key={r.path}>
           <button
             className={cn(treeRow, r === active && "bg-secondary text-foreground")}
             style={pad(depth)}
             aria-current={r === active}
-            title={r.change.path}
+            title={r.path}
             aria-label={label(r)}
-            onClick={() => setSelected(r.change.path)}
+            onClick={() => setSelected(r.path)}
             data-testid="changed-file"
           >
-            <FileIcon path={r.change.path} className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{filePath(r.change.path, cwd).name}</span>
+            <FileIcon path={r.path} className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{filePath(r.path, cwd).name}</span>
             {/* OpenCode's v2 tree marks added and deleted files; M shows in the diff header only. */}
             {r.kind !== "M" && <KindBadge kind={r.kind} />}
           </button>
@@ -236,51 +342,152 @@ export function ChangesPanel({
   const [shownOnce, setShownOnce] = useState(!hidden);
   if (!hidden && !shownOnce) setShownOnce(true);
   if (!shownOnce) return null;
-  if (!rows.length)
-    return (
-      <div className="m-auto flex flex-col items-center gap-2 p-4 text-muted-foreground" hidden={hidden} data-testid="changes-empty">
-        <FileDiffIcon className="size-5 text-faint" aria-hidden />
-        No changes in this session yet.
-      </div>
-    );
+
+  const short = (r: string) => r.replace(/^refs\/(heads|remotes)\//, "");
+  const gitRef = refChoice ?? gitDiff?.ref;
+  const empty = gitMode
+    ? effective === "uncommitted"
+      ? "No uncommitted changes."
+      : `No changes against ${gitRef ? short(gitRef) : "the branch"}.`
+    : scope === "project" && sessionRows.length
+      ? "No changes inside this project."
+      : "No changes in this session yet.";
+  const message = gitError ? (
+    <p role="alert" className="p-3 text-destructive" data-testid="changes-error">
+      {gitError}
+    </p>
+  ) : gitLoading ? (
+    <p className="p-3 text-muted-foreground" data-testid="changes-loading">
+      Loading changes…
+    </p>
+  ) : !rows.length ? (
+    <div className="m-auto flex flex-col items-center gap-2 p-4 text-muted-foreground" data-testid="changes-empty">
+      <FileDiffIcon className="size-5 text-faint" aria-hidden />
+      {empty}
+    </div>
+  ) : undefined;
+
+  const modeSelect = (
+    <Select value={mode} onValueChange={(v) => v && pick(v as DiffMode)}>
+      <SelectTrigger aria-label="Diff mode" data-testid="diff-mode" className={cn("min-w-0", narrow ? "flex-1 data-[size=default]:h-11" : "w-40 data-[size=default]:h-7")}>
+        <SelectValue>{(v: DiffMode) => DIFF_MODES.find((m) => m.value === v)?.label ?? v}</SelectValue>
+      </SelectTrigger>
+      <SelectContent alignItemWithTrigger={false} className="min-w-44">
+        {DIFF_MODES.map((m) => (
+          <SelectItem key={m.value} value={m.value} disabled={m.git && git === false} data-testid={`diff-mode-${m.value}`} className="max-md:min-h-11">
+            <span className="flex flex-col">
+              {m.label}
+              {m.git && git === false && <span className="text-muted-foreground text-xs">Needs a git repository</span>}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+  const branchList = gitRef && !branches.includes(gitRef) ? [gitRef, ...branches] : branches;
+  const branchSelect = effective === "branch" && (
+    <Select value={gitRef ?? null} onValueChange={(v) => v && pick("branch", v)} disabled={!branchList.length}>
+      <SelectTrigger
+        aria-label="Compare against"
+        title={gitDiff?.base ? `Merge base ${gitDiff.base.slice(0, 8)}` : undefined}
+        data-testid="diff-branch"
+        className={cn("min-w-0", narrow ? "max-w-[55%] data-[size=default]:h-11" : "w-44 data-[size=default]:h-7")}
+      >
+        <SelectValue>{(v: string | null) => (v ? short(v) : "Pick a branch")}</SelectValue>
+      </SelectTrigger>
+      <SelectContent alignItemWithTrigger={false} className="min-w-44">
+        {branchList.map((b) => (
+          <SelectItem key={b} value={b} data-testid={`diff-branch-${b}`} className="max-md:min-h-11">
+            {short(b)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+  const scopeGroup = !gitMode && (
+    <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Files shown">
+      {(["project", "all"] as const).map((s) => (
+        <Button
+          key={s}
+          size="sm"
+          variant="ghost"
+          aria-pressed={scope === s}
+          className={cn("h-6 px-2 text-xs max-md:h-11 max-md:px-3 max-md:text-sm", scope === s && "bg-card shadow-xs hover:bg-card")}
+          onClick={() => chooseScope(s)}
+          data-testid={`diff-scope-${s}`}
+        >
+          {s === "project" ? "Project" : "All"}
+        </Button>
+      ))}
+    </div>
+  );
+  const counts = rows.length > 0 && (
+    <>
+      <span className="truncate font-medium">
+        {rows.length} Changed {rows.length === 1 ? "file" : "files"}
+      </span>
+      {rows.some((r) => r.stats) && <StatsText stats={total} />}
+    </>
+  );
+  const notGit = git === false && mode !== "session" && (
+    <p role="status" className="border-b px-3 py-1.5 text-muted-foreground" data-testid="changes-not-git">
+      Not a git repository: showing session changes.
+    </p>
+  );
+  const hiddenNote = outside > 0 && (
+    <span className="text-muted-foreground text-xs" data-testid="scope-hidden">
+      {outside} outside the project hidden
+    </span>
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" hidden={hidden} data-testid="changes-panel">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3 max-md:h-14">
-        <span className="font-medium">
-          {rows.length} Changed {rows.length === 1 ? "file" : "files"}
-        </span>
-        {rows.some((r) => r.stats) && <StatsText stats={total} />}
-        <div className="ml-auto flex items-center gap-1 max-md:gap-2" data-testid="changes-actions">
-          {narrow ? (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-11"
-              onClick={() => setExpanded(allExpanded ? {} : Object.fromEntries(shown.map((r) => [r.change.path, true])))}
-              data-testid="expand-all"
-            >
-              {allExpanded ? <ChevronsDownUpIcon /> : <ChevronsUpDownIcon />} {allExpanded ? "Collapse all" : "Expand all"}
+      {narrow ? (
+        <div className="shrink-0 border-b">
+          <div className="flex h-14 items-center gap-2 px-3">
+            {modeSelect}
+            <div className="flex items-center gap-2 max-md:gap-2" data-testid="changes-actions">
+              {rows.length > 0 && (
+                <Button size="sm" variant="outline" className="h-11" onClick={() => setExpanded(allExpanded ? {} : Object.fromEntries(shown.map((r) => [r.path, true])))} data-testid="expand-all">
+                  {allExpanded ? <ChevronsDownUpIcon /> : <ChevronsUpDownIcon />} {allExpanded ? "Collapse all" : "Expand all"}
+                </Button>
+              )}
+              <Button size="icon-sm" variant="ghost" className="size-11" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
+                <RotateCwIcon />
+              </Button>
+            </div>
+          </div>
+          {(rows.length > 0 || scopeGroup || branchSelect) && (
+            <div className="flex min-h-11 items-center gap-2 border-t px-3">
+              {counts}
+              {hiddenNote}
+              <div className="ml-auto flex items-center">
+                {scopeGroup}
+                {branchSelect}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+          {modeSelect}
+          {branchSelect}
+          {counts}
+          <div className="ml-auto flex items-center gap-1" data-testid="changes-actions">
+            {shown.length > 0 && (
+              <span className="font-mono text-muted-foreground text-xs" data-testid="file-position">
+                {index + 1}/{shown.length}
+              </span>
+            )}
+            <Button size="icon-sm" variant="ghost" disabled={!shown.length} onClick={() => cycle(-1)} title="Previous file (←)" aria-label="Previous file">
+              <ArrowLeftIcon />
             </Button>
-          ) : (
-            <>
-          {shown.length > 0 && (
-            <span className="font-mono text-muted-foreground text-xs" data-testid="file-position">
-              {index + 1}/{shown.length}
-            </span>
-          )}
-          <Button size="icon-sm" variant="ghost" className="max-md:size-11" disabled={!shown.length} onClick={() => cycle(-1)} title="Previous file (←)" aria-label="Previous file">
-            <ArrowLeftIcon />
-          </Button>
-          <Button size="icon-sm" variant="ghost" className="max-md:size-11" disabled={!shown.length} onClick={() => cycle(1)} title="Next file (→)" aria-label="Next file">
-            <ArrowRightIcon />
-          </Button>
-            </>
-          )}
-          <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
-            <RotateCwIcon />
-          </Button>
-          {!narrow && (
+            <Button size="icon-sm" variant="ghost" disabled={!shown.length} onClick={() => cycle(1)} title="Next file (→)" aria-label="Next file">
+              <ArrowRightIcon />
+            </Button>
+            <Button size="icon-sm" variant="ghost" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
+              <RotateCwIcon />
+            </Button>
             <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Diff view">
               {(["unified", "split"] as const).map((s) => (
                 <Button
@@ -298,15 +505,22 @@ export function ChangesPanel({
                 </Button>
               ))}
             </div>
-          )}
+          </div>
         </div>
-      </div>
-      {narrow ? (
+      )}
+      {notGit}
+      {message ? (
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+          {message}
+          {/* A scope that hides every file still offers the way back. */}
+          {scopeGroup && !narrow && <div className="mx-auto pb-4">{scopeGroup}</div>}
+        </div>
+      ) : narrow ? (
         // OpenCode's mobile review: an accordion of the files, each diff under its row.
         <div className="min-h-0 flex-1 overflow-auto p-3">
           <ul className="overflow-hidden rounded-lg border" aria-label="Changed files">
             {shown.map((r) => {
-              const path = r.change.path;
+              const path = r.path;
               const { name, dir } = filePath(path, cwd);
               const open = !!expanded[path];
               return (
@@ -328,11 +542,12 @@ export function ChangesPanel({
                     {r.stats && <StatsText stats={r.stats} />}
                     {open ? <ChevronDownIcon className="size-4 shrink-0 text-faint" aria-hidden /> : <ChevronRightIcon className="size-4 shrink-0 text-faint" aria-hidden />}
                   </button>
-                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline />}
+                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline git={gitMode} />}
                 </li>
               );
             })}
           </ul>
+          {gitDiff?.truncated && <p className="p-2 text-muted-foreground text-xs">List cut at 3000 files</p>}
         </div>
       ) : (
         // OpenCode's review file sidebar (240px, 200px in a narrow panel): filter and folder tree beside the diff.
@@ -350,12 +565,19 @@ export function ChangesPanel({
                 data-testid="changes-filter"
               />
             </label>
+            {scopeGroup && (
+              <div className="flex items-center gap-2 px-2 pb-1">
+                {scopeGroup}
+                {hiddenNote}
+              </div>
+            )}
             {!shown.length && <p className="px-3 py-2 text-muted-foreground">No files match.</p>}
             <ul className="flex min-h-0 flex-col gap-0.5 overflow-auto p-1" aria-label="Changed files">
               {branch(tree, 0)}
             </ul>
+            {gitDiff?.truncated && <p className="border-t p-2 text-muted-foreground text-xs">List cut at 3000 files</p>}
           </div>
-          {active && <FileDiff key={active.change.path} row={active} cwd={cwd} style={style} onOpen={onOpen} />}
+          {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} />}
         </div>
       )}
     </div>
@@ -379,9 +601,9 @@ export function KindBadge({ kind }: { kind: Kind }) {
   );
 }
 
-/** `inline`: under its accordion row, which already names the file: only Open in editor above the diff, and no own scroll. */
-function FileDiff({ row, cwd, style, onOpen, inline }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean }) {
-  const { path } = row.change;
+/** `git`: a git mode's file (sides from a commit and the disk, not from the session's calls). `inline`: under its accordion row, which already names the file: only Open in editor above the diff, and no own scroll. */
+function FileDiff({ row, cwd, style, onOpen, inline, git }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean }) {
+  const { path } = row;
   const dark = useDark();
   // Drawn once the highlighter is loaded (seconds on a first load): until then a loading line.
   const [drawn, setDrawn] = useState(false);
@@ -391,8 +613,8 @@ function FileDiff({ row, cwd, style, onOpen, inline }: { row: Row; cwd: string; 
     [style, dark],
   );
   const files = useMemo(
-    () => (row.before === undefined || row.after === undefined ? undefined : { old: { name: path, contents: row.before }, new: { name: path, contents: row.after } }),
-    [path, row.before, row.after],
+    () => (row.before === undefined || row.after === undefined ? undefined : { old: { name: row.oldPath ?? path, contents: row.before }, new: { name: path, contents: row.after } }),
+    [path, row.oldPath, row.before, row.after],
   );
   const same = files !== undefined && row.before === row.after;
   return (
@@ -410,7 +632,7 @@ function FileDiff({ row, cwd, style, onOpen, inline }: { row: Row; cwd: string; 
           <KindBadge kind={row.kind} />
           <FileIcon path={path} className="size-4 shrink-0" />
           <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground text-xs" title={path}>
-            {relPath(path, cwd)}
+            {row.oldShown ? `${row.oldShown} → ${relPath(path, cwd)}` : relPath(path, cwd)}
           </span>
           {row.stats && <StatsText stats={row.stats} />}
           {/* The files pane shows only tabs inside cwd, so a file outside it has no Open in editor (OpenCode lists only project files). */}
@@ -429,7 +651,7 @@ function FileDiff({ row, cwd, style, onOpen, inline }: { row: Row; cwd: string; 
           </p>
         )}
         {same ? (
-          <p className="p-2 text-muted-foreground">No changes against the file before this session.</p>
+          <p className="p-2 text-muted-foreground">{git ? (row.kind === "R" ? "Renamed without changes" : "No content changes") : "No changes against the file before this session."}</p>
         ) : files ? (
           <MultiFileDiff oldFile={files.old} newFile={files.new} options={options} />
         ) : (
@@ -437,7 +659,7 @@ function FileDiff({ row, cwd, style, onOpen, inline }: { row: Row; cwd: string; 
           row.after !== undefined && (
             <div className="flex flex-col gap-2">
               <p className="text-muted-foreground">The file before this session is unknown: each edit is shown.</p>
-              {row.change.calls.map((c) => (
+              {(row.change?.calls ?? []).map((c) => (
                 <InputDiff key={c.id} tool={c.tool} input={c.input} diffStyle={style} fileHeader={false} />
               ))}
             </div>

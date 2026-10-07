@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import type { Part } from "@claude-ui/protocol";
+import type { GitDiff, GitStatus, Part } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { PaneTabs } from "./App.tsx";
 import { ChangesPanel } from "./changes-panel.tsx";
 import type { connect } from "./client.ts";
+import { saveDiffMode, sessionDiffChoice } from "./diff-mode.ts";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
 // The diff library renders in a worker; the stub keeps the last options so a test can see them and finish the render.
@@ -58,10 +59,24 @@ afterEach(() => {
   act(() => root.render(null));
   narrow = false;
   localStorage.clear();
+  sessionDiffChoice.clear();
 });
 
-function fakeClient(files: Record<string, string>) {
-  const request = vi.fn(async (m: { type: string; path: string }) => {
+/** `git`: git.status (default: not a repository), git.diff (a reply or an error), git.fileAt by "hash:path". */
+type FakeGit = { status?: GitStatus | null; diff?: GitDiff | Error; at?: Record<string, string> };
+function fakeClient(files: Record<string, string>, git: FakeGit = {}) {
+  const request = vi.fn(async (m: { type: string; path: string; hash?: string }) => {
+    if (m.type === "git.status") return { status: git.status ?? null };
+    if (m.type === "git.log") return { log: { commits: [], more: false, branches: ["refs/heads/main", "refs/heads/dev"] } };
+    if (m.type === "git.diff") {
+      if (git.diff instanceof Error) throw git.diff;
+      return { diff: git.diff ?? null };
+    }
+    if (m.type === "git.fileAt") {
+      const k = `${m.hash}:${m.path}`;
+      if (git.at && k in git.at) return { content: git.at[k] };
+      throw Object.assign(new Error(`No such file at that commit: ${m.path}`), { code: "not_found" });
+    }
     if (m.path in files) return { content: files[m.path], mtime: 1 };
     // What the daemon replies for a missing file inside a root (server.test.ts "fs.read of a deleted file…").
     throw Object.assign(new Error(`no such file: ${m.path}`), { code: "not_found" });
@@ -69,7 +84,7 @@ function fakeClient(files: Record<string, string>) {
   const listeners = new Set<(m: { path: string }) => void>();
   const onFsChanged = (l: (m: { path: string }) => void) => (listeners.add(l), () => void listeners.delete(l));
   const changed = (path: string) => listeners.forEach((l) => l({ path }));
-  return Object.assign({ request, onFsChanged } as unknown as ReturnType<typeof connect>, { changed });
+  return Object.assign({ request, onFsChanged } as unknown as ReturnType<typeof connect>, { changed, calls: request });
 }
 
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
@@ -207,7 +222,7 @@ it("leaves ← / → alone while the file list is not on screen (side panel clos
 it("the header total is left out when no file has stats (one deleted file with an unknown before)", async () => {
   await act(async () => root.render(<ChangesPanel client={fakeClient({})} view={view([edit("e1", "/p/gone.ts", "x", "y")])} cwd="/p" onOpen={() => {}} />));
   await flush();
-  expect(el.querySelector("[data-testid=changes-panel] > div")!.textContent).toMatch(/^1 Changed file1\/1/);
+  expect(el.querySelector("[data-testid=changes-panel] > div")!.textContent).toMatch(/1 Changed file1\/1/);
   expect(el.querySelectorAll("[data-testid=change-stats]")).toHaveLength(0);
 });
 
@@ -508,4 +523,191 @@ it("no line stats when both before and after sides failed", async () => {
   expect(labels).toContain("Modified binary.exe");
   expect(labels.every((l) => !l!.includes("+") && !l!.includes("-"))).toBe(true);
   expect(el.querySelectorAll("[data-testid=change-stats]")).toHaveLength(0);
+});
+
+// ---- Diff modes (GH-148) ----
+const BASE = "b".repeat(40);
+const D = (files: GitDiff["files"], extra: Partial<GitDiff> = {}): GitDiff => ({ prefix: "", base: BASE, files, ...extra });
+const REPO: GitStatus = { branch: "main", added: 0, removed: 0 };
+const gitCalls = (c: { calls: ReturnType<typeof vi.fn> }, type: string) => c.calls.mock.calls.map((a) => a[0] as Record<string, unknown>).filter((m) => m.type === type);
+const mode = () => el.querySelector("[data-testid=diff-mode]")!;
+const openSelect = async (id: string) => act(async () => (el.querySelector<HTMLElement>(`[data-testid=${id}]`)!.click(), undefined));
+const optionById = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+const panel = (client: ReturnType<typeof fakeClient>, p: Partial<React.ComponentProps<typeof ChangesPanel>> = {}) => <ChangesPanel client={client} view={view([])} cwd="/p" onOpen={() => {}} {...p} />;
+
+it("defaults to Session changes; the mode select lists Uncommitted and Against branch", async () => {
+  await act(async () => root.render(panel(fakeClient({}, { status: REPO }))));
+  await flush();
+  expect(mode().textContent).toContain("Session changes");
+  await openSelect("diff-mode");
+  expect([...document.querySelectorAll("[role=option]")].map((o) => o.textContent)).toEqual(["Session changes", "Uncommitted", "Against branch"]);
+  expect(optionById("diff-mode-uncommitted").hasAttribute("data-disabled")).toBe(false);
+});
+
+it("outside a git repository the git modes are disabled with the reason", async () => {
+  await act(async () => root.render(panel(fakeClient({}))));
+  await flush();
+  await openSelect("diff-mode");
+  for (const m of ["uncommitted", "branch"]) {
+    expect(optionById(`diff-mode-${m}`).hasAttribute("data-disabled")).toBe(true);
+    expect(optionById(`diff-mode-${m}`).textContent).toContain("Needs a git repository");
+  }
+  expect(optionById("diff-mode-session").textContent).toBe("Session changes");
+});
+
+it("a git default in a non-git cwd shows session changes and says why", async () => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({ "/p/a.ts": "a = 2\n" });
+  await act(async () => root.render(panel(client, { view: view([edit("e1", "/p/a.ts", "a = 1", "a = 2")]) })));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-not-git]")!.textContent).toBe("Not a git repository: showing session changes.");
+  expect(rows()).toEqual(["Modified a.ts, +1 -1"]);
+});
+
+it("Uncommitted lists git.diff files with kinds and +N -N; the diff is HEAD (git.fileAt) against the disk (fs.read)", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "src/a.ts", added: 1, removed: 1 }, { status: "A", path: "new.ts", added: 2, removed: 0 }, { status: "D", path: "old.ts", added: 0, removed: 3 }]), at: { [`${BASE}:src/a.ts`]: "a = 1\n", [`${BASE}:old.ts`]: "o\n" } };
+  const client = fakeClient({ "/p/src/a.ts": "a = 2\n", "/p/new.ts": "x\ny\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(mode().textContent).toContain("Uncommitted");
+  expect(rows()).toEqual(["Modified src/a.ts, +1 -1", "Added new.ts, +2 -0", "Deleted old.ts, +0 -3"]);
+  expect(gitCalls(client, "git.diff")).toEqual([{ type: "git.diff", cwd: "/p", base: "head" }]);
+  expect(gitCalls(client, "git.fileAt")).toEqual([{ type: "git.fileAt", cwd: "/p", hash: BASE, path: "src/a.ts" }]);
+  expect(client.calls.mock.calls.map((a) => (a[0] as { path?: string }).path)).toContain("/p/src/a.ts");
+  expect(diff.options).toBeDefined();
+  expect(el.querySelector("[data-testid=pierre-diff]")).not.toBeNull();
+});
+
+it("an added file reads no before side, a deleted one no after side, a rename reads the old path and shows old to new", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "A", path: "a.ts" }, { status: "D", path: "b.ts" }, { status: "R", path: "n.ts", oldPath: "o.ts", added: 0, removed: 0 }]), at: { [`${BASE}:b.ts`]: "b\n", [`${BASE}:o.ts`]: "same\n" } };
+  const client = fakeClient({ "/p/a.ts": "a\n", "/p/n.ts": "same\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const click = async (i: number) => act(async () => (el.querySelectorAll<HTMLButtonElement>("[data-testid=changed-file]")[i]!.click(), undefined));
+  await click(1);
+  await flush();
+  await click(2);
+  await flush();
+  const at = gitCalls(client, "git.fileAt").map((m) => m.path);
+  expect(at).toEqual(["b.ts", "o.ts"]);
+  const reads = client.calls.mock.calls.map((a) => a[0] as { type: string; path?: string }).filter((m) => m.type === "fs.read").map((m) => m.path);
+  expect(reads).not.toContain("/p/b.ts");
+  expect(reads).toContain("/p/a.ts");
+  expect(el.querySelector("[data-testid=file-diff-header]")!.textContent).toContain("o.ts → n.ts");
+  expect(el.textContent).toContain("Renamed without changes");
+});
+
+it("Against branch asks git.diff with base branch, shows the ref, and a picked branch re-requests with it", async () => {
+  saveDiffMode("branch");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }], { ref: "refs/heads/main", branches: ["refs/heads/main", "refs/heads/dev", "refs/remotes/origin/main"] }), at: { [`${BASE}:a.ts`]: "a\n" } };
+  const client = fakeClient({ "/p/a.ts": "a\nb\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(gitCalls(client, "git.diff")[0]).toEqual({ type: "git.diff", cwd: "/p", base: "branch" });
+  expect(el.querySelector("[data-testid=diff-branch]")!.textContent).toContain("main");
+  await openSelect("diff-branch");
+  expect([...document.querySelectorAll("[role=option]")].map((o) => o.textContent)).toEqual(["main", "dev", "origin/main"]);
+  await act(async () => (optionById("diff-branch-refs/heads/dev").click(), undefined));
+  await flush();
+  expect(gitCalls(client, "git.diff").at(-1)).toEqual({ type: "git.diff", cwd: "/p", base: "branch", ref: "refs/heads/dev" });
+});
+
+it("a git.diff error is shown (role=alert) with the header kept, and Reload retries", async () => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({}, { status: REPO, diff: Object.assign(new Error("fatal: bad object"), { code: "git_failed" }) });
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(el.querySelector("[role=alert]")!.textContent).toBe("fatal: bad object");
+  expect(mode()).not.toBeNull();
+  await act(async () => (el.querySelector<HTMLButtonElement>("button[aria-label='Reload from disk']")!.click(), undefined));
+  await flush();
+  expect(gitCalls(client, "git.diff")).toHaveLength(2);
+});
+
+it("git empty states keep the header", async () => {
+  saveDiffMode("uncommitted");
+  await act(async () => root.render(panel(fakeClient({}, { status: REPO, diff: D([]) }))));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-empty]")!.textContent).toBe("No uncommitted changes.");
+  expect(mode().textContent).toContain("Uncommitted");
+  await act(async () => root.render(null));
+  saveDiffMode("branch");
+  await act(async () => root.render(panel(fakeClient({}, { status: REPO, diff: D([], { ref: "refs/heads/main", branches: ["refs/heads/main"] }) }))));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-empty]")!.textContent).toBe("No changes against main.");
+});
+
+it("the per-session choice survives a remount for the same session only, and the Settings default moves the others live", async () => {
+  const client = fakeClient({}, { status: REPO, diff: D([]) });
+  const p = (id: string) => <ChangesPanel key={id} client={client} view={view([])} cwd="/p" onOpen={() => {}} sessionId={id} />;
+  await act(async () => root.render(p("s1")));
+  await flush();
+  await openSelect("diff-mode");
+  await act(async () => (optionById("diff-mode-uncommitted").click(), undefined));
+  await flush();
+  expect(mode().textContent).toContain("Uncommitted");
+  await act(async () => root.render(null));
+  await act(async () => root.render(p("s1")));
+  await flush();
+  expect(mode().textContent).toContain("Uncommitted");
+  await act(async () => root.render(p("s2")));
+  await flush();
+  expect(mode().textContent).toContain("Session changes");
+  await act(async () => saveDiffMode("branch"));
+  await flush();
+  expect(mode().textContent).toContain("Against branch");
+  await act(async () => root.render(p("s1")));
+  await flush();
+  expect(mode().textContent).toContain("Uncommitted");
+});
+
+it("session scope: Project hides files outside cwd, All shows them; the choice is kept per browser", async () => {
+  const client = fakeClient({ "/p/a.ts": "a = 2\n", "/elsewhere/b.ts": "b = 2\n" });
+  const v = view([edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/elsewhere/b.ts", "b = 1", "b = 2")]);
+  await act(async () => root.render(panel(client, { view: v })));
+  await flush();
+  expect(rows()).toHaveLength(2);
+  await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=diff-scope-project]")!.click(), undefined));
+  expect(rows()).toEqual(["Modified a.ts, +1 -1"]);
+  expect(el.querySelector("[data-testid=scope-hidden]")!.textContent).toBe("1 outside the project hidden");
+  await act(async () => root.render(null));
+  await act(async () => root.render(panel(client, { view: v })));
+  await flush();
+  expect(el.querySelector("[data-testid=diff-scope-project]")!.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=diff-scope-all]")!.click(), undefined));
+  expect(rows()).toHaveLength(2);
+});
+
+it("re-requests git.diff when the session state changes and on fs.changed of a loaded file; reports the count", async () => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({ "/p/a.ts": "a\n" }, { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "" } });
+  const onCount = vi.fn();
+  await act(async () => root.render(panel(client, { onCount })));
+  await flush();
+  expect(gitCalls(client, "git.diff")).toHaveLength(1);
+  expect(onCount).toHaveBeenLastCalledWith(1);
+  await act(async () => root.render(panel(client, { onCount, view: { ...view([]), state: "running" } })));
+  await flush();
+  expect(gitCalls(client, "git.diff")).toHaveLength(2);
+  client.changed("/p/other.ts");
+  await flush();
+  expect(gitCalls(client, "git.diff")).toHaveLength(2);
+  client.changed("/p/a.ts");
+  await flush();
+  expect(gitCalls(client, "git.diff")).toHaveLength(3);
+});
+
+it("below md: the mode select and Reload share the first 44px row, the count and scope sit in a second row", async () => {
+  narrow = true;
+  const client = fakeClient({ "/p/a.ts": "a = 2\n" });
+  await act(async () => root.render(panel(client, { view: view([edit("e1", "/p/a.ts", "a = 1", "a = 2")]) })));
+  await flush();
+  expect(mode().className).toContain("h-11");
+  const first = mode().parentElement!;
+  expect(first.querySelector("button[aria-label='Reload from disk']")!.className).toContain("size-11");
+  expect(first.textContent).not.toContain("Changed file");
+  expect(el.querySelector("[data-testid=diff-scope-project]")!.className).toContain("max-md:h-11");
+  expect(el.textContent).toContain("1 Changed file");
 });

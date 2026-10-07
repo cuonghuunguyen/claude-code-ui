@@ -1329,6 +1329,7 @@ export function App() {
                       view={views[panelSession.id]!}
                       cwd={panelSession.cwd}
                       onOpen={(path) => (setOpenFile(path), setPane("files"))}
+                      sessionId={panelSession.id}
                     />
                   )}
                   {sidePane === "graph" && (
