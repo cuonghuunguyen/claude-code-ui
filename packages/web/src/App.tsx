@@ -60,7 +60,9 @@ import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
 import { byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
-import { appendQuote, splitQuotes } from "./quote.ts";
+import { appendQuote } from "./quote.ts";
+import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
+import { UserMarkdown } from "./user-markdown.tsx";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
 import { StatusBar, totals, type Totals } from "./status-bar.tsx";
@@ -1348,6 +1350,7 @@ export function App() {
                       view={views[panelSession.id]!}
                       cwd={panelSession.cwd}
                       onOpen={(path) => (setOpenFile(path), setPane("files"))}
+                      sessionId={panelSession.id}
                     />
                   )}
                   {sidePane === "graph" && (
@@ -2485,6 +2488,8 @@ function PromptBox({
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter commits the composition, Esc cancels it, arrows pick IME candidates: never send, pick, dismiss or switch modes then.
     if (composing.current || isImeKey(e.nativeEvent)) return;
+    // Ctrl/Cmd+B, I, E format the selection; defaultPrevented keeps Ctrl+B from toggling the sidebar here. Not in bash mode.
+    if (!bash && formatShortcut(e)) return;
     // OpenCode shell mode: `!` typed at the start of an empty caret switches modes and is not inserted.
     if (onBash && !bash && e.key === "!" && !e.ctrlKey && !e.metaKey && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0) {
       e.preventDefault();
@@ -2598,6 +2603,7 @@ function PromptBox({
       className={`relative flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50 ${lift ? "-mt-11" : ""}`}
       data-testid="prompt-box"
     >
+      {!bash && <MarkdownToolbar input={input} disabled={disabled} />}
       {bash && (
         <span data-testid="bash-mode" aria-hidden className="pointer-events-none absolute top-4 left-4 font-mono text-sm text-muted-foreground pointer-coarse:text-base">
           !
@@ -2814,9 +2820,9 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
         <>
           {(text || part.images.length > 0) && (
             <Message from="user">
-              <MessageContent className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+              <MessageContent className="[overflow-wrap:anywhere]">
                 <ImageStrip images={part.images} />
-                <UserText text={text} />
+                <UserMarkdown text={text} />
               </MessageContent>
             </Message>
           )}
@@ -2927,21 +2933,6 @@ function CompactionDivider({ id, summary }: { id: string; summary?: string }) {
         </details>
       )}
     </div>
-  );
-}
-
-/** User prompt: `> ` runs as quote blocks (muted, 2px left border), the rest plain text as before. */
-function UserText({ text }: { text: string }) {
-  const parts = splitQuotes(text);
-  if (parts.length === 1 && !parts[0]!.quote) return text;
-  return parts.map((p, i) =>
-    p.quote ? (
-      <blockquote key={i} className="whitespace-pre-wrap border-l-2 border-border pl-3 text-muted-foreground">
-        {p.text}
-      </blockquote>
-    ) : (
-      <span key={i}>{p.text}</span>
-    ),
   );
 }
 
