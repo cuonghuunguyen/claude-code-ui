@@ -14,32 +14,39 @@ export const MAX_PAYLOAD_BYTES = 3800;
 const SUBJECT = process.env.CLAUDE_UI_VAPID_SUBJECT ?? "https://github.com/cuonghuunguyen/claude-code-ui";
 
 type PendingPart = Extract<Part, { type: "permission_request" | "question" }>;
-type Tracked = { state: SessionState; text?: string; error?: string; request?: PendingPart; timer?: ReturnType<typeof setTimeout>; lastSent: number };
+type Tracked = { state: SessionState; text?: string; error?: string; request?: PendingPart; timer?: ReturnType<typeof setTimeout>; lastSent: number; escalated: Set<string> };
 
 /**
  * Turns session events into pushes: "needs input" at once, "finished" (an error counts) 1.5 s after the turn ends unless
  * work resumes or background tasks still run, at most one per session per 5 s (an escalated request pushes at once), none while `suppressed` (a focused, visible tab shows the session).
+ * An escalated request that settles (answered, stopped, cancelled) calls `replace` once, at once, also while `suppressed`: its notification must not stay.
  */
-export function createNotifier(opts: { push: (sessionId: string, body: string) => void; suppressed: (sessionId: string) => boolean }) {
+export function createNotifier(opts: { push: (sessionId: string, body: string) => void; suppressed: (sessionId: string) => boolean; replace?: (sessionId: string, body: string) => void }) {
   const sessions = new Map<string, Tracked>();
 
+  /** True when a push went out. */
   function fire(id: string, t: Tracked, body: string, force = false) {
-    if (opts.suppressed(id) || (!force && Date.now() - t.lastSent < MIN_GAP_MS)) return;
+    if (opts.suppressed(id) || (!force && Date.now() - t.lastSent < MIN_GAP_MS)) return false;
     t.lastSent = Date.now();
     opts.push(id, body);
+    return true;
   }
 
   return {
     observe({ sessionId: id, part }: Event) {
       let t = sessions.get(id);
-      if (!t) sessions.set(id, (t = { state: "idle", lastSent: -Infinity }));
+      if (!t) sessions.set(id, (t = { state: "idle", lastSent: -Infinity, escalated: new Set() }));
       if (part.type === "user_text") t.text = t.error = undefined;
       else if (part.type === "assistant_text") t.text = part.text;
       else if (part.type === "raw" && (part.message as { error?: unknown })?.error) t.error = String((part.message as { error: unknown }).error);
       else if (part.type === "permission_request" || part.type === "question") {
         t.request = part.settled ? undefined : part;
         // One push per request (escalate refuses a second call); only a focused tab of this (worker) session suppresses it.
-        if (!part.settled && part.escalated) fire(id, t, `Needs input · Escalated by coordinator: ${clip(part.reason ?? "", 200)} · ${describe(part)}`, true);
+        // Only a push that went out is replaced later: a replacement for a notification never shown would show itself.
+        if (!part.settled && part.escalated && !t.escalated.has(part.requestId)) {
+          if (fire(id, t, `Needs input · Escalated by coordinator: ${clip(part.reason ?? "", 200)} · ${describe(part)}`, true)) t.escalated.add(part.requestId);
+        } else if (part.settled && t.escalated.delete(part.requestId))
+          opts.replace?.(id, `No longer needs input · ${part.type === "question" ? (part.answers ? "answered" : "cancelled") : (part.decision ?? "settled")} · ${clip(describe(part), 200)}`);
       }
       if (part.type !== "session_state") return;
       const busy = t.state === "running" || t.state === "needs_input";
@@ -156,6 +163,8 @@ export function createPush({ dir = configDir(), send = webpush.sendNotification,
       // No browser takes a push (plain-HTTP --lan tab, push off, no Web Push): the daemon's machine shows it.
       // Logged once; a missing command (ENOENT) is not called again, other failures are retried.
       if (!subs.length) {
+        // An OS toast cannot be withdrawn: a replacement would only show a second one.
+        if (payload.replace) return;
         if (notify && !notifyMissing)
           await notify(payload).catch((e: NodeJS.ErrnoException) => {
             if (e.code === "ENOENT") notifyMissing = true;

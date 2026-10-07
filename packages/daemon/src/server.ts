@@ -296,6 +296,8 @@ export function createDaemon(opts: {
   idleCloseMs?: number;
   /** WSL distros and Docker containers this daemon routes to (sides.ts). */
   sides?: Sides;
+  /** How long worker_stop and worker_close wait for a stopped worker to leave running/needs_input (orchestration.ts); tests shorten it. */
+  stopWaitMs?: number;
   /** Update checks and installs (update.ts); none: no update_available, update.* fail. Checks start with the daemon. */
   update?: Omit<Parameters<typeof createUpdater>[0], "busy" | "broadcast">;
 }) {
@@ -467,13 +469,15 @@ export function createDaemon(opts: {
 
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<WebSocket, string>();
+  const pushTitleOf = async (sessionId: string) => {
+    const info = await history.getSessionInfo(sessionId).catch(() => undefined);
+    return info?.summary || basename(sessions.get(sessionId)?.cwd ?? "") || "Claude";
+  };
   const notifier = createNotifier({
     suppressed: (id) => [...focused.values()].includes(id),
-    push: async (sessionId, body) => {
-      const info = await history.getSessionInfo(sessionId).catch(() => undefined);
-      const title = info?.summary || basename(sessions.get(sessionId)?.cwd ?? "") || "Claude";
-      await opts.push?.send({ sessionId, title, body });
-    },
+    push: async (sessionId, body) => void (await opts.push?.send({ sessionId, title: await pushTitleOf(sessionId), body })),
+    // A request that settled: the same tag, silent (Web Push must show every push; one that only closes would show "updated in the background").
+    replace: async (sessionId, body) => void (await opts.push?.send({ sessionId, title: await pushTitleOf(sessionId), body, silent: true, replace: true })),
   });
   /**
    * Per session: its transcript entries read so far (JsonlTail), the main chain built from them for a file stamp, and each
@@ -648,6 +652,7 @@ export function createDaemon(opts: {
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
     models: () => known,
+    stopWaitMs: opts.stopWaitMs,
   });
 
   // listSessions() reads every transcript under ~/.claude/projects (hundreds of MB): one scan at a time.

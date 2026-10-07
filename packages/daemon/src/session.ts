@@ -777,11 +777,6 @@ export class Session {
     return true;
   }
 
-  /** Whether a pending request was escalated to the user: a coordinator must not cancel it (worker_stop). */
-  hasEscalated() {
-    return [...this.pending.values()].some((r) => r.part.escalated);
-  }
-
   /** Answers a pending question (answers: question text -> answer). False when already settled or unknown: the first answer wins. `by`: set only by orchestration; an escalated question refuses it. */
   answer(requestId: string, answers: Record<string, string>, by?: "coordinator"): boolean {
     const req = this.pending.get(requestId);

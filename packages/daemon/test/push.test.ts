@@ -18,13 +18,15 @@ const permission = (input: unknown) =>
 
 describe("notifier (same rules as Orca)", () => {
   let pushed: { sessionId: string; body: string }[];
+  let replaced: { sessionId: string; body: string }[];
   let watched: Set<string>;
   let n: ReturnType<typeof createNotifier>;
   beforeEach(() => {
     vi.useFakeTimers();
     pushed = [];
+    replaced = [];
     watched = new Set();
-    n = createNotifier({ push: (sessionId, body) => void pushed.push({ sessionId, body }), suppressed: (id) => watched.has(id) });
+    n = createNotifier({ push: (sessionId, body) => void pushed.push({ sessionId, body }), suppressed: (id) => watched.has(id), replace: (sessionId, body) => void replaced.push({ sessionId, body }) });
   });
   afterEach(() => vi.useRealTimers());
 
@@ -70,6 +72,36 @@ describe("notifier (same rules as Orca)", () => {
     watched.add("s1");
     n.observe(question({ escalated: true, reason: "scope" }));
     expect(pushed).toHaveLength(1);
+  });
+
+  it("a settled escalated request replaces its notification at once, silently, also while its tab is focused", () => {
+    n.observe(state("running"));
+    n.observe(question({ escalated: true, reason: "scope" }));
+    expect(pushed).toHaveLength(1);
+    expect(replaced).toEqual([]);
+    watched.add("s1");
+    n.observe(question({ escalated: true, reason: "scope", settled: true }));
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0]!.sessionId).toBe("s1");
+    expect(replaced[0]!.body).toMatch(/^No longer needs input · /);
+    // The same request settling again (a repeated event) replaces nothing more.
+    n.observe(question({ escalated: true, reason: "scope", settled: true }));
+    expect(replaced).toHaveLength(1);
+  });
+
+  it("a settled escalated permission request names its decision", () => {
+    n.observe(state("running"));
+    n.observe(ev({ type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "npm view react" }, suggestions: [], settled: false, escalated: true, reason: "net" }));
+    n.observe(ev({ type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "npm view react" }, suggestions: [], settled: true, escalated: true, decision: "deny" }));
+    expect(replaced.map((r) => r.body)).toEqual(["No longer needs input · deny · Bash: npm view react"]);
+  });
+
+  it("a settled request that was never escalated replaces nothing", () => {
+    n.observe(state("running"));
+    n.observe(question());
+    n.observe(state("needs_input"));
+    n.observe(question({ settled: true }));
+    expect(replaced).toEqual([]);
   });
 
   it("finished: waits 1.5 s, then pushes the last line of the answer", () => {
@@ -234,6 +266,12 @@ describe("desktop notification", () => {
     p.subscribe(sub);
     await p.send(pl);
     expect(m.send).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([]);
+  });
+
+  it("createPush: a replace payload with no subscription shows no desktop notification", async () => {
+    const calls: [string, string[], object][] = [];
+    await createPush({ ...mk(), notify: (x) => osNotify(x, "linux", fakeRun(calls)) }).send({ ...pl, silent: true, replace: true });
     expect(calls).toEqual([]);
   });
 

@@ -21,6 +21,8 @@ const MAX_TEXT = 4000;
 /** Longest worker_read result. */
 const MAX_READ = 20_000;
 const NAME = /^[a-z0-9-]{1,40}$/;
+/** worker_stop and worker_close wait this long for the worker to leave running / needs_input. */
+const STOP_WAIT_MS = 10_000;
 /** No bypassPermissions or dontAsk from the tool. Absent: the coordinator's mode (bypass gives auto). A mode above the coordinator's passes only through the user's worker_start card (docs/spec.md Orchestration). */
 const MODES = ["default", "acceptEdits", "plan", "auto"] as const;
 
@@ -104,11 +106,27 @@ export type OrchestrationDeps = {
   heldElsewhere: (id: string) => boolean;
   /** The daemon's loaded model list (models.list). */
   models: () => ModelInfo[];
+  /** Longest wait for a stopped worker to settle (worker_stop, worker_close); default 10 s. */
+  stopWaitMs?: number;
 };
+
+/** Resolves true once `s` is neither running nor waiting for input, false after `ms`. */
+function settled(s: Session, ms: number): Promise<boolean> {
+  const busy = () => ["running", "needs_input"].includes(s.info().state);
+  if (!busy()) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let off = () => {};
+    const t = setTimeout(() => (off(), resolve(false)), ms);
+    off = s.subscribe(Infinity, (e) => {
+      if (e.part.type === "session_state" && !busy()) (clearTimeout(t), off(), resolve(true));
+    });
+  });
+}
 
 type Waiter = { coordinator: string; match: (e: WorkerEvent) => boolean; done: (r: { events: WorkerEvent[] } | Error) => void };
 
 export function createOrchestration(deps: OrchestrationDeps) {
+  const stopWait = deps.stopWaitMs ?? STOP_WAIT_MS;
   const queues = new Map<string, WorkerEvent[]>();
   /** Coordinators that got a notice since their last worker_wait: one notice per batch of events. */
   const notified = new Set<string>();
@@ -397,7 +415,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       ),
       def(
         "worker_escalate",
-        "Hand a worker's pending question or permission request (`id` from a question or permission event) to the user: a blocking question (scope, acceptance criteria, user-visible behaviour, design trade-off, destructive or external action, or you are unsure), or a high permission request the worker is blocked on. The worker stays Needs input, the user gets a push notification with `reason`, and you can no longer answer it, stop the worker while it waits, or get events for it.",
+        "Hand a worker's pending question or permission request (`id` from a question or permission event) to the user: a blocking question (scope, acceptance criteria, user-visible behaviour, design trade-off, destructive or external action, or you are unsure), or a high permission request the worker is blocked on. The worker stays Needs input, the user gets a push notification with `reason`, and you can no longer answer it or get events for it; worker_stop and worker_close still cancel it (only when the user asked you to stop the worker).",
         { name, id: requestId, reason: z.string().trim().min(1, "reason must not be empty").max(1000) },
         async (a) => {
           const s = await worker(coordinator, a.name);
@@ -472,20 +490,27 @@ export function createOrchestration(deps: OrchestrationDeps) {
           return { name: a.name, state: s.info().state, entries: kept };
         },
       ),
-      def("worker_stop", "Interrupt a worker's running turn (like Esc). Its pending questions and permission requests are cancelled. Refused while a question you escalated waits for the user.", { name }, async (a) => {
-        const s = await worker(coordinator, a.name);
-        if (s.hasEscalated()) throw new ToolError(`Worker ${a.name} waits for the user's answer to an escalated question: the user answers or stops it in the web app.`);
-        await s.interrupt();
-        return { name: a.name, state: s.info().state };
-      }),
       def(
-        "worker_close",
-        "Close a worker's CLI process; it stops counting toward the worker cap. The session and its transcript stay: worker_send resumes it. Refused while its turn runs: worker_stop first.",
+        "worker_stop",
+        "Interrupt a worker's running turn (like Esc). Its pending questions and permission requests are cancelled, escalated ones too: the user's card closes and the user's notification is replaced. Waits up to 10 s for the worker to stop.",
         { name },
         async (a) => {
           const s = await worker(coordinator, a.name);
-          const state = s.info().state;
-          if (state === "running" || state === "needs_input") throw new ToolError(`Worker ${a.name} is ${state === "running" ? "running" : "waiting for input"}: call worker_stop first.`);
+          await s.interrupt();
+          await settled(s, stopWait);
+          return { name: a.name, state: s.info().state };
+        },
+      ),
+      def(
+        "worker_close",
+        "Close a worker's CLI process; it stops counting toward the worker cap. A running or waiting worker is stopped first (as worker_stop: pending and escalated requests are cancelled). The session and its transcript stay: worker_send resumes it.",
+        { name },
+        async (a) => {
+          const s = await worker(coordinator, a.name);
+          if (["running", "needs_input"].includes(s.info().state)) {
+            await s.interrupt();
+            if (!(await settled(s, stopWait))) throw new ToolError(`Worker ${a.name} did not stop within ${stopWait / 1000} s; try worker_close again.`);
+          }
           if (s.liveQuery()) s.restartQuery();
           return { name: a.name, closed: true };
         },

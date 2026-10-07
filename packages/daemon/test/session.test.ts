@@ -758,17 +758,14 @@ describe("Session questions", () => {
 
   it("escalate() marks a pending question once; a coordinator's answer is then refused, the user's settles it without by", async () => {
     const { s, events, q } = await ask();
-    expect(s.hasEscalated()).toBe(false);
     expect(s.escalate(q.requestId, "scope")).toBe(true);
     expect(s.escalate(q.requestId, "again")).toBe(false);
     expect(s.escalate("unknown", "x")).toBe(false);
-    expect(s.hasEscalated()).toBe(true);
     expect(lastPart(events, q.id)).toMatchObject({ settled: false, escalated: true, reason: "scope" });
     expect(s.answer(q.requestId, { "Which package manager?": "pnpm" }, "coordinator")).toBe(false);
     expect(s.answer(q.requestId, { "Which package manager?": "npm" })).toBe(true);
     expect(lastPart(events, q.id)).toMatchObject({ settled: true, escalated: true });
     expect(lastPart(events, q.id)).not.toHaveProperty("by");
-    expect(s.hasEscalated()).toBe(false);
   });
 
   it("answer() with by coordinator marks the settled part", async () => {

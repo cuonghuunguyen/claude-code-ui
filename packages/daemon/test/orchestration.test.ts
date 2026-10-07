@@ -38,7 +38,11 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
     emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: sid, is_error: false, duration_ms: 1, total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 1 }, permission_denials: [], result: "" });
   let held: ((text: string) => void) | undefined;
   const turn = async (text: string) => {
-    if (text === "hold") {
+    if (text === "stuck") {
+      // A turn an interrupt does not end (a CLI that ignores it).
+      reply("stuck");
+      await new Promise(() => {});
+    } else if (text === "hold") {
       reply("holding");
       reply(`released by ${await new Promise<string>((r) => (held = r))}`);
     } else if (text === "ask") {
@@ -99,7 +103,13 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
     supportedCommands: async () => [],
     supportedModels: async () => models,
     setPermissionMode: async () => {},
-    interrupt: async () => ({ still_queued: [] }),
+    // Esc ends a held turn, as the CLI's turn_interrupted does; a "stuck" turn ignores it.
+    interrupt: async () => {
+      const h = held;
+      held = undefined;
+      h?.("interrupt");
+      return { still_queued: [] };
+    },
     close: () => void ((run.closed = true), q.return(undefined as never)),
   });
 }
@@ -129,8 +139,8 @@ const appSettings = createSettings();
 const history = { listSessions: async () => [], getSessionInfo: async () => undefined, getSessionMessages: async () => [] };
 
 const pushes: PushPayload[] = [];
-function start(h: object = history, idleCloseMs?: number) {
-  const http = createDaemon({ idleCloseMs, push: { send: async (p: PushPayload) => void pushes.push(p) } as never, webRoot, roots: [root], query: orchQuery as never, token, settingsFile, claudeDir, appSettings, history: h as never, listCache: false, modelListWaitMs: 0, allowBypass: true });
+function start(h: object = history, idleCloseMs?: number, stopWaitMs?: number) {
+  const http = createDaemon({ idleCloseMs, stopWaitMs, push: { send: async (p: PushPayload) => void pushes.push(p) } as never, webRoot, roots: [root], query: orchQuery as never, token, settingsFile, claudeDir, appSettings, history: h as never, listCache: false, modelListWaitMs: 0, allowBypass: true });
   return new Promise<typeof http>((r) => http.listen(0, "127.0.0.1", () => r(http)));
 }
 const daemon = await start();
@@ -654,12 +664,33 @@ describe("orchestration", () => {
     expect(sends.filter((r) => /Worker cap reached: 1/.test(r.error))).toHaveLength(1);
   });
 
-  it("worker_close is refused while the worker's turn runs", async () => {
+  it("worker_close stops a running worker first, then closes it", async () => {
     enable();
     const coord = await coordinator();
-    await call(coord, "worker_start", { name: "h", cwd: dirB, prompt: "hold" });
-    expect((await call(coord, "worker_close", { name: "h" })).error).toMatch(/worker_stop first/);
-    await call(coord, "worker_send", { name: "h", text: "end" });
+    const w = await call(coord, "worker_start", { name: "h", cwd: dirB, prompt: "hold" });
+    await until(() => runsOf(w.sessionId)[0]?.texts.length);
+    expect(await call(coord, "worker_close", { name: "h" })).toEqual({ name: "h", closed: true });
+    const list = await call(coord, "worker_list");
+    expect(list.workers.find((x: { name: string }) => x.name === "h")).toMatchObject({ live: false });
+    expect(runsOf(w.sessionId)[0]!.closed).toBe(true);
+  });
+
+  it("worker_close is a tool error when the worker does not stop in time", async () => {
+    const slow = await start(history, undefined, 50);
+    const sp = (slow.address() as AddressInfo).port;
+    const sc = await client(sp);
+    try {
+      appSettings.set({ orchestration: { enabled: true, workerCap: 20, coordinatorPermissions: true } });
+      const created = (await sc.request({ type: "session.create", cwd: dirA })).result.session.id;
+      await sc.request({ type: "session.prompt", sessionId: created, text: "hi" });
+      await until(() => runsOf(created).at(-1)?.texts.length);
+      const w = await call(created, "worker_start", { name: "stk", cwd: dirB, prompt: "stuck" }, {}, slow);
+      await until(() => runsOf(w.sessionId)[0]?.texts.length);
+      expect((await call(created, "worker_close", { name: "stk" }, {}, slow)).error).toMatch(/did not stop within/);
+    } finally {
+      sc.ws.close();
+      slow.close();
+    }
   });
 
   it("a coordinator with a running worker is not idle-closed; after the worker's turn it is", async () => {
@@ -787,14 +818,13 @@ describe("orchestration", () => {
     expect((await call(coord, "worker_wait", { names: ["esc"], types: ["question"], timeoutMs: 0 })).events).toEqual([]);
   });
 
-  it("after worker_escalate the coordinator cannot settle it: worker_answer and worker_stop are tool errors; the user's answer settles it without by", async () => {
+  it("after worker_escalate the coordinator cannot answer it: worker_answer is a tool error; the user's answer settles it without by", async () => {
     enable();
     const coord = await coordinator();
     const w = await call(coord, "worker_start", { name: "lock", cwd: dirB, prompt: "ask" });
     const q = await pendingQ(w.sessionId);
     await call(coord, "worker_escalate", { name: "lock", id: q.requestId, reason: "blocking" });
     expect((await call(coord, "worker_answer", { name: "lock", id: q.requestId, answer: "pnpm" })).error).toMatch(/escalated to the user/);
-    expect((await call(coord, "worker_stop", { name: "lock" })).error).toMatch(/waits for the user's answer/);
     expect(await state(w.sessionId)).toBe("needs_input");
     expect((await ans(q.requestId)).result).toEqual({ settled: true });
     const done = (await settledQ(w.sessionId, q.id)).part;
@@ -802,6 +832,47 @@ describe("orchestration", () => {
     expect(done.by).toBeUndefined();
     const end = (await call(coord, "worker_wait", { names: ["lock"], types: ["turn_end"], timeoutMs: 5000 })).events[0];
     expect(end.result).toBe('answer: {"Which package manager?":"npm"}');
+  });
+
+  it("worker_stop cancels an escalated question: the part settles without answers, the worker leaves needs_input and worker_stop replies its state", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "stq", cwd: dirB, prompt: "ask" });
+    const q = await pendingQ(w.sessionId);
+    await call(coord, "worker_escalate", { name: "stq", id: q.requestId, reason: "blocking" });
+    expect(await state(w.sessionId)).toBe("needs_input");
+    const r = await call(coord, "worker_stop", { name: "stq" });
+    expect(r.name).toBe("stq");
+    expect(r.state).not.toBe("needs_input");
+    const done = (await settledQ(w.sessionId, q.id)).part;
+    expect(done).toMatchObject({ settled: true, escalated: true });
+    expect(done.answers).toBeUndefined();
+    expect(await state(w.sessionId)).not.toBe("needs_input");
+  });
+
+  it("worker_stop denies an escalated permission request", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "stp", cwd: dirB, prompt: perm("Bash", { command: "npm view react version" }) });
+    await c.request({ type: "session.subscribe", sessionId: w.sessionId, sinceSeq: 0 });
+    const [p] = (await call(coord, "worker_wait", { names: ["stp"], types: ["permission"], timeoutMs: 5000 })).events;
+    await call(coord, "worker_escalate", { name: "stp", id: p.requestId, reason: "network" });
+    const r = await call(coord, "worker_stop", { name: "stp" });
+    expect(r.state).not.toBe("needs_input");
+    const part = await until(() => [...c.inbox].reverse().find((m) => m.type === "event" && m.sessionId === w.sessionId && m.part.type === "permission_request" && m.part.settled));
+    expect((part as Extract<ServerMessage, { type: "event" }>).part).toMatchObject({ settled: true, escalated: true, decision: "deny" });
+  });
+
+  it("worker_close stops a worker waiting on an escalated request, then closes it", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "clq", cwd: dirB, prompt: "ask" });
+    const q = await pendingQ(w.sessionId);
+    await call(coord, "worker_escalate", { name: "clq", id: q.requestId, reason: "blocking" });
+    expect(await call(coord, "worker_close", { name: "clq" })).toEqual({ name: "clq", closed: true });
+    expect((await settledQ(w.sessionId, q.id)).part).toMatchObject({ settled: true, escalated: true });
+    const list = await call(coord, "worker_list");
+    expect(list.workers.find((x: { name: string }) => x.name === "clq")).toMatchObject({ live: false });
   });
 
   it("worker_escalate on an unknown, settled or already escalated ID, or another worker's question, is a tool error; it hands a permission request to the user", async () => {

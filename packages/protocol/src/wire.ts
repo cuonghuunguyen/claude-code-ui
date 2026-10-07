@@ -208,7 +208,17 @@ export type ClientMessage = { reqId: string; side?: string } & (
 export type WebPushSubscription = { endpoint: string; keys: { p256dh: string; auth: string } };
 export type PushKeyResult = { publicKey: string };
 /** Decrypted Web Push payload the service worker shows as a notification. */
-export type PushPayload = { sessionId: string; title: string; body: string };
+export type PushPayload = {
+  sessionId: string;
+  title: string;
+  body: string;
+  /** Notification tag; absent: the session ID. A newer notification with the same tag replaces the older one. */
+  tag?: string;
+  /** No sound or vibration. */
+  silent?: boolean;
+  /** Only replaces an earlier notification (a request that settled); the desktop fallback shows nothing for it. */
+  replace?: boolean;
+};
 
 /** Claude Code `/rewind` modes: `both` restores code, then conversation. */
 export type RewindMode = "code" | "conversation" | "both";
