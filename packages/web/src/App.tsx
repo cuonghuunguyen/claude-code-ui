@@ -632,19 +632,23 @@ export function App() {
     }
   }
 
-  /** Creates the session in a known project with the chosen start options and sends its first prompt. Rejects when the session was not created. */
+  /**
+   * Creates the session in a known project with the chosen start options and sends its first prompt or runs its first bash
+   * mode command. Rejects when the session was not created.
+   */
   // A session whose first prompt failed: the retry from the new-session tab sends to it instead of creating another.
   const unprompted = useRef<SessionInfo>(undefined);
-  async function createSession(cwd: string, opts: StartOptions, text: string, images: string[]) {
+  async function createSession(cwd: string, opts: StartOptions, first: FirstMessage) {
     setError(undefined);
     if (status !== "connected") throw new Error(`the daemon is ${status}`);
     const key = pendingKey();
     // GH-133: the bubble shows in this commit; the new-session card hides (Activity keeps its prompt box for a failure).
-    setOptimistic((o) => ({ ...o, [NEW_TAB]: addPending(undefined, undefined, { key, text, images }) }));
+    // A command has no user bubble: its bash card shows once the session tab does.
+    if (!("command" in first)) setOptimistic((o) => ({ ...o, [NEW_TAB]: addPending(undefined, undefined, { key, text: first.text, images: first.images }) }));
     let listed = false;
     try {
       // The new-session tab (and its draft) stays until the first prompt is taken.
-      const session = await startSession(client.current!.request, unprompted, cwd, opts, text, images, (s) => {
+      const session = await startSession(client.current!.request, unprompted, cwd, opts, first, (s) => {
         setInfos((i) => ({ ...i, [s.id]: s }));
         setOptimistic((o) => (o[NEW_TAB] ? { ...o, [NEW_TAB]: o[NEW_TAB].map((p) => ({ ...p, sessionId: s.id })) } : o));
         // Listed (and so subscribed) before the prompt goes out: its echo can be in the view before the tab switches.
@@ -1595,16 +1599,15 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
 }
 
 /**
- * Creates the session (or reuses `created`: one in `cwd` whose first prompt failed), applies mode and effort, sends the first prompt.
- * Rejects when the prompt was not taken; `created` then keeps the session for the retry.
+ * Creates the session (or reuses `created`: one in `cwd` whose first prompt failed), applies mode and effort, sends the first prompt
+ * or runs the first bash mode command. Rejects when it was not taken; `created` then keeps the session for the retry.
  */
 export async function startSession(
   request: Client["request"],
   created: { current?: SessionInfo },
   cwd: string,
   { model, mode, effort }: StartOptions,
-  text: string,
-  images: string[],
+  first: FirstMessage,
   onInfo: (s: SessionInfo) => void = () => {},
 ): Promise<SessionInfo> {
   const reused = created.current?.cwd === cwd;
@@ -1621,7 +1624,12 @@ export async function startSession(
       session = created.current = (await request<SetModelResult>(msg)).session;
       onInfo(session);
     }
-  await request({ type: "session.prompt", sessionId: session.id, text, images });
+  // A command starts the query too (Session.bash), so mode and effort are set before it as well.
+  await request(
+    "command" in first
+      ? { type: "session.bash", sessionId: session.id, command: first.command }
+      : { type: "session.prompt", sessionId: session.id, text: first.text, images: first.images },
+  );
   created.current = undefined;
   return session;
 }
@@ -1718,7 +1726,7 @@ export function NewSession({
   /** Changes on any config.changed (a user-wide change shows in every project): the commands are asked again. */
   commandsRev?: number;
   /** Rejects when the session was not created; the prompt box keeps the draft. */
-  onStart: (cwd: string, opts: StartOptions, text: string, images: string[]) => Promise<void>;
+  onStart: (cwd: string, opts: StartOptions, first: FirstMessage) => Promise<void>;
   /** `/mcp`, `/skills`, `/plugins` typed alone: opens that dialog of `cwd` instead of creating a session. */
   onDialog?: (dialog: DialogName) => void;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
@@ -1758,7 +1766,8 @@ export function NewSession({
           onMode={(m) => onDraft({ ...draft, mode: m })}
           onUpload={onUpload}
           onSearch={cwd ? onSearch(cwd) : async () => []}
-          onPrompt={(text, images) => (cwd ? onStart(cwd, { model, mode, effort }, text, images) : Promise.reject(new Error("no project")))}
+          onPrompt={(text, images) => (cwd ? onStart(cwd, { model, mode, effort }, { text, images }) : Promise.reject(new Error("no project")))}
+          onBash={cwd ? (command) => onStart(cwd, { model, mode, effort }, { command }) : undefined}
           state={connected ? "idle" : "disconnected"}
           blocked={creating ? "Creating worktree…" : undefined}
           blockedIcon={creating ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
@@ -1855,6 +1864,8 @@ const modesOf = (offered: PermissionMode[], model: string, models: ModelInfo[]) 
 const autoUnavailable = (models: ModelInfo[], model: string) => `Auto mode not available for ${models.find((m) => m.value === model)?.displayName ?? model}; switched to Ask`;
 
 export type StartOptions = { model: string; mode: PermissionMode; effort: Effort };
+/** What starts a session: a first prompt, or a bash mode command (`!` in the first prompt box). */
+export type FirstMessage = { text: string; images: string[] } | { command: string };
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
 type DraftPick = Omit<StartOptions, "mode"> & { mode?: PermissionMode };
 const NEW_DRAFT: DraftPick = { model: "default", effort: "default" };

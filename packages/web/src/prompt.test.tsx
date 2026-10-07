@@ -555,7 +555,7 @@ it('bash mode: "!" at caret 0 enters it (mono, "!" badge, placeholder), is not i
   expect(box.value).toBe("");
 });
 
-it('bash mode: "!" not at caret 0 is plain text; no bash mode without onBash (new-session tab)', async () => {
+it('bash mode: "!" not at caret 0 is plain text; no bash mode without onBash (no project yet)', async () => {
   const a = await render({ onBash: async () => {} });
   await type(a.box, "echo ");
   await key(a.box, { key: "!" });

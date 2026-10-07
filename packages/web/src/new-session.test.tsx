@@ -61,7 +61,7 @@ it("the new-session tab has the session prompt toolbar; the first prompt starts 
   expect(el.querySelector('[data-testid="mode-select"]')?.textContent).toContain("Edit automatically");
   await type(box, "hello");
   await key(box, { key: "Enter" });
-  expect(onStart).toHaveBeenCalledWith("/p/a", { model: "default", mode: "acceptEdits", effort: "default" }, "hello", []);
+  expect(onStart).toHaveBeenCalledWith("/p/a", { model: "default", mode: "acceptEdits", effort: "default" }, { text: "hello", images: [] });
 });
 
 it("a failed start keeps the draft; the error goes away when the project changes", async () => {
@@ -86,14 +86,63 @@ it("a first prompt that fails after session.create rejects (the draft stays); th
   });
   const created: { current?: never } = {};
   const opts = { model: "default", mode: "default", effort: "default" } as const;
-  await expect(startSession(request as never, created, "/p/a", opts, "hello", [])).rejects.toThrow("disconnected");
+  await expect(startSession(request as never, created, "/p/a", opts, { text: "hello", images: [] })).rejects.toThrow("disconnected");
   expect(sent).toEqual(["session.create", "session.prompt"]);
   failPrompt = false;
   sent.length = 0;
-  const s = await startSession(request as never, created, "/p/a", { ...opts, model: "opus" }, "hello", []);
+  const s = await startSession(request as never, created, "/p/a", { ...opts, model: "opus" }, { text: "hello", images: [] });
   // No second session: the model goes to the one already created.
   expect(sent).toEqual(["session.setModel", "session.prompt"]);
   expect(s).toMatchObject({ id: "s1", model: "opus" });
+  expect(created.current).toBeUndefined();
+});
+
+it('"!" in the first prompt box is bash mode: Enter starts the session with the command and the chosen mode; no project, no bash mode', async () => {
+  const onStart = vi.fn(async () => {});
+  const { el, box, rerender } = await render({ onStart });
+  await key(box, { key: "Tab", shiftKey: true });
+  await key(box, { key: "!" });
+  expect(el.querySelector('[data-testid="bash-mode"]')).not.toBeNull();
+  await type(box, "  ls -la ");
+  await key(box, { key: "Enter" });
+  expect(onStart).toHaveBeenCalledWith("/p/a", { model: "default", mode: "acceptEdits", effort: "default" }, { command: "ls -la" });
+  expect(el.querySelector('[data-testid="bash-mode"]')).toBeNull();
+  await rerender({ cwd: undefined });
+  await key(box, { key: "!" });
+  expect(el.querySelector('[data-testid="bash-mode"]')).toBeNull();
+});
+
+it("a failed first command keeps it in bash mode with the error", async () => {
+  const { el, box } = await render({ onStart: () => Promise.reject(new Error("outside the allowlisted roots")) });
+  await key(box, { key: "!" });
+  await type(box, "ls");
+  await key(box, { key: "Enter" });
+  expect(box.value).toBe("ls");
+  expect(el.querySelector('[data-testid="bash-mode"]')).not.toBeNull();
+  expect(el.querySelector('[data-testid="prompt-error"]')?.textContent).toContain("Command not run: outside the allowlisted roots");
+});
+
+it("startSession with a command: create, then mode and effort, then session.bash (no prompt); a failed run keeps the session for the retry", async () => {
+  const info = { id: "s1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" };
+  const sent: Record<string, unknown>[] = [];
+  let fail = true;
+  const request = vi.fn(async (msg: Record<string, unknown>) => {
+    sent.push(msg);
+    if (msg.type === "session.bash" && fail) throw new Error("session is busy");
+    if (msg.mode) info.permissionMode = msg.mode as string;
+    if (msg.effort) info.effort = msg.effort as string;
+    return { session: { ...info } };
+  });
+  const created: { current?: never } = {};
+  const opts = { model: "default", mode: "plan", effort: "high" } as const;
+  await expect(startSession(request as never, created, "/p/a", opts, { command: "ls" })).rejects.toThrow("busy");
+  expect(sent.map((m) => m.type)).toEqual(["session.create", "session.setPermissionMode", "session.setEffort", "session.bash"]);
+  expect(sent.at(-1)).toEqual({ type: "session.bash", sessionId: "s1", command: "ls" });
+  expect(created.current).toMatchObject({ id: "s1" });
+  fail = false;
+  sent.length = 0;
+  await startSession(request as never, created, "/p/a", opts, { command: "ls" });
+  expect(sent.map((m) => m.type)).toEqual(["session.bash"]);
   expect(created.current).toBeUndefined();
 });
 
@@ -250,7 +299,7 @@ it("Run session in lists the chosen project's worktrees inside the roots; a pick
   expect(texts).not.toContain("a-wt");
   await type(box, "hi");
   await key(box, { key: "Enter" });
-  expect(onStart).toHaveBeenCalledWith("/p/a-wt", { model: "default", mode: "default", effort: "default" }, "hi", []);
+  expect(onStart).toHaveBeenCalledWith("/p/a-wt", { model: "default", mode: "default", effort: "default" }, { text: "hi", images: [] });
 });
 
 it("a project without linked worktrees inside the roots has no Run session in chip; the project chip is unchanged", async () => {
@@ -268,7 +317,7 @@ it("has no Coordinator toggle; startSession creates a plain session", async () =
   expect(el.querySelector('[data-testid="coordinator-toggle"]')).toBeNull();
   const info = { id: "s1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" };
   const request = vi.fn(async (_m: { type: string }) => ({ session: info }));
-  await startSession(request as never, {}, "/p/a", { model: "default", mode: "default", effort: "default" }, "hi", []);
+  await startSession(request as never, {}, "/p/a", { model: "default", mode: "default", effort: "default" }, { text: "hi", images: [] });
   const create = request.mock.calls.map((c) => c[0] as unknown as Record<string, unknown>).find((m) => m.type === "session.create");
   expect(create).toEqual({ type: "session.create", cwd: "/p/a", model: "default" });
 });
@@ -298,7 +347,7 @@ it("while the worktree is being created the first prompt is held: 'Creating work
   await rerender({ worktreeJob: undefined, cwd: "/p/a-wt" });
   expect(el.querySelector('[data-testid="external-turn"]')).toBeNull();
   await key(box, { key: "Enter" });
-  expect(onStart).toHaveBeenCalledWith("/p/a-wt", { model: "default", mode: "default", effort: "default" }, "hi", []);
+  expect(onStart).toHaveBeenCalledWith("/p/a-wt", { model: "default", mode: "default", effort: "default" }, { text: "hi", images: [] });
 });
 
 it("a failed creation shows the git error and keeps the draft on the project", async () => {
@@ -308,5 +357,5 @@ it("a failed creation shows the git error and keeps the draft on the project", a
   expect(el.querySelector('[data-testid="external-turn"]')).toBeNull();
   await type(box, "hi");
   await key(box, { key: "Enter" });
-  expect(onStart).toHaveBeenCalledWith("/p/a", expect.anything(), "hi", []);
+  expect(onStart).toHaveBeenCalledWith("/p/a", expect.anything(), { text: "hi", images: [] });
 });

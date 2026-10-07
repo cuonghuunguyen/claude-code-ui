@@ -4,6 +4,10 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 
 ## 0.4.1 - 2026-10-07
 
+### Added
+
+- `!` in the new-session prompt box: Enter starts the session with the chosen model, mode and effort and runs the command; a failed command keeps the session for the retry.
+
 ### Changed
 
 - npm package links to the now public GitHub repository (repository, homepage, issues).
