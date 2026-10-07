@@ -23,6 +23,8 @@ Every `Agent`/worker dispatch sets `model` explicitly, at every spawn depth. Nev
 | Plan/design, ambiguous or cross-package issues, code review, review+acceptance verdict, hard root-cause debugging | `opus` |
 
 - `haiku` never edits code.
-- Escalate one tier after a failed `worker_done` or two review rejects; do not retry on the same model a third time.
+- Escalate one tier after a failed worker result or two review rejects; do not retry on the same model a third time.
 - Unsure between two tiers: pick the lower one when the output is checked by an `opus` review later, the higher one otherwise.
-- Issue work: follow the stage table in `.claude/skills/implement-issue/SKILL.md` section 0.
+- Issue work: stages and models in `.claude/skills/orchestrate-tickets/SKILL.md` section 1.
+
+Ticket playbook: .claude/skills/implement-issue/SKILL.md
