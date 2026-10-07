@@ -56,6 +56,13 @@ export function parseSessionQuery(query: string): { project?: string; text: stri
   return { project: m[2] ?? m[3], text };
 }
 
+/** The search text `/resume` fills in: `@project=<name> <text>`; a name with spaces is quoted (a `"` inside a quoted name cannot be written and is dropped). */
+export function resumeSearchText(name: string, text = "") {
+  const quoted = /\s/.test(name);
+  const token = quoted ? `"${name.replace(/"/g, "")}"` : name;
+  return `@project=${token} ${text}`;
+}
+
 /**
  * One group per working directory (per repository with `worktrees`) whatever the input order; groups and sessions newest first.
  * `@project=<name>` in the query (parseSessionQuery) keeps only the group of the project of that name (case-insensitive), worktree rows included.

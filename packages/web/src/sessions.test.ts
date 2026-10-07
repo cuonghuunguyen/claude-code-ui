@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, projectOf, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
+import { byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
   id,
@@ -92,6 +92,17 @@ describe("parseSessionQuery", () => {
     expect(parseSessionQuery("@project= x")).toEqual({ text: "@project= x" });
     expect(parseSessionQuery('@project="" x')).toEqual({ text: '@project="" x' });
     expect(parseSessionQuery("a@project=foo")).toEqual({ text: "a@project=foo" });
+  });
+});
+
+describe("resumeSearchText", () => {
+  it("quotes a name with spaces so parseSessionQuery reads it back; text follows", () => {
+    expect(resumeSearchText("foo")).toBe("@project=foo ");
+    expect(resumeSearchText("my app")).toBe('@project="my app" ');
+    expect(resumeSearchText("my app", "login")).toBe('@project="my app" login');
+    expect(parseSessionQuery(resumeSearchText("my app", "login"))).toEqual({ project: "my app", text: "login" });
+    expect(parseSessionQuery(resumeSearchText('a"b'))).toEqual({ project: 'a"b', text: "" });
+    expect(parseSessionQuery(resumeSearchText('my "x" app')).project).toBe("my x app");
   });
 });
 
