@@ -69,7 +69,7 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { useStableProps } from "@/lib/utils";
@@ -2147,6 +2147,14 @@ export function SessionPane({
                   />
                 )}
               </UserMessage>
+            ) : item.part.type === "turn_result" && turnText(items, index) ? (
+              // The turn's end: Copy response sits beside the usage footer. A running turn has no turn_result yet, so no Copy.
+              <div className="flex items-center gap-2">
+                <PartView part={item.part} view={view} />
+                <MessageActions>
+                  <CopyAction text={turnText(items, index)} label="Copy response" />
+                </MessageActions>
+              </div>
             ) : (
               <PartView part={item.part} view={view} />
             )
@@ -2647,7 +2655,7 @@ function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) 
   );
 }
 
-function CopyAction({ text }: { text: string }) {
+function CopyAction({ text, label = "Copy message" }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   // navigator.clipboard is undefined on a non-secure origin (http://<LAN IP>), so Copy does nothing there.
   const copy = () =>
@@ -2659,7 +2667,7 @@ function CopyAction({ text }: { text: string }) {
       () => {},
     );
   return (
-    <MessageAction title="Copy" label="Copy message" className="pointer-coarse:size-11" onClick={copy}>
+    <MessageAction title="Copy" label={label} className="pointer-coarse:size-11" onClick={copy}>
       {copied ? <CheckIcon /> : <CopyIcon />}
     </MessageAction>
   );
