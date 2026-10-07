@@ -2,7 +2,13 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
-## 0.4.0 - unreleased
+## 0.4.1 - 2026-10-07
+
+### Changed
+
+- npm package links to the now public GitHub repository (repository, homepage, issues).
+
+## 0.4.0 - 2026-10-07
 
 ### Added
 
