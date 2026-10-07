@@ -265,6 +265,8 @@ export type ServerMessage =
   | { type: "terminal.exit"; terminalId: string; exitCode: number }
   /** To every connection of this daemon after `settings.set`. */
   | { type: "settings_changed"; settings: Settings }
+  /** On connect: this daemon runs older code than is on disk (a source checkout changed after the start, or a newer install waits for a restart). `note` says which. */
+  | { type: "daemon_stale"; note: string }
   /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes. `reloadFailed`: set when plugins were reloaded: the sessions whose reload failed (empty: none; restart banners then clear). */
   | { type: "config.changed"; kind: ConfigKind; cwd: string; reloadFailed?: string[] }
   /** A newer claude-ui is on npm: on connect and when a check finds it. */
@@ -398,7 +400,10 @@ export const GIT_LOG_MAX_LIMIT = 500;
 /** Where an MCP server (or plugin setting) is saved; Claude Code's term. local: this project, private; user: all projects; project: `.mcp.json`. */
 export type ConfigScope = "local" | "user" | "project";
 /** App-wide settings (settings.json in the daemon config dir). A later setting is one more field here, in the daemon's `DEFAULTS` and `CHECKS`. */
-export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean } };
+/** `orchestration.workerMode`: the permission mode of a new worker when the coordinator names none; `coordinator` = the coordinator's own mode. */
+export const WORKER_MODES = ["coordinator", "default", "acceptEdits", "plan", "auto"] as const;
+export type WorkerModeSetting = (typeof WORKER_MODES)[number];
+export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting } };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 export type SettingsResult = { settings: Settings };
 export type ConfigKind = "mcp" | "plugins" | "skills";

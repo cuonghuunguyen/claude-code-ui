@@ -296,6 +296,8 @@ export function createDaemon(opts: {
   idleCloseMs?: number;
   /** WSL distros and Docker containers this daemon routes to (sides.ts). */
   sides?: Sides;
+  /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
+  buildInfo?: { stale(): string | undefined };
   /** How long worker_stop and worker_close wait for a stopped worker to leave running/needs_input (orchestration.ts); tests shorten it. */
   stopWaitMs?: number;
   /** Update checks and installs (update.ts); none: no update_available, update.* fail. Checks start with the daemon. */
@@ -654,6 +656,7 @@ export function createDaemon(opts: {
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
     models: () => known,
     stopWaitMs: opts.stopWaitMs,
+    buildNote: () => opts.buildInfo?.stale(),
   });
 
   // listSessions() reads every transcript under ~/.claude/projects (hundreds of MB): one scan at a time.
@@ -933,6 +936,8 @@ export function createDaemon(opts: {
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
     if (plan.age() > PLAN_STALE_MS) void plan.reread();
     updater?.messages().forEach((m) => send(ws, m));
+    const stale = opts.buildInfo?.stale();
+    if (stale) send(ws, { type: "daemon_stale", note: stale });
     const unsubscribes = new Map<string, () => void>();
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     // fs.media: canonical path -> nonce issued to this connection.

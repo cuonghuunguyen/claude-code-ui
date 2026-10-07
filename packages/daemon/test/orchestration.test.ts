@@ -138,9 +138,11 @@ mkdirSync(join(claudeDir, "sessions"));
 const appSettings = createSettings();
 const history = { listSessions: async () => [], getSessionInfo: async () => undefined, getSessionMessages: async () => [] };
 
+/** A fresh links file for a second daemon in a test: its workers must not appear in the shared one (closeAll). */
+const ownLinks = () => join(mkdtempSync(join(tmpdir(), "orch-own-")), "sessions.json");
 const pushes: PushPayload[] = [];
-function start(h: object = history, idleCloseMs?: number, stopWaitMs?: number) {
-  const http = createDaemon({ idleCloseMs, stopWaitMs, push: { send: async (p: PushPayload) => void pushes.push(p) } as never, webRoot, roots: [root], query: orchQuery as never, token, settingsFile, claudeDir, appSettings, history: h as never, listCache: false, modelListWaitMs: 0, allowBypass: true });
+function start(h: object = history, idleCloseMs?: number, stopWaitMs?: number, extra: object = {}) {
+  const http = createDaemon({ idleCloseMs, stopWaitMs, push: { send: async (p: PushPayload) => void pushes.push(p) } as never, webRoot, roots: [root], query: orchQuery as never, token, settingsFile, claudeDir, appSettings, history: h as never, listCache: false, modelListWaitMs: 0, allowBypass: true, ...extra });
   return new Promise<typeof http>((r) => http.listen(0, "127.0.0.1", () => r(http)));
 }
 const daemon = await start();
@@ -309,6 +311,103 @@ describe("orchestration", () => {
     const b = await call(coord, "worker_start", { name: "m2", cwd: dirB, prompt: "p", model: "sonnet" });
     expect(b.mode).toBe("auto");
     expect((await workerRun(b)).permissionMode).toBe("auto");
+  });
+
+  const sdk = { name: "orchestration", source: "sdk" };
+  const startCard = (coord: string, input: object) => daemon.orchestration.permissionCard(coord, "mcp__orchestration__worker_start", input as never, sdk);
+
+  it("worker_start without mode uses Settings workerMode auto: a coordinator in default gets a card titled 'Start worker x in auto mode' and the worker runs in auto", async () => {
+    enable({ workerMode: "auto" });
+    try {
+      const coord = await coordinator(dirA, "sonnet");
+      const input = { name: "sm1", cwd: dirB, prompt: "p", model: "sonnet" };
+      // Without the user's card a mode above the coordinator's is refused.
+      expect((await call(coord, "worker_start", input)).error).toMatch(/needs the user's worker_start card/);
+      const card = startCard(coord, input)!;
+      expect(card.title).toBe("Start worker sm1 in auto mode");
+      expect(card.input).toMatchObject({ mode: "auto" });
+      card.onAllow!();
+      const w = await call(coord, "worker_start", input);
+      expect(w).toMatchObject({ mode: "auto" });
+      expect((await workerRun(w)).permissionMode).toBe("auto");
+    } finally {
+      enable({ workerMode: "coordinator" });
+      await closeAll();
+    }
+  });
+
+  it("a mode from the tool wins over the setting; workerMode coordinator keeps today's inheritance", async () => {
+    enable({ workerMode: "auto" });
+    try {
+      const coord = await coordinator(dirA, "sonnet");
+      const w = await call(coord, "worker_start", { name: "sm2", cwd: dirB, prompt: "p", mode: "plan" });
+      expect(w.mode).toBe("plan");
+      expect(startCard(coord, { name: "sm2b", mode: "plan" })!.title).toBe("Start worker sm2b in plan mode");
+      enable({ workerMode: "coordinator" });
+      const d = await call(coord, "worker_start", { name: "sm3", cwd: dirB, prompt: "p" });
+      expect(d.mode).toBe("default");
+      expect(startCard(coord, { name: "sm3b" })!.title).toBe("Start worker sm3b in default mode");
+      await setMode(coord, "acceptEdits");
+      expect((await call(coord, "worker_start", { name: "sm4", cwd: dirB, prompt: "p" })).mode).toBe("acceptEdits");
+    } finally {
+      enable({ workerMode: "coordinator" });
+      await closeAll();
+    }
+  });
+
+  it("workerMode plan or acceptEdits applies the same way; a coordinator in auto needs no card", async () => {
+    enable({ workerMode: "acceptEdits" });
+    try {
+      const coord = await coordinator(dirA, "sonnet");
+      expect((await call(coord, "worker_start", { name: "sm5", cwd: dirB, prompt: "p" })).error).toMatch(/needs the user's worker_start card/);
+      await setMode(coord, "auto");
+      expect((await call(coord, "worker_start", { name: "sm6", cwd: dirB, prompt: "p", model: "sonnet" })).mode).toBe("acceptEdits");
+    } finally {
+      enable({ workerMode: "coordinator" });
+      await closeAll();
+    }
+  });
+
+  it("workerMode auto on a model without auto mode: default with a modeNote naming the setting", async () => {
+    enable({ workerMode: "auto" });
+    try {
+      const coord = await coordinator(dirA, "sonnet");
+      const w = await call(coord, "worker_start", { name: "sm7", cwd: dirB, prompt: "p", model: "haiku" });
+      expect(w.mode).toBe("default");
+      expect(w.modeNote).toMatch(/Settings > Orchestration > Worker mode is auto, but auto is not available for this model/);
+      expect((await workerRun(w)).permissionMode).toBe("default");
+    } finally {
+      enable({ workerMode: "coordinator" });
+      await closeAll();
+    }
+  });
+
+  it("worker_start and worker_list carry daemonNote when the build is stale, none otherwise", async () => {
+    let note: string | undefined;
+    const stale = await start(history, undefined, undefined, { buildInfo: { stale: () => note }, settingsFile: ownLinks() });
+    const sp = (stale.address() as AddressInfo).port;
+    const sc = await client(sp);
+    try {
+      enable();
+      const created = (await sc.request({ type: "session.create", cwd: dirA })).result.session.id;
+      await sc.request({ type: "session.prompt", sessionId: created, text: "hi" });
+      await until(() => runsOf(created).at(-1)?.texts.length);
+      const a = await call(created, "worker_start", { name: "dn1", cwd: dirB, prompt: "p" }, {}, stale);
+      expect(a).not.toHaveProperty("daemonNote");
+      expect(await call(created, "worker_list", {}, {}, stale)).not.toHaveProperty("daemonNote");
+      note = "This claude-ui daemon runs code older than its source checkout. Restart it.";
+      const b = await call(created, "worker_start", { name: "dn2", cwd: dirC, prompt: "p" }, {}, stale);
+      expect(b.daemonNote).toBe(note);
+      expect((await call(created, "worker_list", {}, {}, stale)).daemonNote).toBe(note);
+      // A new connection hears it too.
+      const late = await client(sp);
+      await until(() => late.inbox.find((m) => m.type === "daemon_stale"));
+      expect(late.inbox.find((m) => m.type === "daemon_stale")).toEqual({ type: "daemon_stale", note });
+      late.ws.close();
+    } finally {
+      sc.ws.close();
+      stale.close();
+    }
   });
 
   it("coordinator in acceptEdits (set by the user) gives an acceptEdits worker", async () => {
@@ -676,7 +775,7 @@ describe("orchestration", () => {
   });
 
   it("worker_close is a tool error when the worker does not stop in time", async () => {
-    const slow = await start(history, undefined, 50);
+    const slow = await start(history, undefined, 50, { settingsFile: ownLinks() });
     const sp = (slow.address() as AddressInfo).port;
     const sc = await client(sp);
     try {
@@ -965,6 +1064,7 @@ describe("orchestration", () => {
     const w = await call(coord, "worker_start", { name: "pin", cwd: dirB, prompt: "p" });
     expect((await workerRun(w)).env?.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR).toBe("1");
     expect(runsOf(coord)[0]!.options.env?.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR).toBeUndefined();
+    await closeAll();
   });
 
   it("a worker's read-only git request has tier low and mayAnswer true; a redirected one is high", async () => {

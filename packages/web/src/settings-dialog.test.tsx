@@ -17,7 +17,7 @@ afterEach(() => {
 
 async function render({ failGet = false } = {}) {
   const onTabGrouping = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" } };
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
@@ -99,6 +99,17 @@ it("Tab grouping shows By project by default and picking By worktree applies at 
   expect(onTabGrouping).toHaveBeenCalledWith("worktree");
   expect(q("settings-tabs-grouping")?.textContent).toContain("By worktree");
   expect(calls.some((c) => c.type === "settings.set")).toBe(false);
+});
+
+it("Worker mode shows the daemon's value and picking Auto sends a patch of that field only", async () => {
+  const { q, calls } = await render();
+  expect(q("settings-orchestration-workerMode")?.textContent).toContain("Coordinator's mode");
+  expect(document.getElementById(q("settings-orchestration-workerMode")!.getAttribute("aria-describedby")!)?.textContent).toContain("still asks you on the worker_start card");
+  await act(async () => q("settings-orchestration-workerMode")!.click());
+  expect([...document.querySelectorAll("[role=option]")].map((o) => o.textContent)).toEqual(["Coordinator's mode", "Default", "Accept edits", "Plan", "Auto"]);
+  await act(async () => document.querySelectorAll<HTMLElement>("[role=option]")[4]!.click());
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { workerMode: "auto" } } });
+  expect(q("settings-orchestration-workerMode")?.textContent).toContain("Auto");
 });
 
 it("the Tabs section shows while daemon settings load or fail", async () => {

@@ -10,7 +10,7 @@ import { Switch } from "./plugins-dialog.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
 
-type Row = { key: string; label: string; hint: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number });
+type Row = { key: string; label: string; hint: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "select"; options: { value: string; label: string }[] });
 const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
   {
     id: "orchestration",
@@ -18,6 +18,19 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
     rows: [
       { key: "enabled", kind: "switch", label: "Enable orchestration", hint: "Every session (except workers) may start and supervise worker sessions. Applies at a session's next start." },
       { key: "workerCap", kind: "number", min: 1, max: 20, label: "Maximum workers", hint: "Worker sessions running at the same time (1 to 20)." },
+      {
+        key: "workerMode",
+        kind: "select",
+        label: "Worker mode",
+        hint: "Permission mode of a new worker when the coordinator does not name one. Coordinator's mode: the coordinator's own (bypass gives auto). A mode above the coordinator's still asks you on the worker_start card.",
+        options: [
+          { value: "coordinator", label: "Coordinator's mode" },
+          { value: "default", label: "Default" },
+          { value: "acceptEdits", label: "Accept edits" },
+          { value: "plan", label: "Plan" },
+          { value: "auto", label: "Auto" },
+        ],
+      },
       { key: "coordinatorPermissions", kind: "switch", label: "Coordinator may answer permission requests", hint: "Allows the coordinator to approve or deny, once, reads and file edits inside the worker folder, reads of the repository's main checkout and agent docs (.claude/skills, CLAUDE.md), and read-only git commands (status, log, diff, show). Other commands and everything else wait for you; no permission rule is saved. Edits can change code that commands you approve later will run." },
     ],
   },
@@ -103,6 +116,19 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
                   </div>
                   {row.kind === "switch" ? (
                     <Switch on={value === true} label={row.label} held={saving} onToggle={(on) => void save(patch(on))} title={row.label} describedBy={`${id}-hint`} testId={id} />
+                  ) : row.kind === "select" ? (
+                    <Select value={String(value)} onValueChange={(v) => v && void save(patch(v))}>
+                      <SelectTrigger id={id} aria-describedby={`${id}-hint`} aria-label={row.label} data-testid={id} className="w-44 max-md:data-[size=default]:h-11">
+                        <SelectValue>{(v: string) => row.options.find((o) => o.value === v)?.label ?? v}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {row.options.map((o) => (
+                          <SelectItem key={o.value} value={o.value} data-testid={`${id}-${o.value}`}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   ) : (
                     <input
                       id={id}

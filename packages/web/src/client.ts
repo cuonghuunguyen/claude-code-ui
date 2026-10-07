@@ -35,6 +35,8 @@ export function connect(opts: {
   onSettingsChanged?: (m: Extract<ServerMessage, { type: "settings_changed" }>) => void;
   /** A newer claude-ui and the update under way (update.tsx). */
   onUpdate?: (m: Extract<ServerMessage, { type: "update_available" | "update_state" }>) => void;
+  /** The daemon runs older code than is on disk (stale-toast.tsx). */
+  onStale?: (note: string) => void;
   onOpen?: () => void;
   onStatus?: (s: ConnectionStatus) => void;
 }) {
@@ -81,6 +83,7 @@ export function connect(opts: {
       if (m.type === "config.changed") return opts.onConfigChanged?.(m);
       if (m.type === "settings_changed") return opts.onSettingsChanged?.(m);
       if (m.type === "update_available" || m.type === "update_state") return opts.onUpdate?.(m);
+      if (m.type === "daemon_stale") return opts.onStale?.(m.note);
       if (m.type === "sessions.search.result") return streams.get(m.reqId)?.(m);
       const p = m.reqId ? pending.get(m.reqId) : undefined;
       if (!p) return console.error("daemon error", m);

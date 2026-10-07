@@ -1,9 +1,9 @@
 // App-wide settings (docs/spec.md "Settings"): settings.json in the config dir, shared by the daemons of one user like projects.json.
 // A new setting = a field in `Settings`, `DEFAULTS` and `CHECKS`; the store, the wire messages and the dialog's patch need no change.
 import { createJsonFile } from "./json-file.ts";
-import type { Settings, SettingsPatch } from "@claude-ui/protocol";
+import { WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" } };
 
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string };
 const bool = (label: string): Check => ({ valid: (v) => typeof v === "boolean", label, rule: "on or off" });
@@ -13,6 +13,7 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     enabled: bool("Enable orchestration"),
     workerCap: { valid: (v) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 20, label: "Maximum workers", rule: "a whole number from 1 to 20" },
     coordinatorPermissions: bool("Coordinator may answer permission requests"),
+    workerMode: { valid: (v) => (WORKER_MODES as readonly unknown[]).includes(v), label: "Worker mode", rule: `one of ${WORKER_MODES.join(", ")}` },
   },
 };
 const checks = CHECKS as Record<string, Record<string, Check>>;

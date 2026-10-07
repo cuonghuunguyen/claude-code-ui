@@ -50,6 +50,7 @@ import { Toast } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, choose, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
+import { StaleToast } from "./stale-toast.tsx";
 import { McpDialog } from "./mcp-dialog.tsx";
 import { SkillsDialog } from "./skills-dialog.tsx";
 import { SettingsDialog } from "./settings-dialog.tsx";
@@ -217,6 +218,9 @@ export function App() {
   const [toast, setToast] = useState<string>();
   const closeToast = useCallback(() => setToast(undefined), []);
   const [update, setUpdate] = useState<UpdateInfo>();
+  // The daemon's "runs older code" note; a dismissed note stays hidden until the page reloads.
+  const [stale, setStale] = useState<string>();
+  const staleDismissed = useRef<string | undefined>(undefined);
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
   const [drawer, setDrawer] = useState(false);
   // Wide screens: the Home button shows or hides the sessions sidebar.
@@ -554,6 +558,7 @@ export function App() {
       onPlanUsage: setPlan,
       onSettingsChanged: () => setSettingsChanged((n) => n + 1),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
+      onStale: (note) => staleDismissed.current !== note && setStale(note),
       onConfigChanged: (m) => {
         setConfigChanged((c) => ({ ...c, [m.cwd]: (c[m.cwd] ?? 0) + 1 }));
         setReloadFailed((f) => nextReloadFailed(f, m.reloadFailed));
@@ -561,6 +566,7 @@ export function App() {
       onOpen: () => {
         // The daemon sends its update state right after the connect; a restarted one has none.
         setUpdate(undefined);
+        setStale(undefined);
         // A transient page failure (a side restarting) is retried after a reconnect.
         failedPage.current.clear();
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
@@ -1481,6 +1487,15 @@ export function App() {
       )}
       <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} />
       {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
+      {stale && !update && (
+        <StaleToast
+          note={stale}
+          onDismiss={() => {
+            staleDismissed.current = stale;
+            setStale(undefined);
+          }}
+        />
+      )}
       {toast && <Toast message={toast} onClose={closeToast} />}
     </div>
     </SideLabel>
