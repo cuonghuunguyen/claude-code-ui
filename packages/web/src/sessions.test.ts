@@ -102,7 +102,14 @@ describe("resumeSearchText", () => {
     expect(resumeSearchText("my app", "login")).toBe('@project="my app" login');
     expect(parseSessionQuery(resumeSearchText("my app", "login"))).toEqual({ project: "my app", text: "login" });
     expect(parseSessionQuery(resumeSearchText('a"b'))).toEqual({ project: 'a"b', text: "" });
-    expect(parseSessionQuery(resumeSearchText('my "x" app')).project).toBe("my x app");
+  });
+  it("falls back to plain text for a name the syntax cannot write, and gives only the text for an empty name", () => {
+    expect(resumeSearchText('"odd', "x")).toBe("odd x");
+    expect(parseSessionQuery(resumeSearchText('"odd')).project).toBeUndefined();
+    expect(resumeSearchText('my "x" app')).toBe("my x app ");
+    expect(resumeSearchText("", "login")).toBe("login");
+    expect(resumeSearchText("")).toBe("");
+    expect(resumeSearchText("  ", "x")).toBe("x");
   });
 });
 
@@ -117,6 +124,16 @@ describe("groupByCwd with @project=", () => {
   it("filters the project's sessions by the rest of the query", () => {
     expect(ids("@project=foo login")).toEqual(["a"]);
     expect(ids("deploy @project=foo")).toEqual(["c"]);
+  });
+  it("a worktree added as its own project matches next to the main checkout; the group lists (F1)", () => {
+    const rows = [{ path: "/p/foo", branch: "main", main: true }, { path: "/p/feat", branch: "feat", main: false }];
+    const wt = { "/p/foo": rows, "/p/feat": rows } as never;
+    const g = groupByCwd(list, "@project=feat", ["/p/foo", "/p/feat", "/p/bar"], false, wt);
+    expect(g.map((x) => x.cwd)).toEqual(["/p/foo"]);
+    expect(g[0]!.sessions.length + g[0]!.worktrees.flatMap((r) => r.sessions).length).toBe(2);
+  });
+  it("with two tokens the first one counts, the second stays plain text", () => {
+    expect(parseSessionQuery("@project=foo @project=bar")).toEqual({ project: "foo", text: "@project=bar" });
   });
   it("an unknown project gives no group; archived still shows only archived", () => {
     expect(groupByCwd(list, "@project=nope", ["/p/foo", "/p/bar"], false, worktrees)).toEqual([]);

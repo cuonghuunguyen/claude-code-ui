@@ -2411,8 +2411,8 @@ function PromptBox({
       return;
     }
     if (!t.trim() && !images.length) return;
-    const dialog = onDialog && !images.length && dialogOf(t, commands);
-    if (dialog) {
+    const dialog = onDialog && dialogOf(t, commands);
+    if (dialog && (!images.length || dialog === "resume")) {
       const arg = dialogArg(t);
       return arg ? onDialog(dialog, arg) : onDialog(dialog), edit("");
     }

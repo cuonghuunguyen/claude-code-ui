@@ -56,16 +56,23 @@ export function parseSessionQuery(query: string): { project?: string; text: stri
   return { project: m[2] ?? m[3], text };
 }
 
-/** The search text `/resume` fills in: `@project=<name> <text>`; a name with spaces is quoted (a `"` inside a quoted name cannot be written and is dropped). */
+/**
+ * The search text `/resume` fills in: `@project=<name> <text>`; a name with spaces is quoted. The syntax has no escape: a name that cannot be
+ * written (a `"` in a quoted name or first) falls back to a plain text search of the name without quotes; an empty name gives just `text`.
+ */
 export function resumeSearchText(name: string, text = "") {
-  const quoted = /\s/.test(name);
-  const token = quoted ? `"${name.replace(/"/g, "")}"` : name;
-  return `@project=${token} ${text}`;
+  const spaced = /\s/.test(name);
+  if (!name.trim()) return text;
+  if (spaced || name.startsWith('"')) {
+    const plain = name.replace(/"/g, "").trim();
+    return spaced && !name.includes('"') ? `@project="${name}" ${text}` : `${plain} ${text}`.trimStart();
+  }
+  return `@project=${name} ${text}`;
 }
 
 /**
  * One group per working directory (per repository with `worktrees`) whatever the input order; groups and sessions newest first.
- * `@project=<name>` in the query (parseSessionQuery) keeps only the group of the project of that name (case-insensitive), worktree rows included.
+ * `@project=<name>` in the query (parseSessionQuery) keeps only the group with a project (its main checkout or an added worktree) of that name (case-insensitive), worktree rows included; with several tokens the first one counts.
  * A query keeps sessions whose title, project name or worktree branch contains it. Archived sessions show only with `archived`, and then only they.
  * With `projects` (the daemon's known projects): one group per project in that order, empty ones too (not with `archived`); other sessions
  * are dropped, except those of the projects' worktrees (`worktrees`: session.list's, docs/spec.md "Projects").
@@ -74,7 +81,7 @@ export function resumeSearchText(name: string, text = "") {
 export function groupByCwd(items: SessionListItem[], query = "", projects?: string[], archived = false, worktrees: Record<string, Worktree[]> = {}, workers?: Map<string, SessionListItem[]>): SessionGroup[] {
   const { project, text } = parseSessionQuery(query);
   const q = text.toLowerCase();
-  const inScope = (g: SessionGroup) => !project || projectName(g.cwd).toLowerCase() === project.toLowerCase();
+  const inScope = (g: SessionGroup) => !project || [g.cwd, ...g.members].some((c) => projectName(c).toLowerCase() === project.toLowerCase());
   const has = (text: string | undefined) => !!text && text.toLowerCase().includes(q);
   const groups = new Map<string, SessionGroup>();
   // Session cwd → its group and worktree row.
