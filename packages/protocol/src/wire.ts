@@ -146,6 +146,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.commit"; cwd: string; hash: string }
   /** File text at a commit (`path` relative to the repository top). Same limits and error codes as fs.read (too_large, binary, not_utf8), not_found when absent. Reply `{ content }`. */
   | { type: "git.fileAt"; cwd: string; hash: string; path: string }
+  /** Changes tab git modes (docs/spec.md "Layout"): the working tree (staged, unstaged, untracked) against HEAD (`base: "head"`) or against the merge base of HEAD and `ref` (`base: "branch"`; full ref under refs/heads or refs/remotes; omitted: the default branch). Reply GitDiffResult. */
+  | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string }
   /** Creates `<repo>/.claude/worktrees/<name>` on branch `worktree-<name>` (docs/spec.md "Worktrees"); no `name`: a generated one. Reply WorktreeCreateResult. Broadcasts `sessions.changed`. */
   | { type: "worktree.create"; cwd: string; name?: string }
   /** What removing `path` loses; reply WorktreeStatusResult. */
@@ -378,11 +380,19 @@ export type GitCommit = { hash: string; parents: string[]; author: string; email
 export type GitLog = { commits: GitCommit[]; more: boolean; branches?: string[] };
 /** `log` null outside a git work tree. */
 export type GitLogResult = { log: GitLog | null };
-/** `added`/`removed` undefined for a binary file. `oldPath`: renamed from. */
-export type GitFileChange = { status: "A" | "D" | "M" | "R"; path: string; oldPath?: string; added?: number; removed?: number };
+/** `added`/`removed` undefined for a binary file. `oldPath`: renamed from. `untracked`: not in the index (status A; git.diff only). */
+export type GitFileChange = { status: "A" | "D" | "M" | "R"; path: string; oldPath?: string; added?: number; removed?: number; untracked?: boolean };
 /** `message`: full message. `truncated`: more than 3000 files changed, list cut. */
 export type GitCommitDetail = GitCommit & { message: string; committer: string; committerTime: number; files: GitFileChange[]; truncated?: boolean };
 export type GitCommitResult = { commit: GitCommitDetail };
+/**
+ * `prefix`: the request cwd relative to the repository top ("/"-separated, "" or ending with "/"); `files[].path` are relative to the top.
+ * `base`: the full hash of the before side; absent before the first commit (every file A, before side empty). `ref`: the branch compared (branch mode).
+ * `branches`: local and remote branches for the picker (branch mode only). `truncated`: list cut at 3000 files.
+ */
+export type GitDiff = { prefix: string; base?: string; ref?: string; files: GitFileChange[]; branches?: string[]; truncated?: boolean };
+/** `diff` null outside a git work tree. */
+export type GitDiffResult = { diff: GitDiff | null };
 export const GIT_LOG_MAX_LIMIT = 500;
 
 /** Where an MCP server (or plugin setting) is saved; Claude Code's term. local: this project, private; user: all projects; project: `.mcp.json`. */

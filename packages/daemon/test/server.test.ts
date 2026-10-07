@@ -920,6 +920,23 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "nope" })).toMatchObject({ code: "not_found" });
   });
 
+  it("answers git.diff for a cwd inside the roots only", async () => {
+    const c = await client();
+    expect(await c.request({ type: "git.diff", cwd: webRoot, base: "head" })).toMatchObject({ result: { diff: null } });
+    expect(await c.request({ type: "git.diff", cwd: join(webRoot, ".."), base: "head" })).toMatchObject({ code: "cwd_not_allowed" });
+    const repo = join(webRoot, "diffproj");
+    mkdirSync(repo, { recursive: true });
+    const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" }).trim();
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repo, "t.txt"), "hi\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "first");
+    writeFileSync(join(repo, "t.txt"), "hi\nthere\n");
+    expect(await c.request({ type: "git.diff", cwd: repo, base: "head" })).toMatchObject({ result: { diff: { prefix: "", files: [{ path: "t.txt", status: "M", added: 1, removed: 0 }] } } });
+    expect(await c.request({ type: "git.diff", cwd: repo, base: "nope" })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.diff", cwd: repo, base: "branch", ref: "refs/heads/zzz" })).toMatchObject({ code: "bad_request" });
+  });
+
   it("does not offer a symlink whose real path is outside the roots as an @-mention", async () => {
     // Junctions on Windows: a directory symlink needs admin rights there (the type is ignored elsewhere).
     symlinkSync(mkdtempSync(join(tmpdir(), "outside-")), join(webRoot, "linkedout"), "junction");
