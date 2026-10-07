@@ -226,7 +226,7 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
 function ArtifactLink({ url }: { url: string }) {
   if (!isClaudeUrl(url)) return <span className="break-all font-mono text-xs">{url}</span>;
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer" title={url} className="inline-flex min-h-11 items-center break-all text-primary text-xs underline md:min-h-0">
+    <a href={url} target="_blank" rel="noopener noreferrer" title={url} className="inline-flex min-h-11 items-center break-all text-foreground text-xs underline md:min-h-0">
       {url}
     </a>
   );
@@ -238,7 +238,7 @@ function ArtifactLink({ url }: { url: string }) {
 function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult }) {
   const out = text(result?.output);
   const failed = result?.isError === true;
-  const output = result && <Lines id={call.id} text={out} error={failed} />;
+  const output = result && <Lines id={call.id} text={out} error={failed} wrap />;
   const action = field(call.input, "action") || (call.tool === "Artifact" ? "publish" : "");
   const url = field(call.input, "url");
   if (call.tool === "ArtifactData") {
@@ -348,7 +348,7 @@ export function InputDiff({
 const MAX_LINES = 20;
 
 /** Monospace output, cut to MAX_LINES lines until expanded. `plain`: Bash output, ANSI colors and no box of its own. */
-function Lines({ id, text, error, plain = false }: { id: string; text: string; error: boolean; plain?: boolean }) {
+function Lines({ id, text, error, plain = false, wrap = false }: { id: string; text: string; error: boolean; plain?: boolean; wrap?: boolean }) {
   const { open: all, onOpenChange: setAll } = useExpanded(`lines:${id}`);
   const lines = text.replace(/\n$/, "").split("\n");
   const shown = all ? lines.join("\n") : lines.slice(0, MAX_LINES).join("\n");
@@ -357,7 +357,7 @@ function Lines({ id, text, error, plain = false }: { id: string; text: string; e
       <pre
         className={cn(
           "overflow-x-auto font-mono text-xs",
-          error && !plain ? "whitespace-pre-wrap" : "whitespace-pre",
+          (error && !plain) || wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre",
           error && "text-destructive",
           !plain && "rounded-md p-2",
           !plain && (error ? "bg-destructive/10" : "bg-muted/50"),

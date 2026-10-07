@@ -324,11 +324,14 @@ describe("Artifact cards", () => {
     expect(html).not.toContain("Parameters");
   });
   it("a publish body shows description, file path and the claude.ai link", () => {
-    const html = open(done("Artifact", publish), result(`Published ${URL} (private)`));
+    const html = open(done("Artifact", publish), result(`Published /tmp/scratchpad/page.html at ${URL} (Version 1, version id 1791409111-93a8) Icon: "test".
+
+Live subscription: arming in the background.`));
     expect(html).toContain("Says hello");
     expect(html).toContain("/tmp/claude/scratchpad/page.html");
     expect(html).toMatch(new RegExp(`<a [^>]*href="${URL}"`));
     expect(html).toContain('target="_blank"');
+    expect(html).not.toContain("text-primary");
     expect(html).toContain('rel="noopener noreferrer"');
     expect(html).not.toContain("Parameters");
   });
@@ -349,8 +352,10 @@ describe("Artifact cards", () => {
     expect(renderToStaticMarkup(<ToolCard call={{ ...done("Artifact", {}), status: "pending" }} />)).toContain("Artifact");
   });
   it("comments: read shows result as plain text, reply shows the reply text, resolve names the thread", () => {
-    const read = open(done("ArtifactComments", { action: "read", url: URL }), result("No comment threads on this artifact yet. <i>x</i> **b**"));
+    const read = open(done("ArtifactComments", { action: "read", url: URL }), result("No comment threads on this artifact yet. Viewers add them from the artifact page (comment mode). <i>x</i> **b**"));
     expect(read).toContain("No comment threads");
+    expect(read).toContain("whitespace-pre-wrap");
+    expect(read).not.toContain("text-primary");
     expect(read).toContain("&lt;i&gt;x&lt;/i&gt; **b**");
     expect(read).not.toContain("Parameters");
     const reply = open(done("ArtifactComments", { action: "reply", url: URL, thread_id: "t9", text: "Done <b>**ok**</b>" }), result("Replied"));
