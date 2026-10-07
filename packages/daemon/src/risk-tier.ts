@@ -94,14 +94,16 @@ export function pathLow(p: unknown, cwd: string, write: boolean, cwdOk = !write,
     // Both the real path and the path as written (a symlinked `.git` inside the root): either denied = high.
     const raw = relative(root, target);
     const rawSegs = raw.startsWith("..") || isAbsolute(raw) ? [] : raw.split(sep);
+    const segs0 = rel.split(sep);
     if (write ? [...rel.split(sep), ...rawSegs].some(denied) : deniedRead(rel.split(sep)) || (rawSegs.length > 0 && deniedRead(rawSegs))) return false;
     if (!write) return !(isDir(real) && treeHasDenied(real));
     // A repo layout: `config` next to HEAD, objects or refs, or objects/refs next to a `config` (in either order the config
     // would be repo config: core.fsmonitor, diff.external run on a later git command the user approves).
     // core.hooksPath inside the worktree (husky v9: .husky/_): a hook planted there runs on a later git status.
-    if (hooksUnder(real, cwd)) return false;
+    // Hook folders by name, anywhere (a submodule's `sub/.husky/_` too), and what the config names (see gitRunsIt).
+    if ([...segs0, ...rawSegs].some((g) => /^(hooks|\.husky)$/i.test(g)) || gitRunsIt(real, segs0, cwd)) return false;
     const has = (dir: string, n: string) => !!lstatSync(join(dir, n), { throwIfNoEntry: false });
-    const segs = rel.split(sep);
+    const segs = segs0;
     for (let i = 0; i < segs.length; i++) {
       const dir = join(realRoot, ...segs.slice(0, i));
       const seg = segs[i]!.toLowerCase();
@@ -128,9 +130,14 @@ function treeHasDenied(dir: string): boolean {
   };
   return walk(dir);
 }
-/** Whether a write path (real) is the folder core.hooksPath names inside its worktree, or below it. */
-function hooksUnder(real: string, cwd: string): boolean {
-  return gitExecConfig(cwd).hooksDirs.some((d) => {
+/**
+ * Whether a Write must be high because git would run it: a folder or script the repository's config (and its submodules') names
+ * inside the cwd; with the config unreadable, any hook-like folder. A hook planted by a low Write runs on a later low `git status`.
+ */
+function gitRunsIt(real: string, segs: string[], cwd: string): boolean {
+  const cfg = gitExecConfig(cwd);
+  if (cfg.failed && segs.some((g) => /hook|husky/i.test(g))) return true;
+  return cfg.protectedPaths.some((d) => {
     const rel = relative(d, real);
     return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
   });

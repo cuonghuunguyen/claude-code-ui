@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { clearGitExecCache } from "../src/git-readonly.ts";
 import { mainCheckoutOf, tier, type TierContext } from "../src/risk-tier.ts";
 
 // Agent docs and the main checkout (GH-163). No symlinks: runs on Windows too.
@@ -179,6 +180,55 @@ describe("secrets of the main checkout and hook folders (GH-163 review)", () => 
     expect(w(".husky/_/sub/x")).toBe("high");
     expect(w(join(repo, ".husky/_/post-index-change"))).toBe("high");
     expect(w("src/a.ts")).toBe("low");
-    expect(tier("Write", { file_path: ".husky/_/x" }, { cwd: plain })).toBe("low");
+    // A folder named .husky or hooks is high by name, config or not.
+    expect(tier("Write", { file_path: ".husky/_/x" }, { cwd: plain })).toBe("high");
+  });
+});
+
+describe("hook folders and config scripts are never low Writes (GH-163 round 2)", () => {
+  const sh = (d: string, ...a: string[]) => execFileSync("git", a, { cwd: d, stdio: "ignore" });
+  const mk = (name: string) => {
+    const d = join(top, name);
+    mkdirSync(d, { recursive: true });
+    sh(d, "init", "-q");
+    return d;
+  };
+  const w = (cwd: string, p: string, tool = "Write") => tier(tool, { file_path: p, content: "x" }, { cwd });
+
+  it("a path component named hooks or .husky is high anywhere in the worktree, config or not, case-insensitive", () => {
+    const d = mk("w-comp");
+    for (const p of [".husky/_/post-index-change", "sub/.husky/_/post-index-change", "hooks/pre-commit", "a/b/Hooks/x", "sub/.HUSKY/x", ".husky/pre-commit"]) expect(w(d, p), p).toBe("high");
+    expect(w(d, "src/hook-utils.ts")).toBe("low");
+    expect(w(d, "src/a.ts")).toBe("low");
+  });
+
+  it("an unreadable config fails closed: a Write into any hook-like folder is high, other Writes stay low", () => {
+    // wt's .git file points nowhere: git config fails.
+    for (const p of [".custom-hooks/x", "tools/githooks/x", ".husky/_/x"]) expect(w(wt, p), p).toBe("high");
+    expect(w(wt, "sub/new.ts")).toBe("low");
+  });
+
+  it("a relative program script named in the repository config is high to Write", () => {
+    const d = mk("w-prog");
+    sh(d, "config", "diff.x.textconv", "./tools/conv.sh");
+    sh(d, "config", "filter.y.clean", "scripts/clean.sh --flag");
+    sh(d, "config", "core.fsmonitor", "./fsm.sh");
+    sh(d, "config", "diff.external", "ext.sh");
+    for (const p of ["tools/conv.sh", "scripts/clean.sh", "fsm.sh", "ext.sh"]) expect(w(d, p), p).toBe("high");
+    expect(w(d, "tools/other.sh")).toBe("low");
+  });
+
+  it("a hooks folder named by core.hooksPath in a submodule's config is high to Write, and git status is high", { timeout: 120_000 }, () => {
+    const upstream = mk("w-up");
+    writeFileSync(join(upstream, "a"), "x");
+    sh(upstream, "add", "a");
+    sh(upstream, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "m");
+    const host = mk("w-host");
+    sh(host, "-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream.replaceAll("\\", "/"), "sub");
+    expect(tier("Bash", { command: "git status" }, { cwd: host, bashCwdPinned: true })).toBe("low");
+    sh(join(host, "sub"), "config", "core.hooksPath", ".githooks-x");
+    clearGitExecCache();
+    expect(w(host, "sub/.githooks-x/post-index-change")).toBe("high");
+    expect(tier("Bash", { command: "git status" }, { cwd: host, bashCwdPinned: true })).toBe("high");
   });
 });

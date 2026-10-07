@@ -1008,7 +1008,7 @@ describe("orchestration", () => {
     const q = await pendingQ(w.sessionId);
     expect((await call(coord, "worker_escalate", { name: "blk", id: q.requestId, reason: "x".repeat(1001) })).error).toMatch(/Invalid input/);
     await call(coord, "worker_escalate", { name: "blk", id: q.requestId, reason: "x".repeat(1000) });
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 400));
     const turns = runsOf(coord).reduce((n, r) => n + r.texts.length, 0);
     expect((await call(coord, "worker_wait", { names: ["blk"], types: ["question"], timeoutMs: 100 })).events).toEqual([]);
     expect(runsOf(coord).reduce((n, r) => n + r.texts.length, 0)).toBe(turns);

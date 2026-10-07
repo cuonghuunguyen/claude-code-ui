@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { gitReadOnly } from "../src/git-readonly.ts";
+import { clearGitExecCache, gitExecConfig, gitReadOnly } from "../src/git-readonly.ts";
 import { tier } from "../src/risk-tier.ts";
 
 // No symlinks here: this file runs on Windows too (risk-tier.test.ts holds the symlink rows).
@@ -235,6 +235,34 @@ describe("gitReadOnly", () => {
     it("a program outside the worktree as one absolute path is the user's own and stays low", () => {
       const d = withConfig("ok-prog", "diff.external", join(root, "bin", "mydiff").replaceAll("\\", "/"));
       expect(gitReadOnly({ command: "git diff" }, d)).toBe(true);
+    });
+
+    it("the config is read once per cwd for 5 s (a tier decision asks several times)", () => {
+      const d = withConfig("cached");
+      clearGitExecCache();
+      const first = gitExecConfig(d);
+      git(d, "config", "core.hooksPath", ".hk");
+      expect(gitExecConfig(d)).toBe(first);
+      expect(first.unsafe).toBe(false);
+      clearGitExecCache();
+      expect(gitExecConfig(d).unsafe).toBe(true);
+    });
+
+    it("an include.path into the worktree, a relative gpg.program and a relative hooksPath written as an absolute path inside are refused", () => {
+      for (const [k, v] of [["include.path", "../extra.cfg"], ["gpg.program", "./gpg.sh"]] as const) {
+        const d = withConfig(`inc-${k}`, k, v);
+        expect(gitReadOnly({ command: "git log" }, d), k).toBe(false);
+        expect(gitReadOnly({ command: "git branch --show-current" }, d), k).toBe(true);
+      }
+      const d = withConfig("abs-hooks");
+      git(d, "config", "core.hooksPath", join(d, "hk").replaceAll("\\", "/"));
+      expect(gitReadOnly({ command: "git status" }, d)).toBe(false);
+      if (process.platform === "win32") {
+        const drive = d.replaceAll("\\", "/").replace(/^([A-Za-z]):/, (_, l: string) => `/${l.toLowerCase()}`);
+        git(d, "config", "core.hooksPath", `${drive}/hk`);
+        clearGitExecCache();
+        expect(gitReadOnly({ command: "git status" }, d), "/c/... form").toBe(false);
+      }
     });
 
     it("a directory that git cannot read config in is refused", () => {
