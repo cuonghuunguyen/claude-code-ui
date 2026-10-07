@@ -342,6 +342,49 @@ describe("side chooser", () => {
     expect(document.activeElement).toBe(input());
   });
 
+  it("Tab from a kind reached with an arrow key leaves the row: forward to the next control, back to the one before it, never to Close", async () => {
+    const { kinds, press, input } = await renderSides(sides());
+    const close = document.querySelector<HTMLElement>('[aria-label="Close"]')!;
+    kinds()[0]!.focus();
+    await press(kinds()[0]!, "ArrowRight");
+    expect(document.activeElement).toBe(kinds()[1]);
+    await press(kinds()[1]!, "Tab");
+    expect(document.activeElement).toBe(input());
+    kinds()[0]!.focus();
+    await press(kinds()[0]!, "ArrowRight");
+    await act(async () => void kinds()[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(close);
+  });
+
+  it("Tab inside the open distro dropdown does not jump to the dialog's Close button", async () => {
+    const { kind, click, target, items, press } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu"), S("wsl:Debian", "WSL: Debian")]);
+    await click(kind("WSL"));
+    await click(target()!);
+    const close = document.querySelector<HTMLElement>('[aria-label="Close"]')!;
+    await press(items()[0]!, "Tab");
+    expect(document.activeElement).not.toBe(close);
+  });
+
+  it("a distro whose setup failed shows Error in the dropdown, not Setting up", async () => {
+    const onStartSide = vi.fn(async (_id: string) => {}).mockRejectedValueOnce(new Error("no node"));
+    const { kind, click, target, items } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu"), S("wsl:Debian", "WSL: Debian", "off")], onStartSide);
+    await click(kind("WSL"));
+    await click(target()!);
+    await click(items()[1]!);
+    await click(target()!);
+    expect(items().map((i) => i.textContent)).toEqual(["Ubuntu", "DebianError"]);
+  });
+
+  it("per-kind memory starts from the side used before it existed", async () => {
+    localStorage.clear();
+    localStorage.setItem("claude-ui.side", "wsl:Debian");
+    const { kind, click, target, checked } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu"), S("wsl:Debian", "WSL: Debian")], undefined, true);
+    expect(checked()).toEqual(["WSL"]);
+    await click(kind("Windows"));
+    await click(kind("WSL"));
+    expect(target()!.textContent).toBe("Debian");
+  });
+
   describe("Docker", () => {
     const many = [S("local", "Linux"), ...docker("cui-alpine", "cui-nologin", "cui-node", "chat-solution-autoheal-1", "db1", "db2")];
     const names = ["cui-alpine", "cui-nologin", "cui-node", "chat-solution-autoheal-1", "db1", "db2"];

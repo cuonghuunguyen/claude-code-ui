@@ -91,7 +91,9 @@ const kindKey = (kind: SideKind) => `${SIDE_KEY}.${kind}`;
 /** The last distro or container chosen of a kind. */
 export const loadSideFor = (kind: SideKind) => {
   try {
-    return localStorage.getItem(kindKey(kind)) ?? undefined;
+    // First read: the side used before per-kind memory existed.
+    const last = localStorage.getItem(SIDE_KEY);
+    return localStorage.getItem(kindKey(kind)) ?? (last && sideKind(last) === kind ? last : undefined);
   } catch {
     return undefined;
   }

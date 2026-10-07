@@ -157,6 +157,8 @@ function SidePicker({
     setChosen({ kind: k });
     setStatus(undefined);
   };
+  // The side used before per-kind memory existed becomes its kind's remembered one (leaving it for another kind keeps it).
+  useEffect(() => void (current && kind !== "local" && saveSideFor(kind, current.id)), []);
   // The last used side, not running: start it (a failed one waits for Retry).
   useEffect(() => void (current && !ready && current.state !== "error" && choose(current.id)), []);
   const shown = !current ? undefined : status?.side === side ? status : !ready && current.state === "error" ? { side: current.id, error: current.message ?? `${current.label} is not running.` } : undefined;
@@ -168,7 +170,7 @@ function SidePicker({
     if (winLocal && /^[a-z]:/i.test(v) && kind !== "local") return void choose(LOCAL_SIDE, v), true;
     if (winLocal && v.startsWith("/") && kind === "local") {
       // A WSL distro first (remembered, else ready, else first), else a container the user chose before or one already running.
-      const to = defaultTarget("wsl", sides, loadSideFor("wsl")) ?? sides.find((s) => s.id === loadSideFor("docker")) ?? sides.find((s) => sideKind(s.id) === "docker" && s.state === "ready");
+      const to = defaultTarget("wsl", sides, loadSideFor("wsl")) ?? sides.find((s) => s.id === loadSideFor("docker") && sideKind(s.id) === "docker") ?? sides.find((s) => sideKind(s.id) === "docker" && s.state === "ready");
       if (to) return void choose(to.id, v), true;
     }
     return false;
@@ -186,7 +188,7 @@ function SidePicker({
     );
   };
   const members = sides.filter((s) => sideKind(s.id) === kind);
-  const stateWord = (s: SideInfo) => (isReady(s) ? undefined : s.state === "error" ? "Error" : s.state === "starting" || status?.side === s.id ? "Setting up…" : "Not set up");
+  const stateWord = (s: SideInfo) => (isReady(s) ? undefined : status?.side === s.id ? (status.error ? "Error" : "Setting up…") : s.state === "error" ? "Error" : s.state === "starting" ? "Setting up…" : "Not set up");
   const kindLabel = (k: SideKind) => (k === "local" ? (sides.find((s) => s.id === LOCAL_SIDE)?.label ?? "This machine") : k === "wsl" ? "WSL" : "Docker");
   return (
     <>
