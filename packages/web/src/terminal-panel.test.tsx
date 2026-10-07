@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ConnectionStatus, TerminalMessage, connect } from "./client.ts";
 import { TerminalPanel } from "./terminal-panel.tsx";
+import { TERMINAL_FONT, resetTerminalFont } from "./terminal-font.ts";
 import { MAX_TERMINAL_INPUT_BYTES } from "@claude-ui/protocol";
 
 // xterm draws on a canvas jsdom lacks; the stub records what the panel does with it.
@@ -20,12 +21,19 @@ type FakeTerm = {
   disposed: boolean;
   parent?: HTMLElement;
   focused: number;
+  options?: { fontFamily?: string };
+  /** Every fontFamily set after construction, in order. */
+  fontSets: string[];
+  fits: number;
 };
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
-    t: FakeTerm = { written: [], resets: 0, cols: 80, rows: 24, selection: "", disposed: false, focused: 0 };
-    options = {};
-    constructor() {
+    t: FakeTerm = { written: [], resets: 0, cols: 80, rows: 24, selection: "", disposed: false, focused: 0, fontSets: [], fits: 0 };
+    options: { fontFamily?: string };
+    constructor(options: { fontFamily?: string } = {}) {
+      this.t.options = options;
+      const t = this.t;
+      this.options = new Proxy(options, { set: (o, k, v) => (k === "fontFamily" && t.fontSets.push(v), Reflect.set(o, k, v)) });
       xterm.all.push(this.t);
     }
     get cols() {
@@ -71,7 +79,8 @@ vi.mock("@xterm/xterm", () => ({
     }
   },
 }));
-vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
+const fitted = vi.hoisted(() => ({ n: 0 }));
+vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() { fitted.n++; } } }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -89,6 +98,9 @@ const root = createRoot(el);
 afterEach(async () => {
   await act(async () => root.render(null));
   xterm.all = [];
+  fitted.n = 0;
+  Reflect.deleteProperty(document, "fonts");
+  resetTerminalFont();
 });
 
 /** Fake daemon: `terminals` per cwd, `buffers` replayed on attach. */
@@ -329,4 +341,53 @@ it("after a reload, every terminal streams and the selected one is selected agai
   expect(xterm.all.map((t) => !!t.parent)).toEqual([false, true]);
   await act(async () => el.querySelectorAll<HTMLButtonElement>("[role=tab]")[0]!.click());
   expect(xterm.all.map((t) => !!t.parent)).toEqual([true, true]);
+});
+
+it("creates the terminal with the Nerd Font stack", async () => {
+  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+  await render(client);
+  await flush();
+  expect(xterm.all[0]!.options!.fontFamily).toBe(TERMINAL_FONT);
+});
+
+it("opens the terminal only once the icon font is loaded, with the scrollback written meanwhile kept", async () => {
+  let loaded!: () => void;
+  Object.defineProperty(document, "fonts", { value: { load: () => new Promise<void>((r) => (loaded = r)) }, configurable: true });
+  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+  client.buffers.t1 = " master";
+  await render(client);
+  await flush();
+  expect(xterm.all[0]!.parent).toBeUndefined();
+  expect(xterm.all[0]!.written).toEqual([" master"]);
+  const fitsBefore = fitted.n;
+  await act(async () => loaded());
+  await flush();
+  expect(xterm.all[0]!.parent).toBeDefined();
+  expect(fitted.n).toBeGreaterThan(fitsBefore);
+  expect(xterm.all[0]!.written).toEqual([" master"]);
+});
+
+it("re-measures and refits when the font arrives after the wait timed out", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    let loaded!: () => void;
+    Object.defineProperty(document, "fonts", { value: { load: () => new Promise<void>((r) => (loaded = r)) }, configurable: true });
+    const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+    await render(client);
+    await act(async () => void (await vi.advanceTimersByTimeAsync(3100)));
+    const t = xterm.all[0]!;
+    // Opened without the font after the cap.
+    expect(t.parent).toBeDefined();
+    expect(t.fontSets).toEqual([]);
+    const fits = fitted.n;
+    await act(async () => void loaded());
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    // Set to another value and back: xterm measures again only when the option changes.
+    expect(t.fontSets.length).toBe(2);
+    expect(t.fontSets.at(-1)).toBe(TERMINAL_FONT);
+    expect(t.fontSets[0]).not.toBe(TERMINAL_FONT);
+    expect(fitted.n).toBeGreaterThan(fits);
+  } finally {
+    vi.useRealTimers();
+  }
 });

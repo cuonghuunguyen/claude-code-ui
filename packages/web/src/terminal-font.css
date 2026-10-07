@@ -1,0 +1,9 @@
+/* Symbols Nerd Font Mono 3.5.1 (https://github.com/ryanoasis/nerd-fonts, NerdFontsSymbolsOnly.zip, MIT, see THIRD_PARTY_NOTICES.md),
+   TTF converted to woff2. An installed copy wins; only the Private Use Area comes from this file, so letters never do.
+   Imported by terminal-panel.tsx only: the file is fetched with the first terminal, not with the app. */
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: local("Symbols Nerd Font Mono"), url("./assets/SymbolsNerdFontMono-Regular.woff2") format("woff2");
+  unicode-range: U+E000-F8FF, U+F0000-FFFFD;
+  font-display: block;
+}

@@ -5,9 +5,11 @@ import type { TerminalAttachResult, TerminalCreateResult, TerminalInfo, Terminal
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import "./terminal-font.css";
 import { PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { connect, ConnectionStatus } from "./client.ts";
+import { TERMINAL_FONT, loadTerminalFont, terminalFontSettled } from "./terminal-font.ts";
 import { KEYS, matchesKey } from "./shortcuts.ts";
 import { IconButton } from "./tabs-bar.tsx";
 import { useDark } from "./theme.ts";
@@ -191,17 +193,34 @@ function TerminalView({
 
   useEffect(() => {
     // OpenCode terminal.tsx options.
-    const t = new Terminal({ cursorBlink: true, cursorStyle: "bar", fontSize: 14, scrollback: 10_000, fontFamily: 'ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, Consolas, monospace' });
+    const t = new Terminal({ cursorBlink: true, cursorStyle: "bar", fontSize: 14, scrollback: 10_000, fontFamily: TERMINAL_FONT });
     const fit = new FitAddon();
     t.loadAddon(fit);
     // Opened once the box is on screen, then fitted to it. Opened in a hidden box (a tab not selected after a reload),
     // xterm measured no cell size and its fit on the first show left the viewport above the newest rows, frozen there.
+    // Also not before the icon font is loaded (or 3 s passed): xterm caches the cell and glyph widths it measures at open.
+    let fontReady = false;
+    let disposed = false;
     const show = () => {
-      if (!box.current?.offsetParent) return;
+      if (disposed || !fontReady || !box.current?.offsetParent) return;
       if (!t.element) t.open(box.current);
       fit.fit();
     };
     term.current = { t, show };
+    let settled = false;
+    void terminalFontSettled().then(() => (settled = true));
+    void loadTerminalFont().then(() => {
+      fontReady = true;
+      show();
+      // The wait ran out before the font did: measure again once it is there (xterm only does when the option changes) and refit.
+      if (!settled && !disposed) void terminalFontSettled().then(() => !disposed && late());
+    });
+    const late = () => {
+      if (!t.element) return;
+      t.options.fontFamily = `${TERMINAL_FONT}, monospace`;
+      t.options.fontFamily = TERMINAL_FONT;
+      fit.fit();
+    };
     // Typed while offline it would arrive late, out of context: dropped.
     t.onData((data) => {
       if (!connected.current) return;
@@ -231,6 +250,7 @@ function TerminalView({
     const ro = new ResizeObserver(show);
     ro.observe(box.current!);
     return () => {
+      disposed = true;
       ro.disconnect();
       off();
       client.request({ type: "terminal.detach", terminalId: id }).catch(() => {});
