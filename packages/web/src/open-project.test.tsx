@@ -194,129 +194,281 @@ it("without recent projects the dialog shows no recent section", async () => {
   expect(document.body.textContent).not.toContain("Recent projects");
 });
 
-describe("side chooser (Windows with WSL)", () => {
-  const sides = (wsl: SideInfo["state"] = "off", message?: string): SideInfo[] => [
-    { id: "local", label: "Windows", state: "ready" },
-    { id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: wsl, ...(message && { message }) },
-  ];
+describe("side chooser", () => {
+  const S = (id: string, label: string, state: SideInfo["state"] = "ready", message?: string): SideInfo => ({ id, label, state, ...(message && { message }) });
+  const sides = (wsl: SideInfo["state"] = "off", message?: string): SideInfo[] => [S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu", wsl, message)];
+  const docker = (...names: string[]): SideInfo[] => names.map((n) => S(`docker:${n}`, `Docker: ${n}`));
   const winTree: Record<string, string[]> = { "C:\\Users\\me": ["proj"], "C:\\Users\\me\\proj": [] };
   const sideList = vi.fn(async (path?: string, side?: string): Promise<FsEntry[]> => {
-    if (side === "wsl:Ubuntu") return list(path);
+    if (side && side !== "local") return list(path);
     if (!path) return [{ name: "C:\\Users\\me", path: "C:\\Users\\me", isDir: true }];
     return (winTree[path] ?? []).map((name) => ({ name, path: `${path}\\${name}`, isDir: true }));
   });
-  async function renderSides(s: SideInfo[], onStartSide = vi.fn(async () => {})) {
-    localStorage.clear();
-    const onPick = vi.fn(async () => {});
+  const sideOf = (c: string) => (c.startsWith("/") ? "wsl:Ubuntu" : "local");
+  async function renderSides(s: SideInfo[], onStartSide = vi.fn(async (_id: string) => {}), keepStorage = false) {
+    if (!keepStorage) localStorage.clear();
+    const onPick = vi.fn(async (_cwd: string, _side?: string) => {});
+    const recent: RecentProject[] = [{ cwd: "/home/u/api", sessionCount: 2, lastActivity: Date.now() }];
     const el = document.createElement("div");
     document.body.append(el);
     root = createRoot(el);
-    const recent: RecentProject[] = [{ cwd: "/home/u/api", sessionCount: 2, lastActivity: Date.now() }];
-    await act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={sideList} onPick={onPick} sides={s} onStartSide={onStartSide} recent={recent} sideOf={(c) => (c.startsWith("/") ? "wsl:Ubuntu" : "local")} />));
+    const show = (sides: SideInfo[]) =>
+      act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={sideList} onPick={onPick} sides={sides} onStartSide={onStartSide} recent={recent} sideOf={sideOf} />));
+    await show(s);
     const input = () => document.querySelector<HTMLInputElement>('[data-testid="folder-input"]');
-    const options = () => [...document.querySelectorAll<HTMLElement>('[data-testid="side-option"]')];
+    const kinds = () => [...document.querySelectorAll<HTMLElement>('[data-testid="side-kind"]')];
+    const checked = () => kinds().filter((o) => o.getAttribute("aria-checked") === "true").map((o) => o.textContent);
     const status = () => document.querySelector('[data-testid="side-status"]')?.textContent;
-    const type = async (v: string) => {
+    // The label inside the trigger (its chevron is part of the button text).
+    const target = () => document.querySelector<HTMLElement>('[data-testid="side-target"] > span');
+    const rowEls = () => [...document.querySelectorAll<HTMLElement>('[data-testid="container-row"]')];
+    const containers = () => rowEls().map((r) => r.textContent);
+    const filter = () => document.querySelector<HTMLInputElement>('[data-testid="container-filter"]')!;
+    const typeIn = async (el: () => HTMLInputElement | null, v: string) => {
       const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
       await act(async () => {
-        set.call(input(), v);
-        input()!.dispatchEvent(new Event("input", { bubbles: true }));
+        set.call(el(), v);
+        el()!.dispatchEvent(new Event("input", { bubbles: true }));
       });
     };
-    return { input, options, status, type, onPick, onStartSide };
+    const type = (v: string) => typeIn(input, v);
+    const press = (el: HTMLElement, k: string) => act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })));
+    const click = (el: HTMLElement) => act(async () => el.click());
+    const kind = (name: string) => kinds().find((k) => k.textContent === name)!;
+    const items = () => [...document.querySelectorAll<HTMLElement>('[data-testid="side-target-item"]')];
+    return { input, kinds, checked, status, target, containers, rowEls, filter, type, typeIn, press, click, kind, items, show, onPick, onStartSide };
   }
 
-  it("starts on Windows; choosing a WSL side sets it up, then browses its home folder and picks on that side", async () => {
+  it("shows one chip per kind: Windows and WSL; choosing WSL sets the distro up, then browses its home folder and picks on that side", async () => {
     let done!: () => void;
-    const { input, options, status, onPick, onStartSide } = await renderSides(sides(), vi.fn(() => new Promise<void>((r) => (done = r))));
-    expect(options().map((o) => [o.textContent, o.getAttribute("aria-checked")])).toEqual([["Windows", "true"], ["WSL: Ubuntu", "false"]]);
+    const { input, checked, kind, click, status, target, onPick, onStartSide, kinds } = await renderSides(sides(), vi.fn(() => new Promise<void>((r) => (done = r))));
+    expect(kinds().map((o) => o.textContent)).toEqual(["Windows", "WSL"]);
+    expect(checked()).toEqual(["Windows"]);
+    expect(target()).toBeNull();
     expect(input()!.value).toBe("C:\\Users\\me\\");
-    await act(async () => options()[1]!.click());
+    await click(kind("WSL"));
     expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu");
     expect(status()).toBe("Setting up WSL: Ubuntu…");
+    expect(target()!.textContent).toBe("Ubuntu");
     await act(async () => done());
     expect(input()!.value).toBe("/home/u/");
-    await act(async () => document.querySelector<HTMLElement>('[data-testid="open-folder"]')!.click());
+    await click(document.querySelector<HTMLElement>('[data-testid="open-folder"]')!);
     expect(onPick).toHaveBeenCalledWith("/home/u", "wsl:Ubuntu");
     // The last used side comes back next time.
     expect(localStorage.getItem("claude-ui.side")).toBe("wsl:Ubuntu");
+    expect(localStorage.getItem("claude-ui.side.wsl")).toBe("wsl:Ubuntu");
   });
 
   it("a side that cannot start says what to do; Retry starts it again", async () => {
     const msg = "Node.js 22 or newer is not installed in WSL: Ubuntu. Install it there (e.g. nvm install 22), then retry.";
-    const onStartSide = vi.fn(async () => {}).mockRejectedValueOnce(new Error(msg));
-    const { options, status, input } = await renderSides(sides(), onStartSide);
-    await act(async () => options()[1]!.click());
+    const onStartSide = vi.fn(async (_id: string) => {}).mockRejectedValueOnce(new Error(msg));
+    const { kind, click, status, input } = await renderSides(sides(), onStartSide);
+    await click(kind("WSL"));
     expect(status()).toBe(`${msg}Retry`);
-    await act(async () => document.querySelector<HTMLElement>('[data-testid="side-retry"]')!.click());
+    await click(document.querySelector<HTMLElement>('[data-testid="side-retry"]')!);
     expect(onStartSide).toHaveBeenCalledTimes(2);
     expect(input()!.value).toBe("/home/u/");
   });
 
   it("a typed path picks its side: /home goes to WSL, C:\\ back to Windows, \\\\wsl.localhost\\Ubuntu to that distro", async () => {
-    const { input, options, type } = await renderSides(sides("ready"));
+    const { input, checked, target, type } = await renderSides(sides("ready"));
     await type("/home/u/cl");
-    expect(options()[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(checked()).toEqual(["WSL"]);
+    expect(target()!.textContent).toBe("Ubuntu");
     expect(input()!.value).toBe("/home/u/cl");
     await type("C:\\Users\\me\\p");
-    expect(options()[0]!.getAttribute("aria-checked")).toBe("true");
+    expect(checked()).toEqual(["Windows"]);
     expect(input()!.value).toBe("C:\\Users\\me\\p");
     await type("\\\\wsl.localhost\\Ubuntu\\home\\u\\");
-    expect(options()[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(checked()).toEqual(["WSL"]);
     expect(input()!.value).toBe("/home/u/");
   });
 
   it("a typed POSIX path on Windows goes to a WSL distro before a container", async () => {
-    const { options, type } = await renderSides([
-      { id: "local", label: "Windows", state: "ready" },
-      { id: "docker:dev", label: "Docker: dev", state: "ready" },
-      { id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: "ready" },
-    ]);
+    const { checked, target, type } = await renderSides([S("local", "Windows"), ...docker("dev"), S("wsl:Ubuntu", "WSL: Ubuntu")]);
     await type("/home/u/cl");
-    const checked = options().filter((o) => o.getAttribute("aria-checked") === "true");
-    expect(checked.map((o) => o.textContent)).toEqual(["WSL: Ubuntu"]);
+    expect(checked()).toEqual(["WSL"]);
+    expect(target()!.textContent).toBe("Ubuntu");
   });
 
   it("recent projects of every side show their side; a /mnt/c folder offers to open it on Windows", async () => {
-    const { type, options, input } = await renderSides(sides("ready"));
-    await act(async () => options()[1]!.click());
+    const { type, kind, click, input, checked } = await renderSides(sides("ready"));
+    await click(kind("WSL"));
     expect(document.querySelector('[data-testid="recent-row"]')!.textContent).toContain("api");
     await type("/mnt/c/Users/me/proj/");
     const hint = document.querySelector<HTMLElement>('[data-testid="open-as-windows"]')!;
     expect(hint.textContent).toBe("Open C:\\Users\\me\\proj on Windows");
-    await act(async () => hint.click());
-    expect(options()[0]!.getAttribute("aria-checked")).toBe("true");
+    await click(hint);
+    expect(checked()).toEqual(["Windows"]);
     expect(input()!.value).toBe("C:\\Users\\me\\proj");
   });
-});
 
-describe("side chooser (Linux with Docker)", () => {
-  const sides: SideInfo[] = [
-    { id: "local", label: "Linux", state: "ready" },
-    { id: "docker:dev", label: "Docker: dev", state: "ready" },
-  ];
-  it("a typed POSIX path stays on the chosen side; no Windows hint in a container", async () => {
-    localStorage.clear();
-    const onStartSide = vi.fn(async () => {});
-    const el = document.createElement("div");
-    document.body.append(el);
-    root = createRoot(el);
-    await act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={async (p?: string) => list(p)} onPick={vi.fn(async () => {})} sides={sides} onStartSide={onStartSide} sideOf={() => "local"} />));
-    const input = () => document.querySelector<HTMLInputElement>('[data-testid="folder-input"]');
-    const options = () => [...document.querySelectorAll<HTMLElement>('[data-testid="side-option"]')];
-    const type = async (v: string) => {
-      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-      await act(async () => {
-        set.call(input(), v);
-        input()!.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-    };
-    await type("/home/u/cl");
-    expect(options()[0]!.getAttribute("aria-checked")).toBe("true");
+  it("two WSL distros: the dropdown picks the distro and shows which are not set up", async () => {
+    const { kind, click, target, items, input, status, onStartSide } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu"), S("wsl:Debian", "WSL: Debian", "off")]);
+    await click(kind("WSL"));
+    expect(target()!.textContent).toBe("Ubuntu");
+    expect(input()!.value).toBe("/home/u/");
+    await click(target()!);
+    expect(items().map((i) => i.textContent)).toEqual(["Ubuntu", "DebianNot set up"]);
+    let done!: () => void;
+    onStartSide.mockImplementationOnce(() => new Promise<void>((r) => (done = r)));
+    await click(items()[1]!);
+    expect(onStartSide).toHaveBeenCalledWith("wsl:Debian");
+    expect(status()).toBe("Setting up WSL: Debian…");
+    await act(async () => done());
+    expect(target()!.textContent).toBe("Debian");
+    expect(input()!.value).toBe("/home/u/");
+    expect(sideList).toHaveBeenLastCalledWith("/home/u", "wsl:Debian");
+  });
+
+  it("the arrow keys move the focus between the kinds without choosing one", async () => {
+    const { kinds, press, checked, onStartSide } = await renderSides(sides());
+    kinds()[0]!.focus();
+    await press(kinds()[0]!, "ArrowRight");
+    expect(document.activeElement).toBe(kinds()[1]);
+    expect(checked()).toEqual(["Windows"]);
     expect(onStartSide).not.toHaveBeenCalled();
-    await act(async () => options()[1]!.click());
-    await type("/mnt/c/Users/x/");
-    expect(document.querySelector('[data-testid="mnt-hint"]')).toBeNull();
+    await press(kinds()[1]!, "ArrowRight");
+    expect(document.activeElement).toBe(kinds()[0]);
+    await press(kinds()[0]!, "ArrowLeft");
+    expect(document.activeElement).toBe(kinds()[1]);
+    expect(kinds().map((k) => k.tabIndex)).toEqual([0, -1]);
+  });
+
+  describe("Docker", () => {
+    const many = [S("local", "Linux"), ...docker("cui-alpine", "cui-nologin", "cui-node", "chat-solution-autoheal-1", "db1", "db2")];
+    const names = ["cui-alpine", "cui-nologin", "cui-node", "chat-solution-autoheal-1", "db1", "db2"];
+
+    it("many containers still show one Docker chip, not one chip per container", async () => {
+      const { kinds, checked, target } = await renderSides(many);
+      expect(kinds().map((o) => o.textContent)).toEqual(["Linux", "Docker"]);
+      expect(checked()).toEqual(["Linux"]);
+      expect(target()).toBeNull();
+      expect(document.querySelector('[data-testid="side-chooser"]')!.textContent).not.toContain("Docker:");
+    });
+
+    it("Docker asks which container first and sets nothing up until one is picked; the filter narrows, Enter picks", async () => {
+      const { kind, click, containers, filter, input, typeIn, press, onStartSide, onPick, target, checked } = await renderSides(many);
+      await click(kind("Docker"));
+      expect(checked()).toEqual(["Docker"]);
+      expect(containers()).toEqual(names);
+      expect(onStartSide).not.toHaveBeenCalled();
+      expect(input()).toBeNull();
+      expect(document.activeElement).toBe(filter());
+      expect(target()!.textContent).toBe("Choose container");
+      await typeIn(filter, "no");
+      expect(containers()).toEqual(["cui-nologin", "cui-node"]);
+      await typeIn(filter, "zzz");
+      expect(document.body.textContent).toContain("No running container matches");
+      await press(filter(), "Enter");
+      expect(onStartSide).not.toHaveBeenCalled();
+      await typeIn(filter, "NO");
+      await press(filter(), "ArrowDown");
+      await press(filter(), "Enter");
+      // Running containers need no setup.
+      expect(onStartSide).not.toHaveBeenCalled();
+      expect(input()!.value).toBe("/home/u/");
+      expect(target()!.textContent).toBe("cui-node");
+      await click(document.querySelector<HTMLElement>('[data-testid="open-folder"]')!);
+      expect(onPick).toHaveBeenCalledWith("/home/u", "docker:cui-node");
+    });
+
+    it("a container that is not set up starts when picked, then browses", async () => {
+      const { kind, click, containers, rowEls, status, input, onStartSide } = await renderSides([S("local", "Linux"), S("docker:a", "Docker: a", "off"), S("docker:b", "Docker: b")]);
+      await click(kind("Docker"));
+      expect(containers()).toEqual(["b", "aNot set up"]);
+      await click(rowEls()[1]!);
+      expect(onStartSide).toHaveBeenCalledWith("docker:a");
+      expect(status()).toBeUndefined();
+      expect(input()!.value).toBe("/home/u/");
+    });
+
+    it("one container that is not running yet is highlighted but never set up until the user confirms it", async () => {
+      const { kind, click, containers, rowEls, press, filter, onStartSide, input } = await renderSides([S("local", "Linux"), S("docker:solo", "Docker: solo", "off")]);
+      expect(onStartSide).not.toHaveBeenCalled();
+      await click(kind("Docker"));
+      expect(containers()).toEqual(["soloNot set up"]);
+      expect(rowEls()[0]!.getAttribute("aria-selected")).toBe("true");
+      expect(onStartSide).not.toHaveBeenCalled();
+      await press(filter(), "Enter");
+      expect(onStartSide).toHaveBeenCalledWith("docker:solo");
+      expect(input()).not.toBeNull();
+    });
+
+    it("the dropdown switches container; the last container comes back next time", async () => {
+      const { kind, click, containers, rowEls, target, items, onStartSide } = await renderSides(many);
+      await click(kind("Docker"));
+      await click(rowEls()[0]!);
+      expect(target()!.textContent).toBe("cui-alpine");
+      await click(target()!);
+      expect(items().map((i) => i.textContent)).toEqual(names);
+      await click(items()[2]!);
+      expect(target()!.textContent).toBe("cui-node");
+      expect(containers()).toEqual([]);
+      expect(onStartSide).not.toHaveBeenCalled();
+      expect(localStorage.getItem("claude-ui.side.docker")).toBe("docker:cui-node");
+      // A new dialog opens on the last used side: Docker with that container.
+      root!.unmount();
+      const again = await renderSides(many, undefined, true);
+      expect(again.checked()).toEqual(["Docker"]);
+      expect(again.target()!.textContent).toBe("cui-node");
+      expect(again.input()!.value).toBe("/home/u/");
+    });
+
+    it("Docker again after another kind goes straight to the remembered container; one that is gone asks again", async () => {
+      const { kind, click, target, containers, input } = await renderSides(many);
+      localStorage.setItem("claude-ui.side.docker", "docker:db1");
+      await click(kind("Docker"));
+      expect(target()!.textContent).toBe("db1");
+      expect(containers()).toEqual([]);
+      expect(input()).not.toBeNull();
+      await click(kind("Linux"));
+      localStorage.setItem("claude-ui.side.docker", "docker:gone");
+      await click(kind("Docker"));
+      expect(containers()).toEqual(names);
+      expect(input()).toBeNull();
+    });
+
+    it("a remembered side that is gone opens on the machine itself", async () => {
+      localStorage.clear();
+      localStorage.setItem("claude-ui.side", "docker:gone");
+      const { checked, input } = await renderSides(many, undefined, true);
+      expect(checked()).toEqual(["Linux"]);
+      expect(input()).not.toBeNull();
+    });
+
+    it("a chosen container that stops falls back to the container list; the last one leaving removes the Docker chip", async () => {
+      const withWsl = [S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu"), ...docker("a", "b", "c")];
+      const { kind, click, rowEls, show, kinds, input, onStartSide } = await renderSides(withWsl);
+      await click(kind("Docker"));
+      await click(rowEls()[1]!);
+      expect(rowEls()).toHaveLength(0);
+      await show(withWsl.filter((s) => s.id !== "docker:b"));
+      expect(rowEls()).toHaveLength(2);
+      expect(kinds().map((k) => k.getAttribute("aria-checked"))).toEqual(["false", "false", "true"]);
+      await show(withWsl.filter((s) => !s.id.startsWith("docker:")));
+      expect(kinds().map((k) => [k.textContent, k.getAttribute("aria-checked")])).toEqual([["Windows", "true"], ["WSL", "false"]]);
+      expect(input()).not.toBeNull();
+      expect(onStartSide).not.toHaveBeenCalled();
+    });
+
+    it("a typed POSIX path stays on the chosen side; no Windows hint in a container", async () => {
+      const { type, kind, click, rowEls, checked, onStartSide } = await renderSides([S("local", "Linux"), ...docker("dev")]);
+      await type("/home/u/cl");
+      expect(checked()).toEqual(["Linux"]);
+      expect(onStartSide).not.toHaveBeenCalled();
+      await click(kind("Docker"));
+      await click(rowEls()[0]!);
+      await type("/mnt/c/Users/x/");
+      expect(document.querySelector('[data-testid="mnt-hint"]')).toBeNull();
+    });
+
+    it("on a Windows hub a typed POSIX path never sets up a container that is not running", async () => {
+      const { type, checked, onStartSide } = await renderSides([S("local", "Windows"), S("docker:a", "Docker: a", "off")]);
+      await type("/home/u/cl");
+      expect(checked()).toEqual(["Windows"]);
+      expect(onStartSide).not.toHaveBeenCalled();
+    });
   });
 });
 

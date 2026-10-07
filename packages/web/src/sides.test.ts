@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { fromMnt, fromWslUnc, localIsWindows, sideLookup } from "./sides.tsx";
+import type { SideInfo } from "@claude-ui/protocol";
+import { defaultTarget, fromMnt, fromWslUnc, kindsOf, localIsWindows, sideKind, sideLookup, sideName } from "./sides.tsx";
 
 it("reads a WSL path written the Windows way as its distro's POSIX path", () => {
   expect(fromWslUnc("\\\\wsl.localhost\\Ubuntu\\home\\me")).toEqual({ side: "wsl:Ubuntu", path: "/home/me" });
@@ -37,4 +38,25 @@ it("short badges: Docker or the container name, WSL counted on its own, local by
   const linux = [{ id: "local", label: "Linux", state: "ready" as const }, dev];
   expect(sideLookup(linux, cwds).badge("/home/me")?.short).toBe("Linux");
   expect([localIsWindows([local, wsl]), localIsWindows(linux)]).toEqual([true, false]);
+});
+
+const S = (id: string, label: string, state: SideInfo["state"] = "ready"): SideInfo => ({ id, label, state });
+
+it("splits sides into kinds and names them without the prefix", () => {
+  expect(["local", "wsl:Ubuntu", "docker:cui-node"].map(sideKind)).toEqual(["local", "wsl", "docker"]);
+  expect([sideName(S("docker:cui-node", "Docker: cui-node")), sideName(S("wsl:Ubuntu", "WSL: Ubuntu")), sideName(S("local", "Windows"))]).toEqual(["cui-node", "Ubuntu", "Windows"]);
+  const local = S("local", "Linux");
+  expect(kindsOf([local])).toEqual(["local"]);
+  expect(kindsOf([local, S("docker:a", "Docker: a"), S("docker:b", "Docker: b")])).toEqual(["local", "docker"]);
+  expect(kindsOf([local, S("docker:a", "Docker: a"), S("wsl:U", "WSL: U")])).toEqual(["local", "wsl", "docker"]);
+});
+
+it("picks the side a kind opens on: remembered, else a ready distro; never an unpicked container", () => {
+  const sides = [S("local", "Windows"), S("wsl:A", "WSL: A", "off"), S("wsl:B", "WSL: B"), S("docker:x", "Docker: x"), S("docker:y", "Docker: y", "off")];
+  expect(defaultTarget("wsl", sides, "wsl:A")?.id).toBe("wsl:A");
+  expect(defaultTarget("wsl", sides, "wsl:gone")?.id).toBe("wsl:B");
+  expect(defaultTarget("wsl", [S("local", "Windows"), S("wsl:A", "WSL: A", "off")])?.id).toBe("wsl:A");
+  expect(defaultTarget("docker", sides)).toBeUndefined();
+  expect(defaultTarget("docker", sides, "docker:y")?.id).toBe("docker:y");
+  expect(defaultTarget("docker", sides, "docker:gone")).toBeUndefined();
 });

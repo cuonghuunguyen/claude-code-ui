@@ -68,3 +68,38 @@ export const saveSide = (id: string) => {
     // Storage blocked: the picker starts on Windows next time.
   }
 };
+
+/** The kinds of side Open project offers: the machine itself, WSL distros, Docker containers. */
+export type SideKind = "local" | "wsl" | "docker";
+export const sideKind = (id: string): SideKind => (id.startsWith("wsl:") ? "wsl" : id.startsWith("docker:") ? "docker" : "local");
+/** Distro or container name: the label without its `WSL: ` / `Docker: ` prefix. */
+export const sideName = (s: Pick<SideInfo, "label">) => s.label.replace(/^(?:WSL|Docker): /, "");
+/** The kinds that have members, in chooser order: local first. */
+export const kindsOf = (sides: SideInfo[]): SideKind[] => (["local", "wsl", "docker"] as const).filter((k) => k === "local" || sides.some((s) => sideKind(s.id) === k));
+/**
+ * The side a kind opens on: the remembered one when still listed; for WSL else the first ready distro, else the first; for
+ * Docker none (the user picks the container: nothing is set up for an unpicked one).
+ */
+export function defaultTarget(kind: SideKind, sides: SideInfo[], remembered?: string): SideInfo | undefined {
+  const members = sides.filter((s) => sideKind(s.id) === kind);
+  const mine = members.find((s) => s.id === remembered);
+  if (kind === "local") return members[0];
+  return mine ?? (kind === "wsl" ? (members.find((s) => s.state === "ready") ?? members[0]) : undefined);
+}
+
+const kindKey = (kind: SideKind) => `${SIDE_KEY}.${kind}`;
+/** The last distro or container chosen of a kind. */
+export const loadSideFor = (kind: SideKind) => {
+  try {
+    return localStorage.getItem(kindKey(kind)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+};
+export const saveSideFor = (kind: SideKind, id: string) => {
+  try {
+    localStorage.setItem(kindKey(kind), id);
+  } catch {
+    // Storage blocked: the kind opens on its default next time.
+  }
+};
