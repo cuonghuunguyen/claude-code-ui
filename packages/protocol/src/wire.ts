@@ -71,6 +71,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "fs.upload"; name: string; data: string; cwd?: string }
   /** Stops the running turn; a no-op while idle. */
   | { type: "session.interrupt"; sessionId: string }
+  /** Drops the session's scheduled continue (auto_continue); reply `{}`, also when none was scheduled. */
+  | { type: "session.cancelContinue"; sessionId: string }
   /** Stop agent: stops one running subagent run (`subagentId` = its subagent part id); the turn goes on. `unknown_subagent` when none runs. */
   | { type: "session.stopSubagent"; sessionId: string; subagentId: string }
   /**
@@ -231,7 +233,7 @@ export type PosPart = { part: Part; pos: number };
 /** Whole turns, oldest part first; `older` absent = the start of the session. */
 export type TimelinePage = { parts: Part[]; older?: Cursor };
 /**
- * Paged subscribe reply: `heads` = the latest session_state, commands, context_usage, external_turn, todo_update events; `aux` = parts of the
+ * Paged subscribe reply: `heads` = the latest session_state, commands, context_usage, external_turn, auto_continue, todo_update events; `aux` = parts of the
  * unloaded region that whole-session features need (subagent, turn_result, running background Bash calls).
  */
 export type Snapshot = { heads: Event[]; attentionSeq: number; page: TimelinePage; aux: PosPart[] };
@@ -388,7 +390,7 @@ export const GIT_LOG_MAX_LIMIT = 500;
 /** Where an MCP server (or plugin setting) is saved; Claude Code's term. local: this project, private; user: all projects; project: `.mcp.json`. */
 export type ConfigScope = "local" | "user" | "project";
 /** App-wide settings (settings.json in the daemon config dir). A later setting is one more field here, in the daemon's `DEFAULTS` and `CHECKS`. */
-export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean } };
+export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean }; usageLimit: { autoContinue: boolean } };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 export type SettingsResult = { settings: Settings };
 export type ConfigKind = "mcp" | "plugins" | "skills";

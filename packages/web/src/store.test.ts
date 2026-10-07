@@ -36,6 +36,13 @@ describe("applyEvent", () => {
     expect(applyEvent(s, ev(2, { type: "external_turn", id: "external_turn", running: false })).externalTurn).toBe(false);
   });
 
+  it("auto_continue sets and clears continueAt and adds no timeline item", () => {
+    const s = applyEvent(emptySession(), ev(1, { type: "auto_continue", id: "auto_continue", at: 5000 }));
+    expect(s.continueAt).toBe(5000);
+    expect(s.order).toEqual([]);
+    expect(applyEvent(s, ev(2, { type: "auto_continue", id: "auto_continue", at: null })).continueAt).toBeUndefined();
+  });
+
   it("tabs, sidebar and header show an idle session running while a terminal CLI turn runs", () => {
     const s = applyEvent(emptySession(), ev(1, { type: "external_turn", id: "external_turn", running: true }));
     expect(shownState(s)).toBe("running");

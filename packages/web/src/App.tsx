@@ -62,6 +62,7 @@ import { byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeTe
 import { appendQuote, splitQuotes } from "./quote.ts";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
+import { ContinueDock } from "./continue-dock.tsx";
 import { StatusBar, totals, type Totals } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
@@ -1269,6 +1270,7 @@ export function App() {
                             ? client.current!.request({ type: "session.bash", sessionId: s.id, command })
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
+                        onCancelContinue={() => client.current!.request({ type: "session.cancelContinue", sessionId: s.id }).catch((e) => setError((e as Error).message))}
                         onInterrupt={() =>
                           client.current!.request({ type: "session.interrupt", sessionId: s.id }).catch((e) => setError((e as Error).message))
                         }
@@ -1910,6 +1912,7 @@ export function SessionPane({
   onBash,
   onSearch,
   onInterrupt,
+  onCancelContinue,
   onRewindPreview,
   onRewind,
   onRespond,
@@ -1957,6 +1960,8 @@ export function SessionPane({
   onBash?: (command: string) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
   onInterrupt: () => void;
+  /** Drops the scheduled continue after a usage limit. */
+  onCancelContinue?: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
@@ -2165,6 +2170,7 @@ export function SessionPane({
           <NotPromptable view={view} run={current} onOpen={onOpenRun} onStop={stopRun} stopping={!!stopOf && !stopOf.error} error={stopOf?.error} />
         ) : (
           <>
+            {view.continueAt !== undefined && <ContinueDock at={view.continueAt} onCancel={() => onCancelContinue?.()} />}
             <PromptBox
               cwd={session.cwd}
               commands={view.commands}

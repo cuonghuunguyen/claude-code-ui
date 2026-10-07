@@ -17,7 +17,7 @@ afterEach(() => {
 
 async function render({ failGet = false } = {}) {
   const onTabGrouping = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true }, usageLimit: { autoContinue: false } };
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
@@ -25,7 +25,7 @@ async function render({ failGet = false } = {}) {
     if (msg.type === "settings.set") {
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v } };
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) } };
     }
     return { settings };
   });
@@ -113,4 +113,14 @@ it("Esc closes the dialog and the focus returns to the prompt box", async () => 
   await act(async () => void new Promise((r) => setTimeout(r, 50)));
   expect(q("settings-dialog")).toBeNull();
   expect(document.activeElement).toBe(prompt);
+});
+
+it("shows Usage limits: the continue switch is off by default and sends its patch only", async () => {
+  const { q, calls } = await render();
+  expect(q("settings-usageLimit")?.textContent).toContain("Continue automatically after a usage limit resets");
+  expect(q("settings-usageLimit")?.textContent).toContain("A daemon restart drops scheduled continues");
+  expect(q("settings-usageLimit-autoContinue")?.getAttribute("aria-checked")).toBe("false");
+  await act(async () => q("settings-usageLimit-autoContinue")!.click());
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { usageLimit: { autoContinue: true } } });
+  expect(q("settings-usageLimit-autoContinue")?.getAttribute("aria-checked")).toBe("true");
 });

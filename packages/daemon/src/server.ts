@@ -16,6 +16,7 @@ import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { createPlanTracker } from "./plan-usage.ts";
+import { CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
@@ -286,6 +287,8 @@ export function createDaemon(opts: {
   projects?: Projects;
   /** App-wide settings (settings.json); in memory when omitted. Readers call `get()` each time. */
   appSettings?: AppSettings;
+  /** Test seam (GH-164): delays of auto-continue.ts. */
+  autoContinue?: { graceMs?: number; gapMs?: number; retryMs?: number };
   listCache?: boolean;
   hostnames?: string[];
   cli?: CliRunner;
@@ -323,6 +326,7 @@ export function createDaemon(opts: {
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
     plan,
+    onLimitStop: (id: string, resetsAt: number | undefined) => autoContinue.schedule(id, resetsAt ?? plan.current()?.statusResetsAt),
     allowBypass: opts.allowBypass,
     supportsAuto,
     uploadDir: uploadParent,
@@ -348,6 +352,18 @@ export function createDaemon(opts: {
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
+  const autoContinue = createAutoContinue({
+    ...opts.autoContinue,
+    enabled: () => appSettings.get().usageLimit.autoContinue,
+    show: (id, at) => sessions.get(id)?.setContinueAt(at),
+    send: async (id) => {
+      const s = sessions.get(id);
+      if (!s || s.info().state !== "idle") return false;
+      const err = await sendPrompt(s, CONTINUE_PROMPT);
+      if (!err) console.log(`session ${id}: sent continue after the usage limit reset`);
+      return !err;
+    },
+  });
   const connections = new Set<WebSocket>();
   const terminals = createTerminals();
   const broadcast = (m: ServerMessage) => connections.forEach((ws) => send(ws, m));
@@ -637,7 +653,7 @@ export function createDaemon(opts: {
       queueMicrotask(() => broadcast({ type: "sessions.changed" }));
       return s;
     },
-    prompt: async (s, text) => (await sendPrompt(s, text))?.message,
+    prompt: async (s, text) => (autoContinue.cancel(s.id), (await sendPrompt(s, text))?.message),
     allowed: (path) => allowed(path),
     sideOf: (path) => {
       const id = opts.sides?.pathSide(path);
@@ -1048,6 +1064,7 @@ export function createDaemon(opts: {
         case "session.prompt": {
           const s = await find(msg.sessionId);
           if (!s) return;
+          autoContinue.cancel(s.id);
           const images = msg.images ?? [];
           if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
             return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
@@ -1058,6 +1075,7 @@ export function createDaemon(opts: {
         case "session.bash": {
           const s = await find(msg.sessionId);
           if (!s) return;
+          autoContinue.cancel(s.id);
           if (typeof msg.command !== "string" || !msg.command.trim()) return fail("bad_command", "empty command");
           if (!allowed(s.cwd)) return fail("cwd_not_allowed", `outside the allowlisted roots: ${s.cwd}`);
           const notLive = () => fail("session_not_live", `session ${s.id} is ${s.info().state}`);
@@ -1112,6 +1130,11 @@ export function createDaemon(opts: {
           } catch (err) {
             return fail("fs_error", String(err));
           }
+        }
+        case "session.cancelContinue": {
+          // No find(): a cancel must not restore a session.
+          autoContinue.cancel(msg.sessionId);
+          return reply({});
         }
         case "session.interrupt": {
           const s = await find(msg.sessionId);
@@ -1186,6 +1209,7 @@ export function createDaemon(opts: {
         case "settings.set": {
           try {
             const settings = appSettings.set(msg.patch);
+            if (!settings.usageLimit.autoContinue) autoContinue.clear();
             broadcast({ type: "settings_changed", settings });
             return reply({ settings });
           } catch (err) {
@@ -1218,6 +1242,7 @@ export function createDaemon(opts: {
           const state = at.live?.info().state;
           if (state === "running" || state === "needs_input") return fail("session_running", "stop the session before deleting it");
           // The CLI exits first: it writes session metadata on exit, which would recreate the transcript. A failed delete keeps the transcript.
+          autoContinue.cancel(msg.sessionId);
           deleting.add(msg.sessionId);
           sessions.delete(msg.sessionId);
           touched.delete(msg.sessionId);

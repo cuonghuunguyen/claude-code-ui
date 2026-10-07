@@ -21,6 +21,13 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
       { key: "coordinatorPermissions", kind: "switch", label: "Coordinator may answer permission requests", hint: "Allows the coordinator to approve or deny, once, reads and file edits inside the worker folder. Commands and everything else wait for you; no permission rule is saved. Edits can change code that commands you approve later will run." },
     ],
   },
+  {
+    id: "usageLimit",
+    title: "Usage limits",
+    rows: [
+      { key: "autoContinue", kind: "switch", label: "Continue automatically after a usage limit resets", hint: "A session stopped by the plan usage limit gets the prompt “continue” once the limit resets; several sessions continue one after another. Sending a message yourself cancels it. A daemon restart drops scheduled continues." },
+    ],
+  },
 ];
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
