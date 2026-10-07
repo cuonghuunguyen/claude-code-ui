@@ -2,7 +2,7 @@
 // coordinator may settle a `low` request, every other request is the user's. Unknown -> high. Any error -> high.
 import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { gitExecConfig, gitReadOnly } from "./git-readonly.ts";
+import { gitReadOnly, repoSafety } from "./git-readonly.ts";
 
 export type Tier = "low" | "high";
 export type TierContext = {
@@ -99,9 +99,9 @@ export function pathLow(p: unknown, cwd: string, write: boolean, cwdOk = !write,
     if (!write) return !(isDir(real) && treeHasDenied(real));
     // A repo layout: `config` next to HEAD, objects or refs, or objects/refs next to a `config` (in either order the config
     // would be repo config: core.fsmonitor, diff.external run on a later git command the user approves).
-    // core.hooksPath inside the worktree (husky v9: .husky/_): a hook planted there runs on a later git status.
-    // Hook folders by name, anywhere (a submodule's `sub/.husky/_` too), and what the config names (see gitRunsIt).
-    if ([...segs0, ...rawSegs].some((g) => /^(hooks|\.husky)$/i.test(g)) || gitRunsIt(real, segs0, cwd)) return false;
+    // Git's control files and hook folders by name, at any depth (a submodule's `sub/.husky/_` too); then no Write is low in a
+    // repository that is not plain (hooks, programs or includes in its config, submodules, nested repositories, unreadable), nor into what its config names.
+    if ([...segs0, ...rawSegs].some(gitControl) || gitRunsIt(real, cwd)) return false;
     const has = (dir: string, n: string) => !!lstatSync(join(dir, n), { throwIfNoEntry: false });
     const segs = segs0;
     for (let i = 0; i < segs.length; i++) {
@@ -131,16 +131,23 @@ function treeHasDenied(dir: string): boolean {
   return walk(dir);
 }
 /**
- * Whether a Write must be high because git would run it: a folder or script the repository's config (and its submodules') names
- * inside the cwd; with the config unreadable, any hook-like folder. A hook planted by a low Write runs on a later low `git status`.
+ * Git's own control files and hook folders, by name at any depth: .gitmodules, .gitattributes, .gitconfig, .gitignore, .githooks*,
+ * .husky*, hooks, .lfsconfig. `.github` and `.gitlab*` hold CI files, not git's: a push (high) is what runs them.
  */
-function gitRunsIt(real: string, segs: string[], cwd: string): boolean {
-  const cfg = gitExecConfig(cwd);
-  if (cfg.failed && segs.some((g) => /hook|husky/i.test(g))) return true;
-  return cfg.protectedPaths.some((d) => {
-    const rel = relative(d, real);
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-  });
+const gitControl = (seg: string) => {
+  const g = seg.toLowerCase();
+  return g === "hooks" || g.startsWith(".husky") || g === ".lfsconfig" || (g.startsWith(".git") && g !== ".github" && !g.startsWith(".gitlab"));
+};
+/** Whether a Write must be high because git could run it: the repository is not plain (repoSafety), or its config names the path. */
+function gitRunsIt(real: string, cwd: string): boolean {
+  const s = repoSafety(cwd);
+  return (
+    s.unsafe ||
+    s.protectedPaths.some((d) => {
+      const rel = relative(d, real);
+      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    })
+  );
 }
 
 /** A glob relative to the cwd: no absolute start, no `..`, no `~`. */

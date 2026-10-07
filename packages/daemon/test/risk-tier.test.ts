@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,9 +9,11 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "tier-")));
 const cwd = join(root, "w");
 const outside = join(root, "o");
 const cwdLink = join(root, "wl");
-for (const d of ["src", ".git", ".claude/skills", "sub", "bare/objects", "barer/refs", "bareh", "cfg"]) mkdirSync(join(cwd, d), { recursive: true });
+for (const d of ["src", ".claude/skills", "sub", "bare/objects", "barer/refs", "bareh", "cfg"]) mkdirSync(join(cwd, d), { recursive: true });
+// A real repository: Writes and read-only git are low only in a plain one (git-readonly.ts repoSafety).
+execFileSync("git", ["init", "-q"], { cwd });
 mkdirSync(outside);
-for (const f of ["bareh/HEAD", "cfg/config", "src/a.ts", ".git/config", ".claude/settings.json", "sub/CLAUDE.md", ".env.local", "id.pem"]) writeFileSync(join(cwd, f), "x");
+for (const f of ["bareh/HEAD", "cfg/config", "src/a.ts", ".claude/settings.json", "sub/CLAUDE.md", ".env.local", "id.pem"]) writeFileSync(join(cwd, f), "x");
 writeFileSync(join(outside, "secret.txt"), "s");
 symlinkSync(outside, join(cwd, "out"));
 symlinkSync(join(outside, "secret.txt"), join(cwd, "outfile"));

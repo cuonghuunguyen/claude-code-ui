@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { clearGitExecCache } from "../src/git-readonly.ts";
+import { repoSafety } from "../src/git-readonly.ts";
 import { mainCheckoutOf, tier, type TierContext } from "../src/risk-tier.ts";
 
 // Agent docs and the main checkout (GH-163). No symlinks: runs on Windows too.
@@ -120,7 +120,12 @@ describe("reads of agent docs and the main checkout", () => {
       ["Edit", join(main, ".claude/skills/x/SKILL.md")],
     ] as const)
       expect(t(tool, rd(p)), `${tool} ${p}`).toBe("high");
-    expect(t("Edit", rd("sub/new.ts"))).toBe("low");
+    // wt's .git file points nowhere: no Write is low there (fail closed); in a plain repository an ordinary Edit is.
+    expect(t("Edit", rd("sub/new.ts"))).toBe("high");
+    const plainRepo = join(top, "plain-edit");
+    mkdirSync(plainRepo);
+    execFileSync("git", ["init", "-q"], { cwd: plainRepo });
+    expect(tier("Edit", rd("sub/new.ts"), { cwd: plainRepo })).toBe("low");
   });
 
   it("a plain folder (no worktree layout) reads its own agent docs but never a main checkout", () => {
@@ -179,7 +184,8 @@ describe("secrets of the main checkout and hook folders (GH-163 review)", () => 
     expect(w(".husky/_/post-index-change")).toBe("high");
     expect(w(".husky/_/sub/x")).toBe("high");
     expect(w(join(repo, ".husky/_/post-index-change"))).toBe("high");
-    expect(w("src/a.ts")).toBe("low");
+    // A hooks folder in the worktree: not a plain repository, every Write is high.
+    expect(w("src/a.ts")).toBe("high");
     // A folder named .husky or hooks is high by name, config or not.
     expect(tier("Write", { file_path: ".husky/_/x" }, { cwd: plain })).toBe("high");
   });
@@ -202,10 +208,10 @@ describe("hook folders and config scripts are never low Writes (GH-163 round 2)"
     expect(w(d, "src/a.ts")).toBe("low");
   });
 
-  it("an unreadable config fails closed: a Write into any hook-like folder is high, other Writes stay low", () => {
+  it("an unreadable config fails closed: every Write is high (round 3 M1)", () => {
     // wt's .git file points nowhere: git config fails.
-    for (const p of [".custom-hooks/x", "tools/githooks/x", ".husky/_/x"]) expect(w(wt, p), p).toBe("high");
-    expect(w(wt, "sub/new.ts")).toBe("low");
+    for (const p of [".custom-hooks/x", "tools/githooks/x", ".husky/_/x", "sub/new.ts", "src/a.ts"]) expect(w(wt, p), p).toBe("high");
+    expect(repoSafety(wt)).toMatchObject({ unsafe: true, failed: true });
   });
 
   it("a relative program script named in the repository config is high to Write", () => {
@@ -215,7 +221,8 @@ describe("hook folders and config scripts are never low Writes (GH-163 round 2)"
     sh(d, "config", "core.fsmonitor", "./fsm.sh");
     sh(d, "config", "diff.external", "ext.sh");
     for (const p of ["tools/conv.sh", "scripts/clean.sh", "fsm.sh", "ext.sh"]) expect(w(d, p), p).toBe("high");
-    expect(w(d, "tools/other.sh")).toBe("low");
+    // Not a plain repository: every Write is high.
+    expect(w(d, "tools/other.sh")).toBe("high");
   });
 
   it("a hooks folder named by core.hooksPath in a submodule's config is high to Write, and git status is high", { timeout: 120_000 }, () => {
@@ -225,10 +232,140 @@ describe("hook folders and config scripts are never low Writes (GH-163 round 2)"
     sh(upstream, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "m");
     const host = mk("w-host");
     sh(host, "-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream.replaceAll("\\", "/"), "sub");
-    expect(tier("Bash", { command: "git status" }, { cwd: host, bashCwdPinned: true })).toBe("low");
+    // A submodule alone makes the repository not plain.
+    expect(tier("Bash", { command: "git status" }, { cwd: host, bashCwdPinned: true })).toBe("high");
     sh(join(host, "sub"), "config", "core.hooksPath", ".githooks-x");
-    clearGitExecCache();
     expect(w(host, "sub/.githooks-x/post-index-change")).toBe("high");
     expect(tier("Bash", { command: "git status" }, { cwd: host, bashCwdPinned: true })).toBe("high");
+  });
+});
+
+describe("a worker changes what git reads, then the tier is asked again (GH-163 round 3)", () => {
+  const sh = (d: string, ...a: string[]) => execFileSync("git", a, { cwd: d, stdio: "ignore" });
+  const mk = (name: string) => {
+    const d = join(top, name);
+    mkdirSync(d, { recursive: true });
+    sh(d, "init", "-q");
+    return d;
+  };
+  const commit = (d: string) => sh(d, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "m");
+  const w = (cwd: string, p: string) => tier("Write", { file_path: p, content: "x" }, { cwd });
+  const status = (cwd: string) => tier("Bash", { command: "git status" }, { cwd, bashCwdPinned: true });
+  /** What the worker does once a Write was low: the test writes the file itself. */
+  const plant = (cwd: string, p: string, text: string) => {
+    mkdirSync(join(cwd, p, ".."), { recursive: true });
+    writeFileSync(join(cwd, p), text);
+  };
+
+  it("B1: emptying .gitmodules does not hide a submodule whose config names a hooks folder", { timeout: 120_000 }, () => {
+    const upstream = mk("r3-up");
+    writeFileSync(join(upstream, "a"), "x");
+    sh(upstream, "add", "a");
+    commit(upstream);
+    const host = mk("r3-host");
+    sh(host, "-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream.replaceAll("\\", "/"), "sub");
+    sh(join(host, "sub"), "config", "core.hooksPath", ".githooks-x");
+    expect(w(host, ".gitmodules")).toBe("high");
+    // Had the Write been allowed (or approved by the user): the index still holds the gitlink.
+    plant(host, ".gitmodules", "");
+    expect(w(host, "sub/.githooks-x/post-index-change")).toBe("high");
+    expect(w(host, "sub/plain.txt")).toBe("high");
+    expect(status(host)).toBe("high");
+    // Malformed .gitmodules (round 3 M1's way to force a failed scan): still high.
+    plant(host, ".gitmodules", '[submodule "sub"');
+    expect(w(host, "sub/.githooks-x/post-index-change")).toBe("high");
+    expect(status(host)).toBe("high");
+    // Gone from disk too: the gitlink in the index still decides.
+    rmSync(join(host, ".gitmodules"));
+    expect(repoSafety(host).unsafe).toBe(true);
+    expect(status(host)).toBe("high");
+  });
+
+  it("a gitlink in the index alone (no .gitmodules, no checked-out folder) makes the repository not plain", () => {
+    const d = mk("r3-gitlink");
+    commit(d);
+    expect(status(d)).toBe("low");
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: d, encoding: "utf8" }).trim();
+    sh(d, "update-index", "--add", "--cacheinfo", `160000,${head},lib`);
+    expect(repoSafety(d).why.join()).toMatch(/gitlink/);
+    expect(status(d)).toBe("high");
+    expect(w(d, "src/a.ts")).toBe("high");
+  });
+
+  it("B2: an include.path target inside the cwd is high to Write and makes the repository not plain", () => {
+    const d = mk("r3-inc");
+    sh(d, "config", "include.path", "../.gitconfig");
+    expect(w(d, ".gitconfig")).toBe("high");
+    expect(status(d)).toBe("high");
+    const e = mk("r3-inc-abs");
+    const target = join(e, "shared", "repo.cfg");
+    plant(e, "shared/repo.cfg", "");
+    sh(e, "config", "include.path", target.replaceAll("\\", "/"));
+    expect(w(e, "shared/repo.cfg")).toBe("high");
+    expect(repoSafety(e).protectedPaths).toContain(realpathSync(target));
+    // The worker plants core.fsmonitor in the include target (as if the Write had gone through): still high, and so is every Write.
+    plant(e, "shared/repo.cfg", "[core]\n\tfsmonitor = ./fsm.sh\n");
+    expect(status(e)).toBe("high");
+    expect(w(e, "src/a.ts")).toBe("high");
+  });
+
+  it("an include outside the cwd is the user's own: the repository stays plain", () => {
+    const d = mk("r3-inc-out");
+    const outside = join(top, "r3-shared.cfg");
+    writeFileSync(outside, "[core]\n\tautocrlf = false\n");
+    sh(d, "config", "include.path", outside.replaceAll("\\", "/"));
+    expect(status(d)).toBe("low");
+    expect(w(d, "src/a.ts")).toBe("low");
+  });
+
+  it("m1: a ~ path is expanded before the inside check", () => {
+    const home = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = process.env.USERPROFILE = top;
+    try {
+      const d = mk("r3-home");
+      sh(d, "config", "core.hooksPath", "~/r3-home/.gh");
+      expect(w(d, ".gh/post-index-change")).toBe("high");
+      expect(status(d)).toBe("high");
+      const o = mk("r3-home-out");
+      sh(o, "config", "core.hooksPath", "~/elsewhere-hooks");
+      expect(status(o)).toBe("low");
+    } finally {
+      for (const [k, v] of Object.entries(home)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    }
+  });
+
+  it("a nested repository with a planted hook makes the repository not plain", () => {
+    const d = mk("r3-nested");
+    expect(status(d)).toBe("low");
+    expect(w(d, "inner/.git/hooks/post-index-change")).toBe("high");
+    // A nested repository the user (or an approved command) created.
+    mkdirSync(join(d, "inner"));
+    sh(join(d, "inner"), "init", "-q");
+    sh(join(d, "inner"), "config", "core.hooksPath", ".h");
+    plant(d, "inner/.h/post-index-change", "#!/bin/sh\necho pwned\n");
+    expect(status(d)).toBe("high");
+    expect(w(d, "src/a.ts")).toBe("high");
+  });
+
+  it("git's control files are high to Write in a plain repository; ordinary files and .github stay low", () => {
+    const d = mk("r3-names");
+    for (const p of [".gitmodules", ".gitattributes", ".gitconfig", ".gitignore", "sub/.gitattributes", ".githooks/pre-commit", ".githooks-x/x", ".husky-hooks/x", ".lfsconfig", "a/.GITMODULES"]) expect(w(d, p), p).toBe("high");
+    for (const p of ["src/a.ts", ".github/workflows/ci.yml", ".gitlab-ci.yml", "docs/git.md"]) expect(w(d, p), p).toBe("low");
+    expect(status(d)).toBe("low");
+  });
+
+  it("a .gitmodules file anywhere makes the repository not plain", () => {
+    const d = mk("r3-gm");
+    commit(d);
+    plant(d, "deep/.gitmodules", "");
+    expect(status(d)).toBe("high");
+    expect(w(d, "src/a.ts")).toBe("high");
+  });
+
+  it("a config value that names a file in the cwd protects it (core.attributesFile)", () => {
+    const d = mk("r3-attr");
+    sh(d, "config", "core.attributesFile", "./my.attributes");
+    expect(w(d, "my.attributes")).toBe("high");
+    expect(w(d, "src/a.ts")).toBe("low");
   });
 });

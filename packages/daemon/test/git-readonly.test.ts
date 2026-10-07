@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { clearGitExecCache, gitExecConfig, gitReadOnly } from "../src/git-readonly.ts";
+import { gitReadOnly, oneDecision, repoSafety } from "../src/git-readonly.ts";
 import { tier } from "../src/risk-tier.ts";
 
 // No symlinks here: this file runs on Windows too (risk-tier.test.ts holds the symlink rows).
@@ -237,15 +237,15 @@ describe("gitReadOnly", () => {
       expect(gitReadOnly({ command: "git diff" }, d)).toBe(true);
     });
 
-    it("the config is read once per cwd for 5 s (a tier decision asks several times)", () => {
-      const d = withConfig("cached");
-      clearGitExecCache();
-      const first = gitExecConfig(d);
+    it("no cache: a config change is seen by the very next ask", () => {
+      const d = withConfig("nocache");
+      expect(repoSafety(d).unsafe).toBe(false);
       git(d, "config", "core.hooksPath", ".hk");
-      expect(gitExecConfig(d)).toBe(first);
-      expect(first.unsafe).toBe(false);
-      clearGitExecCache();
-      expect(gitExecConfig(d).unsafe).toBe(true);
+      expect(repoSafety(d).unsafe).toBe(true);
+      expect(gitReadOnly({ command: "git status" }, d)).toBe(false);
+      // Only one synchronous decision shares a read.
+      oneDecision(() => expect(repoSafety(d)).toBe(repoSafety(d)));
+      expect(repoSafety(d)).not.toBe(repoSafety(d));
     });
 
     it("an include.path into the worktree, a relative gpg.program and a relative hooksPath written as an absolute path inside are refused", () => {
@@ -260,7 +260,6 @@ describe("gitReadOnly", () => {
       if (process.platform === "win32") {
         const drive = d.replaceAll("\\", "/").replace(/^([A-Za-z]):/, (_, l: string) => `/${l.toLowerCase()}`);
         git(d, "config", "core.hooksPath", `${drive}/hk`);
-        clearGitExecCache();
         expect(gitReadOnly({ command: "git status" }, d), "/c/... form").toBe(false);
       }
     });

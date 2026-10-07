@@ -104,7 +104,7 @@ _Avoid_: child session, subagent (different thing: a subagent run lives inside o
 A coordinator hands a worker's pending question or permission request to the user (`worker_escalate`); only the user answers it then. The coordinator can still stop or close the worker, which cancels it.
 
 **Permission tier**:
-`low` or `high`, assigned by the daemon to a worker's permission request (`risk-tier.ts`). A coordinator may settle a `low` one with `worker_permission` (allow once or deny); a `high` one is the user's. Unknown = `high`. Low covers reads in the worker folder and its repository's agent docs and main checkout, file edits in the worker folder, and read-only git there.
+`low` or `high`, assigned by the daemon to a worker's permission request (`risk-tier.ts`). A coordinator may settle a `low` one with `worker_permission` (allow once or deny); a `high` one is the user's. Unknown = `high`. Low covers reads in the worker folder and its repository's agent docs and main checkout, and, in a **plain repository** (nothing a worker can write decides what git runs: no hooks or programs in the cwd, no includes into it, no submodules or nested repositories), file edits in the worker folder and read-only git there.
 _Avoid_: risk level, trust level
 
 **Config scope**:

@@ -1,8 +1,9 @@
 // Whether a Bash tool call is only read-only git (docs/spec.md "Permission tiers"): the one Bash shape a coordinator may settle.
 // An allowlist grammar: one fixed program (git), no quoting, no expansion, no redirection, exact option names. Any doubt = false.
 import { execFileSync } from "node:child_process";
-import { lstatSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { deniedRead, pathLow } from "./risk-tier.ts";
 
 /** One option: `value` absent = takes none; else the value must match (when `optional`, the bare option is fine too). */
@@ -69,18 +70,34 @@ const TABLES: Record<Cmd, Record<string, Opt>> = {
 };
 
 /**
- * What the repository's effective config (`git config --list`: runs nothing) and those of its submodules make git run on status,
- * diff, log and show: a hook folder (`core.hooksPath`, run by an index refresh), `core.fsmonitor`, `diff.external`, textconv, diff
- * and filter programs, `gpg.program`, an `include.path` into the worktree. Where they lie inside the cwd, a worker's low Write
- * can plant what they run (husky v9: core.hooksPath=.husky/_).
- * `unsafe`: such a value lies, or may lie, inside the cwd (a program that is not one absolute path outside it);
- * `failed`: the config could not be read (then unsafe too);
- * `protectedPaths`: files and folders inside the cwd a Write must not reach (the hooks folders, the scripts a relative program names).
- * Cached per cwd for 5 s: one tier decision asks several times, and each ask is a process.
+ * Whether the repository at `cwd` is plain (docs/spec.md "Permission tiers"): nothing a worker can influence decides what git
+ * runs. Not plain (`unsafe`) when ANY of:
+ * - a config key that makes git run something (core.hooksPath, core.fsmonitor, diff.external, textconv, diff and filter
+ *   programs, gpg.program) is set at any scope, unless its value is one absolute path outside the cwd, or (system and global
+ *   scope only) one of the few values Git for Windows and `git lfs install` write (KNOWN);
+ * - an include.path / includeIf.*.path whose target is not an absolute file outside the cwd;
+ * - the worktree holds a `.gitmodules` file or a nested `.git` entry at any depth, or its index holds a gitlink (a submodule);
+ * - PATH has an empty or relative entry (a bare program name could then resolve into the cwd);
+ * - any of it cannot be read in time (`failed`: fail closed).
+ * Then git status, diff, log and show are high and so is every Write in the cwd. `protectedPaths`: what a config value names
+ * inside the cwd (always high to Write). Read anew on every decision: no cache, a worker's last Write is always seen (oneDecision
+ * shares one read between the checks of a single synchronous decision). Synchronous on purpose: the settle-time check
+ * (Session.coordinatorSettle) decides and settles in one step, with no await in between.
  */
-export type ExecConfig = { unsafe: boolean; failed: boolean; protectedPaths: string[] };
-const EXEC_CACHE_MS = 5000;
-const execCache = new Map<string, { at: number; value: ExecConfig }>();
+export type RepoSafety = { unsafe: boolean; failed: boolean; why: string[]; protectedPaths: string[] };
+
+/** Program values the user's own system or global config may hold without making a repository unsafe (bare names via PATH). */
+const KNOWN: Record<string, string> = {
+  "filter.lfs.clean": "git-lfs clean -- %f",
+  "filter.lfs.smudge": "git-lfs smudge -- %f",
+  "filter.lfs.process": "git-lfs filter-process",
+  "diff.astextplain.textconv": "astextplain",
+};
+const BOOL = /^(true|false|yes|no|on|off|0|1)$/i;
+const RUNS = /^(core\.hookspath|core\.fsmonitor|diff\.external|diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|gpg\.program|gpg\..+\.program)$/;
+const INCLUDE = /^(include\.path|includeif\..+\.path)$/;
+/** A full walk of a big tree costs more than a tier decision may: past this many entries, unsafe. */
+const WALK_LIMIT = 50_000;
 
 /** The real path of `p`, a missing tail resolved through its nearest existing ancestor (8.3 short names and symlinks expand); `/c/x` is `C:/x` on Windows. */
 function realish(p: string): string {
@@ -95,74 +112,124 @@ function realish(p: string): string {
   return join(realpathSync.native(q), ...rest);
 }
 
-const BOOL = /^(true|false|yes|no|on|off|0|1)$/i;
-const PROGRAM_KEY = /^(core\.fsmonitor|diff\.external|diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|gpg\.program|gpg\..+\.program)$/;
+/** `~` and `~/x` are the user's home (git's own expansion); `/c/x` and `C:/x` are absolute on Windows. */
+const expandHome = (v: string) => (v === "~" || /^~[/\\]/.test(v) ? join(homedir(), v.slice(1)) : v);
+const absolute = (v: string) => isAbsolute(v) || /^[A-Za-z]:[\\/]/.test(v) || (process.platform === "win32" && /^[/\\][A-Za-z][/\\]/.test(v));
 
-function scanRepo(dir: string, top: string, out: ExecConfig) {
-  const inside = (p: string, base = dir) => {
-    const rel = relative(top, realish(isAbsolute(p) || /^[/\\][A-Za-z][/\\]/.test(p) ? p : resolve(base, p)));
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-  };
-  const text = execFileSync("git", ["config", "--list", "-z", "--show-scope"], { cwd: dir, encoding: "utf8", timeout: 5000, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" }, stdio: ["ignore", "pipe", "ignore"] });
-  const fields = text.split("\u0000");
-  // Output: scope NUL key NL value NUL, repeated.
-  for (let i = 0; i + 1 < fields.length; i += 2) {
-    const own = ["local", "worktree", "command"].includes(fields[i]!);
-    const entry = fields[i + 1]!;
-    const nl = entry.indexOf("\n");
-    const key = (nl < 0 ? entry : entry.slice(0, nl)).toLowerCase();
-    const value = nl < 0 ? "" : entry.slice(nl + 1);
-    if (key === "core.hookspath") {
-      // `~` is the user's home; a relative path is relative to the worktree's top (the repository's own folder).
-      if (value.startsWith("~") || (value && !inside(value))) continue;
-      out.unsafe = true;
-      out.protectedPaths.push(realish(resolve(dir, value || ".")));
-    } else if (key === "include.path" || /^includeif\..+\.path$/.test(key)) {
-      // The included file's text is config: a file inside the worktree is worker-writable.
-      if (value.startsWith("~") ? false : !isAbsolute(value) || inside(value)) out.unsafe = true;
-    } else if (PROGRAM_KEY.test(key)) {
-      const v = value.trim();
-      // core.fsmonitor takes a boolean (the built-in daemon); every other value is a program, and an empty one names none.
-      const noProgram = v === "" || (key === "core.fsmonitor" && BOOL.test(v));
-      if (noProgram) continue;
-      // Safe only as a single absolute path outside the worktree: arguments or a relative path could name a file the worker wrote.
-      const outside = /^[^\s'"]+$/.test(v) && (isAbsolute(v) || /^[A-Za-z]:[\\/]/.test(v) || /^[/\\][A-Za-z][/\\]/.test(v)) && !inside(v);
-      if (own ? !outside : /(^|[\s'"=])\.{1,2}([\\/]|$)/.test(v)) {
-        // The user's system and global config (git-lfs: `git-lfs clean -- %f`) runs through PATH and is unsafe only with a relative path.
-        out.unsafe = true;
-        const first = v.split(/\s+/)[0]!;
-        if (!isAbsolute(first)) out.protectedPaths.push(realish(resolve(dir, first)));
-      }
-    }
+const git = (cwd: string, args: string[]) =>
+  execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    timeout: 5000,
+    windowsHide: true,
+    maxBuffer: 1 << 30,
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+
+/** Whether some folder from `dir` up holds a `.git`: git would find a repository there. */
+function inRepo(dir: string): boolean {
+  for (let d = dir; ; d = dirname(d)) {
+    if (lstatSync(join(d, ".git"), { throwIfNoEntry: false })) return true;
+    if (dirname(d) === d) return false;
   }
 }
 
-/** Forgets the cached configs (tests change a repository's config between asks). */
-export const clearGitExecCache = () => execCache.clear();
+let memo: Map<string, RepoSafety> | undefined;
+/** Runs `fn` (synchronous) with one repoSafety read per cwd: a coordinator's check and its settle-time check see the same facts. */
+export function oneDecision<T>(fn: () => T): T {
+  if (memo) return fn();
+  memo = new Map();
+  try {
+    return fn();
+  } finally {
+    memo = undefined;
+  }
+}
 
-export function gitExecConfig(cwd: string): ExecConfig {
-  const hit = execCache.get(cwd);
-  if (hit && Date.now() - hit.at < EXEC_CACHE_MS) return hit.value;
-  const value: ExecConfig = { unsafe: false, failed: false, protectedPaths: [] };
+export function repoSafety(cwd: string): RepoSafety {
+  const hit = memo?.get(cwd);
+  if (hit) return hit;
+  const out: RepoSafety = { unsafe: false, failed: false, why: [], protectedPaths: [] };
+  const flag = (why: string) => {
+    out.unsafe = true;
+    out.why.push(why);
+  };
   try {
     const top = realpathSync(cwd);
-    scanRepo(top, top, value);
-    // Submodules have their own config (.git/modules/<name>/config) and their own hooks: run on the parent's `git status` too.
-    if (lstatSync(join(top, ".gitmodules"), { throwIfNoEntry: false })) {
-      const paths = execFileSync("git", ["config", "--file", ".gitmodules", "--list", "-z"], { cwd: top, encoding: "utf8", timeout: 5000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] })
-        .split("\u0000")
-        .flatMap((e) => (/^submodule\..+\.path\n/i.test(e) ? [e.slice(e.indexOf("\n") + 1)] : []));
-      for (const p of paths) {
-        const sub = resolve(top, p);
-        if (relative(top, sub).startsWith("..") || !lstatSync(join(sub, ".git"), { throwIfNoEntry: false })) continue;
-        scanRepo(sub, top, value);
+    const inside = (p: string) => {
+      const rel = relative(top, realish(p));
+      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    };
+    const pathEntries = (process.env.PATH ?? "").split(delimiter);
+    // A trailing `;` is common on Windows and names nothing; elsewhere an empty entry is the current folder.
+    const pathBad = pathEntries.some((e, i) => (e === "" ? !(process.platform === "win32" && i === pathEntries.length - 1) : !absolute(e)));
+    if (pathBad) flag("PATH has a relative entry");
+
+    // Output: scope NUL origin NUL key NL value NUL, repeated. Includes are expanded: their keys are listed too.
+    const fields = git(top, ["config", "--list", "-z", "--show-scope", "--show-origin"]).split("\u0000");
+    for (let i = 0; i + 2 < fields.length; i += 3) {
+      const scope = fields[i]!;
+      const origin = fields[i + 1]!;
+      const entry = fields[i + 2]!;
+      const nl = entry.indexOf("\n");
+      const key = (nl < 0 ? entry : entry.slice(0, nl)).toLowerCase();
+      const value = nl < 0 ? "" : entry.slice(nl + 1);
+      const v = value.trim();
+      const originDir = origin.startsWith("file:") ? dirname(resolve(top, origin.slice(5))) : undefined;
+      // What a value names inside the cwd: a Write there is always high. A program's or an include's path-like words, and the
+      // whole value of a key that names a file or folder (core.attributesFile, core.excludesFile, commit.template ...).
+      const named = RUNS.test(key) || INCLUDE.test(key) ? v.split(/\s+/).filter((t) => absolute(t) || t.startsWith("~") || t.startsWith(".") || /[/\\]/.test(t)) : /(file|template)$/.test(key) && v && !BOOL.test(v) ? [v] : [];
+      for (const tok of named) {
+        const p = resolve(INCLUDE.test(key) && originDir ? originDir : top, expandHome(tok));
+        if (inside(p)) out.protectedPaths.push(realish(p));
+      }
+      if (INCLUDE.test(key)) {
+        // A relative include is relative to the file that holds it; an included file inside the cwd is worker-writable config.
+        if (!v) continue;
+        const target = expandHome(v);
+        if (absolute(target) ? inside(target) : !originDir || inside(resolve(originDir, target))) flag(`${key} into the worktree`);
+      } else if (RUNS.test(key)) {
+        // core.fsmonitor takes a boolean (git's own daemon); an empty program value names none (an empty hooksPath is the top folder).
+        if ((v === "" && key !== "core.hookspath") || (key === "core.fsmonitor" && BOOL.test(v))) continue;
+        if ((scope === "system" || scope === "global") && KNOWN[key] === v) continue;
+        const one = expandHome(v);
+        // A program: one token (arguments could name a file the worker wrote). A hooks folder: any absolute path.
+        if ((key === "core.hookspath" || /^[^\s'"]+$/.test(v)) && absolute(one) && !inside(one)) continue;
+        flag(`${scope} ${key}`);
       }
     }
+
+    // The worktree's shape: submodules and nested repositories have their own config and hooks.
+    let seen = 0;
+    const walk = (d: string, depth: number): boolean => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        if (++seen > WALK_LIMIT) return (flag("worktree too large to check"), false);
+        const n = e.name.toLowerCase();
+        if (n === ".git" && depth > 0) return (flag(`nested repository ${relative(top, d) || "."}`), false);
+        if (n === ".gitmodules") return (flag(`${relative(top, join(d, e.name))}`), false);
+        // node_modules: git never runs anything from a nested repository there unless it is a gitlink (the index check below),
+        // and a low Write cannot create a `.git` or `.gitmodules` at any depth.
+        if (e.isDirectory() && !(depth === 0 && n === ".git") && n !== "node_modules" && !walk(join(d, e.name), depth + 1)) return false;
+      }
+      return true;
+    };
+    if (!out.unsafe) walk(top, 0);
+    if (!out.unsafe) {
+      let modes = "";
+      try {
+        modes = git(top, ["ls-files", "-z", "--format=%(objectmode)"]);
+      } catch (e) {
+        if (inRepo(top)) throw e;
+      }
+      if (modes.split("\u0000").includes("160000")) flag("a submodule (gitlink) in the index");
+    }
   } catch {
-    value.unsafe = value.failed = true;
+    out.failed = true;
+    flag("could not read the repository's config or index");
   }
-  execCache.set(cwd, { at: Date.now(), value });
-  return value;
+  memo?.set(cwd, out);
+  return out;
 }
 
 const MAX_COMMAND = 1000;
@@ -234,7 +301,7 @@ function segmentOk(seg: string, cwd: string, execUnsafe: () => boolean): boolean
   if (sub === "branch") return rest.length === 1 && rest[0] === "--show-current";
   if (sub === "rev-parse") return rest.length > 0 && rest.every((a) => REV_PARSE.has(a));
   if (sub !== "status" && sub !== "log" && sub !== "show" && sub !== "diff") return false;
-  // These run config-defined programs and hooks: not while the config points into the worktree.
+  // These run hooks and config-defined programs: only in a plain repository (repoSafety).
   if (execUnsafe()) return false;
   let dashes = false;
   for (let k = 0; k < rest.length; k++) {
@@ -264,7 +331,7 @@ export function gitReadOnly(input: unknown, cwd: string): boolean {
     const segs = cmd.split(/\s*(?:&&|\|\||;)\s*/);
     if (segs.length > MAX_SEGMENTS) return false;
     let unsafe: boolean | undefined;
-    const execUnsafe = () => (unsafe ??= gitExecConfig(cwd).unsafe);
+    const execUnsafe = () => (unsafe ??= repoSafety(cwd).unsafe);
     return segs.every((s) => s.trim() !== "" && !/[&|]/.test(s) && segmentOk(s, cwd, execUnsafe));
   } catch {
     return false;

@@ -6,6 +6,7 @@ import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from "@
 import { z } from "zod";
 import { EFFORTS, ORCHESTRATION_NOTICE, type Event, type ModelInfo, type Part, type PermissionMode, type Settings } from "@claude-ui/protocol";
 import { WorktreeError, type CreateWorktreeOptions } from "./git.ts";
+import { oneDecision } from "./git-readonly.ts";
 import type { Tier } from "./risk-tier.ts";
 import type { Session, SessionSettings } from "./session.ts";
 import type { Link, SessionSettingsStore } from "./session-settings.ts";
@@ -416,10 +417,13 @@ export function createOrchestration(deps: OrchestrationDeps) {
           const p = s.pendingRequest(a.id);
           if (p?.type !== "permission_request") throw new ToolError(`No pending permission request ${a.id} on worker ${a.name}: already answered, cancelled, unknown or a question.`);
           if (p.escalated) throw new ToolError(`Permission request ${a.id} is escalated to the user: only the user answers it.`);
-          if (s.permissionTier(a.id) !== "low")
-            throw new ToolError(`Permission request ${a.id} (${p.tool}) is high risk: only the user answers it. Leave it, or hand it over with worker_escalate and a reason.`);
           const decision = a.allow ? "allow" : "deny";
-          if (!s.respond(a.id, { decision, message: a.reason }, "coordinator")) throw new ToolError(`Permission request ${a.id} was answered meanwhile.`);
+          // One read of the repository for this check and the settle-time check in respond(): each costs git processes.
+          oneDecision(() => {
+            if (s.permissionTier(a.id) !== "low")
+              throw new ToolError(`Permission request ${a.id} (${p.tool}) is high risk: only the user answers it. Leave it, or hand it over with worker_escalate and a reason.`);
+            if (!s.respond(a.id, { decision, message: a.reason }, "coordinator")) throw new ToolError(`Permission request ${a.id} was answered meanwhile.`);
+          });
           return { name: a.name, id: a.id, decision };
         },
       ),
