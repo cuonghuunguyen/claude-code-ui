@@ -666,3 +666,33 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     expect(g.querySelector('[data-testid="project-menu"]')).toBeNull();
   });
 });
+
+it("a search request (/resume) fills the box, focuses it with the caret at the end and filters by @project=; a new seq refocuses (GH-100)", async () => {
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  const show = (search: { text: string; seq: number }) =>
+    act(async () =>
+      root!.render(
+        <SessionList list={LIST} projects={["/home/u/web", "/home/u/api"]} state={(s) => s.state} unread={new Set()} onOpen={() => {}} onNew={() => {}} onRemove={() => {}} onOpenProject={() => {}} onAction={() => {}} onRenamed={() => {}} search={search} />,
+      ),
+    );
+  const input = () => el.querySelector<HTMLInputElement>('[data-testid="session-search"]')!;
+  const groups = () => [...el.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].map((g) => g.dataset.cwd);
+  await show({ text: "@project=web ", seq: 1 });
+  expect(input().value).toBe("@project=web ");
+  expect(document.activeElement).toBe(input());
+  expect(input().selectionStart).toBe(13);
+  expect(groups()).toEqual(["/home/u/web"]);
+  input().blur();
+  await show({ text: "@project=web ", seq: 1 });
+  expect(document.activeElement).not.toBe(input());
+  await show({ text: "@project=api refactor", seq: 2 });
+  expect(document.activeElement).toBe(input());
+  expect(input().value).toBe("@project=api refactor");
+  expect(el.querySelectorAll('[data-testid="session-item"]')).toHaveLength(1);
+  await show({ text: "@project=api zzz", seq: 3 });
+  expect(el.textContent).toContain('No session in api matches "zzz".');
+  await show({ text: "@project=nope ", seq: 4 });
+  expect(el.textContent).toContain('No project named "nope".');
+});
