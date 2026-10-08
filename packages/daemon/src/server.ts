@@ -75,6 +75,10 @@ const MIME: Record<string, string> = {
   ".json": "application/json",
   ".webmanifest": "application/manifest+json",
   ".woff2": "font/woff2",
+  ".woff": "font/woff",
+  ".txt": "text/plain; charset=utf-8",
+  ".wasm": "application/wasm",
+  ".map": "application/json",
 };
 
 type History = {
