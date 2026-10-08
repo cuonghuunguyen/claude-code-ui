@@ -80,6 +80,10 @@ The UI rendering of a `tool_call` merged with its `tool_result`, grouped by `too
 A `> `-prefixed passage of an earlier message, inserted into the prompt as markdown blockquote text.
 _Avoid_: reply, thread
 
+**Guided tour**:
+The first-use walkthrough: a dimmed page, a spotlight on one real control and a popover with Back, Next and Skip, in two chapters (Basics, Your session). Per browser; restarted from Settings › Guide or the palette ("Show guide").
+_Avoid_: onboarding, walkthrough, wizard
+
 **Subagent run**:
 One Agent/Task call: a child agent with its own timeline, inside one turn of the parent session. Stored in the parent's transcript, not as a separate session.
 _Avoid_: child session, subtask
