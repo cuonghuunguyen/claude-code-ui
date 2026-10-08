@@ -59,9 +59,10 @@ export function matchesKey(spec: string, e: KeyboardEvent, mac = IS_MAC) {
   if (e.ctrlKey !== ctrl || e.metaKey !== meta || e.shiftKey !== mods.has("shift") || e.altKey !== mods.has("alt")) return false;
   const k = e.key === " " ? "space" : e.key.toLowerCase();
   if (k === key) return true;
-  // Alt+digit and Shift+` change e.key on some layouts (Czech Alt+1 is "+", Shift+` is "~"): the physical key decides.
+  // Digits and ` are recorded by their physical key (keymap.ts specFromEvent), and the layout changes e.key on them with any modifier
+  // (Czech Alt+1 and macOS Ctrl+1 are "+", AZERTY Ctrl+1 is "&", AZERTY Ctrl+` is "²", Shift+` is "~"): the physical key decides.
   // Not off macOS with Ctrl and Alt both down: that is AltGr, whose typed character (AltGr+7 is "{") must not fire a shortcut.
-  if ((e.altKey || e.shiftKey) && CODES[key] && (mac || !(e.ctrlKey && e.altKey))) return e.code === CODES[key];
+  if (CODES[key] && (mac || !(e.ctrlKey && e.altKey))) return e.code === CODES[key];
   // macOS Option changes e.key (Option+W is "∑"): with Alt a letter matches by its physical key.
   // macOS only: elsewhere Ctrl+Alt is also AltGr, whose typed character (AltGr+W is "|" on a Hungarian layout) must not fire a shortcut.
   return mac && e.altKey && /^[a-z]$/.test(key) && e.code === `Key${key.toUpperCase()}`;
