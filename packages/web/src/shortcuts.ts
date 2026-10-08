@@ -12,6 +12,7 @@ export const KEYS = {
   nextTab: "mod+alt+arrowright",
   closeTab: "mod+alt+w",
   signalOnly: "mod+alt+s",
+  nextWaiting: "mod+alt+arrowdown",
   quickOpen: "mod+p",
   sidebar: "mod+b",
   sidePanel: "mod+shift+r",

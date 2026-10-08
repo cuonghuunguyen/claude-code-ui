@@ -4,6 +4,9 @@ import { baseName } from "./paths.ts";
 /** Id of the new-session tab; every other tab id is a session id. */
 export const NEW_TAB = "new";
 
+/** Id of the Focus page's pinned tab (docs/spec.md "Focus"): never in the stored tab list, never closable. */
+export const FOCUS_TAB = "focus";
+
 export const openTab = (tabs: string[], id: string) => (tabs.includes(id) ? tabs : [...tabs, id]);
 
 /** Closes a tab only (the session's subscription is App's job); closing the active tab focuses its right neighbour, else its left one. */
@@ -90,11 +93,11 @@ export function avatarColors(cwds: Iterable<string>) {
 
 export const avatarColor = (cwd: string, known?: Map<string, AvatarColor>) => known?.get(cwd) ?? AVATAR_COLORS[hashSlot(cwd)]!;
 
-// The active tab lives in the URL hash, so a reload reopens it: a session id, or "#new" for the new-session tab.
+// The active tab lives in the URL hash, so a reload reopens it: a session id, "#new" for the new-session tab, "#focus" for the Focus page.
 export const tabHash = (id: string) => `#${encodeURIComponent(id)}`;
 // A subagent view adds its run: `#<session id>/agent/<subagent part id>`.
 const SESSION_HASH = /^#([0-9a-f-]{36})(?:\/agent\/([^/]+))?$/i;
-export const tabFromHash = (hash: string) => (hash === tabHash(NEW_TAB) ? NEW_TAB : SESSION_HASH.exec(hash)?.[1]);
+export const tabFromHash = (hash: string) => (hash === tabHash(NEW_TAB) ? NEW_TAB : hash === tabHash(FOCUS_TAB) ? FOCUS_TAB : SESSION_HASH.exec(hash)?.[1]);
 /** The subagent run of a subagent view's hash; undefined for the session view. */
 export const runFromHash = (hash: string) => {
   const run = SESSION_HASH.exec(hash)?.[2];

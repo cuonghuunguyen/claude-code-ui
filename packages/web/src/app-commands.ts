@@ -41,6 +41,10 @@ export type CommandContext = {
   setMode: (mode: PermissionMode) => void;
   rewind: (userMessageId: string) => void;
   stop: () => void;
+  /** Opens the Focus page (GH-159). */
+  openFocus?: () => void;
+  /** Opens Focus on the next waiting request; none while nothing waits. */
+  nextWaiting?: () => void;
   /** Toggles Signal only of the shown session; none without a session. */
   toggleSignalOnly?: () => void;
   /** Opens the Settings dialog. */
@@ -73,6 +77,8 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.tabs.length > 1 && cmd("tab.next", "Next tab", () => go(step(1)), KEYS.nextTab),
     c.tabs.length > 1 && cmd("tab.prev", "Previous tab", () => go(step(-1)), KEYS.prevTab),
     at >= 0 && cmd("tab.close", "Close tab", () => c.closeTab(c.activeId!), KEYS.closeTab),
+    c.openFocus && cmd("focus.open", "Open Focus", c.openFocus),
+    c.nextWaiting && cmd("focus.next", "Next waiting request", c.nextWaiting, KEYS.nextWaiting),
     cmd("settings.open", "Open settings", c.openSettings, KEYS.settings),
     cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar, KEYS.sidebar),
     s && !s.draft && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel, KEYS.sidePanel),

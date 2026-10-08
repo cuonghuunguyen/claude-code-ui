@@ -81,6 +81,9 @@ import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpande
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { loadSignalIds, saveSignalOnly, signalItems, type SignalItem } from "./signal.ts";
 import { FoldRow, SignalSwitch } from "./signal-fold.tsx";
+import { FocusPage, FocusRow } from "./focus-page.tsx";
+import { nextWaiting, waitingCount, waitingRequests } from "./focus.ts";
+import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { joinPath, relPath } from "./paths.ts";
@@ -96,7 +99,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
-import { NEW_TAB, avatarColors, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColors, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabGrouping, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
@@ -144,7 +147,7 @@ const loadNumber = (key: string, fallback: number) => {
 /** `r` without the entry of `id`. */
 const without = <T,>(r: Record<string, T>, id: string) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== id));
 
-const hashId = () => (hashTab() === NEW_TAB ? undefined : hashTab());
+const hashId = () => (hashTab() === NEW_TAB || hashTab() === FOCUS_TAB ? undefined : hashTab());
 
 const pageFocused = () => document.visibilityState === "visible" && document.hasFocus();
 
@@ -209,8 +212,12 @@ export function App() {
   const [run, setRun] = useState(() => runFromHash(location.hash));
   const [tabs, setTabs] = useState(() => {
     const h = hashTab();
-    return h ? openTab(loadTabs(), h) : loadTabs();
+    return h && h !== FOCUS_TAB ? openTab(loadTabs(), h) : loadTabs();
   });
+  // The request the Focus page has selected (GH-159); the oldest waiting one while unset.
+  const [focusSel, setFocusSel] = useState<string>();
+  // When this browser first saw a request that came without the daemon's `at`.
+  const firstSeen = useRef(new Map<string, number>());
   // Sessions shown in Signal only (GH-159), per browser.
   const [signalIds, setSignalIds] = useState(loadSignalIds);
   const setSignalOnly = (id: string, on: boolean) => {
@@ -570,6 +577,12 @@ export function App() {
     setDrawer(false);
     if (!keepHash) setRun(undefined);
     if (!id) return;
+    // The Focus page is no session: it has no tab in the list and nothing to subscribe to.
+    if (id === FOCUS_TAB) {
+      if (!keepHash) history.replaceState(null, "", tabHash(id));
+      if (activeId !== FOCUS_TAB) setFocusSel(undefined);
+      return;
+    }
     setTabs((t) => openTab(t, id));
     if (!keepHash) history.replaceState(null, "", tabHash(id));
     // A page-load link subscribed without adding its project: the first explicit open of that session adds it, view or not.
@@ -687,7 +700,7 @@ export function App() {
   // The daemon suppresses pushes for the session a focused, visible tab shows; resent after every reconnect.
   useEffect(() => {
     if (status !== "connected") return;
-    const sessionId = focused && activeId !== NEW_TAB ? activeId : undefined;
+    const sessionId = focused && activeId !== NEW_TAB && activeId !== FOCUS_TAB ? activeId : undefined;
     client.current!.request(sessionId ? { type: "push.focus", sessionId } : { type: "push.focus" }).catch(() => {});
   }, [status, focused, activeId]);
 
@@ -703,7 +716,19 @@ export function App() {
   useEffect(() => applyTheme(theme), [theme]);
 
   const unread = new Set(list.filter((s) => views[s.id] && isUnread(views[s.id]!, seen[s.id])).map((s) => s.id));
-  useEffect(() => void (document.title = tabTitle(unread.size)), [unread.size]);
+  // Focus (GH-159): every unanswered request; the sidebar row, the Focus tab, the browser tab and the status text all show the same number of sessions.
+  const waiting = useMemo(() => {
+    const w = waitingRequests(list, views, firstSeen.current, Date.now());
+    for (const x of w) if (!firstSeen.current.has(x.part.id)) firstSeen.current.set(x.part.id, x.since);
+    return w;
+  }, [list, views]);
+  const waitingN = waitingCount(waiting);
+  const everWaiting = useRef(false);
+  if (waitingN > 0) everWaiting.current = true;
+  useEffect(() => {
+    document.title = tabTitle(waitingN);
+    setFavicon(faviconHref(waitingN));
+  }, [waitingN]);
 
   async function togglePush() {
     setError(undefined);
@@ -1084,6 +1109,8 @@ export function App() {
     setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
+    openFocus: () => open(FOCUS_TAB),
+    nextWaiting: waiting.length ? () => (open(FOCUS_TAB), setFocusSel(nextWaiting(waiting, activeId === FOCUS_TAB ? focusSel ?? waiting[0]?.part.id : undefined)?.part.id)) : undefined,
     toggleSignalOnly: shown ? () => setSignalOnly(shown.id, !signalIds.has(shown.id)) : undefined,
     openSettings: () => setSettingsOpen(true),
     openMcp: project ? () => openMcp() : undefined,
@@ -1145,6 +1172,7 @@ export function App() {
             onNew={() => newSession()}
             home={sidebar}
             onHome={() => setSidebar((v) => !v)}
+            focus={{ count: waitingN }}
           />
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:gap-2">
@@ -1268,6 +1296,7 @@ export function App() {
             Notifications
           </label>
           {error && <p className="text-destructive">{error}</p>}
+          {status !== "unauthorized" && <FocusRow count={waitingN} active={activeId === FOCUS_TAB} onOpen={() => open(FOCUS_TAB)} />}
           {status !== "unauthorized" && (
             <SessionList
               list={list}
@@ -1490,7 +1519,20 @@ export function App() {
                   {(panel || terminalOpen) && <div className={`${card} ml-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
                 </>
               )}
-              {activeId !== NEW_TAB && !shown && (
+              {activeId === FOCUS_TAB && (
+                <FocusPage
+                  list={list}
+                  views={views}
+                  worktrees={worktrees}
+                  waiting={waiting}
+                  selected={focusSel}
+                  onSelect={setFocusSel}
+                  onRespond={respond}
+                  onAnswer={answer}
+                  onOpenSession={(id) => open(id)}
+                />
+              )}
+              {activeId !== NEW_TAB && activeId !== FOCUS_TAB && !shown && (
                 <div className={`${card} flex-1`}>
                   <div className="m-auto text-muted-foreground">Open or create a session to start.</div>
                 </div>
@@ -1498,6 +1540,9 @@ export function App() {
             </>
           )}
         </main>
+      </div>
+      <div role="status" aria-live="polite" className="sr-only" data-testid="attention-status">
+        {announcement(waitingN, everWaiting.current)}
       </div>
       <QuoteButton onQuote={(q) => (setInsert(q), setPane("session"))} />
       {quickOpen && shown && (

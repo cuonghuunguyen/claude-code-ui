@@ -103,6 +103,10 @@ _Avoid_: child session, subagent (different thing: a subagent run lives inside o
 **Escalation**:
 A coordinator hands a worker's pending question or permission request to the user (`worker_escalate`); only the user answers it then. The coordinator can still stop or close the worker, which cancels it.
 
+**Focus**:
+The app-level page (sidebar row, pinned tab, `#focus`) that lists every pending permission request and question across all projects, oldest first, and answers them in place.
+_Avoid_: inbox, queue page
+
 **Signal only**:
 A per-session, per-browser timeline view that folds each run of tool cards into one line ("4 tool calls · Read 3 · Grep 1"); prompts, text, errors and pending requests stay expanded.
 _Avoid_: compact mode

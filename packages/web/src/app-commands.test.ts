@@ -2,6 +2,7 @@
 import { expect, it, vi } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { appCommands, shortcutFor, type CommandContext } from "./app-commands.ts";
+import { KEYS } from "./shortcuts.ts";
 
 const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   tabs: ["a", "b", "new"],
@@ -203,4 +204,18 @@ it("Toggle signal only runs from the palette and Mod+Alt+S, only for a session t
   expect(shortcutFor(appCommands(c), ev("s", { ctrlKey: true, altKey: true }))?.id).toBe("signal.toggle");
   expect(appCommands(ctx({ toggleSignalOnly, session: { ...ctx().session!, draft: true } })).some((i) => i.id === "signal.toggle")).toBe(false);
   expect(appCommands(ctx({ toggleSignalOnly, session: undefined })).some((i) => i.id === "signal.toggle")).toBe(false);
+});
+
+it("Open Focus is always listed when App offers it; Next waiting request only while something waits, on Ctrl+Alt+Down", () => {
+  const openFocus = vi.fn();
+  const nextWaiting = vi.fn();
+  expect(appCommands(ctx({ openFocus })).map((i) => [i.id, i.keys]).filter(([id]) => String(id).startsWith("focus."))).toEqual([["focus.open", undefined]]);
+  const c = ctx({ openFocus, nextWaiting });
+  expect(appCommands(c).map((i) => i.id).filter((id) => id.startsWith("focus."))).toEqual(["focus.open", "focus.next"]);
+  run(c, "focus.next");
+  expect(nextWaiting).toHaveBeenCalledOnce();
+  expect(shortcutFor(appCommands(c), ev("ArrowDown", { ctrlKey: true, altKey: true }))?.id).toBe("focus.next");
+  expect(shortcutFor(appCommands(ctx({ openFocus })), ev("ArrowDown", { ctrlKey: true, altKey: true }))).toBeUndefined();
+  // Never Escape: Esc stops the running turn.
+  expect(KEYS.nextWaiting).not.toMatch(/escape/);
 });

@@ -735,7 +735,7 @@ export class Session {
       const requestId = randomUUID();
       const part: PermissionPart | QuestionPart =
         tool === "AskUserQuestion"
-          ? { type: "question", id: requestId, requestId, toolUseId: toolUseID, questions: (input as { questions: Question[] }).questions, settled: false }
+          ? { type: "question", id: requestId, requestId, toolUseId: toolUseID, questions: (input as { questions: Question[] }).questions, settled: false, at: Date.now() }
           : {
               type: "permission_request",
               id: requestId,
@@ -746,13 +746,25 @@ export class Session {
               ...(title ? { title } : {}),
               suggestions: tool === "ExitPlanMode" && !suggestions.length ? [ACCEPT_EDITS] : suggestions,
               settled: false,
+              at: Date.now(),
             };
       this.pending.set(requestId, { part, resolve, ctx: { blockedPath, defaultToNo, requiresUserInteraction }, onAllow: card?.onAllow });
       this.emit(part);
       this.setState("needs_input");
+      if (part.type === "permission_request") this.markLowTier(requestId);
       signal.addEventListener("abort", () => this.cancel(requestId, "Request cancelled"), { once: true });
     });
   };
+
+  /** A low tier request is sent again with `tier: "low"` once its tier is read (the Focus page offers Always allow only then); high or unknown stays unmarked. */
+  private markLowTier(requestId: string) {
+    void this.permissionTier(requestId).then((tier) => {
+      const req = this.pending.get(requestId);
+      if (tier !== "low" || req?.part.type !== "permission_request") return;
+      req.part = { ...req.part, tier };
+      this.emit(req.part);
+    });
+  }
 
   /** The pending permission request or question with this ID; undefined once settled or unknown. */
   pendingRequest(requestId: string): PermissionPart | QuestionPart | undefined {

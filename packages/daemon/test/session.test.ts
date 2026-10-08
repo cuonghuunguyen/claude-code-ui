@@ -406,6 +406,30 @@ describe("Session", () => {
       expect(s.info().state).toBe("needs_input");
     });
 
+    it("a permission request carries the time the daemon asked, and stays high (no tier) when it is not low", async () => {
+      const before = Date.now();
+      const { s, events, req } = await ask();
+      expect(req.at).toBeGreaterThanOrEqual(before);
+      expect(req.at).toBeLessThanOrEqual(Date.now());
+      await s.permissionTier(req.requestId);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(events.filter((e) => e.part.id === req.id)).toHaveLength(1);
+      expect(req.tier).toBeUndefined();
+    });
+
+    it("a low tier request is sent again with tier low, and the settled request keeps it", async () => {
+      const s = new Session("/tmp", { query: permissionQuery as never, tier: async () => "low" });
+      const events: Event[] = [];
+      s.subscribe(0, (e) => events.push(e));
+      s.prompt("run the tests");
+      await until(events, (e) => e.part.type === "permission_request" && e.part.tier === "low");
+      const sent = events.filter((e) => e.part.type === "permission_request");
+      expect(sent.map((e) => (e.part as { tier?: string }).tier)).toEqual([undefined, "low"]);
+      const req = sent[1]!.part as Extract<Event["part"], { type: "permission_request" }>;
+      s.respond(req.requestId, { decision: "allow" });
+      expect(lastPart(events, req.id)).toMatchObject({ settled: true, tier: "low" });
+    });
+
     it("Yes allows once without saving a rule", async () => {
       const { s, events, req, answered } = await ask();
       expect(s.respond(req.requestId, { decision: "allow" })).toBe(true);
@@ -759,6 +783,13 @@ describe("Session questions", () => {
     expect(q.toolUseId).toBe((events.find((e) => e.part.type === "tool_call")!.part as { toolUseId: string }).toolUseId);
     expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
     expect(s.info().state).toBe("needs_input");
+  });
+
+  it("a question carries the time the daemon asked (Focus wait time)", async () => {
+    const before = Date.now();
+    const { q } = await ask();
+    expect(q.at).toBeGreaterThanOrEqual(before);
+    expect(q.at).toBeLessThanOrEqual(Date.now());
   });
 
   it("answer() returns the questions and answers via updatedInput and logs the settlement once", async () => {
@@ -1931,6 +1962,9 @@ describe("coordinator settle off the event loop (GH-163 round 5)", () => {
 
   it("two concurrent coordinator settles of one worker run one after the other, each decided after the other settled", async () => {
     const { s, log, reqs } = await twoPending(30);
+    // The tier each request showed with (Focus, `tier: "low"`) was read when it arrived: this test is about the settle's own reads.
+    await new Promise((r) => setTimeout(r, 150));
+    log.length = 0;
     const [a, b] = await Promise.all([
       s.coordinatorRespond(reqs[0]!.requestId, { decision: "allow", message: "r" }),
       s.coordinatorRespond(reqs[1]!.requestId, { decision: "allow", message: "r" }),
@@ -1966,6 +2000,10 @@ describe("coordinator settle off the event loop (GH-163 round 5)", () => {
     s.prompt(JSON.stringify({ calls: [edit("a.ts"), edit("b.ts")] }));
     await until(events, () => events.filter((e) => e.part.type === "permission_request").length >= 2);
     const reqs = events.filter((e) => e.part.type === "permission_request").map((e) => e.part as Extract<Event["part"], { type: "permission_request" }>);
+    // The reads made when the requests arrived (their `tier` for Focus) are not the settle's: count from here.
+    await new Promise((r) => setTimeout(r, 250));
+    log.length = 0;
+    n = 0;
     const coord = s.coordinatorRespond(reqs[1]!.requestId, { decision: "allow", message: "r" });
     await new Promise((r) => setTimeout(r, 20));
     // The user allows a while b's read runs: the epoch moves mid-read.
