@@ -49,7 +49,7 @@ import { connect, type ConnectionStatus, type Request, type RequestError } from 
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { Toast } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
-import { activeCommand, choose, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
+import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { McpDialog } from "./mcp-dialog.tsx";
 import { SkillsDialog } from "./skills-dialog.tsx";
@@ -59,12 +59,13 @@ import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
-import { byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
+import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
+import { ContinueDock } from "./continue-dock.tsx";
 import { StatusBar, totals, type Totals } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
@@ -72,7 +73,7 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { useStableProps } from "@/lib/utils";
@@ -222,6 +223,8 @@ export function App() {
   const [update, setUpdate] = useState<UpdateInfo>();
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
   const [drawer, setDrawer] = useState(false);
+  /** A `/resume` request for the sidebar search (SessionList `search`). */
+  const [resumeSearch, setResumeSearch] = useState<{ text: string; seq: number }>();
   // Wide screens: the Home button shows or hides the sessions sidebar.
   const [sidebar, setSidebar] = useState(true);
   // Wide screens: the sidebar's width, dragged on its edge; kept per browser. The narrow-screen drawer is min(85vw, 360px).
@@ -986,7 +989,15 @@ export function App() {
   const openMcp = (server?: string) => project && setMcp({ open: true, cwd: project, sessionId: projectSession, server });
   const openPlugins = () => project && setPlugins({ open: true, cwd: project, sessionId: projectSession });
   const openSkills = () => project && setSkillsDialog({ open: true, cwd: project, sessionId: projectSession });
-  const openDialog = (d: DialogName) => (d === "mcp" ? openMcp() : d === "plugins" ? openPlugins() : openSkills());
+  /** `/resume` (GH-100): shows the sidebar (the drawer below md) with the session search on this project's repository, then the typed text. */
+  const openResume = (arg?: string) => {
+    if (!project) return;
+    if (wide(768)) setSidebar(true);
+    else setDrawer(true);
+    const name = projectName(projectOf(project, worktrees));
+    setResumeSearch((s) => ({ text: resumeSearchText(name, arg), seq: (s?.seq ?? 0) + 1 }));
+  };
+  const openDialog = (d: DialogName, arg?: string) => (d === "mcp" ? openMcp() : d === "plugins" ? openPlugins() : d === "resume" ? openResume(arg) : openSkills());
   // The dialog lists the commands of its session (none on the new-session tab), plus the ones the web app handles itself.
   const dialogSession = skillsDialog?.sessionId ? views[skillsDialog.sessionId] : undefined;
   const skillsCommands = dialogSession?.commands.length ? withDialogCommands(dialogSession.commands) : [];
@@ -994,7 +1005,7 @@ export function App() {
   const runCommand = (r: ReturnType<typeof choose>) => {
     if ("text" in r) return setInsert(r.text.trimEnd());
     const dialog = dialogOf(r.send, dialogSession?.commands);
-    if (dialog) return openDialog(dialog);
+    if (dialog) return openDialog(dialog, dialogArg(r.send));
     if (!skillsDialog?.sessionId) return;
     client.current!.request({ type: "session.prompt", sessionId: skillsDialog.sessionId, text: r.send, images: [] }).catch((e) => setError((e as Error).message));
   };
@@ -1253,6 +1264,7 @@ export function App() {
               renaming={renaming?.in === "list" ? renaming.id : undefined}
               onAction={sessionAction("list")}
               onRenamed={renamed}
+              search={resumeSearch}
             />
           )}
           <button
@@ -1332,6 +1344,7 @@ export function App() {
                             ? client.current!.request({ type: "session.bash", sessionId: s.id, command })
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
+                        onCancelContinue={() => client.current!.request({ type: "session.cancelContinue", sessionId: s.id }).catch((e) => setError((e as Error).message))}
                         onInterrupt={() =>
                           client.current!.request({ type: "session.interrupt", sessionId: s.id }).catch((e) => setError((e as Error).message))
                         }
@@ -1791,8 +1804,8 @@ export function NewSession({
   commandsRev?: number;
   /** Rejects when the session was not created; the prompt box keeps the draft. */
   onStart: (cwd: string, opts: StartOptions, first: FirstMessage) => Promise<void>;
-  /** `/mcp`, `/skills`, `/plugins` typed alone: opens that dialog of `cwd` instead of creating a session. */
-  onDialog?: (dialog: DialogName) => void;
+  /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog of `cwd` instead of creating a session. */
+  onDialog?: (dialog: DialogName, arg?: string) => void;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   connected?: boolean;
 }) {
@@ -1974,6 +1987,7 @@ export function SessionPane({
   onBash,
   onSearch,
   onInterrupt,
+  onCancelContinue,
   onRewindPreview,
   onRewind,
   onRespond,
@@ -2021,6 +2035,8 @@ export function SessionPane({
   onBash?: (command: string) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
   onInterrupt: () => void;
+  /** Drops the scheduled continue after a usage limit. */
+  onCancelContinue?: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
@@ -2028,8 +2044,8 @@ export function SessionPane({
   /** The daemon is reachable; otherwise the send button is disabled. */
   connected: boolean;
   onGitStatus?: () => Promise<GitStatus | null>;
-  /** `/mcp`, `/skills`, `/plugins` typed alone: opens that dialog instead of sending. */
-  onDialog?: (dialog: DialogName) => void;
+  /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
+  onDialog?: (dialog: DialogName, arg?: string) => void;
 }) {
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
@@ -2163,7 +2179,11 @@ export function SessionPane({
           }
           onReachTop={view.older && onLoadOlder ? (user) => onLoadOlder({ user }) : undefined}
           loadingOlder={loadingOlder}
-          renderItem={(item, index) =>
+          renderItem={(item, index) => {
+            // A finished turn (not running; the next top-level item is a prompt, or it is the last) ends with Copy response, with or without a usage footer: a restored transcript has none.
+            const next = items[index + 1];
+            const copyText = (next ? next.kind === "part" && (next.part.type === "user_text" || next.part.type === "bash") : !turnRunning && !view.externalTurn) ? turnText(items, index) : "";
+            const row = (
             item.kind === "context" ? (
               <ContextGroup calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
             ) : item.part.type === "user_text" && coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE) ? (
@@ -2215,7 +2235,18 @@ export function SessionPane({
             ) : (
               <PartView part={item.part} view={view} />
             )
-          }
+            );
+            return copyText ? (
+              <>
+                {row}
+                <MessageActions className="mt-1">
+                  <CopyAction text={copyText} label="Copy response" className="max-md:size-11" />
+                </MessageActions>
+              </>
+            ) : (
+              row
+            );
+          }}
         />
       )}
       <div
@@ -2230,6 +2261,7 @@ export function SessionPane({
           <NotPromptable view={view} run={current} onOpen={onOpenRun} onStop={stopRun} stopping={!!stopOf && !stopOf.error} error={stopOf?.error} />
         ) : (
           <>
+            {view.continueAt !== undefined && <ContinueDock at={view.continueAt} onCancel={() => onCancelContinue?.()} />}
             <PromptBox
               cwd={session.cwd}
               commands={view.commands}
@@ -2317,8 +2349,8 @@ function PromptBox({
   /** Changing it clears the send error. */
   cwd?: string;
   commands: SlashCommand[];
-  /** Given: the dialog commands (`/mcp`, `/skills`, `/plugins`) are in the picker and open their dialog instead of being sent. */
-  onDialog?: (dialog: DialogName) => void;
+  /** Given: the dialog commands (`/mcp`, `/skills`, `/plugins`, `/resume`) are in the picker and open their dialog instead of being sent. */
+  onDialog?: (dialog: DialogName, arg?: string) => void;
   models: ModelInfo[];
   model: string;
   onModel: (model: string) => void;
@@ -2470,8 +2502,11 @@ function PromptBox({
       return;
     }
     if (!t.trim() && !images.length) return;
-    const dialog = onDialog && !images.length && dialogOf(t, commands);
-    if (dialog) return onDialog(dialog), edit("");
+    const dialog = onDialog && dialogOf(t, commands);
+    if (dialog && (!images.length || dialog === "resume")) {
+      const arg = dialogArg(t);
+      return arg ? onDialog(dialog, arg) : onDialog(dialog), edit("");
+    }
     if (blocked && !queueing) return;
     const sent = images;
     setSendError(undefined);
@@ -2720,7 +2755,7 @@ function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) 
   );
 }
 
-function CopyAction({ text }: { text: string }) {
+function CopyAction({ text, label = "Copy message", className = "" }: { text: string; label?: string; className?: string }) {
   const [copied, setCopied] = useState(false);
   // navigator.clipboard is undefined on a non-secure origin (http://<LAN IP>), so Copy does nothing there.
   const copy = () =>
@@ -2732,7 +2767,7 @@ function CopyAction({ text }: { text: string }) {
       () => {},
     );
   return (
-    <MessageAction title="Copy" label="Copy message" className="pointer-coarse:size-11" onClick={copy}>
+    <MessageAction title="Copy" label={label} className={`pointer-coarse:size-11 ${className}`} onClick={copy}>
       {copied ? <CheckIcon /> : <CopyIcon />}
     </MessageAction>
   );

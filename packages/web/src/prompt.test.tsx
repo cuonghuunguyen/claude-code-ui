@@ -652,3 +652,32 @@ it("without CSS field-sizing the prompt box height follows its content and retur
     else delete (HTMLTextAreaElement.prototype as { scrollHeight?: number }).scrollHeight;
   }
 });
+
+it("/resume is never sent, even when the CLI lists its own; text after it goes to the session search (GH-100)", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onDialog = vi.fn();
+  const { box } = await render({ onPrompt, onDialog }, { ...emptySession(), commands: [{ name: "resume", description: "CLI resume", argumentHint: "[conversation]" }] });
+  await type(box, "/resume");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenLastCalledWith("resume");
+  await type(box, "/resume deploy");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenLastCalledWith("resume", "deploy");
+  expect(onPrompt).not.toHaveBeenCalled();
+});
+
+it("/resume with an image attached still opens the session search and keeps the image (GH-100)", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onDialog = vi.fn();
+  const { $, box } = await render({ onPrompt, onDialog });
+  const input = $("attach-input") as HTMLInputElement;
+  const png = new File([Uint8Array.from(atob("iVBORw0KGgo="), (c) => c.charCodeAt(0))], "a.png", { type: "image/png" });
+  Object.defineProperty(input, "files", { value: [png], configurable: true });
+  await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
+  await vi.waitFor(() => expect($("image-strip")!.querySelectorAll("img")).toHaveLength(1));
+  await type(box, "/resume");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenLastCalledWith("resume");
+  expect(onPrompt).not.toHaveBeenCalled();
+  expect($("image-strip")!.querySelectorAll("img")).toHaveLength(1);
+});

@@ -34,13 +34,17 @@ function duration(ms: number) {
 const TIME = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 const DAY = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" });
 
+/** "13:40", with weekday and date unless it is today. */
+export function clockText(at: number, now = Date.now()) {
+  const d = new Date(at);
+  const day = d.toDateString() === new Date(now).toDateString() ? "" : `${DAY.format(d)} `;
+  return `${day}${TIME.format(d)}`;
+}
+
 /** "Resets 13:40 (in 2h 5m)": time only today, weekday and date otherwise. */
 export function resetText(at: number, now = Date.now()) {
   if (at <= now) return "Resets now";
-  const d = new Date(at);
-  const time = TIME.format(d);
-  const day = d.toDateString() === new Date(now).toDateString() ? "" : `${DAY.format(d)} `;
-  return `Resets ${day}${time} (in ${duration(at - now)})`;
+  return `Resets ${clockText(at, now)} (in ${duration(at - now)})`;
 }
 
 /** Date.now(), updated every `ms` while `on`: relative reset times count down. */

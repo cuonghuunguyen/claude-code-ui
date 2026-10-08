@@ -69,6 +69,8 @@ type SessionOpts = Partial<SessionSettings> & {
   query?: typeof sdkQuery;
   onSettings?: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => void;
   onCleared?: (heir: Session) => void;
+  /** The turn just ended because the plan usage limit was hit (assistant error rate_limit); `resetsAt` ms from its rejected rate_limit_event. */
+  onLimitStop?: (id: string, resetsAt: number | undefined) => void;
   /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */
   plan?: Pick<PlanTracker, "refresh" | "rateLimit">;
   /** Reads the session's SDK transcript: its main chain and each subagent run's messages (sync()). */
@@ -164,6 +166,10 @@ export class Session {
   /** A terminal CLI turn runs (external_turn part); ends with its turn, or EXTERNAL_TURN_QUIET_MS after the last growth. */
   private externalTurn = false;
   private externalQuiet?: NodeJS.Timeout;
+  /** The turn hit the plan usage limit (assistant error rate_limit) and the reset time of its rejected rate_limit_event (ms). */
+  private limitHit = false;
+  private limitResetsAt?: number;
+  private continueAt: number | null = null;
   /** The throwaway commands query was asked (once; a failure asks again at the next subscribe). */
   private commandsAsked = false;
   /** After a failed load no new throwaway starts before this time (ms). */
@@ -660,6 +666,13 @@ export class Session {
     void this.refreshUsage();
   }
 
+  /** Shows (ms) or clears (null) the scheduled continue after a usage limit (auto-continue.ts). */
+  setContinueAt(at: number | null) {
+    if (at === this.continueAt) return;
+    this.continueAt = at;
+    this.emit({ type: "auto_continue", id: "auto_continue", at });
+  }
+
   private setExternalTurn(running: boolean) {
     clearTimeout(this.externalQuiet);
     // A CLI that died mid-turn leaves no end in the transcript; the quiet time ends the turn unless the CLI still reports it.
@@ -894,9 +907,15 @@ export class Session {
     if (m.type === "system" && (m.subtype === "init" || m.subtype === "status") && m.permissionMode) this.setMode(m.permissionMode);
     for (const part of this.adapter.convert(m)) this.emit(part);
     if (m.type === "rate_limit_event") void this.opts.plan?.rateLimit(m.rate_limit_info, q);
+    if (m.type === "rate_limit_event" && m.rate_limit_info.status === "rejected" && m.rate_limit_info.resetsAt) this.limitResetsAt = m.rate_limit_info.resetsAt * 1000;
+    if (m.type === "assistant" && !m.parent_tool_use_id && m.error === "rate_limit") this.limitHit = true;
     if (m.type === "result") {
       this.cliTurn = false;
       this.setState("idle");
+      const hit = this.limitHit, at = this.limitResetsAt;
+      this.limitHit = false;
+      this.limitResetsAt = undefined;
+      if (hit) this.opts.onLimitStop?.(this.id, at);
       void this.opts.plan?.refresh(q);
       if (this.syncDeferred && !this.busy()) {
         this.syncDeferred = false;
