@@ -5,8 +5,9 @@ self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener("push", (e) => {
   const p = e.data?.json();
   if (!p) return;
-  // tag: a newer push for the same session replaces the older notification.
-  e.waitUntil(self.registration.showNotification(p.title, { body: p.body, tag: p.sessionId, data: p, icon: "/icon.svg" }));
+  // tag: a newer push with the same tag (default: the session) replaces the older notification, silently when `silent`
+  // (a replace push shows "No longer needs input" over a request that settled: a push must always show something).
+  e.waitUntil(self.registration.showNotification(p.title, { body: p.body, tag: p.tag ?? p.sessionId, data: p, icon: "/icon.svg", silent: !!p.silent, renotify: false }));
 });
 
 // Opens the session scrolled to the bottom: in an open tab (the app listens for "open"), else in a new window.

@@ -17,6 +17,7 @@ import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
 import { startServe, tailscalePreflight } from "./tailscale.ts";
 import { configDir, loadToken, pairingUrl } from "./token.ts";
 import { installVersion, latestNewer, parseRegistry, pruneVersions, versionsDir } from "./update.ts";
+import { createBuildInfo } from "./build-info.ts";
 
 logExit(process, console.error);
 let cleanup = () => {};
@@ -113,7 +114,9 @@ if (side) {
   // Only the launcher (dist/launcher.js, the `claude-ui` bin) starts the daemon again after an update restart.
   const launched = process.env.CLAUDE_UI_LAUNCHER === "1";
   const update = updateCheck !== false && version !== "dev" && launched ? { current: version, dir: versionsDir(), registry, exit: (code: number) => void setTimeout(() => process.exit(code), 200) } : undefined;
-  createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update }).listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
+  // A source checkout compares its files with the start; a release compares its version with the installed ones (build-info.ts).
+  const buildInfo = createBuildInfo({ version, srcDirs: [fileURLToPath(new URL("../src", import.meta.url)), fileURLToPath(new URL("../../protocol/src", import.meta.url))], versionsDir: versionsDir() });
+  createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo }).listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
     if (ts && "cli" in ts) {
       if (ts.serve) {
         const serve = startServe({ cli: ts.cli, port, spawn, log: console.error, platform: process.platform });

@@ -299,6 +299,10 @@ export function createDaemon(opts: {
   idleCloseMs?: number;
   /** WSL distros and Docker containers this daemon routes to (sides.ts). */
   sides?: Sides;
+  /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
+  buildInfo?: { stale(): string | undefined };
+  /** How long worker_stop and worker_close wait for a stopped worker to leave running/needs_input (orchestration.ts); tests shorten it. */
+  stopWaitMs?: number;
   /** Update checks and installs (update.ts); none: no update_available, update.* fail. Checks start with the daemon. */
   update?: Omit<Parameters<typeof createUpdater>[0], "busy" | "broadcast">;
 }) {
@@ -341,6 +345,7 @@ export function createDaemon(opts: {
       track(heir);
       broadcast({ type: "sessions.changed" });
     },
+    worker: (id: string) => !!settings.get(id)?.coordinatorId,
     mcpServers: (id: string) => orchestration.mcpServers(id),
     toolPolicy: (tool: string, mcpServer?: { name: string; source: string }) => orchestration.toolPolicy(tool, mcpServer),
     permissionCard: (id: string, tool: string, input: Record<string, unknown>, mcp?: { name: string; source: string }) => orchestration.permissionCard(id, tool, input, mcp),
@@ -484,13 +489,17 @@ export function createDaemon(opts: {
 
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<WebSocket, string>();
+  const pushTitleOf = async (sessionId: string) => {
+    const info = await history.getSessionInfo(sessionId).catch(() => undefined);
+    return info?.summary || basename(sessions.get(sessionId)?.cwd ?? "") || "Claude";
+  };
   const notifier = createNotifier({
     suppressed: (id) => [...focused.values()].includes(id),
-    push: async (sessionId, body) => {
-      const info = await history.getSessionInfo(sessionId).catch(() => undefined);
-      const title = info?.summary || basename(sessions.get(sessionId)?.cwd ?? "") || "Claude";
-      await opts.push?.send({ sessionId, title, body });
-    },
+    // A group's push (workers blocked on the same request) carries its tag and the coordinator's title.
+    push: async (sessionId, body, { titleSession, ...extra } = {}) => void (await opts.push?.send({ sessionId, title: await pushTitleOf(titleSession ?? sessionId), body, ...extra })),
+    // A request that settled: the same tag, silent (Web Push must show every push; one that only closes would show "updated in the background").
+    replace: async (sessionId, body, tag) => void (await opts.push?.send({ sessionId, title: await pushTitleOf(sessionId), body, ...(tag && { tag }), silent: true, replace: true })),
+    group: (id) => settings.get(id)?.coordinatorId,
   });
   /**
    * Per session: its transcript entries read so far (JsonlTail), the main chain built from them for a file stamp, and each
@@ -667,6 +676,8 @@ export function createDaemon(opts: {
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
     models: () => known,
+    stopWaitMs: opts.stopWaitMs,
+    buildNote: () => opts.buildInfo?.stale(),
   });
 
   // listSessions() reads every transcript under ~/.claude/projects (hundreds of MB): one scan at a time.
@@ -947,6 +958,8 @@ export function createDaemon(opts: {
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
     if (plan.age() > PLAN_STALE_MS) void plan.reread();
     updater?.messages().forEach((m) => send(ws, m));
+    const stale = opts.buildInfo?.stale();
+    if (stale) send(ws, { type: "daemon_stale", note: stale });
     const unsubscribes = new Map<string, () => void>();
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     // fs.media: canonical path -> nonce issued to this connection.

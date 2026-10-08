@@ -1,6 +1,7 @@
 // Web Push (docs/spec.md "Push notifications"): VAPID keys and subscriptions in the config dir, same rules as Orca (MIT; behaviour only, no code).
 // The payload is encrypted for the subscribing browser only (ADR 0003); the push service sees ciphertext.
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import webpush from "web-push";
@@ -14,38 +15,95 @@ export const MAX_PAYLOAD_BYTES = 3800;
 const SUBJECT = process.env.CLAUDE_UI_VAPID_SUBJECT ?? "https://github.com/cuonghuunguyen/claude-code-ui";
 
 type PendingPart = Extract<Part, { type: "permission_request" | "question" }>;
-type Tracked = { state: SessionState; text?: string; error?: string; request?: PendingPart; timer?: ReturnType<typeof setTimeout>; lastSent: number };
+type Tracked = { state: SessionState; text?: string; error?: string; request?: PendingPart; timer?: ReturnType<typeof setTimeout>; lastSent: number; escalated: Set<string>; /** The group this session's last push counted it in (groups below). */ group?: string };
+/** Workers of one coordinator blocked on the same request share one notification (tag) that counts them. */
+type Group = { tag: string; what: string; members: Set<string>; shown: boolean; title: string };
+/** What a push adds to the plain `(sessionId, body)`: the notification's tag, silence and replace-only flags, and whose title it carries. */
+export type PushExtra = { tag?: string; silent?: boolean; replace?: boolean; titleSession?: string };
 
 /**
  * Turns session events into pushes: "needs input" at once, "finished" (an error counts) 1.5 s after the turn ends unless
  * work resumes or background tasks still run, at most one per session per 5 s (an escalated request pushes at once), none while `suppressed` (a focused, visible tab shows the session).
+ * An escalated request that settles (answered, stopped, cancelled) calls `replace` once, at once, also while `suppressed`: its notification must not stay.
  */
-export function createNotifier(opts: { push: (sessionId: string, body: string) => void; suppressed: (sessionId: string) => boolean }) {
+export function createNotifier(opts: {
+  push: (sessionId: string, body: string, extra?: PushExtra) => void;
+  suppressed: (sessionId: string) => boolean;
+  /** An earlier notification (`tag`: its group's; absent: the session's) no longer applies: the daemon replaces it with a silent one. */
+  replace?: (sessionId: string, body: string, tag?: string) => void;
+  /** The coordinator of a worker session, undefined for any other: workers of one coordinator blocked on the same request group (GH-163). */
+  group?: (sessionId: string) => string | undefined;
+}) {
   const sessions = new Map<string, Tracked>();
+  const groups = new Map<string, Group>();
+  const countBody = (g: Group) => (g.members.size === 1 ? `Needs input · ${g.what}` : `${g.members.size} workers need input · ${short(g.what)}`);
 
+  /** A needs-input push of a worker joins its request's group: one tag, a count in the body; true when a push went out. */
+  function fireGrouped(id: string, t: Tracked, body: string, force: boolean) {
+    const coordinator = opts.group?.(id);
+    if (coordinator === undefined || !t.request) return fire(id, t, body, force);
+    const key = `${coordinator}\u0000${describe(t.request)}`;
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { tag: `req-${createHash("sha1").update(key).digest("hex").slice(0, 16)}`, what: describe(t.request), members: new Set(), shown: false, title: coordinator }));
+    const had = g.members.has(id);
+    g.members.add(id);
+    t.group = key;
+    if ((had && !force) || opts.suppressed(id)) return false;
+    const n = g.members.size;
+    // The first push keeps the 5 s gap; a later one only changes the count of the notification already there.
+    if (n === 1 && !force && Date.now() - t.lastSent < MIN_GAP_MS) return false;
+    t.lastSent = Date.now();
+    opts.push(id, n === 1 ? body : countBody(g), { tag: g.tag, titleSession: g.title, ...(n > 1 && { silent: true, replace: true }) });
+    g.shown = true;
+    return true;
+  }
+
+  /** The session no longer waits on its request: the group's notification shows the new count, or goes when it was the last. True when it had a group. */
+  function leave(id: string, t: Tracked) {
+    const key = t.group;
+    t.group = undefined;
+    const g = key === undefined ? undefined : groups.get(key);
+    if (!g || !g.members.delete(id)) return false;
+    if (g.members.size === 0) groups.delete(key!);
+    if (g.shown) {
+      if (g.members.size === 0) opts.replace?.(id, `No longer needs input · ${clip(g.what, 200)}`, g.tag);
+      else opts.push([...g.members].at(-1)!, countBody(g), { tag: g.tag, titleSession: g.title, silent: true, replace: true });
+    }
+    return true;
+  }
+
+  /** True when a push went out. */
   function fire(id: string, t: Tracked, body: string, force = false) {
-    if (opts.suppressed(id) || (!force && Date.now() - t.lastSent < MIN_GAP_MS)) return;
+    if (opts.suppressed(id) || (!force && Date.now() - t.lastSent < MIN_GAP_MS)) return false;
     t.lastSent = Date.now();
     opts.push(id, body);
+    return true;
   }
 
   return {
     observe({ sessionId: id, part }: Event) {
       let t = sessions.get(id);
-      if (!t) sessions.set(id, (t = { state: "idle", lastSent: -Infinity }));
+      if (!t) sessions.set(id, (t = { state: "idle", lastSent: -Infinity, escalated: new Set() }));
       if (part.type === "user_text") t.text = t.error = undefined;
       else if (part.type === "assistant_text") t.text = part.text;
       else if (part.type === "raw" && (part.message as { error?: unknown })?.error) t.error = String((part.message as { error: unknown }).error);
       else if (part.type === "permission_request" || part.type === "question") {
         t.request = part.settled ? undefined : part;
+        // A grouped worker's notification is replaced through its group (leave), not through the session tag.
+        if (part.settled && leave(id, t)) t.escalated.delete(part.requestId);
         // One push per request (escalate refuses a second call); only a focused tab of this (worker) session suppresses it.
-        if (!part.settled && part.escalated) fire(id, t, `Needs input · Escalated by coordinator: ${clip(part.reason ?? "", 200)} · ${describe(part)}`, true);
+        // Only a push that went out is replaced later: a replacement for a notification never shown would show itself.
+        if (!part.settled && part.escalated && !t.escalated.has(part.requestId)) {
+          if (fireGrouped(id, t, `Needs input · Escalated by coordinator: ${clip(part.reason ?? "", 200)} · ${describe(part)}`, true)) t.escalated.add(part.requestId);
+        } else if (part.settled && t.escalated.delete(part.requestId))
+          opts.replace?.(id, `No longer needs input · ${part.type === "question" ? (part.answers ? "answered" : "cancelled") : (part.decision ?? "settled")} · ${clip(describe(part), 200)}`);
       }
       if (part.type !== "session_state") return;
       const busy = t.state === "running" || t.state === "needs_input";
       t.state = part.state;
       clearTimeout(t.timer);
-      if (part.state === "needs_input") fire(id, t, `Needs input · ${t.request ? describe(t.request) : "waiting for an answer"}`);
+      if (part.state !== "needs_input") leave(id, t);
+      if (part.state === "needs_input") fireGrouped(id, t, `Needs input · ${t.request ? describe(t.request) : "waiting for an answer"}`, false);
       else if ((part.state === "error" || (part.state === "idle" && !part.working)) && busy) {
         const body = t.error ? `Error · ${t.error}` : (lastLine(t.text) ?? "Finished");
         t.timer = setTimeout(() => fire(id, t, body), FINISH_DELAY_MS);
@@ -53,6 +111,9 @@ export function createNotifier(opts: { push: (sessionId: string, body: string) =
     },
   };
 }
+
+/** A path in `what` cut to its last two segments: "Read: …/implement-issue/SKILL.md". */
+const short = (what: string) => what.replace(/(\S*[\\/])([^\\/\s]+[\\/][^\\/\s]+)$/, "…/$2");
 
 /** "Bash: npm test": the tool and its command, path or input; a question's text. */
 function describe(p: PendingPart) {
@@ -156,6 +217,8 @@ export function createPush({ dir = configDir(), send = webpush.sendNotification,
       // No browser takes a push (plain-HTTP --lan tab, push off, no Web Push): the daemon's machine shows it.
       // Logged once; a missing command (ENOENT) is not called again, other failures are retried.
       if (!subs.length) {
+        // An OS toast cannot be withdrawn: a replacement would only show a second one.
+        if (payload.replace) return;
         if (notify && !notifyMissing)
           await notify(payload).catch((e: NodeJS.ErrnoException) => {
             if (e.code === "ENOENT") notifyMissing = true;

@@ -212,7 +212,17 @@ export type ClientMessage = { reqId: string; side?: string } & (
 export type WebPushSubscription = { endpoint: string; keys: { p256dh: string; auth: string } };
 export type PushKeyResult = { publicKey: string };
 /** Decrypted Web Push payload the service worker shows as a notification. */
-export type PushPayload = { sessionId: string; title: string; body: string };
+export type PushPayload = {
+  sessionId: string;
+  title: string;
+  body: string;
+  /** Notification tag; absent: the session ID. A newer notification with the same tag replaces the older one. */
+  tag?: string;
+  /** No sound or vibration. */
+  silent?: boolean;
+  /** Only replaces an earlier notification (a request that settled); the desktop fallback shows nothing for it. */
+  replace?: boolean;
+};
 
 /** Claude Code `/rewind` modes: `both` restores code, then conversation. */
 export type RewindMode = "code" | "conversation" | "both";
@@ -259,6 +269,8 @@ export type ServerMessage =
   | { type: "terminal.exit"; terminalId: string; exitCode: number }
   /** To every connection of this daemon after `settings.set`. */
   | { type: "settings_changed"; settings: Settings }
+  /** On connect: this daemon runs older code than is on disk (a source checkout changed after the start, or a newer install waits for a restart). `note` says which. */
+  | { type: "daemon_stale"; note: string }
   /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes. `reloadFailed`: set when plugins were reloaded: the sessions whose reload failed (empty: none; restart banners then clear). */
   | { type: "config.changed"; kind: ConfigKind; cwd: string; reloadFailed?: string[] }
   /** A newer claude-ui is on npm: on connect and when a check finds it. */
@@ -400,7 +412,10 @@ export const GIT_LOG_MAX_LIMIT = 500;
 /** Where an MCP server (or plugin setting) is saved; Claude Code's term. local: this project, private; user: all projects; project: `.mcp.json`. */
 export type ConfigScope = "local" | "user" | "project";
 /** App-wide settings (settings.json in the daemon config dir). A later setting is one more field here, in the daemon's `DEFAULTS` and `CHECKS`. */
-export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean }; usageLimit: { autoContinue: boolean } };
+/** `orchestration.workerMode`: the permission mode of a new worker when the coordinator names none; `coordinator` = the coordinator's own mode. */
+export const WORKER_MODES = ["coordinator", "default", "acceptEdits", "plan", "auto"] as const;
+export type WorkerModeSetting = (typeof WORKER_MODES)[number];
+export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting }; usageLimit: { autoContinue: boolean } };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 export type SettingsResult = { settings: Settings };
 export type ConfigKind = "mcp" | "plugins" | "skills";
