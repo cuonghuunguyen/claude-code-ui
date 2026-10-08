@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionPane } from "./App.tsx";
 import { applyEvent, emptySession } from "./store.ts";
+import { MessageResponse } from "@/components/ai-elements/message";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -92,6 +93,26 @@ it("Copy copies the raw markdown", async () => {
   const { el } = await render("**bold**");
   await act(async () => void el.querySelector<HTMLElement>('button[title="Copy"]')!.click());
   expect(writeText).toHaveBeenCalledWith("**bold**");
+});
+
+it("a code block in a user message is not syntax highlighted (no token spans to build on every scroll)", async () => {
+  // Control: the assistant renderer highlights the same block once the highlighter has loaded.
+  const code = "```ts\nconst a = 1;\nfunction f(x: number) { return x + a; }\n```";
+  const box = document.createElement("div");
+  document.body.append(box);
+  const control = createRoot(box);
+  await act(async () => control.render(<MessageResponse mode="static">{code}</MessageResponse>));
+  const tokens = '[data-streamdown="code-block"] span[style*="--sdm-c"]';
+  // Highlighted: a span per token (more than one per line).
+  await vi.waitFor(() => expect(box.querySelectorAll(tokens).length).toBeGreaterThan(2), { timeout: 10_000 });
+  const { bubble } = await render(code);
+  await act(async () => new Promise((r) => setTimeout(r, 200)));
+  expect(bubble.querySelector('[data-streamdown="code-block"]')?.textContent).toContain("const a = 1;");
+  // Plain: at most one span per line, uncolored.
+  expect(bubble.querySelectorAll(tokens).length).toBeLessThanOrEqual(2);
+  expect(bubble.querySelector('[data-streamdown="code-block"] span[style*="--sdm-c: #"]')).toBeNull();
+  control.unmount();
+  box.remove();
 });
 
 it("uploads and images are unaffected", async () => {
