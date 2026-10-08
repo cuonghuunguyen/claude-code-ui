@@ -2354,6 +2354,29 @@ describe("/clear", () => {
     }
   });
 
+  it("session.list reads a cleared session without a prompt once, not on every list, until its transcript changes", async () => {
+    const id = "8b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const t = { sessionId: id, summary: "/clear", lastModified: 1, fileSize: 10, cwd: webRoot };
+    let prompt = false;
+    const getSessionMessages = vi.fn(async () => (prompt ? [{ type: "user", uuid: randomUUID(), session_id: id, message: { role: "user", content: "later prompt" }, parent_tool_use_id: null, parent_agent_id: null }] : []));
+    const d = createDaemon({ webRoot, roots: [webRoot], projects: added(webRoot), query: fakeQuery as never, token, history: { listSessions: (async () => [t]) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: getSessionMessages as never, listSubagents: (async () => []) as never } });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const titled = async () => ((await c.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string }[] } }).result.sessions.find((s) => s.id === id)?.title;
+      expect(await titled()).toBe("New session");
+      expect(await titled()).toBe("New session");
+      expect(getSessionMessages).toHaveBeenCalledTimes(1);
+      // A prompt was written: the scan reports another size, the transcript is read again.
+      prompt = true;
+      t.fileSize = 99;
+      expect(await titled()).toBe("later prompt");
+      expect(getSessionMessages).toHaveBeenCalledTimes(2);
+    } finally {
+      d.close();
+    }
+  });
+
   it("the live query goes on as the CLI's new session: tabs see session_cleared, both sessions are listed, prompts reach the new one, settings are saved under its ID", async () => {
     const settingsFile = join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json");
     const d = createDaemon({ webRoot, roots: [webRoot], query: clearQuery as never, token, settingsFile, history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never } });

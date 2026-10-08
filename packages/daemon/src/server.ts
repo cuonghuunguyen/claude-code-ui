@@ -730,12 +730,21 @@ export function createDaemon(opts: {
    * The SDK titles a session cleared into (/clear) "/clear" until it finds a prompt in the transcript's head read window, which
    * a background task's notification turn can fill: its first prompt from the transcript, none yet "New session".
    */
-  async function clearedTitle(id: string, cwd: string) {
+  /** Cleared sessions read without a prompt, by ID: the scan's mtime and size then; not read again while they hold. */
+  const untitledAt = new Map<string, string>();
+  async function clearedTitle(id: string, cwd: string, scanned?: { lastModified: number; fileSize?: number }) {
     if (clearedTitles.has(id)) return clearedTitles.get(id)!;
+    // A /clear that was never prompted stays "New session": without this, every list read each such transcript again.
+    const stamp = scanned?.fileSize !== undefined ? `${scanned.lastModified}:${scanned.fileSize}` : undefined;
+    if (stamp && untitledAt.get(id) === stamp) return "New session";
     const main = await readTranscript(id, cwd).then((t) => t.main, () => []);
     const adapter = createAdapter();
     const prompt = main.flatMap((m) => adapter.convert(m as SDKMessage)).find((p) => p.type === "user_text");
-    if (!prompt) return "New session";
+    if (!prompt) {
+      if (stamp) untitledAt.set(id, stamp);
+      return "New session";
+    }
+    untitledAt.delete(id);
     clearedTitles.set(id, prompt.text);
     return prompt.text;
   }
@@ -774,7 +783,7 @@ export function createDaemon(opts: {
     for (const t of all) {
       if (!t.cwd || !allowedCwd(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
-      const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd)) : t.summary;
+      const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
       items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId, t) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
