@@ -578,7 +578,7 @@ export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff |
   const byPath = (x: GitFileChange, y: GitFileChange) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
   files.sort(byPath);
   // Tracked files first: a flood of untracked files is cut before any edit.
-  const untracked = others.split(" ").filter(Boolean).sort();
+  const untracked = others.split("\0").filter(Boolean).sort();
   const room = Math.max(0, MAX_COMMIT_FILES - files.length);
   const cut = files.length + untracked.length > MAX_COMMIT_FILES;
   const kept = untracked.slice(0, room);
