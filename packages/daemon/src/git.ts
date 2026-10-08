@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
 import { promisify } from "node:util";
 import { GIT_LOG_MAX_LIMIT, worktreeNameError, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
 
@@ -76,7 +76,9 @@ export async function listWorktrees(cwd: string): Promise<Worktree[] | null> {
   return out.split(sep + sep).flatMap((entry, i) => {
     const lines = entry.split(sep);
     const field = (k: string) => lines.find((l) => l === k || l.startsWith(`${k} `))?.slice(k.length + 1);
-    const path = field("worktree");
+    // git prints forward slashes on Windows; every other path here is native.
+    const raw = field("worktree");
+    const path = raw && process.platform === "win32" ? normalize(raw) : raw;
     if (!path || field("bare") !== undefined || field("prunable") !== undefined) return [];
     const branch = field("branch")?.replace(/^refs\/heads\//, "") ?? field("HEAD")?.slice(0, 7);
     return [{ path, ...(branch && { branch }), main: i === 0 }];

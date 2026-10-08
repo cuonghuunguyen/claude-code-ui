@@ -149,7 +149,9 @@ describe("sides", () => {
     c.ws.close();
   });
 
-  it("routes a side project's sessions to the side: create, subscribe, prompt, events", async () => {
+  // Routes by the path's form: a real WSL path is POSIX, while this test stands in for it with a native temp dir, which on a Windows host is a Windows path and so (correctly) local.
+  // The in-process side needs that same path on the real filesystem, so these cannot run on Windows; they run on Linux and macOS.
+  it.skipIf(process.platform === "win32")("routes a side project's sessions to the side: create, subscribe, prompt, events", async () => {
     const c = await client();
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });
     await c.request({ type: "session.list" });
@@ -209,7 +211,9 @@ describe("sides", () => {
     c.ws.close();
   });
 
-  it("fs.media of a side path fails side_unsupported; a local path is served", async () => {
+  // Routes by the path's form: a real WSL path is POSIX, while this test stands in for it with a native temp dir, which on a Windows host is a Windows path and so (correctly) local.
+  // The in-process side needs that same path on the real filesystem, so these cannot run on Windows; they run on Linux and macOS.
+  it.skipIf(process.platform === "win32")("fs.media of a side path fails side_unsupported; a local path is served", async () => {
     writeFileSync(join(wslRoot, "s.png"), "png");
     writeFileSync(join(winRoot, "l.png"), "png");
     const c = await client();
