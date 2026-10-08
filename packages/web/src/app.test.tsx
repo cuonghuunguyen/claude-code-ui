@@ -300,7 +300,7 @@ it("/clear: the tab keeps its prompt box (same element, same text) and shows the
     expect(promptBox()).toBe(box);
     expect(box.value).toBe("draft");
     expect(el.textContent).not.toContain("Open or create a session to start.");
-    expect(el.querySelector('[data-testid="session-state-skeleton"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="session-header"]')).not.toBeNull();
   } finally {
     restoreSubscribe();
   }

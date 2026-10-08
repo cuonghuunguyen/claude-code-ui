@@ -99,7 +99,9 @@ describe("first prompt", () => {
     expect(card).toBeTruthy();
     expect(card.querySelector('[data-testid="user-message"][data-pending]')?.textContent).toContain("hello");
     expect(card.querySelector('[data-testid="thinking"]')).not.toBeNull();
-    expect(card.querySelector('[data-testid="session-state-skeleton"]')).not.toBeNull();
+    expect(card.querySelector('[data-testid="prompt-skeleton"]')).not.toBeNull();
+    // No state chip skeleton: the header has no state chip any more (GH-165).
+    expect(card.querySelector('[data-testid="session-state-skeleton"]')).toBeNull();
     expect(one('[data-testid="titlebar"] [data-testid="title-skeleton"]')).toBeTruthy();
     expect(visible('[data-testid="new-session-tab"]')).toHaveLength(0);
   });
@@ -134,13 +136,11 @@ describe("first prompt", () => {
     expect(visible('[data-testid="user-message"][data-pending]')).toHaveLength(1);
     // Not inside the "No session shown" hidden card (the tab strip card is `hidden` until a session is shown).
     expect(one('[data-testid="user-message"][data-pending]')!.closest(".hidden")).toBeNull();
-    expect(one('[data-testid="session-state-skeleton"]')).toBeTruthy();
     await act(async () => subscribe.resolve({ logEpoch: "e1", seq: 0, session: info, title: "New session" }));
     await act(async () => emit({ type: "event", sessionId: NEW, seq: 1, part: { type: "user_text", id: "u1", text: "hello", images: [] } }));
     await act(async () => emit({ type: "event", sessionId: NEW, seq: 2, part: { type: "session_state", id: "st", state: "running" } }));
     expect(visible('[data-testid="user-message"]')).toHaveLength(1);
     expect(visible('[data-testid="user-message"][data-pending]')).toHaveLength(0);
-    expect(one('[data-testid="session-state-skeleton"]')).toBeUndefined();
   });
 
   it("rejected: the new-session card comes back with the text and the error", async () => {

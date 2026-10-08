@@ -137,17 +137,14 @@ it("narrow screen: the toolbar choosers wrap to a second row instead of shrinkin
   expect($("prompt-toolbar")!.className).not.toMatch(/(^| )h-\d/);
 });
 
-it("phone: the model picker drops the parenthesised note, the choosers wrap in the toolbar's own row and ring + send sit in a right group", async () => {
+it("the model picker drops the parenthesised note where short, and ring + send sit in a right group", async () => {
   expect(["Default (recommended)", "Sonnet 5.5", "Opus 5.5 (1M context)", "(x)"].map(shortModel)).toEqual(["Default model", "Sonnet 5.5", "Opus 5.5 (1M context)", "(x)"]);
   const view = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "context_usage", id: "context_usage", usage: { totalTokens: 100, maxTokens: 1000, percentage: 10, categories: [] } } });
   const { $ } = await render({}, view);
   // jsdom shows both labels (CSS picks one by the toolbar width); the full name stays the accessible name.
   expect($("session-model")!.textContent).toContain("Default modelDefault (recommended)");
   expect($("session-model")!.getAttribute("aria-label")).toBe("Default (recommended), Model");
-  expect($("session-model")!.parentElement!.className).toContain("max-sm:contents");
-  expect($("prompt-toolbar")!.className).toContain("max-sm:flex-wrap");
   const right = $("send")!.parentElement!;
-  expect(right.className).toContain("max-sm:ml-auto");
   expect(right.contains($("context-meter"))).toBe(true);
 });
 
@@ -269,7 +266,7 @@ it("send button sends; while a turn runs with nothing typed it is a stop button"
   await act(async () => $("toolbar-stop")!.click());
   expect(onInterrupt).toHaveBeenCalled();
   await type(box, "steer");
-  expect($("toolbar-stop")).toBeNull();
+  expect($("toolbar-stop")).not.toBeNull();
   await act(async () => $("send")!.click());
   expect(onPrompt).toHaveBeenCalledWith("steer", []);
 });
@@ -651,6 +648,187 @@ it("without CSS field-sizing the prompt box height follows its content and retur
     if (desc) Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", desc);
     else delete (HTMLTextAreaElement.prototype as { scrollHeight?: number }).scrollHeight;
   }
+});
+
+// GH-165: one Stop (the prompt box's), no running chip in the session header, no header row on a phone.
+const phone = (on: boolean) => {
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ matches: on && q.includes("40rem"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  return () => void (window.matchMedia = mm);
+};
+
+it("GH-165: a running turn has exactly one Stop, in the prompt box; the header has none and no state chip", async () => {
+  const onInterrupt = vi.fn();
+  const { el, $ } = await render({ onInterrupt }, { ...emptySession(), state: "running" });
+  expect($("stop")).toBeNull();
+  expect($("session-state")).toBeNull();
+  expect([...el.querySelectorAll("button")].filter((b) => /^Stop\b/.test(b.textContent ?? "") || /Stop/.test(b.title))).toHaveLength(1);
+  expect(el.querySelectorAll('[data-testid="toolbar-stop"]')).toHaveLength(1);
+  expect($("session-header")).not.toBeNull();
+});
+
+it("GH-165: no state chip for idle, running or needs_input; error and closed keep theirs", async () => {
+  for (const state of ["idle", "running", "needs_input"] as const) {
+    const d = await render({}, { ...emptySession(), state });
+    expect(d.$("session-state"), state).toBeNull();
+    unmount();
+  }
+  for (const state of ["error", "closed"] as const) {
+    const d = await render({}, { ...emptySession(), state });
+    expect(d.$("session-state")!.textContent).toBe(state);
+    unmount();
+  }
+});
+
+it("GH-165: below sm there is no session header row", async () => {
+  const back = phone(true);
+  try {
+    const { $ } = await render({}, { ...emptySession(), state: "error" });
+    expect($("session-header")).toBeNull();
+    expect($("session-project")).toBeNull();
+    expect($("session-state")).toBeNull();
+  } finally {
+    back();
+  }
+});
+
+it("GH-165: while steering (running, text typed) a separate Stop sits beside Steer and stops without sending", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onInterrupt = vi.fn();
+  const { $, box } = await render({ onPrompt, onInterrupt }, { ...emptySession(), state: "running" });
+  await type(box, "also do X");
+  expect($("send")).not.toBeNull();
+  expect($("toolbar-stop")).not.toBeNull();
+  expect($("toolbar-stop")!.getAttribute("aria-label")).toBe("Stop");
+  await act(async () => $("toolbar-stop")!.click());
+  expect(onInterrupt).toHaveBeenCalledTimes(1);
+  expect(onPrompt).not.toHaveBeenCalled();
+});
+
+it("GH-165: a permission request has its own Stop that interrupts the turn", async () => {
+  const onInterrupt = vi.fn();
+  const view = applyEvent({ ...emptySession(), state: "needs_input" }, { type: "event", sessionId: "s1", seq: 1, part: { type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "ls" }, suggestions: [], settled: false } });
+  const { $ } = await render({ onInterrupt }, view);
+  expect($("permission-stop")).not.toBeNull();
+  await act(async () => $("permission-stop")!.click());
+  expect(onInterrupt).toHaveBeenCalledTimes(1);
+});
+
+// GH-166: phone (below sm) prompt box on one line, settings chip, short status line.
+it("GH-166: phone: the idle prompt box is one line with a short placeholder; desktop keeps two lines and the hints", async () => {
+  const back = phone(true);
+  try {
+    const idle = await render();
+    expect(idle.box.rows).toBe(1);
+    expect(idle.box.placeholder).toBe("Ask Claude…");
+    unmount();
+    const busy = await render({}, { ...emptySession(), state: "running" });
+    expect(busy.box.placeholder).toBe("Claude is working…");
+    unmount();
+  } finally {
+    back();
+  }
+  const wide = await render();
+  expect(wide.box.rows).toBe(2);
+  expect(wide.box.placeholder).toContain("Enter to send");
+});
+
+it("GH-166: phone: mode, model and effort sit behind one settings chip; the toolbar is one row", async () => {
+  const onModel = vi.fn();
+  const back = phone(true);
+  try {
+    const view = { ...emptySession(), permissionMode: "plan" as const, effort: "high" as const };
+    const { $ } = await render({ onModel }, view);
+    expect($("session-model")).toBeNull();
+    expect($("mode-select")).toBeNull();
+    expect($("effort-select")).toBeNull();
+    const chip = $("session-settings")!;
+    expect($("prompt-toolbar")!.contains(chip)).toBe(true);
+    expect(chip.textContent).toContain("Plan");
+    expect(chip.textContent).toContain("Default model");
+    const name = chip.getAttribute("aria-label")!;
+    expect(name.startsWith(chip.textContent!)).toBe(true);
+    expect(name).toContain("Plan mode");
+    expect(name).toContain("Default (recommended)");
+    expect(name).toContain("High");
+    expect($("prompt-toolbar")!.className).not.toContain("flex-wrap");
+    await act(async () => chip.click());
+    const popup = document.querySelector<HTMLElement>('[data-testid="session-settings-popup"]')!;
+    expect(popup.querySelector('[data-testid="mode-select"]')).not.toBeNull();
+    expect(popup.querySelector('[data-testid="session-model"]')).not.toBeNull();
+    expect(popup.querySelector('[data-testid="effort-select"]')).not.toBeNull();
+    await act(async () => popup.querySelector<HTMLElement>('[data-testid="session-model"]')!.click());
+    const option = [...document.querySelectorAll<HTMLElement>("[role=option]")].find((o) => o.textContent === "Haiku 4.5");
+    expect(option).toBeDefined();
+    await act(async () => option!.click());
+    expect(onModel).toHaveBeenCalledWith("haiku");
+  } finally {
+    back();
+  }
+});
+
+it("GH-166: phone: without effort support the chip has no effort in its name or popup; agents, ring and send stay in the row", async () => {
+  const back = phone(true);
+  try {
+    const { $ } = await render({ session: { id: "s1", cwd: "/tmp", state: "idle", model: "haiku", permissionMode: "default", effort: "default", permissionModes: ["default"] } }, { ...emptySession(), model: "haiku" });
+    expect($("session-settings")!.getAttribute("aria-label")).not.toMatch(/effort/i);
+    await act(async () => $("session-settings")!.click());
+    expect(document.querySelector('[data-testid="effort-select"]')).toBeNull();
+    expect($("attach")).not.toBeNull();
+    expect($("send")).not.toBeNull();
+  } finally {
+    back();
+  }
+});
+
+it("GH-166: desktop: the choosers stay in the toolbar and there is no settings chip", async () => {
+  const { $ } = await render();
+  expect($("session-settings")).toBeNull();
+  expect($("prompt-toolbar")!.contains($("mode-select"))).toBe(true);
+});
+
+// GH-166: hide-on-scroll (phone fallback for reading space).
+async function scrollLog(el: HTMLElement, top: number, toEnd = 1000) {
+  const log = el.querySelector<HTMLElement>('[role="log"]')!;
+  Object.defineProperty(log, "scrollTop", { value: top, configurable: true, writable: true });
+  Object.defineProperty(log, "clientHeight", { value: 500, configurable: true, writable: true });
+  Object.defineProperty(log, "scrollHeight", { value: top + 500 + toEnd, configurable: true, writable: true });
+  await act(async () => void log.dispatchEvent(new Event("scroll")));
+}
+
+it("GH-166: phone: scrolling up through an idle transcript hides the prompt dock, scrolling down shows it again", async () => {
+  const back = phone(true);
+  try {
+    const { el, $ } = await render();
+    const dock = () => $("prompt-box")!.parentElement!.parentElement!;
+    await scrollLog(el, 1000);
+    expect(dock().hasAttribute("data-hidden")).toBe(false);
+    await scrollLog(el, 900);
+    expect(dock().hasAttribute("data-hidden")).toBe(true);
+    expect(dock().className).toContain("hidden");
+    expect($("prompt-box")).not.toBeNull();
+    await scrollLog(el, 1000);
+    expect(dock().hasAttribute("data-hidden")).toBe(false);
+  } finally {
+    back();
+  }
+});
+
+it("GH-166: the dock stays while a turn runs (Stop), and on desktop", async () => {
+  const back = phone(true);
+  try {
+    const { el, $ } = await render({}, { ...emptySession(), state: "running" });
+    await scrollLog(el, 1000);
+    await scrollLog(el, 800);
+    expect($("prompt-box")!.parentElement!.parentElement!.hasAttribute("data-hidden")).toBe(false);
+  } finally {
+    back();
+  }
+  unmount();
+  const wide = await render();
+  await scrollLog(wide.el, 1000);
+  await scrollLog(wide.el, 800);
+  expect(wide.$("prompt-box")!.parentElement!.parentElement!.hasAttribute("data-hidden")).toBe(false);
 });
 
 it("/resume is never sent, even when the CLI lists its own; text after it goes to the session search (GH-100)", async () => {

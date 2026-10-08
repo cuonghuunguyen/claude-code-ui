@@ -1,7 +1,7 @@
 // Permission panel (replaces the prompt box) and its timeline marker (docs/spec.md "Permission bridge").
 import { useState, type FormEvent, type ReactNode } from "react";
 import type { PermissionUpdate } from "@claude-ui/protocol";
-import { FileDiffIcon, ListTodoIcon, PencilIcon, TriangleAlertIcon } from "lucide-react";
+import { FileDiffIcon, ListTodoIcon, PencilIcon, SquareIcon, TriangleAlertIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import type { PermissionRequest } from "./store.ts";
@@ -60,7 +60,7 @@ export const DOCK = "flex flex-col overflow-hidden rounded-xl border bg-card tex
 export const TRAY = "@container flex flex-wrap items-center justify-end gap-2 border-t bg-muted px-2 py-2 pointer-coarse:[&_button]:h-11";
 
 /** OpenCode permission dock: header, hint, content, rule patterns; tray Deny · Allow always · Allow once. */
-export function PermissionPanel({ part, onRespond, mode }: { part: PermissionRequest; onRespond: (a: PermissionAnswer) => void; mode?: ReactNode }) {
+export function PermissionPanel({ part, onRespond, mode, onStop }: { part: PermissionRequest; onRespond: (a: PermissionAnswer) => void; mode?: ReactNode; /** Stops the turn (Esc). The panel replaces the prompt box, so without it a phone could not (GH-165). */ onStop?: () => void }) {
   const [feedback, setFeedback] = useState("");
   const [draft, setDraft] = useState(() => proposed(part));
   const [editing, setEditing] = useState(false);
@@ -75,10 +75,17 @@ export function PermissionPanel({ part, onRespond, mode }: { part: PermissionReq
     <form onSubmit={deny} className={`${DOCK} max-h-[60dvh]`} data-testid="permission-panel" aria-label="Permission request">
       {/* The body scrolls inside the bounded panel; the tray below stays in view (same as the question panel). */}
       <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain p-3">
-        <p className="flex items-center gap-2 font-medium">
-          {plan !== undefined ? <ListTodoIcon className="size-4 shrink-0 text-muted-foreground" /> : <TriangleAlertIcon className="size-4 shrink-0 text-warning" />}
-          {plan !== undefined ? "Ready to code? Claude has written up a plan" : "Permission required"}
-        </p>
+        <div className="flex items-center gap-2">
+          <p className="flex min-w-0 flex-1 items-center gap-2 font-medium">
+            {plan !== undefined ? <ListTodoIcon className="size-4 shrink-0 text-muted-foreground" /> : <TriangleAlertIcon className="size-4 shrink-0 text-warning" />}
+            {plan !== undefined ? "Ready to code? Claude has written up a plan" : "Permission required"}
+          </p>
+          {onStop && (
+            <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 pointer-coarse:size-11" aria-label="Stop" title="Stop (Esc)" data-testid="permission-stop" onClick={onStop}>
+              <SquareIcon aria-hidden className="size-3 fill-current" />
+            </Button>
+          )}
+        </div>
         {plan === undefined && <p className="text-muted-foreground">{part.title ?? `Claude wants to use ${part.tool}`}</p>}
         {part.escalated && (
           <p className="text-xs break-words" data-testid="permission-escalated">

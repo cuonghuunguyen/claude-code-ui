@@ -40,6 +40,8 @@ import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
+import { usePhone } from "./lib/use-narrow.ts";
+import { useHideOnScroll } from "./lib/hide-on-scroll.ts";
 import { cancelFlight, launchFlight, useLanding } from "./flight.ts";
 import { clearing, heirView } from "./clear.ts";
 import { addPending, dropPending, movePending, pendingKey, promptedIds, pruneEchoed, titleLoading, unechoed, type Pending } from "./optimistic.ts";
@@ -1322,7 +1324,6 @@ export function App() {
                         place={worktreeName(s.cwd, worktrees)}
                         view={v}
                         pending={pend}
-                        loading={!views[id]}
                         models={models}
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
@@ -1716,19 +1717,21 @@ const EMPTY_VIEW = emptySession();
 
 /** The new-session tab while its first prompt creates the session (GH-133): SessionPane's layout with the prompt, Thinking and skeletons. */
 function StartingSession({ cwd, place, pending }: { cwd: string; place?: string; pending: Pending[] }) {
+  const phone = usePhone();
   return (
     <div className={`${card} flex-1`} data-testid="starting-session" aria-busy="true">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-        <ProjectAvatar cwd={cwd} />
-        <span className="min-w-0 truncate font-medium" title={cwd}>
-          {place ?? projectName(cwd)}
-        </span>
-        <SideBadge cwd={cwd} />
-        <span className="hidden min-w-0 truncate text-muted-foreground sm:inline" title={cwd}>
-          {cwd}
-        </span>
-        <Skeleton className="ml-auto h-5 w-12" data-testid="session-state-skeleton" />
-      </header>
+      {!phone && (
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4" data-testid="session-header">
+          <ProjectAvatar cwd={cwd} />
+          <span className="min-w-0 truncate font-medium" title={cwd}>
+            {place ?? projectName(cwd)}
+          </span>
+          <SideBadge cwd={cwd} />
+          <span className="min-w-0 truncate text-muted-foreground" title={cwd}>
+            {cwd}
+          </span>
+        </header>
+      )}
       <VirtualTimeline
         items={[] as TimelineItem[]}
         itemKey={timelineKey}
@@ -1742,7 +1745,7 @@ function StartingSession({ cwd, place, pending }: { cwd: string; place?: string;
           </>
         }
       />
-      <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4">
+      <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4 max-sm:px-2 max-sm:py-2">
         <Skeleton className="h-[104px] w-full rounded-lg" data-testid="prompt-skeleton" />
       </div>
     </div>
@@ -1977,7 +1980,6 @@ export function SessionPane({
   session,
   view,
   pending,
-  loading,
   models,
   onModel,
   onMode,
@@ -2021,8 +2023,6 @@ export function SessionPane({
   view: SessionView;
   /** Optimistic prompts not yet echoed (GH-133). */
   pending?: Pending[];
-  /** No subscribe reply yet: the view is a placeholder (GH-133). */
-  loading?: boolean;
   models: ModelInfo[];
   onModel: (model: string) => void;
   onMode: (mode: PermissionMode) => void;
@@ -2047,6 +2047,7 @@ export function SessionPane({
   /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
   onDialog?: (dialog: DialogName, arg?: string) => void;
 }) {
+  const phone = usePhone();
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
   const pendingAsk = pendingQuestion(view);
@@ -2110,6 +2111,12 @@ export function SessionPane({
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
   const prompt = useRef<HTMLTextAreaElement>(null);
   const dock = useRef<HTMLDivElement>(null);
+  // Phone: scrolling up through an idle transcript hides the prompt dock for reading space; scrolling down or the end brings it back (GH-166).
+  // Never while a turn or shell runs (Stop), a panel waits for an answer, or the dock has focus (typing).
+  const card = useRef<HTMLElement | null>(null);
+  useEffect(() => void (card.current = dock.current?.parentElement ?? null), []);
+  const [dockFocused, setDockFocused] = useState(false);
+  const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
 
   return (
     <CwdContext value={session.cwd}>
@@ -2117,29 +2124,25 @@ export function SessionPane({
       {current ? (
         <SubagentBar view={view} run={current} onOpen={onOpenRun} />
       ) : (
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+      phone ? null : (
+      // From sm up: where the session is (project, side, cwd). Below sm the tab switcher says it, so the reading space starts at the top (GH-165).
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4" data-testid="session-header">
         <ProjectAvatar cwd={session.cwd} />
         <span className="min-w-0 truncate font-medium" title={session.cwd} data-testid="session-project">
           {place ?? projectName(session.cwd)}
         </span>
         <SideBadge cwd={session.cwd} />
-        <span className="hidden min-w-0 truncate text-muted-foreground sm:inline" title={session.cwd}>
+        <span className="min-w-0 truncate text-muted-foreground" title={session.cwd}>
           {session.cwd}
         </span>
-        {loading ? (
-          <Skeleton className="ml-auto h-5 w-12" data-testid="session-state-skeleton" />
-        ) : (
+        {/* Idle, running and needs input show in the tab and the send button. Only error and closed have no other place. */}
+        {(shownState(view) === "error" || shownState(view) === "closed") && (
           <span className="ml-auto rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
             {shownState(view)}
           </span>
         )}
-        {turnRunning && (
-          <Button size="sm" variant="outline" className="h-6 px-2 text-xs pointer-coarse:h-11 pointer-coarse:px-3" title="Stop (Esc)" data-testid="stop" onClick={onInterrupt}>
-            <SquareIcon className="size-3 fill-current" />
-            Stop
-          </Button>
-        )}
       </header>
+      )
       )}
       {current ? (
         <Conversation key={`${scrollKey}:${current.id}`} className="flex-1">
@@ -2251,10 +2254,13 @@ export function SessionPane({
       )}
       <div
         ref={dock}
-        className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4"
+        className={`relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4 max-sm:px-2 max-sm:py-2 ${dockHidden ? "hidden" : ""}`}
+        data-hidden={dockHidden || undefined}
+        onFocus={() => setDockFocused(true)}
+        onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setDockFocused(false)}
       >
         {permission ? (
-          <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} mode={modePicker} />
+          <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} mode={modePicker} onStop={onInterrupt} />
         ) : question ? (
           <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} onDismiss={onInterrupt} mode={modePicker} />
         ) : current ? (
@@ -2292,7 +2298,7 @@ export function SessionPane({
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
               inputRef={prompt}
-              placeholder={turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
+              placeholder={phone ? (turnRunning ? "Claude is working…" : "Ask Claude…") : turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
             />
           </>
         )}
@@ -2392,6 +2398,7 @@ function PromptBox({
   queueing?: boolean;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
+  const phone = usePhone();
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
   const [selected, setSelected] = useState(0);
@@ -2696,8 +2703,8 @@ function PromptBox({
         aria-controls="command-picker"
         aria-activedescendant={pickerOpen ? `command-${selected}` : undefined}
         aria-label={bash ? "Shell command" : label}
-        className={`field-sizing-content max-h-[min(240px,40dvh)] min-h-[calc(2lh+1.5rem)] w-full resize-none bg-transparent pt-4 pb-2 text-sm outline-none pointer-coarse:text-base ${bash ? "pr-4 pl-8 font-mono" : "px-4"}`}
-        rows={2}
+        className={`field-sizing-content max-h-[min(240px,40dvh)] min-h-[calc(2lh+1.5rem)] max-sm:min-h-[calc(1lh+1.5rem)] w-full resize-none bg-transparent pt-4 pb-2 text-sm outline-none pointer-coarse:text-base ${bash ? "pr-4 pl-8 font-mono" : "px-4"}`}
+        rows={phone ? 1 : 2}
         placeholder={bash ? "Run a shell command (Esc to exit)" : placeholder}
         autoFocus={autoFocus}
         disabled={disabled}
