@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -118,6 +118,55 @@ describe("sides", () => {
     if (hasSh) expect(spawnSync("sh", ["-n", "-c", s]).status).toBe(0);
   });
 
+  // npm skips an optional dependency it could not fetch: a side without the SDK's Linux binary lists no models (no auto mode) and runs no prompt.
+  describe.skipIf(!hasSh || process.platform === "win32")("the setup script and the SDK's Linux binary", () => {
+    const key = "0.4.1-1";
+    /** Runs the docker setup script with a fake npm (writes the package; the SDK binary only when `native`); the npm calls and the output. */
+    function setup({ installed, native }: { installed?: "complete" | "no-binary"; native: boolean }) {
+      const home = dir("side-home-");
+      const bin = dir("side-bin-");
+      const log = join(home, "npm.log");
+      const pkg = (prefix: string, withBinary: boolean) => {
+        mkdirSync(join(prefix, "node_modules/claude-code-ui/dist"), { recursive: true });
+        writeFileSync(join(prefix, "node_modules/claude-code-ui/dist/cli.js"), 'console.log("side started")');
+        if (withBinary) mkdirSync(join(prefix, "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"), { recursive: true });
+      };
+      const sideDir = join(home, ".local/share/claude-ui/side", key);
+      if (installed) pkg(sideDir, installed === "complete");
+      for (const tool of ["make", "python3", "g++"]) writeFileSync(join(bin, tool), "#!/bin/sh\n", { mode: 0o755 });
+      // Like npm: an existing node_modules without the optional dependency does not get it.
+      const writeBinary = native ? '[ "$fresh" = 1 ] && mkdir -p "$p/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"' : "";
+      const npm = `#!/bin/sh\necho npm >> '${log}'\nwhile [ "$1" != --prefix ]; do shift; done; p=$2\nfresh=1; [ -d "$p/node_modules" ] && fresh=0\nmkdir -p "$p/node_modules/claude-code-ui/dist"\necho 'console.log("side started")' > "$p/node_modules/claude-code-ui/dist/cli.js"\n${writeBinary}\n`;
+      writeFileSync(join(bin, "npm"), npm, { mode: 0o755 });
+      const tgz = join(home, "side.tgz");
+      writeFileSync(tgz, "");
+      const r = spawnSync("sh", ["-c", setupScript(tgz, key, "docker")], { cwd: home, encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}`, HOME: home, ANTHROPIC_API_KEY: "test" } });
+      const calls = spawnSync("sh", ["-c", `cat '${log}' 2>/dev/null | wc -l`], { encoding: "utf8" }).stdout.trim();
+      return { status: r.status, out: r.stdout, npmCalls: Number(calls), sideDir };
+    }
+
+    it("installs again over an install without the binary, then starts", () => {
+      const r = setup({ installed: "no-binary", native: true });
+      expect(r.npmCalls).toBe(1);
+      expect(r.out).toContain("side started");
+      expect(existsSync(join(r.sideDir, "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"))).toBe(true);
+    });
+
+    it("fails the setup with install_failed when npm leaves the binary out", () => {
+      const r = setup({ native: false });
+      expect(r.status).toBe(3);
+      expect(r.out).toMatch(/^CLAUDE_UI_SETUP install_failed .*Claude Agent SDK/m);
+      expect(r.out).not.toContain("side started");
+      expect(existsSync(r.sideDir)).toBe(false);
+    });
+
+    it("starts a complete install without npm", () => {
+      const r = setup({ installed: "complete", native: true });
+      expect(r.npmCalls).toBe(0);
+      expect(r.out).toContain("side started");
+    });
+  });
+
   it("setup errors in a container name the container's next step", () => {
     expect(setupMessage("not_logged_in", "", "Docker: dev", true)).toBe("Claude is not logged in in Docker: dev. Run claude login in the container or copy your ~/.claude/.credentials.json into it (or start it with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN set), then retry.");
     expect(setupMessage("node_missing", "", "Docker: dev", true)).toBe("Node.js 22 or newer is not installed in Docker: dev. Use an image with Node.js 22+ (e.g. node:22) or install it in the container, then retry.");
@@ -149,7 +198,9 @@ describe("sides", () => {
     c.ws.close();
   });
 
-  it("routes a side project's sessions to the side: create, subscribe, prompt, events", async () => {
+  // Routes by the path's form: a real WSL path is POSIX, while this test stands in for it with a native temp dir, which on a Windows host is a Windows path and so (correctly) local.
+  // The in-process side needs that same path on the real filesystem, so these cannot run on Windows; they run on Linux and macOS.
+  it.skipIf(process.platform === "win32")("routes a side project's sessions to the side: create, subscribe, prompt, events", async () => {
     const c = await client();
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });
     await c.request({ type: "session.list" });
@@ -209,7 +260,9 @@ describe("sides", () => {
     c.ws.close();
   });
 
-  it("fs.media of a side path fails side_unsupported; a local path is served", async () => {
+  // Routes by the path's form: a real WSL path is POSIX, while this test stands in for it with a native temp dir, which on a Windows host is a Windows path and so (correctly) local.
+  // The in-process side needs that same path on the real filesystem, so these cannot run on Windows; they run on Linux and macOS.
+  it.skipIf(process.platform === "win32")("fs.media of a side path fails side_unsupported; a local path is served", async () => {
     writeFileSync(join(wslRoot, "s.png"), "png");
     writeFileSync(join(winRoot, "l.png"), "png");
     const c = await client();

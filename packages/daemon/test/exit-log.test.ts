@@ -31,7 +31,8 @@ describe("logExit", () => {
   });
 });
 
-describe("exitOnSignal", () => {
+describe.skipIf(process.platform === "win32")("exitOnSignal", () => {
+  // Windows has no POSIX signals: child.kill(sig) is TerminateProcess, so no handler runs and there is no signal exit code to assert.
   it.each([["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]] as const)("%s runs cleanup, logs the exit line and exits %i", async (sig, code) => {
     const f = join(dir, `${Math.random()}.ts`);
     writeFileSync(f, `import { exitOnSignal, logExit } from ${JSON.stringify(src("exit-log.ts"))};\nlogExit(process, console.error);\nexitOnSignal(process, () => console.error("cleanup"));\nsetInterval(() => {}, 1000);\nconsole.error("ready");`);
@@ -47,7 +48,8 @@ describe("exitOnSignal", () => {
 describe("runCli stdin", () => {
   it("a child that exits before reading a large stdin rejects/resolves, not crashes", async () => {
     const old = process.env.CLAUDE_UI_CLAUDE_BIN;
-    process.env.CLAUDE_UI_CLAUDE_BIN = execFileSync("which", ["true"], { encoding: "utf8" }).trim();
+    // Any program that exits 0 without reading stdin; there is no `true` on Windows.
+    process.env.CLAUDE_UI_CLAUDE_BIN = process.platform === "win32" ? "hostname" : execFileSync("which", ["true"], { encoding: "utf8" }).trim();
     try {
       const r = await runCli([], dir, "x".repeat(1 << 22));
       expect(r.code).toBe(0);
