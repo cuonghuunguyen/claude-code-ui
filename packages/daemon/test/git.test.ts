@@ -2,11 +2,14 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
 import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, worktreeStatus } from "../src/git.ts";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
+
+// Git for Windows takes 0.2-0.6 s per process; the multi-command tests here need far more than the 15 s default there.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 120_000 });
 
 describe("gitStatus", () => {
   it("is null outside a git repository", async () => {
@@ -578,7 +581,8 @@ describe("gitLog / gitShow / gitFileAt", () => {
     return readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => l.split("\x1f").slice(0, -1));
   }
 
-  it("passes user text to git only as one value after the option terminators", async () => {
+  // A `git` shell-script wrapper first on PATH: node cannot spawn an extensionless script on Windows (no shell, no .cmd lookup).
+  it.skipIf(process.platform === "win32")("passes user text to git only as one value after the option terminators", async () => {
     const r = graphRepo();
     const calls = await recorded(async () => {
       await gitLog(r.dir, { ref: "refs/heads/f", author: "-x y", text: "--all -p", allowed: all });
@@ -614,8 +618,10 @@ describe("gitLog / gitShow / gitFileAt", () => {
 
   it("does not run core.fsmonitor for git.status, git.log, git.commit, git.fileAt or git.diff", async () => {
     const r = graphRepo();
-    const marker = join(r.dir, "..", `fsmon-${Date.now()}`);
-    const hook = join(r.dir, "..", `fsmon-${Date.now()}.sh`);
+    // The hook is a sh script and git runs it through sh: forward slashes, or Git for Windows mangles the path.
+    const fwd = (p: string) => p.replaceAll("\\", "/");
+    const marker = fwd(join(r.dir, "..", `fsmon-${Date.now()}`));
+    const hook = fwd(join(r.dir, "..", `fsmon-${Date.now()}.sh`));
     writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\nprintf '\\0'\n`, { mode: 0o755 });
     run(r.dir, "config", "core.fsmonitor", hook);
     writeFileSync(join(r.dir, "b.txt"), "dirty\n");
