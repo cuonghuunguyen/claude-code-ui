@@ -244,7 +244,7 @@ export function TabsBar({
     // Below md: 44px hit areas, 8px apart (touch-target-size, touch-spacing).
     <div className="flex min-w-0 flex-1 items-center gap-1.5 max-md:gap-2">
       {onHome && (
-        <IconButton className="w-9! max-md:hidden aria-pressed:bg-transparent aria-pressed:text-faint aria-pressed:hover:bg-accent aria-pressed:hover:text-foreground" label="Toggle sidebar" onClick={onHome} pressed={home} testId="tab-home">
+        <IconButton className="w-9! max-md:hidden aria-pressed:bg-transparent aria-pressed:text-faint aria-pressed:hover:bg-accent aria-pressed:hover:text-foreground" label="Toggle sidebar" onClick={onHome} pressed={home} testId="tab-home" command="sidebar.toggle">
           <PanelLeftIcon />
         </IconButton>
       )}
@@ -342,7 +342,7 @@ export function TabsBar({
           <XIcon />
         </IconButton>
       )}
-      <IconButton label="New session" onClick={onNew} testId="tab-new" ref={newButton}>
+      <IconButton label="New session" onClick={onNew} testId="tab-new" command="session.new" ref={newButton}>
         <PlusIcon />
       </IconButton>
     </div>
@@ -649,6 +649,7 @@ export function IconButton({
   children,
   className,
   testId,
+  command,
   pressed,
   expanded,
   controls,
@@ -660,6 +661,8 @@ export function IconButton({
   children: React.ReactNode;
   className?: string;
   testId?: string;
+  /** The app command (shortcuts registry id) the button runs: the guided tour spotlights it by this. */
+  command?: string;
   pressed?: boolean;
   expanded?: boolean;
   controls?: string;
@@ -679,6 +682,7 @@ export function IconButton({
       className={cn(ICON_BUTTON, className)}
       onClick={disabled ? undefined : onClick}
       data-testid={testId}
+      data-command={command}
     >
       {children}
     </button>

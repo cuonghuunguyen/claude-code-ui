@@ -430,6 +430,21 @@ describe("Session", () => {
       expect(lastPart(events, req.id)).toMatchObject({ settled: true, tier: "low" });
     });
 
+    it("a low mark is taken back when a later read says high (GH-159)", async () => {
+      let tier: "low" | "high" = "low";
+      const s = new Session("/tmp", { query: permissionQuery as never, tier: async () => tier });
+      const events: Event[] = [];
+      s.subscribe(0, (e) => events.push(e));
+      s.prompt("run the tests");
+      await until(events, (e) => e.part.type === "permission_request" && e.part.tier === "low");
+      const id = (events.find((e) => e.part.type === "permission_request")!.part as { requestId: string }).requestId;
+      tier = "high";
+      (s as unknown as { epoch: number }).epoch++;
+      await s.permissionTier(id);
+      await until(events, (e) => e.part.type === "permission_request" && e.part.tier === undefined && events.filter((x) => x.part.type === "permission_request").length === 3);
+      expect(events.filter((e) => e.part.type === "permission_request").map((e) => (e.part as { tier?: string }).tier)).toEqual([undefined, "low", undefined]);
+    });
+
     it("Yes allows once without saving a rule", async () => {
       const { s, events, req, answered } = await ask();
       expect(s.respond(req.requestId, { decision: "allow" })).toBe(true);

@@ -1,5 +1,5 @@
 // Settings dialog (docs/spec.md "Settings"): app-wide, daemon-side settings in sections, on the ConfigDialog shell,
-// plus per-browser choices (Changes, Tabs) that never reach the daemon.
+// plus per-browser choices (Changes, Tabs, Guide) that never reach the daemon.
 // A later setting is one more row in SECTIONS; reading, patching, errors and layout stay as they are.
 import { useEffect, useRef, useState } from "react";
 import type { Settings, SettingsPatch, SettingsResult } from "@claude-ui/protocol";
@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
 import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
 import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
+import { GuideSection } from "./guide-settings.tsx";
 
 type Row = { key: string; label: string; hint: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "select"; options: { value: string; label: string }[] });
 const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
@@ -46,7 +47,7 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
 ];
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, onShortcuts }: { open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, onShortcuts, onRestartGuide }: { open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -177,6 +178,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           </div>
         </section>
       )}
+      {onRestartGuide && <GuideSection onRestart={onRestartGuide} />}
       {!settings && !error && <p className="text-muted-foreground text-sm">Loading…</p>}
       {settings &&
         SECTIONS.map((sec) => (
