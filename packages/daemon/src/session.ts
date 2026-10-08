@@ -144,6 +144,8 @@ export class Session {
   private usageRequest = 0;
   /** False until the first start(): the first query creates the transcript (sessionId), every later one resumes it. */
   private started: boolean;
+  /** Born by a /clear hand-over and not prompted yet: its title is "New session" without reading its transcript. */
+  private cleared = false;
   /** Converts transcript messages (restore and sync); the live adapter converts the query's stream. */
   private readonly transcript = createAdapter();
   /** UUID of every transcript message the session logged or its own query streamed: the rest are external turns. */
@@ -349,6 +351,11 @@ export class Session {
     return this.externalTurn;
   }
 
+  /** A /clear heir before its first prompt. */
+  untitled() {
+    return this.cleared;
+  }
+
   /** False once the query ended or failed: nothing reads the input queue any more. */
   isLive() {
     return this.state !== "error" && this.state !== "closed";
@@ -412,6 +419,7 @@ export class Session {
     if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
     if (this.bashRun) throw new Error("a shell command is running: stop it first");
     if (this.rewinding) throw new Error("session is rewinding");
+    this.cleared = false;
     const uuid = randomUUID();
     this.known.add(uuid);
     this.own.add(uuid);
@@ -924,6 +932,7 @@ export class Session {
    */
   private handOver(id: string, clearId: string | undefined): Session {
     const heir = Session.restore(id, this.cwd, [], { ...this.opts, model: this.model, permissionMode: this.permissionMode, effort: this.effort });
+    heir.cleared = true;
     // Background calls (shells, subagent runs) still run in the CLI: the heir owns them (shells list, Stop agent, their
     // notification); here they end as a restore of this transcript shows them.
     for (const part of this.adapter.endCalls(true)) this.emit(part);

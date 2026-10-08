@@ -276,6 +276,127 @@ it("/clear typed in the prompt box: the box of the session the tab follows to ha
   }
 });
 
+const NEXT = "99999999-2222-3333-4444-555555555555";
+const promptBox = () => [...el.querySelectorAll<HTMLTextAreaElement>('textarea[aria-label="Prompt"]')].find((b) => !b.closest('[style*="display: none"]'))!;
+const typeInto = (box: HTMLTextAreaElement, text: string) =>
+  act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+const holdNext = () => {
+  replies["session.subscribe"] = (m: { sessionId: string }) => (m.sessionId === NEXT ? new Promise(() => {}) : { logEpoch: "e1", seq: 1, session });
+};
+const restoreSubscribe = () => {
+  replies["session.subscribe"] = { logEpoch: "e1", session };
+};
+
+it("/clear: the tab keeps its prompt box (same element, same text) and shows the new session before its subscribe reply", async () => {
+  holdNext();
+  try {
+    const box = promptBox();
+    await typeInto(box, "draft");
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
+    expect(location.hash).toBe(`#${NEXT}`);
+    expect(promptBox()).toBe(box);
+    expect(box.value).toBe("draft");
+    expect(el.textContent).not.toContain("Open or create a session to start.");
+    expect(el.querySelector('[data-testid="session-state-skeleton"]')).not.toBeNull();
+  } finally {
+    restoreSubscribe();
+  }
+});
+
+it("/clear: an attached image and the focus stay in the same prompt box", async () => {
+  holdNext();
+  try {
+    const box = promptBox();
+    box.focus();
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", { value: { files: [new File(["x"], "a.png", { type: "image/png" })] } });
+    await act(async () => {
+      box.dispatchEvent(paste);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const thumbs = () => promptBox().closest('[data-testid="prompt-box"]')!.parentElement!.querySelectorAll("img").length;
+    expect(thumbs()).toBe(1);
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
+    expect(promptBox()).toBe(box);
+    expect(thumbs()).toBe(1);
+    expect(document.activeElement).toBe(box);
+  } finally {
+    restoreSubscribe();
+  }
+});
+
+it("/clear: a prompt sent before the new session's subscribe reply goes to the new session", async () => {
+  holdNext();
+  try {
+    await typeInto(promptBox(), "draft");
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
+    sent.length = 0;
+    await press({ key: "Enter" }, promptBox());
+    expect(sent).toContainEqual(expect.objectContaining({ type: "session.prompt", sessionId: NEXT, text: "draft" }));
+    expect(el.textContent).toContain("draft");
+  } finally {
+    restoreSubscribe();
+  }
+});
+
+it("/clear: reopening the old session afterwards opens its own tab with an empty prompt box", async () => {
+  holdNext();
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await typeInto(promptBox(), "draft");
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
+    await act(async () => {
+      location.hash = `#${ID}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await act(async () => {});
+    expect(promptBox().value).toBe("");
+    expect(errors.mock.calls.some((c) => String(c[0]).includes("same key"))).toBe(false);
+    await act(async () => {
+      location.hash = `#${NEXT}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    expect(promptBox().value).toBe("draft");
+  } finally {
+    errors.mockRestore();
+    restoreSubscribe();
+  }
+});
+
+it("Enter while /clear runs queues the message: it shows at once and goes to the new session once session_cleared moves the tab", async () => {
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "user_text", id: "u1", text: "/clear", images: [] } }));
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "session_state", id: "s1", state: "running" } }));
+  expect(el.textContent).toContain("Clearing the conversation…");
+  await typeInto(promptBox(), "next");
+  sent.length = 0;
+  await press({ key: "Enter" }, promptBox());
+  expect(sent.some((m) => m.type === "session.prompt")).toBe(false);
+  expect(promptBox().value).toBe("");
+  expect(el.textContent).toContain("next");
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 3, part: { type: "rewind", id: "r1", userMessageId: "u1" } }));
+  expect(sent.some((m) => m.type === "session.prompt")).toBe(false);
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 4, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
+  expect(sent.filter((m) => m.type === "session.prompt")).toEqual([expect.objectContaining({ sessionId: NEXT, text: "next" })]);
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 5, part: { type: "session_state", id: "s2", state: "idle" } }));
+  expect(el.textContent).not.toContain("Clearing the conversation…");
+  expect(el.textContent).toContain("next");
+  expect(sent.filter((m) => m.type === "session.prompt")).toHaveLength(1);
+});
+
+it("a /clear that ends without session_cleared sends the queued message to the same session", async () => {
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "user_text", id: "u1", text: "/clear", images: [] } }));
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "session_state", id: "s1", state: "running" } }));
+  await typeInto(promptBox(), "next");
+  sent.length = 0;
+  await press({ key: "Enter" }, promptBox());
+  expect(sent.some((m) => m.type === "session.prompt")).toBe(false);
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 3, part: { type: "session_state", id: "s2", state: "idle" } }));
+  expect(sent.filter((m) => m.type === "session.prompt")).toEqual([expect.objectContaining({ sessionId: ID, text: "next" })]);
+});
+
 it("an SDK message the adapter does not know shows as a short muted line, not as JSON", async () => {
   await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "raw", id: "r1", message: { type: "system", subtype: "some_future_subtype", secret: "payload" } } }));
   const row = el.querySelector<HTMLElement>('[data-testid="raw-part"]')!;

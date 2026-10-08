@@ -708,6 +708,7 @@ export function createDaemon(opts: {
 
   /** A session's title as list() gives it: the SDK summary, a cleared session's first prompt, "New session" without transcript. */
   async function titleOf(s: Session) {
+    if (s.untitled()) return "New session";
     const info = await history.getSessionInfo(s.id).catch(() => undefined);
     if (!info) return "New session";
     return CLEARED.test(info.summary) ? clearedTitle(s.id, info.cwd ?? s.cwd) : info.summary;
@@ -733,7 +734,7 @@ export function createDaemon(opts: {
     for (const t of all) {
       if (!t.cwd || !allowed(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
-      const title = CLEARED.test(t.summary) ? await clearedTitle(t.sessionId, t.cwd) : t.summary;
+      const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd)) : t.summary;
       items.set(t.sessionId, { ...live, id: t.sessionId, cwd: sessionCwd(t.cwd), title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
