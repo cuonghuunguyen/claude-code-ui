@@ -10,7 +10,30 @@ const exec = promisify(execFile);
 // Read-only calls on a repository's own config: no fsmonitor hook (a program from .git/config), no transport (a partial clone's lazy fetch runs core.sshCommand), on any git version.
 const READ_ONLY = ["-c", "core.fsmonitor=false", "-c", "protocol.allow=never"];
 const readEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_NO_LAZY_FETCH: "1" });
-const git = async (cwd: string, ...args: string[]) => (await exec("git", [...READ_ONLY, ...args], { cwd, encoding: "utf8", maxBuffer: 64 << 20, env: readEnv() })).stdout.trim();
+/** Runs `fn`s with at most `n` running at a time, the rest in arrival order. */
+export function limiter(n: number) {
+  let active = 0;
+  const waiting: (() => void)[] = [];
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (active < n) active++;
+    else await new Promise<void>((r) => waiting.push(r));
+    try {
+      return await fn();
+    } finally {
+      // The slot passes to the next waiter as is.
+      const next = waiting.shift();
+      if (next) next();
+      else active--;
+    }
+  };
+}
+/**
+ * Git processes of the status bar, worktree lists and history reads start at most 4 at a time: a process start blocks the
+ * event loop (tens of ms on Windows), and a session list with dozens of projects started them all in one tick, which held
+ * every other reply (a session's transcript, a prompt) for seconds. Spread over ticks, other replies go out between them.
+ */
+const gitSlot = limiter(4);
+const git = async (cwd: string, ...args: string[]) => (await gitSlot(() => exec("git", [...READ_ONLY, ...args], { cwd, encoding: "utf8", maxBuffer: 64 << 20, env: readEnv() }))).stdout.trim();
 
 /** null outside a git work tree. Lines added/removed: staged and unstaged changes of tracked files against HEAD (the empty tree before the first commit). */
 export async function gitStatus(cwd: string): Promise<GitStatus | null> {
@@ -72,7 +95,7 @@ export class WorktreeError extends Error {
 /** git with a timeout, no shell; failure becomes a WorktreeError git_failed with the first stderr line. */
 async function run(cwd: string, args: string[], timeout = 30_000, env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" }): Promise<string> {
   try {
-    return (await exec("git", args, { cwd, encoding: "utf8", timeout, maxBuffer: 64 << 20, env })).stdout.trim();
+    return (await gitSlot(() => exec("git", args, { cwd, encoding: "utf8", timeout, maxBuffer: 64 << 20, env }))).stdout.trim();
   } catch (e) {
     const err = e as { killed?: boolean; stderr?: string; message: string };
     throw new WorktreeError("git_failed", err.killed ? `git ${args[0]} timed out` : (err.stderr?.split("\n").find((l) => l.trim()) ?? err.message));
@@ -555,7 +578,7 @@ export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff |
   const byPath = (x: GitFileChange, y: GitFileChange) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
   files.sort(byPath);
   // Tracked files first: a flood of untracked files is cut before any edit.
-  const untracked = others.split(" ").filter(Boolean).sort();
+  const untracked = others.split("\0").filter(Boolean).sort();
   const room = Math.max(0, MAX_COMMIT_FILES - files.length);
   const cut = files.length + untracked.length > MAX_COMMIT_FILES;
   const kept = untracked.slice(0, room);
