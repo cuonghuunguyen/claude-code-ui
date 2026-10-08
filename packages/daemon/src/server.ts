@@ -476,6 +476,17 @@ export function createDaemon(opts: {
     return list;
   };
 
+  /**
+   * git.status of a folder, shared by the requests that arrive while it runs: the web app asks up to three times for the same
+   * folder when a session opens (status bar, header, changes), and every git process start blocks the event loop on Windows.
+   */
+  const statusReads = new Map<string, ReturnType<typeof gitStatus>>();
+  const statusOf = (cwd: string) => {
+    let read = statusReads.get(cwd);
+    if (!read) statusReads.set(cwd, (read = gitStatus(cwd).finally(() => statusReads.delete(cwd))));
+    return read;
+  };
+
   /** New worktree of `cwd`'s repository (roots enforced); other clients refresh their list. */
   const createIn = async (cwd: string, o: Pick<CreateWorktreeOptions, "name" | "branch" | "base" | "onCreated"> = {}) => {
     // The new path is no project: a session created in it (worker_start) must not add it.
@@ -1373,7 +1384,7 @@ export function createDaemon(opts: {
         case "git.status": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          return reply({ status: await gitStatus(cwd) });
+          return reply({ status: await statusOf(cwd) });
         }
         case "git.log":
         case "git.diff":
