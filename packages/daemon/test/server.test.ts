@@ -1242,6 +1242,21 @@ describe("daemon", () => {
     }
   });
 
+  it("a session created in a worktree just made from a terminal does not add the worktree as its own project", async () => {
+    const { root, repo, git, projects, d, c, list } = await repoDaemon("wtadd-");
+    try {
+      expect((await list()).projects).toEqual([repo]);
+      const wt = join(root, "wt-fresh");
+      git(repo, "worktree", "add", "-q", "-b", "fresh", wt);
+      // No list in between: the daemon's last list does not have the worktree.
+      expect(await c.request({ type: "session.create", cwd: wt })).toMatchObject({ type: "reply" });
+      expect(projects.has(wt)).toBe(false);
+      expect(await list()).toMatchObject({ projects: [repo], worktrees: [`${repo}@main`, `${wt}@fresh`] });
+    } finally {
+      d.close();
+    }
+  });
+
   it("a git worktree list that failed is read again on the next session.list, not reused", async () => {
     const { repo, d, list } = await repoDaemon("wtfail-");
     const before = process.env.GIT_DIR;

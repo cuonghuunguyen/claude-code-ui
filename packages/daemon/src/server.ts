@@ -501,11 +501,21 @@ export function createDaemon(opts: {
   /** Worktree paths inside the roots of the added projects, as of the last session.list: their sessions show under the project. */
   let worktreePaths = new Set<string>();
   /**
+   * A linked worktree whose main checkout is an added project: it shows under that project, also when made (from a terminal)
+   * after the last session.list.
+   */
+  const ofAddedRepository = (cwd: string) => {
+    const dirs = gitDirsOf(cwd);
+    if (!dirs || dirs.own === dirs.common || basename(dirs.common) !== ".git") return false;
+    const main = allowed(dirname(dirs.common));
+    return !!main && projects.has(main);
+  };
+  /**
    * Adds the project of a session the user opened or created (not a worktree of an added project: it shows under that one);
    * other clients refresh their list. A failed write is only logged: the session works.
    */
   function addProject(cwd: string) {
-    if (projects.has(cwd) || worktreePaths.has(cwd)) return;
+    if (projects.has(cwd) || worktreePaths.has(cwd) || ofAddedRepository(cwd)) return;
     try {
       projects.open(cwd);
       broadcast({ type: "sessions.changed" });
