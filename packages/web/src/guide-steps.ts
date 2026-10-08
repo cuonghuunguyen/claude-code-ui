@@ -10,7 +10,7 @@ export type GuideStep = {
   /** Candidate selectors, first one that is visible wins; none visible = shown centered, no cutout. */
   anchors: string[];
   /** Used instead when the anchors are not visible, with its own body ("Show the side panel…"). */
-  alt?: { anchors: string[]; body: string };
+  alt?: { anchors: string[]; body: string; keys?: string[] };
   /** Below md (the sidebar is a closed drawer): replaces anchors, and optionally the body and keys. */
   narrow?: { anchors?: string[]; body?: string; keys?: string[] };
   title: string;
@@ -99,7 +99,7 @@ export const STEPS: GuideStep[] = [
     id: "files",
     chapter: "session",
     anchors: [cmd("pane.files")],
-    alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph." },
+    alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph.", keys: ["panel.toggle"] },
     title: "Files",
     body: "Browse and edit the project's files. @ in the prompt mentions a file.",
     keys: ["filetree.toggle"],
@@ -109,7 +109,7 @@ export const STEPS: GuideStep[] = [
     id: "changes",
     chapter: "session",
     anchors: [cmd("pane.changes")],
-    alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph." },
+    alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph.", keys: ["panel.toggle"] },
     title: "Changes",
     body: "Every file Claude edited, as a diff. Switch to Uncommitted or Against branch for git diffs.",
     side: "left",
@@ -119,7 +119,7 @@ export const STEPS: GuideStep[] = [
     chapter: "session",
     needs: "git",
     anchors: [cmd("pane.graph")],
-    alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph." },
+    alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph.", keys: ["panel.toggle"] },
     title: "Git graph",
     body: "Commits of all branches. Pick one to see its files and diffs.",
     side: "left",

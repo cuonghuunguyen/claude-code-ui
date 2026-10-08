@@ -144,8 +144,10 @@ export function GuideTour({ ids, start, host, narrow: forced, onStep, onEnd, ret
 
   const rect = target.rect;
   const sheet = view.width <= PHONE;
-  const body = target.alt ? step.alt!.body : step.body;
-  const keys = step.keys.flatMap((id) => {
+  // The alternative counts only if this step has one: `target` can still hold the previous step's for a render.
+  const alt = target.alt ? step.alt : undefined;
+  const body = alt ? alt.body : step.body;
+  const keys = (alt?.keys ?? step.keys).flatMap((id) => {
     const spec = host.keyOf(id);
     return spec ? [{ id, spec }] : [];
   });

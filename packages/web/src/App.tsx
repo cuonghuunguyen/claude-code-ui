@@ -1100,7 +1100,8 @@ export function App() {
   // Guided tour. The tour gets its key text only from here; the palette rows carry the keys.
   const sessionIdle = !!shown && shownState(view) === "idle";
   const guideHost: GuideHost = {
-    keyOf: (id) => (id === "palette.open" ? KEYS.palette : commands.find((c) => c.id === id)?.keys),
+    // The tab rows exist only with several tabs; the tour names their keys anyway.
+    keyOf: (id) => ({ "palette.open": KEYS.palette, "tab.next": KEYS.nextTab, "tab.close": KEYS.closeTab })[id] ?? commands.find((c) => c.id === id)?.keys,
     openProject: () => (setDrawer(false), setOpeningProject(true)),
     openSettings: () => setSettingsOpen(true),
     closeDrawer: () => setDrawer(false),

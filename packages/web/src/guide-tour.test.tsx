@@ -245,3 +245,21 @@ it("with nothing focused at the start the focus goes to the shown prompt box at 
   await act(async () => root.render(<></>));
   expect(document.activeElement).toBe(prompt);
 });
+
+it("walking every step with no anchor visible (panel hidden) never crashes, and the panel steps show the panel toggle key", async () => {
+  const all = ["welcome", "project", "new-session", "sidebar", "palette", "tabs", "files", "changes", "graph", "terminal", "replay"];
+  const withKeys: GuideHost = { ...guestHost, keyOf: (id) => ({ "panel.toggle": "mod+shift+r", "filetree.toggle": "mod+\\" })[id] };
+  const toggle = app.querySelector<HTMLElement>("#plus")!;
+  toggle.setAttribute("data-command", "panel.toggle");
+  // Only the panel toggle is on screen: Files, Changes and Git graph use their alternative, Terminal has none.
+  await show({ ids: all, host: withKeys, visible: (el) => el === toggle });
+  for (const id of all) {
+    expect(pop().dataset.step).toBe(id);
+    if (["files", "changes", "graph"].includes(id)) {
+      expect(pop().textContent).toContain("Show the side panel");
+      expect([...q("guide-keys")!.querySelectorAll("kbd span")].map((s) => s.textContent)).toEqual(["Ctrl", "Shift", "R"]);
+    }
+    if (id === "terminal") expect(pop().textContent).toContain("A shell in the project folder");
+    if (id !== "replay") await key("ArrowRight");
+  }
+});
