@@ -735,7 +735,7 @@ export class Session {
       const requestId = randomUUID();
       const part: PermissionPart | QuestionPart =
         tool === "AskUserQuestion"
-          ? { type: "question", id: requestId, requestId, toolUseId: toolUseID, questions: (input as { questions: Question[] }).questions, settled: false }
+          ? { type: "question", id: requestId, requestId, toolUseId: toolUseID, questions: (input as { questions: Question[] }).questions, settled: false, at: Date.now() }
           : {
               type: "permission_request",
               id: requestId,
@@ -746,13 +746,26 @@ export class Session {
               ...(title ? { title } : {}),
               suggestions: tool === "ExitPlanMode" && !suggestions.length ? [ACCEPT_EDITS] : suggestions,
               settled: false,
+              at: Date.now(),
             };
       this.pending.set(requestId, { part, resolve, ctx: { blockedPath, defaultToNo, requiresUserInteraction }, onAllow: card?.onAllow });
       this.emit(part);
       this.setState("needs_input");
+      if (part.type === "permission_request") this.markLowTier(requestId);
       signal.addEventListener("abort", () => this.cancel(requestId, "Request cancelled"), { once: true });
     });
   };
+
+  /** A low tier request is sent again with `tier: "low"` once its tier is read (the Focus page offers Always allow only then); high or unknown stays unmarked. A later read that says otherwise sends it again without the mark. */
+  private markLowTier(requestId: string) {
+    void this.permissionTier(requestId).then((tier) => {
+      const req = this.pending.get(requestId);
+      if (req?.part.type !== "permission_request" || (tier === "low") === (req.part.tier === "low")) return;
+      const { tier: _, ...rest } = req.part;
+      req.part = tier === "low" ? { ...rest, tier } : rest;
+      this.emit(req.part);
+    });
+  }
 
   /** The pending permission request or question with this ID; undefined once settled or unknown. */
   pendingRequest(requestId: string): PermissionPart | QuestionPart | undefined {
@@ -767,7 +780,12 @@ export class Session {
   permissionTier(requestId: string): Promise<Tier | undefined> {
     const req = this.pending.get(requestId);
     if (req?.part.type !== "permission_request") return Promise.resolve(undefined);
-    if (req.tier?.epoch !== this.epoch) req.tier = { epoch: this.epoch, value: this.readTier(req.part, req.ctx, this.epochAt) };
+    if (req.tier?.epoch !== this.epoch) {
+      const again = !!req.tier;
+      req.tier = { epoch: this.epoch, value: this.readTier(req.part, req.ctx, this.epochAt) };
+      // A re-read can change what the Focus page was told.
+      if (again) this.markLowTier(requestId);
+    }
     return req.tier.value;
   }
 

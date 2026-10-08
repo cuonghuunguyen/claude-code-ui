@@ -487,3 +487,34 @@ it("useGroupedTabs regroups an interleaved stored list (App uses it for its tab 
   await act(async () => root!.render(<H />));
   expect(seen).toEqual(["a1", "a2", "b1"]);
 });
+
+it("the pinned Focus tab comes first with the number of waiting sessions, cannot be closed, and selects the page (GH-159)", async () => {
+  const { el, tab, onSelect, onClose } = await render({ focus: { count: 3 } });
+  const strip = el.querySelector('[data-testid="tab-strip"]')!;
+  expect(strip.firstElementChild!.getAttribute("data-testid")).toBe("focus-tab");
+  const focus = tab("focus");
+  expect(focus.textContent).toBe("Focus3");
+  expect(focus.querySelector('[role="tab"]')!.getAttribute("aria-label")).toBe("Focus, 3 sessions need input");
+  // The count has a shape (alert icon) and a number, not only a color.
+  expect(focus.querySelector(".lucide-circle-alert")).not.toBeNull();
+  expect(focus.querySelector('[data-testid="tab-close"]')).toBeNull();
+  await act(async () => focus.querySelector<HTMLElement>('[role="tab"]')!.click());
+  expect(onSelect).toHaveBeenCalledWith("focus");
+  await act(async () => focus.querySelector<HTMLElement>('[role="tab"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true })));
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it("Focus shows no badge at 0, is selected while the page shows, and the arrow keys reach it from the first tab (GH-159)", async () => {
+  const { el, tab, onSelect } = await render({ focus: { count: 0 }, activeId: "focus" });
+  expect(tab("focus").textContent).toBe("Focus");
+  expect(tab("focus").querySelector('[role="tab"]')!.getAttribute("aria-selected")).toBe("true");
+  expect(el.querySelector('[data-testid="tab-close-active"]')).toBeNull();
+  const first = tab("a").querySelector<HTMLElement>('[role="tab"]')!;
+  await act(async () => first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+  expect(onSelect).toHaveBeenCalledWith("focus");
+});
+
+it("without a Focus prop there is no Focus tab (GH-159)", async () => {
+  const { el } = await render();
+  expect(el.querySelector('[data-testid="focus-tab"]')).toBeNull();
+});

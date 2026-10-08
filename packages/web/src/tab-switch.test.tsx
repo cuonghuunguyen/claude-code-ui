@@ -111,7 +111,7 @@ it("the phone tab switcher is a popup that picks the tab", async () => {
   expect(el.querySelector("select")).toBeNull();
   await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!.click());
   const options = [...document.querySelectorAll<HTMLElement>("[role=option]")];
-  expect(options.map((o) => o.textContent)).toEqual(["AAlphaa", "BBetab"]);
-  await act(async () => options[1]!.click());
+  expect(options.map((o) => o.textContent)).toEqual(["Focus", "AAlphaa", "BBetab"]);
+  await act(async () => options[2]!.click());
   expect(location.hash).toBe(`#${B}`);
 });

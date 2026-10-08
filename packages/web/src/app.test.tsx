@@ -929,7 +929,7 @@ it("the Tab grouping setting drives the tab order and which tabs may move past e
   const sB = { ...session, id: B, title: "Beta", cwd: "/p/demo-wt" };
   const sC = { ...session, id: C, title: "Gamma", cwd: "/p/other" };
   const worktrees = { "/p/demo": [{ path: "/p/demo", branch: "main", main: true }, { path: "/p/demo-wt", branch: "feature-x", main: false }] };
-  const order = () => [...el.querySelectorAll<HTMLElement>("[data-tab-id]")].map((t) => t.dataset.tabId);
+  const order = () => [...el.querySelectorAll<HTMLElement>("[data-tab-id]:not([data-testid=focus-tab])")].map((t) => t.dataset.tabId);
   const alt = (id: string, key: string) => press({ key, altKey: true, shiftKey: true }, el.querySelector(`[data-tab-id="${id}"] [role="tab"]`)!);
   const mount = async (grouping?: string) => {
     location.hash = `#${A}`;

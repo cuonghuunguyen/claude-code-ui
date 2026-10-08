@@ -98,6 +98,10 @@ export type Part = { parentId?: string } & (
       by?: "coordinator";
       escalated?: boolean;
       reason?: string;
+      /** When the daemon asked (ms, its clock): the Focus page's wait time. Absent in a restored or older log. */
+      at?: number;
+      /** "low" when the request is low tier (risk-tier.ts: only then may a coordinator answer it). Absent = high, or not read yet: Focus offers no Always allow. Sent as a second event of this part once read. */
+      tier?: "low";
     }
   /**
    * `AskUserQuestion` waiting for an answer. `id` = `requestId`; re-emitted once settled.
@@ -115,6 +119,8 @@ export type Part = { parentId?: string } & (
       by?: "coordinator";
       escalated?: boolean;
       reason?: string;
+      /** Same as on `permission_request`. */
+      at?: number;
     }
   /** `working`: only with `idle`; a background task (subagent run, background shell) of the session's own query still runs (Session.working()). */
   | { type: "session_state"; id: string; state: SessionState; working?: true }

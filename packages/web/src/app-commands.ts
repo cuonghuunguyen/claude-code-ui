@@ -53,6 +53,12 @@ export type CommandContext = {
   setMode: (mode: PermissionMode) => void;
   rewind: (userMessageId: string) => void;
   stop: () => void;
+  /** Opens the Focus page (GH-159). */
+  openFocus?: () => void;
+  /** Opens Focus on the next waiting request; none while nothing waits. */
+  nextWaiting?: () => void;
+  /** Toggles Signal only of the shown session; none without a session. */
+  toggleSignalOnly?: () => void;
   /** Opens the Settings dialog. */
   openSettings: () => void;
   /** Restarts the guided tour from its first step. */
@@ -91,6 +97,8 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     ...Array.from({ length: Math.min(8, c.tabs.length) }, (_, i) => cmd(`tab.goto${i + 1}`, `Go to tab ${i + 1}`, () => go(c.tabs[i]!), true)),
     c.tabs.length > 0 && cmd("tab.gotoLast", "Go to last tab", () => go(c.tabs.at(-1)!), true),
     cmd("shortcuts.open", "Keyboard shortcuts", c.openShortcuts),
+    c.openFocus && cmd("focus.open", "Open Focus", c.openFocus),
+    c.nextWaiting && cmd("focus.next", "Next waiting request", c.nextWaiting),
     cmd("settings.open", "Open settings", c.openSettings),
     cmd("guide.start", "Show guide", c.startGuide),
     cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar),
@@ -100,6 +108,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s && !s.draft && cmd("pane.changes", "Show changes", () => c.showPane("changes")),
     s && !s.draft && c.isGit && cmd("pane.graph", "Show git graph", () => c.showPane("graph")),
     s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
+    s && !s.draft && c.toggleSignalOnly && cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
     s && !s.draft && cmd("terminal.new", "New terminal", c.newTerminal),
     s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
     s &&

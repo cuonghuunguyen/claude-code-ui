@@ -5,11 +5,11 @@
 import { createContext, memo, use, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
-import { ChevronDownIcon, CircleAlertIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
-import { NEW_TAB, avatarColor, closeTab, groupTabs, loadCollapsed, projectName, saveCollapsed, type AvatarColor } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColor, closeTab, groupTabs, loadCollapsed, projectName, saveCollapsed, type AvatarColor } from "./tabs.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { GHOST, ROW } from "./toolbar.tsx";
@@ -93,8 +93,11 @@ export function TabsBar({
   onAction,
   onRenamed,
   grouping = "project",
+  focus,
   compact = false,
 }: {
+  /** The pinned Focus tab (docs/spec.md "Focus"), first in the strip and never closable; `count`: sessions waiting for the user. Absent: no Focus tab. */
+  focus?: { count: number };
   tabs: string[];
   /** Selects the collapsed-state storage; group keys come from `info().group`. */
   grouping?: "project" | "worktree" | "none";
@@ -159,7 +162,7 @@ export function TabsBar({
   const visible = tabs.filter((id) => !hidden(id));
   // A tab that becomes active (sidebar, next/previous tab, URL hash) inside a collapsed group expands it, like Chrome.
   const activeKey = activeId && tabs.includes(activeId) ? keyOf(activeId) : undefined;
-  const activeHidden = !!activeId && !keepActive && hidden(activeId);
+  const activeHidden = !!activeId && tabs.includes(activeId) && !keepActive && hidden(activeId);
   useEffect(() => {
     if (!activeHidden || !activeKey) return;
     const n = new Set(stored);
@@ -198,12 +201,14 @@ export function TabsBar({
     ro.observe(el);
     return () => ro.disconnect();
   }, [activeId, tabs.length, collapsed]);
-  const active = activeId ? info(activeId) : undefined;
+  const active = activeId && activeId !== FOCUS_TAB ? info(activeId) : undefined;
   const sideOf = use(SideLabel);
   // Below sm the session header row is gone: the switcher says where the session is, "<project or project · branch> · <side>" (GH-165).
   const place = (t: TabInfo) => [t.worktree ?? (t.cwd ? projectName(t.cwd) : ""), t.cwd ? sideOf(t.cwd)?.label : ""].filter(Boolean).join(" · ");
   // Only one tab is in the Tab order; arrows, Home and End move between tabs (WAI-ARIA tabs, automatic activation). Delete closes.
-  const focusable = activeId && visible.includes(activeId) ? activeId : visible[0];
+  const focusable = activeId === FOCUS_TAB ? undefined : activeId && visible.includes(activeId) ? activeId : visible[0];
+  // The arrow keys also reach the pinned Focus tab, which comes first.
+  const ring = focus ? [FOCUS_TAB, ...visible] : visible;
   const onKeyDown = (e: KeyboardEvent) => {
     const target = e.target as HTMLElement;
     const chip = target.closest<HTMLElement>("[data-group-chip]")?.dataset.groupChip;
@@ -215,8 +220,10 @@ export function TabsBar({
       return onMoveGroup(chip, by);
     }
     const id = target.closest<HTMLElement>("[data-tab-id]")?.dataset.tabId;
-    const at = id ? visible.indexOf(id) : -1;
+    const at = id ? ring.indexOf(id) : -1;
     if (at < 0 || target.getAttribute("role") !== "tab") return;
+    // Focus is pinned: it neither closes nor moves.
+    if (id === FOCUS_TAB && (e.key === "Delete" || e.altKey || e.ctrlKey)) return;
     if (e.key === "Delete") return closeKeepFocus(id!);
     const by =
       e.altKey && e.shiftKey ? { ArrowLeft: -1, ArrowRight: 1 }[e.key] : e.ctrlKey && e.shiftKey ? { PageUp: -1, PageDown: 1 }[e.key] : undefined;
@@ -224,11 +231,11 @@ export function TabsBar({
       e.preventDefault();
       return moveBy(id!, by as -1 | 1);
     }
-    const n = visible.length;
+    const n = ring.length;
     const to = { ArrowRight: at + 1, ArrowLeft: at - 1 + n, Home: 0, End: n - 1 }[e.key];
     if (to === undefined) return;
     e.preventDefault();
-    const next = visible[to % n]!;
+    const next = ring[to % n]!;
     onSelect(next);
     strip.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(next)}"] [role="tab"]`)?.focus();
   };
@@ -253,6 +260,7 @@ export function TabsBar({
       >
         {/* One provider for the chips: same (default) delay as the message action tooltips; moving to a neighbouring chip opens at once. */}
         <TooltipProvider>
+        {focus && <FocusTab active={activeId === FOCUS_TAB} count={focus.count} focusable={activeId === FOCUS_TAB || !focusable} onSelect={() => onSelect(FOCUS_TAB)} />}
         {groups.map(([cwd, ids]) => (
           // `contents`: groups are no boxes, tabs shrink in the strip as before. The chip is a button inside the tablist (a11y trade-off, no group role).
           <div key={cwd} role="none" className="contents" data-testid="tab-group">
@@ -285,7 +293,7 @@ export function TabsBar({
         ))}
         </TooltipProvider>
       </div>
-      {given.length > 0 && (
+      {(given.length > 0 || focus) && (
         <div className="flex h-7 min-w-0 flex-1 max-md:h-11 md:hidden">
           <Select value={activeId ?? null} onValueChange={(v) => v && onSelect(v)}>
             <SelectTrigger
@@ -293,14 +301,24 @@ export function TabsBar({
               data-testid="tab-switcher"
               className={`${GHOST} max-md:h-11! min-w-0 flex-1 bg-secondary! px-1.5 font-medium text-foreground max-md:my-2`}
             >
-              {active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} /> : null}
+              {activeId === FOCUS_TAB ? <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden /> : active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} /> : null}
               <span className="flex min-w-0 flex-col text-left">
-                <span className="truncate" data-slot="tab-switcher-title">{active?.titleLoading ? <TitleSkeleton title={active.title} /> : (active?.title ?? "Open tabs")}</span>
+                <span className="truncate" data-slot="tab-switcher-title">{activeId === FOCUS_TAB ? "Focus" : active?.titleLoading ? <TitleSkeleton title={active.title} /> : (active?.title ?? "Open tabs")}</span>
                 {active && place(active) && <span className="truncate font-normal text-muted-foreground text-xs leading-4" data-slot="tab-switcher-place">{place(active)}</span>}
               </span>
-              <span className="ml-auto text-muted-foreground tabular-nums">{given.length}</span>
+              {focus && focus.count > 0 && <span className="ml-auto flex items-center gap-1 rounded-full bg-warning px-1.5 text-background text-xs tabular-nums" data-testid="focus-badge"><CircleAlertIcon className="size-3" aria-hidden />{focus.count}</span>}
+              <span className={cn("text-muted-foreground tabular-nums", !(focus && focus.count > 0) && "ml-auto")}>{given.length}</span>
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] rounded-md p-0.5 shadow-floating! ring-0">
+              {focus && (
+                <SelectItem value={FOCUS_TAB} className={ROW}>
+                  <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate">Focus</span>
+                  </span>
+                  {focus.count > 0 && <span className="text-muted-foreground text-xs leading-none">{focus.count} waiting</span>}
+                </SelectItem>
+              )}
               {given.map((id) => {
                 const t = info(id);
                 const label = stateNote(t) || STATUS_LABEL[status(id, t)];
@@ -319,7 +337,7 @@ export function TabsBar({
           </Select>
         </div>
       )}
-      {activeId && (
+      {activeId && activeId !== FOCUS_TAB && (
         <IconButton className="md:hidden" label={`Close ${active?.title ?? "tab"}`} onClick={() => onClose(activeId)} testId="tab-close-active">
           <XIcon />
         </IconButton>
@@ -327,6 +345,36 @@ export function TabsBar({
       <IconButton label="New session" onClick={onNew} testId="tab-new" command="session.new" ref={newButton}>
         <PlusIcon />
       </IconButton>
+    </div>
+  );
+}
+
+/** The pinned Focus tab: first in the strip, a count of the sessions waiting for the user (a shape and a number, not only a color). */
+function FocusTab({ active, count, focusable, onSelect }: { active: boolean; count: number; focusable: boolean; onSelect: () => void }) {
+  return (
+    <div
+      className={cn("relative flex h-7 shrink-0 items-center rounded-md transition-colors", active ? "bg-secondary" : "hover:bg-secondary/70")}
+      data-active={active || undefined}
+      data-testid="focus-tab"
+      data-tab-id={FOCUS_TAB}
+    >
+      <button
+        role="tab"
+        aria-selected={active}
+        tabIndex={focusable ? 0 : -1}
+        aria-label={count ? `Focus, ${count} ${count === 1 ? "session needs" : "sessions need"} input` : "Focus"}
+        className={cn("flex h-full cursor-pointer items-center gap-1.5 rounded-md px-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset", active ? "text-foreground" : "text-muted-foreground")}
+        onClick={onSelect}
+      >
+        <CrosshairIcon className="size-4 shrink-0" aria-hidden />
+        <span className="leading-4">Focus</span>
+        {count > 0 && (
+          <span className="flex items-center gap-1 rounded-full bg-warning px-1.5 text-background text-xs tabular-nums leading-4" data-testid="focus-badge" aria-hidden>
+            <CircleAlertIcon className="size-3" aria-hidden />
+            {count}
+          </span>
+        )}
+      </button>
     </div>
   );
 }

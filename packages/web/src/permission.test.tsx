@@ -70,6 +70,22 @@ describe("PermissionPanel", () => {
     expect(html).toContain("No, and tell Claude what to do differently");
   });
 
+  it("on the Focus page a high tier request says so and offers no Always allow; a low tier one words the rule as what Always allow saves", () => {
+    const labels = (html: string) => html.match(/<button[^>]*>([^<]*)<\/button>/g)!.map((b) => b.replace(/<[^>]+>/g, ""));
+    const high = renderToStaticMarkup(<PermissionPanel part={request()} onRespond={() => {}} tier="high" />);
+    expect(high).toContain("High tier · always asks");
+    expect(high).not.toContain("permission-rules");
+    expect(labels(high)).toEqual(["Deny", "Allow once"]);
+    const low = renderToStaticMarkup(<PermissionPanel part={request()} onRespond={() => {}} tier="low" />);
+    expect(low).not.toContain("High tier");
+    expect(low).toContain("Always allow saves: <code");
+    expect(labels(low)).toEqual(["Deny", "Allow always", "Allow once"]);
+    // The session's own panel (no tier) is unchanged.
+    const own = renderToStaticMarkup(<PermissionPanel part={request()} onRespond={() => {}} />);
+    expect(own).not.toContain("High tier");
+    expect(labels(own)).toEqual(["Deny", "Allow always", "Allow once"]);
+  });
+
   it("offers no Allow always without suggestions", () => {
     const html = renderToStaticMarkup(<PermissionPanel part={request({ suggestions: [] })} onRespond={() => {}} />);
     expect(html).not.toContain("Allow always");

@@ -79,6 +79,11 @@ import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
+import { loadSignalIds, saveSignalOnly, signalItems, type SignalItem } from "./signal.ts";
+import { FoldRow, SignalSwitch } from "./signal-fold.tsx";
+import { FocusPage, FocusRow } from "./focus-page.tsx";
+import { nextWaiting, waitingCount, waitingRequests } from "./focus.ts";
+import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { joinPath, relPath } from "./paths.ts";
@@ -101,7 +106,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
-import { NEW_TAB, avatarColors, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColors, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
@@ -148,7 +153,7 @@ const loadNumber = (key: string, fallback: number) => {
 /** `r` without the entry of `id`. */
 const without = <T,>(r: Record<string, T>, id: string) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== id));
 
-const hashId = () => (hashTab() === NEW_TAB ? undefined : hashTab());
+const hashId = () => (hashTab() === NEW_TAB || hashTab() === FOCUS_TAB ? undefined : hashTab());
 
 const pageFocused = () => document.visibilityState === "visible" && document.hasFocus();
 
@@ -223,8 +228,23 @@ export function App() {
   const [run, setRun] = useState(() => runFromHash(location.hash));
   const [tabs, setTabs] = useState(() => {
     const h = hashTab();
-    return h ? openTab(loadTabs(), h) : loadTabs();
+    return h && h !== FOCUS_TAB ? openTab(loadTabs(), h) : loadTabs();
   });
+  // The request the Focus page has selected (GH-159); the oldest waiting one while unset.
+  const [focusSel, setFocusSel] = useState<string>();
+  // When this browser first saw a request that came without the daemon's `at`.
+  const firstSeen = useRef(new Map<string, number>());
+  // Sessions shown in Signal only (GH-159), per browser.
+  const [signalIds, setSignalIds] = useState(loadSignalIds);
+  const setSignalOnly = (id: string, on: boolean) => {
+    saveSignalOnly(id, on);
+    setSignalIds((s) => {
+      const next = new Set(s);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
   const changeGrouping = (g: TabGrouping) => {
     setGrouping(g);
@@ -593,6 +613,12 @@ export function App() {
     setDrawer(false);
     if (!keepHash) setRun(undefined);
     if (!id) return;
+    // The Focus page is no session: it has no tab in the list and nothing to subscribe to.
+    if (id === FOCUS_TAB) {
+      if (!keepHash) history.replaceState(null, "", tabHash(id));
+      if (activeId !== FOCUS_TAB) setFocusSel(undefined);
+      return;
+    }
     setTabs((t) => openTab(t, id));
     if (!keepHash) history.replaceState(null, "", tabHash(id));
     // A page-load link subscribed without adding its project: the first explicit open of that session adds it, view or not.
@@ -711,7 +737,7 @@ export function App() {
   // The daemon suppresses pushes for the session a focused, visible tab shows; resent after every reconnect.
   useEffect(() => {
     if (status !== "connected") return;
-    const sessionId = focused && activeId !== NEW_TAB ? activeId : undefined;
+    const sessionId = focused && activeId !== NEW_TAB && activeId !== FOCUS_TAB ? activeId : undefined;
     client.current!.request(sessionId ? { type: "push.focus", sessionId } : { type: "push.focus" }).catch(() => {});
   }, [status, focused, activeId]);
 
@@ -727,7 +753,21 @@ export function App() {
   useEffect(() => applyTheme(theme), [theme]);
 
   const unread = new Set(list.filter((s) => views[s.id] && isUnread(views[s.id]!, seen[s.id])).map((s) => s.id));
-  useEffect(() => void (document.title = tabTitle(unread.size)), [unread.size]);
+  // Focus (GH-159): every unanswered request; the sidebar row, the Focus tab, the browser tab and the status text all show the same number of sessions.
+  const waiting = useMemo(() => {
+    const w = waitingRequests(list, views, firstSeen.current, Date.now());
+    for (const x of w) if (!firstSeen.current.has(x.part.id)) firstSeen.current.set(x.part.id, x.since);
+    const ids = new Set(w.map((x) => x.part.id));
+    for (const id of firstSeen.current.keys()) if (!ids.has(id)) firstSeen.current.delete(id);
+    return w;
+  }, [list, views]);
+  const waitingN = waitingCount(waiting);
+  const everWaiting = useRef(false);
+  if (waitingN > 0) everWaiting.current = true;
+  useEffect(() => {
+    document.title = tabTitle(waitingN);
+    setFavicon(faviconHref(waitingN));
+  }, [waitingN]);
 
   async function togglePush() {
     setError(undefined);
@@ -1141,6 +1181,9 @@ export function App() {
     setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
+    openFocus: () => open(FOCUS_TAB),
+    nextWaiting: waiting.length ? () => (open(FOCUS_TAB), setFocusSel(nextWaiting(waiting, activeId === FOCUS_TAB ? focusSel ?? waiting[0]?.part.id : undefined)?.part.id)) : undefined,
+    toggleSignalOnly: shown ? () => setSignalOnly(shown.id, !signalIds.has(shown.id)) : undefined,
     openSettings: () => setSettingsOpen(true),
     startGuide: () => startGuide(),
     openMcp: project ? () => openMcp() : undefined,
@@ -1297,6 +1340,7 @@ export function App() {
             onNew={() => newSession()}
             home={sidebar}
             onHome={() => setSidebar((v) => !v)}
+            focus={{ count: waitingN }}
           />
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:gap-2">
@@ -1420,6 +1464,7 @@ export function App() {
             Notifications
           </label>
           {error && <p className="text-destructive">{error}</p>}
+          {status !== "unauthorized" && <FocusRow count={waitingN} active={activeId === FOCUS_TAB} onOpen={() => open(FOCUS_TAB)} />}
           {status !== "unauthorized" && (
             <SessionList
               list={list}
@@ -1531,6 +1576,8 @@ export function App() {
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
+                        signalOnly={signalIds.has(s.id)}
+                        onSignalOnly={(on) => setSignalOnly(s.id, on)}
                         onAnswer={answer}
                         connected={status === "connected"}
                         onGitStatus={() =>
@@ -1642,7 +1689,20 @@ export function App() {
                   {(panel || terminalOpen) && <div className={`${card} ml-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
                 </>
               )}
-              {activeId !== NEW_TAB && !shown && (
+              {activeId === FOCUS_TAB && (
+                <FocusPage
+                  list={list}
+                  views={views}
+                  worktrees={worktrees}
+                  waiting={waiting}
+                  selected={focusSel}
+                  onSelect={setFocusSel}
+                  onRespond={respond}
+                  onAnswer={answer}
+                  onOpenSession={(id) => open(id)}
+                />
+              )}
+              {activeId !== NEW_TAB && activeId !== FOCUS_TAB && !shown && (
                 <div className={`${card} flex-1`}>
                   <div className="m-auto text-muted-foreground">Open or create a session to start.</div>
                 </div>
@@ -1650,6 +1710,9 @@ export function App() {
             </>
           )}
         </main>
+      </div>
+      <div role="status" aria-live="polite" className="sr-only" data-testid="attention-status">
+        {announcement(waitingN, everWaiting.current)}
       </div>
       <QuoteButton onQuote={(q) => (setInsert(q), setPane("session"))} />
       {guideRun && (
@@ -2163,7 +2226,7 @@ const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermission
 type DraftPick = Omit<StartOptions, "mode"> & { mode?: PermissionMode };
 const NEW_DRAFT: DraftPick = { model: "default", effort: "default" };
 
-const timelineKey = (item: TimelineItem) => (item.kind === "context" ? item.id : item.part.id);
+const timelineKey = (item: SignalItem) => (item.kind === "part" ? item.part.id : item.id);
 
 const MemoSessionPane = memo(SessionPane);
 
@@ -2210,8 +2273,13 @@ export function SessionPane({
   connected,
   onGitStatus,
   onDialog,
+  signalOnly = false,
+  onSignalOnly,
 }: {
   scrollKey: number;
+  /** Signal only: runs of tool cards fold into one line (GH-159). Kept by App per session. */
+  signalOnly?: boolean;
+  onSignalOnly?: (on: boolean) => void;
   /** Subagent run whose subagent view shows; an unknown one shows the session view. */
   run?: string;
   /** Opens a run's subagent view; undefined: the session view. */
@@ -2260,6 +2328,7 @@ export function SessionPane({
   /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
   onDialog?: (dialog: DialogName, arg?: string) => void;
 }) {
+  const signalKey = useKeymap()("signal.toggle");
   const phone = usePhone();
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
@@ -2300,6 +2369,7 @@ export function SessionPane({
     onRewindShown?.();
   }, [rewindTo]);
   const items = useMemo(() => timeline(view), [view]);
+  const shownItems = useMemo<SignalItem[]>(() => (signalOnly ? signalItems(items, (c) => awaitingPermission(view).has(c.toolUseId)) : items), [items, signalOnly, view]);
   // Palette Messages: the session may still be loading; the hit is revealed once its message is in the timeline.
   const triedUntil = useRef<unknown>(undefined);
   useEffect(() => {
@@ -2348,9 +2418,10 @@ export function SessionPane({
         <span className="min-w-0 truncate text-muted-foreground" title={session.cwd}>
           {session.cwd}
         </span>
+        {onSignalOnly && <SignalSwitch on={signalOnly} onChange={onSignalOnly} keys={keyText(signalKey)} />}
         {/* Idle, running and needs input show in the tab and the send button. Only error and closed have no other place. */}
         {(shownState(view) === "error" || shownState(view) === "closed") && (
-          <span className="ml-auto rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
+          <span className="rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
             {shownState(view)}
           </span>
         )}
@@ -2368,7 +2439,7 @@ export function SessionPane({
       ) : (
         <VirtualTimeline
           key={scrollKey}
-          items={items}
+          items={shownItems}
           itemKey={timelineKey}
           reveal={reveal}
           sticky={(item) => {
@@ -2387,7 +2458,7 @@ export function SessionPane({
             (shownPending.length > 0 || thinking) && (
               <>
                 {shownPending.map((p, i) => (
-                  <PendingMessage key={p.key} p={p} view={view} index={items.length + i} />
+                  <PendingMessage key={p.key} p={p} view={view} index={shownItems.length + i} />
                 ))}
                 {thinking}
               </>
@@ -2397,10 +2468,14 @@ export function SessionPane({
           loadingOlder={loadingOlder}
           renderItem={(item, index) => {
             // A finished turn (not running; the next top-level item is a prompt, or it is the last) ends with Copy response, with or without a usage footer: a restored transcript has none.
-            const next = items[index + 1];
-            const copyText = (next ? next.kind === "part" && (next.part.type === "user_text" || next.part.type === "bash") : !turnRunning && !view.externalTurn) ? turnText(items, index) : "";
+            const next = shownItems[index + 1];
+            const copyText = (next ? next.kind === "part" && (next.part.type === "user_text" || next.part.type === "bash") : !turnRunning && !view.externalTurn) ? turnText(shownItems, index) : "";
             const row = (
-            item.kind === "context" ? (
+            item.kind === "fold" ? (
+              <FoldRow id={item.id} calls={item.calls}>
+                <Timeline view={view} items={item.items} />
+              </FoldRow>
+            ) : item.kind === "context" ? (
               <ContextGroup calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
             ) : item.part.type === "user_text" && coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE) ? (
               <div className={`flex ${index ? "mt-3" : ""}`} data-testid="orchestration-notice">
@@ -2965,8 +3040,8 @@ function PromptBox({
 }
 
 /** Top-level parts, or with `parentId` the child parts of that subagent. */
-function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) {
-  return timeline(view, parentId).map((item) =>
+function Timeline({ view, parentId, items = timeline(view, parentId) }: { view: SessionView; parentId?: string; items?: TimelineItem[] }) {
+  return items.map((item) =>
     item.kind === "context" ? (
       <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
     ) : (
