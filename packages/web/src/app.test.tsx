@@ -965,6 +965,55 @@ it("the Tab grouping setting drives the tab order and which tabs may move past e
   }
 });
 
+describe("a reload keeps the stored tab order while the session list is late (GH-196)", () => {
+  const mk = (id: string, cwd: string) => ({ ...session, id, title: id.slice(0, 1), cwd });
+  const order = () => [...el.querySelectorAll<HTMLElement>("[data-tab-id]:not([data-testid=focus-tab])")].map((t) => t.dataset.tabId);
+  const stored = () => JSON.parse(localStorage.getItem("claude-ui.tabs")!);
+  const ids = { A: "aaaaaaaa-2222-3333-4444-555555555555", B: "bbbbbbbb-2222-3333-4444-555555555555", C: "cccccccc-2222-3333-4444-555555555555" };
+  afterEach(() => {
+    localStorage.removeItem("claude-ui.tabs");
+    localStorage.removeItem("claude-ui.tabGrouping");
+  });
+
+  it("the subscribe reply before the list does not gather the unknown tabs", async () => {
+    const { A, B, C } = ids;
+    const all = [mk(A, "/p/one"), mk(B, "/p/two"), mk(C, "/p/one")];
+    location.hash = `#${A}`;
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([B, A, C]));
+    let release!: (r: unknown) => void;
+    const restore = await remount({ "session.list": new Promise((r) => (release = r)), "session.subscribe": (m: { sessionId: string }) => ({ logEpoch: "e1", session: all.find((x) => x.id === m.sessionId) ?? all[0] }) });
+    try {
+      expect(order()).toEqual([B, A, C]);
+      expect(stored()).toEqual([B, A, C]);
+      await act(async () => release({ sessions: all, projects: ["/p/one", "/p/two"] }));
+      await act(async () => {});
+      expect(order()).toEqual([B, A, C]);
+      expect(stored()).toEqual([B, A, C]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("a worktree session keeps its slot until the list brings the worktrees", async () => {
+    const X = ids.A, Y = ids.B, Z = ids.C;
+    const all = [mk(X, "/p/one"), mk(Y, "/p/one-wt"), mk(Z, "/p/one")];
+    const worktrees = { "/p/one": [{ path: "/p/one", branch: "main", main: true }, { path: "/p/one-wt", branch: "f", main: false }] };
+    location.hash = `#${Y}`;
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([X, Y, Z]));
+    let release!: (r: unknown) => void;
+    const restore = await remount({ "session.list": new Promise((r) => (release = r)), "session.subscribe": (m: { sessionId: string }) => ({ logEpoch: "e1", session: all.find((x) => x.id === m.sessionId) ?? all[0] }) });
+    try {
+      expect(stored()).toEqual([X, Y, Z]);
+      await act(async () => release({ sessions: all, projects: ["/p/one"], worktrees }));
+      await act(async () => {});
+      expect(order()).toEqual([X, Y, Z]);
+      expect(stored()).toEqual([X, Y, Z]);
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe("worktrees", () => {
   const main = { path: "/p/demo", branch: "main", main: true };
   const managed = "/p/demo/.claude/worktrees/x";
