@@ -223,6 +223,13 @@ export type SidebarSort = "recent" | "name";
 export const sortGroups = (groups: SessionGroup[], sort: SidebarSort) =>
   sort === "name" ? [...groups].sort((a, b) => projectName(a.cwd).localeCompare(projectName(b.cwd), undefined, { sensitivity: "base" })) : groups;
 
+/** Workers that `keep` holds for; a coordinator with none drops out. */
+export function activeWorkers(workers: Map<string, SessionListItem[]>, keep: (s: SessionListItem) => boolean) {
+  const out = new Map<string, SessionListItem[]>();
+  for (const [id, ws] of workers) if (ws.some(keep)) out.set(id, ws.filter(keep));
+  return out;
+}
+
 /** Groups with only the sessions `keep` holds for, or whose workers it holds for; projects and worktree rows stay listed even when empty. */
 export function activeOnly(groups: SessionGroup[], workers: Map<string, SessionListItem[]>, keep: (s: SessionListItem) => boolean): SessionGroup[] {
   const f = (l: SessionListItem[]) => l.filter((s) => keep(s) || !!workers.get(s.id)?.some(keep));

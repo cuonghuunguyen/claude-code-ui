@@ -842,4 +842,61 @@ describe("sidebar header actions (GH-152)", () => {
     await act(async () => m("sidebar-menu-collapse-all").click());
     expect(expanded('[data-testid="group-toggle"]')).toEqual(["false", "false"]);
   });
+  it("Select active session finds a worker whose coordinator is beyond Load more", async () => {
+    const many = [
+      item("co", "/home/u/api", "Old coordinator", 500),
+      { ...item("wk", "/home/u/api", "W", 501), coordinatorId: "co", workerName: "alpha" },
+      ...[1, 2, 3, 4, 5, 6].map((n) => item(`n${n}`, "/home/u/api", `New ${n}`, n)),
+    ];
+    await render({ list: many, projects: ["/home/u/api"], activeId: "wk" });
+    expect(document.querySelector('[data-session-id="wk"]')).not.toBeNull();
+    await act(async () => q("sidebar-collapse-all").click());
+    await act(async () => q("sidebar-select-active").click());
+    expect(document.activeElement).toBe(document.querySelector('[data-session-id="wk"]'));
+  });
+
+  it("is disabled when the sidebar does not list the active session", async () => {
+    await render({ ...base, activeId: "unknown" });
+    expect(q("sidebar-select-active").getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("the Sort radio closes the menu, a checkbox keeps it open", async () => {
+    await render(base);
+    const m = await open();
+    await act(async () => m("sidebar-opt-day-headers").click());
+    expect(document.querySelector('[data-testid="sidebar-options-menu"]')).not.toBeNull();
+    await act(async () => m("sidebar-opt-sort-name").click());
+    expect(document.querySelector('[data-testid="sidebar-options-menu"]')).toBeNull();
+  });
+
+  it("Only active sessions lists just the qualifying workers and says 'No active sessions' for an empty row", async () => {
+    const l = [
+      item("co", "/home/u/api", "Coord", 3),
+      { ...item("w1", "/home/u/api", "W1", 4, "running"), coordinatorId: "co", workerName: "run" },
+      { ...item("w2", "/home/u/api", "W2", 5), coordinatorId: "co", workerName: "idle" },
+      item("x", "/home/u/web", "Idle", 9),
+    ];
+    const r = await render({ ...base, list: l, activeId: "none" });
+    const m = await open();
+    await act(async () => m("sidebar-opt-only-active").click());
+    expect(r.rows().map((x) => x.dataset.sessionId)).toEqual(["co", "w1"]);
+    expect(r.el.textContent).toContain("No active sessions");
+    expect(r.el.textContent).not.toContain("No sessions yet");
+  });
+
+  it("Expand all keeps the other view's worker group keys", async () => {
+    localStorage.setItem("claude-ui.collapsed", JSON.stringify(["/home/u/web", "coordinator:co", "archived:coordinator:zz"]));
+    await render(base);
+    await act(async () => q("sidebar-expand-all").click());
+    expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toEqual(["archived:coordinator:zz"]);
+  });
+
+  it("below md the greyed Expand all item says why", async () => {
+    window.matchMedia = ((qs: string) => ({ matches: qs.includes("48rem"), media: qs, addEventListener() {}, removeEventListener() {} })) as never;
+    const { search } = await render(base);
+    await search("fix");
+    const m = await open();
+    expect(m("sidebar-menu-expand-all").textContent).toBe("Expand all (clear the search first)");
+  });
+
 });

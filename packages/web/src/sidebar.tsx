@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
-import { activeOnly, byDay, collapseKeys, groupByCwd, limitSessions, loadCollapsed, loadSidebarView, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveSidebarView, nestWorkers, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SidebarView, type WorktreeRow } from "./sessions.ts";
+import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, loadCollapsed, loadSidebarView, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveSidebarView, nestWorkers, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SidebarView, type WorktreeRow } from "./sessions.ts";
 import { useNow } from "./plan-meter.tsx";
 import { projectName } from "./tabs.ts";
 import { ICON_BUTTON, IconButton, ProjectAvatar } from "./tabs-bar.tsx";
@@ -70,9 +70,9 @@ const CHECK_ITEM = cn(ITEM, "gap-2");
 const Tick = ({ on }: { on: boolean }) => <span className="grid size-4 shrink-0 place-items-center">{on && <CheckIcon className="size-4" aria-hidden />}</span>;
 
 /** IntelliJ-style options of the sidebar (kebab in the Projects header): behavior, what shows, project order; below md also Expand all / Collapse all. */
-function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollapse, treeDisabled, narrow }: { view: SidebarView; onView: (v: Partial<SidebarView>) => void; archived: boolean; onArchived: (on: boolean) => void; onExpand: () => void; onCollapse: () => void; treeDisabled: boolean; narrow: boolean }) {
+function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollapse, treeHint, narrow }: { view: SidebarView; onView: (v: Partial<SidebarView>) => void; archived: boolean; onArchived: (on: boolean) => void; onExpand: () => void; onCollapse: () => void; treeHint: string; narrow: boolean }) {
   const check = (label: string, on: boolean, set: (on: boolean) => void, testId: string) => (
-    <Menu.CheckboxItem className={CHECK_ITEM} checked={on} onCheckedChange={set} closeOnClick={false} data-testid={testId}>
+    <Menu.CheckboxItem className={CHECK_ITEM} checked={on} onCheckedChange={set} data-testid={testId}>
       <Tick on={on} />
       {label}
     </Menu.CheckboxItem>
@@ -87,11 +87,11 @@ function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollap
           <Menu.Popup className={POPUP} data-testid="sidebar-options-menu">
             {narrow && (
               <>
-                <Menu.Item className={ITEM} disabled={treeDisabled} onClick={onExpand} data-testid="sidebar-menu-expand-all">
-                  Expand all
+                <Menu.Item className={ITEM} disabled={!!treeHint} onClick={onExpand} data-testid="sidebar-menu-expand-all">
+                  Expand all{treeHint}
                 </Menu.Item>
-                <Menu.Item className={ITEM} disabled={treeDisabled} onClick={onCollapse} data-testid="sidebar-menu-collapse-all">
-                  Collapse all
+                <Menu.Item className={ITEM} disabled={!!treeHint} onClick={onCollapse} data-testid="sidebar-menu-collapse-all">
+                  Collapse all{treeHint}
                 </Menu.Item>
                 <Menu.Separator className="my-1 h-px bg-border" />
               </>
@@ -112,7 +112,7 @@ function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollap
               <Menu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">Sort projects</Menu.GroupLabel>
               <Menu.RadioGroup value={view.sort} onValueChange={(sort) => onView({ sort: sort as SidebarView["sort"] })}>
                 {(["recent", "name"] as const).map((v) => (
-                  <Menu.RadioItem key={v} value={v} className={CHECK_ITEM} closeOnClick={false} data-testid={`sidebar-opt-sort-${v}`}>
+                  <Menu.RadioItem key={v} value={v} className={CHECK_ITEM} closeOnClick data-testid={`sidebar-opt-sort-${v}`}>
                     <Tick on={view.sort === v} />
                     {v === "recent" ? "Recent activity" : "Name"}
                   </Menu.RadioItem>
@@ -215,20 +215,27 @@ export function SessionList({
     if (focusId.current) listRef.current?.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(focusId.current)}"]`)?.focus();
     focusId.current = undefined;
   });
-  const { top, workers } = nestWorkers(list, archived);
+  const nested = nestWorkers(list, archived);
+  const top = nested.top;
   const keepActive = (s: SessionListItem) => s.id === activeId || unread.has(s.id) || state(s) === "running" || state(s) === "needs_input";
-  const shown = sortGroups(groupByCwd(top, query, projects, archived, worktrees, workers), view.sort);
+  const shown = sortGroups(groupByCwd(top, query, projects, archived, worktrees, nested.workers), view.sort);
+  // Only active sessions: a coordinator lists just its workers that qualify too.
+  const workers = view.onlyActive ? activeWorkers(nested.workers, keepActive) : nested.workers;
   const groups = view.onlyActive ? activeOnly(shown, workers, keepActive) : shown;
   const searching = !!query.trim();
   const activeSession = list.find((s) => s.id === activeId);
   // Select active session: open what hides the row (clearing a search or switching to the row's archived view first), then scroll to it; `focus`: move the focus to it.
   const [reveal, setReveal] = useState<{ id: string; focus: boolean }>();
-  const revealActive = (focus: boolean) => {
-    if (!activeSession) return;
+  const activeKeys = (() => {
+    if (!activeSession) return undefined;
     const a = activeSession.archived;
     const nv = nestWorkers(list, a);
-    const keys = revealKeys(activeSession.id, groupByCwd(nv.top, "", projects, a, worktrees, nv.workers), nv.workers, a);
-    if (!keys) return;
+    return revealKeys(activeSession.id, groupByCwd(nv.top, "", projects, a, worktrees, nv.workers), nv.workers, a);
+  })();
+  const revealActive = (focus: boolean) => {
+    const keys = activeKeys;
+    if (!activeSession || !keys) return;
+    const a = activeSession.archived;
     if (focus) {
       setQuery("");
       setArchived(a);
@@ -241,7 +248,7 @@ export function SessionList({
     });
     setReveal({ id: activeSession.id, focus });
   };
-  const known = !!activeSession;
+  const known = !!activeKeys;
   useEffect(() => {
     if (view.alwaysSelect && known) revealActive(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -253,18 +260,16 @@ export function SessionList({
     if (reveal.focus) row?.focus();
     setReveal(undefined);
   }, [reveal]);
-  const setAll = (keys: string[] | undefined) =>
-    setCollapsed(() => {
-      const next = new Set(keys);
+  const setAll = (update: (c: Set<string>) => Iterable<string>) =>
+    setCollapsed((c) => {
+      const next = new Set(update(c));
       saveCollapsed(next);
       return next;
     });
-  const expandAll = () => setAll(undefined);
-  const collapseAll = () => {
-    const mine = new Set(collapseKeys(groups, workers, archived));
-    // The other view's keys stay as they are.
-    setAll([...collapsed, ...mine]);
-  };
+  // The other view's worker group keys stay as they are.
+  const otherView = (k: string) => (archived ? k.startsWith("coordinator:") : k.startsWith("archived:"));
+  const expandAll = () => setAll((c) => [...c].filter(otherView));
+  const collapseAll = () => setAll((c) => [...c, ...collapseKeys(groups, workers, archived)]);
   // While searching every match shows, also in collapsed groups and rows.
   const isOpen = (key: string) => searching || !collapsed.has(key);
   const days = (all: SessionListItem[], depth: 0 | 1, key: string, name: string) => {
@@ -272,7 +277,7 @@ export function SessionList({
     // While searching every match shows; the active, running and needs-input sessions always do.
     const { shown: sessions, hidden } = query.trim()
       ? { shown: all, hidden: undefined }
-      : limitSessions(all, limits[key] ?? SHOWN, (s) => s.id === activeId || state(s) === "running" || state(s) === "needs_input" || !!workers.get(s.id)?.some((w) => state(w) === "running" || state(w) === "needs_input"));
+      : limitSessions(all, limits[key] ?? SHOWN, (s) => s.id === activeId || !!workers.get(s.id)?.some((w) => w.id === activeId) || state(s) === "running" || state(s) === "needs_input" || !!workers.get(s.id)?.some((w) => state(w) === "running" || state(w) === "needs_input"));
     return [
       ...(view.dayHeaders ? byDay(sessions, now) : sessions.length ? [{ title: "", sessions }] : []).map((day) => (
         <div key={day.title}>
@@ -338,6 +343,7 @@ export function SessionList({
       ),
     ];
   };
+  const emptyText = view.onlyActive ? "No active sessions" : "No sessions yet";
   const treeHint = searching ? " (clear the search first)" : "";
   const header = (
     <div className="flex h-7 items-center pl-1.5 max-md:h-11">
@@ -349,7 +355,7 @@ export function SessionList({
         {!!projects.length && (
           <>
             {!view.alwaysSelect && (
-              <IconButton label={`Select active session${known ? "" : " (no session tab is active)"}`} disabled={!known} onClick={() => revealActive(true)} testId="sidebar-select-active">
+              <IconButton label={`Select active session${known ? "" : " (no active session in the list)"}`} disabled={!known} onClick={() => revealActive(true)} testId="sidebar-select-active">
                 <LocateFixedIcon />
               </IconButton>
             )}
@@ -363,7 +369,7 @@ export function SessionList({
                 </IconButton>
               </>
             )}
-            <SidebarOptions view={view} onView={setView} archived={archived} onArchived={setArchived} onExpand={expandAll} onCollapse={collapseAll} treeDisabled={searching} narrow={narrow} />
+            <SidebarOptions view={view} onView={setView} archived={archived} onArchived={setArchived} onExpand={expandAll} onCollapse={collapseAll} treeHint={treeHint} narrow={narrow} />
           </>
         )}
       </div>
@@ -469,7 +475,7 @@ export function SessionList({
                   )}
                 </span>
               </h3>
-              {open && !g.sessions.length && !g.worktrees.length && <p className="py-1 pl-7 text-muted-foreground text-sm">No sessions yet</p>}
+              {open && !g.sessions.length && !g.worktrees.length && <p className="py-1 pl-7 text-muted-foreground text-sm">{emptyText}</p>}
               {open && days(g.sessions, 0, g.cwd, projectName(g.cwd))}
               {open &&
                 g.worktrees.map((r) => {
@@ -522,7 +528,7 @@ export function SessionList({
                           </span>
                         )}
                       </div>
-                      {rowOpen && !r.sessions.length && <p className="py-1 pl-12 text-muted-foreground text-sm">No sessions yet</p>}
+                      {rowOpen && !r.sessions.length && <p className="py-1 pl-12 text-muted-foreground text-sm">{emptyText}</p>}
                       {rowOpen && days(r.sessions, 1, rowKey(r.path), label)}
                     </div>
                   );
