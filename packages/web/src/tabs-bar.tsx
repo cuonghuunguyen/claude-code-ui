@@ -2,7 +2,7 @@
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
 // Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
-import { createContext, memo, use, useEffect, useId, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
+import { createContext, memo, use, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
 import { ChevronDownIcon, CircleAlertIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
@@ -133,7 +133,9 @@ export function TabsBar({
   if (col.mode !== store) setCol({ mode: store, set: loadCollapsed(store) });
   const stored = col.mode === store ? col.set : loadCollapsed(store);
   // Compact: every group counts as collapsed; the stored set is left alone, so turning compact off brings back the user's own.
-  const collapsed = compact ? new Set(groups.map(([k]) => k).filter(Boolean)) : stored;
+  // Memoised on the group keys: a new Set every render would re-run the reveal effect (observer, scrollIntoView) on every app render.
+  const compactKeys = compact ? JSON.stringify(groups.map(([k]) => k).filter(Boolean)) : "";
+  const collapsed = useMemo(() => (compact ? new Set<string>(JSON.parse(compactKeys || "[]")) : stored), [compact, compactKeys, stored]);
   const toggle = (cwd: string) => {
     const n = new Set(stored);
     if (n.delete(cwd)) return commit(n);
@@ -174,7 +176,7 @@ export function TabsBar({
     refocus.current = undefined;
     if (!r) return;
     if (r.group) return strip.current?.querySelector<HTMLElement>(`[data-group-chip="${CSS.escape(r.group)}"]`)?.focus();
-    (r.id ? strip.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(r.id)}"] [role="tab"]`) : newButton.current)?.focus();
+    ((r.id ? strip.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(r.id)}"] [role="tab"]`) : undefined) ?? newButton.current)?.focus();
   }, [tabs]);
   const closeKeepFocus = (id: string) => {
     refocus.current = { id: closeTab(tabs, id, activeId ?? id).active };
@@ -254,7 +256,7 @@ export function TabsBar({
         {groups.map(([cwd, ids]) => (
           // `contents`: groups are no boxes, tabs shrink in the strip as before. The chip is a button inside the tablist (a11y trade-off, no group role).
           <div key={cwd} role="none" className="contents" data-testid="tab-group">
-            {chips && cwd && <GroupChip cwd={cwd} ids={ids} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} menu={compact ? { activeId, onSelect, onClose } : undefined} />}
+            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} menu={compact ? { activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) } : undefined} />}
             {ids
               .filter((id) => !hidden(id))
               .map((id) => {
@@ -330,15 +332,16 @@ export function TabsBar({
 }
 
 /** Group header: project color, name, tab count; a collapsed group shows its most urgent tab state. */
-function GroupChip({ cwd, ids, info, collapsed, onToggle, onMoveTo, menu }: { menu?: { activeId?: string; onSelect: (id: string) => void; onClose: (id: string) => void }; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
+function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, menu }: { menu?: { activeId?: string; onSelect: (id: string) => void; onClose: (id: string) => void }; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
   const first = info(ids[0]!);
   const c = avatarColor(first.groupColor ?? cwd, use(AvatarColors));
-  const states = ids.map((id) => status(id, info(id)));
+  const states = hiddenIds.map((id) => status(id, info(id)));
   const urgent = states.includes("needs_input") ? "needs_input" : states.includes("running") ? "running" : states.includes("unread") ? "unread" : undefined;
   const name = first.groupLabel ?? projectName(cwd);
   const sub = first.groupSub;
   const pathId = useId();
   const shown = collapsed || !!menu;
+  const [open, setOpen] = useState(false);
   const props = {
     "aria-describedby": pathId,
     "aria-label": `${name}${sub ? ` (${sub})` : ""}, ${ids.length} ${ids.length === 1 ? "tab" : "tabs"}${urgent ? `, ${STATUS_LABEL[urgent]}` : ""}`,
@@ -348,6 +351,7 @@ function GroupChip({ cwd, ids, info, collapsed, onToggle, onMoveTo, menu }: { me
     style: { "--av": `var(--avatar-${c})` } as CSSProperties,
     draggable: true,
     onDragStart: (e: DragEvent) => {
+      setOpen(false);
       e.dataTransfer.setData(GROUP_DRAG_TYPE, cwd);
       e.dataTransfer.effectAllowed = "move";
     },
@@ -376,7 +380,8 @@ function GroupChip({ cwd, ids, info, collapsed, onToggle, onMoveTo, menu }: { me
   if (menu)
     // Compact: a menu button (click, Enter, Space, ArrowDown; hover after 300 ms). A path tooltip would fight the hover menu, so the menu header carries name and path.
     return (
-      <Menu.Root>
+      // Not modal: a modal menu opened by the press puts a backdrop over the other chips, and a chip drag could not drop. A drag start closes the menu.
+      <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
         <Menu.Trigger {...props} openOnHover delay={300}>
           {body}
         </Menu.Trigger>
