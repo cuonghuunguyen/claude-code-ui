@@ -120,3 +120,16 @@ it("the filter takes focus when the dialog opens, not on every edit or reset", a
   expect(document.activeElement).not.toBe(q("shortcuts-filter"));
 });
 
+
+it("the filter text is cleared when the dialog closes", async () => {
+  const filter = q("shortcuts-filter") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(filter, "term");
+    filter.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(q("shortcut-row-sidebar.toggle")).toBeNull();
+  await act(async () => root.render(<ShortcutsDialog open={false} onClose={onClose} />));
+  await act(async () => root.render(<ShortcutsDialog open onClose={onClose} />));
+  expect((q("shortcuts-filter") as HTMLInputElement).value).toBe("");
+  expect(q("shortcut-row-sidebar.toggle")).not.toBeNull();
+});

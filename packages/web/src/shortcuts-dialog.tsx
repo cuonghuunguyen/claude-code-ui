@@ -47,7 +47,7 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
 
   const stop = () => (setRecording(undefined), setPending(undefined), setError(undefined));
   useEffect(() => {
-    if (!open) stop();
+    if (!open) (stop(), setFilter(""));
   }, [open]);
 
   // The recorder takes the next key press before the dialog or the app sees it.
