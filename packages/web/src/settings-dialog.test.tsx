@@ -18,6 +18,7 @@ afterEach(() => {
 async function render({ failGet = false } = {}) {
   const onTabGrouping = vi.fn();
   const onTabCompact = vi.fn();
+  const onShortcuts = vi.fn();
   let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false } };
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
@@ -42,6 +43,7 @@ async function render({ failGet = false } = {}) {
     return (
       <SettingsDialog
         open={open}
+        onShortcuts={onShortcuts}
         request={request as never}
         onClose={() => set(false)}
         tabCompact={compact}
@@ -60,7 +62,7 @@ async function render({ failGet = false } = {}) {
   root = createRoot(el);
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
-  return { calls, q, prompt, onTabGrouping, onTabCompact };
+  return { calls, q, prompt, onTabGrouping, onTabCompact, onShortcuts };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -172,4 +174,11 @@ it("Default diff view is a per-browser choice: picking Uncommitted saves it and 
   expect(q("settings-diff-mode")?.textContent).toContain("Uncommitted");
   expect(calls.some((c) => c.type === "settings.set")).toBe(false);
   localStorage.removeItem("claude-ui.diffMode");
+});
+
+it("the Keyboard section's Customize button opens the shortcuts dialog", async () => {
+  const { q, onShortcuts } = await render();
+  expect(q("settings-keyboard")?.textContent).toContain("Keyboard");
+  await act(async () => q("settings-shortcuts")!.click());
+  expect(onShortcuts).toHaveBeenCalledOnce();
 });
