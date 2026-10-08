@@ -102,7 +102,7 @@ export const STEPS: GuideStep[] = [
     alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph.", keys: ["panel.toggle"] },
     title: "Files",
     body: "Browse and edit the project's files. @ in the prompt mentions a file.",
-    keys: ["filetree.toggle"],
+    keys: ["pane.files"],
     side: "left",
   },
   {
@@ -112,6 +112,7 @@ export const STEPS: GuideStep[] = [
     alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph.", keys: ["panel.toggle"] },
     title: "Changes",
     body: "Every file Claude edited, as a diff. Switch to Uncommitted or Against branch for git diffs.",
+    keys: ["pane.changes"],
     side: "left",
   },
   {
@@ -122,6 +123,7 @@ export const STEPS: GuideStep[] = [
     alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph.", keys: ["panel.toggle"] },
     title: "Git graph",
     body: "Commits of all branches. Pick one to see its files and diffs.",
+    keys: ["pane.graph"],
     side: "left",
   },
   {

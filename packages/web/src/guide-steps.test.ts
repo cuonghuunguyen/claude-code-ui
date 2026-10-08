@@ -71,7 +71,7 @@ describe("chapter Your session", () => {
   });
   it("keys: only commands the app has today", () => {
     expect(stepById("tabs")!.keys).toEqual(["tab.next", "tab.close"]);
-    expect(stepById("files")!.keys).toEqual(["filetree.toggle"]);
-    expect(stepById("changes")!.keys).toBeUndefined();
+    expect(stepById("files")!.keys).toEqual(["pane.files"]);
+    expect(stepById("changes")!.keys).toEqual(["pane.changes"]);
   });
 });

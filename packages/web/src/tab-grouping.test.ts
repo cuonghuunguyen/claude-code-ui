@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { Worktree } from "@claude-ui/protocol";
-import { loadTabGrouping, saveTabGrouping, tabGroup } from "./tab-grouping.ts";
+import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup } from "./tab-grouping.ts";
 
 const wt: Record<string, Worktree[]> = {
   "/r/acme": [
@@ -52,4 +52,19 @@ it("the setting defaults to by project, survives a reload, and garbage falls bac
   expect(localStorage.getItem("claude-ui.tabGrouping")).toBeNull();
   localStorage.setItem("claude-ui.tabGrouping", "bogus");
   expect(loadTabGrouping()).toBe("project");
+});
+
+it("compact tabs: off by default, kept per browser, and storage failures do not throw", () => {
+  expect(loadTabCompact()).toBe(false);
+  saveTabCompact(true);
+  expect(localStorage.getItem("claude-ui.tabCompact")).toBe("1");
+  expect(loadTabCompact()).toBe(true);
+  saveTabCompact(false);
+  expect(localStorage.getItem("claude-ui.tabCompact")).toBeNull();
+  const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
+  const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+  expect(loadTabCompact()).toBe(false);
+  expect(() => saveTabCompact(true)).not.toThrow();
+  get.mockRestore();
+  set.mockRestore();
 });
