@@ -164,6 +164,61 @@ it("plain typing in the prompt box runs no shortcut", async () => {
   expect(document.querySelector('[data-testid="palette"]')).toBeNull();
 });
 
+it("Ctrl+Shift+S opens the new-session tab; Alt+1 shows the first tab and Alt+9 the last, by physical key", async () => {
+  await press({ key: "S", code: "KeyS", ctrlKey: true, shiftKey: true });
+  expect(location.hash).toBe("#new");
+  await press({ key: "+", code: "Digit1", altKey: true });
+  expect(location.hash).toBe(`#${ID}`);
+  await press({ key: "9", code: "Digit9", altKey: true });
+  expect(location.hash).toBe("#new");
+  await press({ key: "2", code: "Digit2", altKey: true });
+  expect(location.hash).toBe("#new");
+});
+
+it("Alt+Shift+T reopens the tab Ctrl+Alt+W closed, at its place", async () => {
+  await press({ key: "S", code: "KeyS", ctrlKey: true, shiftKey: true });
+  await press({ key: "1", code: "Digit1", altKey: true });
+  await press({ key: "w", code: "KeyW", ctrlKey: true, altKey: true });
+  expect(location.hash).toBe("#new");
+  await press({ key: "T", code: "KeyT", altKey: true, shiftKey: true });
+  expect(location.hash).toBe(`#${ID}`);
+  await press({ key: "9", code: "Digit9", altKey: true });
+  expect(location.hash).toBe("#new");
+});
+
+it("Ctrl+/ opens Keyboard shortcuts; Ctrl+Shift+E, G show Files and Changes", async () => {
+  await press({ key: "/", code: "Slash", ctrlKey: true });
+  expect(document.querySelector('[data-testid="shortcuts-dialog"]')).not.toBeNull();
+  await act(async () => document.querySelector<HTMLElement>('[aria-label="Close dialog"]')!.click());
+  await press({ key: "G", code: "KeyG", ctrlKey: true, shiftKey: true });
+  expect(sideTab()).toMatch(/changes/i);
+  await press({ key: "E", code: "KeyE", ctrlKey: true, shiftKey: true });
+  expect(sideTab()).toMatch(/files/i);
+});
+
+it("prefix: Alt+A shows the hint, then c opens a new session tab; Esc cancels and nothing else happens", async () => {
+  const box = el.querySelector<HTMLTextAreaElement>('textarea[aria-label="Prompt"]')!;
+  const hint = () => document.querySelector('[data-testid="prefix-hint"]')!.textContent;
+  await press({ key: "a", code: "KeyA", altKey: true }, box);
+  expect(hint()).toContain("New session");
+  await press({ key: "c", code: "KeyC" }, box);
+  expect(hint()).toBe("");
+  expect(location.hash).toBe("#new");
+  await press({ key: "a", code: "KeyA", altKey: true }, document.body);
+  const esc = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  await act(async () => void document.body.dispatchEvent(esc));
+  expect(esc.defaultPrevented).toBe(true);
+  expect(hint()).toBe("");
+});
+
+it("the terminal button label follows the binding", async () => {
+  expect(el.querySelector('[data-testid="terminal-toggle"]')!.getAttribute("aria-label")).toBe("Toggle terminal (Ctrl+`)");
+  const { bind, resetAll } = await import("./keymap.ts");
+  await act(async () => bind("terminal.toggle", "mod+alt+j"));
+  expect(el.querySelector('[data-testid="terminal-toggle"]')!.getAttribute("aria-label")).toBe("Toggle terminal (Ctrl+Alt+J)");
+  await act(async () => resetAll());
+});
+
 it("Focus prompt on a narrow screen switches from the files pane back to the session", async () => {
   width = 800;
   await act(async () => el.querySelector<HTMLElement>('[data-testid="pane-files"]')!.click());
