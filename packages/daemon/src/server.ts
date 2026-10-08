@@ -106,8 +106,60 @@ function real(path: string) {
 
 /** Bytes read from a transcript's end to find its last message; more than a few large tool results. */
 const TAIL_BYTES = 256 * 1024;
-/** How long session.list reuses a project's `git worktree list` (worktreesOf). */
-const WORKTREE_LIST_MS = 30_000;
+/**
+ * `cwd`'s own git dir and the one its worktrees share; undefined without a readable `cwd/.git`. In a linked worktree `.git`
+ * is a file (`gitdir: <main>/.git/worktrees/<name>`) whose git dir names the shared one in `commondir`.
+ */
+function gitDirsOf(cwd: string): { own: string; common: string } | undefined {
+  const dotGit = join(cwd, ".git");
+  try {
+    if (statSync(dotGit).isDirectory()) return { own: dotGit, common: dotGit };
+    const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
+    if (!gitdir) return undefined;
+    const own = resolve(cwd, gitdir.trim());
+    try {
+      return { own, common: resolve(own, readFileSync(join(own, "commondir"), "utf8").trim()) };
+    } catch {
+      return { own, common: own };
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What `git worktree list` of `cwd` reads, from file stats only (no process): the shared HEAD, the worktrees folder and each
+ * worktree's HEAD and checkout. A worktree added or removed (from a terminal too), a checkout or a moved worktree changes it;
+ * a commit on a branch does not (the list shows branch names). "-" without a readable `.git`.
+ */
+function worktreeStamp(cwd: string) {
+  const dirs = gitDirsOf(cwd);
+  if (!dirs) return "-";
+  const stamp = (p: string) => {
+    try {
+      const st = statSync(p);
+      return `${st.mtimeMs}:${st.size}:${st.ino}`;
+    } catch {
+      return "-";
+    }
+  };
+  const checkout = (gitdirFile: string) => {
+    try {
+      return stamp(readFileSync(gitdirFile, "utf8").trim());
+    } catch {
+      return "-";
+    }
+  };
+  const wts = join(dirs.common, "worktrees");
+  let names: string[] = [];
+  try {
+    names = readdirSync(wts).sort();
+  } catch {
+    // No linked worktree yet.
+  }
+  return [dirs.common, stamp(join(dirs.common, "HEAD")), stamp(wts), ...names.flatMap((n) => [n, stamp(join(wts, n, "HEAD")), checkout(join(wts, n, "gitdir"))])].join("|");
+}
+
 /** Transcript path → last message time for the file version (mtime, size) it was read from. */
 /** `listed`: the transcript scan's mtime and size when the file was read (lastMessageAt skips the open while they hold). */
 const lastMessageCache = new Map<string, { version: string; listed?: string; at: number | undefined }>();
@@ -463,28 +515,21 @@ export function createDaemon(opts: {
   }
 
   /**
-   * `git worktree list` of each project, reused by session.list for WORKTREE_LIST_MS: a list runs on every turn start and end,
-   * and starting a process blocks the event loop (on Windows tens of ms each), so one per project per list stalled every
-   * reply with a few dozen projects. Worktrees this daemon creates or removes show at once; others within that time: an older
-   * list is still answered while the next one is read in the background (a list never waits for dozens of git processes).
+   * `git worktree list` of each project, reused by session.list while its worktreeStamp holds: a list runs on every turn start
+   * and end, and starting a process blocks the event loop (on Windows tens of ms each), so one per project per list stalled
+   * every reply with a few dozen projects. The stamp is file stats only, so every list is current (terminal changes too).
    */
-  const worktreeLists = new Map<string, { at: number; list: Promise<Worktree[] | null>; git: boolean; refreshing?: boolean }>();
+  const worktreeLists = new Map<string, { stamp: string; list: Promise<Worktree[] | null> }>();
   const worktreesOf = (cwd: string) => {
+    // Taken before the read: a change during it gives the next list another stamp, which reads again.
+    const stamp = worktreeStamp(cwd);
     const hit = worktreeLists.get(cwd);
-    // A `git init` (or a removed .git) in the project folder is read at once.
-    const git = existsSync(join(cwd, ".git"));
-    if (!hit || hit.git !== git) {
-      const list = listWorktrees(cwd);
-      worktreeLists.set(cwd, { at: Date.now(), list, git });
-      return list;
-    }
-    if (Date.now() - hit.at >= WORKTREE_LIST_MS && !hit.refreshing) {
-      hit.refreshing = true;
-      const list = listWorktrees(cwd);
-      // A create or remove meanwhile cleared the map: this read may predate it.
-      void list.then(() => worktreeLists.get(cwd) === hit && worktreeLists.set(cwd, { at: Date.now(), list, git }), () => (hit.refreshing = false));
-    }
-    return hit.list;
+    if (hit?.stamp === stamp) return hit.list;
+    const entry = { stamp, list: listWorktrees(cwd) };
+    worktreeLists.set(cwd, entry);
+    // A failed read of a git folder (spawn error, killed process) is not kept: the next list reads again.
+    void entry.list.then((l) => l === null && stamp !== "-" && worktreeLists.get(cwd) === entry && worktreeLists.delete(cwd));
+    return entry.list;
   };
 
   /**
@@ -502,7 +547,6 @@ export function createDaemon(opts: {
   const createIn = async (cwd: string, o: Pick<CreateWorktreeOptions, "name" | "branch" | "base" | "onCreated"> = {}) => {
     // The new path is no project: a session created in it (worker_start) must not add it.
     const r = await createWorktree(cwd, { ...o, allowed: (p) => inRoots(real(p) ?? p), claudeDir, onCreated: (r) => { worktreePaths.add(r.path); o.onCreated?.(r); } });
-    worktreeLists.clear();
     broadcast({ type: "sessions.changed" });
     return r;
   };
@@ -525,7 +569,6 @@ export function createDaemon(opts: {
         // Its terminals too: a shell running in the folder keeps Windows from deleting it ("Permission denied").
         await terminals.closeIn(isRemoving);
       });
-      worktreeLists.clear();
       broadcast({ type: "sessions.changed" });
     } finally {
       removing.delete(path);

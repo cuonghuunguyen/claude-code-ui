@@ -1178,37 +1178,83 @@ describe("daemon", () => {
     }
   });
 
-  it("session.list reuses a project's git worktree list for a while (no git process per list); worktree.create and remove refresh it at once", async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "wtcache-")));
+  /** A repository at `<root>/repo` with one commit, added as the only project of a daemon whose transcripts are `listed`. */
+  const repoDaemon = async (prefix: string, listed: unknown[] = []) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
     const repo = join(root, "repo");
-    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+    const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
     mkdirSync(repo);
-    git("init", "-q", "-b", "main");
-    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init");
+    git(repo, "init", "-q", "-b", "main");
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init");
+    const projects = added(repo);
     const d = createDaemon({
       webRoot,
       token,
       roots: [root],
       query: fakeQuery as never,
-      projects: added(repo),
-      history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+      projects,
+      history: { listSessions: (async () => listed) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
     });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
+    type L = { result: { projects: string[]; worktrees: Record<string, { path: string; branch?: string }[]>; sessions: { id: string }[] } };
+    const list = async () => {
+      const r = ((await c.request({ type: "session.list" })) as L).result;
+      return { projects: r.projects, worktrees: r.worktrees[repo]?.map((w) => `${w.path}@${w.branch}`) ?? [], sessions: r.sessions.map((s) => s.id) };
+    };
+    return { root, repo, git, projects, d, c, list };
+  };
+
+  it("session.list shows a worktree added or removed from a terminal, and a branch checkout, on the very next list", async () => {
+    const listed: unknown[] = [];
+    const { root, repo, git, d, list } = await repoDaemon("wtstamp-", listed);
     try {
-      const c = await client((d.address() as AddressInfo).port);
-      type L = { result: { worktrees: Record<string, { path: string }[]> } };
-      const paths = async () => ((await c.request({ type: "session.list" })) as L).result.worktrees[repo]?.map((w) => w.path) ?? [];
-      expect(await paths()).toEqual([repo]);
-      // Made outside the daemon (a terminal): the cached list does not show it yet.
-      git("worktree", "add", "-q", "-b", "outside", join(root, "wt-outside"));
-      expect(await paths()).toEqual([repo]);
-      // The daemon's own create refreshes the list: both show.
+      const wt = join(root, "wt-outside");
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
+      git(repo, "worktree", "add", "-q", "-b", "outside", wt);
+      // A session in it (from the CLI) shows at once too: it is a worktree of the project.
+      listed.push({ sessionId: "11111111-2222-4333-8444-555555555555", summary: "in wt", lastModified: Date.now(), cwd: wt });
+      expect(await list()).toMatchObject({ worktrees: [`${repo}@main`, `${wt}@outside`], sessions: ["11111111-2222-4333-8444-555555555555"] });
+      git(repo, "checkout", "-q", "-b", "renamed-main");
+      git(wt, "checkout", "-q", "-b", "renamed-outside");
+      expect((await list()).worktrees).toEqual([`${repo}@renamed-main`, `${wt}@renamed-outside`]);
+      git(repo, "worktree", "remove", wt);
+      expect(await list()).toMatchObject({ worktrees: [`${repo}@renamed-main`], sessions: [] });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.list reuses a project's git worktree list while its git files are unchanged; worktree.create and remove show at once", async () => {
+    const { repo, git, d, c, list } = await repoDaemon("wtcache-");
+    try {
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
+      // Unchanged files: the cached list is answered (a commit does not touch HEAD, so the read list stays).
+      git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "second");
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
       const made = join(repo, ".claude", "worktrees", "feat");
       expect(await c.request({ type: "worktree.create", cwd: repo, name: "feat" })).toMatchObject({ result: { path: made } });
-      expect(await paths()).toEqual([repo, made, join(root, "wt-outside")]);
+      expect((await list()).worktrees.map((w) => w.split("@")[0])).toEqual([repo, made]);
       expect(await c.request({ type: "worktree.remove", cwd: repo, path: made })).toMatchObject({ type: "reply" });
-      expect(await paths()).toEqual([repo, join(root, "wt-outside")]);
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
     } finally {
+      d.close();
+    }
+  });
+
+  it("a git worktree list that failed is read again on the next session.list, not reused", async () => {
+    const { repo, d, list } = await repoDaemon("wtfail-");
+    const before = process.env.GIT_DIR;
+    try {
+      // git fails without any change to the repository's files (as a killed process or a spawn error would).
+      process.env.GIT_DIR = join(repo, "no-such-git-dir");
+      expect((await list()).worktrees).toEqual([]);
+      if (before === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = before;
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
+    } finally {
+      if (before === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = before;
       d.close();
     }
   });
