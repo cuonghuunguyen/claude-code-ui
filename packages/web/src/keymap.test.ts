@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, expect, it, vi } from "vitest";
+import { matchesKey } from "./shortcuts.ts";
 import { bind, bindingError, conflictOf, isChanged, parseOverrides, resetAll, resetBinding, specFromEvent, specOf, leavesTerminal } from "./keymap.ts";
 
 const ev = (key: string, init: KeyboardEventInit = {}) => new KeyboardEvent("keydown", { key, ...init });
@@ -74,6 +75,25 @@ it("the recorder turns a key press into a spec", () => {
   expect(specFromEvent(ev("∑", { metaKey: true, altKey: true, code: "KeyW" }), true)).toBe("mod+alt+w");
   expect(specFromEvent(ev("ArrowLeft", { ctrlKey: true, altKey: true }), false)).toBe("mod+alt+arrowleft");
   expect(specFromEvent(ev("l", { ctrlKey: true, code: "KeyL" }), true)).toBe("ctrl+l");
+});
+
+it("outside macOS the recorder stores the typed letter, so the matcher fires on the same press (QWERTZ, AZERTY, Dvorak)", () => {
+  const presses: [string, string][] = [["z", "KeyY"], ["a", "KeyQ"], ["j", "KeyC"]];
+  for (const [key, code] of presses) {
+    const e = ev(key, { ctrlKey: true, shiftKey: true, code });
+    const spec = specFromEvent(e, false)!;
+    expect(spec).toBe(`mod+shift+${key}`);
+    expect(matchesKey(spec, e, false)).toBe(true);
+  }
+  const alt = ev("w", { altKey: true, code: "KeyZ" });
+  expect(specFromEvent(alt, false)).toBe("alt+w");
+  expect(matchesKey("alt+w", alt, false)).toBe(true);
+});
+
+it("the conflict check compares the typed letter on QWERTZ", () => {
+  bind("sidebar.toggle", "mod+shift+z");
+  const spec = specFromEvent(ev("z", { ctrlKey: true, shiftKey: true, code: "KeyY" }), false)!;
+  expect(conflictOf("panel.toggle", spec, false)?.id).toBe("sidebar.toggle");
 });
 
 it("terminal: tab keys, palette, terminal and prefix keys leave xterm; Ctrl+letter stays with the shell", () => {

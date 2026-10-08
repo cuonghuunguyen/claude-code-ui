@@ -80,10 +80,10 @@ export function conflictOf(id: string, spec: string, mac = IS_MAC): { id?: strin
   return undefined;
 }
 
-/** The spec of a key press for the recorder; undefined for a modifier alone. */
+/** The spec of a key press for the recorder; undefined for a modifier alone. A letter is the typed one (`e.key`), as matchesKey compares it, so a rebind works on QWERTZ, AZERTY and Dvorak; only macOS Option, which changes `e.key`, records the physical key. */
 export function specFromEvent(e: KeyboardEvent, mac = IS_MAC) {
   if (["Control", "Shift", "Alt", "Meta", "AltGraph"].includes(e.key)) return undefined;
-  const key = /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : /^Digit\d$/.test(e.code) ? e.code.slice(5) : e.code === "Backquote" ? "`" : e.key === " " ? "space" : e.key.toLowerCase();
+  const key = mac && e.altKey && /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : /^Digit\d$/.test(e.code) ? e.code.slice(5) : e.code === "Backquote" ? "`" : e.key === " " ? "space" : e.key.toLowerCase();
   const mods = [e.ctrlKey && !mac && "mod", e.metaKey && mac && "mod", e.ctrlKey && mac && "ctrl", e.metaKey && !mac && "meta", e.altKey && "alt", e.shiftKey && "shift"].filter(Boolean);
   return [...mods, key].join("+");
 }
