@@ -755,13 +755,15 @@ export function createDaemon(opts: {
       modelList().catch(() => {}).then(() => (clearTimeout(t), done()));
     });
     const items = new Map<string, SessionListItem>();
+    const all = await transcripts();
+    // One read of sessions.json per list: settings.get() reads the file again on every call (json-file.ts), once per transcript here.
+    const linked = new Map(settings.entries());
     // A coordinator is a session with a worker.
-    const coordinators = new Set(settings.entries().flatMap(([, l]) => (l.coordinatorId && l.name ? [l.coordinatorId] : [])));
+    const coordinators = new Set([...linked.values()].flatMap((l) => (l.coordinatorId && l.name ? [l.coordinatorId] : [])));
     const links = (id: string) => {
-      const l = settings.get(id);
+      const l = linked.get(id);
       return { ...(coordinators.has(id) && { coordinator: true as const }), ...(l?.coordinatorId && l.name && { coordinatorId: l.coordinatorId, workerName: l.name }) };
     };
-    const all = await transcripts();
     // Entries of sessions deleted outside this daemon (CLI, file removed): no transcript and not live (session-settings.ts prune).
     const known = new Set(all.map((t) => t.sessionId));
     saveSettings(() => settings.prune((id) => known.has(id) || sessions.has(id)));
