@@ -105,3 +105,18 @@ it("Reset all restores every default", async () => {
   await click("shortcuts-reset-all");
   expect(specOf("sidebar.toggle", false)).toBe("mod+b");
 });
+
+const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 20))));
+
+it("the filter takes focus when the dialog opens, not on every edit or reset", async () => {
+  await settle();
+  expect(document.activeElement).toBe(q("shortcuts-filter"));
+  (q("shortcut-edit-sidebar.toggle") as HTMLElement).focus();
+  await click("shortcut-edit-sidebar.toggle");
+  await settle();
+  expect(document.activeElement).not.toBe(q("shortcuts-filter"));
+  await press({ key: "b", code: "KeyB", ctrlKey: true, altKey: true });
+  await settle();
+  expect(document.activeElement).not.toBe(q("shortcuts-filter"));
+});
+

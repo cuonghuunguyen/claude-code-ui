@@ -1,5 +1,5 @@
 // Keyboard shortcuts dialog (docs/spec.md "Keyboard shortcuts"): every shortcut by group, a filter, and a recorder to rebind one (per browser).
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ConfigDialog } from "./config-dialog.tsx";
 import { bind, bindingError, conflictOf, isChanged, resetAll, resetBinding, specFromEvent, specOf, useKeymap } from "./keymap.ts";
 import { PREFIX_KEYS } from "./leader.ts";
@@ -36,6 +36,14 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
   const [recording, setRecording] = useState<string>();
   const [pending, setPending] = useState<{ id: string; spec: string; with: { id?: string; title: string } }>();
   const [error, setError] = useState<string>();
+
+  const filterRef = useRef<HTMLInputElement>(null);
+  // The filter takes the focus once when the dialog opens (after the dialog's own focus move), not on each render.
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => filterRef.current?.focus(), 0);
+    return () => clearTimeout(t);
+  }, [open]);
 
   const stop = () => (setRecording(undefined), setPending(undefined), setError(undefined));
   useEffect(() => {
@@ -93,8 +101,7 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
     >
       <input
         type="search"
-        // The filter takes the focus on open (after the dialog's own focus move).
-        ref={(n) => void (n && setTimeout(() => n.isConnected && n.focus(), 0))}
+        ref={filterRef}
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
         placeholder="Filter by name or key"
