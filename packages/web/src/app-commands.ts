@@ -1,7 +1,8 @@
 // The app's commands: palette rows and the shortcuts that run them. Only commands that apply right now are listed.
 import type { Effort, ModelInfo, PermissionMode, SessionListItem } from "@claude-ui/protocol";
 import type { PaletteItem } from "./palette.tsx";
-import { KEYS, matchesKey } from "./shortcuts.ts";
+import { matchesKey, shortcutById } from "./shortcuts.ts";
+import { specOf } from "./keymap.ts";
 import { timeAgo } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
 import { EFFORT_LABEL, MODE_LABEL, effortOptions } from "./toolbar.tsx";
@@ -34,6 +35,17 @@ export type CommandContext = {
   toggleSidePanel: () => void;
   toggleFileTree: () => void;
   toggleTerminal: () => void;
+  /** Shows the side panel pane (files, changes, git graph); where it already shows, focus goes back to the prompt. */
+  showPane: (pane: "files" | "changes" | "graph") => void;
+  /** Adds a terminal to the terminal panel (opens the panel first). */
+  newTerminal: () => void;
+  /** Reopens the tab closed last that still exists; false when there is none. */
+  reopenTab: () => void;
+  canReopen: boolean;
+  /** Opens the Keyboard shortcuts dialog. */
+  openShortcuts: () => void;
+  /** Git graph needs a repository. */
+  isGit?: boolean;
   /** `id`: the tab just selected; default the shown one. */
   focusPrompt: (id?: string) => void;
   setModel: (model: string) => void;
@@ -62,21 +74,31 @@ export function appCommands(c: CommandContext): PaletteItem[] {
   // The prompt box that had focus is hidden with its tab; focus goes to the shown tab's prompt.
   const go = (id: string) => (c.selectTab(id), c.focusPrompt(id));
   const efforts = s ? effortOptions(c.models, s.model) : [];
-  const cmd = (id: string, title: string, run: () => void, keys?: string): PaletteItem => ({ id, group: "Commands", title, keys, run });
-  const page = (id: string, title: string, placeholder: string, items: PaletteItem[], keys?: string): PaletteItem => ({ id, group: "Commands", title, keys, page: { placeholder, items } });
+  // The shortcut's title and its current binding come from the registry (shortcuts.ts, keymap.ts).
+  const cmd = (id: string, title: string, run: () => void, searchOnly?: boolean): PaletteItem => ({ id, group: "Commands", title, keys: specOf(id), run, searchOnly });
+  const page = (id: string, title: string, placeholder: string, items: PaletteItem[], keys = specOf(id)): PaletteItem => ({ id, group: "Commands", title, keys, page: { placeholder, items } });
   const items: (PaletteItem | false | undefined)[] = [
-    cmd("session.new", "New session", c.newSession, KEYS.newSession),
+    cmd("session.new", "New session", c.newSession),
     c.newWorktree && cmd("worktree.new", "New worktree…", c.newWorktree),
-    c.canQuickOpen && cmd("file.open", "Open file", c.quickOpen, KEYS.quickOpen),
-    c.tabs.length > 1 && cmd("tab.next", "Next tab", () => go(step(1)), KEYS.nextTab),
-    c.tabs.length > 1 && cmd("tab.prev", "Previous tab", () => go(step(-1)), KEYS.prevTab),
-    at >= 0 && cmd("tab.close", "Close tab", () => c.closeTab(c.activeId!), KEYS.closeTab),
-    cmd("settings.open", "Open settings", c.openSettings, KEYS.settings),
-    cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar, KEYS.sidebar),
-    s && !s.draft && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel, KEYS.sidePanel),
-    s && !s.draft && cmd("filetree.toggle", "Toggle file tree", c.toggleFileTree, KEYS.fileTree),
-    s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal, KEYS.terminal),
-    s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt(), KEYS.focusPrompt),
+    c.canQuickOpen && cmd("file.open", "Open file", c.quickOpen),
+    c.tabs.length > 1 && cmd("tab.next", "Next tab", () => go(step(1))),
+    c.tabs.length > 1 && cmd("tab.prev", "Previous tab", () => go(step(-1))),
+    at >= 0 && cmd("tab.close", "Close tab", () => c.closeTab(c.activeId!)),
+    c.canReopen && cmd("tab.reopen", "Reopen closed tab", c.reopenTab),
+    // Tab N: only for tabs that exist; found by typing "go to tab".
+    ...Array.from({ length: Math.min(8, c.tabs.length) }, (_, i) => cmd(`tab.goto${i + 1}`, `Go to tab ${i + 1}`, () => go(c.tabs[i]!), true)),
+    c.tabs.length > 0 && cmd("tab.gotoLast", "Go to last tab", () => go(c.tabs.at(-1)!), true),
+    cmd("shortcuts.open", "Keyboard shortcuts", c.openShortcuts),
+    cmd("settings.open", "Open settings", c.openSettings),
+    cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar),
+    s && !s.draft && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel),
+    s && !s.draft && cmd("filetree.toggle", "Toggle file tree", c.toggleFileTree),
+    s && !s.draft && cmd("pane.files", "Show files", () => c.showPane("files")),
+    s && !s.draft && cmd("pane.changes", "Show changes", () => c.showPane("changes")),
+    s && !s.draft && c.isGit && cmd("pane.graph", "Show git graph", () => c.showPane("graph")),
+    s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
+    s && !s.draft && cmd("terminal.new", "New terminal", c.newTerminal),
+    s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
     s &&
       c.models.length > 0 &&
       page(
@@ -84,7 +106,6 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         "Change model",
         "Choose model",
         c.models.map((m) => ({ id: `model:${m.value}`, group: "Models", title: m.displayName, description: m.description, checked: m.value === s.model, run: () => c.setModel(m.value) })),
-        KEYS.model,
       ),
     s &&
       efforts.length > 0 &&
@@ -114,7 +135,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         "Rewind to before which message?",
         [...s.prompts].reverse().map((p) => ({ id: `rewind:${p.id}`, group: "Messages, newest first", title: firstLine(p.text), run: () => c.rewind(p.id) })),
       ),
-    s?.running && cmd("session.stop", "Stop", c.stop, "escape"),
+    s?.running && { ...cmd("session.stop", "Stop", c.stop), keys: "escape" },
     // The extension's command menu section "Customize".
     c.openMcp && { id: "mcp.open", group: "Customize", title: "MCP servers", description: "Configure Model Context Protocol servers", run: c.openMcp },
     c.openSkills && { id: "skills.open", group: "Customize", title: "Slash commands", description: "Browse slash commands", run: c.openSkills },
@@ -140,5 +161,5 @@ export function appCommands(c: CommandContext): PaletteItem[] {
 
 /** The command a key press runs: a page command opens the palette on its page. Esc and Shift+Tab stay with their own handlers. */
 export const shortcutFor = (items: PaletteItem[], e: KeyboardEvent) =>
-  items.find((i) => i.keys && Object.values(KEYS).includes(i.keys as never) && matchesKey(i.keys, e));
+  items.find((i) => i.keys && shortcutById(i.id) && matchesKey(i.keys, e));
 

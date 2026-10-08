@@ -17,6 +17,8 @@ afterEach(() => {
 
 async function render({ failGet = false } = {}) {
   const onTabGrouping = vi.fn();
+  const onTabCompact = vi.fn();
+  const onShortcuts = vi.fn();
   let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false } };
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
@@ -37,11 +39,18 @@ async function render({ failGet = false } = {}) {
   function Host() {
     const [open, set] = useState(true);
     const [grouping, setGrouping] = useState<TabGrouping>("project");
+    const [compact, setCompact] = useState(false);
     return (
       <SettingsDialog
         open={open}
+        onShortcuts={onShortcuts}
         request={request as never}
         onClose={() => set(false)}
+        tabCompact={compact}
+        onTabCompact={(on) => {
+          onTabCompact(on);
+          setCompact(on);
+        }}
         tabGrouping={grouping}
         onTabGrouping={(g) => {
           onTabGrouping(g);
@@ -53,7 +62,7 @@ async function render({ failGet = false } = {}) {
   root = createRoot(el);
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
-  return { calls, q, prompt, onTabGrouping };
+  return { calls, q, prompt, onTabGrouping, onTabCompact, onShortcuts };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -88,6 +97,25 @@ it("an out-of-range cap shows the daemon's error in a Banner", async () => {
   });
   await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   expect(q("banner-error")?.textContent).toContain("Maximum workers must be a whole number");
+});
+
+it("Compact tabs is a switch that applies at once, and is disabled with a hint while grouping is None", async () => {
+  const { q, calls, onTabCompact } = await render();
+  const sw = q("settings-tabs-compact")!;
+  expect(sw.getAttribute("role")).toBe("switch");
+  expect(sw.getAttribute("aria-checked")).toBe("false");
+  expect(document.getElementById("settings-tabs-compact-hint")?.textContent).toContain("Show each group as one chip");
+  await act(async () => sw.click());
+  expect(onTabCompact).toHaveBeenCalledWith(true);
+  expect(q("settings-tabs-compact")!.getAttribute("aria-checked")).toBe("true");
+  await act(async () => q("settings-tabs-grouping")!.click());
+  await act(async () => document.querySelectorAll<HTMLElement>("[role=option]")[2]!.click());
+  expect(q("settings-tabs-compact")!.getAttribute("aria-disabled")).toBe("true");
+  expect(document.getElementById("settings-tabs-compact-hint")?.textContent).toBe("Needs a tab grouping");
+  onTabCompact.mockClear();
+  await act(async () => q("settings-tabs-compact")!.click());
+  expect(onTabCompact).not.toHaveBeenCalled();
+  expect(calls.some((c) => c.type === "settings.set")).toBe(false);
 });
 
 it("Tab grouping shows By project by default and picking By worktree applies at once without a daemon request", async () => {
@@ -146,4 +174,11 @@ it("Default diff view is a per-browser choice: picking Uncommitted saves it and 
   expect(q("settings-diff-mode")?.textContent).toContain("Uncommitted");
   expect(calls.some((c) => c.type === "settings.set")).toBe(false);
   localStorage.removeItem("claude-ui.diffMode");
+});
+
+it("the Keyboard section's Customize button opens the shortcuts dialog", async () => {
+  const { q, onShortcuts } = await render();
+  expect(q("settings-keyboard")?.textContent).toContain("Keyboard");
+  await act(async () => q("settings-shortcuts")!.click());
+  expect(onShortcuts).toHaveBeenCalledOnce();
 });

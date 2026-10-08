@@ -43,3 +43,23 @@ export function saveTabGrouping(g: TabGrouping) {
     // Storage blocked: the choice lasts for this page.
   }
 }
+
+const COMPACT = "claude-ui.tabCompact";
+
+/** Compact tabs: every group drawn as its chip only (md and up); kept per browser. */
+export function loadTabCompact(): boolean {
+  try {
+    return localStorage.getItem(COMPACT) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveTabCompact(on: boolean) {
+  try {
+    if (on) localStorage.setItem(COMPACT, "1");
+    else localStorage.removeItem(COMPACT);
+  } catch {
+    // Storage blocked: the choice lasts for this page.
+  }
+}
