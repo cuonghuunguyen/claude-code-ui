@@ -3,7 +3,8 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Described, Card } from "./notify.ts";
-import { NotificationStack, type CardItem } from "./notifications.tsx";
+import { NotificationStack, useNotifications, type CardItem } from "./notifications.tsx";
+import { applyEvent, emptySession } from "./store.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -245,4 +246,22 @@ it("touch targets: buttons and the X are 44px on a coarse pointer or below sm", 
   await show([item("b")]);
   for (const b of qa("article button")) expect(b.className).toMatch(/pointer-coarse:(h|size|min-h)-11|max-sm:h-11/);
   void noop;
+});
+
+it("a request whose render has not landed yet still makes its card: the hook waits for the view to hold the part", async () => {
+  const part = { type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t", tool: "Bash", input: { command: "npm test" }, suggestions: [], settled: false } as never;
+  const list = [{ id: "b", cwd: "/p", state: "idle", title: "B", lastActivity: 0, archived: false, transcript: true }] as never;
+  let api!: ReturnType<typeof useNotifications>;
+  function Host({ views }: { views: Record<string, ReturnType<typeof emptySession>> }) {
+    api = useNotifications({ enabled: true, focused: true, focusPage: false, shown: () => false, list, views });
+    return <p data-testid="n">{api.cards.length}</p>;
+  }
+  await act(async () => root.render(<Host views={{ b: emptySession() }} />));
+  await act(async () => api.observe({ type: "event", sessionId: "b", seq: 1, part }, true));
+  await act(async () => void vi.advanceTimersByTime(120));
+  expect(q('[data-testid="n"]').textContent).toBe("0");
+  const view = applyEvent(emptySession(), { type: "event", sessionId: "b", seq: 1, part });
+  await act(async () => root.render(<Host views={{ b: view }} />));
+  await act(async () => void vi.advanceTimersByTime(120));
+  expect(q('[data-testid="n"]').textContent).toBe("1");
 });

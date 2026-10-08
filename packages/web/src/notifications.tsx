@@ -69,19 +69,21 @@ export function useNotifications(gate: Gate, onCard?: (card: Card) => void) {
     if (s.type === "resume") return cancel(`finish:${s.sessionId}`);
     if (s.type === "request") {
       if (!allowed(s.sessionId)) return;
-      const show = () => {
+      const show = (tries = 0) => {
         const g = latest.current;
         const part = g.views[s.sessionId]?.parts.get(s.requestId);
+        // The event is applied to the views by the render that follows it: wait for that render (at most 1 s).
+        if (!part && tries < 20 && allowed(s.sessionId)) return later(`req:${s.requestId}`, 50, () => show(tries + 1));
         if (!allowed(s.sessionId) || !part || (part.type !== "permission_request" && part.type !== "question") || part.settled) return;
         add({ sessionId: s.sessionId, kind: s.kind, requestId: s.requestId, since: part.at ?? Date.now() });
       };
       const worker = !!latest.current.list.find((x) => x.id === s.sessionId)?.coordinatorId;
       // A coordinator often answers a worker's low-tier request within seconds: show it only if it still waits. An escalated one waits for the user for certain.
-      if (worker && !s.escalated) later(`req:${s.requestId}`, WORKER_DELAY_MS, show);
+      if (worker && !s.escalated) later(`req:${s.requestId}`, WORKER_DELAY_MS, () => show());
       else {
         cancel(`req:${s.requestId}`);
         // The part arrives with this render; the view may not hold it yet when the event is handled.
-        later(`req:${s.requestId}`, 0, show);
+        later(`req:${s.requestId}`, 0, () => show());
       }
       return;
     }
