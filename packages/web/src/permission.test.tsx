@@ -78,7 +78,7 @@ describe("PermissionPanel", () => {
     expect(labels(high)).toEqual(["Deny", "Allow once"]);
     const low = renderToStaticMarkup(<PermissionPanel part={request()} onRespond={() => {}} tier="low" />);
     expect(low).not.toContain("High tier");
-    expect(low).toContain("Always allow saves the rule <code");
+    expect(low).toContain("Always allow saves: <code");
     expect(labels(low)).toEqual(["Deny", "Allow always", "Allow once"]);
     // The session's own panel (no tier) is unchanged.
     const own = renderToStaticMarkup(<PermissionPanel part={request()} onRespond={() => {}} />);

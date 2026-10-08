@@ -206,7 +206,7 @@ export function TabsBar({
   // Below sm the session header row is gone: the switcher says where the session is, "<project or project · branch> · <side>" (GH-165).
   const place = (t: TabInfo) => [t.worktree ?? (t.cwd ? projectName(t.cwd) : ""), t.cwd ? sideOf(t.cwd)?.label : ""].filter(Boolean).join(" · ");
   // Only one tab is in the Tab order; arrows, Home and End move between tabs (WAI-ARIA tabs, automatic activation). Delete closes.
-  const focusable = activeId && visible.includes(activeId) ? activeId : visible[0];
+  const focusable = activeId === FOCUS_TAB ? undefined : activeId && visible.includes(activeId) ? activeId : visible[0];
   // The arrow keys also reach the pinned Focus tab, which comes first.
   const ring = focus ? [FOCUS_TAB, ...visible] : visible;
   const onKeyDown = (e: KeyboardEvent) => {

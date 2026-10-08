@@ -756,12 +756,13 @@ export class Session {
     });
   };
 
-  /** A low tier request is sent again with `tier: "low"` once its tier is read (the Focus page offers Always allow only then); high or unknown stays unmarked. */
+  /** A low tier request is sent again with `tier: "low"` once its tier is read (the Focus page offers Always allow only then); high or unknown stays unmarked. A later read that says otherwise sends it again without the mark. */
   private markLowTier(requestId: string) {
     void this.permissionTier(requestId).then((tier) => {
       const req = this.pending.get(requestId);
-      if (tier !== "low" || req?.part.type !== "permission_request") return;
-      req.part = { ...req.part, tier };
+      if (req?.part.type !== "permission_request" || (tier === "low") === (req.part.tier === "low")) return;
+      const { tier: _, ...rest } = req.part;
+      req.part = tier === "low" ? { ...rest, tier } : rest;
       this.emit(req.part);
     });
   }
@@ -779,7 +780,12 @@ export class Session {
   permissionTier(requestId: string): Promise<Tier | undefined> {
     const req = this.pending.get(requestId);
     if (req?.part.type !== "permission_request") return Promise.resolve(undefined);
-    if (req.tier?.epoch !== this.epoch) req.tier = { epoch: this.epoch, value: this.readTier(req.part, req.ctx, this.epochAt) };
+    if (req.tier?.epoch !== this.epoch) {
+      const again = !!req.tier;
+      req.tier = { epoch: this.epoch, value: this.readTier(req.part, req.ctx, this.epochAt) };
+      // A re-read can change what the Focus page was told.
+      if (again) this.markLowTier(requestId);
+    }
     return req.tier.value;
   }
 

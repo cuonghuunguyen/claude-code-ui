@@ -98,7 +98,7 @@ it("high tier: the badge and no Always allow; a low tier request shows the rule 
   low.views.a = view([bash("ra", "npm run test -- auth", NOW - 90_000, { tier: "low" })]);
   await render(low);
   expect(el.textContent).not.toContain("High tier");
-  expect(el.textContent).toContain("Always allow saves the rule");
+  expect(el.textContent).toContain("Always allow saves:");
   expect(button("Allow always")).toBeDefined();
 });
 

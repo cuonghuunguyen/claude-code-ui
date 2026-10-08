@@ -739,6 +739,8 @@ export function App() {
   const waiting = useMemo(() => {
     const w = waitingRequests(list, views, firstSeen.current, Date.now());
     for (const x of w) if (!firstSeen.current.has(x.part.id)) firstSeen.current.set(x.part.id, x.since);
+    const ids = new Set(w.map((x) => x.part.id));
+    for (const id of firstSeen.current.keys()) if (!ids.has(id)) firstSeen.current.delete(id);
     return w;
   }, [list, views]);
   const waitingN = waitingCount(waiting);
@@ -2229,6 +2231,7 @@ export function SessionPane({
   /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
   onDialog?: (dialog: DialogName, arg?: string) => void;
 }) {
+  const signalKey = useKeymap()("signal.toggle");
   const phone = usePhone();
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
@@ -2318,7 +2321,7 @@ export function SessionPane({
         <span className="min-w-0 truncate text-muted-foreground" title={session.cwd}>
           {session.cwd}
         </span>
-        {onSignalOnly && <SignalSwitch on={signalOnly} onChange={onSignalOnly} keys={keyText(specOf("signal.toggle"))} />}
+        {onSignalOnly && <SignalSwitch on={signalOnly} onChange={onSignalOnly} keys={keyText(signalKey)} />}
         {/* Idle, running and needs input show in the tab and the send button. Only error and closed have no other place. */}
         {(shownState(view) === "error" || shownState(view) === "closed") && (
           <span className="rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
