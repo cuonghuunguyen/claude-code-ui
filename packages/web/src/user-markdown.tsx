@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState, type ComponentProps } from "react";
-import { code, type CodeHighlighterPlugin, type HighlightOptions, type HighlightResult } from "@streamdown/code";
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { code, type CodeHighlighterPlugin, type HighlightResult } from "@streamdown/code";
 import { cjk } from "@streamdown/cjk";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { defaultRehypePlugins, defaultRemarkPlugins, type Streamdown } from "streamdown";
 import { MessageResponse } from "./components/ai-elements/message.tsx";
+import { codeOf, unwatchBlock, watchBlock } from "./user-code-paint.ts";
 
 type Plugins<K extends "remarkPlugins" | "rehypePlugins"> = NonNullable<ComponentProps<typeof Streamdown>[K]>;
 type MdNode = { type: string; value?: string; children?: MdNode[] };
@@ -31,93 +32,31 @@ const { raw: _raw, ...SAFE_REHYPE } = defaultRehypePlugins;
 export const USER_REHYPE_PLUGINS = Object.values(SAFE_REHYPE) as Plugins<"rehypePlugins">;
 export const USER_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkLineBreaks] as Plugins<"remarkPlugins">;
 
-/** Code in one message colored at once, up to this many characters in all; every block after it (or one longer) is colored when idle. */
+/** Code in one message colored at once, up to this many characters in all; every block after it (or one longer) is painted when idle. */
 export const LONG_CODE = 1200;
-/** Coloring waits until the user has not scrolled for this long (ms): a block built mid-scroll is a dropped frame. */
-export const SCROLL_REST = 500;
-/** A scroll event within this long (ms) of the user's wheel, touch, key or pointer is theirs (a fling goes on after the finger lifts). */
-const FLING = 1500;
 
-let lastInput = -Infinity;
-let lastScroll = -Infinity;
-if (typeof document !== "undefined") {
-  for (const t of ["wheel", "touchstart", "touchmove", "keydown", "pointerdown"]) document.addEventListener(t, () => (lastScroll = lastInput = performance.now()), { capture: true, passive: true });
-  document.addEventListener("pointermove", (e) => e.buttons && (lastScroll = lastInput = performance.now()), { capture: true, passive: true });
-  // Programmatic scrolling (a streaming turn follows its output) is not the user's: only a scroll just after their input counts.
-  document.addEventListener("scroll", () => performance.now() - lastInput < FLING && (lastScroll = performance.now()), { capture: true, passive: true });
-}
-
-type Job = { options: HighlightOptions; callbacks: Set<(r: HighlightResult) => void> };
-/** Newest job last: the rows on screen mounted last, and they come first. Deduped by language and code. */
-const jobs = new Map<string, Job>();
-/** Results of finished jobs (a row that comes into view again is colored at once). */
-const done = new Map<string, HighlightResult>();
-const DONE_MAX = 40;
-let epoch = 0;
-let scheduled = false;
-const keyOf = (o: HighlightOptions) => `${o.language}\0${o.code}`;
-
-/** One block per idle slot, once scrolling has rested (checked again when the slot comes). */
-function schedule() {
-  if (scheduled || !jobs.size) return;
-  scheduled = true;
-  const mine = epoch;
-  const wait = () => {
-    if (mine !== epoch) return;
-    const rest = lastScroll + SCROLL_REST - performance.now();
-    if (rest > 0) return void setTimeout(wait, rest);
-    const next = () => {
-      if (mine !== epoch) return;
-      const rest = lastScroll + SCROLL_REST - performance.now();
-      if (rest > 0) return void setTimeout(wait, rest);
-      scheduled = false;
-      const key = [...jobs.keys()].pop();
-      const job = key === undefined ? undefined : jobs.get(key);
-      if (key !== undefined && job) {
-        jobs.delete(key);
-        const finish = (r: HighlightResult) => {
-          done.delete(key);
-          done.set(key, r);
-          if (done.size > DONE_MAX) done.delete(done.keys().next().value!);
-          job.callbacks.forEach((cb) => cb(r));
-        };
-        const r = code.highlight(job.options, finish);
-        if (r) finish(r);
-      }
-      schedule();
-    };
-    const ric = globalThis.requestIdleCallback;
-    if (ric) ric(next, { timeout: 1000 });
-    else setTimeout(next, 16);
-  };
-  wait();
-}
-
-/** For tests: drop every queued job and timer. */
-export function resetIdleQueue() {
-  epoch++;
-  scheduled = false;
-  jobs.clear();
-  done.clear();
-  lastScroll = lastInput = -Infinity;
-}
+const keyOf = (o: { language: string; code: string }) => `${o.language}\0${o.code}`;
 
 /**
- * The assistant's code plugin (it caches the tokens per code, language and theme) with code deferred: highlighting builds a
- * span per token on every mount, and the virtual timeline mounts a row each time it scrolls into view, so long prompts with
- * code made scrolling stutter. One plugin per message: its first 1200 characters of code are colored at once, as in the
- * assistant's text; the rest paints plain and takes its colors when idle (newest row first). `cancel` (the row unmounted)
- * drops the message's queued jobs.
+ * The assistant's code plugin (it caches the tokens per code, language and theme), one per message: its first 1200
+ * characters of code are colored at once by streamdown, as in the assistant's text. Further blocks stay plain DOM (a span
+ * per token on every row mount made scrolling stutter, GH-188) and are reported to `onDeferred`; `user-code-paint.ts`
+ * paints their colors over the plain text once they are on screen and the scroll has rested.
  */
-function userCodeFor() {
-  const mine = new Map<string, (r: HighlightResult) => void>();
+function userCodeFor(onDeferred: () => void) {
+  const deferred = new Set<string>();
   const sync = new Map<string, boolean>();
   let used = 0;
+  // Streamdown keeps a block's last result until the plugin gives a new one: on the first mount that is the plain block,
+  // but a block whose code changes later (the message text changed) needs its new plain result.
+  let mounted = false;
+  const plain = new Map<string, HighlightResult>();
   const plugin: CodeHighlighterPlugin = {
     ...code,
     highlight(options, callback) {
       const key = keyOf(options);
       if (!callback) return code.highlight(options, callback);
+      if (!mounted) queueMicrotask(() => (mounted = true));
       let now = sync.get(key);
       if (now === undefined) {
         now = used + options.code.length <= LONG_CODE;
@@ -125,37 +64,58 @@ function userCodeFor() {
         sync.set(key, now);
       }
       if (now) return code.highlight(options, callback);
-      const cached = done.get(key);
-      if (cached) return cached;
-      const job = jobs.get(key) ?? { options, callbacks: new Set() };
-      jobs.delete(key);
-      jobs.set(key, job);
-      mine.get(key) && job.callbacks.delete(mine.get(key)!);
-      mine.set(key, callback);
-      job.callbacks.add(callback);
-      schedule();
-      return null;
+      deferred.add(key);
+      onDeferred();
+      if (!mounted) return null;
+      let r = plain.get(key);
+      if (!r) plain.set(key, (r = { bg: "transparent", fg: "inherit", tokens: options.code.split("\n").map((content) => [{ content, color: "inherit", bgColor: "transparent", htmlStyle: {}, offset: 0 }]) } as HighlightResult));
+      return r;
     },
   };
-  const cancel = () => {
-    for (const [key, cb] of mine) {
-      const job = jobs.get(key);
-      job?.callbacks.delete(cb);
-      if (job && !job.callbacks.size) jobs.delete(key);
-    }
-    mine.clear();
-  };
-  return { plugin, cancel };
+  return { plugin, deferred };
 }
 
-/** A user message's text as markdown, through the same renderer as assistant text (code beyond the first 1200 characters colored when idle). */
+/** A user message's text as markdown, through the same renderer as assistant text (code beyond the first 1200 characters painted when idle). */
 export function UserMarkdown({ text }: { text: string }) {
-  const [own] = useState(userCodeFor);
+  const ref = useRef<HTMLDivElement>(null);
+  const [own] = useState(() => {
+    /** Watched blocks of this message and the key (language and code) each was watched for. */
+    const watched = new Map<HTMLElement, string>();
+    let queued = false;
+    // The message's plain blocks whose code was deferred (by language and code: two equal blocks are both watched; a block
+    // whose code changed is watched again).
+    const scan = () => {
+      queued = false;
+      const root = ref.current;
+      if (!root) return;
+      for (const el of watched.keys()) if (!root.contains(el)) (unwatchBlock(el), watched.delete(el));
+      for (const el of root.querySelectorAll<HTMLElement>('[data-streamdown="code-block"]')) {
+        const lines = el.querySelector("code");
+        const key = lines && keyOf({ language: el.dataset.language ?? "", code: codeOf(lines) });
+        if (watched.get(el) === key) continue;
+        if (watched.has(el)) (unwatchBlock(el), watched.delete(el));
+        if (!key || !own.deferred.has(key)) continue;
+        watched.set(el, key);
+        watchBlock(el);
+      }
+    };
+    const unwatchAll = () => {
+      for (const el of watched.keys()) unwatchBlock(el);
+      watched.clear();
+    };
+    const own = { ...userCodeFor(() => queued || ((queued = true), queueMicrotask(scan))), scan, unwatchAll };
+    return own;
+  });
   const plugins = useMemo(() => ({ cjk, code: own.plugin, math, mermaid }), [own]);
-  useEffect(() => () => own.cancel(), [own]);
+  useEffect(() => {
+    own.scan();
+    return own.unwatchAll;
+  }, [own]);
   return (
-    <MessageResponse mode="static" plugins={plugins} remarkPlugins={USER_REMARK_PLUGINS} rehypePlugins={USER_REHYPE_PLUGINS}>
-      {text}
-    </MessageResponse>
+    <div ref={ref} className="contents">
+      <MessageResponse mode="static" plugins={plugins} remarkPlugins={USER_REMARK_PLUGINS} rehypePlugins={USER_REHYPE_PLUGINS}>
+        {text}
+      </MessageResponse>
+    </div>
   );
 }
