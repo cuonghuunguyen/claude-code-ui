@@ -528,6 +528,10 @@ function Tab({
   );
 }
 
+/** The look of an icon button; `aria-disabled` keeps it focusable and its tooltip readable. */
+export const ICON_BUTTON =
+  "grid size-7 shrink-0 cursor-pointer place-items-center max-md:size-11 pointer-coarse:size-11 rounded-md text-faint outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-secondary aria-pressed:text-foreground aria-expanded:bg-secondary aria-expanded:text-foreground aria-expanded:shadow-[inset_0_-2px_0_var(--foreground)] [&_svg]:size-4 aria-disabled:cursor-default aria-disabled:opacity-50 aria-disabled:hover:bg-transparent aria-disabled:hover:text-faint";
+
 export function IconButton({
   label,
   onClick,
@@ -537,6 +541,7 @@ export function IconButton({
   pressed,
   expanded,
   controls,
+  disabled,
   ref,
 }: {
   label: string;
@@ -547,6 +552,8 @@ export function IconButton({
   pressed?: boolean;
   expanded?: boolean;
   controls?: string;
+  /** Looks and acts disabled but stays focusable (`aria-disabled`); put the reason in `label`. */
+  disabled?: boolean;
   ref?: React.Ref<HTMLButtonElement>;
 }) {
   return (
@@ -557,11 +564,9 @@ export function IconButton({
       aria-pressed={pressed}
       aria-expanded={expanded}
       aria-controls={controls}
-      className={cn(
-        "grid size-7 shrink-0 cursor-pointer place-items-center max-md:size-11 pointer-coarse:size-11 rounded-md text-faint outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-secondary aria-pressed:text-foreground aria-expanded:bg-secondary aria-expanded:text-foreground aria-expanded:shadow-[inset_0_-2px_0_var(--foreground)] [&_svg]:size-4",
-        className,
-      )}
-      onClick={onClick}
+      aria-disabled={disabled || undefined}
+      className={cn(ICON_BUTTON, className)}
+      onClick={disabled ? undefined : onClick}
       data-testid={testId}
     >
       {children}

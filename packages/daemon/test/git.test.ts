@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, worktreeStatus } from "../src/git.ts";
+import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, limiter, listWorktrees, removeWorktree, worktreeStatus } from "../src/git.ts";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
 
@@ -847,5 +847,28 @@ describe("gitDiff truncation", { timeout: 120_000 }, () => {
     expect(d.truncated).toBe(true);
     expect(d.files).toHaveLength(3000);
     expect(d.files.find((f) => f.path === "zzz.txt")).toMatchObject({ status: "M", added: 1, removed: 1 });
+  });
+});
+
+describe("limiter", () => {
+  it("runs at most n tasks at a time, in order; a failed task frees its slot", async () => {
+    const run = limiter(2);
+    let active = 0;
+    let most = 0;
+    const order: number[] = [];
+    const task = (i: number, fail = false) =>
+      run(async () => {
+        active++;
+        most = Math.max(most, active);
+        order.push(i);
+        await new Promise((r) => setTimeout(r, 5));
+        active--;
+        if (fail) throw new Error(`task ${i}`);
+        return i;
+      });
+    const results = await Promise.allSettled([task(0), task(1, true), task(2), task(3), task(4)]);
+    expect(most).toBe(2);
+    expect(order).toEqual([0, 1, 2, 3, 4]);
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "rejected", "fulfilled", "fulfilled", "fulfilled"]);
   });
 });

@@ -196,3 +196,65 @@ export function saveCollapsed(cwds: Set<string>) {
     // Storage blocked: collapsing still works for this page.
   }
 }
+
+/** A worktree row's collapse key: not its path alone, which is also the project's key for the main checkout. */
+export const rowKey = (path: string) => `worktree:${path}`;
+/** The collapse key of the workers of coordinator `id` in the normal or the archived view. */
+export const workerKey = (id: string, archived: boolean) => `${archived ? "archived:" : ""}coordinator:${id}`;
+
+/** Every collapse key of the view: project groups, worktree rows, worker groups (Collapse all). */
+export function collapseKeys(groups: SessionGroup[], workers: Map<string, SessionListItem[]>, archived: boolean) {
+  return [...groups.flatMap((g) => [g.cwd, ...g.worktrees.map((r) => rowKey(r.path))]), ...[...workers.keys()].map((id) => workerKey(id, archived))];
+}
+
+/** The collapse keys that hide session `id` (its group, worktree row, coordinator's worker group); undefined when the groups do not list it. */
+export function revealKeys(id: string, groups: SessionGroup[], workers: Map<string, SessionListItem[]>, archived: boolean) {
+  const coordinator = [...workers].find(([, ws]) => ws.some((w) => w.id === id))?.[0];
+  const top = coordinator ?? id;
+  for (const g of groups) {
+    if (g.sessions.some((s) => s.id === top)) return [g.cwd, ...(coordinator ? [workerKey(coordinator, archived)] : [])];
+    const r = g.worktrees.find((r) => r.sessions.some((s) => s.id === top));
+    if (r) return [g.cwd, rowKey(r.path), ...(coordinator ? [workerKey(coordinator, archived)] : [])];
+  }
+}
+
+export type SidebarSort = "recent" | "name";
+/** `recent` keeps the daemon's order; `name`: A to Z by project name (stable). */
+export const sortGroups = (groups: SessionGroup[], sort: SidebarSort) =>
+  sort === "name" ? [...groups].sort((a, b) => projectName(a.cwd).localeCompare(projectName(b.cwd), undefined, { sensitivity: "base" })) : groups;
+
+/** Workers that `keep` holds for; a coordinator with none drops out. */
+export function activeWorkers(workers: Map<string, SessionListItem[]>, keep: (s: SessionListItem) => boolean) {
+  const out = new Map<string, SessionListItem[]>();
+  for (const [id, ws] of workers) if (ws.some(keep)) out.set(id, ws.filter(keep));
+  return out;
+}
+
+/** Groups with only the sessions `keep` holds for, or whose workers it holds for; projects and worktree rows stay listed even when empty. */
+export function activeOnly(groups: SessionGroup[], workers: Map<string, SessionListItem[]>, keep: (s: SessionListItem) => boolean): SessionGroup[] {
+  const f = (l: SessionListItem[]) => l.filter((s) => keep(s) || !!workers.get(s.id)?.some(keep));
+  return groups.map((g) => ({ ...g, sessions: f(g.sessions), worktrees: g.worktrees.map((r) => ({ ...r, sessions: f(r.sessions) })) }));
+}
+
+/** Sidebar view settings, per browser (docs/spec.md "Layout"). */
+export type SidebarView = { alwaysSelect: boolean; dayHeaders: boolean; onlyActive: boolean; sort: SidebarSort };
+const VIEW_KEY = "claude-ui.sidebarView";
+const VIEW_DEFAULT: SidebarView = { alwaysSelect: false, dayHeaders: true, onlyActive: false, sort: "recent" };
+
+export function loadSidebarView(): SidebarView {
+  try {
+    const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "{}") as Record<string, unknown>;
+    const bool = (k: "alwaysSelect" | "dayHeaders" | "onlyActive") => (typeof v[k] === "boolean" ? (v[k] as boolean) : VIEW_DEFAULT[k]);
+    return { alwaysSelect: bool("alwaysSelect"), dayHeaders: bool("dayHeaders"), onlyActive: bool("onlyActive"), sort: v.sort === "name" ? "name" : "recent" };
+  } catch {
+    return VIEW_DEFAULT;
+  }
+}
+
+export function saveSidebarView(view: SidebarView) {
+  try {
+    localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+  } catch {
+    // Storage blocked: the settings still apply to this page.
+  }
+}
