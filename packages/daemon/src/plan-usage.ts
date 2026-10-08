@@ -20,9 +20,9 @@ const label = (r: Row) => {
 };
 // ponytail: a server still on the old window right at its reset is not retried; the next turn or stale connect read fixes it.
 /** A read at a reset time waits this long, so the server has rolled the window over. */
-const RESET_GRACE_MS = 10_000;
+export const RESET_GRACE_MS = 10_000;
 /** Longest setTimeout delay (2^31-1 ms, 24.8 days); Node runs a longer one after 1 ms. A later reset re-arms on each fire. */
-const MAX_TIMER_MS = 2 ** 31 - 1;
+export const MAX_TIMER_MS = 2 ** 31 - 1;
 // Window labels of a rate_limit_event's rateLimitType (SDK 0.3.285), for "Limit reached: …".
 const LIMIT_LABELS: Record<string, string> = {
   five_hour: LABELS.session!,

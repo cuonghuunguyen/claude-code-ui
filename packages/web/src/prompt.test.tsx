@@ -518,11 +518,11 @@ it("a pick that leaves the text as it was still moves the caret out of the token
   expect(box.selectionStart).toBe(14);
 });
 
-it('user bubble: "> " lines render as a blockquote, the rest stays plain text', async () => {
+it('user bubble: "> " lines render as a markdown blockquote, the rest as a paragraph', async () => {
   const user = (text: string) => applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "user_text", id: "u1", text, images: [] } });
   const d = await render({}, user("> first\n> second\n\nmy reply"));
-  expect(d.el.querySelector("blockquote")?.textContent).toBe("first\nsecond");
-  expect(d.$("user-message")?.textContent).toContain("my reply");
+  expect(d.el.querySelector("blockquote")?.textContent?.trim()).toBe("first\nsecond");
+  expect([...d.el.querySelectorAll("p")].some((p) => p.textContent === "my reply")).toBe(true);
   await d.rerender({ view: user("no quote") });
   expect(d.el.querySelector("blockquote")).toBeNull();
 });
@@ -829,4 +829,33 @@ it("GH-166: the dock stays while a turn runs (Stop), and on desktop", async () =
   await scrollLog(wide.el, 1000);
   await scrollLog(wide.el, 800);
   expect(wide.$("prompt-box")!.parentElement!.parentElement!.hasAttribute("data-hidden")).toBe(false);
+});
+
+it("/resume is never sent, even when the CLI lists its own; text after it goes to the session search (GH-100)", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onDialog = vi.fn();
+  const { box } = await render({ onPrompt, onDialog }, { ...emptySession(), commands: [{ name: "resume", description: "CLI resume", argumentHint: "[conversation]" }] });
+  await type(box, "/resume");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenLastCalledWith("resume");
+  await type(box, "/resume deploy");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenLastCalledWith("resume", "deploy");
+  expect(onPrompt).not.toHaveBeenCalled();
+});
+
+it("/resume with an image attached still opens the session search and keeps the image (GH-100)", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onDialog = vi.fn();
+  const { $, box } = await render({ onPrompt, onDialog });
+  const input = $("attach-input") as HTMLInputElement;
+  const png = new File([Uint8Array.from(atob("iVBORw0KGgo="), (c) => c.charCodeAt(0))], "a.png", { type: "image/png" });
+  Object.defineProperty(input, "files", { value: [png], configurable: true });
+  await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
+  await vi.waitFor(() => expect($("image-strip")!.querySelectorAll("img")).toHaveLength(1));
+  await type(box, "/resume");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenLastCalledWith("resume");
+  expect(onPrompt).not.toHaveBeenCalled();
+  expect($("image-strip")!.querySelectorAll("img")).toHaveLength(1);
 });

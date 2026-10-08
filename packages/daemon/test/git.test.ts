@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { createWorktree, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, worktreeStatus } from "../src/git.ts";
+import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, worktreeStatus } from "../src/git.ts";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
 
@@ -587,6 +587,8 @@ describe("gitLog / gitShow / gitFileAt", () => {
       await gitShow(r.dir, r.c3, all);
       await gitFileAt(r.dir, r.c3, "a.txt", all, 1000);
       await gitStatus(r.dir);
+      await gitDiff(r.dir, { base: "head", allowed: all });
+      await gitDiff(r.dir, { base: "branch", ref: "refs/heads/f", allowed: all });
     });
     // Read-only: no fsmonitor program, no transport (a partial clone's lazy fetch), no lazy fetch, in every call.
     for (const a of calls) {
@@ -607,10 +609,10 @@ describe("gitLog / gitShow / gitFileAt", () => {
     expect(one.slice(-3)).toEqual(["--end-of-options", r.c3, "--"]);
     expect(calls.some((a) => a.includes("check-ref-format") && a.includes("refs/heads/f"))).toBe(true);
     for (const a of calls.filter((a) => a.includes("show") && a.includes("-s"))) expect(a.slice(-2)).toEqual(["--end-of-options", r.c3]);
-    for (const a of calls.filter((a) => a.includes("diff-tree"))) expect(a).toEqual(expect.arrayContaining(["--no-ext-diff", "--no-textconv"]));
+    for (const a of calls.filter((a) => a.includes("diff-tree") || a.includes("diff"))) expect(a).toEqual(expect.arrayContaining(["--no-ext-diff", "--no-textconv"]));
   });
 
-  it("does not run core.fsmonitor for git.status, git.log, git.commit or git.fileAt", async () => {
+  it("does not run core.fsmonitor for git.status, git.log, git.commit, git.fileAt or git.diff", async () => {
     const r = graphRepo();
     const marker = join(r.dir, "..", `fsmon-${Date.now()}`);
     const hook = join(r.dir, "..", `fsmon-${Date.now()}.sh`);
@@ -625,6 +627,8 @@ describe("gitLog / gitShow / gitFileAt", () => {
     await gitLog(r.dir, { allowed: all });
     await gitShow(r.dir, r.c5, all);
     await gitFileAt(r.dir, r.c3, "a.txt", all, 1000);
+    await gitDiff(r.dir, { base: "head", allowed: all });
+    await gitDiff(r.dir, { base: "branch", ref: "refs/heads/f", allowed: all });
     expect(existsSync(marker)).toBe(false);
   });
 
@@ -695,5 +699,153 @@ describe("gitLog / gitShow / gitFileAt", () => {
     await expect(gitLog(sub, { allowed: inSub })).rejects.toMatchObject({ code: "cwd_not_allowed" });
     await expect(gitShow(sub, r.c1, inSub)).rejects.toMatchObject({ code: "cwd_not_allowed" });
     await expect(gitFileAt(sub, r.c1, "a.txt", inSub, 1000)).rejects.toMatchObject({ code: "cwd_not_allowed" });
+  });
+});
+
+describe("gitDiff", { timeout: 90_000 }, () => {
+  const all = () => true;
+  const sh = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), "gd-")));
+  const put = (dir: string, f: string, text: string) => {
+    mkdirSync(join(dir, f, ".."), { recursive: true });
+    writeFileSync(join(dir, f), text);
+  };
+  const code = (p: Promise<unknown>) => p.then(() => "ok", (e) => (e as { code: string }).code);
+  const msg = (p: Promise<unknown>) => p.then(() => "ok", (e) => (e as Error).message);
+
+  /** main: a.txt, sub.txt; feat: + f.txt, g.txt; working tree: a.txt edited, sub.txt moved, f.txt removed, s/u.txt untracked. */
+  function diffRepo() {
+    const dir = tmp();
+    sh(dir, "init", "-q", "-b", "main");
+    put(dir, "a.txt", "1\n2\n3\n");
+    put(dir, "sub.txt", "same\ncontent\n");
+    sh(dir, "add", ".");
+    sh(dir, "commit", "-qm", "init");
+    const main = sh(dir, "rev-parse", "HEAD");
+    sh(dir, "checkout", "-q", "-b", "feat");
+    put(dir, "f.txt", "f\n");
+    put(dir, "g.txt", "g\n");
+    sh(dir, "add", ".");
+    sh(dir, "commit", "-qm", "feat");
+    put(dir, "a.txt", "1\nx\n3\n");
+    sh(dir, "mv", "sub.txt", "moved.txt");
+    rmSync(join(dir, "f.txt"));
+    put(dir, "s/u.txt", "one\ntwo\n");
+    return { dir, main, head: sh(dir, "rev-parse", "HEAD") };
+  }
+
+  it("is null outside a git repository", async () => {
+    expect(await gitDiff(mkdtempSync(join(tmpdir(), "nogit-")), { base: "head", allowed: all })).toBeNull();
+  });
+
+  it("head: staged, unstaged and untracked against HEAD, paths relative to the top, prefix of a subdirectory cwd", async () => {
+    const r = diffRepo();
+    const d = (await gitDiff(join(r.dir, "s"), { base: "head", allowed: all }))!;
+    expect(d.prefix).toBe("s/");
+    expect(d.base).toBe(r.head);
+    expect(d.ref).toBeUndefined();
+    expect(d.branches).toBeUndefined();
+    expect(d.files).toEqual([
+      { status: "M", path: "a.txt", added: 1, removed: 1 },
+      { status: "D", path: "f.txt", added: 0, removed: 1 },
+      { status: "R", path: "moved.txt", oldPath: "sub.txt", added: 0, removed: 0 },
+      { status: "A", path: "s/u.txt", untracked: true, added: 2, removed: 0 },
+    ]);
+    expect((await gitDiff(r.dir, { base: "head", allowed: all }))!.prefix).toBe("");
+  });
+
+  it("head before the first commit: no base, staged and untracked files are A", async () => {
+    const dir = tmp();
+    sh(dir, "init", "-q", "-b", "main");
+    put(dir, "staged.txt", "a\n");
+    sh(dir, "add", "staged.txt");
+    put(dir, "loose.txt", "b\nc\n");
+    const d = (await gitDiff(dir, { base: "head", allowed: all }))!;
+    expect(d.base).toBeUndefined();
+    expect(d.files).toEqual([
+      { status: "A", path: "loose.txt", untracked: true, added: 2, removed: 0 },
+      { status: "A", path: "staged.txt", added: 1, removed: 0 },
+    ]);
+  });
+
+  it("branch: against the merge base with the default branch (origin/HEAD, else main), with the branch list", async () => {
+    const r = diffRepo();
+    const d = (await gitDiff(r.dir, { base: "branch", allowed: all }))!;
+    expect(d.ref).toBe("refs/heads/main");
+    expect(d.base).toBe(r.main);
+    expect(d.files.map((f) => `${f.status} ${f.path}`)).toEqual(["M a.txt", "A g.txt", "R moved.txt", "A s/u.txt"]);
+    expect(d.branches).toEqual(expect.arrayContaining(["refs/heads/main", "refs/heads/feat"]));
+    sh(r.dir, "update-ref", "refs/remotes/origin/dev", r.main);
+    sh(r.dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev");
+    const o = (await gitDiff(r.dir, { base: "branch", allowed: all }))!;
+    expect(o.ref).toBe("refs/remotes/origin/dev");
+    expect(o.branches).not.toContain("refs/remotes/origin/HEAD");
+  });
+
+  it("branch: an explicit ref; unknown refs and option-like refs are refused", async () => {
+    const r = diffRepo();
+    expect((await gitDiff(r.dir, { base: "branch", ref: "refs/heads/main", allowed: all }))!.ref).toBe("refs/heads/main");
+    for (const ref of ["main", "--output=x", "refs/tags/v1", "refs/heads/nope"]) expect(await code(gitDiff(r.dir, { base: "branch", ref, allowed: all }))).toBe("bad_request");
+    expect(await code(gitDiff(r.dir, { base: "branch", ref: 5 as never, allowed: all }))).toBe("bad_request");
+  });
+
+  it("branch: bad_base before the first commit, without a default branch, and without common history", async () => {
+    const dir = tmp();
+    sh(dir, "init", "-q", "-b", "main");
+    expect(await msg(gitDiff(dir, { base: "branch", allowed: all }))).toBe("No commits yet");
+    const r = diffRepo();
+    sh(r.dir, "checkout", "-q", "--orphan", "orph");
+    sh(r.dir, "commit", "-qm", "orphan");
+    expect(await msg(gitDiff(r.dir, { base: "branch", ref: "refs/heads/main", allowed: all }))).toMatch(/^No common history with main/);
+    expect(await code(gitDiff(r.dir, { base: "branch", ref: "refs/heads/main", allowed: all }))).toBe("bad_base");
+    const only = tmp();
+    sh(only, "init", "-q", "-b", "dev");
+    put(only, "a", "1\n");
+    sh(only, "add", ".");
+    sh(only, "commit", "-qm", "x");
+    expect(await code(gitDiff(only, { base: "branch", allowed: all }))).toBe("bad_base");
+    expect(await msg(gitDiff(only, { base: "branch", allowed: all }))).toMatch(/No default branch/);
+  });
+
+  it("refuses an unknown base and a repository outside the allowed roots", async () => {
+    const r = diffRepo();
+    expect(await code(gitDiff(r.dir, { base: "x", allowed: all }))).toBe("bad_request");
+    expect(await code(gitDiff(r.dir, { base: "head", allowed: () => false }))).toBe("cwd_not_allowed");
+  });
+
+  it("untracked stats: none for binary, larger than 1 MiB or symlink", async () => {
+    const dir = tmp();
+    sh(dir, "init", "-q", "-b", "main");
+    put(dir, "a", "1\n");
+    sh(dir, "add", ".");
+    sh(dir, "commit", "-qm", "x");
+    writeFileSync(join(dir, "bin"), Buffer.from([1, 0, 2]));
+    writeFileSync(join(dir, "big.txt"), "x\n".repeat(600_000));
+    put(dir, "noeol.txt", "a\nb");
+    if (process.platform !== "win32") symlinkSync("a", join(dir, "link"));
+    const d = (await gitDiff(dir, { base: "head", allowed: all }))!;
+    const f = (p: string) => d.files.find((x) => x.path === p)!;
+    expect(f("bin")).toEqual({ status: "A", path: "bin", untracked: true });
+    expect(f("big.txt")).toEqual({ status: "A", path: "big.txt", untracked: true });
+    expect(f("noeol.txt")).toMatchObject({ added: 2, removed: 0 });
+    if (process.platform !== "win32") expect(f("link")).toEqual({ status: "A", path: "link", untracked: true });
+  });
+});
+
+describe("gitDiff truncation", { timeout: 120_000 }, () => {
+  it("lists tracked edits first: untracked files are cut before tracked ones", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "gdt-")));
+    const sh = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: dir, stdio: "ignore" });
+    sh("init", "-q", "-b", "main");
+    writeFileSync(join(dir, "zzz.txt"), "1\n");
+    sh("add", ".");
+    sh("commit", "-qm", "x");
+    writeFileSync(join(dir, "zzz.txt"), "2\n");
+    mkdirSync(join(dir, "u"));
+    for (let i = 0; i < 3100; i++) writeFileSync(join(dir, "u", `f${i}.txt`), "x\n");
+    const d = (await gitDiff(dir, { base: "head", allowed: () => true }))!;
+    expect(d.truncated).toBe(true);
+    expect(d.files).toHaveLength(3000);
+    expect(d.files.find((f) => f.path === "zzz.txt")).toMatchObject({ status: "M", added: 1, removed: 1 });
   });
 });

@@ -1,5 +1,5 @@
 // Settings dialog (docs/spec.md "Settings"): app-wide, daemon-side settings in sections, on the ConfigDialog shell,
-// plus per-browser choices (Tabs) that never reach the daemon.
+// plus per-browser choices (Changes, Tabs) that never reach the daemon.
 // A later setting is one more row in SECTIONS; reading, patching, errors and layout stay as they are.
 import { useEffect, useRef, useState } from "react";
 import type { Settings, SettingsPatch, SettingsResult } from "@claude-ui/protocol";
@@ -8,6 +8,7 @@ import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { Switch } from "./plugins-dialog.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
 import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
 
 type Row = { key: string; label: string; hint: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number });
@@ -21,6 +22,13 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
       { key: "coordinatorPermissions", kind: "switch", label: "Coordinator may answer permission requests", hint: "Allows the coordinator to approve or deny, once, reads and file edits inside the worker folder. Commands and everything else wait for you; no permission rule is saved. Edits can change code that commands you approve later will run." },
     ],
   },
+  {
+    id: "usageLimit",
+    title: "Usage limits",
+    rows: [
+      { key: "autoContinue", kind: "switch", label: "Continue automatically after a usage limit resets", hint: "A session stopped by the plan usage limit gets the prompt “continue” once the limit resets; several sessions continue one after another. Sending a message yourself cancels it. A daemon restart drops scheduled continues." },
+    ],
+  },
 ];
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
@@ -30,6 +38,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const [saving, setSaving] = useState(false);
   // The number field's text while typing; committed on Enter or blur.
   const [draft, setDraft] = useState<Record<string, string>>({});
+  const diffMode = useDefaultDiffMode();
   const ask = useRef(request);
   ask.current = request;
 
@@ -59,6 +68,29 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   return (
     <ConfigDialog title="Settings" open={open} onClose={onClose} testId="settings-dialog">
       {error && <Banner kind="error">{error}</Banner>}
+      <section aria-labelledby="settings-changes" className="flex flex-col" data-testid="settings-changes">
+        <h3 id="settings-changes" className="pb-1 font-medium text-[13px] text-muted-foreground">
+          Changes
+        </h3>
+        <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+          <div className="min-w-0 flex-1">
+            <span id="settings-changes-mode-label" className="block text-sm">Default diff view</span>
+            <span id="settings-changes-mode-hint" className="block text-muted-foreground text-xs">The mode the Changes panel opens in. A choice in a session's panel lasts for that session until the page reloads. Kept in this browser.</span>
+          </div>
+          <Select value={diffMode} onValueChange={(v) => v && saveDiffMode(v as DiffMode)}>
+            <SelectTrigger aria-labelledby="settings-changes-mode-label" aria-describedby="settings-changes-mode-hint" data-testid="settings-diff-mode" className="w-40 max-md:data-[size=default]:h-11">
+              <SelectValue>{(v: DiffMode) => DIFF_MODES.find((m) => m.value === v)?.label ?? v}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {DIFF_MODES.map((m) => (
+                <SelectItem key={m.value} value={m.value} data-testid={`settings-diff-mode-${m.value}`}>
+                  {m.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </section>
       {onTabGrouping && (
         <section aria-labelledby="settings-tabs" className="flex flex-col" data-testid="settings-tabs">
           <h3 id="settings-tabs" className="pb-1 font-medium text-[13px] text-muted-foreground">

@@ -359,3 +359,18 @@ it("a failed creation shows the git error and keeps the draft on the project", a
   await key(box, { key: "Enter" });
   expect(onStart).toHaveBeenCalledWith("/p/a", expect.anything(), { text: "hi", images: [] });
 });
+
+it("/resume alone or with text opens the session search instead of starting a session (GH-100)", async () => {
+  const onStart = vi.fn(async () => {});
+  const onDialog = vi.fn();
+  const { el, box } = await render({ onStart, onDialog });
+  await type(box, "/res");
+  expect(el.textContent).toContain("Resume a previous session");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenLastCalledWith("resume");
+  expect(box.value).toBe("");
+  await type(box, "/resume login bug");
+  await key(box, { key: "Enter" });
+  expect(onDialog).toHaveBeenLastCalledWith("resume", "login bug");
+  expect(onStart).not.toHaveBeenCalled();
+});

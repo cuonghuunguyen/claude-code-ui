@@ -43,6 +43,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { usePhone } from "./lib/use-narrow.ts";
 import { useHideOnScroll } from "./lib/hide-on-scroll.ts";
 import { cancelFlight, launchFlight, useLanding } from "./flight.ts";
+import { clearing, heirView } from "./clear.ts";
 import { addPending, dropPending, movePending, pendingKey, promptedIds, pruneEchoed, titleLoading, unechoed, type Pending } from "./optimistic.ts";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
@@ -50,7 +51,7 @@ import { connect, type ConnectionStatus, type Request, type RequestError } from 
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { Toast } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
-import { activeCommand, choose, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
+import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { McpDialog } from "./mcp-dialog.tsx";
 import { SkillsDialog } from "./skills-dialog.tsx";
@@ -60,10 +61,13 @@ import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
-import { byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
-import { appendQuote, splitQuotes } from "./quote.ts";
+import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
+import { appendQuote } from "./quote.ts";
+import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
+import { UserMarkdown } from "./user-markdown.tsx";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
+import { ContinueDock } from "./continue-dock.tsx";
 import { StatusBar, totals, type Totals } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
@@ -71,7 +75,7 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { useStableProps } from "@/lib/utils";
@@ -221,6 +225,8 @@ export function App() {
   const [update, setUpdate] = useState<UpdateInfo>();
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
   const [drawer, setDrawer] = useState(false);
+  /** A `/resume` request for the sidebar search (SessionList `search`). */
+  const [resumeSearch, setResumeSearch] = useState<{ text: string; seq: number }>();
   // Wide screens: the Home button shows or hides the sessions sidebar.
   const [sidebar, setSidebar] = useState(true);
   // Wide screens: the sidebar's width, dragged on its edge; kept per browser. The narrow-screen drawer is min(85vw, 360px).
@@ -235,6 +241,10 @@ export function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
   const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
+  /** React key of a session tab: a /clear moves it to the session the tab follows to, so its prompt box (text, images, focus) stays mounted. */
+  const [tabKeys, setTabKeys] = useState<Record<string, string>>({});
+  /** A session a tab followed to after /clear, until its subscribe reply: the session it replaced. */
+  const [heirOf, setHeirOf] = useState<Record<string, string>>({});
   /** Titles from subscribe replies: a tab of a session not (yet) in the list, e.g. the page-load hash session. */
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
@@ -304,10 +314,14 @@ export function App() {
   const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
+  const statusRef = useRef(status);
+  statusRef.current = status;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const listRef = useRef(list);
   listRef.current = list;
+  /** Prompts sent while a session's /clear runs: they go to the session the tab follows to (or back to this one when the /clear ends without), keyed by the session they were typed in. */
+  const clearQueue = useRef<Record<string, { key: string; text: string; images: string[] }[]>>({});
   const requested = useRef(new Set<string>());
   /** Sessions subscribed holding on this connection: a tab shows them, the daemon keeps their CLI (docs/spec.md "Idle close"). */
   const held = useRef(new Set<string>());
@@ -389,6 +403,7 @@ export function App() {
       }
       setViews((v) => ({ ...v, [sessionId]: withSubscribe(v[sessionId] ?? emptySession(), r) }));
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
+      setHeirOf((h) => (h[sessionId] ? without(h, sessionId) : h));
       if (r.title) setTitles((t) => ({ ...t, [sessionId]: r.title }));
     } catch (e) {
       // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
@@ -452,10 +467,55 @@ export function App() {
 
   /** The tab of session `from` shows session `to` instead, in its place; the active one opens it, its prompt box keeps the focus. */
   function follow(from: string, to: string) {
+    if (tabsRef.current.includes(from)) {
+      setTabKeys((k) => ({ ...k, [to]: k[from] ?? from, [from]: pendingKey() }));
+      setHeirOf((h) => ({ ...h, [to]: from }));
+      // The event handler is a closure of the first render: the latest infos come from the updater, the list from its ref.
+      setInfos((i) => {
+        const old = i[from] ?? listRef.current.find((x) => x.id === from);
+        if (i[to] || !old) return i;
+        const { cwd, state, model, permissionMode, effort, permissionModes } = old;
+        return { ...i, [to]: { id: to, cwd, state, model, permissionMode, effort, permissionModes } };
+      });
+      // The daemon titles an unprompted heir "New session" (the tab shows that, not "Untitled", until the list or the reply).
+      setTitles((t) => (t[to] ? t : { ...t, [to]: "New session" }));
+    }
+    flushClearQueue(from, to);
     setTabs((t) => (t.includes(from) ? replaceTab(t, from, to) : t));
     if (hashId() !== from) return;
     if (document.activeElement && document.activeElement === shownPrompt()) refocus.current = to;
     open(to);
+  }
+
+  // A /clear that ended without moving the tab (it failed, or was a no-op): the queued prompts go to the session they were typed in.
+  useEffect(() => {
+    for (const id of Object.keys(clearQueue.current)) {
+      const v = views[id];
+      if (v && shownState(v) === "idle" && !clearing(v, optimistic[id])) flushClearQueue(id, id);
+    }
+  });
+
+  /** Sends the prompts queued during a /clear: the bubble moves from the old session to `to`. */
+  function flushClearQueue(from: string, to: string) {
+    const queued = clearQueue.current[from];
+    if (!queued) return;
+    delete clearQueue.current[from];
+    for (const q of queued) {
+      setOptimistic((o) => dropPending(o, from, q.key));
+      sendPrompt(to, q.text, q.images).catch((e: Error) => setError(`Prompt not sent: ${e.message}`));
+    }
+  }
+
+  /** A prompt of the user to session `id`: the bubble shows at once (GH-133); the daemon's user_text replaces it. */
+  function sendPrompt(id: string, text: string, images: string[]): Promise<unknown> {
+    // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
+    if (statusRef.current !== "connected") return Promise.reject(new Error(`the daemon is ${statusRef.current}`));
+    const key = pendingKey();
+    setOptimistic((o) => ({ ...o, [id]: addPending(o[id], viewsRef.current[id], { key, text, images }) }));
+    return client.current!.request({ type: "session.prompt", sessionId: id, text, images }).catch((e) => {
+      setOptimistic((o) => dropPending(o, id, key));
+      throw e;
+    });
   }
 
   /** Drops the view of a session this tab no longer follows; `unsubscribe`: also stops the daemon's events. */
@@ -473,6 +533,9 @@ export function App() {
     setOptimistic((o) => without(o, sessionId));
     setList((l) => l.filter((s) => s.id !== sessionId));
     setTabs((t) => t.filter((id) => id !== sessionId));
+    setHeirOf((h) => without(h, sessionId));
+    delete clearQueue.current[sessionId];
+    setTabKeys((k) => without(k, sessionId));
     if (hashId() === sessionId) {
       // Deleted like a closed tab: its neighbour becomes active.
       const next = deleted ? closeTab(tabsRef.current, sessionId, sessionId).active : undefined;
@@ -813,7 +876,10 @@ export function App() {
   useGroupedTabs(tabs, setTabs, groupOfTab);
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   // GH-133: a just-created session shows (with its pending prompt) before its subscribe reply.
-  const view = activeId ? (views[activeId] ?? (optimistic[activeId]?.length ? EMPTY_VIEW : undefined)) : undefined;
+  // A tab that followed a /clear shows the new session at once too: an empty timeline carrying the old one's settings.
+  const heirViews = useMemo(() => Object.fromEntries(Object.entries(heirOf).map(([to, from]) => [to, heirView(views[from])])), [heirOf, views]);
+  const viewOf = (id: string) => views[id] ?? heirViews[id] ?? (optimistic[id]?.length ? EMPTY_VIEW : undefined);
+  const view = activeId ? viewOf(activeId) : undefined;
   const shown = active && view ? active : undefined;
   // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
   useEffect(() => {
@@ -925,7 +991,15 @@ export function App() {
   const openMcp = (server?: string) => project && setMcp({ open: true, cwd: project, sessionId: projectSession, server });
   const openPlugins = () => project && setPlugins({ open: true, cwd: project, sessionId: projectSession });
   const openSkills = () => project && setSkillsDialog({ open: true, cwd: project, sessionId: projectSession });
-  const openDialog = (d: DialogName) => (d === "mcp" ? openMcp() : d === "plugins" ? openPlugins() : openSkills());
+  /** `/resume` (GH-100): shows the sidebar (the drawer below md) with the session search on this project's repository, then the typed text. */
+  const openResume = (arg?: string) => {
+    if (!project) return;
+    if (wide(768)) setSidebar(true);
+    else setDrawer(true);
+    const name = projectName(projectOf(project, worktrees));
+    setResumeSearch((s) => ({ text: resumeSearchText(name, arg), seq: (s?.seq ?? 0) + 1 }));
+  };
+  const openDialog = (d: DialogName, arg?: string) => (d === "mcp" ? openMcp() : d === "plugins" ? openPlugins() : d === "resume" ? openResume(arg) : openSkills());
   // The dialog lists the commands of its session (none on the new-session tab), plus the ones the web app handles itself.
   const dialogSession = skillsDialog?.sessionId ? views[skillsDialog.sessionId] : undefined;
   const skillsCommands = dialogSession?.commands.length ? withDialogCommands(dialogSession.commands) : [];
@@ -933,7 +1007,7 @@ export function App() {
   const runCommand = (r: ReturnType<typeof choose>) => {
     if ("text" in r) return setInsert(r.text.trimEnd());
     const dialog = dialogOf(r.send, dialogSession?.commands);
-    if (dialog) return openDialog(dialog);
+    if (dialog) return openDialog(dialog, dialogArg(r.send));
     if (!skillsDialog?.sessionId) return;
     client.current!.request({ type: "session.prompt", sessionId: skillsDialog.sessionId, text: r.send, images: [] }).catch((e) => setError((e as Error).message));
   };
@@ -1192,6 +1266,7 @@ export function App() {
               renaming={renaming?.in === "list" ? renaming.id : undefined}
               onAction={sessionAction("list")}
               onRenamed={renamed}
+              search={resumeSearch}
             />
           )}
           <button
@@ -1227,10 +1302,10 @@ export function App() {
                   const s = id === NEW_TAB ? undefined : sessionOf(id);
                   const pend = optimistic[id];
                   // Just created: shown before its subscribe reply, so the card is never blank.
-                  const v = views[id] ?? (pend?.length ? EMPTY_VIEW : undefined);
+                  const v = viewOf(id);
                   if (!s || !v) return null;
                   return (
-                    <Activity key={id} mode={id === activeId ? "visible" : "hidden"}>
+                    <Activity key={tabKeys[id] ?? id} mode={id === activeId ? "visible" : "hidden"}>
                       <SessionTab
                         scrollKey={scrollKeys[id] ?? 0}
                         insert={id === activeId ? insert : undefined}
@@ -1255,21 +1330,22 @@ export function App() {
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
                         onUpload={upload(s.cwd)}
                         onPrompt={(text, images) => {
-                          // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
-                          if (status !== "connected") return Promise.reject(new Error(`the daemon is ${status}`));
-                          // GH-133: the bubble shows at once; the daemon's user_text replaces it.
-                          const key = pendingKey();
-                          setOptimistic((o) => ({ ...o, [s.id]: addPending(o[s.id], viewsRef.current[s.id], { key, text, images }) }));
-                          return client.current!.request({ type: "session.prompt", sessionId: s.id, text, images }).catch((e) => {
-                            setOptimistic((o) => dropPending(o, s.id, key));
-                            throw e;
-                          });
+                          // While the /clear runs the message waits: its bubble shows now, it is sent once the tab follows (or the /clear ends without).
+                          if (!v.externalTurn && clearing(v, pend)) {
+                            if (status !== "connected") return Promise.reject(new Error(`the daemon is ${status}`));
+                            const key = pendingKey();
+                            setOptimistic((o) => ({ ...o, [s.id]: addPending(o[s.id], viewsRef.current[s.id], { key, text, images }) }));
+                            (clearQueue.current[s.id] ??= []).push({ key, text, images });
+                            return Promise.resolve();
+                          }
+                          return sendPrompt(s.id, text, images);
                         }}
                         onBash={(command) =>
                           status === "connected"
                             ? client.current!.request({ type: "session.bash", sessionId: s.id, command })
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
+                        onCancelContinue={() => client.current!.request({ type: "session.cancelContinue", sessionId: s.id }).catch((e) => setError((e as Error).message))}
                         onInterrupt={() =>
                           client.current!.request({ type: "session.interrupt", sessionId: s.id }).catch((e) => setError((e as Error).message))
                         }
@@ -1330,6 +1406,7 @@ export function App() {
                       view={views[panelSession.id]!}
                       cwd={panelSession.cwd}
                       onOpen={(path) => (setOpenFile(path), setPane("files"))}
+                      sessionId={panelSession.id}
                     />
                   )}
                   {sidePane === "graph" && (
@@ -1730,8 +1807,8 @@ export function NewSession({
   commandsRev?: number;
   /** Rejects when the session was not created; the prompt box keeps the draft. */
   onStart: (cwd: string, opts: StartOptions, first: FirstMessage) => Promise<void>;
-  /** `/mcp`, `/skills`, `/plugins` typed alone: opens that dialog of `cwd` instead of creating a session. */
-  onDialog?: (dialog: DialogName) => void;
+  /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog of `cwd` instead of creating a session. */
+  onDialog?: (dialog: DialogName, arg?: string) => void;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   connected?: boolean;
 }) {
@@ -1912,6 +1989,7 @@ export function SessionPane({
   onBash,
   onSearch,
   onInterrupt,
+  onCancelContinue,
   onRewindPreview,
   onRewind,
   onRespond,
@@ -1957,6 +2035,8 @@ export function SessionPane({
   onBash?: (command: string) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
   onInterrupt: () => void;
+  /** Drops the scheduled continue after a usage limit. */
+  onCancelContinue?: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
@@ -1964,8 +2044,8 @@ export function SessionPane({
   /** The daemon is reachable; otherwise the send button is disabled. */
   connected: boolean;
   onGitStatus?: () => Promise<GitStatus | null>;
-  /** `/mcp`, `/skills`, `/plugins` typed alone: opens that dialog instead of sending. */
-  onDialog?: (dialog: DialogName) => void;
+  /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
+  onDialog?: (dialog: DialogName, arg?: string) => void;
 }) {
   const phone = usePhone();
   const current = runOf(view, run);
@@ -1977,6 +2057,7 @@ export function SessionPane({
   const modePicker = <ModePicker mode={view.permissionMode ?? session.permissionMode} modes={modesOf(session.permissionModes, view.model ?? session.model, models)} onMode={onMode} shortcut={false} />;
   // Waiting for a permission answer is part of the running turn.
   const turnRunning = view.state === "running" || view.state === "needs_input";
+  const isClearing = clearing(view, pending);
   // A bash mode command runs: Stop and Esc kill it.
   const shellRunning = bashRunning(view);
   // Stop agent of the shown run: pending until the run ends, or the request's error next to the button.
@@ -2101,7 +2182,11 @@ export function SessionPane({
           }
           onReachTop={view.older && onLoadOlder ? (user) => onLoadOlder({ user }) : undefined}
           loadingOlder={loadingOlder}
-          renderItem={(item, index) =>
+          renderItem={(item, index) => {
+            // A finished turn (not running; the next top-level item is a prompt, or it is the last) ends with Copy response, with or without a usage footer: a restored transcript has none.
+            const next = items[index + 1];
+            const copyText = (next ? next.kind === "part" && (next.part.type === "user_text" || next.part.type === "bash") : !turnRunning && !view.externalTurn) ? turnText(items, index) : "";
+            const row = (
             item.kind === "context" ? (
               <ContextGroup calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
             ) : item.part.type === "user_text" && coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE) ? (
@@ -2153,7 +2238,18 @@ export function SessionPane({
             ) : (
               <PartView part={item.part} view={view} />
             )
-          }
+            );
+            return copyText ? (
+              <>
+                {row}
+                <MessageActions className="mt-1">
+                  <CopyAction text={copyText} label="Copy response" className="max-md:size-11" />
+                </MessageActions>
+              </>
+            ) : (
+              row
+            );
+          }}
         />
       )}
       <div
@@ -2171,6 +2267,7 @@ export function SessionPane({
           <NotPromptable view={view} run={current} onOpen={onOpenRun} onStop={stopRun} stopping={!!stopOf && !stopOf.error} error={stopOf?.error} />
         ) : (
           <>
+            {view.continueAt !== undefined && <ContinueDock at={view.continueAt} onCancel={() => onCancelContinue?.()} />}
             <PromptBox
               cwd={session.cwd}
               commands={view.commands}
@@ -2195,7 +2292,9 @@ export function SessionPane({
               usage={view.contextUsage}
               stats={totals(view)}
               todos={showTodoDock(view.state, view.todos, false) ? view.todos : undefined}
-              blocked={view.externalTurn ? "A terminal CLI turn is running in this session" : undefined}
+              blocked={view.externalTurn ? "A terminal CLI turn is running in this session" : isClearing ? "Clearing the conversation… your message sends when it is done" : undefined}
+              queueing={!view.externalTurn && isClearing}
+              blockedIcon={!view.externalTurn && isClearing ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
               inputRef={prompt}
@@ -2249,14 +2348,15 @@ function PromptBox({
   disabled,
   blocked,
   blockedIcon,
+  queueing,
   inputRef,
   onDialog,
 }: {
   /** Changing it clears the send error. */
   cwd?: string;
   commands: SlashCommand[];
-  /** Given: the dialog commands (`/mcp`, `/skills`, `/plugins`) are in the picker and open their dialog instead of being sent. */
-  onDialog?: (dialog: DialogName) => void;
+  /** Given: the dialog commands (`/mcp`, `/skills`, `/plugins`, `/resume`) are in the picker and open their dialog instead of being sent. */
+  onDialog?: (dialog: DialogName, arg?: string) => void;
   models: ModelInfo[];
   model: string;
   onModel: (model: string) => void;
@@ -2294,6 +2394,8 @@ function PromptBox({
   blocked?: string;
   /** Icon of the blocked dock; default the terminal icon. */
   blockedIcon?: React.ReactNode;
+  /** The block is a wait the app queues sends through (a /clear running): Enter sends the prompt, the app holds it. */
+  queueing?: boolean;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   const phone = usePhone();
@@ -2407,9 +2509,12 @@ function PromptBox({
       return;
     }
     if (!t.trim() && !images.length) return;
-    const dialog = onDialog && !images.length && dialogOf(t, commands);
-    if (dialog) return onDialog(dialog), edit("");
-    if (blocked) return;
+    const dialog = onDialog && dialogOf(t, commands);
+    if (dialog && (!images.length || dialog === "resume")) {
+      const arg = dialogArg(t);
+      return arg ? onDialog(dialog, arg) : onDialog(dialog), edit("");
+    }
+    if (blocked && !queueing) return;
     const sent = images;
     setSendError(undefined);
     launchFlight(t, input.current?.getBoundingClientRect());
@@ -2471,6 +2576,8 @@ function PromptBox({
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter commits the composition, Esc cancels it, arrows pick IME candidates: never send, pick, dismiss or switch modes then.
     if (composing.current || isImeKey(e.nativeEvent)) return;
+    // Ctrl/Cmd+B, I, E format the selection; defaultPrevented keeps Ctrl+B from toggling the sidebar here. Not in bash mode.
+    if (!bash && formatShortcut(e)) return;
     // OpenCode shell mode: `!` typed at the start of an empty caret switches modes and is not inserted.
     if (onBash && !bash && e.key === "!" && !e.ctrlKey && !e.metaKey && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0) {
       e.preventDefault();
@@ -2584,6 +2691,7 @@ function PromptBox({
       className={`relative flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50 ${lift ? "-mt-11" : ""}`}
       data-testid="prompt-box"
     >
+      {!bash && <MarkdownToolbar input={input} disabled={disabled} />}
       {bash && (
         <span data-testid="bash-mode" aria-hidden className="pointer-events-none absolute top-4 left-4 font-mono text-sm text-muted-foreground pointer-coarse:text-base">
           !
@@ -2654,7 +2762,7 @@ function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) 
   );
 }
 
-function CopyAction({ text }: { text: string }) {
+function CopyAction({ text, label = "Copy message", className = "" }: { text: string; label?: string; className?: string }) {
   const [copied, setCopied] = useState(false);
   // navigator.clipboard is undefined on a non-secure origin (http://<LAN IP>), so Copy does nothing there.
   const copy = () =>
@@ -2666,7 +2774,7 @@ function CopyAction({ text }: { text: string }) {
       () => {},
     );
   return (
-    <MessageAction title="Copy" label="Copy message" className="pointer-coarse:size-11" onClick={copy}>
+    <MessageAction title="Copy" label={label} className={`pointer-coarse:size-11 ${className}`} onClick={copy}>
       {copied ? <CheckIcon /> : <CopyIcon />}
     </MessageAction>
   );
@@ -2800,9 +2908,9 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
         <>
           {(text || part.images.length > 0) && (
             <Message from="user">
-              <MessageContent className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+              <MessageContent className="[overflow-wrap:anywhere]">
                 <ImageStrip images={part.images} />
-                <UserText text={text} />
+                <UserMarkdown text={text} />
               </MessageContent>
             </Message>
           )}
@@ -2913,21 +3021,6 @@ function CompactionDivider({ id, summary }: { id: string; summary?: string }) {
         </details>
       )}
     </div>
-  );
-}
-
-/** User prompt: `> ` runs as quote blocks (muted, 2px left border), the rest plain text as before. */
-function UserText({ text }: { text: string }) {
-  const parts = splitQuotes(text);
-  if (parts.length === 1 && !parts[0]!.quote) return text;
-  return parts.map((p, i) =>
-    p.quote ? (
-      <blockquote key={i} className="whitespace-pre-wrap border-l-2 border-border pl-3 text-muted-foreground">
-        {p.text}
-      </blockquote>
-    ) : (
-      <span key={i}>{p.text}</span>
-    ),
   );
 }
 

@@ -10,12 +10,13 @@ import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_T
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
-import { createWorktree, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { createPlanTracker } from "./plan-usage.ts";
+import { CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
@@ -286,6 +287,8 @@ export function createDaemon(opts: {
   projects?: Projects;
   /** App-wide settings (settings.json); in memory when omitted. Readers call `get()` each time. */
   appSettings?: AppSettings;
+  /** Test seam (GH-164): delays of auto-continue.ts. */
+  autoContinue?: { graceMs?: number; gapMs?: number; retryMs?: number };
   listCache?: boolean;
   hostnames?: string[];
   cli?: CliRunner;
@@ -323,6 +326,8 @@ export function createDaemon(opts: {
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
     plan,
+    // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
+    onLimitStop: (id: string, resetsAt: number | undefined) => autoContinue.schedule(id, resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined)),
     allowBypass: opts.allowBypass,
     supportsAuto,
     uploadDir: uploadParent,
@@ -348,6 +353,18 @@ export function createDaemon(opts: {
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
+  const autoContinue = createAutoContinue({
+    ...opts.autoContinue,
+    enabled: () => appSettings.get().usageLimit.autoContinue,
+    show: (id, at) => sessions.get(id)?.setContinueAt(at),
+    send: async (id, wanted) => {
+      const s = sessions.get(id);
+      if (!s || s.info().state !== "idle") return false;
+      const err = await sendPrompt(s, CONTINUE_PROMPT, [], wanted);
+      if (!err) console.log(`session ${id}: sent continue after the usage limit reset`);
+      return !err;
+    },
+  });
   const connections = new Set<WebSocket>();
   const terminals = createTerminals();
   const broadcast = (m: ServerMessage) => connections.forEach((ws) => send(ws, m));
@@ -608,12 +625,14 @@ export function createDaemon(opts: {
   }
 
   /** session.prompt's checks and send; the reason when the prompt is not taken. `images`: checked with imageBlock(). */
-  async function sendPrompt(s: Session, text: string, images: string[] = []): Promise<{ code: string; message: string } | undefined> {
+  async function sendPrompt(s: Session, text: string, images: string[] = [], stillWanted?: () => boolean): Promise<{ code: string; message: string } | undefined> {
     const notLive = () => ({ code: "session_not_live", message: `session ${s.id} is ${s.info().state}` });
     if (!s.isLive()) return notLive();
     // Sync before prompt: the prompt continues after the terminal CLI's turns (a running turn is steered as is).
     if (s.info().state === "idle") await s.sync();
     if (!s.isLive()) return notLive();
+    // A message the user sent while the sync ran cancelled an automatic continue: send nothing (GH-164).
+    if (stillWanted && !stillWanted()) return { code: "cancelled", message: "cancelled" };
     // The web app holds the prompt while it shows the external turn; this covers a client that has not seen it yet.
     if (s.externalTurnRunning()) return { code: "external_turn", message: "A terminal CLI turn is running in this session" };
     if (s.bashRunning()) return { code: "bash_running", message: "A shell command is running in this session; stop it first" };
@@ -637,7 +656,7 @@ export function createDaemon(opts: {
       queueMicrotask(() => broadcast({ type: "sessions.changed" }));
       return s;
     },
-    prompt: async (s, text) => (await sendPrompt(s, text))?.message,
+    prompt: async (s, text) => (autoContinue.cancel(s.id), (await sendPrompt(s, text))?.message),
     allowed: (path) => allowed(path),
     sideOf: (path) => {
       const id = opts.sides?.pathSide(path);
@@ -689,6 +708,7 @@ export function createDaemon(opts: {
 
   /** A session's title as list() gives it: the SDK summary, a cleared session's first prompt, "New session" without transcript. */
   async function titleOf(s: Session) {
+    if (s.untitled()) return "New session";
     const info = await history.getSessionInfo(s.id).catch(() => undefined);
     if (!info) return "New session";
     return CLEARED.test(info.summary) ? clearedTitle(s.id, info.cwd ?? s.cwd) : info.summary;
@@ -714,7 +734,7 @@ export function createDaemon(opts: {
     for (const t of all) {
       if (!t.cwd || !allowed(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
-      const title = CLEARED.test(t.summary) ? await clearedTitle(t.sessionId, t.cwd) : t.summary;
+      const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd)) : t.summary;
       items.set(t.sessionId, { ...live, id: t.sessionId, cwd: sessionCwd(t.cwd), title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
@@ -1048,6 +1068,7 @@ export function createDaemon(opts: {
         case "session.prompt": {
           const s = await find(msg.sessionId);
           if (!s) return;
+          autoContinue.cancel(s.id);
           const images = msg.images ?? [];
           if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
             return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
@@ -1058,6 +1079,7 @@ export function createDaemon(opts: {
         case "session.bash": {
           const s = await find(msg.sessionId);
           if (!s) return;
+          autoContinue.cancel(s.id);
           if (typeof msg.command !== "string" || !msg.command.trim()) return fail("bad_command", "empty command");
           if (!allowed(s.cwd)) return fail("cwd_not_allowed", `outside the allowlisted roots: ${s.cwd}`);
           const notLive = () => fail("session_not_live", `session ${s.id} is ${s.info().state}`);
@@ -1112,6 +1134,11 @@ export function createDaemon(opts: {
           } catch (err) {
             return fail("fs_error", String(err));
           }
+        }
+        case "session.cancelContinue": {
+          // No find(): a cancel must not restore a session.
+          autoContinue.cancel(msg.sessionId);
+          return reply({});
         }
         case "session.interrupt": {
           const s = await find(msg.sessionId);
@@ -1186,6 +1213,7 @@ export function createDaemon(opts: {
         case "settings.set": {
           try {
             const settings = appSettings.set(msg.patch);
+            if (!settings.usageLimit.autoContinue) autoContinue.clear();
             broadcast({ type: "settings_changed", settings });
             return reply({ settings });
           } catch (err) {
@@ -1218,6 +1246,7 @@ export function createDaemon(opts: {
           const state = at.live?.info().state;
           if (state === "running" || state === "needs_input") return fail("session_running", "stop the session before deleting it");
           // The CLI exits first: it writes session metadata on exit, which would recreate the transcript. A failed delete keeps the transcript.
+          autoContinue.cancel(msg.sessionId);
           deleting.add(msg.sessionId);
           sessions.delete(msg.sessionId);
           touched.delete(msg.sessionId);
@@ -1253,6 +1282,7 @@ export function createDaemon(opts: {
           const s = await find(msg.sessionId);
           if (!s) return;
           if (msg.type === "session.rewind" && !REWIND_MODES.includes(msg.mode)) return fail("bad_mode", `unknown rewind mode ${msg.mode}`);
+          if (msg.type === "session.rewind") autoContinue.cancel(s.id);
           try {
             return reply(msg.type === "session.rewind" ? (await s.rewind(msg.userMessageId, msg.mode), {}) : await s.previewRewind(msg.userMessageId));
           } catch (err) {
@@ -1296,6 +1326,7 @@ export function createDaemon(opts: {
           return reply({ status: await gitStatus(cwd) });
         }
         case "git.log":
+        case "git.diff":
         case "git.commit":
         case "git.fileAt": {
           const cwd = allowed(msg.cwd);
@@ -1304,6 +1335,7 @@ export function createDaemon(opts: {
           // No filter text in the log (it may hold a secret).
           try {
             if (msg.type === "git.log") return reply({ log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, allowed: inside }) });
+            if (msg.type === "git.diff") return reply({ diff: await gitDiff(cwd, { base: msg.base, ref: msg.ref, allowed: inside }) });
             if (msg.type === "git.commit") {
               const c = await gitShow(cwd, msg.hash, inside);
               return c ? reply({ commit: c }) : fail("not_git", "Not in a git repository");

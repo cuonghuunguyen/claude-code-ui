@@ -162,11 +162,13 @@ export type Part = { parentId?: string } & (
    * the web app sends no prompt until `running` is false.
    */
   | { type: "external_turn"; id: "external_turn"; running: boolean }
+  /** A continue prompt is scheduled at `at` (ms) after a usage limit (docs/spec.md "Continue after a usage limit"); null = none. */
+  | { type: "auto_continue"; id: "auto_continue"; at: number | null }
 );
 
 /** Part types that are not timeline entries: they set session state or edit the order (never in `order`). The daemon's PartIndex skips them; the web store handles each one explicitly in applyEvent. */
 export const TIMELINE_EXCLUDED: ReadonlySet<Part["type"]> = new Set<Part["type"]>([
-  "session_state", "session_model", "session_permission_mode", "session_effort", "commands", "context_usage", "todo_update", "external_turn", "session_cleared", "rewind", "retract",
+  "session_state", "session_model", "session_permission_mode", "session_effort", "commands", "context_usage", "todo_update", "external_turn", "auto_continue", "session_cleared", "rewind", "retract",
 ]);
 
 /** A session_state that makes the session unread: needs input, or finished (idle without background work, or error) after being busy. */

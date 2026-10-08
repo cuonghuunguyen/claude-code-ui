@@ -7,7 +7,7 @@ import { createSettings, DEFAULTS } from "../src/settings.ts";
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false }, usageLimit: { autoContinue: false } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -89,4 +89,13 @@ it("the file keeps only fields that differ from their default", () => {
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { enabled: true, coordinatorPermissions: true } });
   s.set({ orchestration: { enabled: false } });
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { coordinatorPermissions: true } });
+});
+
+it("usageLimit.autoContinue defaults off, is saved when on, refuses a non-boolean", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.get().usageLimit).toEqual({ autoContinue: false });
+  s.set({ usageLimit: { autoContinue: true } });
+  expect(createSettings({ file: f }).get().usageLimit).toEqual({ autoContinue: true });
+  expect(() => s.set({ usageLimit: { autoContinue: "yes" as never } })).toThrow("Continue automatically after a usage limit resets must be on or off");
 });

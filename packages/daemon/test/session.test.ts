@@ -7,7 +7,7 @@ import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Event } from "@claude-ui/protocol";
 import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, queuedQuery, Session, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
-import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -545,6 +545,21 @@ describe("coordinator settle", () => {
 });
 
 describe("Session /clear", () => {
+  it("the session a /clear hands the query to is untitled until its first prompt", async () => {
+    const heirs: Session[] = [];
+    const s = new Session("/repo", { query: clearQuery as never, onCleared: (h) => heirs.push(h) });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hi");
+    await until(events, (e) => e.part.type === "turn_result");
+    s.prompt("/clear");
+    await until(events, (e) => e.part.type === "session_cleared");
+    expect(heirs[0]!.untitled()).toBe(true);
+    expect(s.untitled()).toBe(false);
+    heirs[0]!.prompt("x");
+    expect(heirs[0]!.untitled()).toBe(false);
+  });
+
   it("hands the live query to a new session under the CLI's next session ID; the old one keeps its history and resumes its own transcript", async () => {
     const heirs: Session[] = [];
     const s = new Session("/repo", { query: clearQuery as never, onCleared: (h) => heirs.push(h) });
@@ -1075,6 +1090,51 @@ describe("Session context usage", () => {
     expect(plan.rateLimit).toHaveBeenCalledWith(expect.objectContaining({ status: "allowed", rateLimitType: "five_hour" }), expect.objectContaining({ usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: expect.any(Function) }));
     expect(plan.refresh).toHaveBeenCalledTimes(1);
     expect(plan.refresh.mock.calls[0]![0]).toBe(plan.rateLimit.mock.calls[0]![1]);
+  });
+
+  it("a turn ended by the usage limit reports onLimitStop with the rejected event's reset time", async () => {
+    limitState.resetsAt = 0;
+    const onLimitStop = vi.fn();
+    const s = new Session("/tmp", { query: limitQuery as never, onLimitStop });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("limit");
+    await until(events, (e) => e.part.type === "session_state" && e.part.state === "idle" && events.some((x) => x.part.type === "turn_result"));
+    expect(onLimitStop).toHaveBeenCalledTimes(1);
+    expect(onLimitStop).toHaveBeenCalledWith(s.id, limitState.resetsAt * 1000);
+  });
+
+  it("a rate_limit error without a rejected event reports no reset time", async () => {
+    const onLimitStop = vi.fn();
+    const s = new Session("/tmp", { query: limitQuery as never, onLimitStop });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("limit-noevent");
+    await until(events, (e) => e.part.type === "turn_result");
+    await until(events, (e) => e.part.type === "session_state" && e.part.state === "idle");
+    expect(onLimitStop).toHaveBeenCalledWith(s.id, undefined);
+  });
+
+  it("a normal turn and an allowed rate_limit_event report no limit stop", async () => {
+    const onLimitStop = vi.fn();
+    const s = new Session("/tmp", { query: fakeQuery as never, onLimitStop });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hello");
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(onLimitStop).not.toHaveBeenCalled();
+  });
+
+  it("setContinueAt emits one auto_continue part per change; the snapshot heads carry it", () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.setContinueAt(5000);
+    s.setContinueAt(5000);
+    s.setContinueAt(null);
+    expect(events.filter((e) => e.part.type === "auto_continue").map((e) => (e.part as { at: number | null }).at)).toEqual([5000, null]);
+    const snap = s.snapshot().snapshot;
+    expect(snap.heads.some((e) => e.part.type === "auto_continue" && e.part.at === null)).toBe(true);
   });
 
   it("refreshes after a compaction boundary, before the turn ends", async () => {
