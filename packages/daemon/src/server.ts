@@ -1126,6 +1126,7 @@ export function createDaemon(opts: {
       }
       if (typeof msg !== "object" || msg === null || Array.isArray(msg))
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
+      if (msg.type === "ping") return send(ws, { type: "reply", reqId: msg.reqId, result: {} });
       if (router) return router.handle(msg as ClientMessage & Record<string, unknown>);
       return local(msg, (m) => send(ws, m));
     };

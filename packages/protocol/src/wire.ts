@@ -115,6 +115,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "fs.search"; cwd: string; query: string }
   /** Content search (docs/spec.md "Wire protocol"): streams `sessions.search.result`, then the reply SessionsSearchResult. A new search on the connection cancels the running one; a query under MIN_SEARCH_CHARS only cancels. */
   | { type: "sessions.search"; query: string; cwd?: string }
+  /** Liveness probe: answered with `{}` by the daemon itself (never routed to a side). The page sends it after waking to find a zombie socket. */
+  | { type: "ping" }
   /** The daemon's VAPID public key, for `PushManager.subscribe()`. */
   | { type: "push.key" }
   | { type: "push.subscribe"; subscription: WebPushSubscription }

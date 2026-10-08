@@ -2709,6 +2709,12 @@ describe("WebSocket auth and origin check", () => {
     expect(wrong.body).not.toContain("wrong-token");
   });
 
+  it("answers a ping request with an empty reply (the page's liveness probe)", async () => {
+    const c = await client();
+    expect(await c.request({ type: "ping" })).toMatchObject({ type: "reply", result: {} });
+    c.ws.close();
+  });
+
   it("answers the /auth probe 204 for the paired token and 401 otherwise: the browser cannot see a rejected upgrade's status", async () => {
     const probe = (headers: Record<string, string> = {}) => fetch(`${origin()}/auth`, { headers }).then((r) => r.status);
     expect(await probe({ authorization: `Bearer ${token}` })).toBe(204);
