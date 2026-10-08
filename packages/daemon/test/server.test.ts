@@ -23,6 +23,8 @@ const added = (...cwds: string[]) => {
 
 // POSIX-only assertions (sh syntax, symlinks without admin rights) are skipped or swapped on Windows.
 const posix = process.platform !== "win32";
+// Git for Windows takes 0.2-0.6 s per process, so tests that drive many git commands (worktrees) exceed the 15 s default there.
+if (!posix) vi.setConfig({ testTimeout: 120_000 });
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
@@ -3310,10 +3312,11 @@ describe("fs.media and /media", () => {
   });
   it("filename* encodes ' ( ) * (RFC 5987)", async () => {
     const c = await client();
-    const f = join(dir, "it's (a) *.png");
+    // `*` cannot be in a Windows file name; the RFC 5987 escape of `*` is checked where the file system allows it.
+    const f = join(dir, posix ? "it's (a) *.png" : "it's (a).png");
     writeFileSync(f, png);
     const r = await get((await media(c, f)).result.url);
-    expect(String(r.headers["content-disposition"])).toContain("filename*=UTF-8''it%27s%20%28a%29%20%2A.png");
+    expect(String(r.headers["content-disposition"])).toContain(`filename*=UTF-8''it%27s%20%28a%29${posix ? "%20%2A" : ""}.png`);
     c.ws.close();
   });
 
