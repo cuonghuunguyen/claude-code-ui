@@ -1259,7 +1259,7 @@ export function App() {
   useEffect(() => {
     if (status === "unauthorized") return;
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.defaultPrevented || document.querySelector('[aria-modal="true"]')) return;
+      if (e.defaultPrevented || isImeKey(e) || document.querySelector('[aria-modal="true"]')) return;
       const isPalette = [specOf("palette.open"), specOf("palette.alt")].some((k) => k && matchesKey(k, e));
       const c = isPalette ? undefined : shortcutFor(latestCommands.current, e);
       if (!isPalette && !c) return;
