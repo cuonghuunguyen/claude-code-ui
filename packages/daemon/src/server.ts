@@ -63,6 +63,7 @@ const IDLE_CHECK_MS = 60_000;
 
 /** A new connection gets a fresh plan usage read when the last one is older (reset times pass without a turn). */
 const PLAN_STALE_MS = 5 * 60_000;
+const PING_MS = 15_000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -341,6 +342,8 @@ export function createDaemon(opts: {
   /** Test seam (GH-164): delays of auto-continue.ts. */
   autoContinue?: { graceMs?: number; gapMs?: number; retryMs?: number };
   listCache?: boolean;
+  /** Interval of the WebSocket ping that drops a half-open socket (default 15 s; tests use a few hundred ms). */
+  pingMs?: number;
   hostnames?: string[];
   cli?: CliRunner;
   configHoldMs?: number;
@@ -1061,8 +1064,29 @@ export function createDaemon(opts: {
   /** This daemon has the session: live, or a transcript inside the roots. */
   const isLocalSession = async (id: string) => sessions.has(id) || (UUID.test(id) && !!allowed((await history.getSessionInfo(id).catch(() => undefined))?.cwd));
 
+  // Ping each socket every interval; one that did not pong since the previous tick is half-open (phone asleep, wifi gone, no FIN):
+  // terminate it so its close handler runs (focused tab, subscriptions, watches), else its stale "focused" entry mutes push.
+  const answered = new WeakSet<WebSocket>();
+  const pinger = setInterval(() => {
+    for (const ws of connections) {
+      if (!answered.has(ws)) {
+        ws.terminate();
+        continue;
+      }
+      answered.delete(ws);
+      try {
+        ws.ping();
+      } catch {
+        ws.terminate();
+      }
+    }
+  }, opts.pingMs ?? PING_MS).unref();
+  http.on("close", () => clearInterval(pinger));
+
   wss.on("connection", (ws: WebSocket) => {
     connections.add(ws);
+    answered.add(ws);
+    ws.on("pong", () => answered.add(ws));
     const usage = plan.current();
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
     if (plan.age() > PLAN_STALE_MS) void plan.reread();

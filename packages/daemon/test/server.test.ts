@@ -73,8 +73,8 @@ function attempt(opts: { protocols?: string[]; headers?: Record<string, string> 
   });
 }
 
-function client(p = port) {
-  const ws = new WebSocket(`ws://127.0.0.1:${p}/ws`, protocols(), { origin: `http://127.0.0.1:${p}` });
+function client(p = port, wsOpts: { autoPong?: boolean } = {}) {
+  const ws = new WebSocket(`ws://127.0.0.1:${p}/ws`, protocols(), { origin: `http://127.0.0.1:${p}`, ...wsOpts });
   const inbox: ServerMessage[] = [];
   ws.on("message", (d) => inbox.push(JSON.parse(String(d))));
   const waitFor = (pred: (m: ServerMessage) => boolean) =>
@@ -2588,8 +2588,8 @@ describe("push", () => {
     const subs: unknown[] = [];
     return { sent, subs, push: { publicKey: "BPUBLIC", subscribe: (s: unknown) => (subs.push(s), s !== null), send: async (p: PushPayload) => void sent.push(p) } };
   };
-  async function daemon(push?: ReturnType<typeof fakePush>["push"]) {
-    const d = createDaemon({ webRoot, roots: [webRoot], query: permissionQuery as never, token, push, history: { ...history, getSessionInfo: async () => undefined } as never });
+  async function daemon(push?: ReturnType<typeof fakePush>["push"], pingMs?: number) {
+    const d = createDaemon({ webRoot, roots: [webRoot], query: permissionQuery as never, token, push, pingMs, history: { ...history, getSessionInfo: async () => undefined } as never });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     return { d, c: await client((d.address() as AddressInfo).port) };
   }
@@ -2646,6 +2646,51 @@ describe("push", () => {
     } finally {
       d.close();
     }
+  });
+
+  describe("ws ping", () => {
+    const closed = (ws: WebSocket) => new Promise<number>((r) => ws.once("close", (code) => r(code)));
+
+    it("drops a socket that stops answering pings and keeps one that answers", async () => {
+      const { d, c: healthy } = await daemon(undefined, 100);
+      try {
+        const dead = await client((d.address() as AddressInfo).port, { autoPong: false });
+        const t0 = Date.now();
+        expect(await closed(dead.ws)).toBe(1006);
+        expect(Date.now() - t0).toBeLessThan(1500);
+        await new Promise((r) => setTimeout(r, 500));
+        expect(healthy.ws.readyState).toBe(WebSocket.OPEN);
+        expect(await healthy.request({ type: "push.key" })).toMatchObject({ code: "push_unavailable" });
+      } finally {
+        d.close();
+      }
+    });
+
+    it("a half-open tab no longer suppresses push for the session it showed", async () => {
+      const f = fakePush();
+      const { d, c } = await daemon(f.push, 300);
+      try {
+        const port = (d.address() as AddressInfo).port;
+        const dead = await client(port, { autoPong: false });
+        const { result } = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+        const sessionId = result.session.id;
+        await c.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+        await dead.request({ type: "push.focus", sessionId });
+        await c.request({ type: "session.prompt", sessionId, text: "run tests" });
+        const req = (await c.waitFor((m) => m.type === "event" && m.part.type === "permission_request")) as { part: { requestId: string } };
+        // Control: while the dead socket is still registered it suppresses the push.
+        await new Promise((r) => setTimeout(r, 50));
+        expect(f.sent).toEqual([]);
+        await closed(dead.ws);
+        await c.request({ type: "permission.respond", requestId: req.part.requestId, decision: "allow" });
+        await c.waitFor((m) => m.type === "event" && m.part.type === "session_state" && m.part.state === "idle");
+        await c.request({ type: "session.prompt", sessionId, text: "again" });
+        await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+        expect(f.sent[0]).toMatchObject({ sessionId });
+      } finally {
+        d.close();
+      }
+    });
   });
 });
 
