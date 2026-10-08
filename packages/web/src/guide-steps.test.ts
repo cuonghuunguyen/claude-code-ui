@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adapt, STEPS, stepById, stepsFor } from "./guide-steps.ts";
+import { adapt, chaptersOf, STEPS, stepById, stepsFor } from "./guide-steps.ts";
 
 const ctx = { session: false, git: false, narrow: false };
 
@@ -41,5 +41,37 @@ describe("step data", () => {
   });
   it("anchors are CSS selectors on data-command or data-testid", () => {
     for (const s of STEPS) for (const a of [...s.anchors, ...(s.alt?.anchors ?? [])]) expect(a).toMatch(/^\[data-(command|testid)="[\w.-]+"\]$/);
+  });
+});
+
+describe("chapter Your session", () => {
+  const withSession = { session: true, git: true, narrow: false };
+  it("has six steps in a git work tree and five outside it (no git graph)", () => {
+    expect(stepsFor("session", withSession).map((s) => s.id)).toEqual(["tabs", "files", "changes", "graph", "terminal", "replay"]);
+    expect(stepsFor("session", { ...withSession, git: false }).map((s) => s.id)).toEqual(["tabs", "files", "changes", "terminal", "replay"]);
+  });
+  it("Basics with a session shown carries on into it without its end card: 11 steps, 10 outside git", () => {
+    const ids = stepsFor("basics", withSession).map((s) => s.id);
+    expect(ids).toHaveLength(11);
+    expect(ids).not.toContain("basics-end");
+    expect(ids.slice(0, 5)).toEqual(["welcome", "project", "new-session", "sidebar", "palette"]);
+    expect(stepsFor("basics", { ...withSession, git: false })).toHaveLength(10);
+    expect(chaptersOf(ids)).toEqual(["basics", "session"]);
+    expect(chaptersOf(stepsFor("basics", ctx).map((s) => s.id))).toEqual(["basics"]);
+  });
+  it("the tab strip step points at the tab switcher below md", () => {
+    expect(adapt(stepById("tabs")!, true)).toMatchObject({ anchors: ['[data-testid="tab-switcher"]'], keys: [] });
+  });
+  it("the panel steps fall back to the side panel toggle with its own body", () => {
+    for (const id of ["files", "changes", "graph"]) expect(stepById(id)!.alt).toMatchObject({ anchors: ['[data-command="panel.toggle"]'], body: "Show the side panel to see files, changes and the git graph." });
+  });
+  it("the terminal step falls back to the pane row below lg, and has no side panel alternative (centered)", () => {
+    expect(stepById("terminal")!.anchors).toEqual(['[data-command="terminal.toggle"]', '[data-testid="pane-terminal"]']);
+    expect(stepById("terminal")!.alt).toBeUndefined();
+  });
+  it("keys: only commands the app has today", () => {
+    expect(stepById("tabs")!.keys).toEqual(["tab.next", "tab.close"]);
+    expect(stepById("files")!.keys).toEqual(["filetree.toggle"]);
+    expect(stepById("changes")!.keys).toBeUndefined();
   });
 });

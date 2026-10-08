@@ -27,6 +27,7 @@ window.matchMedia = ((query: string) => ({
 const ID = "11111111-2222-3333-4444-555555555555";
 const session: SessionListItem = { id: ID, cwd: "/p/demo", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: ["default"], title: "Demo", lastActivity: 0, archived: false, transcript: true };
 const replies: Record<string, unknown> = {};
+let emit: (e: unknown) => void = () => {};
 const reset = () => {
   for (const k of Object.keys(replies)) delete replies[k];
   Object.assign(replies, {
@@ -59,7 +60,8 @@ vi.mock("@xterm/xterm", () => ({
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
-  connect: (opts: { onOpen?: () => void; onStatus?: (s: string) => void }) => {
+  connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
+    emit = opts.onEvent;
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return { request: async (m: { type: string }) => replies[m.type] ?? {}, onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
   },
@@ -178,12 +180,86 @@ describe("first use", () => {
   });
 });
 
+describe("chapter Your session", () => {
+  const inSession = (git: boolean, state: object = { v: 1, origin: "new", basics: "done", session: "pending" }) => {
+    localStorage.setItem(GUIDE_KEY, JSON.stringify(state));
+    location.hash = `#${ID}`;
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    replies["git.status"] = { status: git ? { branch: "main" } : null };
+  };
+  it("starts when a session shows and is idle: Tabs first, six steps in a git work tree", async () => {
+    inSession(true);
+    await mount();
+    expect(tour()!.dataset.step).toBe("tabs");
+    expect(tour()!.textContent).toContain("Step 1 of 6");
+  });
+  it("waits for the git status, so a slow answer does not drop the Git graph step", async () => {
+    inSession(true);
+    let answer: (v: unknown) => void = () => {};
+    replies["git.status"] = new Promise((r) => (answer = r));
+    await mount();
+    await act(async () => new Promise((r) => setTimeout(r, 3500)));
+    expect(tour()).toBeNull();
+    await act(async () => answer({ status: { branch: "main" } }));
+    expect(tour()!.textContent).toContain("Step 1 of 6");
+  });
+  it("outside git the Git graph step is absent and the count is one less", async () => {
+    inSession(false);
+    await mount();
+    expect(tour()!.textContent).toContain("Step 1 of 5");
+    for (let i = 0; i < 2; i++) await press({ key: "ArrowRight" });
+    expect(tour()!.dataset.step).toBe("changes");
+    await press({ key: "ArrowRight" });
+    expect(tour()!.dataset.step).toBe("terminal");
+  });
+  it("finishing it marks the chapter done and it does not start again", async () => {
+    inSession(true);
+    await mount();
+    for (let i = 0; i < 5; i++) await press({ key: "ArrowRight" });
+    expect(tour()!.dataset.step).toBe("replay");
+    await act(async () => [...tour()!.querySelectorAll("button")].find((b) => b.textContent === "Done")!.click());
+    expect(tour()).toBeNull();
+    expect(saved()).toMatchObject({ basics: "done", session: "done" });
+  });
+  it("does not start while the turn runs, and starts once it is idle", async () => {
+    inSession(true);
+    const head = { type: "event", sessionId: ID, seq: 1, part: { type: "session_state", id: "st", state: "running" } };
+    replies["session.subscribe"] = { logEpoch: "e1", seq: 1, session: { ...session, state: "running" }, title: "Demo", snapshot: { heads: [head], attentionSeq: 0, page: { parts: [] }, aux: [] } };
+    await mount();
+    expect(tour()).toBeNull();
+    await act(async () => emit({ ...head, seq: 2, part: { ...head.part, state: "idle" } }));
+    expect(tour()!.dataset.step).toBe("tabs");
+  });
+  it("a state that was offered or skipped never starts it", async () => {
+    inSession(true, { v: 1, origin: "existing", basics: "offered", session: "offered" });
+    await mount();
+    expect(tour()).toBeNull();
+  });
+  it("a fresh Basics run with a session already shown chains into it (no end card)", async () => {
+    inSession(true, { v: 1, origin: "new", basics: "pending", session: "pending" });
+    await mount();
+    expect(tour()!.textContent).toContain("Step 1 of 11");
+  });
+});
+
 describe("anchor drift guard: every step's anchors match an element of the rendered app", () => {
   const hits = (step: GuideStep, narrow: boolean) => {
     const r = adapt(step, narrow);
     return [...r.anchors, ...(r.alt?.anchors ?? [])].some((sel) => document.querySelector(sel));
   };
   for (const w of [1440, 390]) {
+    it(`app with a session in a git work tree at ${w}px (every step with an anchor)`, async () => {
+      width = w;
+      location.hash = `#${ID}`;
+      replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+      replies["git.status"] = { status: { branch: "main" } };
+      replies["terminal.list"] = { terminals: [{ id: "t1", title: "Terminal 1" }] };
+      localStorage.setItem(GUIDE_KEY, JSON.stringify({ v: 1, origin: "existing", basics: "offered", session: "offered" }));
+      await mount();
+      const withAnchor = STEPS.filter((s) => s.chapter === "session" && adapt(s, w < 768).anchors.length);
+      for (const s of withAnchor) expect(hits(s, w < 768), `${s.id} at ${w}`).toBe(true);
+      for (const id of ["session.new", "sidebar.toggle", "file.open", "settings.open"]) expect(document.querySelector(`[data-command="${id}"]`) !== null || w < 768, id).toBe(true);
+    });
     it(`fresh app at ${w}px (Basics steps with an anchor)`, async () => {
       width = w;
       await mount();

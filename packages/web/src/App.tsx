@@ -90,7 +90,7 @@ import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
 import { shownPrompt } from "./config-dialog.tsx";
 import { autoChapter, decideFirstUse, finishRun, GUIDE_KEY, loadGuide, parseGuide, saveGuide, settled, skipGuide, wasFreshBrowser, withStep, type ChapterId, type GuideHost, type GuideState } from "./guide.ts";
-import { stepsFor } from "./guide-steps.ts";
+import { chaptersOf, stepById, stepsFor } from "./guide-steps.ts";
 import { GuideTour } from "./guide-tour.tsx";
 import { IS_MAC, KEYS, keyLabels, matchesKey } from "./shortcuts.ts";
 import { isImeKey } from "./ime.ts";
@@ -230,6 +230,7 @@ export function App() {
   const guideState = useRef<GuideState>(undefined);
   const guideDecided = useRef(false);
   const [guideReady, setGuideReady] = useState(false);
+  const guideStep = useRef<string>(undefined);
   const [guideRun, setGuideRun] = useState<{ n: number; ids: string[]; chapters: ChapterId[]; start?: string }>();
   const [update, setUpdate] = useState<UpdateInfo>();
   // The daemon's "runs older code" note; a dismissed note stays hidden until the page reloads.
@@ -936,13 +937,15 @@ export function App() {
   const changeCount = listedChanges && listedChanges.id === panelSession?.id ? listedChanges.n : changedPaths.length;
   // The graph tab exists only while the side panel's cwd is a git work tree.
   const [isGit, setIsGit] = useState(false);
+  // The cwd whose git status has been answered: the tour waits for it so "Git graph" is not dropped by a status still on its way.
+  const [gitChecked, setGitChecked] = useState<string>();
   const panelCwd = panelSession?.cwd;
   useEffect(() => {
     if (!panelCwd || status !== "connected") return;
     let live = true;
     client.current!.request<GitStatusResult>({ type: "git.status", cwd: panelCwd }).then(
-      (r) => live && setIsGit(!!r.status),
-      () => live && setIsGit(false),
+      (r) => live && (setIsGit(!!r.status), setGitChecked(panelCwd)),
+      () => live && (setIsGit(false), setGitChecked(panelCwd)),
     );
     return () => void (live = false);
   }, [panelCwd, status]);
@@ -1094,7 +1097,7 @@ export function App() {
     openPlugins: project ? openPlugins : undefined,
   });
   // Guided tour. The tour gets its key text only from here; the palette rows carry the keys.
-  const sessionIdle = !!shown && view?.state === "idle";
+  const sessionIdle = !!shown && shownState(view) === "idle";
   const guideHost: GuideHost = {
     keyOf: (id) => (id === "palette.open" ? KEYS.palette : commands.find((c) => c.id === id)?.keys),
     openProject: () => (setDrawer(false), setOpeningProject(true)),
@@ -1104,13 +1107,25 @@ export function App() {
   const startRun = (chapter: ChapterId) => {
     const ids = stepsFor(chapter, { session: !!shown, git: isGit, narrow: !wide(768) }).map((s) => s.id);
     const step = guideState.current?.step;
-    setGuideRun((r) => ({ n: (r?.n ?? 0) + 1, ids, chapters: [chapter], start: step && ids.includes(step) ? step : undefined }));
+    setGuideRun((r) => ({ n: (r?.n ?? 0) + 1, ids, chapters: chaptersOf(ids), start: step && ids.includes(step) ? step : undefined }));
   };
+  // An automatic start waits for the shown session (a reload restores its tab a moment after the list) and its git status, so the run's step count is final (a restored tab that never shows: 3 s at most).
+  const [guideWaited, setGuideWaited] = useState(false);
   useEffect(() => {
-    if (!guideReady || guideRun || !guideState.current) return;
+    if (!guideReady) return;
+    const t = setTimeout(() => setGuideWaited(true), 3000);
+    return () => clearTimeout(t);
+  }, [guideReady]);
+  const guideSettled = shown ? gitChecked === shown.cwd : !activeId || activeId === NEW_TAB || guideWaited;
+  useEffect(() => {
+    if (!guideReady || guideRun || !guideState.current || !guideSettled) return;
     const chapter = autoChapter(guideState.current, { session: sessionIdle });
     if (chapter) startRun(chapter);
-  }, [guideReady, guideRun, sessionIdle]);
+  }, [guideReady, guideRun, sessionIdle, guideSettled]);
+  // The shown session's tab closed (another client) while "Your session" showed: the tour is over.
+  useEffect(() => {
+    if (guideRun && !shown && guideStep.current && stepById(guideStep.current)?.chapter === "session") endGuide("done");
+  }, [!!shown]);
   const endGuide = (outcome: "done" | "skipped") => {
     const s = guideState.current;
     if (s && guideRun) {
@@ -1118,6 +1133,7 @@ export function App() {
       saveGuide(guideState.current);
     }
     setGuideRun(undefined);
+    guideStep.current = undefined;
     if (outcome === "skipped") setToast("Tour closed. Restart it from Settings › Guide.");
   };
   // Another tab of this profile finished or skipped the tour: this one ends it too.
@@ -1547,7 +1563,7 @@ export function App() {
           ids={guideRun.ids}
           start={guideRun.start}
           host={guideHost}
-          onStep={(id) => guideState.current && saveGuide((guideState.current = withStep(guideState.current, id)))}
+          onStep={(id) => ((guideStep.current = id), guideState.current && saveGuide((guideState.current = withStep(guideState.current, id))))}
           onEnd={endGuide}
         />
       )}
