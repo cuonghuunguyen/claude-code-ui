@@ -1204,7 +1204,7 @@ export function App() {
               const item = list.find((l) => l.id === id);
               const g = tabGroup(s?.cwd, grouping, worktrees);
               const title = item?.title || titles[id] || "Untitled";
-              return { title, titleLoading: titleLoading(title, prompted.has(id)), cwd: s?.cwd, group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined, worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, state: shownState(views[id]) ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
+              return { title, titleLoading: titleLoading(title, prompted.has(id)), cwd: s?.cwd, ...(keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" }), worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, state: shownState(views[id]) ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
             }}
             renaming={renaming?.in === "tab" ? renaming.id : undefined}
             onAction={sessionAction("tab")}
