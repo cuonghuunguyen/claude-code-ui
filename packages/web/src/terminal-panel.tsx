@@ -10,7 +10,8 @@ import { PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { connect, ConnectionStatus } from "./client.ts";
 import { TERMINAL_FONT, loadTerminalFont, terminalFontSettled } from "./terminal-font.ts";
-import { KEYS, matchesKey } from "./shortcuts.ts";
+import { leavesTerminal, specOf } from "./keymap.ts";
+import { withKey } from "./shortcuts.ts";
 import { IconButton } from "./tabs-bar.tsx";
 import { useDark } from "./theme.ts";
 
@@ -39,7 +40,8 @@ const storage = {
  * Mounted when the user opens the panel: then, with none running, it starts one. A project switch (`cwd`) or a reconnect
  * to an empty list starts none. `onEmpty`: the last terminal was closed or its shell exited; the panel should hide.
  */
-export function TerminalPanel({ client, status, cwd, onEmpty }: { client: Client; status: ConnectionStatus; cwd: string; onEmpty: () => void }) {
+/** `newTick`: bumped by the New terminal shortcut; each bump adds a terminal. */
+export function TerminalPanel({ client, status, cwd, onEmpty, newTick = 0 }: { client: Client; status: ConnectionStatus; cwd: string; onEmpty: () => void; newTick?: number }) {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [activeId, setActiveId] = useState<string>();
   const [error, setError] = useState<string>();
@@ -67,6 +69,13 @@ export function TerminalPanel({ client, status, cwd, onEmpty }: { client: Client
       setError((e as Error).message);
     }
   };
+
+  const seenTick = useRef(newTick);
+  useEffect(() => {
+    if (newTick === seenTick.current) return;
+    seenTick.current = newTick;
+    void create();
+  }, [newTick]);
 
   const latest = useRef({ terminals, onEmpty });
   latest.current = { terminals, onEmpty };
@@ -151,7 +160,7 @@ export function TerminalPanel({ client, status, cwd, onEmpty }: { client: Client
             </div>
           ))}
         </div>
-        <IconButton label="New terminal" onClick={() => void create()} testId="terminal-new">
+        <IconButton label={withKey("New terminal", specOf("terminal.new"))} onClick={() => void create()} testId="terminal-new">
           <PlusIcon />
         </IconButton>
       </div>
@@ -237,8 +246,8 @@ function TerminalView({
     t.onResize(({ cols, rows }) => connected.current && client.request({ type: "terminal.resize", terminalId: id, cols, rows }).catch(() => {}));
     t.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
-      // Left to the app's Toggle terminal shortcut, not a NUL for the shell.
-      if (matchesKey(KEYS.terminal, e)) return false;
+      // Left to the app's shortcuts (Toggle terminal, tab keys, ...), not a NUL for the shell.
+      if (leavesTerminal(e)) return false;
       const mod = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
       // Copy: Ctrl+Shift+C, Cmd+C, or Ctrl+C over a selection (without one it is the shell's interrupt).

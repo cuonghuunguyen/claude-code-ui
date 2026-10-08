@@ -1,9 +1,10 @@
 // Titlebar tabs (OpenCode titlebar-tab-strip): avatar + title + close; middle click closes, drag reorders, overflow scrolls.
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
-// Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip.
+// Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
-import { createContext, memo, use, useEffect, useId, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
+import { createContext, memo, use, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
+import { Menu } from "@base-ui/react/menu";
 import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
@@ -93,12 +94,15 @@ export function TabsBar({
   onRenamed,
   grouping = "project",
   focus,
+  compact = false,
 }: {
   /** The pinned Focus tab (docs/spec.md "Focus"), first in the strip and never closable; `count`: sessions waiting for the user. Absent: no Focus tab. */
   focus?: { count: number };
   tabs: string[];
   /** Selects the collapsed-state storage; group keys come from `info().group`. */
   grouping?: "project" | "worktree" | "none";
+  /** Compact tabs (md and up): every group is its chip, the chip opens a menu of its tabs; the active tab stays after its chip. */
+  compact?: boolean;
   activeId?: string;
   info: (id: string) => TabInfo;
   onSelect: (id: string) => void;
@@ -124,14 +128,19 @@ export function TabsBar({
   };
   const groups = [...groupTabs(given, keyOf)];
   const tabs = groups.flatMap(([, ids]) => ids);
-  const chips = groups.filter(([k]) => k).length > 1;
+  const named = groups.filter(([k]) => k).length;
+  const chips = named > 1 || (compact && named > 0);
   // Collapsed groups are kept per grouping mode; a mode change loads that mode's set.
   const store = grouping === "worktree" ? "worktree" : "project";
   const [col, setCol] = useState(() => ({ mode: store, set: loadCollapsed(store) }));
   if (col.mode !== store) setCol({ mode: store, set: loadCollapsed(store) });
-  const collapsed = col.mode === store ? col.set : loadCollapsed(store);
+  const stored = col.mode === store ? col.set : loadCollapsed(store);
+  // Compact: every group counts as collapsed; the stored set is left alone, so turning compact off brings back the user's own.
+  // Memoised on the group keys: a new Set every render would re-run the reveal effect (observer, scrollIntoView) on every app render.
+  const compactKeys = compact ? JSON.stringify(groups.map(([k]) => k).filter(Boolean)) : "";
+  const collapsed = useMemo(() => (compact ? new Set<string>(JSON.parse(compactKeys || "[]")) : stored), [compact, compactKeys, stored]);
   const toggle = (cwd: string) => {
-    const n = new Set(collapsed);
+    const n = new Set(stored);
     if (n.delete(cwd)) return commit(n);
     n.add(cwd);
     commit(n);
@@ -148,7 +157,7 @@ export function TabsBar({
     saveCollapsed(n, store);
   };
   // No other tab is visible: the active tab stays shown inside its collapsed group.
-  const keepActive = chips && !!activeId && !tabs.some((id) => !collapsed.has(keyOf(id)));
+  const keepActive = chips && !!activeId && (compact || !tabs.some((id) => !collapsed.has(keyOf(id))));
   const hidden = (id: string) => chips && collapsed.has(keyOf(id)) && !(keepActive && id === activeId);
   const visible = tabs.filter((id) => !hidden(id));
   // A tab that becomes active (sidebar, next/previous tab, URL hash) inside a collapsed group expands it, like Chrome.
@@ -156,7 +165,7 @@ export function TabsBar({
   const activeHidden = !!activeId && tabs.includes(activeId) && !keepActive && hidden(activeId);
   useEffect(() => {
     if (!activeHidden || !activeKey) return;
-    const n = new Set(collapsed);
+    const n = new Set(stored);
     n.delete(activeKey);
     commit(n);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -170,7 +179,7 @@ export function TabsBar({
     refocus.current = undefined;
     if (!r) return;
     if (r.group) return strip.current?.querySelector<HTMLElement>(`[data-group-chip="${CSS.escape(r.group)}"]`)?.focus();
-    (r.id ? strip.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(r.id)}"] [role="tab"]`) : newButton.current)?.focus();
+    ((r.id ? strip.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(r.id)}"] [role="tab"]`) : undefined) ?? newButton.current)?.focus();
   }, [tabs]);
   const closeKeepFocus = (id: string) => {
     refocus.current = { id: closeTab(tabs, id, activeId ?? id).active };
@@ -255,7 +264,7 @@ export function TabsBar({
         {groups.map(([cwd, ids]) => (
           // `contents`: groups are no boxes, tabs shrink in the strip as before. The chip is a button inside the tablist (a11y trade-off, no group role).
           <div key={cwd} role="none" className="contents" data-testid="tab-group">
-            {chips && cwd && <GroupChip cwd={cwd} ids={ids} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} />}
+            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} menu={compact ? { activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) } : undefined} />}
             {ids
               .filter((id) => !hidden(id))
               .map((id) => {
@@ -371,47 +380,101 @@ function FocusTab({ active, count, focusable, onSelect }: { active: boolean; cou
 }
 
 /** Group header: project color, name, tab count; a collapsed group shows its most urgent tab state. */
-function GroupChip({ cwd, ids, info, collapsed, onToggle, onMoveTo }: { onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
+function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, menu }: { menu?: { activeId?: string; onSelect: (id: string) => void; onClose: (id: string) => void }; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
   const first = info(ids[0]!);
   const c = avatarColor(first.groupColor ?? cwd, use(AvatarColors));
-  const states = ids.map((id) => status(id, info(id)));
-  const urgent = states.includes("needs_input") ? "needs_input" : states.includes("running") ? "running" : undefined;
+  const states = hiddenIds.map((id) => status(id, info(id)));
+  const urgent = states.includes("needs_input") ? "needs_input" : states.includes("running") ? "running" : states.includes("unread") ? "unread" : undefined;
   const name = first.groupLabel ?? projectName(cwd);
   const sub = first.groupSub;
   const pathId = useId();
+  const shown = collapsed || !!menu;
+  const [open, setOpen] = useState(false);
+  const props = {
+    "aria-describedby": pathId,
+    "aria-label": `${name}${sub ? ` (${sub})` : ""}, ${ids.length} ${ids.length === 1 ? "tab" : "tabs"}${urgent ? `, ${STATUS_LABEL[urgent]}` : ""}`,
+    "data-group-chip": cwd,
+    "data-testid": "tab-group-chip",
+    className: "flex h-6 max-w-40 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-[color-mix(in_oklab,var(--av)_18%,var(--background))] px-1.5 font-medium text-foreground text-xs shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--av)_60%,transparent)] outline-none focus-visible:ring-2 focus-visible:ring-ring",
+    style: { "--av": `var(--avatar-${c})` } as CSSProperties,
+    draggable: true,
+    onDragStart: (e: DragEvent) => {
+      setOpen(false);
+      e.dataTransfer.setData(GROUP_DRAG_TYPE, cwd);
+      e.dataTransfer.effectAllowed = "move";
+    },
+    onDragOver: (e: DragEvent) => {
+      if (!e.dataTransfer.types.includes(GROUP_DRAG_TYPE)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    },
+    onDrop: (e: DragEvent) => {
+      const from = e.dataTransfer.getData(GROUP_DRAG_TYPE);
+      if (!from) return;
+      e.preventDefault();
+      onMoveTo(from, cwd);
+    },
+  };
+  const body = (
+    <>
+      <ChevronDownIcon className={cn("size-3 shrink-0 transition-transform", shown && "-rotate-90")} aria-hidden />
+      <span className="min-w-0 truncate">{name}</span>
+      <span className="tabular-nums" aria-hidden>{ids.length}</span>
+      {shown && urgent === "running" && <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none" data-icon="running" aria-hidden />}
+      {shown && urgent === "needs_input" && <CircleAlertIcon className="size-3.5 shrink-0" data-icon="needs_input" aria-hidden />}
+      {shown && urgent === "unread" && <span data-dot="unread" className="size-1.5 shrink-0 rounded-full bg-info" aria-hidden />}
+    </>
+  );
+  if (menu)
+    // Compact: a menu button (click, Enter, Space, ArrowDown; hover after 300 ms). A path tooltip would fight the hover menu, so the menu header carries name and path.
+    return (
+      // Not modal: a modal menu opened by the press puts a backdrop over the other chips, and a chip drag could not drop. A drag start closes the menu.
+      <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
+        <Menu.Trigger {...props} openOnHover delay={300}>
+          {body}
+        </Menu.Trigger>
+        <span id={pathId} hidden>{cwd}</span>
+        <Menu.Portal>
+          <Menu.Positioner align="start" sideOffset={4} className="z-50">
+            <Menu.Popup className={cn(POPUP, "max-w-80")} data-testid="tab-group-menu">
+              <div className="flex flex-col px-2 py-1 text-xs" aria-hidden>
+                <span className="font-medium">{sub ?? name}</span>
+                <span className="truncate text-muted-foreground">{cwd}</span>
+              </div>
+              {ids.map((id) => {
+                const t = info(id);
+                const s = status(id, t);
+                const label = stateNote(t) || STATUS_LABEL[s];
+                return (
+                  <Menu.Item
+                    key={id}
+                    className={cn(ITEM, "gap-2")}
+                    aria-current={id === menu.activeId ? "true" : undefined}
+                    data-menu-tab={id}
+                    onClick={() => menu.onSelect(id)}
+                    // Middle click closes the tab, like on the tab itself; the menu stays open.
+                    onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+                    onAuxClick={(e) => {
+                      if (e.button !== 1) return;
+                      e.preventDefault();
+                      menu.onClose(id);
+                    }}
+                  >
+                    <TabIcon s={s} cwd={t.cwd} />
+                    {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className={cn("min-w-0 flex-1 truncate", id === menu.activeId && "font-medium")}>{t.title}</span>}
+                    {label && <span className="text-muted-foreground text-xs leading-none">{label}</span>}
+                  </Menu.Item>
+                );
+              })}
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+    );
   return (
     <Tooltip>
-      <TooltipTrigger
-        aria-expanded={!collapsed}
-        aria-describedby={pathId}
-        aria-label={`${name}${sub ? ` (${sub})` : ""}, ${ids.length} ${ids.length === 1 ? "tab" : "tabs"}${urgent ? `, ${STATUS_LABEL[urgent]}` : ""}`}
-        data-group-chip={cwd}
-        data-testid="tab-group-chip"
-        className="flex h-6 max-w-40 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-[color-mix(in_oklab,var(--av)_18%,var(--background))] px-1.5 font-medium text-foreground text-xs shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--av)_60%,transparent)] outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        style={{ "--av": `var(--avatar-${c})` } as CSSProperties}
-        onClick={onToggle}
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.setData(GROUP_DRAG_TYPE, cwd);
-          e.dataTransfer.effectAllowed = "move";
-        }}
-        onDragOver={(e) => {
-          if (!e.dataTransfer.types.includes(GROUP_DRAG_TYPE)) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "move";
-        }}
-        onDrop={(e) => {
-          const from = e.dataTransfer.getData(GROUP_DRAG_TYPE);
-          if (!from) return;
-          e.preventDefault();
-          onMoveTo(from, cwd);
-        }}
-      >
-        <ChevronDownIcon className={cn("size-3 shrink-0 transition-transform", collapsed && "-rotate-90")} aria-hidden />
-        <span className="min-w-0 truncate">{name}</span>
-        <span className="tabular-nums" aria-hidden>{ids.length}</span>
-        {collapsed && urgent === "running" && <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none" data-icon="running" aria-hidden />}
-        {collapsed && urgent === "needs_input" && <CircleAlertIcon className="size-3.5 shrink-0" data-icon="needs_input" aria-hidden />}
+      <TooltipTrigger aria-expanded={!collapsed} {...props} onClick={onToggle}>
+        {body}
       </TooltipTrigger>
       <span id={pathId} hidden>{cwd}</span>
       <TooltipContent className="flex-col items-start gap-0.5">

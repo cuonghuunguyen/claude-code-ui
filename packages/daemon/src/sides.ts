@@ -66,15 +66,20 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
     ...(docker ? [`src='${src}'`] : []),
-    'if [ ! -f "$cli" ]; then',
+    // npm skips an optional dependency it could not fetch: without the SDK's Linux binary (any arch or libc) the side lists no
+    // models (no auto mode) and runs no query. Such an install is installed again.
+    'sdk() { for b in "$dir"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
+    'if [ ! -f "$cli" ] || ! sdk; then',
     docker
       ? `  [ -f "$src" ] || say install_failed "the claude-ui package was not copied in"`
       : `  src=$(wslpath -u '${src}') && [ -f "$src/dist/cli.js" ] || say install_failed "the Windows claude-ui package was not found"`,
     // node-pty has no Linux prebuilds: npm install compiles it.
     "  { command -v make && command -v python3 && { command -v g++ || command -v c++; }; } >/dev/null 2>&1 || say build_tools_missing",
-    '  mkdir -p "$dir" || say install_failed',
+    // From scratch: npm does not fetch an optional dependency again into a node_modules that lacks it.
+    '  rm -rf "$dir"; mkdir -p "$dir" || say install_failed',
     `  out=$(npm install --prefix "$dir" ${docker ? "" : "--install-links "}--omit=dev --no-save --no-fund --no-audit --loglevel=error "$src" 2>&1 >/dev/null) || { rm -rf "$dir"; say install_failed "$(printf '%s' "$out" | tail -n 3 | tr '\\n' ' ')"; }`,
     '  [ -f "$cli" ] || { rm -rf "$dir"; say install_failed "the package has no dist/cli.js"; }',
+    '  sdk || { rm -rf "$dir"; say install_failed "npm did not install the Claude Agent SDK binary for Linux (an optional dependency)"; }',
     // Earlier versions and builds.
     '  for d in "$root"/*; do [ "$d" = "$dir" ] || rm -rf "$d"; done',
     "fi",

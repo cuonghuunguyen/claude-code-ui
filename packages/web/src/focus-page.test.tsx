@@ -66,6 +66,19 @@ it("lists the waiting requests oldest first with their wait time, then the runni
   expect(el.querySelector('[data-testid="focus-running-row"]')!.textContent).toContain("Edit");
 });
 
+it("every button is a 44px target on narrow screens and coarse pointers (case 12)", async () => {
+  await render();
+  const buttons = [
+    ...el.querySelectorAll<HTMLElement>('[data-testid="focus-next"], [data-testid="focus-back"], [data-testid="focus-open-session"]'),
+    ...[...el.querySelectorAll<HTMLElement>('[data-testid="permission-panel"] button')].filter((b) => /^(Deny|Allow always|Allow once|Edit content)$/.test(b.textContent!.trim())),
+  ];
+  expect(buttons.length).toBeGreaterThanOrEqual(5);
+  for (const b of buttons) {
+    expect(b.className, b.textContent!).toContain("max-md:h-11");
+    expect(b.className, b.textContent!).toContain("pointer-coarse:h-11");
+  }
+});
+
 it("the detail shows the selected session, its signal-only context and the request with its wait time", async () => {
   await render();
   expect(el.querySelector('[data-testid="focus-title"]')!.textContent).toBe("Session a");

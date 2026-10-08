@@ -94,14 +94,18 @@ import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
 import { shownPrompt } from "./config-dialog.tsx";
-import { IS_MAC, KEYS, keyLabels, matchesKey } from "./shortcuts.ts";
+import { keyText, matchesKey, withKey } from "./shortcuts.ts";
+import { specOf, useKeymap } from "./keymap.ts";
+import { LEADER_MS, PREFIX_KEYS, leaderStep } from "./leader.ts";
+import { loadClosed, popClosed, pushClosed, saveClosed } from "./closed-tabs.ts";
+import { ShortcutsDialog } from "./shortcuts-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
 import { FOCUS_TAB, NEW_TAB, avatarColors, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
-import { loadTabGrouping, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
+import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -117,7 +121,6 @@ const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ d
 const TERMINAL_KEY = "claude-ui.terminalOpen";
 const PANEL_HIDDEN_KEY = "claude-ui.sidePanelHidden";
 const FILE_TREE_HIDDEN_KEY = "claude-ui.fileTreeHidden";
-const keyText = (spec: string) => keyLabels(spec).join(IS_MAC ? "" : "+");
 const loadFlag = (key: string) => {
   try {
     return localStorage.getItem(key) === "1";
@@ -192,6 +195,16 @@ export function App() {
   // config.changed count per project cwd: an open dialog of that project refreshes.
   // Settings dialog; `settingsChanged`: another client changed the settings (the open dialog reloads).
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // Shortcut labels and the shortcuts themselves follow the user's bindings.
+  useKeymap();
+  // Closed session tabs (Reopen closed tab), per browser.
+  const [closedTabs, setClosedTabs] = useState(loadClosed);
+  useEffect(() => saveClosed(closedTabs), [closedTabs]);
+  // Prefix key: shows the second keys until one is pressed or the time is up.
+  const [prefixOn, setPrefixOn] = useState(false);
+  // New terminal shortcut: each bump adds a terminal to the shown terminal panel.
+  const [terminalTick, setTerminalTick] = useState(0);
   const [settingsChanged, setSettingsChanged] = useState(0);
   const [configChanged, setConfigChanged] = useState<Record<string, number>>({});
   // Manage Plugins dialog, like `mcp`; `reloadFailed`: sessions whose last plugin reload failed (its restart banner).
@@ -233,6 +246,11 @@ export function App() {
   const changeGrouping = (g: TabGrouping) => {
     setGrouping(g);
     saveTabGrouping(g);
+  };
+  const [compact, setCompact] = useState(loadTabCompact);
+  const changeCompact = (on: boolean) => {
+    setCompact(on);
+    saveTabCompact(on);
   };
   // A closed or replaced new-session tab starts with the defaults next time.
   const draftOpen = tabs.includes(NEW_TAB);
@@ -619,6 +637,7 @@ export function App() {
   function close(id: string) {
     const r = closeTab(tabs, id, activeId);
     setTabs(r.tabs);
+    if (id !== NEW_TAB) setClosedTabs((c) => pushClosed(c, id, tabs.indexOf(id)));
     const state = listRef.current.find((s) => s.id === id)?.state;
     if (id !== NEW_TAB) state && state !== "closed" && state !== "error" ? void subscribe(id, false, false, true) : drop(id);
     if (r.active === activeId) return;
@@ -1070,6 +1089,20 @@ export function App() {
   // Palette "New worktree…": the shown project's repository, when its main checkout is inside the roots.
   const gitProject = project ? projectOf(project, worktrees) : undefined;
   const canWorktree = !!gitProject && !!worktrees[gitProject]?.some((w) => w.main && !w.outsideRoots);
+  // `id`: the tab just selected, which this render does not show yet.
+  const focusShownPrompt = (id = activeId) => {
+    if (id !== NEW_TAB) showSession();
+    // After the render: only the shown tab's prompt box has a layout box.
+    const prompts = () => [...document.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"], textarea[aria-label="First prompt"]')];
+    // A session that just opened (Reopen closed tab, Go to tab N after a reload) has its prompt box once its view loaded: wait for it, up to 1 s.
+    const focus = (frames: number) => {
+      const el = id === NEW_TAB ? newPrompt.current : prompts().find((el) => el.offsetParent);
+      if (el) el.focus();
+      else if (frames > 0) requestAnimationFrame(() => focus(frames - 1));
+    };
+    requestAnimationFrame(() => focus(60));
+  };
+  const reopen = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs).tab;
   const commands = appCommands({
     newWorktree: canWorktree ? () => (setWtName(""), setNaming(gitProject)) : undefined,
     tabs,
@@ -1097,13 +1130,30 @@ export function App() {
     toggleFileTree,
     toggleSidePanel: () => (wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
     toggleTerminal: () => (wide(1024) ? setTerminalOpen((v) => !v) : setPane(pane === "terminal" ? "session" : "terminal")),
-    // `id`: the tab just selected, which this render does not show yet.
-    focusPrompt: (id = activeId) => {
-      if (id !== NEW_TAB) showSession();
-      // After the render: only the shown tab's prompt box has a layout box.
-      const prompts = () => [...document.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"], textarea[aria-label="First prompt"]')];
-      requestAnimationFrame(() => (id === NEW_TAB ? newPrompt.current : prompts().find((el) => el.offsetParent))?.focus());
+    // The pane that shows already: focus goes back to the prompt (VS Code's Explorer key does the same).
+    showPane: (p) => {
+      const side = sidePane === "changes" || sidePane === "graph" ? sidePane : "files";
+      if (wide(1024) ? panel && side === p : sidePane === p) return focusShownPrompt();
+      setPane(p);
+      setPanel(true);
     },
+    newTerminal: () => {
+      if (wide(1024) ? terminalOpen : pane === "terminal") return setTerminalTick((n) => n + 1);
+      wide(1024) ? setTerminalOpen(true) : setPane("terminal");
+    },
+    canReopen: !!reopen,
+    reopenTab: () => {
+      const r = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs);
+      setClosedTabs(r.rest);
+      if (!r.tab) return;
+      const { id, at } = r.tab;
+      setTabs((t) => (t.includes(id) ? t : [...t.slice(0, at), id, ...t.slice(at)]));
+      open(id);
+      focusShownPrompt(id);
+    },
+    openShortcuts: () => setShortcutsOpen(true),
+    isGit,
+    focusPrompt: focusShownPrompt,
     setModel: (model) => (draftShown ? changeDraft({ ...draft, model }) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
     setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
     setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
@@ -1125,7 +1175,7 @@ export function App() {
     if (status === "unauthorized") return;
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.defaultPrevented || document.querySelector('[aria-modal="true"]')) return;
-      const isPalette = matchesKey(KEYS.palette, e) || matchesKey(KEYS.paletteAlt, e);
+      const isPalette = [specOf("palette.open"), specOf("palette.alt")].some((k) => k && matchesKey(k, e));
       const c = isPalette ? undefined : shortcutFor(latestCommands.current, e);
       if (!isPalette && !c) return;
       e.preventDefault();
@@ -1136,6 +1186,38 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [status]);
+
+  // Prefix key (tmux): runs in the capture phase, so the key after the prefix reaches no prompt box, terminal or other handler.
+  useEffect(() => {
+    if (status === "unauthorized") return;
+    let armed: number | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const disarm = () => ((armed = undefined), setPrefixOn(false));
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (document.querySelector('[aria-modal="true"]') || isImeKey(e)) return armed !== undefined ? disarm() : undefined;
+      const spec = specOf("leader");
+      const r = leaderStep(armed, e, Date.now(), !!spec && matchesKey(spec, e));
+      if (r.armedAt !== armed) {
+        clearTimeout(timer);
+        if (r.armedAt !== undefined) timer = setTimeout(disarm, LEADER_MS);
+      }
+      armed = r.armedAt;
+      setPrefixOn(armed !== undefined);
+      if (r.swallow) (e.preventDefault(), e.stopPropagation());
+      if (!r.run) return;
+      if (r.run === "palette.open") {
+        paletteOpener.current = document.activeElement;
+        return setPalette({});
+      }
+      const c = latestCommands.current.find((i) => i.id === r.run);
+      if (c && "run" in c) c.run();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      clearTimeout(timer);
+    };
   }, [status]);
 
   const prompted = useMemo(() => promptedIds(optimistic, views), [optimistic, views]);
@@ -1166,6 +1248,7 @@ export function App() {
             onSelect={open}
             onClose={close}
             grouping={grouping}
+            compact={compact && grouping !== "none"}
             onMove={(from, to) => setTabs((t) => moveTabIn(t, groupOfTab, from, to))}
             onMoveGroup={(cwd, by) => setTabs((t) => moveGroup(t, groupOfTab, cwd, by))}
             onMoveGroupTo={(from, to) => setTabs((t) => moveGroupTo(t, groupOfTab, from, to))}
@@ -1187,7 +1270,7 @@ export function App() {
             <ThemeIcon />
           </IconButton>
           {shown && (
-            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={`Toggle side panel (${keyText(KEYS.sidePanel)})`} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle">
+            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={withKey("Toggle side panel", specOf("panel.toggle"))} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle">
               <PanelRightIcon />
             </IconButton>
           )}
@@ -1431,7 +1514,7 @@ export function App() {
                 <section className={`${card} flex-1 ${pane === "terminal" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`} id="side-panel" data-testid="side-panel">
                   <div className="hidden items-center border-b px-2 py-1 lg:flex">
                     <PaneTabs panes={["changes", "files", ...(isGit ? (["graph"] as const) : [])]} value={sidePane === "changes" || sidePane === "graph" ? sidePane : "files"} onChange={setPane} changes={changeCount} />
-                    <IconButton className="ml-auto" label="Toggle terminal (Ctrl+`)" pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle">
+                    <IconButton className="ml-auto" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle">
                       <SquareTerminalIcon />
                     </IconButton>
                   </div>
@@ -1479,6 +1562,7 @@ export function App() {
                         status={status}
                         cwd={panelSession.cwd}
                         onEmpty={() => (setTerminalOpen(false), pane === "terminal" && setPane("session"))}
+                        newTick={terminalTick}
                       />
                     </Suspense>
                   </section>
@@ -1624,7 +1708,24 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} />
+      <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
+      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      {/* Always mounted so a screen reader announces the hint when it fills in. */}
+      <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 left-1/2 z-50 w-max max-w-[calc(100vw-24px)] -translate-x-1/2" data-testid="prefix-hint">
+        {prefixOn && (
+          <p className="flex flex-wrap justify-center gap-x-3 gap-y-1 rounded-lg bg-card px-3 py-2 text-xs shadow-floating">
+            <span className="font-medium">{keyText(specOf("leader"))} then</span>
+            {PREFIX_KEYS.map((p) => (
+              <span key={p.key} className="text-muted-foreground">
+                <kbd className="font-sans font-medium text-foreground">{p.key}</kbd> {p.title}
+              </span>
+            ))}
+            <span className="text-muted-foreground">
+              <kbd className="font-sans font-medium text-foreground">Esc</kbd> cancel
+            </span>
+          </p>
+        )}
+      </div>
       {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
       {stale && !update && (
         <StaleToast
@@ -2217,7 +2318,7 @@ export function SessionPane({
         <span className="min-w-0 truncate text-muted-foreground" title={session.cwd}>
           {session.cwd}
         </span>
-        {onSignalOnly && <SignalSwitch on={signalOnly} onChange={onSignalOnly} keys={keyText(KEYS.signalOnly)} />}
+        {onSignalOnly && <SignalSwitch on={signalOnly} onChange={onSignalOnly} keys={keyText(specOf("signal.toggle"))} />}
         {/* Idle, running and needs input show in the tab and the send button. Only error and closed have no other place. */}
         {(shownState(view) === "error" || shownState(view) === "closed") && (
           <span className="rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">

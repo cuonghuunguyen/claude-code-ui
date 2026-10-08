@@ -22,6 +22,11 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   toggleSidePanel: vi.fn(),
   toggleFileTree: vi.fn(),
   toggleTerminal: vi.fn(),
+  showPane: vi.fn(),
+  newTerminal: vi.fn(),
+  reopenTab: vi.fn(),
+  canReopen: false,
+  openShortcuts: vi.fn(),
   focusPrompt: vi.fn(),
   setModel: vi.fn(),
   setEffort: vi.fn(),
@@ -47,11 +52,19 @@ it("lists the issue's commands with shortcuts, then the sessions", () => {
     ["tab.next", "mod+alt+arrowright"],
     ["tab.prev", "mod+alt+arrowleft"],
     ["tab.close", "mod+alt+w"],
+    ["tab.goto1", "alt+1"],
+    ["tab.goto2", "alt+2"],
+    ["tab.goto3", "alt+3"],
+    ["tab.gotoLast", "alt+9"],
+    ["shortcuts.open", "mod+/"],
     ["settings.open", "mod+,"],
     ["sidebar.toggle", "mod+b"],
     ["panel.toggle", "mod+shift+r"],
     ["filetree.toggle", "mod+\\"],
+    ["pane.files", "mod+shift+e"],
+    ["pane.changes", "mod+shift+g"],
     ["terminal.toggle", "ctrl+`"],
+    ["terminal.new", "ctrl+shift+`"],
     ["prompt.focus", "ctrl+l"],
     ["model.choose", "mod+'"],
     ["effort.choose", undefined],
@@ -121,7 +134,7 @@ it("rewind lists prompts newest first; hidden while a turn runs, when Stop shows
 
 it("without a shown session only the app-level commands remain", () => {
   const items = appCommands(ctx({ session: undefined, canQuickOpen: false, tabs: ["new"], activeId: "new", sessions: [] }));
-  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "settings.open", "sidebar.toggle"]);
+  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "sidebar.toggle"]);
 });
 
 it("a shortcut finds its command; Esc, Shift+Tab and plain keys run nothing from here", () => {
@@ -217,5 +230,43 @@ it("Open Focus is always listed when App offers it; Next waiting request only wh
   expect(shortcutFor(appCommands(c), ev("ArrowDown", { ctrlKey: true, altKey: true }))?.id).toBe("focus.next");
   expect(shortcutFor(appCommands(ctx({ openFocus })), ev("ArrowDown", { ctrlKey: true, altKey: true }))).toBeUndefined();
   // Never Escape: Esc stops the running turn.
-  expect(KEYS.nextWaiting).not.toMatch(/escape/);
+  expect(KEYS["focus.next"]).not.toMatch(/escape/);
+});
+
+it("new commands: Go to tab N, last tab and reopen run their action; Go to tab rows only show for a typed search", () => {
+  const items = appCommands(ctx({ canReopen: true, isGit: true }));
+  expect(items.filter((i) => i.id.startsWith("tab.goto")).every((i) => i.searchOnly)).toBe(true);
+  expect(items.find((i) => i.id === "tab.reopen")?.keys).toBe("alt+shift+t");
+  expect(items.find((i) => i.id === "pane.graph")?.keys).toBe("mod+shift+h");
+  const c = ctx({ canReopen: true });
+  run(c, "tab.goto2");
+  expect(c.selectTab).toHaveBeenCalledWith("b");
+  run(c, "tab.gotoLast");
+  expect(c.selectTab).toHaveBeenLastCalledWith("new");
+  run(c, "tab.reopen");
+  expect(c.reopenTab).toHaveBeenCalled();
+  run(c, "pane.changes");
+  expect(c.showPane).toHaveBeenCalledWith("changes");
+  expect(appCommands(ctx()).some((i) => i.id === "tab.reopen" || i.id === "pane.graph")).toBe(false);
+  expect(appCommands(ctx({ tabs: ["a"] })).some((i) => i.id === "tab.goto2")).toBe(false);
+});
+
+it("shortcutFor finds the new keys by id", () => {
+  const items = appCommands(ctx({ canReopen: true }));
+  expect(shortcutFor(items, ev("+", { altKey: true, code: "Digit2" }))?.id).toBe("tab.goto2");
+  expect(shortcutFor(items, ev("T", { altKey: true, shiftKey: true, code: "KeyT" }))?.id).toBe("tab.reopen");
+  expect(shortcutFor(items, ev("E", { ctrlKey: true, shiftKey: true }))?.id).toBe("pane.files");
+  expect(shortcutFor(items, ev("/", { ctrlKey: true }))?.id).toBe("shortcuts.open");
+});
+
+it("a remapped key matches and the old key no longer does; a removed binding matches nothing", async () => {
+  const { bind, resetAll } = await import("./keymap.ts");
+  bind("sidebar.toggle", "mod+alt+b");
+  const items = appCommands(ctx());
+  expect(items.find((i) => i.id === "sidebar.toggle")?.keys).toBe("mod+alt+b");
+  expect(shortcutFor(items, ev("b", { ctrlKey: true, altKey: true }))?.id).toBe("sidebar.toggle");
+  expect(shortcutFor(items, ev("b", { ctrlKey: true }))).toBeUndefined();
+  bind("sidebar.toggle", null);
+  expect(appCommands(ctx()).find((i) => i.id === "sidebar.toggle")?.keys).toBeUndefined();
+  resetAll();
 });

@@ -122,7 +122,7 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
                 <InputDiff tool={part.tool} input={updatedInput ?? part.input} />
               </div>
             )}
-            <Button type="button" variant="ghost" size="sm" className="self-end pointer-coarse:h-11" aria-pressed={editing} onClick={() => setEditing(!editing)}>
+            <Button type="button" variant="ghost" size="sm" className="self-end max-md:h-11 pointer-coarse:h-11" aria-pressed={editing} onClick={() => setEditing(!editing)}>
               {editing ? <FileDiffIcon /> : <PencilIcon />}
               {editing ? "Show diff" : "Edit content"}
             </Button>
@@ -147,15 +147,15 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
         {mode && <span className="mr-auto min-w-0">{mode}</span>}
         {/* One group: on a narrow tray the answer buttons wrap together, below the picker. */}
         <div className="ml-auto flex flex-wrap justify-end gap-2">
-          <Button type="submit" variant="ghost">
+          <Button type="submit" variant="ghost" className="max-md:h-11 pointer-coarse:h-11">
             {plan !== undefined ? "No, keep planning" : "Deny"}
           </Button>
           {always && (
-            <Button type="button" variant="outline" onClick={() => onRespond({ decision: "allow_always", updatedInput })}>
+            <Button type="button" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => onRespond({ decision: "allow_always", updatedInput })}>
               {plan !== undefined ? "Yes, and auto-accept edits" : "Allow always"}
             </Button>
           )}
-          <Button type="button" onClick={() => onRespond({ decision: "allow", updatedInput })}>
+          <Button type="button" className="max-md:h-11 pointer-coarse:h-11" onClick={() => onRespond({ decision: "allow", updatedInput })}>
             {plan !== undefined ? "Yes, manually approve edits" : "Allow once"}
           </Button>
         </div>

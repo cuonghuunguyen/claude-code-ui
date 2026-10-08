@@ -1,0 +1,117 @@
+// The user's keybindings (docs/spec.md "Keyboard shortcuts"): overrides of the defaults in shortcuts.ts, kept per browser.
+import { useSyncExternalStore } from "react";
+import { IS_MAC, SHORTCUTS, altGrChar, canon, matchesKey, parseSpec, defaultSpec, shortcutById, type Shortcut } from "./shortcuts.ts";
+import { FORMAT_KEYS } from "./markdown-toolbar.tsx";
+
+const KEY = "claude-ui.keybindings";
+
+/** Combos the browser keeps for itself: a page never receives them (Chrome, Edge, Firefox). */
+const RESERVED = ["mod+t", "mod+w", "mod+n", "mod+shift+t", "mod+shift+n", "mod+shift+w", "ctrl+tab", "ctrl+shift+tab", "ctrl+pageup", "ctrl+pagedown", ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `mod+${n}`)];
+
+/** Why `spec` cannot be a binding, or undefined when it can. */
+export function bindingError(spec: string, mac = IS_MAC) {
+  const { key, mods: set } = parseSpec(spec);
+  const mods = [...set];
+  // Older builds stored "dead": it fires on every dead key.
+  if (["dead", "unidentified", "process", ""].includes(key)) return "This key cannot be a shortcut";
+  if (!mods.some((m) => m === "mod" || m === "ctrl" || m === "meta" || m === "alt")) return "Use Ctrl, Cmd or Alt with the key, or it would fire while typing";
+  if (RESERVED.some((r) => canon(r, mac) === canon(spec, mac))) return "The browser keeps this shortcut";
+  return undefined;
+}
+
+type Overrides = Record<string, string | null>;
+
+/** Stored overrides without unknown ids and invalid specs. */
+export function parseOverrides(raw: string | null | undefined): Overrides {
+  try {
+    const v: unknown = JSON.parse(raw ?? "{}");
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    return Object.fromEntries(Object.entries(v).filter(([id, s]) => shortcutById(id) && (s === null || (typeof s === "string" && !bindingError(s)))) as [string, string | null][]);
+  } catch {
+    return {};
+  }
+}
+
+const read = () => {
+  try {
+    return parseOverrides(localStorage.getItem(KEY));
+  } catch {
+    return {};
+  }
+};
+let overrides = read();
+const subs = new Set<() => void>();
+const set = (next: Overrides) => {
+  overrides = next;
+  try {
+    localStorage.setItem(KEY, JSON.stringify(next));
+  } catch {
+    // Storage blocked: the bindings last for this page.
+  }
+  subs.forEach((f) => f());
+};
+
+/** The spec `id` is bound to now; undefined when the user removed the binding. */
+export const specOf = (id: string, mac = IS_MAC) => {
+  if (id in overrides) return overrides[id] ?? undefined;
+  const s = shortcutById(id);
+  return s && defaultSpec(s, mac);
+};
+export const isChanged = (id: string) => id in overrides;
+export const bind = (id: string, spec: string | null) => set({ ...overrides, [id]: spec });
+export const resetBinding = (id: string) => set(Object.fromEntries(Object.entries(overrides).filter(([k]) => k !== id)));
+export const resetAll = () => set({});
+
+/** Re-renders on a binding change; returns `specOf`. */
+export function useKeymap() {
+  useSyncExternalStore(
+    (cb) => (subs.add(cb), () => void subs.delete(cb)),
+    () => overrides,
+  );
+  return specOf;
+}
+
+/** What `spec` would clash with as the binding of `id`: another shortcut, or a prompt box format key. Mod+B is the sidebar's by default and bold in the prompt box on purpose. */
+export function conflictOf(id: string, spec: string, mac = IS_MAC): { id?: string; title: string } | undefined {
+  const c = canon(spec, mac);
+  const other = SHORTCUTS.find((s: Shortcut) => s.id !== id && specOf(s.id, mac) && canon(specOf(s.id, mac)!, mac) === c);
+  if (other) return { id: other.id, title: other.title };
+  if (id !== "sidebar.toggle") {
+    const f = Object.entries(FORMAT_KEYS).find(([, k]) => canon(k, mac) === c);
+    if (f) return { title: `${f[0][0]!.toUpperCase()}${f[0].slice(1)} in the prompt box` };
+  }
+  return undefined;
+}
+
+/** The spec of a key press for the recorder (check pressError first); undefined for a modifier alone. A letter is the typed one (`e.key`), as matchesKey compares it, so a rebind works on QWERTZ, AZERTY and Dvorak; only macOS Option, which changes `e.key`, records the physical key. */
+export function specFromEvent(e: KeyboardEvent, mac = IS_MAC) {
+  if (["Control", "Shift", "Alt", "Meta", "AltGraph"].includes(e.key)) return undefined;
+  const key = physicalKey(e, mac) ?? (e.key === " " ? "space" : e.key.toLowerCase());
+  const mods = [e.ctrlKey && !mac && "mod", e.metaKey && mac && "mod", e.ctrlKey && mac && "ctrl", e.metaKey && !mac && "meta", e.altKey && "alt", e.shiftKey && "shift"].filter(Boolean);
+  return [...mods, key].join("+");
+}
+
+/** The key a press is recorded by when the physical key decides (digits, `, macOS Option+letter; matchesKey compares them by `code` too), else undefined. */
+const physicalKey = (e: KeyboardEvent, mac: boolean) =>
+  mac && e.altKey && /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : /^Digit\d$/.test(e.code) ? e.code.slice(5) : e.code === "Backquote" ? "`" : undefined;
+
+/** Why the recorder refuses this key press, or undefined when it can be a binding (then specFromEvent and bindingError decide). */
+export function pressError(e: KeyboardEvent, mac = IS_MAC) {
+  const altGr = altGrChar(e, mac);
+  if (altGr === "Dead") return "Ctrl+Alt is AltGr on this keyboard and starts an accented letter with this key. Pick another key.";
+  if (altGr) return `Ctrl+Alt is AltGr on this keyboard and types “${altGr}” with this key, so the shortcut would block typing it. Pick another key.`;
+  if (physicalKey(e, mac)) return undefined;
+  // Every dead key reports "Dead": a binding on one would fire on all of them.
+  if (e.key === "Dead") return "This is a dead key: it starts an accented letter. Pick another key.";
+  if (e.key === "Unidentified" || e.key === "Process") return "The browser does not say which key this is. Pick another key.";
+  return undefined;
+}
+
+const TERMINAL_KEYS = ["terminal.toggle", "terminal.new", "palette.open", "palette.alt", "shortcuts.open"];
+
+/** App keys that leave the terminal (xterm) for the app: the prefix key, tab keys, palette, shortcuts and terminal keys, and anything with Alt. Plain Ctrl+letter stays with the shell. */
+export const leavesTerminal = (e: KeyboardEvent) =>
+  SHORTCUTS.some((s) => {
+    const spec = specOf(s.id);
+    return !!spec && matchesKey(spec, e) && (parseSpec(spec).mods.has("alt") || TERMINAL_KEYS.includes(s.id) || s.id.startsWith("tab.goto"));
+  });

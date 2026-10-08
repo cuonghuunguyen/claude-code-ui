@@ -7,7 +7,8 @@ import { answeredLabel, nextWaiting, requestSummary, runningSessions, waitLabel,
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionPanel } from "./question.tsx";
 import { foldLabel, signalItems } from "./signal.ts";
-import { KEYS, keyLabels } from "./shortcuts.ts";
+import { keyLabels } from "./shortcuts.ts";
+import { useKeymap } from "./keymap.ts";
 import { projectOf, timeAgo, worktreeName } from "./sessions.ts";
 import { awaitingPermission, timeline, type SessionView } from "./store.ts";
 import { ProjectAvatar } from "./tabs-bar.tsx";
@@ -118,7 +119,8 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
     ...answered.map((a) => ({ id: a.id, since: a.since, w: undefined, answered: a })),
   ].sort((a, b) => a.since - b.since);
   const next = nextWaiting(waiting, current?.part.id);
-  const keys = keyLabels(KEYS.nextWaiting);
+  const nextKey = useKeymap()("focus.next");
+  const keys = nextKey ? keyLabels(nextKey) : [];
   const session = current && list.find((s) => s.id === current.sessionId);
   const view = current && views[current.sessionId];
   return (
@@ -131,7 +133,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
           </p>
         </div>
         {n > 0 && (
-          <Button type="button" variant="outline" className="pointer-coarse:h-11" onClick={() => next && onSelect(next.part.id)} data-testid="focus-next">
+          <Button type="button" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => next && onSelect(next.part.id)} data-testid="focus-next">
             Next waiting
             <span className="flex gap-0.5 max-md:hidden" aria-hidden>
               {keys.map((k) => <kbd key={k} className="rounded border px-1 font-mono text-[10px]">{k}</kbd>)}
@@ -186,7 +188,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
         <div className={`flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto p-4 max-md:p-3 ${detail && current ? "" : "max-md:hidden"}`} data-testid="focus-detail">
           {current && session && view ? (
             <>
-              <Button type="button" variant="ghost" className="w-fit md:hidden pointer-coarse:h-11" onClick={() => setDetail(false)} data-testid="focus-back">
+              <Button type="button" variant="ghost" className="w-fit md:hidden max-md:h-11 pointer-coarse:h-11" onClick={() => setDetail(false)} data-testid="focus-back">
                 <ArrowLeftIcon />
                 Back to queue
               </Button>
@@ -196,7 +198,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
                   <h2 className="truncate font-medium" data-testid="focus-title">{session.title || "Untitled"}</h2>
                   <p className="truncate text-muted-foreground text-xs" title={session.cwd}>{worktreeName(session.cwd, worktrees) ?? projectName(session.cwd)}</p>
                 </div>
-                <Button type="button" variant="outline" className="pointer-coarse:h-11" onClick={() => onOpenSession(session.id)} data-testid="focus-open-session">
+                <Button type="button" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => onOpenSession(session.id)} data-testid="focus-open-session">
                   Open session
                   <ArrowRightIcon />
                 </Button>
