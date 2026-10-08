@@ -9,12 +9,19 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, yielded } from "./fake-query.ts";
 
 /** A projects store with these cwds added. */
+// Counts `git worktree list` reads (the session list's cache); behaviour unchanged.
+vi.mock("../src/git.ts", async (importOriginal) => {
+  const git = await importOriginal<typeof import("../src/git.ts")>();
+  return { ...git, listWorktrees: vi.fn(git.listWorktrees) };
+});
+
 const added = (...cwds: string[]) => {
   const p = createProjects();
   cwds.forEach((c) => p.open(c));
@@ -1218,7 +1225,11 @@ describe("daemon", () => {
       git(repo, "checkout", "-q", "-b", "renamed-main");
       git(wt, "checkout", "-q", "-b", "renamed-outside");
       expect((await list()).worktrees).toEqual([`${repo}@renamed-main`, `${wt}@renamed-outside`]);
-      git(repo, "worktree", "remove", wt);
+      // A move renames the folder and rewrites only the path in .git/worktrees/<name>/gitdir.
+      const moved = join(root, "wt-moved");
+      git(repo, "worktree", "move", wt, moved);
+      expect((await list()).worktrees).toEqual([`${repo}@renamed-main`, `${moved}@renamed-outside`]);
+      git(repo, "worktree", "remove", moved);
       expect(await list()).toMatchObject({ worktrees: [`${repo}@renamed-main`], sessions: [] });
     } finally {
       d.close();
@@ -1229,9 +1240,13 @@ describe("daemon", () => {
     const { repo, git, d, c, list } = await repoDaemon("wtcache-");
     try {
       expect((await list()).worktrees).toEqual([`${repo}@main`]);
-      // Unchanged files: the cached list is answered (a commit does not touch HEAD, so the read list stays).
+      const reads = vi.mocked(listWorktrees).mock.calls.filter(([cwd]) => cwd === repo).length;
+      expect(reads).toBe(1);
+      // Unchanged files: the cached list is answered without a git process (a commit does not touch HEAD).
       git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "second");
       expect((await list()).worktrees).toEqual([`${repo}@main`]);
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
+      expect(vi.mocked(listWorktrees).mock.calls.filter(([cwd]) => cwd === repo).length).toBe(reads);
       const made = join(repo, ".claude", "worktrees", "feat");
       expect(await c.request({ type: "worktree.create", cwd: repo, name: "feat" })).toMatchObject({ result: { path: made } });
       expect((await list()).worktrees.map((w) => w.split("@")[0])).toEqual([repo, made]);

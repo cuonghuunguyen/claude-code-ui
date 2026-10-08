@@ -129,7 +129,7 @@ function gitDirsOf(cwd: string): { own: string; common: string } | undefined {
 
 /**
  * What `git worktree list` of `cwd` reads, from file stats only (no process): the shared HEAD, the worktrees folder and each
- * worktree's HEAD and checkout. A worktree added or removed (from a terminal too), a checkout or a moved worktree changes it;
+ * worktree's HEAD and checkout path. A worktree added, removed or moved (from a terminal too), or a checkout changes it;
  * a commit on a branch does not (the list shows branch names). "-" without a readable `.git`.
  */
 function worktreeStamp(cwd: string) {
@@ -143,9 +143,12 @@ function worktreeStamp(cwd: string) {
       return "-";
     }
   };
+  // The checkout's path (a `git worktree move` rewrites only it) and its `.git` file (gone when the folder was deleted).
+  // A relative path (worktree.useRelativePaths) is relative to the gitdir file's folder.
   const checkout = (gitdirFile: string) => {
     try {
-      return stamp(readFileSync(gitdirFile, "utf8").trim());
+      const path = readFileSync(gitdirFile, "utf8").trim();
+      return `${path}@${stamp(resolve(dirname(gitdirFile), path))}`;
     } catch {
       return "-";
     }
