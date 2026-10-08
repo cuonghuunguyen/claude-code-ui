@@ -363,6 +363,8 @@ export function App() {
   const refocus = useRef<string>(undefined);
   // Tabs restored from storage, checked against the first session list: a stale one would show "Untitled".
   const restored = useRef<string[] | undefined>(tabs);
+  /** True once a session list reply is in (never reset): the tab group keys are final only after it (GH-196). */
+  const [listLoaded, setListLoaded] = useState(false);
 
   async function refreshList() {
     try {
@@ -376,6 +378,7 @@ export function App() {
       setSides(sides);
       setCwdSides(cwdSides);
       setWorktrees(worktrees);
+      setListLoaded(true);
       if (permissionModes) setNewModes(permissionModes);
       if (restored.current) {
         // The page-load hash session is left out: its project may be removed (not listed); its own subscribe forgets it when unknown.
@@ -898,7 +901,9 @@ export function App() {
   const sessionOf = (id: string): SessionInfo | undefined => infos[id] ?? list.find((s) => s.id === id);
   const groupOfTab = (id: string) => (id === NEW_TAB ? "" : tabGroup(sessionOf(id)?.cwd, grouping, worktrees).key);
   // The stored list stays grouped by the Tab grouping setting (also once the session cwds arrive), so close, next/previous tab and moves all use the order the strip draws.
-  useGroupedTabs(tabs, setTabs, groupOfTab);
+  // Regrouped only once every tab's key is final: on partial keys the unknown tabs gather in one group and the damaged order is stored (GH-196).
+  const keysFinal = listLoaded && tabs.every((id) => id === NEW_TAB || !!sessionOf(id));
+  useGroupedTabs(tabs, setTabs, groupOfTab, keysFinal);
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   // GH-133: a just-created session shows (with its pending prompt) before its subscribe reply.
   // A tab that followed a /clear shows the new session at once too: an empty timeline carrying the old one's settings.
