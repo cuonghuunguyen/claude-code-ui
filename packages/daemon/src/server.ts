@@ -28,6 +28,7 @@ import { createSessionSettings } from "./session-settings.ts";
 import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
+import { serveStatic } from "./static.ts";
 
 export { MAX_SETTINGS } from "./session-settings.ts";
 
@@ -64,22 +65,6 @@ const IDLE_CHECK_MS = 60_000;
 const PLAN_STALE_MS = 5 * 60_000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const MIME: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".json": "application/json",
-  ".webmanifest": "application/manifest+json",
-  ".woff2": "font/woff2",
-  ".woff": "font/woff",
-  ".txt": "text/plain; charset=utf-8",
-  ".wasm": "application/wasm",
-  ".map": "application/json",
-};
 
 type History = {
   listSessions: typeof listSessions;
@@ -1056,13 +1041,7 @@ export function createDaemon(opts: {
     }
     // Pairing probe: a browser cannot read the 401 of a rejected WebSocket upgrade, so it asks here (client.ts).
     if (path === "/auth") return void res.writeHead(isToken(/^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1]) ? 204 : 401).end();
-    let file = resolve(join(root, path));
-    if (!file.startsWith(root + sep) && file !== root) return void res.writeHead(403).end();
-    // SPA fallback: unknown paths serve index.html.
-    if (!existsSync(file) || statSync(file).isDirectory()) file = join(root, "index.html");
-    if (!existsSync(file)) return void res.writeHead(404).end("web app not built: run npm run build");
-    res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
-    createReadStream(file).pipe(res);
+    serveStatic(req, res, root, path);
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, handleProtocols: (offered) => (offered.has(WS_PROTOCOL) ? WS_PROTOCOL : false) });
