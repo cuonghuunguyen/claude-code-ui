@@ -96,7 +96,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSepa
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
 import { NEW_TAB, avatarColors, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
-import { loadTabGrouping, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
+import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -213,6 +213,11 @@ export function App() {
   const changeGrouping = (g: TabGrouping) => {
     setGrouping(g);
     saveTabGrouping(g);
+  };
+  const [compact, setCompact] = useState(loadTabCompact);
+  const changeCompact = (on: boolean) => {
+    setCompact(on);
+    saveTabCompact(on);
   };
   // A closed or replaced new-session tab starts with the defaults next time.
   const draftOpen = tabs.includes(NEW_TAB);
@@ -1125,6 +1130,7 @@ export function App() {
             onSelect={open}
             onClose={close}
             grouping={grouping}
+            compact={compact && grouping !== "none"}
             onMove={(from, to) => setTabs((t) => moveTabIn(t, groupOfTab, from, to))}
             onMoveGroup={(cwd, by) => setTabs((t) => moveGroup(t, groupOfTab, cwd, by))}
             onMoveGroupTo={(from, to) => setTabs((t) => moveGroupTo(t, groupOfTab, from, to))}
@@ -1563,7 +1569,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} />
+      <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} tabCompact={compact} onTabCompact={changeCompact} />
       {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
       {stale && !update && (
         <StaleToast
