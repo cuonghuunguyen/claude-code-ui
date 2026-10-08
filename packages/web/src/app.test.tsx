@@ -967,7 +967,7 @@ it("the Tab grouping setting drives the tab order and which tabs may move past e
 
 describe("a reload keeps the stored tab order while the session list is late (GH-196)", () => {
   const mk = (id: string, cwd: string) => ({ ...session, id, title: id.slice(0, 1), cwd });
-  const order = () => [...el.querySelectorAll<HTMLElement>("[data-tab-id]")].map((t) => t.dataset.tabId);
+  const order = () => [...el.querySelectorAll<HTMLElement>("[data-tab-id]:not([data-testid=focus-tab])")].map((t) => t.dataset.tabId);
   const stored = () => JSON.parse(localStorage.getItem("claude-ui.tabs")!);
   const ids = { A: "aaaaaaaa-2222-3333-4444-555555555555", B: "bbbbbbbb-2222-3333-4444-555555555555", C: "cccccccc-2222-3333-4444-555555555555" };
   afterEach(() => {
