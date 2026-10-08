@@ -1,7 +1,7 @@
 // The recorder (keymap.ts specFromEvent) and the matcher (shortcuts.ts matchesKey) agree on every keyboard layout:
 // a key press the recorder accepts fires the stored binding on the very same press. `key` is what Chrome reports for that press.
 import { describe, expect, it } from "vitest";
-import { bindingError, specFromEvent } from "./keymap.ts";
+import { bindingError, pressError, specFromEvent } from "./keymap.ts";
 import { SHORTCUTS, defaultSpec, matchesKey } from "./shortcuts.ts";
 
 type Press = { key: string; code: string; ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean };
@@ -112,5 +112,50 @@ describe("a default shortcut fires on its key on every layout", () => {
   it.each(DEFAULTS)("%s", (_, mac, p, id) => {
     const s = SHORTCUTS.find((x) => x.id === id)!;
     expect(matchesKey(defaultSpec(s, mac), ev(p), mac)).toBe(true);
+  });
+});
+
+/** Off macOS Ctrl+Alt is AltGr: [layout and press, the press]. Each types a character (or starts an accent), so it is no shortcut. */
+const ALTGR: [string, Press][] = [
+  ["German AltGr+Q (@)", { key: "@", code: "KeyQ", ...C, ...A }],
+  ["German AltGr+E (€)", { key: "€", code: "KeyE", ...C, ...A }],
+  ["German AltGr+M (µ)", { key: "µ", code: "KeyM", ...C, ...A }],
+  ["German AltGr+7 ({)", { key: "{", code: "Digit7", ...C, ...A }],
+  ["German AltGr+0 (})", { key: "}", code: "Digit0", ...C, ...A }],
+  ["German AltGr+ß (\)", { key: "\\", code: "Minus", ...C, ...A }],
+  ["German AltGr+Plus (~)", { key: "~", code: "BracketRight", ...C, ...A }],
+  ["German AltGr+< (|)", { key: "|", code: "IntlBackslash", ...C, ...A }],
+  ["Polish AltGr+A (ą)", { key: "ą", code: "KeyA", ...C, ...A }],
+  ["Polish AltGr+Shift+A (Ą)", { key: "Ą", code: "KeyA", ...C, ...A, ...S }],
+  ["Polish AltGr+L (ł)", { key: "ł", code: "KeyL", ...C, ...A }],
+  ["Hungarian AltGr+W (|)", { key: "|", code: "KeyW", ...C, ...A }],
+  ["Czech AltGr+, (<)", { key: "<", code: "Comma", ...C, ...A }],
+  ["Czech AltGr+F ([)", { key: "[", code: "KeyF", ...C, ...A }],
+  ["Czech AltGr+ů ($)", { key: "$", code: "Semicolon", ...C, ...A }],
+  ["AZERTY AltGr+à (@)", { key: "@", code: "Digit0", ...C, ...A }],
+  ["AZERTY AltGr+\" (#)", { key: "#", code: "Digit3", ...C, ...A }],
+  ["Spanish AltGr+º (\)", { key: "\\", code: "Backquote", ...C, ...A }],
+  ["Czech AltGr+2 (dead ˇ)", { key: "Dead", code: "Digit2", ...C, ...A }],
+  ["Czech AltGr+= (dead ´)", { key: "Dead", code: "Equal", ...C, ...A }],
+  // The base character of a non-US key: Ctrl+Alt cannot be told apart from AltGr here, so it is refused too.
+  ["AZERTY Ctrl+Alt+& (no AltGr character)", { key: "&", code: "Digit1", ...C, ...A }],
+  ["Russian Ctrl+Alt+Л", { key: "л", code: "KeyK", ...C, ...A }],
+];
+
+describe("AltGr (Ctrl+Alt off macOS) typing a character is never a shortcut", () => {
+  it.each(ALTGR)("%s: the recorder refuses it", (_, p) => {
+    expect(pressError(ev(p), false)).toMatch(/AltGr/);
+  });
+  it.each(ALTGR)("%s: no default and no recordable binding fires on it", (_, p) => {
+    const specs = [...SHORTCUTS.map((s) => defaultSpec(s, false)), ...ACCEPTED.filter(([, mac]) => !mac).map(([, , , spec]) => spec)];
+    // Bindings made on a US keyboard for the same key: Ctrl+Alt+Q, +7, +ß's key (-), +, (comma), +A.
+    specs.push("mod+alt+q", "mod+alt+7", "mod+alt+-", "mod+alt+,", "mod+alt+a", "mod+alt+@", "mod+alt+ą", "mod+alt+\\", "mod+alt+<", "mod+alt+[");
+    for (const spec of specs) expect(matchesKey(spec, ev(p), false), spec).toBe(false);
+  });
+  it("on macOS Ctrl+Option is no AltGr: the press is a shortcut", () => {
+    expect(pressError(ev({ key: "@", code: "KeyL", ...C, ...A }), true)).toBeUndefined();
+  });
+  it("accepted presses have no error", () => {
+    for (const [name, mac, p] of ACCEPTED) expect(pressError(ev(p), mac), name).toBeUndefined();
   });
 });

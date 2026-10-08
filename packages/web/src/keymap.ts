@@ -1,6 +1,6 @@
 // The user's keybindings (docs/spec.md "Keyboard shortcuts"): overrides of the defaults in shortcuts.ts, kept per browser.
 import { useSyncExternalStore } from "react";
-import { IS_MAC, SHORTCUTS, canon, matchesKey, defaultSpec, shortcutById, type Shortcut } from "./shortcuts.ts";
+import { IS_MAC, SHORTCUTS, altGrChar, canon, matchesKey, defaultSpec, shortcutById, type Shortcut } from "./shortcuts.ts";
 import { FORMAT_KEYS } from "./markdown-toolbar.tsx";
 
 const KEY = "claude-ui.keybindings";
@@ -86,6 +86,14 @@ export function specFromEvent(e: KeyboardEvent, mac = IS_MAC) {
   const key = mac && e.altKey && /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : /^Digit\d$/.test(e.code) ? e.code.slice(5) : e.code === "Backquote" ? "`" : e.key === " " ? "space" : e.key.toLowerCase();
   const mods = [e.ctrlKey && !mac && "mod", e.metaKey && mac && "mod", e.ctrlKey && mac && "ctrl", e.metaKey && !mac && "meta", e.altKey && "alt", e.shiftKey && "shift"].filter(Boolean);
   return [...mods, key].join("+");
+}
+
+/** Why the recorder refuses this key press, or undefined when it can be a binding (then specFromEvent and bindingError decide). */
+export function pressError(e: KeyboardEvent, mac = IS_MAC) {
+  const altGr = altGrChar(e, mac);
+  if (altGr === "Dead") return "Ctrl+Alt is AltGr on this keyboard and starts an accented letter with this key. Pick another key.";
+  if (altGr) return `Ctrl+Alt is AltGr on this keyboard and types “${altGr}” with this key, so the shortcut would block typing it. Pick another key.`;
+  return undefined;
 }
 
 const TERMINAL_KEYS = ["terminal.toggle", "terminal.new", "palette.open", "palette.alt", "shortcuts.open"];

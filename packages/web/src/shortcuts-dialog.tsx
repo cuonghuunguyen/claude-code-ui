@@ -1,7 +1,7 @@
 // Keyboard shortcuts dialog (docs/spec.md "Keyboard shortcuts"): every shortcut by group, a filter, and a recorder to rebind one (per browser).
 import { useEffect, useRef, useState } from "react";
 import { ConfigDialog } from "./config-dialog.tsx";
-import { bind, bindingError, conflictOf, isChanged, resetAll, resetBinding, specFromEvent, specOf, useKeymap } from "./keymap.ts";
+import { bind, bindingError, conflictOf, isChanged, pressError, resetAll, resetBinding, specFromEvent, specOf, useKeymap } from "./keymap.ts";
 import { PREFIX_KEYS } from "./leader.ts";
 import { FORMAT_KEYS } from "./markdown-toolbar.tsx";
 import { SHORTCUTS, keyLabels, type ShortcutGroup } from "./shortcuts.ts";
@@ -60,7 +60,7 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
       e.stopImmediatePropagation();
       if (spec === "escape") return stop();
       if (spec === "backspace" || spec === "delete") return (bind(recording, null), stop());
-      const bad = bindingError(spec);
+      const bad = pressError(e) ?? bindingError(spec);
       if (bad) return (setPending(undefined), setError(bad));
       const clash = conflictOf(recording, spec);
       // A prompt box key cannot be taken over; another shortcut can (Replace).

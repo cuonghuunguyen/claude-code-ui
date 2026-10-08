@@ -57,18 +57,54 @@ export function matchesKey(spec: string, e: KeyboardEvent, mac = IS_MAC) {
   const ctrl = mods.has("ctrl") || (mods.has("mod") && !mac);
   const meta = mods.has("meta") || (mods.has("mod") && mac);
   if (e.ctrlKey !== ctrl || e.metaKey !== meta || e.shiftKey !== mods.has("shift") || e.altKey !== mods.has("alt")) return false;
+  // AltGr typing a character (German AltGr+Q is "@", AltGr+7 is "{") is typing, never a shortcut.
+  if (altGrChar(e, mac)) return false;
   const k = e.key === " " ? "space" : e.key.toLowerCase();
   if (k === key) return true;
   // Digits and ` are recorded by their physical key (keymap.ts specFromEvent), and the layout changes e.key on them with any modifier
   // (Czech Alt+1 and macOS Ctrl+1 are "+", AZERTY Ctrl+1 is "&", AZERTY Ctrl+` is "²", Shift+` is "~"): the physical key decides.
-  // Not off macOS with Ctrl and Alt both down: that is AltGr, whose typed character (AltGr+7 is "{") must not fire a shortcut.
-  if (CODES[key] && (mac || !(e.ctrlKey && e.altKey))) return e.code === CODES[key];
+  if (CODES[key]) return e.code === CODES[key];
   // macOS Option changes e.key (Option+W is "∑"): with Alt a letter matches by its physical key.
   // macOS only: elsewhere Ctrl+Alt is also AltGr, whose typed character (AltGr+W is "|" on a Hungarian layout) must not fire a shortcut.
   return mac && e.altKey && /^[a-z]$/.test(key) && e.code === `Key${key.toUpperCase()}`;
 }
 
 const CODES: Record<string, string> = { "`": "Backquote", ...Object.fromEntries([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [String(n), `Digit${n}`])) };
+
+/** The characters a key types on a US layout, unshifted then shifted, by `event.code` (letters aside). */
+const US: Record<string, string> = {
+  Backquote: "`~",
+  Minus: "-_",
+  Equal: "=+",
+  BracketLeft: "[{",
+  BracketRight: "]}",
+  Backslash: "\\|",
+  Semicolon: ";:",
+  Quote: "'\"",
+  Comma: ",<",
+  Period: ".>",
+  Slash: "/?",
+  Space: "  ",
+  NumpadAdd: "++",
+  NumpadSubtract: "--",
+  NumpadMultiply: "**",
+  NumpadDivide: "//",
+  NumpadDecimal: "..",
+  ...Object.fromEntries([..."1234567890"].map((n, i) => [`Digit${n}`, n + "!@#$%^&*()"[i]])),
+  ...Object.fromEntries([..."0123456789"].map((n) => [`Numpad${n}`, n + n])),
+};
+
+/**
+ * Off macOS, Ctrl+Alt is AltGr: the character the press types ("@" for German AltGr+Q, "Dead" for an accent), or undefined when it is a shortcut.
+ * A layout's AltGr character cannot be told from its base character, so Ctrl+Alt counts as a shortcut only on an ASCII letter, a named key
+ * (arrows, F2, End) or the key's US character: AZERTY Ctrl+Alt+& and Russian Ctrl+Alt+Л count as AltGr too.
+ */
+export function altGrChar(e: KeyboardEvent, mac = IS_MAC) {
+  if (mac || !e.ctrlKey || !e.altKey) return undefined;
+  if (e.key === "Dead") return e.key;
+  if ([...e.key].length !== 1 || /^[a-z]$/i.test(e.key) || US[e.code]?.[e.shiftKey ? 1 : 0] === e.key) return undefined;
+  return e.key;
+}
 
 /** Canonical form of a spec for comparing: `mod` resolved for the platform, modifiers in a fixed order. */
 export function canon(spec: string, mac = IS_MAC) {

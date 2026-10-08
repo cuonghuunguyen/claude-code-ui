@@ -99,6 +99,14 @@ it("a browser-reserved combo and a plain key are rejected with a message", async
   expect(specOf("sidebar.toggle", false)).toBe("mod+b");
 });
 
+it("an AltGr press (Ctrl+Alt typing a character) is refused with a message, so typing @ stays typing", async () => {
+  await click("shortcut-edit-tab.close");
+  await press({ key: "@", code: "KeyQ", ctrlKey: true, altKey: true });
+  expect(q("shortcut-error")!.textContent).toBe("Ctrl+Alt is AltGr on this keyboard and types “@” with this key, so the shortcut would block typing it. Pick another key.");
+  expect(q("shortcut-recording")).not.toBeNull();
+  expect(specOf("tab.close", false)).toBe("mod+alt+w");
+});
+
 it("Reset all restores every default", async () => {
   await click("shortcut-edit-sidebar.toggle");
   await press({ key: "b", code: "KeyB", ctrlKey: true, altKey: true });
