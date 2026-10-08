@@ -194,3 +194,13 @@ it("New worktree… shows only with a git project, right after New session, and 
   expect(newWorktree).toHaveBeenCalled();
   expect(appCommands(ctx()).some((i) => i.id === "worktree.new")).toBe(false);
 });
+
+it("Toggle signal only runs from the palette and Mod+Alt+S, only for a session that is not a draft", () => {
+  const toggleSignalOnly = vi.fn();
+  const c = ctx({ toggleSignalOnly });
+  run(c, "signal.toggle");
+  expect(toggleSignalOnly).toHaveBeenCalledOnce();
+  expect(shortcutFor(appCommands(c), ev("s", { ctrlKey: true, altKey: true }))?.id).toBe("signal.toggle");
+  expect(appCommands(ctx({ toggleSignalOnly, session: { ...ctx().session!, draft: true } })).some((i) => i.id === "signal.toggle")).toBe(false);
+  expect(appCommands(ctx({ toggleSignalOnly, session: undefined })).some((i) => i.id === "signal.toggle")).toBe(false);
+});

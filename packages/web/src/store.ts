@@ -190,7 +190,7 @@ export function timeline(s: SessionView, parentId?: string): TimelineItem[] {
 }
 
 /** The assistant text of the turn up to and including item `index` (back to its prompt), blocks joined by a blank line; tool calls and reasoning are not text parts. */
-export function turnText(items: TimelineItem[], index: number): string {
+export function turnText(items: readonly (TimelineItem | { kind: "fold" })[], index: number): string {
   const texts: string[] = [];
   for (let i = index; i >= 0; i--) {
     const item = items[i]!;

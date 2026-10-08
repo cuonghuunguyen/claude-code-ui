@@ -79,6 +79,8 @@ import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
+import { loadSignalIds, saveSignalOnly, signalItems, type SignalItem } from "./signal.ts";
+import { FoldRow, SignalSwitch } from "./signal-fold.tsx";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { joinPath, relPath } from "./paths.ts";
@@ -209,6 +211,17 @@ export function App() {
     const h = hashTab();
     return h ? openTab(loadTabs(), h) : loadTabs();
   });
+  // Sessions shown in Signal only (GH-159), per browser.
+  const [signalIds, setSignalIds] = useState(loadSignalIds);
+  const setSignalOnly = (id: string, on: boolean) => {
+    saveSignalOnly(id, on);
+    setSignalIds((s) => {
+      const next = new Set(s);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
   const changeGrouping = (g: TabGrouping) => {
     setGrouping(g);
@@ -1071,6 +1084,7 @@ export function App() {
     setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
+    toggleSignalOnly: shown ? () => setSignalOnly(shown.id, !signalIds.has(shown.id)) : undefined,
     openSettings: () => setSettingsOpen(true),
     openMcp: project ? () => openMcp() : undefined,
     openSkills: project ? openSkills : undefined,
@@ -1364,6 +1378,8 @@ export function App() {
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
+                        signalOnly={signalIds.has(s.id)}
+                        onSignalOnly={(on) => setSignalOnly(s.id, on)}
                         onAnswer={answer}
                         connected={status === "connected"}
                         onGitStatus={() =>
@@ -1965,7 +1981,7 @@ const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermission
 type DraftPick = Omit<StartOptions, "mode"> & { mode?: PermissionMode };
 const NEW_DRAFT: DraftPick = { model: "default", effort: "default" };
 
-const timelineKey = (item: TimelineItem) => (item.kind === "context" ? item.id : item.part.id);
+const timelineKey = (item: SignalItem) => (item.kind === "part" ? item.part.id : item.id);
 
 const MemoSessionPane = memo(SessionPane);
 
@@ -2012,8 +2028,13 @@ export function SessionPane({
   connected,
   onGitStatus,
   onDialog,
+  signalOnly = false,
+  onSignalOnly,
 }: {
   scrollKey: number;
+  /** Signal only: runs of tool cards fold into one line (GH-159). Kept by App per session. */
+  signalOnly?: boolean;
+  onSignalOnly?: (on: boolean) => void;
   /** Subagent run whose subagent view shows; an unknown one shows the session view. */
   run?: string;
   /** Opens a run's subagent view; undefined: the session view. */
@@ -2102,6 +2123,7 @@ export function SessionPane({
     onRewindShown?.();
   }, [rewindTo]);
   const items = useMemo(() => timeline(view), [view]);
+  const shownItems = useMemo<SignalItem[]>(() => (signalOnly ? signalItems(items, (c) => awaitingPermission(view).has(c.toolUseId)) : items), [items, signalOnly, view]);
   // Palette Messages: the session may still be loading; the hit is revealed once its message is in the timeline.
   const triedUntil = useRef<unknown>(undefined);
   useEffect(() => {
@@ -2150,9 +2172,10 @@ export function SessionPane({
         <span className="min-w-0 truncate text-muted-foreground" title={session.cwd}>
           {session.cwd}
         </span>
+        {onSignalOnly && <SignalSwitch on={signalOnly} onChange={onSignalOnly} keys={keyText(KEYS.signalOnly)} />}
         {/* Idle, running and needs input show in the tab and the send button. Only error and closed have no other place. */}
         {(shownState(view) === "error" || shownState(view) === "closed") && (
-          <span className="ml-auto rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
+          <span className="rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
             {shownState(view)}
           </span>
         )}
@@ -2170,7 +2193,7 @@ export function SessionPane({
       ) : (
         <VirtualTimeline
           key={scrollKey}
-          items={items}
+          items={shownItems}
           itemKey={timelineKey}
           reveal={reveal}
           sticky={(item) => {
@@ -2189,7 +2212,7 @@ export function SessionPane({
             (shownPending.length > 0 || thinking) && (
               <>
                 {shownPending.map((p, i) => (
-                  <PendingMessage key={p.key} p={p} view={view} index={items.length + i} />
+                  <PendingMessage key={p.key} p={p} view={view} index={shownItems.length + i} />
                 ))}
                 {thinking}
               </>
@@ -2199,10 +2222,14 @@ export function SessionPane({
           loadingOlder={loadingOlder}
           renderItem={(item, index) => {
             // A finished turn (not running; the next top-level item is a prompt, or it is the last) ends with Copy response, with or without a usage footer: a restored transcript has none.
-            const next = items[index + 1];
-            const copyText = (next ? next.kind === "part" && (next.part.type === "user_text" || next.part.type === "bash") : !turnRunning && !view.externalTurn) ? turnText(items, index) : "";
+            const next = shownItems[index + 1];
+            const copyText = (next ? next.kind === "part" && (next.part.type === "user_text" || next.part.type === "bash") : !turnRunning && !view.externalTurn) ? turnText(shownItems, index) : "";
             const row = (
-            item.kind === "context" ? (
+            item.kind === "fold" ? (
+              <FoldRow id={item.id} calls={item.calls}>
+                <Timeline view={view} items={item.items} />
+              </FoldRow>
+            ) : item.kind === "context" ? (
               <ContextGroup calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
             ) : item.part.type === "user_text" && coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE) ? (
               <div className={`flex ${index ? "mt-3" : ""}`} data-testid="orchestration-notice">
@@ -2767,8 +2794,8 @@ function PromptBox({
 }
 
 /** Top-level parts, or with `parentId` the child parts of that subagent. */
-function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) {
-  return timeline(view, parentId).map((item) =>
+function Timeline({ view, parentId, items = timeline(view, parentId) }: { view: SessionView; parentId?: string; items?: TimelineItem[] }) {
+  return items.map((item) =>
     item.kind === "context" ? (
       <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
     ) : (

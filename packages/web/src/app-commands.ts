@@ -41,6 +41,8 @@ export type CommandContext = {
   setMode: (mode: PermissionMode) => void;
   rewind: (userMessageId: string) => void;
   stop: () => void;
+  /** Toggles Signal only of the shown session; none without a session. */
+  toggleSignalOnly?: () => void;
   /** Opens the Settings dialog. */
   openSettings: () => void;
   /** Opens the MCP servers dialog of the shown project; none without a project. */
@@ -76,6 +78,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s && !s.draft && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel, KEYS.sidePanel),
     s && !s.draft && cmd("filetree.toggle", "Toggle file tree", c.toggleFileTree, KEYS.fileTree),
     s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal, KEYS.terminal),
+    s && !s.draft && c.toggleSignalOnly && cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly, KEYS.signalOnly),
     s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt(), KEYS.focusPrompt),
     s &&
       c.models.length > 0 &&
