@@ -3,6 +3,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionPane } from "./App.tsx";
+import { resetIdleQueue, SCROLL_REST, UserMarkdown } from "./user-markdown.tsx";
 import { applyEvent, emptySession } from "./store.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -120,6 +121,104 @@ it("a long code block is plain first and gets its colors once the browser is idl
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+/** Idle slots by hand: `slot()` runs the oldest idle callback the way the browser would. */
+function manualIdle() {
+  const idle: (() => void)[] = [];
+  vi.stubGlobal("requestIdleCallback", (cb: () => void) => idle.push(cb));
+  return { idle, slot: () => act(async () => void idle.shift()?.()) };
+}
+const mounted: { unmount: () => void }[] = [];
+async function mountMd(text: string) {
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  await act(async () => root.render(<UserMarkdown text={text} />));
+  const m = { el, unmount: () => (root.unmount(), el.remove()) };
+  mounted.push(m);
+  return m;
+}
+const colored = (el: Element) => el.querySelectorAll(TOKENS).length > 20;
+afterEach(async () => {
+  mounted.splice(0).forEach((m) => m.unmount());
+  resetIdleQueue();
+  vi.unstubAllGlobals();
+});
+
+it("rows that mounted and unmounted again do not delay the block on screen (newest first, cancelled on unmount)", async () => {
+  const { idle, slot } = manualIdle();
+  const a = await mountMd(fence(longCode(11)));
+  const b = await mountMd(fence(longCode(12)));
+  const c = await mountMd(fence(longCode(13)));
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  a.unmount();
+  b.unmount();
+  // One idle slot is enough for the visible row: the two gone rows' jobs are cancelled, none runs first.
+  await slot();
+  await vi.waitFor(() => expect(colored(c.el)).toBe(true), { timeout: 10_000 });
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(idle).toHaveLength(0);
+});
+
+it("two rows with the same code share one job", async () => {
+  const { idle, slot } = manualIdle();
+  const a = await mountMd(fence(longCode(21)));
+  const b = await mountMd(fence(longCode(21)));
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  await slot();
+  await vi.waitFor(() => expect(colored(a.el) && colored(b.el)).toBe(true), { timeout: 10_000 });
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(idle).toHaveLength(0);
+});
+
+it("coloring waits while the user is scrolling, also when the job is about to run", async () => {
+  const { slot } = manualIdle();
+  const a = await mountMd(fence(longCode(31)));
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  // The idle slot comes, then the user scrolls: the job must not run inside this scroll.
+  document.dispatchEvent(new Event("wheel", { bubbles: true }));
+  await slot();
+  await act(async () => new Promise((r) => setTimeout(r, 100)));
+  expect(colored(a.el)).toBe(false);
+  await act(async () => new Promise((r) => setTimeout(r, SCROLL_REST + 100)));
+  await slot();
+  await vi.waitFor(() => expect(colored(a.el)).toBe(true), { timeout: 10_000 });
+});
+
+it("a scroll no input started (streaming follows the output) does not hold the coloring back", async () => {
+  const { slot } = manualIdle();
+  const a = await mountMd(fence(longCode(41)));
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  document.dispatchEvent(new Event("scroll", { bubbles: true }));
+  await slot();
+  await vi.waitFor(() => expect(colored(a.el)).toBe(true), { timeout: 10_000 });
+});
+
+it("a message colors the first 1200 characters of its code at once, the rest when idle", async () => {
+  const { slot } = manualIdle();
+  const small = (n: number) => fence(`${"x".repeat(5)}${n}\n` + "const a = 1;\n".repeat(80));
+  const a = await mountMd([small(1), small(2), small(3)].join("\n\n"));
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  const blocks = [...a.el.querySelectorAll('[data-streamdown="code-block"]')];
+  expect(blocks).toHaveLength(3);
+  await vi.waitFor(() => expect(blocks[0]!.querySelectorAll('span[style*="--sdm-c: #"]').length).toBeGreaterThan(5), { timeout: 10_000 });
+  expect(blocks[1]!.querySelectorAll('span[style*="--sdm-c: #"]')).toHaveLength(0);
+  expect(blocks[2]!.querySelectorAll('span[style*="--sdm-c: #"]')).toHaveLength(0);
+  await slot();
+  await slot();
+  await vi.waitFor(() => expect(blocks[1]!.querySelectorAll('span[style*="--sdm-c: #"]').length).toBeGreaterThan(5), { timeout: 10_000 });
+});
+
+it("a block colored once is colored at once when its row mounts again (no plain flash)", async () => {
+  const { slot } = manualIdle();
+  const a = await mountMd(fence(longCode(51)));
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  await slot();
+  await vi.waitFor(() => expect(colored(a.el)).toBe(true), { timeout: 10_000 });
+  a.unmount();
+  const b = await mountMd(fence(longCode(51)));
+  expect(colored(b.el)).toBe(true);
 });
 
 it("uploads and images are unaffected", async () => {

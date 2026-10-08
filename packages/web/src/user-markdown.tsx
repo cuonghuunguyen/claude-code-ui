@@ -1,5 +1,5 @@
-import type { ComponentProps } from "react";
-import { code, type CodeHighlighterPlugin } from "@streamdown/code";
+import { useEffect, useMemo, useState, type ComponentProps } from "react";
+import { code, type CodeHighlighterPlugin, type HighlightOptions, type HighlightResult } from "@streamdown/code";
 import { cjk } from "@streamdown/cjk";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
@@ -31,59 +31,130 @@ const { raw: _raw, ...SAFE_REHYPE } = defaultRehypePlugins;
 export const USER_REHYPE_PLUGINS = Object.values(SAFE_REHYPE) as Plugins<"rehypePlugins">;
 export const USER_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkLineBreaks] as Plugins<"remarkPlugins">;
 
-/** A code block longer than this (characters) is colored when the browser is idle, not while its row mounts. */
+/** Code in one message colored at once, up to this many characters in all; every block after it (or one longer) is colored when idle. */
 export const LONG_CODE = 1200;
+/** Coloring waits until the user has not scrolled for this long (ms): a block built mid-scroll is a dropped frame. */
+export const SCROLL_REST = 500;
+/** A scroll event within this long (ms) of the user's wheel, touch, key or pointer is theirs (a fling goes on after the finger lifts). */
+const FLING = 1500;
 
-const idleQueue: (() => void)[] = [];
-let idleScheduled = false;
-let lastScroll = 0;
-/** Coloring waits for the scroll to rest this long (ms): a block built mid-scroll is a dropped frame. */
-export const SCROLL_REST = 150;
-if (typeof document !== "undefined") document.addEventListener("scroll", () => (lastScroll = performance.now()), { capture: true, passive: true });
+let lastInput = -Infinity;
+let lastScroll = -Infinity;
+if (typeof document !== "undefined") {
+  for (const t of ["wheel", "touchstart", "touchmove", "keydown", "pointerdown"]) document.addEventListener(t, () => (lastScroll = lastInput = performance.now()), { capture: true, passive: true });
+  document.addEventListener("pointermove", (e) => e.buttons && (lastScroll = lastInput = performance.now()), { capture: true, passive: true });
+  // Programmatic scrolling (a streaming turn follows its output) is not the user's: only a scroll just after their input counts.
+  document.addEventListener("scroll", () => performance.now() - lastInput < FLING && (lastScroll = performance.now()), { capture: true, passive: true });
+}
 
-/** One block per idle slot, once scrolling has rested: a prompt with several long blocks never builds them all in one task. */
-function whenIdle(job: () => void) {
-  idleQueue.push(job);
-  if (idleScheduled) return;
-  const schedule = () => {
-    idleScheduled = true;
-    const wait = lastScroll + SCROLL_REST - performance.now();
-    if (wait > 0) return void setTimeout(schedule, wait);
-    const ric = globalThis.requestIdleCallback;
+type Job = { options: HighlightOptions; callbacks: Set<(r: HighlightResult) => void> };
+/** Newest job last: the rows on screen mounted last, and they come first. Deduped by language and code. */
+const jobs = new Map<string, Job>();
+/** Results of finished jobs (a row that comes into view again is colored at once). */
+const done = new Map<string, HighlightResult>();
+const DONE_MAX = 40;
+let epoch = 0;
+let scheduled = false;
+const keyOf = (o: HighlightOptions) => `${o.language}\0${o.code}`;
+
+/** One block per idle slot, once scrolling has rested (checked again when the slot comes). */
+function schedule() {
+  if (scheduled || !jobs.size) return;
+  scheduled = true;
+  const mine = epoch;
+  const wait = () => {
+    if (mine !== epoch) return;
+    const rest = lastScroll + SCROLL_REST - performance.now();
+    if (rest > 0) return void setTimeout(wait, rest);
     const next = () => {
-      idleScheduled = false;
-      idleQueue.shift()?.();
-      if (idleQueue.length) schedule();
+      if (mine !== epoch) return;
+      const rest = lastScroll + SCROLL_REST - performance.now();
+      if (rest > 0) return void setTimeout(wait, rest);
+      scheduled = false;
+      const key = [...jobs.keys()].pop();
+      const job = key === undefined ? undefined : jobs.get(key);
+      if (key !== undefined && job) {
+        jobs.delete(key);
+        const finish = (r: HighlightResult) => {
+          done.delete(key);
+          done.set(key, r);
+          if (done.size > DONE_MAX) done.delete(done.keys().next().value!);
+          job.callbacks.forEach((cb) => cb(r));
+        };
+        const r = code.highlight(job.options, finish);
+        if (r) finish(r);
+      }
+      schedule();
     };
+    const ric = globalThis.requestIdleCallback;
     if (ric) ric(next, { timeout: 1000 });
     else setTimeout(next, 16);
   };
-  schedule();
+  wait();
+}
+
+/** For tests: drop every queued job and timer. */
+export function resetIdleQueue() {
+  epoch++;
+  scheduled = false;
+  jobs.clear();
+  done.clear();
+  lastScroll = lastInput = -Infinity;
 }
 
 /**
- * The assistant's code plugin (it caches the tokens per code, language and theme) with long blocks deferred: highlighting
- * builds a span per token on every mount, and the virtual timeline mounts a row each time it scrolls into view, so long
- * prompts with code made scrolling stutter. A long block paints plain first and takes its colors when idle; a short one is
- * colored at once, as in the assistant's text.
+ * The assistant's code plugin (it caches the tokens per code, language and theme) with code deferred: highlighting builds a
+ * span per token on every mount, and the virtual timeline mounts a row each time it scrolls into view, so long prompts with
+ * code made scrolling stutter. One plugin per message: its first 1200 characters of code are colored at once, as in the
+ * assistant's text; the rest paints plain and takes its colors when idle (newest row first). `cancel` (the row unmounted)
+ * drops the message's queued jobs.
  */
-export const userCode: CodeHighlighterPlugin = {
-  ...code,
-  highlight(options, callback) {
-    if (options.code.length <= LONG_CODE || !callback) return code.highlight(options, callback);
-    whenIdle(() => {
-      const done = code.highlight(options, callback);
-      if (done) callback(done);
-    });
-    return null;
-  },
-};
-const USER_PLUGINS = { cjk, code: userCode, math, mermaid };
+function userCodeFor() {
+  const mine = new Map<string, (r: HighlightResult) => void>();
+  const sync = new Map<string, boolean>();
+  let used = 0;
+  const plugin: CodeHighlighterPlugin = {
+    ...code,
+    highlight(options, callback) {
+      const key = keyOf(options);
+      if (!callback) return code.highlight(options, callback);
+      let now = sync.get(key);
+      if (now === undefined) {
+        now = used + options.code.length <= LONG_CODE;
+        if (now) used += options.code.length;
+        sync.set(key, now);
+      }
+      if (now) return code.highlight(options, callback);
+      const cached = done.get(key);
+      if (cached) return cached;
+      const job = jobs.get(key) ?? { options, callbacks: new Set() };
+      jobs.delete(key);
+      jobs.set(key, job);
+      mine.get(key) && job.callbacks.delete(mine.get(key)!);
+      mine.set(key, callback);
+      job.callbacks.add(callback);
+      schedule();
+      return null;
+    },
+  };
+  const cancel = () => {
+    for (const [key, cb] of mine) {
+      const job = jobs.get(key);
+      job?.callbacks.delete(cb);
+      if (job && !job.callbacks.size) jobs.delete(key);
+    }
+    mine.clear();
+  };
+  return { plugin, cancel };
+}
 
-/** A user message's text as markdown, through the same renderer as assistant text (long code blocks colored when idle). */
+/** A user message's text as markdown, through the same renderer as assistant text (code beyond the first 1200 characters colored when idle). */
 export function UserMarkdown({ text }: { text: string }) {
+  const [own] = useState(userCodeFor);
+  const plugins = useMemo(() => ({ cjk, code: own.plugin, math, mermaid }), [own]);
+  useEffect(() => () => own.cancel(), [own]);
   return (
-    <MessageResponse mode="static" plugins={USER_PLUGINS} remarkPlugins={USER_REMARK_PLUGINS} rehypePlugins={USER_REHYPE_PLUGINS}>
+    <MessageResponse mode="static" plugins={plugins} remarkPlugins={USER_REMARK_PLUGINS} rehypePlugins={USER_REHYPE_PLUGINS}>
       {text}
     </MessageResponse>
   );
