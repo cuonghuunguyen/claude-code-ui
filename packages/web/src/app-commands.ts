@@ -43,6 +43,8 @@ export type CommandContext = {
   stop: () => void;
   /** Opens the Settings dialog. */
   openSettings: () => void;
+  /** Restarts the guided tour from its first step. */
+  startGuide: () => void;
   /** Opens the MCP servers dialog of the shown project; none without a project. */
   openMcp?: () => void;
   /** Opens the "Slash commands" dialog of the shown project; none without a project. */
@@ -72,6 +74,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.tabs.length > 1 && cmd("tab.prev", "Previous tab", () => go(step(-1)), KEYS.prevTab),
     at >= 0 && cmd("tab.close", "Close tab", () => c.closeTab(c.activeId!), KEYS.closeTab),
     cmd("settings.open", "Open settings", c.openSettings, KEYS.settings),
+    cmd("guide.start", "Show guide", c.startGuide),
     cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar, KEYS.sidebar),
     s && !s.draft && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel, KEYS.sidePanel),
     s && !s.draft && cmd("filetree.toggle", "Toggle file tree", c.toggleFileTree, KEYS.fileTree),

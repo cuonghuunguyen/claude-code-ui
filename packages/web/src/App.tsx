@@ -89,7 +89,7 @@ import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
 import { shownPrompt } from "./config-dialog.tsx";
-import { autoChapter, decideFirstUse, finishRun, GUIDE_KEY, loadGuide, parseGuide, saveGuide, settled, skipGuide, wasFreshBrowser, withStep, type ChapterId, type GuideHost, type GuideState } from "./guide.ts";
+import { autoChapter, decideFirstUse, finishRun, GUIDE_KEY, isVisible, loadGuide, parseGuide, restartGuide, saveGuide, settled, skipGuide, wasFreshBrowser, withStep, type ChapterId, type GuideHost, type GuideState } from "./guide.ts";
 import { chaptersOf, stepById, stepsFor } from "./guide-steps.ts";
 import { GuideTour } from "./guide-tour.tsx";
 import { IS_MAC, KEYS, keyLabels, matchesKey } from "./shortcuts.ts";
@@ -231,7 +231,7 @@ export function App() {
   const guideDecided = useRef(false);
   const [guideReady, setGuideReady] = useState(false);
   const guideStep = useRef<string>(undefined);
-  const [guideRun, setGuideRun] = useState<{ n: number; ids: string[]; chapters: ChapterId[]; start?: string }>();
+  const [guideRun, setGuideRun] = useState<{ n: number; ids: string[]; chapters: ChapterId[]; start?: string; from?: "settings" }>();
   const [update, setUpdate] = useState<UpdateInfo>();
   // The daemon's "runs older code" note; a dismissed note stays hidden until the page reloads.
   const [stale, setStale] = useState<string>();
@@ -1092,6 +1092,7 @@ export function App() {
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
     openSettings: () => setSettingsOpen(true),
+    startGuide: () => startGuide(),
     openMcp: project ? () => openMcp() : undefined,
     openSkills: project ? openSkills : undefined,
     openPlugins: project ? openPlugins : undefined,
@@ -1104,10 +1105,19 @@ export function App() {
     openSettings: () => setSettingsOpen(true),
     closeDrawer: () => setDrawer(false),
   };
-  const startRun = (chapter: ChapterId) => {
+  const startRun = (chapter: ChapterId, from?: "settings") => {
     const ids = stepsFor(chapter, { session: !!shown, git: isGit, narrow: !wide(768) }).map((s) => s.id);
     const step = guideState.current?.step;
-    setGuideRun((r) => ({ n: (r?.n ?? 0) + 1, ids, chapters: chaptersOf(ids), start: step && ids.includes(step) ? step : undefined }));
+    setGuideRun((r) => ({ n: (r?.n ?? 0) + 1, ids, chapters: chaptersOf(ids), start: step && ids.includes(step) ? step : undefined, from }));
+  };
+  // Settings > Guide > Restart guide and the palette's "Show guide": both chapters pending again, from the first step.
+  const startGuide = (from?: "settings") => {
+    guideState.current = restartGuide(guideState.current ?? decideFirstUse(false, 0));
+    saveGuide(guideState.current);
+    setGuideReady(true);
+    if (from) setSettingsOpen(false);
+    setDrawer(false);
+    startRun("basics", from);
   };
   // An automatic start waits for the shown session (a reload restores its tab a moment after the list) and its git status, so the run's step count is final (a restored tab that never shows: 3 s at most).
   const [guideWaited, setGuideWaited] = useState(false);
@@ -1565,6 +1575,8 @@ export function App() {
           host={guideHost}
           onStep={(id) => ((guideStep.current = id), guideState.current && saveGuide((guideState.current = withStep(guideState.current, id))))}
           onEnd={endGuide}
+          // Started from Settings: the focus goes back to its button (a closed drawer has none on a phone: the prompt box).
+          returnFocus={guideRun.from === "settings" ? () => [...document.querySelectorAll<HTMLElement>('[data-testid="open-settings"]')].find((b) => isVisible(b)) ?? shownPrompt() : undefined}
         />
       )}
       {quickOpen && shown && (
@@ -1646,7 +1658,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} />
+      <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} />
       {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
       {stale && !update && (
         <StaleToast

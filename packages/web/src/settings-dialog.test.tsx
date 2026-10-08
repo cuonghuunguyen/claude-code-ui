@@ -17,6 +17,7 @@ afterEach(() => {
 
 async function render({ failGet = false } = {}) {
   const onTabGrouping = vi.fn();
+  const onRestartGuide = vi.fn();
   let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false } };
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
@@ -43,6 +44,7 @@ async function render({ failGet = false } = {}) {
         request={request as never}
         onClose={() => set(false)}
         tabGrouping={grouping}
+        onRestartGuide={onRestartGuide}
         onTabGrouping={(g) => {
           onTabGrouping(g);
           setGrouping(g);
@@ -53,7 +55,7 @@ async function render({ failGet = false } = {}) {
   root = createRoot(el);
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
-  return { calls, q, prompt, onTabGrouping };
+  return { calls, q, prompt, onTabGrouping, onRestartGuide };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -146,4 +148,19 @@ it("Default diff view is a per-browser choice: picking Uncommitted saves it and 
   expect(q("settings-diff-mode")?.textContent).toContain("Uncommitted");
   expect(calls.some((c) => c.type === "settings.set")).toBe(false);
   localStorage.removeItem("claude-ui.diffMode");
+});
+
+it("shows a Guide section whose Restart guide button calls onRestartGuide", async () => {
+  const { q, onRestartGuide } = await render();
+  expect(q("settings-guide")!.textContent).toContain("Guided tour");
+  const button = q("settings-guide-restart") as HTMLButtonElement;
+  expect(button.textContent).toBe("Restart guide");
+  expect(button.getAttribute("aria-describedby")).toBe("settings-guide-tour-hint");
+  await act(async () => button.click());
+  expect(onRestartGuide).toHaveBeenCalledTimes(1);
+});
+
+it("lists the Guide section after Tabs", async () => {
+  const { q } = await render();
+  expect(q("settings-tabs")!.compareDocumentPosition(q("settings-guide")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });

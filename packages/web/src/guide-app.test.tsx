@@ -180,6 +180,48 @@ describe("first use", () => {
   });
 });
 
+describe("restart", () => {
+  const skipped = { v: 1, origin: "new", basics: "skipped", session: "skipped" };
+  it("Settings > Guide > Restart guide closes Settings and starts Basics at step 1", async () => {
+    localStorage.setItem(GUIDE_KEY, JSON.stringify(skipped));
+    await mount();
+    expect(tour()).toBeNull();
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="open-settings"]')!.click());
+    await act(async () => {});
+    expect(document.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-guide-restart"]')!.click());
+    await act(async () => {});
+    expect(document.querySelector('[data-testid="settings-dialog"]')).toBeNull();
+    expect(tour()!.dataset.step).toBe("welcome");
+    expect(tour()!.textContent).toContain("Step 1 of 6");
+    expect(saved()).toMatchObject({ basics: "pending", session: "pending" });
+  });
+  it("an existing user restarts it from the palette's Show guide", async () => {
+    localStorage.setItem("claude-ui.tabs", "[]");
+    await mount();
+    expect(tour()).toBeNull();
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Show guide"))!;
+    expect(row).toBeDefined();
+    await act(async () => row.click());
+    await act(async () => {});
+    expect(tour()!.dataset.step).toBe("welcome");
+  });
+  it("Esc after a restart skips again and the focus returns to the Settings button", async () => {
+    localStorage.setItem(GUIDE_KEY, JSON.stringify(skipped));
+    await mount();
+    const btn = document.querySelector<HTMLElement>('[data-testid="open-settings"]')!;
+    Object.defineProperty(btn, "getClientRects", { value: () => [{}] });
+    btn.getBoundingClientRect = () => ({ left: 0, top: 0, width: 50, height: 20, right: 50, bottom: 20, x: 0, y: 0, toJSON() {} });
+    await act(async () => btn.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-guide-restart"]')!.click());
+    await act(async () => {});
+    await press({ key: "Escape" });
+    expect(tour()).toBeNull();
+    expect(document.activeElement).toBe(btn);
+  });
+});
+
 describe("chapter Your session", () => {
   const inSession = (git: boolean, state: object = { v: 1, origin: "new", basics: "done", session: "pending" }) => {
     localStorage.setItem(GUIDE_KEY, JSON.stringify(state));
