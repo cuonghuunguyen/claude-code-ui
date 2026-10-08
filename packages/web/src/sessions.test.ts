@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
+import { activeOnly, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
   id,
@@ -273,4 +273,63 @@ it("removeWorktreeText: counts in the CLI wording, singular and plural; a clean 
   expect(removeWorktreeText({ uncommitted: 1, commits: 0, branch: "worktree-x" })).toBe("You have 1 uncommitted file on worktree-x. All will be lost if you remove.");
   expect(removeWorktreeText({ uncommitted: 0, commits: 1, branch: "worktree-x" })).toBe("You have 1 commit on worktree-x. All will be lost if you remove.");
   expect(removeWorktreeText({ uncommitted: 0, commits: 0, branch: "worktree-x" })).toBe("Clean up the worktree directory.");
+});
+
+describe("sidebar actions (GH-152)", () => {
+  const wts = [
+    { path: "/r", branch: "main", main: true },
+    { path: "/r/.claude/worktrees/wt", branch: "wt", main: false },
+  ];
+  const list = [item("c1", "/r", 9), { ...item("w1", "/r/.claude/worktrees/wt", 8), coordinatorId: "c1" }, item("s2", "/r/.claude/worktrees/wt", 7), item("p1", "/zeta", 6)];
+  const view = (archived = false) => {
+    const { top, workers } = nestWorkers(list, archived);
+    return { groups: groupByCwd(top, "", ["/r", "/zeta"], archived, { "/r": wts }, workers), workers };
+  };
+
+  it("collapseKeys: every project group, worktree row and worker group", () => {
+    const { groups, workers } = view();
+    expect(collapseKeys(groups, workers, false)).toEqual(["/r", "worktree:/r", "worktree:/r/.claude/worktrees/wt", "/zeta", "coordinator:c1"]);
+    expect(collapseKeys(groups, workers, true).at(-1)).toBe("archived:coordinator:c1");
+  });
+
+  it("revealKeys: the keys that hide a session, undefined for an unknown one", () => {
+    const { groups, workers } = view();
+    expect(revealKeys("p1", groups, workers, false)).toEqual(["/zeta"]);
+    expect(revealKeys("s2", groups, workers, false)).toEqual(["/r", "worktree:/r/.claude/worktrees/wt"]);
+    expect(revealKeys("c1", groups, workers, false)).toEqual(["/r", "worktree:/r"]);
+    expect(revealKeys("w1", groups, workers, false)).toEqual(["/r", "worktree:/r", "coordinator:c1"]);
+    expect(revealKeys("nope", groups, workers, false)).toBeUndefined();
+  });
+
+  it("sortGroups: recent keeps the order, name sorts case-insensitively without touching the input", () => {
+    const g = (cwd: string) => ({ cwd, members: [cwd], sessions: [], worktrees: [] });
+    const groups = [g("/b/zed"), g("/a/Beta"), g("/c/alpha")];
+    expect(sortGroups(groups, "recent")).toBe(groups);
+    expect(sortGroups(groups, "name").map((x) => x.cwd)).toEqual(["/c/alpha", "/a/Beta", "/b/zed"]);
+    expect(groups[0]!.cwd).toBe("/b/zed");
+  });
+
+  it("activeOnly: keeps sessions that hold or have a worker that holds, drops the rest, keeps empty projects", () => {
+    const { groups, workers } = view();
+    const out = activeOnly(groups, workers, (s) => s.id === "w1");
+    expect(out.flatMap((g) => [...g.sessions, ...g.worktrees.flatMap((r) => r.sessions)]).map((s) => s.id)).toEqual(["c1"]);
+    expect(out.map((g) => g.cwd)).toEqual(["/r", "/zeta"]);
+  });
+
+  describe("sidebar view settings", () => {
+    afterEach(() => localStorage.clear());
+    const def = { alwaysSelect: false, dayHeaders: true, onlyActive: false, sort: "recent" };
+    it("defaults when missing, corrupt or of the wrong type", () => {
+      expect(loadSidebarView()).toEqual(def);
+      localStorage.setItem("claude-ui.sidebarView", "{nope");
+      expect(loadSidebarView()).toEqual(def);
+      localStorage.setItem("claude-ui.sidebarView", JSON.stringify({ alwaysSelect: "yes", dayHeaders: 0, sort: 3 }));
+      expect(loadSidebarView()).toEqual(def);
+    });
+    it("round-trips", () => {
+      const v = { alwaysSelect: true, dayHeaders: false, onlyActive: true, sort: "name" as const };
+      saveSidebarView(v);
+      expect(loadSidebarView()).toEqual(v);
+    });
+  });
 });

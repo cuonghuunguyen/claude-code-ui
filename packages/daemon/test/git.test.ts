@@ -2,11 +2,14 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, worktreeStatus } from "../src/git.ts";
+import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, limiter, listWorktrees, removeWorktree, worktreeStatus } from "../src/git.ts";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
+
+// Git for Windows takes 0.2-0.6 s per process; the multi-command tests here need far more than the 15 s default there.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 120_000 });
 
 describe("gitStatus", () => {
   it("is null outside a git repository", async () => {
@@ -578,7 +581,8 @@ describe("gitLog / gitShow / gitFileAt", () => {
     return readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => l.split("\x1f").slice(0, -1));
   }
 
-  it("passes user text to git only as one value after the option terminators", async () => {
+  // A `git` shell-script wrapper first on PATH: node cannot spawn an extensionless script on Windows (no shell, no .cmd lookup).
+  it.skipIf(process.platform === "win32")("passes user text to git only as one value after the option terminators", async () => {
     const r = graphRepo();
     const calls = await recorded(async () => {
       await gitLog(r.dir, { ref: "refs/heads/f", author: "-x y", text: "--all -p", allowed: all });
@@ -614,8 +618,10 @@ describe("gitLog / gitShow / gitFileAt", () => {
 
   it("does not run core.fsmonitor for git.status, git.log, git.commit, git.fileAt or git.diff", async () => {
     const r = graphRepo();
-    const marker = join(r.dir, "..", `fsmon-${Date.now()}`);
-    const hook = join(r.dir, "..", `fsmon-${Date.now()}.sh`);
+    // The hook is a sh script and git runs it through sh: forward slashes, or Git for Windows mangles the path.
+    const fwd = (p: string) => p.replaceAll("\\", "/");
+    const marker = fwd(join(r.dir, "..", `fsmon-${Date.now()}`));
+    const hook = fwd(join(r.dir, "..", `fsmon-${Date.now()}.sh`));
     writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\nprintf '\\0'\n`, { mode: 0o755 });
     run(r.dir, "config", "core.fsmonitor", hook);
     writeFileSync(join(r.dir, "b.txt"), "dirty\n");
@@ -847,5 +853,28 @@ describe("gitDiff truncation", { timeout: 120_000 }, () => {
     expect(d.truncated).toBe(true);
     expect(d.files).toHaveLength(3000);
     expect(d.files.find((f) => f.path === "zzz.txt")).toMatchObject({ status: "M", added: 1, removed: 1 });
+  });
+});
+
+describe("limiter", () => {
+  it("runs at most n tasks at a time, in order; a failed task frees its slot", async () => {
+    const run = limiter(2);
+    let active = 0;
+    let most = 0;
+    const order: number[] = [];
+    const task = (i: number, fail = false) =>
+      run(async () => {
+        active++;
+        most = Math.max(most, active);
+        order.push(i);
+        await new Promise((r) => setTimeout(r, 5));
+        active--;
+        if (fail) throw new Error(`task ${i}`);
+        return i;
+      });
+    const results = await Promise.allSettled([task(0), task(1, true), task(2), task(3), task(4)]);
+    expect(most).toBe(2);
+    expect(order).toEqual([0, 1, 2, 3, 4]);
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "rejected", "fulfilled", "fulfilled", "fulfilled"]);
   });
 });
