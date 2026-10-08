@@ -61,11 +61,14 @@ export function matchesKey(spec: string, e: KeyboardEvent, mac = IS_MAC) {
   if (e.ctrlKey !== ctrl || e.metaKey !== meta || e.shiftKey !== mods.has("shift") || e.altKey !== mods.has("alt")) return false;
   // AltGr typing a character (German AltGr+Q is "@", AltGr+7 is "{") is typing, never a shortcut.
   if (altGrChar(e, mac)) return false;
+  // Alt+number pad digits are a Windows Alt code in progress (Alt+0169 is "©"): no shortcut, so Alt+1 cannot jump to a tab on the way.
+  if (isAltCode(e, mac)) return false;
+  // Digits and ` are recorded by their physical key (keymap.ts specFromEvent), and the layout changes e.key on them with any modifier
+  // (Czech Alt+1 and macOS Ctrl+1 are "+", AZERTY Ctrl+1 is "&", AZERTY Ctrl+` is "²", Shift+` is "~"): the physical key decides, and only
+  // the spec of that key matches, so one press never fires two specs (Czech Alt+1 is alt+1, not alt++).
+  if (/^Digit\d$/.test(e.code) || e.code === "Backquote") return CODES[key] === e.code;
   const k = e.key === " " ? "space" : e.key.toLowerCase();
   if (k === key) return true;
-  // Digits and ` are recorded by their physical key (keymap.ts specFromEvent), and the layout changes e.key on them with any modifier
-  // (Czech Alt+1 and macOS Ctrl+1 are "+", AZERTY Ctrl+1 is "&", AZERTY Ctrl+` is "²", Shift+` is "~"): the physical key decides.
-  if (CODES[key]) return e.code === CODES[key];
   // macOS Option changes e.key (Option+W is "∑"): with Alt a letter matches by its physical key.
   // macOS only: elsewhere Ctrl+Alt is also AltGr, whose typed character (AltGr+W is "|" on a Hungarian layout) must not fire a shortcut.
   return mac && e.altKey && /^[a-z]$/.test(key) && e.code === `Key${key.toUpperCase()}`;
@@ -73,38 +76,22 @@ export function matchesKey(spec: string, e: KeyboardEvent, mac = IS_MAC) {
 
 const CODES: Record<string, string> = { "`": "Backquote", ...Object.fromEntries([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [String(n), `Digit${n}`])) };
 
-/** The characters a key types on a US layout, unshifted then shifted, by `event.code` (letters aside). */
-const US: Record<string, string> = {
-  Backquote: "`~",
-  Minus: "-_",
-  Equal: "=+",
-  BracketLeft: "[{",
-  BracketRight: "]}",
-  Backslash: "\\|",
-  Semicolon: ";:",
-  Quote: "'\"",
-  Comma: ",<",
-  Period: ".>",
-  Slash: "/?",
-  Space: "  ",
-  NumpadAdd: "++",
-  NumpadSubtract: "--",
-  NumpadMultiply: "**",
-  NumpadDivide: "//",
-  NumpadDecimal: "..",
-  ...Object.fromEntries([..."1234567890"].map((n, i) => [`Digit${n}`, n + "!@#$%^&*()"[i]])),
-  ...Object.fromEntries([..."0123456789"].map((n) => [`Numpad${n}`, n + n])),
-};
+/** Number pad operators: AltGr does not change them on the layouts tested, so Ctrl+Alt with one is a shortcut. */
+const NUMPAD_OPS = new Set(["NumpadAdd", "NumpadSubtract", "NumpadMultiply", "NumpadDivide", "NumpadDecimal"]);
+
+/** Off macOS, Alt (alone) with a number pad digit: a Windows Alt code (Alt+0169 types "©"). */
+export const isAltCode = (e: KeyboardEvent, mac = IS_MAC) => !mac && e.altKey && !e.ctrlKey && !e.metaKey && /^Numpad\d$/.test(e.code);
 
 /**
- * Off macOS, Ctrl+Alt is AltGr: the character the press types ("@" for German AltGr+Q, "Dead" for an accent), or undefined when it is a shortcut.
- * A layout's AltGr character cannot be told from its base character, so Ctrl+Alt counts as a shortcut only on an ASCII letter, a named key
- * (arrows, F2, End) or the key's US character: AZERTY Ctrl+Alt+& and Russian Ctrl+Alt+Л count as AltGr too.
+ * Off macOS, Ctrl+Alt is AltGr: the character the press types ("@" for German AltGr+Q, "[" for Spanish AltGr+the key right of P, "Dead" for an accent),
+ * or undefined when it is a shortcut. A layout's AltGr character cannot be told from its base character, so Ctrl+Alt counts as a shortcut only on
+ * an ASCII letter, a digit key that types its digit, a named key (arrows, F2, End), Space or a number pad operator. Any other character
+ * counts as AltGr: AZERTY Ctrl+Alt+&, Russian Ctrl+Alt+Л, and US Ctrl+Alt+/ too.
  */
 export function altGrChar(e: KeyboardEvent, mac = IS_MAC) {
   if (mac || !e.ctrlKey || !e.altKey) return undefined;
   if (e.key === "Dead") return e.key;
-  if ([...e.key].length !== 1 || /^[a-z]$/i.test(e.key) || US[e.code]?.[e.shiftKey ? 1 : 0] === e.key) return undefined;
+  if ([...e.key].length !== 1 || /^[a-z0-9 ]$/i.test(e.key) || NUMPAD_OPS.has(e.code)) return undefined;
   return e.key;
 }
 
