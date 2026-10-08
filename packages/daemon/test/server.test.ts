@@ -1498,6 +1498,32 @@ describe("daemon", () => {
     }
   });
 
+  it("session.list requests that arrive while a list runs share one next list, not one list each", async () => {
+    const p = added(webRoot);
+    const listProjects = vi.fn(p.list);
+    let scans = 0;
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      projects: { ...p, list: listProjects } as never,
+      history: { listSessions: (async () => (scans++, await new Promise((r) => setTimeout(r, 100)), [])) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.list" });
+      listProjects.mockClear();
+      const replies = await Promise.all(Array.from({ length: 6 }, () => c.request({ type: "session.list" })));
+      expect(replies.every((r) => r.type === "reply")).toBe(true);
+      // The first runs; the five that arrived meanwhile get one list that starts after it (it sees what changed before them).
+      expect(listProjects).toHaveBeenCalledTimes(2);
+    } finally {
+      d.close();
+    }
+  });
+
   it("does not open a transcript again for its last message time while the scan reports the same mtime and size", async () => {
     const id = "7b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
     const cwd = join(webRoot, "stamp proj");

@@ -768,7 +768,18 @@ export function createDaemon(opts: {
     return CLEARED.test(info.summary) ? clearedTitle(s.id, info.cwd ?? s.cwd) : info.summary;
   }
 
-  async function list(): Promise<ListResult> {
+  /**
+   * session.list: every tab asks on each sessions.changed, turn start and end and focus, often at once. Requests that arrive
+   * while a list runs share one list that starts after it (so it still sees what changed before them), not one list each.
+   */
+  let listing: Promise<ListResult> | undefined;
+  let nextListing: Promise<ListResult> | undefined;
+  function list(): Promise<ListResult> {
+    if (!listing) return (listing = listNow().finally(() => (listing = undefined)));
+    return (nextListing ??= listing.catch(() => {}).then(() => ((nextListing = undefined), list())));
+  }
+
+  async function listNow(): Promise<ListResult> {
     // The model list starts a CLI: not waiting longer than this offers no auto mode until it is there.
     await new Promise<void>((done) => {
       const t = setTimeout(done, opts.modelListWaitMs ?? MODEL_LIST_WAIT_MS);
