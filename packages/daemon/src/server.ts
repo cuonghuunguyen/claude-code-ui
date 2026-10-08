@@ -1,7 +1,7 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { closeSync, constants, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -353,6 +353,9 @@ export function createDaemon(opts: {
   autoContinue?: { graceMs?: number; gapMs?: number; retryMs?: number };
   listCache?: boolean;
   hostnames?: string[];
+  /** Name shown for this computer in Settings (default: the OS host name); `desktopForcedOff`: started with --no-os-notify. */
+  host?: string;
+  desktopForcedOff?: boolean;
   cli?: CliRunner;
   configHoldMs?: number;
   configPollMs?: number;
@@ -588,6 +591,7 @@ export function createDaemon(opts: {
     }
   };
 
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<WebSocket, string>();
   const pushTitleOf = async (sessionId: string) => {
@@ -1348,13 +1352,13 @@ export function createDaemon(opts: {
           broadcast({ type: "sessions.changed" });
           return reply({});
         case "settings.get":
-          return reply({ settings: appSettings.get() });
+          return reply({ settings: appSettings.get(), daemon: daemonInfo() });
         case "settings.set": {
           try {
             const settings = appSettings.set(msg.patch);
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
             broadcast({ type: "settings_changed", settings });
-            return reply({ settings });
+            return reply({ settings, daemon: daemonInfo() });
           } catch (err) {
             return fail("bad_settings", (err as Error).message);
           }

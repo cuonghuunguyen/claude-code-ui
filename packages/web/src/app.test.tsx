@@ -106,10 +106,10 @@ it("phone: the titlebar keeps the sessions menu, tab switcher with the session n
   expect(tools.querySelector('[data-testid="drawer-quick-open"]')).not.toBeNull();
 });
 
-it("phone: the drawer Notifications toggle is a 44px target on a coarse pointer", async () => {
+it("the sidebar and the drawer have no Notifications checkbox: it lives in Settings (GH-158)", async () => {
   await act(async () => el.querySelector<HTMLElement>('[data-testid="open-drawer"]')!.click());
-  const label = document.querySelector('[data-testid="push-toggle"]')!.closest("label")!;
-  expect(label.className).toContain("pointer-coarse:min-h-11");
+  expect(document.querySelector('[data-testid="push-toggle"]')).toBeNull();
+  expect(document.querySelector('input[type="checkbox"]')).toBeNull();
 });
 
 it("phone: Search in the drawer closes the drawer and opens quick open", async () => {

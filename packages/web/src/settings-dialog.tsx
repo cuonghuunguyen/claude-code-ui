@@ -1,5 +1,5 @@
 // Settings dialog (docs/spec.md "Settings"): app-wide, daemon-side settings in sections, on the ConfigDialog shell,
-// plus per-browser choices (Changes, Tabs, Guide) that never reach the daemon.
+// plus per-browser choices (Notifications, Changes, Tabs, Guide) that never reach the daemon.
 // A later setting is one more row in SECTIONS; reading, patching, errors and layout stay as they are.
 import { useEffect, useRef, useState } from "react";
 import type { Settings, SettingsPatch, SettingsResult } from "@claude-ui/protocol";
@@ -46,10 +46,14 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
   },
 ];
 
+/** This browser's Web Push switch (App owns the subscription: it needs the daemon connection). */
+export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
+
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, onShortcuts, onRestartGuide }: { open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, onShortcuts, onRestartGuide, push }: { push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
+  const [daemon, setDaemon] = useState<SettingsResult["daemon"]>();
   const [saving, setSaving] = useState(false);
   // "Show only active sessions": the sidebar's own per-browser setting (its options menu writes it too).
   const [onlyActive, setOnlyActive] = useState(() => loadSidebarView().onlyActive);
@@ -69,7 +73,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     if (!open) return;
     let live = true;
     ask.current<SettingsResult>({ type: "settings.get" }).then(
-      (r) => live && (setSettings(r.settings), setError(undefined), setDraft({})),
+      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setError(undefined), setDraft({})),
       (e: Error) => live && setError(e.message),
     );
     return () => void (live = false);
@@ -78,7 +82,9 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const save = async (patch: SettingsPatch, field?: string) => {
     setSaving(true);
     try {
-      setSettings((await ask.current<SettingsResult>({ type: "settings.set", patch })).settings);
+      const r = await ask.current<SettingsResult>({ type: "settings.set", patch });
+      setSettings(r.settings);
+      setDaemon(r.daemon);
       setError(undefined);
       if (field) setDraft(({ [field]: _, ...rest }) => rest);
     } catch (e) {
@@ -91,6 +97,50 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   return (
     <ConfigDialog title="Settings" open={open} onClose={onClose} testId="settings-dialog">
       {error && <Banner kind="error">{error}</Banner>}
+      <section aria-labelledby="settings-notifications-title" className="flex flex-col" data-testid="settings-notifications">
+        <h3 id="settings-notifications-title" className="pb-1 font-medium text-[13px] text-muted-foreground">
+          Notifications
+        </h3>
+        {push && (
+          <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+            <div className="min-w-0 flex-1">
+              <span className="block text-sm">Push notifications</span>
+              <span id="settings-push-hint" className="block text-muted-foreground text-xs">
+                {push.supported
+                  ? "This browser notifies you when a session needs input or finishes, also with the page closed. Kept in this browser."
+                  : "Not available in this browser here: Web Push needs HTTPS or localhost. The daemon's desktop notifications are used instead."}
+              </span>
+              {push.error && (
+                <span role="alert" className="mt-1 block text-destructive text-xs">
+                  {push.error}
+                </span>
+              )}
+            </div>
+            <Switch on={push.on} label="Push notifications" held={!push.supported || push.busy} onToggle={push.toggle} title="Push notifications" describedBy="settings-push-hint" testId="settings-push" />
+          </div>
+        )}
+        {settings && (
+          <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+            <div className="min-w-0 flex-1">
+              <span className="block text-sm">{daemon?.host ? `Desktop notifications on ${daemon.host}` : "Desktop notifications on the daemon's computer"}</span>
+              <span id="settings-notifications-desktop-hint" className="block text-muted-foreground text-xs">
+                {daemon?.desktopForcedOff
+                  ? "Turned off when the daemon started (--no-os-notify or CLAUDE_UI_OS_NOTIFY=0)."
+                  : "The daemon's computer shows a system notification when no browser has push notifications on. For every browser of this daemon."}
+              </span>
+            </div>
+            <Switch
+              on={settings.notifications.desktop && !daemon?.desktopForcedOff}
+              label="Desktop notifications"
+              held={saving || !!daemon?.desktopForcedOff}
+              onToggle={(on) => void save({ notifications: { desktop: on } })}
+              title="Desktop notifications"
+              describedBy="settings-notifications-desktop-hint"
+              testId="settings-notifications-desktop"
+            />
+          </div>
+        )}
+      </section>
       <section aria-labelledby="settings-changes" className="flex flex-col" data-testid="settings-changes">
         <h3 id="settings-changes" className="pb-1 font-medium text-[13px] text-muted-foreground">
           Changes

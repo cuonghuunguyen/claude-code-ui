@@ -371,6 +371,23 @@ describe("desktop notification", () => {
     expect(calls).toEqual([]);
   });
 
+  it("the desktop setting off: no desktop notification without a subscription; on: one; notify false still wins; a subscription ignores it (GH-158)", async () => {
+    const calls: [string, string[], object][] = [];
+    const notify = (x: { title: string; body: string }) => osNotify(x, "linux", fakeRun(calls));
+    await createPush({ ...mk(), notify, desktop: () => false }).send(pl);
+    expect(calls).toEqual([]);
+    await createPush({ ...mk(), notify, desktop: () => true }).send(pl);
+    expect(calls).toHaveLength(1);
+    await createPush({ ...mk(), notify: false, desktop: () => true }).send(pl);
+    expect(calls).toHaveLength(1);
+    const m = mk();
+    const p = createPush({ ...m, notify, desktop: () => false });
+    p.subscribe(sub);
+    await p.send(pl);
+    expect(m.send).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(1);
+  });
+
   it("notify false (--no-os-notify): nothing runs", async () => {
     await expect(createPush({ ...mk(), notify: false }).send(pl)).resolves.toBeUndefined();
   });

@@ -15,12 +15,13 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ failGet = false } = {}) {
+async function render({ failGet = false, daemon = { host: "box" } as { host: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } } = {}) {
+  const toggle = vi.fn();
   const onTabGrouping = vi.fn();
   const onRestartGuide = vi.fn();
   const onTabCompact = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true } };
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
@@ -28,9 +29,9 @@ async function render({ failGet = false } = {}) {
     if (msg.type === "settings.set") {
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) } };
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) } };
     }
-    return { settings };
+    return { settings, ...(daemon && { daemon }) };
   });
   const el = document.createElement("div");
   const prompt = document.createElement("textarea");
@@ -47,6 +48,7 @@ async function render({ failGet = false } = {}) {
         onShortcuts={onShortcuts}
         request={request as never}
         onClose={() => set(false)}
+        push={{ ...push, toggle }}
         tabCompact={compact}
         onTabCompact={(on) => {
           onTabCompact(on);
@@ -64,7 +66,7 @@ async function render({ failGet = false } = {}) {
   root = createRoot(el);
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
-  return { calls, q, prompt, onTabGrouping, onTabCompact, onShortcuts, onRestartGuide };
+  return { calls, toggle, q, prompt, onTabGrouping, onTabCompact, onShortcuts, onRestartGuide };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -211,4 +213,56 @@ it("the Keyboard section's Customize button opens the shortcuts dialog", async (
   expect(q("settings-keyboard")?.textContent).toContain("Keyboard");
   await act(async () => q("settings-shortcuts")!.click());
   expect(onShortcuts).toHaveBeenCalledOnce();
+});
+
+it("Settings > Notifications is the first section: Push and Desktop rows (GH-158)", async () => {
+  const { q } = await render();
+  const sections = [...document.querySelectorAll('[data-testid="settings-dialog"] section')];
+  expect(sections[0]?.getAttribute("data-testid")).toBe("settings-notifications");
+  expect(q("settings-notifications")?.querySelector("h3")?.textContent).toBe("Notifications");
+  expect(q("settings-push")).not.toBeNull();
+  expect(q("settings-notifications-desktop")).not.toBeNull();
+});
+
+it("the Push switch shows the browser's subscription and calls the toggle; it is the old sidebar checkbox moved here", async () => {
+  const { q, toggle } = await render({ push: { on: true, supported: true, busy: false, error: undefined } });
+  expect(q("settings-push")?.getAttribute("aria-checked")).toBe("true");
+  await act(async () => q("settings-push")!.click());
+  expect(toggle).toHaveBeenCalledTimes(1);
+});
+
+it("Push unsupported: the switch is aria-disabled with the reason, and a click does nothing", async () => {
+  const { q, toggle } = await render({ push: { on: false, supported: false, busy: false, error: undefined } });
+  expect(q("settings-push")?.getAttribute("aria-disabled")).toBe("true");
+  expect(document.getElementById(q("settings-push")!.getAttribute("aria-describedby")!)?.textContent).toContain("Web Push needs HTTPS or localhost");
+  await act(async () => q("settings-push")!.click());
+  expect(toggle).not.toHaveBeenCalled();
+});
+
+it("a push error is an alert under the row, not the sidebar line", async () => {
+  const { q } = await render({ push: { on: false, supported: true, busy: false, error: "notifications are blocked for this site in the browser" } });
+  const alert = q("settings-notifications")!.querySelector('[role="alert"]');
+  expect(alert?.textContent).toContain("blocked for this site");
+});
+
+it("the Desktop row names the daemon's host and writes notifications.desktop with settings.set", async () => {
+  const { q, calls } = await render();
+  expect(q("settings-notifications-desktop")?.getAttribute("aria-checked")).toBe("true");
+  expect(document.querySelector('[data-testid="settings-notifications"]')?.textContent).toContain("Desktop notifications on box");
+  await act(async () => q("settings-notifications-desktop")!.click());
+  expect(calls.find((c) => c.type === "settings.set")).toMatchObject({ patch: { notifications: { desktop: false } } });
+  expect(q("settings-notifications-desktop")?.getAttribute("aria-checked")).toBe("false");
+});
+
+it("the Desktop row falls back to the daemon's computer when the daemon sends no host", async () => {
+  await render({ daemon: null });
+  expect(document.querySelector('[data-testid="settings-notifications"]')?.textContent).toContain("Desktop notifications on the daemon's computer");
+});
+
+it("a daemon started with --no-os-notify: the Desktop switch is aria-disabled with the flag hint and does not save", async () => {
+  const { q, calls } = await render({ daemon: { host: "box", desktopForcedOff: true } });
+  expect(q("settings-notifications-desktop")?.getAttribute("aria-disabled")).toBe("true");
+  expect(q("settings-notifications")?.textContent).toContain("--no-os-notify");
+  await act(async () => q("settings-notifications-desktop")!.click());
+  expect(calls.some((c) => c.type === "settings.set")).toBe(false);
 });

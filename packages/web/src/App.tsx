@@ -300,6 +300,8 @@ export function App() {
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
   const [pushOn, setPushOn] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState<string>();
   // Per session, bumped by a notification click: remounts its conversation, which starts scrolled to the bottom.
   const [scrollKeys, setScrollKeys] = useState<Record<string, number>>({});
   const focused = usePageFocused();
@@ -769,14 +771,19 @@ export function App() {
     setFavicon(faviconHref(waitingN));
   }, [waitingN]);
 
+  // Settings › Notifications owns the switch; its error shows under the row (not in the sidebar).
   async function togglePush() {
-    setError(undefined);
+    setPushError(undefined);
+    setPushBusy(true);
     try {
       if (pushOn) await disablePush();
       else await enablePush(client.current!);
       setPushOn(!pushOn);
     } catch (e) {
-      setError(`notifications: ${(e as Error).message}`);
+      const m = (e as Error).message;
+      setPushError(/blocked/.test(m) ? "Notifications are blocked for this site in the browser. Allow them in the site settings, then turn this on again." : m);
+    } finally {
+      setPushBusy(false);
     }
   }
 
@@ -1456,13 +1463,6 @@ export function App() {
               <ThemeIcon />
             </IconButton>
           </div>
-          <label
-            className="flex items-center gap-2 pointer-coarse:min-h-11"
-            title={pushSupported() ? "Push notification when a session needs input or finishes" : "Web Push needs HTTPS or localhost and a browser with Web Push. Without it, the daemon shows desktop notifications on its own machine."}
-          >
-            <input type="checkbox" checked={pushOn} disabled={!pushSupported()} onChange={togglePush} data-testid="push-toggle" />
-            Notifications
-          </label>
           {error && <p className="text-destructive">{error}</p>}
           {status !== "unauthorized" && <FocusRow count={waitingN} active={activeId === FOCUS_TAB} onOpen={() => open(FOCUS_TAB)} />}
           {status !== "unauthorized" && (
@@ -1806,7 +1806,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
+      <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       {/* Always mounted so a screen reader announces the hint when it fills in. */}
       <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 left-1/2 z-50 w-max max-w-[calc(100vw-24px)] -translate-x-1/2" data-testid="prefix-hint">

@@ -1672,6 +1672,27 @@ describe("daemon", () => {
     }
   });
 
+  it("settings.get and settings.set replies name the daemon's host, and say when desktop notifications were turned off at start (GH-158)", async () => {
+    const run = async (extra: object) => {
+      const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, ...extra });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        const got = await c.request({ type: "settings.get" });
+        const set = await c.request({ type: "settings.set", patch: { notifications: { desktop: false } } });
+        return [got, set];
+      } finally {
+        d.close();
+      }
+    };
+    const [got, set] = await run({ host: "box" });
+    expect(got).toMatchObject({ result: { settings: { notifications: { desktop: true } }, daemon: { host: "box" } } });
+    expect((got as { result: { daemon: object } }).result.daemon).not.toHaveProperty("desktopForcedOff");
+    expect(set).toMatchObject({ result: { settings: { notifications: { desktop: false } }, daemon: { host: "box" } } });
+    const [forced] = await run({ host: "box", desktopForcedOff: true });
+    expect(forced).toMatchObject({ result: { daemon: { host: "box", desktopForcedOff: true } } });
+  });
+
   describe("added projects", () => {
     const cwdOf = (n: string) => mkdtempSync(join(webRoot, `${n}-`));
     const sid = (n: number) => `0b2c3d4e-5f60-4718-8a9b-${String(n).padStart(12, "0")}`;
