@@ -89,3 +89,14 @@ it("a digit never matches by code while Ctrl and Alt are both down (AltGr on Win
   // Alt alone still matches by the physical key (Czech Alt+1 types "+").
   expect(matchesKey("alt+1", ev("+", { code: "Digit1", altKey: true }), false)).toBe(true);
 });
+
+it("the + key: \"mod++\" is Ctrl and +, \"mod+shift++\" is Ctrl, Shift and +", () => {
+  expect(matchesKey("mod++", ev("+", { ctrlKey: true, code: "BracketRight" }), false)).toBe(true);
+  expect(matchesKey("mod++", ev("=", { ctrlKey: true, code: "Equal" }), false)).toBe(false);
+  expect(matchesKey("mod+shift++", ev("+", { ctrlKey: true, shiftKey: true, code: "Equal" }), false)).toBe(true);
+  expect(matchesKey("mod++", ev("+", { ctrlKey: true, shiftKey: true, code: "Equal" }), false)).toBe(false);
+  expect(canon("mod+shift++", false)).toBe("ctrl+shift++");
+  expect(keyLabels("mod+shift++", false)).toEqual(["Ctrl", "Shift", "+"]);
+  expect(bindingError("mod++", false)).toBeUndefined();
+  expect(bindingError("shift++", false)).toMatch(/Ctrl, Cmd or Alt/);
+});

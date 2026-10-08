@@ -1,6 +1,6 @@
 // The user's keybindings (docs/spec.md "Keyboard shortcuts"): overrides of the defaults in shortcuts.ts, kept per browser.
 import { useSyncExternalStore } from "react";
-import { IS_MAC, SHORTCUTS, altGrChar, canon, matchesKey, defaultSpec, shortcutById, type Shortcut } from "./shortcuts.ts";
+import { IS_MAC, SHORTCUTS, altGrChar, canon, matchesKey, parseSpec, defaultSpec, shortcutById, type Shortcut } from "./shortcuts.ts";
 import { FORMAT_KEYS } from "./markdown-toolbar.tsx";
 
 const KEY = "claude-ui.keybindings";
@@ -10,7 +10,7 @@ const RESERVED = ["mod+t", "mod+w", "mod+n", "mod+shift+t", "mod+shift+n", "mod+
 
 /** Why `spec` cannot be a binding, or undefined when it can. */
 export function bindingError(spec: string, mac = IS_MAC) {
-  const mods = spec.split("+").slice(0, -1);
+  const mods = [...parseSpec(spec).mods];
   if (!mods.some((m) => m === "mod" || m === "ctrl" || m === "meta" || m === "alt")) return "Use Ctrl, Cmd or Alt with the key, or it would fire while typing";
   if (RESERVED.some((r) => canon(r, mac) === canon(spec, mac))) return "The browser keeps this shortcut";
   return undefined;
@@ -102,5 +102,5 @@ const TERMINAL_KEYS = ["terminal.toggle", "terminal.new", "palette.open", "palet
 export const leavesTerminal = (e: KeyboardEvent) =>
   SHORTCUTS.some((s) => {
     const spec = specOf(s.id);
-    return !!spec && matchesKey(spec, e) && (spec.split("+").slice(0, -1).includes("alt") || TERMINAL_KEYS.includes(s.id) || s.id.startsWith("tab.goto"));
+    return !!spec && matchesKey(spec, e) && (parseSpec(spec).mods.has("alt") || TERMINAL_KEYS.includes(s.id) || s.id.startsWith("tab.goto"));
   });

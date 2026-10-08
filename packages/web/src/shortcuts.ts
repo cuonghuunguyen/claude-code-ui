@@ -46,14 +46,14 @@ export const defaultSpec = (s: Shortcut, mac = IS_MAC) => (mac && s.mac) || s.ke
 /** Default specs by id on this platform (labels and tests); the user's own bindings are in keymap.ts. */
 export const KEYS = Object.fromEntries(SHORTCUTS.map((s) => [s.id, defaultSpec(s)])) as Record<string, string>;
 
-const parse = (spec: string) => {
-  const parts = spec.split("+");
-  // "mod+'" and a literal "+" key: the key is the last part, the rest are modifiers.
-  return { key: parts.at(-1)!, mods: new Set(parts.slice(0, -1)) };
+/** A spec's key and modifiers: the key follows the last "+", and a trailing "+" is the + key ("mod++" is Ctrl and +). */
+export const parseSpec = (spec: string) => {
+  const i = spec.endsWith("+") ? spec.length - 1 : spec.lastIndexOf("+") + 1;
+  return { key: spec.slice(i), mods: new Set(spec.slice(0, i).split("+").filter(Boolean)) };
 };
 
 export function matchesKey(spec: string, e: KeyboardEvent, mac = IS_MAC) {
-  const { key, mods } = parse(spec);
+  const { key, mods } = parseSpec(spec);
   const ctrl = mods.has("ctrl") || (mods.has("mod") && !mac);
   const meta = mods.has("meta") || (mods.has("mod") && mac);
   if (e.ctrlKey !== ctrl || e.metaKey !== meta || e.shiftKey !== mods.has("shift") || e.altKey !== mods.has("alt")) return false;
@@ -108,7 +108,7 @@ export function altGrChar(e: KeyboardEvent, mac = IS_MAC) {
 
 /** Canonical form of a spec for comparing: `mod` resolved for the platform, modifiers in a fixed order. */
 export function canon(spec: string, mac = IS_MAC) {
-  const { key, mods } = parse(spec);
+  const { key, mods } = parseSpec(spec);
   const has = (m: string) => mods.has(m) || (mods.has("mod") && m === (mac ? "meta" : "ctrl"));
   return [...["ctrl", "meta", "alt", "shift"].filter(has), key].join("+");
 }

@@ -54,6 +54,13 @@ const ACCEPTED: [string, boolean, Press, string][] = [
   ["Czech Ctrl+Ú", false, { key: "ú", code: "BracketLeft", ...C }, "mod+ú"],
   ["Ctrl+Space", false, { key: " ", code: "Space", ...C }, "mod+space"],
   ["Alt+F2", false, { key: "F2", code: "F2", ...A }, "alt+f2"],
+  // The + key: "mod++" is Ctrl and the + key
+  ["German Ctrl+Plus", false, { key: "+", code: "BracketRight", ...C }, "mod++"],
+  ["US Ctrl+Shift+= (+)", false, { key: "+", code: "Equal", ...C, ...S }, "mod+shift++"],
+  ["Numpad Ctrl+Alt++", false, { key: "+", code: "NumpadAdd", ...C, ...A }, "mod+alt++"],
+  ["Numpad Alt++", false, { key: "+", code: "NumpadAdd", ...A }, "alt++"],
+  ["mac German Cmd+Plus", true, { key: "+", code: "BracketRight", ...M }, "mod++"],
+  ["mac US Cmd+Shift+= (+)", true, { key: "+", code: "Equal", ...M, ...S }, "mod+shift++"],
   // macOS: letters (Option changes `key`, so with Option the physical key)
   ["mac Option+W (∑)", true, { key: "∑", code: "KeyW", ...A }, "alt+w"],
   ["mac QWERTZ Cmd+Option+Z (Ω)", true, { key: "Ω", code: "KeyY", ...M, ...A }, "mod+alt+y"],
