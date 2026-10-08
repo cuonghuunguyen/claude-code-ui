@@ -54,6 +54,8 @@ import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from 
 import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
+import { NotificationStack, useNotifications, type CardItem } from "./notifications.tsx";
+import { cardText, describeCard, IN_APP_EVENT, loadInApp, type Card } from "./notify.ts";
 import { McpDialog } from "./mcp-dialog.tsx";
 import { SkillsDialog } from "./skills-dialog.tsx";
 import { SettingsDialog } from "./settings-dialog.tsx";
@@ -81,8 +83,8 @@ import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpande
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { loadSignalIds, saveSignalOnly, signalItems, type SignalItem } from "./signal.ts";
 import { FoldRow, SignalSwitch } from "./signal-fold.tsx";
-import { FocusPage, FocusRow } from "./focus-page.tsx";
-import { nextWaiting, waitingCount, waitingRequests } from "./focus.ts";
+import { FocusPage, FocusRow, useNow } from "./focus-page.tsx";
+import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
 import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
@@ -299,6 +301,14 @@ export function App() {
   /** Titles from subscribe replies: a tab of a session not (yet) in the list, e.g. the page-load hash session. */
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
+  // In-app notifications (GH-158): `notifyRef` takes every event; the choice is per browser and Settings tells this page by event.
+  const notifyRef = useRef<(e: Event, live: boolean) => void>(undefined);
+  const [inApp, setInApp] = useState(loadInApp);
+  useEffect(() => {
+    const sync = (e: globalThis.Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
+    window.addEventListener(IN_APP_EVENT, sync);
+    return () => window.removeEventListener(IN_APP_EVENT, sync);
+  }, []);
   const [pushOn, setPushOn] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState<string>();
@@ -672,6 +682,7 @@ export function App() {
         // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
         // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
         const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+        notifyRef.current?.(e, live);
         // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
         if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
         if (e.part.type === "session_state" && live) void refreshList();
@@ -772,6 +783,33 @@ export function App() {
   }, [waitingN]);
 
   // Settings › Notifications owns the switch; its error shows under the row (not in the sidebar).
+  // In-app notification cards: live events of sessions this page does not show (docs/spec.md "In-app notifications").
+  const [cardNote, setCardNote] = useState<{ text: string; at?: number }>();
+  const hinted = useRef(false);
+  const notify = useNotifications(
+    { enabled: inApp, focused, focusPage: activeId === FOCUS_TAB, shown: (id) => id === activeId, list, views },
+    (card: Card) => {
+      const s = listRef.current.find((x) => x.id === card.sessionId);
+      const d = describeCard(card, viewsRef.current[card.sessionId], s?.cwd ?? "");
+      let text = cardText({ kind: d.kind, title: s?.title || "Untitled", body: d.summary });
+      // Said once per page load: how to reach the cards without the mouse.
+      const keys = specOf("notifications.focus");
+      if (!hinted.current && keys) text += ` ${keyText(keys)} goes to notifications.`;
+      hinted.current = true;
+      setCardNote({ text });
+    },
+  );
+  notifyRef.current = notify.observe;
+  // The note holds for the count it was said with; another count takes over with the plain count text.
+  useEffect(() => setCardNote((n) => (n && n.at === undefined ? { ...n, at: waitingN } : n && n.at !== waitingN ? undefined : n)), [waitingN, cardNote]);
+  const [cardFocus, setCardFocus] = useState(0);
+  const cardItems: CardItem[] = notify.cards.map((card) => {
+    const s = list.find((x) => x.id === card.sessionId);
+    const cwd = s?.cwd ?? "";
+    return { card, d: describeCard(card, views[card.sessionId], cwd), title: s?.title || "Untitled", place: cwd ? (worktreeName(cwd, worktrees) ?? projectName(cwd)) : "", cwd: cwd || undefined };
+  });
+  const cardsNow = useNow(60_000);
+
   async function togglePush() {
     setPushError(undefined);
     setPushBusy(true);
@@ -1189,6 +1227,7 @@ export function App() {
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
     openFocus: () => open(FOCUS_TAB),
+    focusNotifications: notify.cards.length ? () => setCardFocus((n) => n + 1) : undefined,
     nextWaiting: waiting.length ? () => (open(FOCUS_TAB), setFocusSel(nextWaiting(waiting, activeId === FOCUS_TAB ? focusSel ?? waiting[0]?.part.id : undefined)?.part.id)) : undefined,
     toggleSignalOnly: shown ? () => setSignalOnly(shown.id, !signalIds.has(shown.id)) : undefined,
     openSettings: () => setSettingsOpen(true),
@@ -1712,7 +1751,7 @@ export function App() {
         </main>
       </div>
       <div role="status" aria-live="polite" className="sr-only" data-testid="attention-status">
-        {announcement(waitingN, everWaiting.current)}
+        {cardNote ? cardNote.text + (waitingN ? ` ${waitingStatus(waitingN)}.` : "") : announcement(waitingN, everWaiting.current)}
       </div>
       <QuoteButton onQuote={(q) => (setInsert(q), setPane("session"))} />
       {guideRun && (
@@ -1836,6 +1875,18 @@ export function App() {
           />
         )}
         {toast && <Toast message={toast} onClose={closeToast} />}
+        <NotificationStack
+          items={cardItems}
+          now={cardsNow}
+          focusTick={cardFocus}
+          hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || openingProject}
+          onRespond={(card, decision) => client.current!.request({ type: "permission.respond", requestId: card.requestId!, decision })}
+          onOpenFocus={(card) => (open(FOCUS_TAB), setFocusSel(card.requestId))}
+          onOpenSession={(card) => (open(card.sessionId), setScrollKeys((k) => ({ ...k, [card.sessionId]: (k[card.sessionId] ?? 0) + 1 })))}
+          onDismiss={notify.dismiss}
+          onOpenAll={() => open(FOCUS_TAB)}
+          restoreFocus={() => (activeId === FOCUS_TAB ? document.querySelector<HTMLElement>("main")?.focus() : focusShownPrompt())}
+        />
       </ToastRegion>
     </div>
     </SideLabel>

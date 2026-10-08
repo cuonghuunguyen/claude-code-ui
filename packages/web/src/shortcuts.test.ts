@@ -70,6 +70,17 @@ it("registry: ids are unique, no default is browser-reserved, no two defaults co
   }
 });
 
+it("Go to notifications is Ctrl/Cmd+Alt+N: a modifier, not Escape, no clash (GH-158)", () => {
+  const spec = KEYS["notifications.focus"]!;
+  expect(spec).toBe("mod+alt+n");
+  expect(spec).not.toMatch(/escape/);
+  expect(SHORTCUTS.filter((s) => canon(defaultSpec(s)) === canon(spec))).toHaveLength(1);
+  expect(bindingError(spec)).toBeUndefined();
+  expect(matchesKey(spec, ev("n", { ctrlKey: true, altKey: true }), false)).toBe(true);
+  // A Polish AltGr+N types "ń": typing, not the shortcut.
+  expect(matchesKey(spec, ev("ń", { ctrlKey: true, altKey: true, code: "KeyN" }), false)).toBe(false);
+});
+
 it("tab-by-number defaults: Alt+1..8 and Alt+9 (last) off macOS, Ctrl on macOS", () => {
   const goto = (id: string, mac: boolean) => defaultSpec(SHORTCUTS.find((s) => s.id === id)!, mac);
   expect(goto("tab.goto3", false)).toBe("alt+3");

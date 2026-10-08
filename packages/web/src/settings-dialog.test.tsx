@@ -266,3 +266,22 @@ it("a daemon started with --no-os-notify: the Desktop switch is aria-disabled wi
   await act(async () => q("settings-notifications-desktop")!.click());
   expect(calls.some((c) => c.type === "settings.set")).toBe(false);
 });
+
+it("the In-app switch is the first row, on by default, and writes the per-browser choice and tells the page (GH-158)", async () => {
+  localStorage.clear();
+  const heard: boolean[] = [];
+  const on = (e: Event) => heard.push((e as CustomEvent<boolean>).detail);
+  window.addEventListener("claude-ui:in-app", on);
+  const { q } = await render();
+  const rows = [...q("settings-notifications")!.querySelectorAll('[role="switch"]')].map((b) => b.getAttribute("data-testid"));
+  expect(rows).toEqual(["settings-in-app", "settings-push", "settings-notifications-desktop"]);
+  expect(q("settings-in-app")?.getAttribute("aria-checked")).toBe("true");
+  expect(document.getElementById(q("settings-in-app")!.getAttribute("aria-describedby")!)?.textContent).toContain("Kept in this browser");
+  await act(async () => q("settings-in-app")!.click());
+  expect(localStorage.getItem("claude-ui.inAppNotifications")).toBe("off");
+  expect(q("settings-in-app")?.getAttribute("aria-checked")).toBe("false");
+  expect(heard).toEqual([false]);
+  await act(async () => q("settings-in-app")!.click());
+  expect(heard).toEqual([false, true]);
+  window.removeEventListener("claude-ui:in-app", on);
+});

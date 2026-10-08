@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
 import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
 import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
+import { IN_APP_EVENT, loadInApp, saveInApp } from "./notify.ts";
 import { GuideSection } from "./guide-settings.tsx";
 
 type Row = { key: string; label: string; hint: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "select"; options: { value: string; label: string }[] });
@@ -63,6 +64,13 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     window.addEventListener(VIEW_EVENT, sync);
     return () => window.removeEventListener(VIEW_EVENT, sync);
   }, [open]);
+  // In-app notifications: per browser; the page (App) hears the choice through IN_APP_EVENT.
+  const [inApp, setInApp] = useState(loadInApp);
+  useEffect(() => {
+    const sync = (e: Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
+    window.addEventListener(IN_APP_EVENT, sync);
+    return () => window.removeEventListener(IN_APP_EVENT, sync);
+  }, []);
   // The number field's text while typing; committed on Enter or blur.
   const [draft, setDraft] = useState<Record<string, string>>({});
   const diffMode = useDefaultDiffMode();
@@ -101,6 +109,15 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         <h3 id="settings-notifications-title" className="pb-1 font-medium text-[13px] text-muted-foreground">
           Notifications
         </h3>
+        <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+          <div className="min-w-0 flex-1">
+            <span className="block text-sm">In-app notifications</span>
+            <span id="settings-in-app-hint" className="block text-muted-foreground text-xs">
+              A notice in this page when a session you are not looking at needs input or finishes. Read-only requests can be allowed or denied from the notice. Kept in this browser.
+            </span>
+          </div>
+          <Switch on={inApp} label="In-app notifications" held={false} onToggle={(on) => (setInApp(on), saveInApp(on))} title="In-app notifications" describedBy="settings-in-app-hint" testId="settings-in-app" />
+        </div>
         {push && (
           <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
             <div className="min-w-0 flex-1">
@@ -119,7 +136,8 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             <Switch on={push.on} label="Push notifications" held={!push.supported || push.busy} onToggle={push.toggle} title="Push notifications" describedBy="settings-push-hint" testId="settings-push" />
           </div>
         )}
-        {settings && (
+        {/* An older daemon sends no `notifications`: no row. */}
+        {settings?.notifications && (
           <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
             <div className="min-w-0 flex-1">
               <span className="block text-sm">{daemon?.host ? `Desktop notifications on ${daemon.host}` : "Desktop notifications on the daemon's computer"}</span>
