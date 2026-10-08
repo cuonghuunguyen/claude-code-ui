@@ -487,3 +487,20 @@ it("useGroupedTabs regroups an interleaved stored list (App uses it for its tab 
   await act(async () => root!.render(<H />));
   expect(seen).toEqual(["a1", "a2", "b1"]);
 });
+
+it("useGroupedTabs leaves the list alone while not ready, and regroups once ready (GH-196)", async () => {
+  const cwds: Record<string, string> = { a1: "/a", b1: "/b", a2: "/a" };
+  let seen: string[] = [];
+  function H({ ready }: { ready: boolean }) {
+    const [t, set] = useState(["a1", "b1", "a2"]);
+    useGroupedTabs(t, set, (id) => cwds[id], ready);
+    seen = t;
+    return null;
+  }
+  const el = document.createElement("div");
+  root = createRoot(el);
+  await act(async () => root!.render(<H ready={false} />));
+  expect(seen).toEqual(["a1", "b1", "a2"]);
+  await act(async () => root!.render(<H ready={true} />));
+  expect(seen).toEqual(["a1", "a2", "b1"]);
+});

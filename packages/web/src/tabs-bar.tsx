@@ -69,11 +69,14 @@ function TabIcon({ s, cwd }: { s: TabStatus; cwd?: string }) {
 const DRAG_TYPE = "application/x-claude-ui-tab";
 const GROUP_DRAG_TYPE = "application/x-claude-ui-tab-group";
 
-/** Keeps the stored tab list grouped by project, also once the session cwds arrive (the strip draws groups; close, next tab and moves use this order). */
-export function useGroupedTabs(tabs: string[], setTabs: (t: string[]) => void, cwdOf: (id: string) => string | undefined) {
+/**
+ * Keeps the stored tab list grouped by project, also once the session cwds arrive (the strip draws groups; close, next tab and moves use this order).
+ * It regroups only when `ready` (every tab's group key is final): on partial keys, unknown tabs of different projects form one group and the damaged order is persisted (GH-196).
+ */
+export function useGroupedTabs(tabs: string[], setTabs: (t: string[]) => void, cwdOf: (id: string) => string | undefined, ready = true) {
   const grouped = [...groupTabs(tabs, cwdOf).values()].flat();
   useEffect(() => {
-    if (grouped.some((id, i) => id !== tabs[i])) setTabs(grouped);
+    if (ready && grouped.some((id, i) => id !== tabs[i])) setTabs(grouped);
   });
 }
 
