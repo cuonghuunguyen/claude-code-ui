@@ -106,6 +106,8 @@ function real(path: string) {
 
 /** Bytes read from a transcript's end to find its last message; more than a few large tool results. */
 const TAIL_BYTES = 256 * 1024;
+/** How long session.list reuses a project's `git worktree list` (worktreesOf). */
+const WORKTREE_LIST_MS = 30_000;
 /** Transcript path → last message time for the file version (mtime, size) it was read from. */
 const lastMessageCache = new Map<string, { version: string; at: number | undefined }>();
 
@@ -455,10 +457,25 @@ export function createDaemon(opts: {
     }
   }
 
+  /**
+   * `git worktree list` of each project, reused by session.list for WORKTREE_LIST_MS: a list runs on every turn start and end,
+   * and starting a process blocks the event loop (on Windows tens of ms each), so one per project per list stalled every
+   * reply with a few dozen projects. Worktrees this daemon creates or removes show at once; others within that time.
+   */
+  const worktreeLists = new Map<string, { at: number; list: Promise<Worktree[] | null> }>();
+  const worktreesOf = (cwd: string) => {
+    const hit = worktreeLists.get(cwd);
+    if (hit && Date.now() - hit.at < WORKTREE_LIST_MS) return hit.list;
+    const list = listWorktrees(cwd);
+    worktreeLists.set(cwd, { at: Date.now(), list });
+    return list;
+  };
+
   /** New worktree of `cwd`'s repository (roots enforced); other clients refresh their list. */
   const createIn = async (cwd: string, o: Pick<CreateWorktreeOptions, "name" | "branch" | "base" | "onCreated"> = {}) => {
     // The new path is no project: a session created in it (worker_start) must not add it.
     const r = await createWorktree(cwd, { ...o, allowed: (p) => inRoots(real(p) ?? p), claudeDir, onCreated: (r) => { worktreePaths.add(r.path); o.onCreated?.(r); } });
+    worktreeLists.clear();
     broadcast({ type: "sessions.changed" });
     return r;
   };
@@ -481,6 +498,7 @@ export function createDaemon(opts: {
         // Its terminals too: a shell running in the folder keeps Windows from deleting it ("Permission denied").
         await terminals.closeIn(isRemoving);
       });
+      worktreeLists.clear();
       broadcast({ type: "sessions.changed" });
     } finally {
       removing.delete(path);
@@ -763,11 +781,10 @@ export function createDaemon(opts: {
       }
     // An added project whose directory is gone or left the roots is not listed (its New session would fail).
     const open = projects.list(listed).filter((cwd) => allowed(cwd));
-    // ponytail: one `git worktree list` per project per list (~5 ms each, in parallel); cache it if many projects make lists slow.
     const worktrees: Record<string, Worktree[]> = {};
     await Promise.all(
       open.map(async (cwd) => {
-        const found = (await listWorktrees(cwd))?.map((w) => ({ ...w, path: real(w.path) ?? w.path }));
+        const found = (await worktreesOf(cwd))?.map((w) => ({ ...w, path: real(w.path) ?? w.path }));
         // A subfolder of a repository (mono/pa, a folder of a dotfiles home) is no worktree: listed as a non-git project.
         if (found?.some((w) => w.path === (real(cwd) ?? cwd))) worktrees[cwd] = found.map((w) => (inRoots(w.path) ? w : { ...w, outsideRoots: true }));
       }),

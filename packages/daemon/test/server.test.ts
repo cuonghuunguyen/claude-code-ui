@@ -1178,6 +1178,41 @@ describe("daemon", () => {
     }
   });
 
+  it("session.list reuses a project's git worktree list for a while (no git process per list); worktree.create and remove refresh it at once", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wtcache-")));
+    const repo = join(root, "repo");
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+    mkdirSync(repo);
+    git("init", "-q", "-b", "main");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init");
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [root],
+      query: fakeQuery as never,
+      projects: added(repo),
+      history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      type L = { result: { worktrees: Record<string, { path: string }[]> } };
+      const paths = async () => ((await c.request({ type: "session.list" })) as L).result.worktrees[repo]?.map((w) => w.path) ?? [];
+      expect(await paths()).toEqual([repo]);
+      // Made outside the daemon (a terminal): the cached list does not show it yet.
+      git("worktree", "add", "-q", "-b", "outside", join(root, "wt-outside"));
+      expect(await paths()).toEqual([repo]);
+      // The daemon's own create refreshes the list: both show.
+      const made = join(repo, ".claude", "worktrees", "feat");
+      expect(await c.request({ type: "worktree.create", cwd: repo, name: "feat" })).toMatchObject({ result: { path: made } });
+      expect(await paths()).toEqual([repo, made, join(root, "wt-outside")]);
+      expect(await c.request({ type: "worktree.remove", cwd: repo, path: made })).toMatchObject({ type: "reply" });
+      expect(await paths()).toEqual([repo, join(root, "wt-outside")]);
+    } finally {
+      d.close();
+    }
+  });
+
   it("worktree.create replies path and branch and broadcasts sessions.changed; the new worktree is listed; bad names and cwds outside the roots are refused", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "wtcreate-")));
     const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "wtout-")));
