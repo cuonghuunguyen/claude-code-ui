@@ -309,10 +309,14 @@ export function App() {
   const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
+  const statusRef = useRef(status);
+  statusRef.current = status;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const listRef = useRef(list);
   listRef.current = list;
+  /** Prompts sent while a session's /clear runs: they go to the session the tab follows to (or back to this one when the /clear ends without), keyed by the session they were typed in. */
+  const clearQueue = useRef<Record<string, { key: string; text: string; images: string[] }[]>>({});
   const requested = useRef(new Set<string>());
   /** Sessions subscribed holding on this connection: a tab shows them, the daemon keeps their CLI (docs/spec.md "Idle close"). */
   const held = useRef(new Set<string>());
@@ -394,6 +398,7 @@ export function App() {
       }
       setViews((v) => ({ ...v, [sessionId]: withSubscribe(v[sessionId] ?? emptySession(), r) }));
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
+      setHeirOf((h) => (h[sessionId] ? without(h, sessionId) : h));
       if (r.title) setTitles((t) => ({ ...t, [sessionId]: r.title }));
     } catch (e) {
       // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
@@ -463,13 +468,49 @@ export function App() {
       // The event handler is a closure of the first render: the latest infos come from the updater, the list from its ref.
       setInfos((i) => {
         const old = i[from] ?? listRef.current.find((x) => x.id === from);
-        return i[to] || !old ? i : { ...i, [to]: { ...old, id: to } };
+        if (i[to] || !old) return i;
+        const { cwd, state, model, permissionMode, effort, permissionModes } = old;
+        return { ...i, [to]: { id: to, cwd, state, model, permissionMode, effort, permissionModes } };
       });
+      // The daemon titles an unprompted heir "New session" (the tab shows that, not "Untitled", until the list or the reply).
+      setTitles((t) => (t[to] ? t : { ...t, [to]: "New session" }));
     }
+    flushClearQueue(from, to);
     setTabs((t) => (t.includes(from) ? replaceTab(t, from, to) : t));
     if (hashId() !== from) return;
     if (document.activeElement && document.activeElement === shownPrompt()) refocus.current = to;
     open(to);
+  }
+
+  // A /clear that ended without moving the tab (it failed, or was a no-op): the queued prompts go to the session they were typed in.
+  useEffect(() => {
+    for (const id of Object.keys(clearQueue.current)) {
+      const v = views[id];
+      if (v && shownState(v) === "idle" && !clearing(v, optimistic[id])) flushClearQueue(id, id);
+    }
+  });
+
+  /** Sends the prompts queued during a /clear: the bubble moves from the old session to `to`. */
+  function flushClearQueue(from: string, to: string) {
+    const queued = clearQueue.current[from];
+    if (!queued) return;
+    delete clearQueue.current[from];
+    for (const q of queued) {
+      setOptimistic((o) => dropPending(o, from, q.key));
+      sendPrompt(to, q.text, q.images).catch((e: Error) => setError(`Prompt not sent: ${e.message}`));
+    }
+  }
+
+  /** A prompt of the user to session `id`: the bubble shows at once (GH-133); the daemon's user_text replaces it. */
+  function sendPrompt(id: string, text: string, images: string[]): Promise<unknown> {
+    // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
+    if (statusRef.current !== "connected") return Promise.reject(new Error(`the daemon is ${statusRef.current}`));
+    const key = pendingKey();
+    setOptimistic((o) => ({ ...o, [id]: addPending(o[id], viewsRef.current[id], { key, text, images }) }));
+    return client.current!.request({ type: "session.prompt", sessionId: id, text, images }).catch((e) => {
+      setOptimistic((o) => dropPending(o, id, key));
+      throw e;
+    });
   }
 
   /** Drops the view of a session this tab no longer follows; `unsubscribe`: also stops the daemon's events. */
@@ -488,6 +529,7 @@ export function App() {
     setList((l) => l.filter((s) => s.id !== sessionId));
     setTabs((t) => t.filter((id) => id !== sessionId));
     setHeirOf((h) => without(h, sessionId));
+    delete clearQueue.current[sessionId];
     setTabKeys((k) => without(k, sessionId));
     if (hashId() === sessionId) {
       // Deleted like a closed tab: its neighbour becomes active.
@@ -1275,15 +1317,15 @@ export function App() {
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
                         onUpload={upload(s.cwd)}
                         onPrompt={(text, images) => {
-                          // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
-                          if (status !== "connected") return Promise.reject(new Error(`the daemon is ${status}`));
-                          // GH-133: the bubble shows at once; the daemon's user_text replaces it.
-                          const key = pendingKey();
-                          setOptimistic((o) => ({ ...o, [s.id]: addPending(o[s.id], viewsRef.current[s.id], { key, text, images }) }));
-                          return client.current!.request({ type: "session.prompt", sessionId: s.id, text, images }).catch((e) => {
-                            setOptimistic((o) => dropPending(o, s.id, key));
-                            throw e;
-                          });
+                          // While the /clear runs the message waits: its bubble shows now, it is sent once the tab follows (or the /clear ends without).
+                          if (!v.externalTurn && clearing(v, pend)) {
+                            if (status !== "connected") return Promise.reject(new Error(`the daemon is ${status}`));
+                            const key = pendingKey();
+                            setOptimistic((o) => ({ ...o, [s.id]: addPending(o[s.id], viewsRef.current[s.id], { key, text, images }) }));
+                            (clearQueue.current[s.id] ??= []).push({ key, text, images });
+                            return Promise.resolve();
+                          }
+                          return sendPrompt(s.id, text, images);
                         }}
                         onBash={(command) =>
                           status === "connected"
@@ -2212,7 +2254,8 @@ export function SessionPane({
               usage={view.contextUsage}
               stats={totals(view)}
               todos={showTodoDock(view.state, view.todos, false) ? view.todos : undefined}
-              blocked={view.externalTurn ? "A terminal CLI turn is running in this session" : isClearing ? "Clearing the conversation…" : undefined}
+              blocked={view.externalTurn ? "A terminal CLI turn is running in this session" : isClearing ? "Clearing the conversation… your message sends when it is done" : undefined}
+              queueing={!view.externalTurn && isClearing}
               blockedIcon={!view.externalTurn && isClearing ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
@@ -2267,6 +2310,7 @@ function PromptBox({
   disabled,
   blocked,
   blockedIcon,
+  queueing,
   inputRef,
   onDialog,
 }: {
@@ -2312,6 +2356,8 @@ function PromptBox({
   blocked?: string;
   /** Icon of the blocked dock; default the terminal icon. */
   blockedIcon?: React.ReactNode;
+  /** The block is a wait the app queues sends through (a /clear running): Enter sends the prompt, the app holds it. */
+  queueing?: boolean;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   const [text, setText] = useState("");
@@ -2426,7 +2472,7 @@ function PromptBox({
     if (!t.trim() && !images.length) return;
     const dialog = onDialog && !images.length && dialogOf(t, commands);
     if (dialog) return onDialog(dialog), edit("");
-    if (blocked) return;
+    if (blocked && !queueing) return;
     const sent = images;
     setSendError(undefined);
     launchFlight(t, input.current?.getBoundingClientRect());

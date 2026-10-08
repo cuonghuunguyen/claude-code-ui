@@ -306,6 +306,28 @@ it("/clear: the tab keeps its prompt box (same element, same text) and shows the
   }
 });
 
+it("/clear: an attached image and the focus stay in the same prompt box", async () => {
+  holdNext();
+  try {
+    const box = promptBox();
+    box.focus();
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", { value: { files: [new File(["x"], "a.png", { type: "image/png" })] } });
+    await act(async () => {
+      box.dispatchEvent(paste);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const thumbs = () => promptBox().closest('[data-testid="prompt-box"]')!.parentElement!.querySelectorAll("img").length;
+    expect(thumbs()).toBe(1);
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
+    expect(promptBox()).toBe(box);
+    expect(thumbs()).toBe(1);
+    expect(document.activeElement).toBe(box);
+  } finally {
+    restoreSubscribe();
+  }
+});
+
 it("/clear: a prompt sent before the new session's subscribe reply goes to the new session", async () => {
   holdNext();
   try {
@@ -344,7 +366,7 @@ it("/clear: reopening the old session afterwards opens its own tab with an empty
   }
 });
 
-it("while /clear runs the prompt box holds sends: the text stays, 'Clearing the conversation…' shows until session_cleared", async () => {
+it("Enter while /clear runs queues the message: it shows at once and goes to the new session once session_cleared moves the tab", async () => {
   await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "user_text", id: "u1", text: "/clear", images: [] } }));
   await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "session_state", id: "s1", state: "running" } }));
   expect(el.textContent).toContain("Clearing the conversation…");
@@ -352,12 +374,27 @@ it("while /clear runs the prompt box holds sends: the text stays, 'Clearing the 
   sent.length = 0;
   await press({ key: "Enter" }, promptBox());
   expect(sent.some((m) => m.type === "session.prompt")).toBe(false);
-  expect(promptBox().value).toBe("next");
+  expect(promptBox().value).toBe("");
+  expect(el.textContent).toContain("next");
   await act(async () => emit({ type: "event", sessionId: ID, seq: 3, part: { type: "rewind", id: "r1", userMessageId: "u1" } }));
+  expect(sent.some((m) => m.type === "session.prompt")).toBe(false);
   await act(async () => emit({ type: "event", sessionId: ID, seq: 4, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
+  expect(sent.filter((m) => m.type === "session.prompt")).toEqual([expect.objectContaining({ sessionId: NEXT, text: "next" })]);
   await act(async () => emit({ type: "event", sessionId: ID, seq: 5, part: { type: "session_state", id: "s2", state: "idle" } }));
   expect(el.textContent).not.toContain("Clearing the conversation…");
-  expect(promptBox().value).toBe("next");
+  expect(el.textContent).toContain("next");
+  expect(sent.filter((m) => m.type === "session.prompt")).toHaveLength(1);
+});
+
+it("a /clear that ends without session_cleared sends the queued message to the same session", async () => {
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "user_text", id: "u1", text: "/clear", images: [] } }));
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "session_state", id: "s1", state: "running" } }));
+  await typeInto(promptBox(), "next");
+  sent.length = 0;
+  await press({ key: "Enter" }, promptBox());
+  expect(sent.some((m) => m.type === "session.prompt")).toBe(false);
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 3, part: { type: "session_state", id: "s2", state: "idle" } }));
+  expect(sent.filter((m) => m.type === "session.prompt")).toEqual([expect.objectContaining({ sessionId: ID, text: "next" })]);
 });
 
 it("an SDK message the adapter does not know shows as a short muted line, not as JSON", async () => {
