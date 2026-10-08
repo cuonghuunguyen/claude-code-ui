@@ -1498,6 +1498,43 @@ describe("daemon", () => {
     }
   });
 
+  it("does not open a transcript again for its last message time while the scan reports the same mtime and size", async () => {
+    const id = "7b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const cwd = join(webRoot, "stamp proj");
+    mkdirSync(cwd, { recursive: true });
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const dir = join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+    mkdirSync(dir);
+    const file = join(dir, `${id}.jsonl`);
+    const write = (at: string) => writeFileSync(file, JSON.stringify({ type: "user", timestamp: at }) + "\n");
+    write("2026-10-01T10:00:05.000Z");
+    const size = statSync(file).size;
+    const t = { sessionId: id, summary: "s", lastModified: 9_000, fileSize: size, cwd };
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      projectsDir,
+      projects: added(cwd),
+      history: { listSessions: (async () => [t]) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const at = async () => ((await c.request({ type: "session.list" })) as { result: { sessions: { lastActivity: number }[] } }).result.sessions[0]!.lastActivity;
+      expect(await at()).toBe(Date.parse("2026-10-01T10:00:05.000Z"));
+      // Same length, other time: the file is not read while the scan reports the same mtime and size.
+      write("2026-10-01T10:00:09.000Z");
+      expect(statSync(file).size).toBe(size);
+      expect(await at()).toBe(Date.parse("2026-10-01T10:00:05.000Z"));
+      t.lastModified = 9_500;
+      expect(await at()).toBe(Date.parse("2026-10-01T10:00:09.000Z"));
+    } finally {
+      d.close();
+    }
+  });
+
   it("a projects.json write that fails is an fs_error reply; the daemon keeps running", async () => {
     // The config dir is gone after the start: the write fails (as EACCES, ENOSPC, EROFS would).
     const dir = mkdtempSync(join(tmpdir(), "cfg-"));

@@ -109,7 +109,8 @@ const TAIL_BYTES = 256 * 1024;
 /** How long session.list reuses a project's `git worktree list` (worktreesOf). */
 const WORKTREE_LIST_MS = 30_000;
 /** Transcript path → last message time for the file version (mtime, size) it was read from. */
-const lastMessageCache = new Map<string, { version: string; at: number | undefined }>();
+/** `listed`: the transcript scan's mtime and size when the file was read (lastMessageAt skips the open while they hold). */
+const lastMessageCache = new Map<string, { version: string; listed?: string; at: number | undefined }>();
 
 // ponytail: the SDK's project folder name for cwds up to 200 chars; longer ones get a hash suffix and are not found.
 const transcriptFile = (projectsDir: string, cwd: string, sessionId: string) => join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
@@ -221,16 +222,20 @@ function transcriptStamp(projectsDir: string) {
  * the CLI appends metadata (`last-prompt`, `cost-state`), so every live session looks just used after a daemon restart.
  * Undefined when the file or such an entry is not found (e.g. the entry is further back than `TAIL_BYTES`).
  */
-function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
+function lastMessageAt(projectsDir: string, cwd: string, sessionId: string, scanned?: { lastModified: number; fileSize?: number }) {
   // Not found (long cwd): the list falls back to the file mtime.
   const file = transcriptFile(projectsDir, cwd, sessionId);
+  // The scan's own stamp: no open per transcript per list, which blocks the event loop (slow on Windows with hundreds of transcripts).
+  const listed = scanned?.fileSize !== undefined ? `${scanned.lastModified}:${scanned.fileSize}` : undefined;
+  const hit = listed && lastMessageCache.get(file);
+  if (hit && hit.listed === listed) return hit.at;
   let fd: number | undefined;
   try {
     fd = openSync(file, "r");
     const { size, mtimeMs } = fstatSync(fd);
     const version = `${mtimeMs}:${size}`;
     const cached = lastMessageCache.get(file);
-    if (cached?.version === version) return cached.at;
+    if (cached?.version === version) return (lastMessageCache.set(file, { ...cached, listed }), cached.at);
     let at: number | undefined;
     const buf = Buffer.alloc(Math.min(size, TAIL_BYTES));
     readSync(fd, buf, 0, buf.length, size - buf.length);
@@ -248,7 +253,7 @@ function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
         // The first line of the tail is cut.
       }
     }
-    lastMessageCache.set(file, { version, at });
+    lastMessageCache.set(file, { version, listed, at });
     return at;
   } catch {
     // No transcript at that path.
@@ -764,7 +769,7 @@ export function createDaemon(opts: {
       if (!t.cwd || !allowed(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
       const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd)) : t.summary;
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: sessionCwd(t.cwd), title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: sessionCwd(t.cwd), title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId, t) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
