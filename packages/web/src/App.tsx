@@ -747,12 +747,16 @@ export function App() {
     };
   }, []);
 
+  // Listed sessions this page covers with in-app cards: only while in-app notifications are on and the page is focused and visible.
+  const coveredKey = inApp && focused ? list.filter((s) => !s.archived).map((s) => s.id).sort().slice(0, 2000).join(",") : undefined;
   // The daemon suppresses pushes for the session a focused, visible tab shows; resent after every reconnect.
   useEffect(() => {
     if (status !== "connected") return;
     const sessionId = focused && activeId !== NEW_TAB && activeId !== FOCUS_TAB ? activeId : undefined;
-    client.current!.request(sessionId ? { type: "push.focus", sessionId } : { type: "push.focus" }).catch(() => {});
-  }, [status, focused, activeId]);
+    // One event, one channel: what this page shows as in-app cards needs no push (the Focus page covers every session too).
+    const covered = coveredKey === undefined ? undefined : coveredKey.split(",").filter(Boolean);
+    client.current!.request({ type: "push.focus", ...(sessionId && { sessionId }), ...(covered && { covered }) }).catch(() => {});
+  }, [status, focused, activeId, coveredKey]);
 
   const activeView = activeId ? views[activeId] : undefined;
   useEffect(() => {

@@ -124,7 +124,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
               <span className="block text-sm">Push notifications</span>
               <span id="settings-push-hint" className="block text-muted-foreground text-xs">
                 {push.supported
-                  ? "This browser notifies you when a session needs input or finishes, also with the page closed. Kept in this browser."
+                  ? "This browser notifies you when a session needs input or finishes, also with the page closed. Not sent while this page is in front and shows in-app notifications. Kept in this browser."
                   : "Not available in this browser here: Web Push needs HTTPS or localhost. The daemon's desktop notifications are used instead."}
               </span>
               {push.error && (

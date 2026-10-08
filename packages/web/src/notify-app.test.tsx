@@ -200,3 +200,31 @@ it("no push toggle in the page: it lives in Settings", async () => {
   await mount(`#${A}`);
   expect(el.querySelector('[data-testid="push-toggle"]')).toBeNull();
 });
+
+it("push.focus carries the covered sessions while the page is focused and in-app is on, so push and desktop stay quiet for them (GH-158)", async () => {
+  await mount(`#${A}`);
+  const last = () => [...sent].reverse().find((m) => m.type === "push.focus");
+  expect(last()).toMatchObject({ sessionId: A, covered: [A, B].sort() });
+});
+
+it("push.focus has no covered with in-app off or an unfocused page", async () => {
+  await mount(`#${A}`, () => localStorage.setItem("claude-ui.inAppNotifications", "off"));
+  expect([...sent].reverse().find((m) => m.type === "push.focus")).toEqual(expect.not.objectContaining({ covered: expect.anything() }));
+  act(() => root.unmount());
+  el.remove();
+  sent.length = 0;
+  localStorage.clear();
+  await mount(`#${A}`, () => (document.hasFocus = () => false));
+  const m = sent.filter((x) => x.type === "push.focus").at(-1);
+  expect(m).toBeDefined();
+  expect(m).not.toHaveProperty("covered");
+});
+
+it("switching in-app off in Settings tells the daemon at once: push.focus without covered", async () => {
+  await mount(`#${A}`);
+  sent.length = 0;
+  await act(async () => void window.dispatchEvent(new CustomEvent("claude-ui:in-app", { detail: false })));
+  const m = sent.filter((x) => x.type === "push.focus").at(-1);
+  expect(m).toBeDefined();
+  expect(m).not.toHaveProperty("covered");
+});

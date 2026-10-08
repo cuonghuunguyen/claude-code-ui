@@ -118,8 +118,11 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** The daemon's VAPID public key, for `PushManager.subscribe()`. */
   | { type: "push.key" }
   | { type: "push.subscribe"; subscription: WebPushSubscription }
-  /** The session this tab shows while focused and visible (none otherwise); pushes for it are suppressed. */
-  | { type: "push.focus"; sessionId?: string }
+  /**
+   * The session this tab shows while focused and visible (none otherwise); pushes for it are suppressed.
+   * `covered` (GH-158): the sessions this page shows in-app notification cards for (in-app on, page focused and visible); no push or desktop notification for them either. Absent otherwise; an empty array is a page with in-app on and no listed session.
+   */
+  | { type: "push.focus"; sessionId?: string; covered?: string[] }
   /** Text files only; `mtime` (ms) identifies the disk version. */
   | { type: "fs.read"; path: string }
   /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). */
