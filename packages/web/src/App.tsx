@@ -89,7 +89,7 @@ import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
 import { shownPrompt } from "./config-dialog.tsx";
-import { IS_MAC, keyLabels, matchesKey } from "./shortcuts.ts";
+import { keyText, matchesKey } from "./shortcuts.ts";
 import { specOf, useKeymap } from "./keymap.ts";
 import { LEADER_MS, PREFIX_KEYS, leaderStep } from "./leader.ts";
 import { loadClosed, popClosed, pushClosed, saveClosed } from "./closed-tabs.ts";
@@ -116,7 +116,6 @@ const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ d
 const TERMINAL_KEY = "claude-ui.terminalOpen";
 const PANEL_HIDDEN_KEY = "claude-ui.sidePanelHidden";
 const FILE_TREE_HIDDEN_KEY = "claude-ui.fileTreeHidden";
-const keyText = (spec?: string) => (spec ? keyLabels(spec).join(IS_MAC ? "" : "+") : "");
 const loadFlag = (key: string) => {
   try {
     return localStorage.getItem(key) === "1";

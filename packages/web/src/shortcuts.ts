@@ -94,3 +94,6 @@ const NAMES: Record<string, [mac: string, other: string]> = {
 /** One label per key, for keybind chips: ["Ctrl", "Shift", "P"] or ["⌘", "⇧", "P"]. */
 export const keyLabels = (spec: string, mac = IS_MAC) =>
   spec.split(/\+(?!$)/).map((k) => NAMES[k]?.[mac ? 0 : 1] ?? k.toUpperCase());
+
+/** A spec as one hint string for a button label: "Ctrl+Shift+P", "⌘⇧P" on macOS. */
+export const keyText = (spec?: string) => (spec ? keyLabels(spec).join(IS_MAC ? "" : "+") : "");

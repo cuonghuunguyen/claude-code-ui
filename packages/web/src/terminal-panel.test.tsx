@@ -406,3 +406,9 @@ it("gives the shell the keyboard focus when the terminal opens after the icon fo
   expect(xterm.all[0]!.parent).toBeDefined();
   expect(xterm.all[0]!.focused).toBeGreaterThan(0);
 });
+
+it("the New terminal button shows its key hint", async () => {
+  await render(fakeClient([{ id: "t1", title: "Terminal 1" }]), "connected", vi.fn());
+  await flush();
+  expect(el.querySelector("[data-testid=terminal-new]")!.getAttribute("aria-label")).toBe("New terminal (Ctrl+Shift+`)");
+});
