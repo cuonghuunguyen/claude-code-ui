@@ -88,8 +88,8 @@ it("an update_state without a known version is ignored; update_available starts 
   expect(nextUpdate(waiting, { type: "update_available", version: "0.2.1", current: "0.2.0" })).toEqual(available);
 });
 
-it("uses the toast frame and 44px touch targets on coarse pointers", async () => {
+it("uses the toast card and 44px touch targets on coarse pointers", async () => {
   await render(available);
-  expect(toast()!.className).toContain("min-[601px]:w-80");
+  expect(toast()!.className).toContain("shadow-floating");
   expect(button("Not yet")!.className).toContain("pointer-coarse:min-h-11");
 });

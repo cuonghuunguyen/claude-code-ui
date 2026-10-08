@@ -49,7 +49,7 @@ import { Message, MessageAction, MessageActions, MessageContent, MessageResponse
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
-import { Toast } from "./toast.tsx";
+import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
@@ -1824,17 +1824,19 @@ export function App() {
           </p>
         )}
       </div>
-      {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
-      {stale && !update && (
-        <StaleToast
-          note={stale}
-          onDismiss={() => {
-            staleDismissed.current = stale;
-            setStale(undefined);
-          }}
-        />
-      )}
-      {toast && <Toast message={toast} onClose={closeToast} />}
+      <ToastRegion>
+        {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
+        {stale && !update && (
+          <StaleToast
+            note={stale}
+            onDismiss={() => {
+              staleDismissed.current = stale;
+              setStale(undefined);
+            }}
+          />
+        )}
+        {toast && <Toast message={toast} onClose={closeToast} />}
+      </ToastRegion>
     </div>
     </SideLabel>
     </AvatarColors>

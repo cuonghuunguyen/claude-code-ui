@@ -1,10 +1,19 @@
-// One toast like OpenCode's toast-v2: bottom right (32px / 48px), 320px wide, 12px padding, radius 8, floating shadow, gone after 5 s.
+// One toast like OpenCode's toast-v2 in the corner region: bottom right (32px / 48px), 320px wide, 12px padding, radius 8, floating shadow, gone after 5 s.
 // At 600px and below it is full width (16px offsets). It slides in and out (280ms transform, 160ms opacity; none under reduced motion).
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
 
-/** Position, size and surface of a toast (Toast, UpdateToast). */
-export const TOAST_FRAME = "fixed right-4 bottom-4 z-1000 w-[calc(100vw-2rem)] rounded-lg bg-card p-3 text-foreground shadow-floating min-[601px]:right-8 min-[601px]:bottom-12 min-[601px]:w-80";
+/** Surface of a toast (Toast, UpdateToast, StaleToast, the notification card); the ToastRegion places it. */
+export const TOAST_CARD = "pointer-events-auto rounded-lg bg-card p-3 text-foreground shadow-floating";
+
+/** The one corner every toast stacks in (first child nearest the corner), so two at once never cover each other. Clicks pass through the gaps. */
+export function ToastRegion({ children }: { children?: ReactNode }) {
+  return (
+    <div data-testid="toast-region" className="pointer-events-none fixed right-4 bottom-4 z-1000 flex w-[calc(100vw-2rem)] flex-col-reverse gap-2 min-[601px]:right-8 min-[601px]:bottom-12 min-[601px]:w-80">
+      {children}
+    </div>
+  );
+}
 
 export function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   const [open, setOpen] = useState(false);
@@ -24,7 +33,7 @@ export function Toast({ message, onClose }: { message: string; onClose: () => vo
       role="status"
       data-testid="toast"
       data-state={open ? "open" : "closed"}
-      className={`${TOAST_FRAME} grid grid-cols-[minmax(0,1fr)_20px] gap-3 transition-[transform,opacity] duration-[280ms,160ms] ease-[cubic-bezier(0.2,0,0,1),ease-out] data-[state=closed]:translate-y-4 data-[state=closed]:opacity-0 motion-reduce:transition-none`}
+      className={`${TOAST_CARD} grid grid-cols-[minmax(0,1fr)_20px] gap-3 transition-[transform,opacity] duration-[280ms,160ms] ease-[cubic-bezier(0.2,0,0,1),ease-out] data-[state=closed]:translate-y-4 data-[state=closed]:opacity-0 motion-reduce:transition-none`}
     >
       <p className="text-[13px] leading-5 font-medium tracking-[-0.04px]">{message}</p>
       <button
