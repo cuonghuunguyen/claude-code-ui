@@ -25,6 +25,8 @@ export type SessionView = {
   contextUsage?: ContextUsage;
   /** A terminal CLI turn runs in this session (external_turn): the prompt box sends nothing until it ends. */
   externalTurn?: boolean;
+  /** A continue is scheduled at this time (ms) after a usage limit (auto_continue); undefined = none. */
+  continueAt?: number;
   /** Idle, but a background task of the session's own query still runs (session_state `working`). */
   working?: boolean;
   /** Latest todo list (todo_update) of the live turn; cleared on idle, error and rewind. */
@@ -80,6 +82,7 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
     return { ...s, lastSeq: e.seq, order: s.order.filter((id) => !gone.has(id)), parts, aux: s.aux.filter((a) => !gone.has(a.part.id)) };
   }
   if (part.type === "external_turn") return { ...s, lastSeq: e.seq, externalTurn: part.running };
+  if (part.type === "auto_continue") return { ...s, lastSeq: e.seq, continueAt: part.at ?? undefined };
   // Not rendered: App moves a tab that shows the session live.
   if (part.type === "session_cleared") return { ...s, lastSeq: e.seq };
   if (part.type === "todo_update") return { ...s, lastSeq: e.seq, todos: part.items };

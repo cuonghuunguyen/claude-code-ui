@@ -48,7 +48,7 @@ import { connect, type ConnectionStatus, type Request, type RequestError } from 
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { Toast } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
-import { activeCommand, choose, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
+import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
 import { McpDialog } from "./mcp-dialog.tsx";
@@ -59,10 +59,13 @@ import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
-import { byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
-import { appendQuote, splitQuotes } from "./quote.ts";
+import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
+import { appendQuote } from "./quote.ts";
+import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
+import { UserMarkdown } from "./user-markdown.tsx";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
+import { ContinueDock } from "./continue-dock.tsx";
 import { StatusBar, totals, type Totals } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
@@ -223,6 +226,8 @@ export function App() {
   const staleDismissed = useRef<string | undefined>(undefined);
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
   const [drawer, setDrawer] = useState(false);
+  /** A `/resume` request for the sidebar search (SessionList `search`). */
+  const [resumeSearch, setResumeSearch] = useState<{ text: string; seq: number }>();
   // Wide screens: the Home button shows or hides the sessions sidebar.
   const [sidebar, setSidebar] = useState(true);
   // Wide screens: the sidebar's width, dragged on its edge; kept per browser. The narrow-screen drawer is min(85vw, 360px).
@@ -929,7 +934,15 @@ export function App() {
   const openMcp = (server?: string) => project && setMcp({ open: true, cwd: project, sessionId: projectSession, server });
   const openPlugins = () => project && setPlugins({ open: true, cwd: project, sessionId: projectSession });
   const openSkills = () => project && setSkillsDialog({ open: true, cwd: project, sessionId: projectSession });
-  const openDialog = (d: DialogName) => (d === "mcp" ? openMcp() : d === "plugins" ? openPlugins() : openSkills());
+  /** `/resume` (GH-100): shows the sidebar (the drawer below md) with the session search on this project's repository, then the typed text. */
+  const openResume = (arg?: string) => {
+    if (!project) return;
+    if (wide(768)) setSidebar(true);
+    else setDrawer(true);
+    const name = projectName(projectOf(project, worktrees));
+    setResumeSearch((s) => ({ text: resumeSearchText(name, arg), seq: (s?.seq ?? 0) + 1 }));
+  };
+  const openDialog = (d: DialogName, arg?: string) => (d === "mcp" ? openMcp() : d === "plugins" ? openPlugins() : d === "resume" ? openResume(arg) : openSkills());
   // The dialog lists the commands of its session (none on the new-session tab), plus the ones the web app handles itself.
   const dialogSession = skillsDialog?.sessionId ? views[skillsDialog.sessionId] : undefined;
   const skillsCommands = dialogSession?.commands.length ? withDialogCommands(dialogSession.commands) : [];
@@ -937,7 +950,7 @@ export function App() {
   const runCommand = (r: ReturnType<typeof choose>) => {
     if ("text" in r) return setInsert(r.text.trimEnd());
     const dialog = dialogOf(r.send, dialogSession?.commands);
-    if (dialog) return openDialog(dialog);
+    if (dialog) return openDialog(dialog, dialogArg(r.send));
     if (!skillsDialog?.sessionId) return;
     client.current!.request({ type: "session.prompt", sessionId: skillsDialog.sessionId, text: r.send, images: [] }).catch((e) => setError((e as Error).message));
   };
@@ -1196,6 +1209,7 @@ export function App() {
               renaming={renaming?.in === "list" ? renaming.id : undefined}
               onAction={sessionAction("list")}
               onRenamed={renamed}
+              search={resumeSearch}
             />
           )}
           <button
@@ -1275,6 +1289,7 @@ export function App() {
                             ? client.current!.request({ type: "session.bash", sessionId: s.id, command })
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
+                        onCancelContinue={() => client.current!.request({ type: "session.cancelContinue", sessionId: s.id }).catch((e) => setError((e as Error).message))}
                         onInterrupt={() =>
                           client.current!.request({ type: "session.interrupt", sessionId: s.id }).catch((e) => setError((e as Error).message))
                         }
@@ -1335,6 +1350,7 @@ export function App() {
                       view={views[panelSession.id]!}
                       cwd={panelSession.cwd}
                       onOpen={(path) => (setOpenFile(path), setPane("files"))}
+                      sessionId={panelSession.id}
                     />
                   )}
                   {sidePane === "graph" && (
@@ -1742,8 +1758,8 @@ export function NewSession({
   commandsRev?: number;
   /** Rejects when the session was not created; the prompt box keeps the draft. */
   onStart: (cwd: string, opts: StartOptions, first: FirstMessage) => Promise<void>;
-  /** `/mcp`, `/skills`, `/plugins` typed alone: opens that dialog of `cwd` instead of creating a session. */
-  onDialog?: (dialog: DialogName) => void;
+  /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog of `cwd` instead of creating a session. */
+  onDialog?: (dialog: DialogName, arg?: string) => void;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   connected?: boolean;
 }) {
@@ -1925,6 +1941,7 @@ export function SessionPane({
   onBash,
   onSearch,
   onInterrupt,
+  onCancelContinue,
   onRewindPreview,
   onRewind,
   onRespond,
@@ -1972,6 +1989,8 @@ export function SessionPane({
   onBash?: (command: string) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
   onInterrupt: () => void;
+  /** Drops the scheduled continue after a usage limit. */
+  onCancelContinue?: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
@@ -1979,8 +1998,8 @@ export function SessionPane({
   /** The daemon is reachable; otherwise the send button is disabled. */
   connected: boolean;
   onGitStatus?: () => Promise<GitStatus | null>;
-  /** `/mcp`, `/skills`, `/plugins` typed alone: opens that dialog instead of sending. */
-  onDialog?: (dialog: DialogName) => void;
+  /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
+  onDialog?: (dialog: DialogName, arg?: string) => void;
 }) {
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
@@ -2180,6 +2199,7 @@ export function SessionPane({
           <NotPromptable view={view} run={current} onOpen={onOpenRun} onStop={stopRun} stopping={!!stopOf && !stopOf.error} error={stopOf?.error} />
         ) : (
           <>
+            {view.continueAt !== undefined && <ContinueDock at={view.continueAt} onCancel={() => onCancelContinue?.()} />}
             <PromptBox
               cwd={session.cwd}
               commands={view.commands}
@@ -2264,8 +2284,8 @@ function PromptBox({
   /** Changing it clears the send error. */
   cwd?: string;
   commands: SlashCommand[];
-  /** Given: the dialog commands (`/mcp`, `/skills`, `/plugins`) are in the picker and open their dialog instead of being sent. */
-  onDialog?: (dialog: DialogName) => void;
+  /** Given: the dialog commands (`/mcp`, `/skills`, `/plugins`, `/resume`) are in the picker and open their dialog instead of being sent. */
+  onDialog?: (dialog: DialogName, arg?: string) => void;
   models: ModelInfo[];
   model: string;
   onModel: (model: string) => void;
@@ -2415,8 +2435,11 @@ function PromptBox({
       return;
     }
     if (!t.trim() && !images.length) return;
-    const dialog = onDialog && !images.length && dialogOf(t, commands);
-    if (dialog) return onDialog(dialog), edit("");
+    const dialog = onDialog && dialogOf(t, commands);
+    if (dialog && (!images.length || dialog === "resume")) {
+      const arg = dialogArg(t);
+      return arg ? onDialog(dialog, arg) : onDialog(dialog), edit("");
+    }
     if (blocked) return;
     const sent = images;
     setSendError(undefined);
@@ -2479,6 +2502,8 @@ function PromptBox({
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter commits the composition, Esc cancels it, arrows pick IME candidates: never send, pick, dismiss or switch modes then.
     if (composing.current || isImeKey(e.nativeEvent)) return;
+    // Ctrl/Cmd+B, I, E format the selection; defaultPrevented keeps Ctrl+B from toggling the sidebar here. Not in bash mode.
+    if (!bash && formatShortcut(e)) return;
     // OpenCode shell mode: `!` typed at the start of an empty caret switches modes and is not inserted.
     if (onBash && !bash && e.key === "!" && !e.ctrlKey && !e.metaKey && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0) {
       e.preventDefault();
@@ -2592,6 +2617,7 @@ function PromptBox({
       className={`relative flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50 ${lift ? "-mt-11" : ""}`}
       data-testid="prompt-box"
     >
+      {!bash && <MarkdownToolbar input={input} disabled={disabled} />}
       {bash && (
         <span data-testid="bash-mode" aria-hidden className="pointer-events-none absolute top-4 left-4 font-mono text-sm text-muted-foreground pointer-coarse:text-base">
           !
@@ -2808,9 +2834,9 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
         <>
           {(text || part.images.length > 0) && (
             <Message from="user">
-              <MessageContent className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+              <MessageContent className="[overflow-wrap:anywhere]">
                 <ImageStrip images={part.images} />
-                <UserText text={text} />
+                <UserMarkdown text={text} />
               </MessageContent>
             </Message>
           )}
@@ -2921,21 +2947,6 @@ function CompactionDivider({ id, summary }: { id: string; summary?: string }) {
         </details>
       )}
     </div>
-  );
-}
-
-/** User prompt: `> ` runs as quote blocks (muted, 2px left border), the rest plain text as before. */
-function UserText({ text }: { text: string }) {
-  const parts = splitQuotes(text);
-  if (parts.length === 1 && !parts[0]!.quote) return text;
-  return parts.map((p, i) =>
-    p.quote ? (
-      <blockquote key={i} className="whitespace-pre-wrap border-l-2 border-border pl-3 text-muted-foreground">
-        {p.text}
-      </blockquote>
-    ) : (
-      <span key={i}>{p.text}</span>
-    ),
   );
 }
 

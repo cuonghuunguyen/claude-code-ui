@@ -407,3 +407,54 @@ export function clearQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserM
 
 /** How the CLI records a typed /clear, live (its echo) and as the first message of the new transcript. */
 export const CLEAR_RECORD = "<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>";
+
+/** Shared reset of the fake account limit (GH-164): `resetsAt` (s) stays until it passes; a new hit then resets `inSeconds` later. */
+export const limitState: { resetsAt: number; inSeconds: number; repeatEvent: boolean; continueHits: boolean } = { resetsAt: 0, inSeconds: 60, repeatEvent: true, continueHits: false };
+
+const promptText = (m: SDKUserMessage) => {
+  const c = m.message.content;
+  return typeof c === "string" ? c : c.map((b) => (b.type === "text" ? b.text : "")).join("");
+};
+
+/**
+ * Like fakeQuery, but a prompt starting with `limit` hits the plan usage limit: a rejected rate_limit_event (not for `limit-noevent`),
+ * the CLI's synthetic assistant message with error rate_limit, and an error result. Other prompts get the fixture's first turn.
+ */
+export function limitQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
+  calls.push(options ?? {});
+  const q = (async function* () {
+    for await (const m of prompt) {
+      inputs.push(m);
+      if (m.shouldQuery === false) continue;
+      const text = promptText(m);
+      if (!text.startsWith("limit") && !(limitState.continueHits && text === "continue")) {
+        yield* turns[0]!;
+        continue;
+      }
+      // Like the CLI, which sends the rejected event once per reset time: `repeatEvent` false leaves a second hit without it.
+      const isNew = limitState.resetsAt * 1000 <= Date.now();
+      if (isNew) limitState.resetsAt = Math.floor(Date.now() / 1000) + limitState.inSeconds;
+      const resetsAt = limitState.resetsAt;
+      yield { type: "system", subtype: "init", uuid: randomUUID(), session_id: "x" } as never;
+      if (text === "limit-warn")
+        yield { type: "rate_limit_event", uuid: randomUUID(), session_id: "x", rate_limit_info: { status: "allowed_warning", resetsAt, rateLimitType: "five_hour" } } as never;
+      else if (text !== "limit-noevent" && (isNew || limitState.repeatEvent))
+        yield { type: "rate_limit_event", uuid: randomUUID(), session_id: "x", rate_limit_info: { status: "rejected", resetsAt, rateLimitType: "five_hour" } } as never;
+      yield {
+        type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, error: "rate_limit",
+        message: { id: randomUUID(), role: "assistant", model: "<synthetic>", content: [{ type: "text", text: `You've hit your session limit · resets ${new Date(resetsAt * 1000).toLocaleTimeString()}` }], usage: { input_tokens: 0, output_tokens: 0 } },
+      } as never;
+      yield { type: "result", subtype: "success", uuid: randomUUID(), session_id: "x", is_error: true, duration_ms: 1, duration_api_ms: 0, num_turns: 1, total_cost_usd: 0, result: "limit", usage: { input_tokens: 0, output_tokens: 0 }, permission_denials: [] } as never;
+    }
+  })();
+  return Object.assign(q, {
+    setModel: async (m?: string) => void setModelCalls.push(m),
+    setPermissionMode: async (mode: string) => void controlCalls.push({ setPermissionMode: mode }),
+    applyFlagSettings: async (settings: object) => void controlCalls.push({ applyFlagSettings: settings }),
+    supportedModels: async () => models,
+    supportedCommands: async () => fakeCommands,
+    getContextUsage: async (opts?: object) => (usageCalls.push({ options: options ?? {}, opts }), fakeUsage),
+    usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => fakePlanUsage,
+    close: () => void (closed++, closedQueries.push(options ?? {}), q.return(undefined)),
+  });
+}

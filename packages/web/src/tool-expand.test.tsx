@@ -158,11 +158,14 @@ it("a subagent is expanded while a child call waits for permission (daemon sends
   expect(el.querySelector('[data-testid="subagent"] button')?.getAttribute("aria-expanded")).toBe("true");
 });
 
-it("a multi-line user prompt keeps its line breaks and still wraps long words (GH-126)", async () => {
+it("a multi-line user prompt keeps its line breaks as markdown and still wraps long words (GH-126)", async () => {
   await render(view([{ type: "user_text", id: "u3", text: "line one\nline two\n\nline four", images: [] }]));
   const content = el.querySelector<HTMLElement>('[data-testid="user-message"] .bg-secondary, [data-testid="user-message"] [class*="bg-secondary"]')!;
-  expect(content.textContent).toBe("line one\nline two\n\nline four");
-  expect(content.className).toMatch(/\bwhitespace-pre-wrap\b/);
+  // Markdown: a single newline is a <br>, a blank line starts a new paragraph.
+  expect(content.querySelectorAll("p")).toHaveLength(2);
+  expect(content.querySelectorAll("br")).toHaveLength(1);
+  expect(content.textContent).toContain("line one\nline two");
+  expect(content.textContent).toContain("line four");
   expect(content.className).toContain("[overflow-wrap:anywhere]");
 });
 
