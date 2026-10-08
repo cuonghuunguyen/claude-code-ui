@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
-import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, loadCollapsed, loadSidebarView, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveSidebarView, nestWorkers, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SidebarView, type WorktreeRow } from "./sessions.ts";
+import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, loadCollapsed, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveSidebarView, nestWorkers, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SidebarView, type WorktreeRow } from "./sessions.ts";
 import { useNow } from "./plan-meter.tsx";
 import { projectName } from "./tabs.ts";
 import { ICON_BUTTON, IconButton, ProjectAvatar } from "./tabs-bar.tsx";
@@ -192,12 +192,17 @@ export function SessionList({
   }, [search?.seq]);
   const [archived, setArchived] = useState(false);
   const [view, setViewState] = useState(loadSidebarView);
-  const setView = (patch: Partial<SidebarView>) =>
-    setViewState((v) => {
-      const next = { ...v, ...patch };
-      saveSidebarView(next);
-      return next;
-    });
+  const setView = (patch: Partial<SidebarView>) => {
+    const next = { ...loadSidebarView(), ...view, ...patch };
+    setViewState(next);
+    saveSidebarView(next);
+  };
+  // Settings > Sidebar changes the same setting.
+  useEffect(() => {
+    const sync = () => setViewState(loadSidebarView());
+    window.addEventListener(VIEW_EVENT, sync);
+    return () => window.removeEventListener(VIEW_EVENT, sync);
+  }, []);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
   const toggle = (cwd: string) =>
     setCollapsed((c) => {
@@ -217,12 +222,15 @@ export function SessionList({
   });
   const nested = nestWorkers(list, archived);
   const top = nested.top;
-  const keepActive = (s: SessionListItem) => s.id === activeId || unread.has(s.id) || state(s) === "running" || state(s) === "needs_input";
+  const keepActive = (s: SessionListItem) => s.id === activeId || state(s) === "running" || state(s) === "needs_input";
   const shown = sortGroups(groupByCwd(top, query, projects, archived, worktrees, nested.workers), view.sort);
   // Only active sessions: a coordinator lists just its workers that qualify too.
-  const workers = view.onlyActive ? activeWorkers(nested.workers, keepActive) : nested.workers;
-  const groups = view.onlyActive ? activeOnly(shown, workers, keepActive) : shown;
   const searching = !!query.trim();
+  // Search still finds every session, and the archived view lists archived ones only.
+  const filtering = view.onlyActive && !searching && !archived;
+  const workers = filtering ? activeWorkers(nested.workers, keepActive) : nested.workers;
+  const filtered = filtering ? activeOnly(shown, nested.workers, keepActive) : undefined;
+  const groups = filtered ? filtered.groups : shown;
   const activeSession = list.find((s) => s.id === activeId);
   // Select active session: open what hides the row (clearing a search or switching to the row's archived view first), then scroll to it; `focus`: move the focus to it.
   const [reveal, setReveal] = useState<{ id: string; focus: boolean }>();
@@ -343,7 +351,7 @@ export function SessionList({
       ),
     ];
   };
-  const emptyText = view.onlyActive ? "No active sessions" : "No sessions yet";
+  const emptyText = filtering ? "No active sessions" : "No sessions yet";
   const treeHint = searching ? " (clear the search first)" : "";
   const header = (
     <div className="flex h-7 items-center pl-1.5 max-md:h-11">
@@ -411,6 +419,14 @@ export function SessionList({
           <ArchiveIcon />
         </IconButton>
       </div>
+      {filtering && (
+        <p className="flex items-center gap-2 px-1.5 text-muted-foreground text-xs max-md:min-h-11" data-testid="active-only-chip">
+          <span>Active only · {filtered!.idleTotal} idle hidden</span>
+          <button type="button" className="cursor-pointer rounded text-foreground underline outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 max-md:px-2" onClick={() => setView({ onlyActive: false })} data-testid="active-only-show-all">
+            Show all
+          </button>
+        </p>
+      )}
       <nav className="-mx-1 flex min-h-0 flex-col gap-2 overflow-y-auto px-1" aria-label="Sessions" data-testid="session-list" ref={listRef}>
         {archived && !!groups.length && (
           <p className="px-1.5 text-muted-foreground text-xs" data-testid="archived-caption">
@@ -423,6 +439,8 @@ export function SessionList({
               ? emptySearch(query, archived, projects)
               : archived
                 ? "No archived sessions."
+                : filtering
+                  ? "No active sessions. Show all lists the idle ones."
                 : "All sessions are archived."}
           </p>
         )}
@@ -442,6 +460,7 @@ export function SessionList({
                   <ProjectAvatar cwd={g.cwd} />
                   <span className="min-w-0 truncate font-medium">{projectName(g.cwd)}</span>
                   <SideBadge cwd={g.cwd} short />
+                  {filtering && !!g.idle && <span className="shrink-0 font-normal text-faint text-xs" data-testid="idle-count">+{g.idle} idle</span>}
                   <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden />
                 </button>
                 {/* OpenCode project row actions: shown on hover or focus; always on touch screens (no hover there), any width. */}

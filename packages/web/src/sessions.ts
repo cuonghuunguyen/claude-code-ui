@@ -2,13 +2,14 @@
 import type { SessionListItem, Worktree, WorktreeStatusResult } from "@claude-ui/protocol";
 import { projectName } from "./tabs.ts";
 
-export type WorktreeRow = Worktree & { sessions: SessionListItem[] };
+/** `idle`: sessions the "Show only active sessions" setting hides from the row (activeOnly). */
+export type WorktreeRow = Worktree & { sessions: SessionListItem[]; idle?: number };
 /**
  * `cwd`: the project the group shows (the main checkout when it is added). `members`: the added projects of its repository.
  * `worktrees`: one row per worktree when the repository has linked ones (main first, then by branch); `sessions` then holds only
  * sessions of no row.
  */
-export type SessionGroup = { cwd: string; members: string[]; sessions: SessionListItem[]; worktrees: WorktreeRow[] };
+export type SessionGroup = { cwd: string; members: string[]; sessions: SessionListItem[]; worktrees: WorktreeRow[]; idle?: number };
 
 /** The added project whose worktree list holds `cwd` (a worktree path), else `cwd`. */
 export const projectOf = (cwd: string, worktrees: Record<string, Worktree[]> = {}) =>
@@ -230,15 +231,31 @@ export function activeWorkers(workers: Map<string, SessionListItem[]>, keep: (s:
   return out;
 }
 
-/** Groups with only the sessions `keep` holds for, or whose workers it holds for; projects and worktree rows stay listed even when empty. */
-export function activeOnly(groups: SessionGroup[], workers: Map<string, SessionListItem[]>, keep: (s: SessionListItem) => boolean): SessionGroup[] {
-  const f = (l: SessionListItem[]) => l.filter((s) => keep(s) || !!workers.get(s.id)?.some(keep));
-  return groups.map((g) => ({ ...g, sessions: f(g.sessions), worktrees: g.worktrees.map((r) => ({ ...r, sessions: f(r.sessions) })) }));
+/**
+ * "Show only active sessions": groups with only the sessions `keep` holds for (running, needs input, the open one), or whose workers it
+ * holds for. A project or worktree row with none is dropped; `idle` counts what each keeps out (workers included), `idleTotal` is the sum.
+ */
+export function activeOnly(groups: SessionGroup[], workers: Map<string, SessionListItem[]>, keep: (s: SessionListItem) => boolean): { groups: SessionGroup[]; idleTotal: number } {
+  const kept = (s: SessionListItem) => keep(s) || !!workers.get(s.id)?.some(keep);
+  // Hidden sessions of a list: those not kept, with all their workers, and the idle workers of a kept coordinator.
+  const idleOf = (l: SessionListItem[]) => l.reduce((n, s) => n + (kept(s) ? (workers.get(s.id) ?? []).filter((w) => !keep(w)).length : 1 + (workers.get(s.id)?.length ?? 0)), 0);
+  let idleTotal = 0;
+  const out: SessionGroup[] = [];
+  for (const g of groups) {
+    const rows = g.worktrees.map((r) => ({ ...r, sessions: r.sessions.filter(kept), idle: idleOf(r.sessions) })).filter((r) => r.sessions.length);
+    const sessions = g.sessions.filter(kept);
+    const idle = idleOf(g.sessions) + g.worktrees.reduce((n, r) => n + idleOf(r.sessions), 0);
+    idleTotal += idle;
+    if (sessions.length || rows.length) out.push({ ...g, sessions, worktrees: rows, idle });
+  }
+  return { groups: out, idleTotal };
 }
 
 /** Sidebar view settings, per browser (docs/spec.md "Layout"). */
 export type SidebarView = { alwaysSelect: boolean; dayHeaders: boolean; onlyActive: boolean; sort: SidebarSort };
 const VIEW_KEY = "claude-ui.sidebarView";
+/** Fired on `window` by saveSidebarView. */
+export const VIEW_EVENT = "claude-ui:sidebar-view";
 const VIEW_DEFAULT: SidebarView = { alwaysSelect: false, dayHeaders: true, onlyActive: false, sort: "recent" };
 
 export function loadSidebarView(): SidebarView {
@@ -254,6 +271,8 @@ export function loadSidebarView(): SidebarView {
 export function saveSidebarView(view: SidebarView) {
   try {
     localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+    // The sidebar and the Settings dialog both write it: the mounted list follows.
+    window.dispatchEvent(new Event(VIEW_EVENT));
   } catch {
     // Storage blocked: the settings still apply to this page.
   }

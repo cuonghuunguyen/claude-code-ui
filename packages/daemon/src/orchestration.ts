@@ -233,6 +233,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (!type) return;
     const l = linkOf(s.id);
     if (!l?.coordinatorId || !l.name) return;
+    // A request's part is emitted again when its tier is read (session.ts markLowTier): one request, one event.
+    if ((p.type === "permission_request" || p.type === "question") && !seen(p.requestId)) return;
     const e: WorkerEvent = { name: l.name, sessionId: s.id, type, at: Date.now() };
     if (p.type === "turn_result" || p.type === "turn_interrupted") {
       e.result = cut(lastText.get(s.id) ?? "");
@@ -260,6 +262,15 @@ export function createOrchestration(deps: OrchestrationDeps) {
     const coordinator = l.coordinatorId;
     if (ordered.has(s.id)) inOrder(s.id, async () => deliver(coordinator, e));
     else deliver(coordinator, e);
+  }
+
+  /** Request IDs already turned into an event; false for one seen before. Bounded: the oldest are forgotten. */
+  const delivered = new Set<string>();
+  function seen(requestId: string) {
+    if (delivered.has(requestId)) return false;
+    delivered.add(requestId);
+    if (delivered.size > 1000) delivered.delete(delivered.values().next().value!);
+    return true;
   }
 
   /** Per worker: events queued behind a permission event whose tier is still being read. Empty = deliver at once. */

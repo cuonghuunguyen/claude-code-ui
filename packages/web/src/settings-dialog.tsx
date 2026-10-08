@@ -1,5 +1,5 @@
 // Settings dialog (docs/spec.md "Settings"): app-wide, daemon-side settings in sections, on the ConfigDialog shell,
-// plus per-browser choices (Changes, Tabs) that never reach the daemon.
+// plus per-browser choices (Changes, Tabs, Guide) that never reach the daemon.
 // A later setting is one more row in SECTIONS; reading, patching, errors and layout stay as they are.
 import { useEffect, useRef, useState } from "react";
 import type { Settings, SettingsPatch, SettingsResult } from "@claude-ui/protocol";
@@ -9,7 +9,9 @@ import { isImeKey } from "./ime.ts";
 import { Switch } from "./plugins-dialog.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
+import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
 import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
+import { GuideSection } from "./guide-settings.tsx";
 
 type Row = { key: string; label: string; hint: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "select"; options: { value: string; label: string }[] });
 const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
@@ -45,10 +47,18 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
 ];
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, onShortcuts }: { open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, onShortcuts, onRestartGuide }: { open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
+  // "Show only active sessions": the sidebar's own per-browser setting (its options menu writes it too).
+  const [onlyActive, setOnlyActive] = useState(() => loadSidebarView().onlyActive);
+  useEffect(() => {
+    const sync = () => setOnlyActive(loadSidebarView().onlyActive);
+    sync();
+    window.addEventListener(VIEW_EVENT, sync);
+    return () => window.removeEventListener(VIEW_EVENT, sync);
+  }, [open]);
   // The number field's text while typing; committed on Enter or blur.
   const [draft, setDraft] = useState<Record<string, string>>({});
   const diffMode = useDefaultDiffMode();
@@ -104,6 +114,18 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           </Select>
         </div>
       </section>
+      <section aria-labelledby="settings-sidebar" className="flex flex-col" data-testid="settings-sidebar">
+        <h3 id="settings-sidebar" className="pb-1 font-medium text-[13px] text-muted-foreground">
+          Sidebar
+        </h3>
+        <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+          <div className="min-w-0 flex-1">
+            <span id="settings-sidebar-active-label" className="block text-sm">Show only active sessions</span>
+            <span id="settings-sidebar-active-hint" className="block text-muted-foreground text-xs">Lists sessions that are running or need input. Search still finds every session, and the one you have open stays listed. Kept in this browser.</span>
+          </div>
+          <Switch on={onlyActive} label="Show only active sessions" held={false} onToggle={(on) => saveSidebarView({ ...loadSidebarView(), onlyActive: on })} title="Show only active sessions" describedBy="settings-sidebar-active-hint" testId="settings-sidebar-active-only" />
+        </div>
+      </section>
       {onTabGrouping && (
         <section aria-labelledby="settings-tabs" className="flex flex-col" data-testid="settings-tabs">
           <h3 id="settings-tabs" className="pb-1 font-medium text-[13px] text-muted-foreground">
@@ -156,6 +178,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           </div>
         </section>
       )}
+      {onRestartGuide && <GuideSection onRestart={onRestartGuide} />}
       {!settings && !error && <p className="text-muted-foreground text-sm">Loading…</p>}
       {settings &&
         SECTIONS.map((sec) => (

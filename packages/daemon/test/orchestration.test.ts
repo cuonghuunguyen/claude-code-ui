@@ -1045,6 +1045,19 @@ describe("orchestration", () => {
   };
   const lastEvent = (sid: string, id: string) => [...c.inbox].reverse().find((m) => m.type === "event" && m.sessionId === sid && m.part.id === id) as any;
 
+  it("a low tier request reaches its coordinator once, although its part is emitted again with the tier (GH-159)", async () => {
+    enable();
+    await closeAll();
+    const coord = await coordinator();
+    await call(coord, "worker_start", { name: "dup", cwd: dirB, prompt: perm("Edit", editIn) });
+    const first = await permEvent(coord, "dup");
+    expect(first).toMatchObject({ tier: "low" });
+    await new Promise((r) => setTimeout(r, 500));
+    expect((await call(coord, "worker_wait", { names: ["dup"], types: ["permission"], timeoutMs: 300 })).events).toEqual([]);
+    await respond(first.requestId, "deny");
+    await turnEnd(coord, "dup");
+  });
+
   it("permission events carry the daemon's tier", async () => {
     enable();
     await closeAll();

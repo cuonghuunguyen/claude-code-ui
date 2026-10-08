@@ -1,7 +1,7 @@
 // Permission panel (replaces the prompt box) and its timeline marker (docs/spec.md "Permission bridge").
 import { useState, type FormEvent, type ReactNode } from "react";
 import type { PermissionUpdate } from "@claude-ui/protocol";
-import { FileDiffIcon, ListTodoIcon, PencilIcon, SquareIcon, TriangleAlertIcon } from "lucide-react";
+import { FileDiffIcon, ListTodoIcon, PencilIcon, ShieldAlertIcon, SquareIcon, TriangleAlertIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import type { PermissionRequest } from "./store.ts";
@@ -57,10 +57,10 @@ const planOf = (part: PermissionRequest) => {
 
 /** Dock tray (OpenCode DockTray): actions right-aligned under the dock body. */
 export const DOCK = "flex flex-col overflow-hidden rounded-xl border bg-card text-sm shadow-sm";
-export const TRAY = "@container flex flex-wrap items-center justify-end gap-2 border-t bg-muted px-2 py-2 pointer-coarse:[&_button]:h-11";
+export const TRAY = "@container flex flex-wrap items-center justify-end gap-2 border-t bg-muted px-2 py-2 max-md:[&_button]:h-11 pointer-coarse:[&_button]:h-11";
 
 /** OpenCode permission dock: header, hint, content, rule patterns; tray Deny · Allow always · Allow once. */
-export function PermissionPanel({ part, onRespond, mode, onStop }: { part: PermissionRequest; onRespond: (a: PermissionAnswer) => void; mode?: ReactNode; /** Stops the turn (Esc). The panel replaces the prompt box, so without it a phone could not (GH-165). */ onStop?: () => void }) {
+export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part: PermissionRequest; onRespond: (a: PermissionAnswer) => void; mode?: ReactNode; /** Stops the turn (Esc). The panel replaces the prompt box, so without it a phone could not (GH-165). */ onStop?: () => void; /** The Focus page (GH-159): a "high" request shows "High tier · always asks" and offers no Always allow; "low" words the rule line as what Always allow saves. Absent: the session's own panel. */ tier?: "low" | "high" }) {
   const [feedback, setFeedback] = useState("");
   const [draft, setDraft] = useState(() => proposed(part));
   const [editing, setEditing] = useState(false);
@@ -70,6 +70,7 @@ export function PermissionPanel({ part, onRespond, mode, onStop }: { part: Permi
     e.preventDefault();
     onRespond({ decision: "deny", message: feedback.trim() || undefined });
   };
+  const always = part.suggestions.length > 0 && tier !== "high";
   const noLabel = plan !== undefined ? "No, keep planning: tell Claude what to change" : "No, and tell Claude what to do differently";
   return (
     <form onSubmit={deny} className={`${DOCK} max-h-[60dvh]`} data-testid="permission-panel" aria-label="Permission request">
@@ -87,6 +88,12 @@ export function PermissionPanel({ part, onRespond, mode, onStop }: { part: Permi
           )}
         </div>
         {plan === undefined && <p className="text-muted-foreground">{part.title ?? `Claude wants to use ${part.tool}`}</p>}
+        {tier === "high" && (
+          <p className="flex w-fit items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 text-xs" data-testid="permission-high-tier">
+            <ShieldAlertIcon className="size-3.5 shrink-0 text-warning" aria-hidden />
+            High tier · always asks
+          </p>
+        )}
         {part.escalated && (
           <p className="text-xs break-words" data-testid="permission-escalated">
             <span className="font-medium">Escalated by coordinator:</span> {part.reason}
@@ -115,16 +122,16 @@ export function PermissionPanel({ part, onRespond, mode, onStop }: { part: Permi
                 <InputDiff tool={part.tool} input={updatedInput ?? part.input} />
               </div>
             )}
-            <Button type="button" variant="ghost" size="sm" className="self-end pointer-coarse:h-11" aria-pressed={editing} onClick={() => setEditing(!editing)}>
+            <Button type="button" variant="ghost" size="sm" className="self-end max-md:h-11 pointer-coarse:h-11" aria-pressed={editing} onClick={() => setEditing(!editing)}>
               {editing ? <FileDiffIcon /> : <PencilIcon />}
               {editing ? "Show diff" : "Edit content"}
             </Button>
           </>
         )}
         {/* Like Claude Code: "Allow always" applies every SDK suggestion (e.g. the Bash rule plus its directory). */}
-        {plan === undefined && part.suggestions.length > 0 && (
+        {plan === undefined && always && (
           <p className="text-muted-foreground text-xs" data-testid="permission-rules">
-            Allow always: don&apos;t ask again for <code className="font-mono">{part.suggestions.map(ruleLabel).join(", ")}</code>
+            {tier ? "Always allow saves:" : "Allow always: don't ask again for"} <code className="font-mono">{part.suggestions.map(ruleLabel).join(", ")}</code>
           </p>
         )}
         <input
@@ -140,15 +147,15 @@ export function PermissionPanel({ part, onRespond, mode, onStop }: { part: Permi
         {mode && <span className="mr-auto min-w-0">{mode}</span>}
         {/* One group: on a narrow tray the answer buttons wrap together, below the picker. */}
         <div className="ml-auto flex flex-wrap justify-end gap-2">
-          <Button type="submit" variant="ghost">
+          <Button type="submit" variant="ghost" className="max-md:h-11 pointer-coarse:h-11">
             {plan !== undefined ? "No, keep planning" : "Deny"}
           </Button>
-          {part.suggestions.length > 0 && (
-            <Button type="button" variant="outline" onClick={() => onRespond({ decision: "allow_always", updatedInput })}>
+          {always && (
+            <Button type="button" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => onRespond({ decision: "allow_always", updatedInput })}>
               {plan !== undefined ? "Yes, and auto-accept edits" : "Allow always"}
             </Button>
           )}
-          <Button type="button" onClick={() => onRespond({ decision: "allow", updatedInput })}>
+          <Button type="button" className="max-md:h-11 pointer-coarse:h-11" onClick={() => onRespond({ decision: "allow", updatedInput })}>
             {plan !== undefined ? "Yes, manually approve edits" : "Allow once"}
           </Button>
         </div>

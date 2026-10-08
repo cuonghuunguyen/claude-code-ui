@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { NEW_TAB, avatarColor, avatarColors, closeTab, groupTabs, loadCollapsed, loadTabs, moveGroup, moveGroupTo, moveTab, moveTabIn, openTab, saveCollapsed, staleTabs, replaceTab, saveTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColor, avatarColors, closeTab, groupTabs, loadCollapsed, loadTabs, moveGroup, moveGroupTo, moveTab, moveTabIn, openTab, saveCollapsed, staleTabs, replaceTab, saveTabs, tabFromHash, tabHash } from "./tabs.ts";
 
 describe("tabs", () => {
   it("restored tabs the daemon does not list are stale; the new-session tab always stays", () => {
@@ -58,6 +58,8 @@ describe("tabs", () => {
     const id = "0b5e6f1c-1111-4222-8333-444455556666";
     expect(tabFromHash(tabHash(id))).toBe(id);
     expect(tabFromHash(tabHash(NEW_TAB))).toBe(NEW_TAB);
+    expect(tabFromHash("#focus")).toBe(FOCUS_TAB);
+    expect(tabFromHash(tabHash(FOCUS_TAB))).toBe(FOCUS_TAB);
     expect(tabFromHash("")).toBeUndefined();
     expect(tabFromHash("#token=abc")).toBeUndefined();
   });

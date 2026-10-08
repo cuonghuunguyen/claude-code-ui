@@ -2,6 +2,7 @@
 import { expect, it, vi } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { appCommands, shortcutFor, type CommandContext } from "./app-commands.ts";
+import { KEYS } from "./shortcuts.ts";
 
 const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   tabs: ["a", "b", "new"],
@@ -33,6 +34,7 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   rewind: vi.fn(),
   stop: vi.fn(),
   openSettings: vi.fn(),
+  startGuide: vi.fn(),
   ...over,
 });
 
@@ -57,6 +59,7 @@ it("lists the issue's commands with shortcuts, then the sessions", () => {
     ["tab.gotoLast", "alt+9"],
     ["shortcuts.open", "mod+/"],
     ["settings.open", "mod+,"],
+    ["guide.start", undefined],
     ["sidebar.toggle", "mod+b"],
     ["panel.toggle", "mod+shift+r"],
     ["filetree.toggle", "mod+\\"],
@@ -133,7 +136,7 @@ it("rewind lists prompts newest first; hidden while a turn runs, when Stop shows
 
 it("without a shown session only the app-level commands remain", () => {
   const items = appCommands(ctx({ session: undefined, canQuickOpen: false, tabs: ["new"], activeId: "new", sessions: [] }));
-  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "sidebar.toggle"]);
+  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "guide.start", "sidebar.toggle"]);
 });
 
 it("a shortcut finds its command; Esc, Shift+Tab and plain keys run nothing from here", () => {
@@ -206,6 +209,38 @@ it("New worktree… shows only with a git project, right after New session, and 
   run(ctx({ newWorktree }), "worktree.new");
   expect(newWorktree).toHaveBeenCalled();
   expect(appCommands(ctx()).some((i) => i.id === "worktree.new")).toBe(false);
+});
+
+it("Toggle signal only runs from the palette and Mod+Alt+S, only for a session that is not a draft", () => {
+  const toggleSignalOnly = vi.fn();
+  const c = ctx({ toggleSignalOnly });
+  run(c, "signal.toggle");
+  expect(toggleSignalOnly).toHaveBeenCalledOnce();
+  expect(shortcutFor(appCommands(c), ev("s", { ctrlKey: true, altKey: true }))?.id).toBe("signal.toggle");
+  expect(appCommands(ctx({ toggleSignalOnly, session: { ...ctx().session!, draft: true } })).some((i) => i.id === "signal.toggle")).toBe(false);
+  expect(appCommands(ctx({ toggleSignalOnly, session: undefined })).some((i) => i.id === "signal.toggle")).toBe(false);
+});
+
+it("Open Focus is always listed when App offers it; Next waiting request only while something waits, on Ctrl+Alt+Down", () => {
+  const openFocus = vi.fn();
+  const nextWaiting = vi.fn();
+  expect(appCommands(ctx({ openFocus })).map((i) => [i.id, i.keys]).filter(([id]) => String(id).startsWith("focus."))).toEqual([["focus.open", undefined]]);
+  const c = ctx({ openFocus, nextWaiting });
+  expect(appCommands(c).map((i) => i.id).filter((id) => id.startsWith("focus."))).toEqual(["focus.open", "focus.next"]);
+  run(c, "focus.next");
+  expect(nextWaiting).toHaveBeenCalledOnce();
+  expect(shortcutFor(appCommands(c), ev("ArrowDown", { ctrlKey: true, altKey: true }))?.id).toBe("focus.next");
+  expect(shortcutFor(appCommands(ctx({ openFocus })), ev("ArrowDown", { ctrlKey: true, altKey: true }))).toBeUndefined();
+  // Never Escape: Esc stops the running turn.
+  expect(KEYS["focus.next"]).not.toMatch(/escape/);
+});
+
+it("lists Show guide without a shortcut and runs startGuide", () => {
+  const c = ctx();
+  const row = run(c, "guide.start");
+  expect(row.title).toBe("Show guide");
+  expect(row.keys).toBeUndefined();
+  expect(c.startGuide).toHaveBeenCalledOnce();
 });
 
 it("new commands: Go to tab N, last tab and reopen run their action; Go to tab rows only show for a typed search", () => {

@@ -79,6 +79,11 @@ import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
+import { loadSignalIds, saveSignalOnly, signalItems, type SignalItem } from "./signal.ts";
+import { FoldRow, SignalSwitch } from "./signal-fold.tsx";
+import { FocusPage, FocusRow } from "./focus-page.tsx";
+import { nextWaiting, waitingCount, waitingRequests } from "./focus.ts";
+import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { joinPath, relPath } from "./paths.ts";
@@ -89,6 +94,9 @@ import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
 import { shownPrompt } from "./config-dialog.tsx";
+import { autoChapter, decideFirstUse, finishRun, GUIDE_KEY, isVisible, loadGuide, parseGuide, restartGuide, saveGuide, settled, skipGuide, wasFreshBrowser, withStep, type ChapterId, type GuideHost, type GuideState } from "./guide.ts";
+import { chaptersOf, stepById, stepsFor } from "./guide-steps.ts";
+import { GuideTour } from "./guide-tour.tsx";
 import { keyText, matchesKey, withKey } from "./shortcuts.ts";
 import { specOf, useKeymap } from "./keymap.ts";
 import { LEADER_MS, PREFIX_KEYS, leaderStep } from "./leader.ts";
@@ -98,7 +106,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
-import { NEW_TAB, avatarColors, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColors, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
@@ -145,7 +153,7 @@ const loadNumber = (key: string, fallback: number) => {
 /** `r` without the entry of `id`. */
 const without = <T,>(r: Record<string, T>, id: string) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== id));
 
-const hashId = () => (hashTab() === NEW_TAB ? undefined : hashTab());
+const hashId = () => (hashTab() === NEW_TAB || hashTab() === FOCUS_TAB ? undefined : hashTab());
 
 const pageFocused = () => document.visibilityState === "visible" && document.hasFocus();
 
@@ -220,8 +228,23 @@ export function App() {
   const [run, setRun] = useState(() => runFromHash(location.hash));
   const [tabs, setTabs] = useState(() => {
     const h = hashTab();
-    return h ? openTab(loadTabs(), h) : loadTabs();
+    return h && h !== FOCUS_TAB ? openTab(loadTabs(), h) : loadTabs();
   });
+  // The request the Focus page has selected (GH-159); the oldest waiting one while unset.
+  const [focusSel, setFocusSel] = useState<string>();
+  // When this browser first saw a request that came without the daemon's `at`.
+  const firstSeen = useRef(new Map<string, number>());
+  // Sessions shown in Signal only (GH-159), per browser.
+  const [signalIds, setSignalIds] = useState(loadSignalIds);
+  const setSignalOnly = (id: string, on: boolean) => {
+    saveSignalOnly(id, on);
+    setSignalIds((s) => {
+      const next = new Set(s);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
   const changeGrouping = (g: TabGrouping) => {
     setGrouping(g);
@@ -241,6 +264,12 @@ export function App() {
   const [error, setError] = useState<string>();
   const [toast, setToast] = useState<string>();
   const closeToast = useCallback(() => setToast(undefined), []);
+  // Guided tour (docs/spec.md "First-use guide"): `guideState` is the per-browser state, decided once after the first session list.
+  const guideState = useRef<GuideState>(undefined);
+  const guideDecided = useRef(false);
+  const [guideReady, setGuideReady] = useState(false);
+  const guideStep = useRef<string>(undefined);
+  const [guideRun, setGuideRun] = useState<{ n: number; ids: string[]; chapters: ChapterId[]; start?: string; from?: "settings" }>();
   const [update, setUpdate] = useState<UpdateInfo>();
   // The daemon's "runs older code" note; a dismissed note stays hidden until the page reloads.
   const [stale, setStale] = useState<string>();
@@ -374,6 +403,15 @@ export function App() {
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
       setList(sessions);
       setProjects(projects);
+      if (!guideDecided.current) {
+        // The first list of this page decides: a fresh browser on a daemon with no projects gets the tour, anything else is only offered it.
+        // A dialog open now (a pairing flow) postpones the decision to the next page load.
+        guideDecided.current = true;
+        let g = loadGuide();
+        if (!g && !document.querySelector('[aria-modal="true"]')) saveGuide((g = decideFirstUse(wasFreshBrowser(), projects.length)));
+        guideState.current = g;
+        setGuideReady(!!g);
+      }
       setRecentProjects(recentProjects);
       setSides(sides);
       setCwdSides(cwdSides);
@@ -578,6 +616,12 @@ export function App() {
     setDrawer(false);
     if (!keepHash) setRun(undefined);
     if (!id) return;
+    // The Focus page is no session: it has no tab in the list and nothing to subscribe to.
+    if (id === FOCUS_TAB) {
+      if (!keepHash) history.replaceState(null, "", tabHash(id));
+      if (activeId !== FOCUS_TAB) setFocusSel(undefined);
+      return;
+    }
     setTabs((t) => openTab(t, id));
     if (!keepHash) history.replaceState(null, "", tabHash(id));
     // A page-load link subscribed without adding its project: the first explicit open of that session adds it, view or not.
@@ -696,7 +740,7 @@ export function App() {
   // The daemon suppresses pushes for the session a focused, visible tab shows; resent after every reconnect.
   useEffect(() => {
     if (status !== "connected") return;
-    const sessionId = focused && activeId !== NEW_TAB ? activeId : undefined;
+    const sessionId = focused && activeId !== NEW_TAB && activeId !== FOCUS_TAB ? activeId : undefined;
     client.current!.request(sessionId ? { type: "push.focus", sessionId } : { type: "push.focus" }).catch(() => {});
   }, [status, focused, activeId]);
 
@@ -712,7 +756,21 @@ export function App() {
   useEffect(() => applyTheme(theme), [theme]);
 
   const unread = new Set(list.filter((s) => views[s.id] && isUnread(views[s.id]!, seen[s.id])).map((s) => s.id));
-  useEffect(() => void (document.title = tabTitle(unread.size)), [unread.size]);
+  // Focus (GH-159): every unanswered request; the sidebar row, the Focus tab, the browser tab and the status text all show the same number of sessions.
+  const waiting = useMemo(() => {
+    const w = waitingRequests(list, views, firstSeen.current, Date.now());
+    for (const x of w) if (!firstSeen.current.has(x.part.id)) firstSeen.current.set(x.part.id, x.since);
+    const ids = new Set(w.map((x) => x.part.id));
+    for (const id of firstSeen.current.keys()) if (!ids.has(id)) firstSeen.current.delete(id);
+    return w;
+  }, [list, views]);
+  const waitingN = waitingCount(waiting);
+  const everWaiting = useRef(false);
+  if (waitingN > 0) everWaiting.current = true;
+  useEffect(() => {
+    document.title = tabTitle(waitingN);
+    setFavicon(faviconHref(waitingN));
+  }, [waitingN]);
 
   async function togglePush() {
     setError(undefined);
@@ -943,13 +1001,15 @@ export function App() {
   const changeCount = listedChanges && listedChanges.id === panelSession?.id ? listedChanges.n : changedPaths.length;
   // The graph tab exists only while the side panel's cwd is a git work tree.
   const [isGit, setIsGit] = useState(false);
+  // The cwd whose git status has been answered: the tour waits for it so "Git graph" is not dropped by a status still on its way.
+  const [gitChecked, setGitChecked] = useState<string>();
   const panelCwd = panelSession?.cwd;
   useEffect(() => {
     if (!panelCwd || status !== "connected") return;
     let live = true;
     client.current!.request<GitStatusResult>({ type: "git.status", cwd: panelCwd }).then(
-      (r) => live && setIsGit(!!r.status),
-      () => live && setIsGit(false),
+      (r) => live && (setIsGit(!!r.status), setGitChecked(panelCwd)),
+      () => live && (setIsGit(false), setGitChecked(panelCwd)),
     );
     return () => void (live = false);
   }, [panelCwd, status]);
@@ -1126,11 +1186,77 @@ export function App() {
     setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
+    openFocus: () => open(FOCUS_TAB),
+    nextWaiting: waiting.length ? () => (open(FOCUS_TAB), setFocusSel(nextWaiting(waiting, activeId === FOCUS_TAB ? focusSel ?? waiting[0]?.part.id : undefined)?.part.id)) : undefined,
+    toggleSignalOnly: shown ? () => setSignalOnly(shown.id, !signalIds.has(shown.id)) : undefined,
     openSettings: () => setSettingsOpen(true),
+    startGuide: () => startGuide(),
     openMcp: project ? () => openMcp() : undefined,
     openSkills: project ? openSkills : undefined,
     openPlugins: project ? openPlugins : undefined,
   });
+  // Guided tour. The tour gets its key text only from here; the palette rows carry the keys.
+  const sessionIdle = !!shown && shownState(view) === "idle";
+  const guideHost: GuideHost = {
+    // The user's own bindings (a rebound or removed key shows as such); App re-renders on a keymap change.
+    keyOf: (id) => specOf(id),
+    openProject: () => (setDrawer(false), setOpeningProject(true)),
+    openSettings: () => setSettingsOpen(true),
+    closeDrawer: () => setDrawer(false),
+  };
+  const startRun = (chapter: ChapterId, from?: "settings") => {
+    const ids = stepsFor(chapter, { session: !!shown, git: isGit, narrow: !wide(768) }).map((s) => s.id);
+    const step = guideState.current?.step;
+    setGuideRun((r) => ({ n: (r?.n ?? 0) + 1, ids, chapters: chaptersOf(ids), start: step && ids.includes(step) ? step : undefined, from }));
+  };
+  // Settings > Guide > Restart guide and the palette's "Show guide": both chapters pending again, from the first step.
+  const startGuide = (from?: "settings") => {
+    guideState.current = restartGuide(guideState.current ?? decideFirstUse(false, 0));
+    saveGuide(guideState.current);
+    setGuideReady(true);
+    if (from) setSettingsOpen(false);
+    setDrawer(false);
+    startRun("basics", from);
+  };
+  // An automatic start waits for the shown session (a reload restores its tab a moment after the list) and its git status, so the run's step count is final (a restored tab that never shows: 3 s at most).
+  const [guideWaited, setGuideWaited] = useState(false);
+  useEffect(() => {
+    if (!guideReady) return;
+    const t = setTimeout(() => setGuideWaited(true), 3000);
+    return () => clearTimeout(t);
+  }, [guideReady]);
+  const guideSettled = shown ? gitChecked === shown.cwd : !activeId || activeId === NEW_TAB || guideWaited;
+  useEffect(() => {
+    if (!guideReady || guideRun || !guideState.current || !guideSettled) return;
+    const chapter = autoChapter(guideState.current, { session: sessionIdle });
+    if (chapter) startRun(chapter);
+  }, [guideReady, guideRun, sessionIdle, guideSettled]);
+  // The shown session's tab closed (another client) while "Your session" showed: the tour is over.
+  useEffect(() => {
+    if (guideRun && !shown && guideStep.current && stepById(guideStep.current)?.chapter === "session") endGuide("done");
+  }, [!!shown]);
+  const endGuide = (outcome: "done" | "skipped") => {
+    const s = guideState.current;
+    if (s && guideRun) {
+      guideState.current = outcome === "done" ? finishRun(s, guideRun.chapters) : skipGuide(s);
+      saveGuide(guideState.current);
+    }
+    setGuideRun(undefined);
+    guideStep.current = undefined;
+    if (outcome === "skipped") setToast("Tour closed. Restart it from Settings › Guide.");
+  };
+  // Another tab of this profile finished or skipped the tour: this one ends it too.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== GUIDE_KEY) return;
+      const s = parseGuide(e.newValue, false);
+      if (!settled(s)) return;
+      guideState.current = s;
+      setGuideRun(undefined);
+    };
+    addEventListener("storage", onStorage);
+    return () => removeEventListener("storage", onStorage);
+  }, []);
   // App shortcuts. Each has Ctrl, Cmd or Alt, so it also fires in the prompt box; an open dialog (quick open, palette) owns the keyboard.
   // A shortcut whose command does not apply now is left to the browser (e.g. Ctrl+P prints without a session).
   const latestCommands = useRef(commands);
@@ -1219,13 +1345,14 @@ export function App() {
             onNew={() => newSession()}
             home={sidebar}
             onHome={() => setSidebar((v) => !v)}
+            focus={{ count: waitingN }}
           />
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:gap-2">
           {plan && status !== "unauthorized" && <PlanMeter usage={plan} />}
           {/* Below sm the tab switcher needs the width for the session name: search and theme live in the drawer. */}
           {canQuickOpen && (
-            <IconButton className="max-sm:hidden" label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button">
+            <IconButton className="max-sm:hidden" label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button" command="file.open">
               <SearchIcon />
             </IconButton>
           )}
@@ -1233,7 +1360,7 @@ export function App() {
             <ThemeIcon />
           </IconButton>
           {shown && (
-            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={withKey("Toggle side panel", specOf("panel.toggle"))} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle">
+            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={withKey("Toggle side panel", specOf("panel.toggle"))} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle" command="panel.toggle">
               <PanelRightIcon />
             </IconButton>
           )}
@@ -1342,6 +1469,7 @@ export function App() {
             Notifications
           </label>
           {error && <p className="text-destructive">{error}</p>}
+          {status !== "unauthorized" && <FocusRow count={waitingN} active={activeId === FOCUS_TAB} onOpen={() => open(FOCUS_TAB)} />}
           {status !== "unauthorized" && (
             <SessionList
               list={list}
@@ -1368,6 +1496,7 @@ export function App() {
             onClick={() => (setDrawer(false), setSettingsOpen(true))}
             className="mt-auto flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11"
             data-testid="open-settings"
+            data-command="settings.open"
           >
             <SettingsIcon className="size-4" />
             Settings
@@ -1452,6 +1581,8 @@ export function App() {
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
+                        signalOnly={signalIds.has(s.id)}
+                        onSignalOnly={(on) => setSignalOnly(s.id, on)}
                         onAnswer={answer}
                         connected={status === "connected"}
                         onGitStatus={() =>
@@ -1474,7 +1605,7 @@ export function App() {
                 <section className={`${card} flex-1 ${pane === "terminal" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`} id="side-panel" data-testid="side-panel">
                   <div className="hidden items-center border-b px-2 py-1 lg:flex">
                     <PaneTabs panes={["changes", "files", ...(isGit ? (["graph"] as const) : [])]} value={sidePane === "changes" || sidePane === "graph" ? sidePane : "files"} onChange={setPane} changes={changeCount} />
-                    <IconButton className="ml-auto" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle">
+                    <IconButton className="ml-auto" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle" command="terminal.toggle">
                       <SquareTerminalIcon />
                     </IconButton>
                   </div>
@@ -1563,7 +1694,20 @@ export function App() {
                   {(panel || terminalOpen) && <div className={`${card} ml-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
                 </>
               )}
-              {activeId !== NEW_TAB && !shown && (
+              {activeId === FOCUS_TAB && (
+                <FocusPage
+                  list={list}
+                  views={views}
+                  worktrees={worktrees}
+                  waiting={waiting}
+                  selected={focusSel}
+                  onSelect={setFocusSel}
+                  onRespond={respond}
+                  onAnswer={answer}
+                  onOpenSession={(id) => open(id)}
+                />
+              )}
+              {activeId !== NEW_TAB && activeId !== FOCUS_TAB && !shown && (
                 <div className={`${card} flex-1`}>
                   <div className="m-auto text-muted-foreground">Open or create a session to start.</div>
                 </div>
@@ -1572,7 +1716,22 @@ export function App() {
           )}
         </main>
       </div>
+      <div role="status" aria-live="polite" className="sr-only" data-testid="attention-status">
+        {announcement(waitingN, everWaiting.current)}
+      </div>
       <QuoteButton onQuote={(q) => (setInsert(q), setPane("session"))} />
+      {guideRun && (
+        <GuideTour
+          key={guideRun.n}
+          ids={guideRun.ids}
+          start={guideRun.start}
+          host={guideHost}
+          onStep={(id) => ((guideStep.current = id), guideState.current && saveGuide((guideState.current = withStep(guideState.current, id))))}
+          onEnd={endGuide}
+          // Started from Settings: the focus goes back to its button (a closed drawer has none on a phone: the prompt box).
+          returnFocus={guideRun.from === "settings" ? () => [...document.querySelectorAll<HTMLElement>('[data-testid="open-settings"]')].find((b) => isVisible(b)) ?? shownPrompt() : undefined}
+        />
+      )}
       {quickOpen && shown && (
         <QuickOpen
           connected={status === "connected"}
@@ -1652,7 +1811,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
+      <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       {/* Always mounted so a screen reader announces the hint when it fills in. */}
       <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 left-1/2 z-50 w-max max-w-[calc(100vw-24px)] -translate-x-1/2" data-testid="prefix-hint">
@@ -1703,6 +1862,7 @@ export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[
           aria-selected={p === value}
           onClick={() => onChange(p)}
           data-testid={`pane-${p}`}
+          data-command={p === "files" || p === "changes" || p === "graph" ? `pane.${p}` : undefined}
         >
           {p}
           {p === "changes" && changes > 0 && <span className="text-muted-foreground tabular-nums">{changes}</span>}
@@ -2071,7 +2231,7 @@ const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermission
 type DraftPick = Omit<StartOptions, "mode"> & { mode?: PermissionMode };
 const NEW_DRAFT: DraftPick = { model: "default", effort: "default" };
 
-const timelineKey = (item: TimelineItem) => (item.kind === "context" ? item.id : item.part.id);
+const timelineKey = (item: SignalItem) => (item.kind === "part" ? item.part.id : item.id);
 
 const MemoSessionPane = memo(SessionPane);
 
@@ -2118,8 +2278,13 @@ export function SessionPane({
   connected,
   onGitStatus,
   onDialog,
+  signalOnly = false,
+  onSignalOnly,
 }: {
   scrollKey: number;
+  /** Signal only: runs of tool cards fold into one line (GH-159). Kept by App per session. */
+  signalOnly?: boolean;
+  onSignalOnly?: (on: boolean) => void;
   /** Subagent run whose subagent view shows; an unknown one shows the session view. */
   run?: string;
   /** Opens a run's subagent view; undefined: the session view. */
@@ -2168,6 +2333,7 @@ export function SessionPane({
   /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
   onDialog?: (dialog: DialogName, arg?: string) => void;
 }) {
+  const signalKey = useKeymap()("signal.toggle");
   const phone = usePhone();
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
@@ -2208,6 +2374,7 @@ export function SessionPane({
     onRewindShown?.();
   }, [rewindTo]);
   const items = useMemo(() => timeline(view), [view]);
+  const shownItems = useMemo<SignalItem[]>(() => (signalOnly ? signalItems(items, (c) => awaitingPermission(view).has(c.toolUseId)) : items), [items, signalOnly, view]);
   // Palette Messages: the session may still be loading; the hit is revealed once its message is in the timeline.
   const triedUntil = useRef<unknown>(undefined);
   useEffect(() => {
@@ -2256,9 +2423,10 @@ export function SessionPane({
         <span className="min-w-0 truncate text-muted-foreground" title={session.cwd}>
           {session.cwd}
         </span>
+        {onSignalOnly && <SignalSwitch on={signalOnly} onChange={onSignalOnly} keys={keyText(signalKey)} />}
         {/* Idle, running and needs input show in the tab and the send button. Only error and closed have no other place. */}
         {(shownState(view) === "error" || shownState(view) === "closed") && (
-          <span className="ml-auto rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
+          <span className="rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
             {shownState(view)}
           </span>
         )}
@@ -2276,7 +2444,7 @@ export function SessionPane({
       ) : (
         <VirtualTimeline
           key={scrollKey}
-          items={items}
+          items={shownItems}
           itemKey={timelineKey}
           reveal={reveal}
           sticky={(item) => {
@@ -2295,7 +2463,7 @@ export function SessionPane({
             (shownPending.length > 0 || thinking) && (
               <>
                 {shownPending.map((p, i) => (
-                  <PendingMessage key={p.key} p={p} view={view} index={items.length + i} />
+                  <PendingMessage key={p.key} p={p} view={view} index={shownItems.length + i} />
                 ))}
                 {thinking}
               </>
@@ -2305,10 +2473,14 @@ export function SessionPane({
           loadingOlder={loadingOlder}
           renderItem={(item, index) => {
             // A finished turn (not running; the next top-level item is a prompt, or it is the last) ends with Copy response, with or without a usage footer: a restored transcript has none.
-            const next = items[index + 1];
-            const copyText = (next ? next.kind === "part" && (next.part.type === "user_text" || next.part.type === "bash") : !turnRunning && !view.externalTurn) ? turnText(items, index) : "";
+            const next = shownItems[index + 1];
+            const copyText = (next ? next.kind === "part" && (next.part.type === "user_text" || next.part.type === "bash") : !turnRunning && !view.externalTurn) ? turnText(shownItems, index) : "";
             const row = (
-            item.kind === "context" ? (
+            item.kind === "fold" ? (
+              <FoldRow id={item.id} calls={item.calls}>
+                <Timeline view={view} items={item.items} />
+              </FoldRow>
+            ) : item.kind === "context" ? (
               <ContextGroup calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
             ) : item.part.type === "user_text" && coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE) ? (
               <div className={`flex ${index ? "mt-3" : ""}`} data-testid="orchestration-notice">
@@ -2873,8 +3045,8 @@ function PromptBox({
 }
 
 /** Top-level parts, or with `parentId` the child parts of that subagent. */
-function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) {
-  return timeline(view, parentId).map((item) =>
+function Timeline({ view, parentId, items = timeline(view, parentId) }: { view: SessionView; parentId?: string; items?: TimelineItem[] }) {
+  return items.map((item) =>
     item.kind === "context" ? (
       <ContextGroup key={item.id} calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
     ) : (
