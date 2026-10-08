@@ -46,6 +46,15 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
   }, [open]);
 
   const stop = () => (setRecording(undefined), setPending(undefined), setError(undefined));
+
+  // Reset, Replace and Cancel unmount the focused button: the focus moves to the row's Edit button, or the filter when the row is filtered out.
+  const editRefs = useRef(new Map<string, HTMLButtonElement>());
+  const [refocus, setRefocus] = useState<string>();
+  useEffect(() => {
+    if (!refocus) return;
+    (editRefs.current.get(refocus) ?? filterRef.current)?.focus();
+    setRefocus(undefined);
+  }, [refocus]);
   useEffect(() => {
     if (!open) (stop(), setFilter(""));
   }, [open]);
@@ -123,11 +132,16 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
                 ) : (
                   <Chips spec={specOf(s.id)} />
                 )}
-                <button type="button" className={btn} onClick={() => (stop(), setRecording(s.id))} aria-label={`Edit ${s.title}`} data-testid={`shortcut-edit-${s.id}`}>
+                <button
+                  type="button"
+                  ref={(b) => void (b ? editRefs.current.set(s.id, b) : editRefs.current.delete(s.id))}
+                  className={btn}
+                  onClick={() => (stop(), setRecording(s.id))}
+                  aria-label={`Edit ${s.title}`} data-testid={`shortcut-edit-${s.id}`}>
                   Edit
                 </button>
                 {isChanged(s.id) && (
-                  <button type="button" className={btn} onClick={() => (resetBinding(s.id), stop())} aria-label={`Reset ${s.title}`} data-testid={`shortcut-reset-${s.id}`}>
+                  <button type="button" className={btn} onClick={() => (resetBinding(s.id), stop(), setRefocus(s.id))} aria-label={`Reset ${s.title}`} data-testid={`shortcut-reset-${s.id}`}>
                     Reset
                   </button>
                 )}
@@ -143,13 +157,13 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
                       <button
                         type="button"
                         className={`${btn} border`}
-                        onClick={() => (bind(pending.with.id!, null), bind(pending.id, pending.spec), stop())}
+                        onClick={() => (bind(pending.with.id!, null), bind(pending.id, pending.spec), stop(), setRefocus(pending.id))}
                         data-testid="shortcut-replace"
                       >
                         Replace
                       </button>
                     )}
-                    <button type="button" className={`${btn} border`} onClick={stop} data-testid="shortcut-cancel">
+                    <button type="button" className={`${btn} border`} onClick={() => (stop(), setRefocus(pending.id))} data-testid="shortcut-cancel">
                       Cancel
                     </button>
                   </p>

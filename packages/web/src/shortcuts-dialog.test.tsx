@@ -148,3 +148,36 @@ it("the filter text is cleared when the dialog closes", async () => {
   expect((q("shortcuts-filter") as HTMLInputElement).value).toBe("");
   expect(q("shortcut-row-sidebar.toggle")).not.toBeNull();
 });
+
+const focusClick = async (id: string) => (q(id)!.focus(), await click(id));
+
+it("after Reset the focus is on the row's Edit button, not the page", async () => {
+  await click("shortcut-edit-sidebar.toggle");
+  await press({ key: "b", code: "KeyB", ctrlKey: true, altKey: true });
+  await focusClick("shortcut-reset-sidebar.toggle");
+  expect(document.activeElement).toBe(q("shortcut-edit-sidebar.toggle"));
+});
+
+it("after Replace or Cancel the focus is on the row's Edit button", async () => {
+  await click("shortcut-edit-sidebar.toggle");
+  await press({ key: "p", code: "KeyP", ctrlKey: true });
+  await focusClick("shortcut-cancel");
+  expect(document.activeElement).toBe(q("shortcut-edit-sidebar.toggle"));
+  await click("shortcut-edit-sidebar.toggle");
+  await press({ key: "p", code: "KeyP", ctrlKey: true });
+  await focusClick("shortcut-replace");
+  expect(document.activeElement).toBe(q("shortcut-edit-sidebar.toggle"));
+});
+
+it("after Reset hides the row (the filter no longer matches) the focus is on the filter", async () => {
+  await click("shortcut-edit-sidebar.toggle");
+  await press({ key: "b", code: "KeyB", ctrlKey: true, altKey: true });
+  const filter = q("shortcuts-filter") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(filter, "alt+b");
+    filter.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await focusClick("shortcut-reset-sidebar.toggle");
+  expect(q("shortcut-row-sidebar.toggle")).toBeNull();
+  expect(document.activeElement).toBe(filter);
+});
