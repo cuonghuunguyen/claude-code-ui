@@ -60,7 +60,8 @@ export function matchesKey(spec: string, e: KeyboardEvent, mac = IS_MAC) {
   const k = e.key === " " ? "space" : e.key.toLowerCase();
   if (k === key) return true;
   // Alt+digit and Shift+` change e.key on some layouts (Czech Alt+1 is "+", Shift+` is "~"): the physical key decides.
-  if ((e.altKey || e.shiftKey) && CODES[key]) return e.code === CODES[key];
+  // Not off macOS with Ctrl and Alt both down: that is AltGr, whose typed character (AltGr+7 is "{") must not fire a shortcut.
+  if ((e.altKey || e.shiftKey) && CODES[key] && (mac || !(e.ctrlKey && e.altKey))) return e.code === CODES[key];
   // macOS Option changes e.key (Option+W is "∑"): with Alt a letter matches by its physical key.
   // macOS only: elsewhere Ctrl+Alt is also AltGr, whose typed character (AltGr+W is "|" on a Hungarian layout) must not fire a shortcut.
   return mac && e.altKey && /^[a-z]$/.test(key) && e.code === `Key${key.toUpperCase()}`;

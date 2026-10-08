@@ -82,3 +82,10 @@ it("canon resolves mod and orders modifiers", () => {
   expect(canon("shift+mod+p", true)).toBe("meta+shift+p");
   expect(canon("alt+shift+t", false)).toBe(canon("shift+alt+t", false));
 });
+
+it("a digit never matches by code while Ctrl and Alt are both down (AltGr on Windows)", () => {
+  const altGr = ev("{", { code: "Digit7", ctrlKey: true, altKey: true });
+  expect(matchesKey("mod+alt+7", altGr, false)).toBe(false);
+  // Alt alone still matches by the physical key (Czech Alt+1 types "+").
+  expect(matchesKey("alt+1", ev("+", { code: "Digit1", altKey: true }), false)).toBe(true);
+});
