@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tier, type TierContext } from "../src/risk-tier.ts";
+import { canSymlink, NO_SYMLINK } from "./symlink-support.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "tier-")));
 const cwd = join(root, "w");
@@ -15,13 +16,15 @@ execFileSync("git", ["init", "-q"], { cwd });
 mkdirSync(outside);
 for (const f of ["bareh/HEAD", "cfg/config", "src/a.ts", ".claude/settings.json", "sub/CLAUDE.md", ".env.local", "id.pem"]) writeFileSync(join(cwd, f), "x");
 writeFileSync(join(outside, "secret.txt"), "s");
-symlinkSync(outside, join(cwd, "out"));
-symlinkSync(join(outside, "secret.txt"), join(cwd, "outfile"));
-symlinkSync(join(root, "nope"), join(cwd, "dangling"));
 linkSync(join(outside, "secret.txt"), join(cwd, "hard"));
-symlinkSync(cwd, cwdLink);
+if (canSymlink) {
+  symlinkSync(outside, join(cwd, "out"));
+  symlinkSync(join(outside, "secret.txt"), join(cwd, "outfile"));
+  symlinkSync(join(root, "nope"), join(cwd, "dangling"));
+  symlinkSync(cwd, cwdLink);
+}
 // A skills entry that leads out of `.claude/skills` to the permission config.
-symlinkSync(join(cwd, ".claude/settings.json"), join(cwd, ".claude/skills/link"));
+if (canSymlink) symlinkSync(join(cwd, ".claude/settings.json"), join(cwd, ".claude/skills/link"));
 
 type Case = [string, string, unknown, Partial<TierContext>?];
 const bash = (command: string): Case => [`Bash ${JSON.stringify(command)}`, "Bash", { command }];
@@ -217,11 +220,16 @@ const high: Case[] = [
   ["Read with requiresUserInteraction", "Read", { file_path: "src/a.ts" }, { requiresUserInteraction: true }],
 ];
 
+// Rows that follow a symlink made above. Without symlink support (Windows without Developer Mode) they are skipped, not weakened.
+const needsSymlink = (c: Case) => ["symlink", "out/secret.txt", "outfile", "dangling", ".claude/skills/link"].some((k) => c[0].includes(k));
+const usable = (rows: Case[]) => rows.filter((c) => canSymlink || !needsSymlink(c));
+
 describe("tier", () => {
-  it.each(low)("low: %s", (_, tool, input, ctx) => expect(tier(tool, input, { cwd, ...ctx })).toBe("low"));
-  it.each(high)("high: %s", (_, tool, input, ctx) => expect(tier(tool, input, { cwd, ...ctx })).toBe("high"));
+  if (!canSymlink) it.skip(`${low.concat(high).filter(needsSymlink).length} rows that follow a symlink: ${NO_SYMLINK}`, () => {});
+  it.each(usable(low))("low: %s", (_, tool, input, ctx) => expect(tier(tool, input, { cwd, ...ctx })).toBe("low"));
+  it.each(usable(high))("high: %s", (_, tool, input, ctx) => expect(tier(tool, input, { cwd, ...ctx })).toBe("high"));
   // The Bash rows stay high with the shell cwd pinned too.
-  it.each(high.filter((c) => c[1] === "Bash" && !c[0].includes("not pinned")))("high pinned: %s", (_, tool, input, ctx) => expect(tier(tool, input, { cwd, bashCwdPinned: true, ...ctx })).toBe("high"));
+  it.each(usable(high).filter((c) => c[1] === "Bash" && !c[0].includes("not pinned")))("high pinned: %s", (_, tool, input, ctx) => expect(tier(tool, input, { cwd, bashCwdPinned: true, ...ctx })).toBe("high"));
 
   it("a missing cwd or an fs error is high", () => {
     const gone = mkdtempSync(join(tmpdir(), "tier-gone-"));

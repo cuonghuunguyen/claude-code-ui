@@ -10,6 +10,7 @@ import type { ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
 import { fakeQuery } from "./fake-query.ts";
+import { canSymlink, needsLinks } from "./symlink-support.ts";
 
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 const project = realpathSync(mkdtempSync(join(tmpdir(), "skills-")));
@@ -201,7 +202,8 @@ describe("skills.setState", () => {
     c.ws.close();
   });
 
-  it("keeps the mode of an existing settings file and never writes through a symlink at a temp path", async () => {
+  // The file mode (0o600) is a POSIX notion; the symlink needs Windows Developer Mode.
+  it.skipIf(!canSymlink)(needsLinks("keeps the mode of an existing settings file and never writes through a symlink at a temp path"), async () => {
     reset();
     mkdirSync(join(quiet, ".claude"), { recursive: true });
     writeFileSync(settingsFile, "{}", { mode: 0o600 });
@@ -211,14 +213,14 @@ describe("skills.setState", () => {
     symlinkSync(victim, `${settingsFile}.${process.pid}.tmp`);
     const c = await client();
     await c.request({ type: "skills.setState", cwd: quiet, name: "probe", state: "off" });
-    expect(statSync(settingsFile).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(settingsFile).mode & 0o777).toBe(0o600);
     expect(readFileSync(victim, "utf8")).toBe("keep");
     expect(overridesOf()).toEqual({ skillOverrides: { probe: "off" } });
     expect(readdirSync(join(quiet, ".claude")).filter((f) => f.endsWith(".tmp") && f !== `settings.local.json.${process.pid}.tmp`)).toEqual([]);
     c.ws.close();
   });
 
-  it("refuses a .claude symlinked out of the project", async () => {
+  it.skipIf(!canSymlink)(needsLinks("refuses a .claude symlinked out of the project"), async () => {
     reset();
     const outside = realpathSync(mkdtempSync(join(tmpdir(), "skills-out-")));
     symlinkSync(outside, join(quiet, ".claude"));
