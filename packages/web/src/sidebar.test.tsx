@@ -869,7 +869,7 @@ describe("sidebar header actions (GH-152)", () => {
     expect(document.querySelector('[data-testid="sidebar-options-menu"]')).toBeNull();
   });
 
-  it("Only active sessions lists just the qualifying workers and says 'No active sessions' for an empty row", async () => {
+  it("Only active sessions lists just the qualifying workers, hides a project with nothing active and counts the idle ones", async () => {
     const l = [
       item("co", "/home/u/api", "Coord", 3),
       { ...item("w1", "/home/u/api", "W1", 4, "running"), coordinatorId: "co", workerName: "run" },
@@ -880,8 +880,25 @@ describe("sidebar header actions (GH-152)", () => {
     const m = await open();
     await act(async () => m("sidebar-opt-only-active").click());
     expect(r.rows().map((x) => x.dataset.sessionId)).toEqual(["co", "w1"]);
-    expect(r.el.textContent).toContain("No active sessions");
-    expect(r.el.textContent).not.toContain("No sessions yet");
+    expect(r.groups().map((g) => g.dataset.cwd)).toEqual(["/home/u/api"]);
+    expect(q("active-only-chip")!.textContent).toBe("Active only · 2 idle hiddenShow all");
+    expect(q("idle-count")!.textContent).toBe("+1 idle");
+  });
+
+  it("Active only: search still finds an idle session, Show all turns the setting off, the archived view is not filtered", async () => {
+    const l = [item("a", "/home/u/web", "Fix login", 1, "running"), item("x", "/home/u/web", "Idle one", 2, "idle"), item("z", "/home/u/api", "Idle two", 1, "idle")];
+    localStorage.setItem("claude-ui.sidebarView", JSON.stringify({ onlyActive: true }));
+    const r = await render({ ...base, list: l, activeId: "none" });
+    expect(r.rows().map((x) => x.dataset.sessionId)).toEqual(["a"]);
+    expect(q("active-only-chip")!.textContent).toContain("2 idle hidden");
+    await r.search("idle one");
+    expect(r.rows().map((x) => x.dataset.sessionId)).toEqual(["x"]);
+    expect(q("active-only-chip")).toBeNull();
+    await r.search("");
+    await act(async () => q("active-only-show-all")!.click());
+    expect(r.rows().map((x) => x.dataset.sessionId).sort()).toEqual(["a", "x", "z"]);
+    expect(q("active-only-chip")).toBeNull();
+    expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).onlyActive).toBe(false);
   });
 
   it("Expand all keeps the other view's worker group keys", async () => {

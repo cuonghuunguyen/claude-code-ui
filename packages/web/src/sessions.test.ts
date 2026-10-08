@@ -309,11 +309,16 @@ describe("sidebar actions (GH-152)", () => {
     expect(groups[0]!.cwd).toBe("/b/zed");
   });
 
-  it("activeOnly: keeps sessions that hold or have a worker that holds, drops the rest, keeps empty projects", () => {
+  it("activeOnly: keeps sessions that hold or have a worker that holds, drops the rest and the projects and rows with none, counts what it hides", () => {
     const { groups, workers } = view();
     const out = activeOnly(groups, workers, (s) => s.id === "w1");
-    expect(out.flatMap((g) => [...g.sessions, ...g.worktrees.flatMap((r) => r.sessions)]).map((s) => s.id)).toEqual(["c1"]);
-    expect(out.map((g) => g.cwd)).toEqual(["/r", "/zeta"]);
+    expect(out.groups.flatMap((g) => [...g.sessions, ...g.worktrees.flatMap((r) => r.sessions)]).map((s) => s.id)).toEqual(["c1"]);
+    // /zeta has nothing active: hidden. s2 (idle, in the worktree row) is the one idle session of /r; the row of w1's worktree is gone.
+    expect(out.groups.map((g) => g.cwd)).toEqual(["/r"]);
+    // The wt row (only s2, idle) is gone; the main row keeps c1.
+    expect(out.groups[0]!.worktrees.map((r) => r.path)).toEqual(["/r"]);
+    expect(out.groups[0]!.idle).toBe(1);
+    expect(out.idleTotal).toBe(2);
   });
 
   describe("sidebar view settings", () => {

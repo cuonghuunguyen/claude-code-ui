@@ -147,3 +147,16 @@ it("Default diff view is a per-browser choice: picking Uncommitted saves it and 
   expect(calls.some((c) => c.type === "settings.set")).toBe(false);
   localStorage.removeItem("claude-ui.diffMode");
 });
+
+it("Sidebar section: Show only active sessions is the sidebar's own per-browser setting, off by default (GH-159)", async () => {
+  localStorage.clear();
+  const { q } = await render();
+  const sw = q("settings-sidebar-active-only")!;
+  expect(q("settings-sidebar")!.textContent).toContain("Lists sessions that are running or need input. Search still finds every session, and the one you have open stays listed.");
+  expect(sw.getAttribute("aria-checked")).toBe("false");
+  await act(async () => sw.click());
+  expect(sw.getAttribute("aria-checked")).toBe("true");
+  expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).onlyActive).toBe(true);
+  await act(async () => sw.click());
+  expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).onlyActive).toBe(false);
+});
