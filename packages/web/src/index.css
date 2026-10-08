@@ -63,6 +63,12 @@
     --shadow-button-contrast: var(--elevation-button-contrast);
 }
 
+/* Guided tour popover fade-in (guide-tour.tsx). */
+@keyframes guide-in {
+    from {
+        opacity: 0;
+    }
+}
 /* In-progress todo dot (OpenCode --animate-pulse-scale). */
 @keyframes pulse-scale {
     50% {

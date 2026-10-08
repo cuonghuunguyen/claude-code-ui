@@ -89,6 +89,9 @@ import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
 import { shownPrompt } from "./config-dialog.tsx";
+import { autoChapter, decideFirstUse, finishRun, GUIDE_KEY, loadGuide, parseGuide, saveGuide, settled, skipGuide, wasFreshBrowser, withStep, type ChapterId, type GuideHost, type GuideState } from "./guide.ts";
+import { stepsFor } from "./guide-steps.ts";
+import { GuideTour } from "./guide-tour.tsx";
 import { IS_MAC, KEYS, keyLabels, matchesKey } from "./shortcuts.ts";
 import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
@@ -223,6 +226,11 @@ export function App() {
   const [error, setError] = useState<string>();
   const [toast, setToast] = useState<string>();
   const closeToast = useCallback(() => setToast(undefined), []);
+  // Guided tour (docs/spec.md "First-use guide"): `guideState` is the per-browser state, decided once after the first session list.
+  const guideState = useRef<GuideState>(undefined);
+  const guideDecided = useRef(false);
+  const [guideReady, setGuideReady] = useState(false);
+  const [guideRun, setGuideRun] = useState<{ n: number; ids: string[]; chapters: ChapterId[]; start?: string }>();
   const [update, setUpdate] = useState<UpdateInfo>();
   // The daemon's "runs older code" note; a dismissed note stays hidden until the page reloads.
   const [stale, setStale] = useState<string>();
@@ -354,6 +362,15 @@ export function App() {
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
       setList(sessions);
       setProjects(projects);
+      if (!guideDecided.current) {
+        // The first list of this page decides: a fresh browser on a daemon with no projects gets the tour, anything else is only offered it.
+        // A dialog open now (a pairing flow) postpones the decision to the next page load.
+        guideDecided.current = true;
+        let g = loadGuide();
+        if (!g && !document.querySelector('[aria-modal="true"]')) saveGuide((g = decideFirstUse(wasFreshBrowser(), projects.length)));
+        guideState.current = g;
+        setGuideReady(!!g);
+      }
       setRecentProjects(recentProjects);
       setSides(sides);
       setCwdSides(cwdSides);
@@ -1076,6 +1093,45 @@ export function App() {
     openSkills: project ? openSkills : undefined,
     openPlugins: project ? openPlugins : undefined,
   });
+  // Guided tour. The tour gets its key text only from here; the palette rows carry the keys.
+  const sessionIdle = !!shown && view?.state === "idle";
+  const guideHost: GuideHost = {
+    keyOf: (id) => (id === "palette.open" ? KEYS.palette : commands.find((c) => c.id === id)?.keys),
+    openProject: () => (setDrawer(false), setOpeningProject(true)),
+    openSettings: () => setSettingsOpen(true),
+    closeDrawer: () => setDrawer(false),
+  };
+  const startRun = (chapter: ChapterId) => {
+    const ids = stepsFor(chapter, { session: !!shown, git: isGit, narrow: !wide(768) }).map((s) => s.id);
+    const step = guideState.current?.step;
+    setGuideRun((r) => ({ n: (r?.n ?? 0) + 1, ids, chapters: [chapter], start: step && ids.includes(step) ? step : undefined }));
+  };
+  useEffect(() => {
+    if (!guideReady || guideRun || !guideState.current) return;
+    const chapter = autoChapter(guideState.current, { session: sessionIdle });
+    if (chapter) startRun(chapter);
+  }, [guideReady, guideRun, sessionIdle]);
+  const endGuide = (outcome: "done" | "skipped") => {
+    const s = guideState.current;
+    if (s && guideRun) {
+      guideState.current = outcome === "done" ? finishRun(s, guideRun.chapters) : skipGuide(s);
+      saveGuide(guideState.current);
+    }
+    setGuideRun(undefined);
+    if (outcome === "skipped") setToast("Tour closed. Restart it from Settings › Guide.");
+  };
+  // Another tab of this profile finished or skipped the tour: this one ends it too.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== GUIDE_KEY) return;
+      const s = parseGuide(e.newValue, false);
+      if (!settled(s)) return;
+      guideState.current = s;
+      setGuideRun(undefined);
+    };
+    addEventListener("storage", onStorage);
+    return () => removeEventListener("storage", onStorage);
+  }, []);
   // App shortcuts. Each has Ctrl, Cmd or Alt, so it also fires in the prompt box; an open dialog (quick open, palette) owns the keyboard.
   // A shortcut whose command does not apply now is left to the browser (e.g. Ctrl+P prints without a session).
   const latestCommands = useRef(commands);
@@ -1137,7 +1193,7 @@ export function App() {
           {plan && status !== "unauthorized" && <PlanMeter usage={plan} />}
           {/* Below sm the tab switcher needs the width for the session name: search and theme live in the drawer. */}
           {canQuickOpen && (
-            <IconButton className="max-sm:hidden" label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button">
+            <IconButton className="max-sm:hidden" label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button" command="file.open">
               <SearchIcon />
             </IconButton>
           )}
@@ -1145,7 +1201,7 @@ export function App() {
             <ThemeIcon />
           </IconButton>
           {shown && (
-            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={`Toggle side panel (${keyText(KEYS.sidePanel)})`} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle">
+            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={`Toggle side panel (${keyText(KEYS.sidePanel)})`} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle" command="panel.toggle">
               <PanelRightIcon />
             </IconButton>
           )}
@@ -1280,6 +1336,7 @@ export function App() {
             onClick={() => (setDrawer(false), setSettingsOpen(true))}
             className="mt-auto flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11"
             data-testid="open-settings"
+            data-command="settings.open"
           >
             <SettingsIcon className="size-4" />
             Settings
@@ -1386,7 +1443,7 @@ export function App() {
                 <section className={`${card} flex-1 ${pane === "terminal" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`} id="side-panel" data-testid="side-panel">
                   <div className="hidden items-center border-b px-2 py-1 lg:flex">
                     <PaneTabs panes={["changes", "files", ...(isGit ? (["graph"] as const) : [])]} value={sidePane === "changes" || sidePane === "graph" ? sidePane : "files"} onChange={setPane} changes={changeCount} />
-                    <IconButton className="ml-auto" label="Toggle terminal (Ctrl+`)" pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle">
+                    <IconButton className="ml-auto" label="Toggle terminal (Ctrl+`)" pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle" command="terminal.toggle">
                       <SquareTerminalIcon />
                     </IconButton>
                   </div>
@@ -1484,6 +1541,16 @@ export function App() {
         </main>
       </div>
       <QuoteButton onQuote={(q) => (setInsert(q), setPane("session"))} />
+      {guideRun && (
+        <GuideTour
+          key={guideRun.n}
+          ids={guideRun.ids}
+          start={guideRun.start}
+          host={guideHost}
+          onStep={(id) => guideState.current && saveGuide((guideState.current = withStep(guideState.current, id)))}
+          onEnd={endGuide}
+        />
+      )}
       {quickOpen && shown && (
         <QuickOpen
           connected={status === "connected"}
@@ -1597,6 +1664,7 @@ export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[
           aria-selected={p === value}
           onClick={() => onChange(p)}
           data-testid={`pane-${p}`}
+          data-command={p === "files" || p === "changes" || p === "graph" ? `pane.${p}` : undefined}
         >
           {p}
           {p === "changes" && changes > 0 && <span className="text-muted-foreground tabular-nums">{changes}</span>}
