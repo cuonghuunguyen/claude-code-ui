@@ -24,7 +24,7 @@ export async function gitStatus(cwd: string): Promise<GitStatus | null> {
   let added = 0;
   let removed = 0;
   // Binary files count "-": no lines.
-  for (const line of (await git(cwd, "diff", "--numstat", base).catch(() => "")).split("\n")) {
+  for (const line of (await git(cwd, "diff", "--no-ext-diff", "--no-textconv", "--numstat", base).catch(() => "")).split("\n")) {
     const [a, r] = line.split("\t");
     added += Number(a) || 0;
     removed += Number(r) || 0;
