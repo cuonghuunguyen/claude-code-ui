@@ -94,6 +94,34 @@ it("Copy copies the raw markdown", async () => {
   expect(writeText).toHaveBeenCalledWith("**bold**");
 });
 
+const TOKENS = '[data-streamdown="code-block"] span[style*="--sdm-c: #"]';
+const longCode = (n: number) => Array.from({ length: 40 }, (_, i) => `export const v${n}_${i} = (x: number) => x + ${i}; // line ${i}`).join("\n");
+const fence = (code: string) => ["```ts", code, "```"].join("\n");
+
+it("a short code block in a user message is colored", async () => {
+  const { bubble } = await render(fence("const a = 1;"));
+  await vi.waitFor(() => expect(bubble.querySelectorAll(TOKENS).length).toBeGreaterThan(2), { timeout: 10_000 });
+});
+
+it("a long code block is plain first and gets its colors once the browser is idle", async () => {
+  const idle: (() => void)[] = [];
+  vi.stubGlobal("requestIdleCallback", (cb: () => void) => idle.push(cb));
+  try {
+    const { bubble } = await render(fence(longCode(1)));
+    expect(bubble.querySelector('[data-streamdown="code-block"]')?.textContent).toContain("export const v1_0");
+    await act(async () => new Promise((r) => setTimeout(r, 300)));
+    expect(idle.length).toBeGreaterThan(0);
+    expect(bubble.querySelectorAll(TOKENS)).toHaveLength(0);
+    // Idle: it colors, one block per idle slot.
+    await vi.waitFor(async () => {
+      await act(async () => idle.splice(0).forEach((f) => f()));
+      expect(bubble.querySelectorAll(TOKENS).length).toBeGreaterThan(20);
+    }, { timeout: 10_000 });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
 it("uploads and images are unaffected", async () => {
   const { el, bubble } = await render("see @/tmp/claude-ui-Ab12Cd/u-Xy34Ef/notes.txt and more", ["data:image/png;base64,iVBORw0KGgo="]);
   expect(bubble.querySelector("img")).not.toBeNull();
