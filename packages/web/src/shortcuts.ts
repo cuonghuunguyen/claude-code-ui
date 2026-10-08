@@ -134,3 +134,6 @@ export const keyLabels = (spec: string, mac = IS_MAC) =>
 
 /** A spec as one hint string for a button label: "Ctrl+Shift+P", "⌘⇧P" on macOS. */
 export const keyText = (spec?: string) => (spec ? keyLabels(spec).join(IS_MAC ? "" : "+") : "");
+
+/** A button label with its key hint, "New terminal (Ctrl+Shift+`)"; the bare label when the binding is removed. */
+export const withKey = (label: string, spec?: string) => (spec ? `${label} (${keyText(spec)})` : label);

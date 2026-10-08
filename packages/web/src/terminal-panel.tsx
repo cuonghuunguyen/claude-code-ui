@@ -11,7 +11,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 
 import type { connect, ConnectionStatus } from "./client.ts";
 import { TERMINAL_FONT, loadTerminalFont, terminalFontSettled } from "./terminal-font.ts";
 import { leavesTerminal, specOf } from "./keymap.ts";
-import { keyText } from "./shortcuts.ts";
+import { withKey } from "./shortcuts.ts";
 import { IconButton } from "./tabs-bar.tsx";
 import { useDark } from "./theme.ts";
 
@@ -160,7 +160,7 @@ export function TerminalPanel({ client, status, cwd, onEmpty, newTick = 0 }: { c
             </div>
           ))}
         </div>
-        <IconButton label={`New terminal (${keyText(specOf("terminal.new"))})`} onClick={() => void create()} testId="terminal-new">
+        <IconButton label={withKey("New terminal", specOf("terminal.new"))} onClick={() => void create()} testId="terminal-new">
           <PlusIcon />
         </IconButton>
       </div>

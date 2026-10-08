@@ -6,6 +6,7 @@ import type { ConnectionStatus, TerminalMessage, connect } from "./client.ts";
 import { TerminalPanel } from "./terminal-panel.tsx";
 import { TERMINAL_FONT, resetTerminalFont } from "./terminal-font.ts";
 import { MAX_TERMINAL_INPUT_BYTES } from "@claude-ui/protocol";
+import { bind, resetAll } from "./keymap.ts";
 
 // xterm draws on a canvas jsdom lacks; the stub records what the panel does with it.
 const xterm = vi.hoisted(() => ({ all: [] as FakeTerm[] }));
@@ -411,4 +412,15 @@ it("the New terminal button shows its key hint", async () => {
   await render(fakeClient([{ id: "t1", title: "Terminal 1" }]), "connected", vi.fn());
   await flush();
   expect(el.querySelector("[data-testid=terminal-new]")!.getAttribute("aria-label")).toBe("New terminal (Ctrl+Shift+`)");
+});
+
+it("with its binding removed the New terminal button has no empty key hint", async () => {
+  bind("terminal.new", null);
+  try {
+    await render(fakeClient([{ id: "t1", title: "Terminal 1" }]), "connected", vi.fn());
+    await flush();
+    expect(el.querySelector("[data-testid=terminal-new]")!.getAttribute("aria-label")).toBe("New terminal");
+  } finally {
+    resetAll();
+  }
 });

@@ -89,7 +89,7 @@ import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
 import { shownPrompt } from "./config-dialog.tsx";
-import { keyText, matchesKey } from "./shortcuts.ts";
+import { keyText, matchesKey, withKey } from "./shortcuts.ts";
 import { specOf, useKeymap } from "./keymap.ts";
 import { LEADER_MS, PREFIX_KEYS, leaderStep } from "./leader.ts";
 import { loadClosed, popClosed, pushClosed, saveClosed } from "./closed-tabs.ts";
@@ -1222,7 +1222,7 @@ export function App() {
             <ThemeIcon />
           </IconButton>
           {shown && (
-            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={`Toggle side panel (${keyText(specOf("panel.toggle"))})`} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle">
+            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={withKey("Toggle side panel", specOf("panel.toggle"))} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle">
               <PanelRightIcon />
             </IconButton>
           )}
@@ -1463,7 +1463,7 @@ export function App() {
                 <section className={`${card} flex-1 ${pane === "terminal" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`} id="side-panel" data-testid="side-panel">
                   <div className="hidden items-center border-b px-2 py-1 lg:flex">
                     <PaneTabs panes={["changes", "files", ...(isGit ? (["graph"] as const) : [])]} value={sidePane === "changes" || sidePane === "graph" ? sidePane : "files"} onChange={setPane} changes={changeCount} />
-                    <IconButton className="ml-auto" label={`Toggle terminal (${keyText(specOf("terminal.toggle"))})`} pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle">
+                    <IconButton className="ml-auto" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle">
                       <SquareTerminalIcon />
                     </IconButton>
                   </div>

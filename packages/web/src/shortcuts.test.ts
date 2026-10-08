@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { KEYS, SHORTCUTS, canon, defaultSpec, keyLabels, matchesKey } from "./shortcuts.ts";
+import { KEYS, SHORTCUTS, canon, defaultSpec, keyLabels, matchesKey, withKey } from "./shortcuts.ts";
 import { bindingError } from "./keymap.ts";
 
 const ev = (key: string, init: KeyboardEventInit = {}) => ({ key, code: "", ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...init }) as KeyboardEvent;
@@ -99,4 +99,9 @@ it("the + key: \"mod++\" is Ctrl and +, \"mod+shift++\" is Ctrl, Shift and +", (
   expect(keyLabels("mod+shift++", false)).toEqual(["Ctrl", "Shift", "+"]);
   expect(bindingError("mod++", false)).toBeUndefined();
   expect(bindingError("shift++", false)).toMatch(/Ctrl, Cmd or Alt/);
+});
+
+it("a button hint names its key, and is the bare label when the binding is removed", () => {
+  expect(withKey("New terminal", "ctrl+shift+`")).toMatch(/^New terminal \(.+\)$/);
+  expect(withKey("New terminal", undefined)).toBe("New terminal");
 });
