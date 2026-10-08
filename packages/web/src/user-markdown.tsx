@@ -1,5 +1,8 @@
 import type { ComponentProps } from "react";
 import { defaultRehypePlugins, defaultRemarkPlugins, type Streamdown } from "streamdown";
+import { cjk } from "@streamdown/cjk";
+import { math } from "@streamdown/math";
+import { mermaid } from "@streamdown/mermaid";
 import { MessageResponse } from "./components/ai-elements/message.tsx";
 
 type Plugins<K extends "remarkPlugins" | "rehypePlugins"> = NonNullable<ComponentProps<typeof Streamdown>[K]>;
@@ -26,11 +29,16 @@ const { raw: _raw, ...SAFE_REHYPE } = defaultRehypePlugins;
 /** Typed HTML (`<Button>`) stays visible text: the default `raw` plugin would drop or restructure it. */
 export const USER_REHYPE_PLUGINS = Object.values(SAFE_REHYPE) as Plugins<"rehypePlugins">;
 export const USER_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkLineBreaks] as Plugins<"remarkPlugins">;
+/**
+ * No `code` plugin: a fenced block stays a plain code block. Highlighting builds a span per token on every mount, and the
+ * virtual timeline mounts a row each time it scrolls into view: long prompts with code made scrolling stutter.
+ */
+const USER_PLUGINS = { cjk, math, mermaid };
 
-/** A user message's text as markdown, through the same renderer as assistant text. */
+/** A user message's text as markdown, through the same renderer as assistant text (code blocks not highlighted). */
 export function UserMarkdown({ text }: { text: string }) {
   return (
-    <MessageResponse mode="static" remarkPlugins={USER_REMARK_PLUGINS} rehypePlugins={USER_REHYPE_PLUGINS}>
+    <MessageResponse mode="static" plugins={USER_PLUGINS} remarkPlugins={USER_REMARK_PLUGINS} rehypePlugins={USER_REHYPE_PLUGINS}>
       {text}
     </MessageResponse>
   );
