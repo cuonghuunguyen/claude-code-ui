@@ -106,8 +106,66 @@ function real(path: string) {
 
 /** Bytes read from a transcript's end to find its last message; more than a few large tool results. */
 const TAIL_BYTES = 256 * 1024;
+/**
+ * `cwd`'s own git dir and the one its worktrees share; undefined without a readable `cwd/.git`. In a linked worktree `.git`
+ * is a file (`gitdir: <main>/.git/worktrees/<name>`) whose git dir names the shared one in `commondir`.
+ */
+function gitDirsOf(cwd: string): { own: string; common: string } | undefined {
+  const dotGit = join(cwd, ".git");
+  try {
+    if (statSync(dotGit).isDirectory()) return { own: dotGit, common: dotGit };
+    const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
+    if (!gitdir) return undefined;
+    const own = resolve(cwd, gitdir.trim());
+    try {
+      return { own, common: resolve(own, readFileSync(join(own, "commondir"), "utf8").trim()) };
+    } catch {
+      return { own, common: own };
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What `git worktree list` of `cwd` reads, from file stats only (no process): the shared HEAD, the worktrees folder and each
+ * worktree's HEAD and checkout path. A worktree added, removed or moved (from a terminal too), or a checkout changes it;
+ * a commit on a branch does not (the list shows branch names). "-" without a readable `.git`.
+ */
+function worktreeStamp(cwd: string) {
+  const dirs = gitDirsOf(cwd);
+  if (!dirs) return "-";
+  const stamp = (p: string) => {
+    try {
+      const st = statSync(p);
+      return `${st.mtimeMs}:${st.size}:${st.ino}`;
+    } catch {
+      return "-";
+    }
+  };
+  // The checkout's path (a `git worktree move` rewrites only it) and its `.git` file (gone when the folder was deleted).
+  // A relative path (worktree.useRelativePaths) is relative to the gitdir file's folder.
+  const checkout = (gitdirFile: string) => {
+    try {
+      const path = readFileSync(gitdirFile, "utf8").trim();
+      return `${path}@${stamp(resolve(dirname(gitdirFile), path))}`;
+    } catch {
+      return "-";
+    }
+  };
+  const wts = join(dirs.common, "worktrees");
+  let names: string[] = [];
+  try {
+    names = readdirSync(wts).sort();
+  } catch {
+    // No linked worktree yet.
+  }
+  return [dirs.common, stamp(join(dirs.common, "HEAD")), stamp(wts), ...names.flatMap((n) => [n, stamp(join(wts, n, "HEAD")), checkout(join(wts, n, "gitdir"))])].join("|");
+}
+
 /** Transcript path → last message time for the file version (mtime, size) it was read from. */
-const lastMessageCache = new Map<string, { version: string; at: number | undefined }>();
+/** `listed`: the transcript scan's mtime and size when the file was read (lastMessageAt skips the open while they hold). */
+const lastMessageCache = new Map<string, { version: string; listed?: string; at: number | undefined }>();
 
 // ponytail: the SDK's project folder name for cwds up to 200 chars; longer ones get a hash suffix and are not found.
 const transcriptFile = (projectsDir: string, cwd: string, sessionId: string) => join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
@@ -219,16 +277,20 @@ function transcriptStamp(projectsDir: string) {
  * the CLI appends metadata (`last-prompt`, `cost-state`), so every live session looks just used after a daemon restart.
  * Undefined when the file or such an entry is not found (e.g. the entry is further back than `TAIL_BYTES`).
  */
-function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
+function lastMessageAt(projectsDir: string, cwd: string, sessionId: string, scanned?: { lastModified: number; fileSize?: number }) {
   // Not found (long cwd): the list falls back to the file mtime.
   const file = transcriptFile(projectsDir, cwd, sessionId);
+  // The scan's own stamp: no open per transcript per list, which blocks the event loop (slow on Windows with hundreds of transcripts).
+  const listed = scanned?.fileSize !== undefined ? `${scanned.lastModified}:${scanned.fileSize}` : undefined;
+  const hit = listed && lastMessageCache.get(file);
+  if (hit && hit.listed === listed) return hit.at;
   let fd: number | undefined;
   try {
     fd = openSync(file, "r");
     const { size, mtimeMs } = fstatSync(fd);
     const version = `${mtimeMs}:${size}`;
     const cached = lastMessageCache.get(file);
-    if (cached?.version === version) return cached.at;
+    if (cached?.version === version) return (lastMessageCache.set(file, { ...cached, listed }), cached.at);
     let at: number | undefined;
     const buf = Buffer.alloc(Math.min(size, TAIL_BYTES));
     readSync(fd, buf, 0, buf.length, size - buf.length);
@@ -246,7 +308,7 @@ function lastMessageAt(projectsDir: string, cwd: string, sessionId: string) {
         // The first line of the tail is cut.
       }
     }
-    lastMessageCache.set(file, { version, at });
+    lastMessageCache.set(file, { version, listed, at });
     return at;
   } catch {
     // No transcript at that path.
@@ -442,11 +504,21 @@ export function createDaemon(opts: {
   /** Worktree paths inside the roots of the added projects, as of the last session.list: their sessions show under the project. */
   let worktreePaths = new Set<string>();
   /**
+   * A linked worktree whose main checkout is an added project: it shows under that project, also when made (from a terminal)
+   * after the last session.list.
+   */
+  const ofAddedRepository = (cwd: string) => {
+    const dirs = gitDirsOf(cwd);
+    if (!dirs || dirs.own === dirs.common || basename(dirs.common) !== ".git") return false;
+    const main = allowed(dirname(dirs.common));
+    return !!main && projects.has(main);
+  };
+  /**
    * Adds the project of a session the user opened or created (not a worktree of an added project: it shows under that one);
    * other clients refresh their list. A failed write is only logged: the session works.
    */
   function addProject(cwd: string) {
-    if (projects.has(cwd) || worktreePaths.has(cwd)) return;
+    if (projects.has(cwd) || worktreePaths.has(cwd) || ofAddedRepository(cwd)) return;
     try {
       projects.open(cwd);
       broadcast({ type: "sessions.changed" });
@@ -454,6 +526,35 @@ export function createDaemon(opts: {
       console.error("saving projects failed:", err);
     }
   }
+
+  /**
+   * `git worktree list` of each project, reused by session.list while its worktreeStamp holds: a list runs on every turn start
+   * and end, and starting a process blocks the event loop (on Windows tens of ms each), so one per project per list stalled
+   * every reply with a few dozen projects. The stamp is file stats only, so every list is current (terminal changes too).
+   */
+  const worktreeLists = new Map<string, { stamp: string; list: Promise<Worktree[] | null> }>();
+  const worktreesOf = (cwd: string) => {
+    // Taken before the read: a change during it gives the next list another stamp, which reads again.
+    const stamp = worktreeStamp(cwd);
+    const hit = worktreeLists.get(cwd);
+    if (hit?.stamp === stamp) return hit.list;
+    const entry = { stamp, list: listWorktrees(cwd) };
+    worktreeLists.set(cwd, entry);
+    // A failed read of a git folder (spawn error, killed process) is not kept: the next list reads again.
+    void entry.list.then((l) => l === null && stamp !== "-" && worktreeLists.get(cwd) === entry && worktreeLists.delete(cwd));
+    return entry.list;
+  };
+
+  /**
+   * git.status of a folder, shared by the requests that arrive while it runs: the web app asks up to three times for the same
+   * folder when a session opens (status bar, header, changes), and every git process start blocks the event loop on Windows.
+   */
+  const statusReads = new Map<string, ReturnType<typeof gitStatus>>();
+  const statusOf = (cwd: string) => {
+    let read = statusReads.get(cwd);
+    if (!read) statusReads.set(cwd, (read = gitStatus(cwd).finally(() => statusReads.delete(cwd))));
+    return read;
+  };
 
   /** New worktree of `cwd`'s repository (roots enforced); other clients refresh their list. */
   const createIn = async (cwd: string, o: Pick<CreateWorktreeOptions, "name" | "branch" | "base" | "onCreated"> = {}) => {
@@ -707,12 +808,21 @@ export function createDaemon(opts: {
    * The SDK titles a session cleared into (/clear) "/clear" until it finds a prompt in the transcript's head read window, which
    * a background task's notification turn can fill: its first prompt from the transcript, none yet "New session".
    */
-  async function clearedTitle(id: string, cwd: string) {
+  /** Cleared sessions read without a prompt, by ID: the scan's mtime and size then; not read again while they hold. */
+  const untitledAt = new Map<string, string>();
+  async function clearedTitle(id: string, cwd: string, scanned?: { lastModified: number; fileSize?: number }) {
     if (clearedTitles.has(id)) return clearedTitles.get(id)!;
+    // A /clear that was never prompted stays "New session": without this, every list read each such transcript again.
+    const stamp = scanned?.fileSize !== undefined ? `${scanned.lastModified}:${scanned.fileSize}` : undefined;
+    if (stamp && untitledAt.get(id) === stamp) return "New session";
     const main = await readTranscript(id, cwd).then((t) => t.main, () => []);
     const adapter = createAdapter();
     const prompt = main.flatMap((m) => adapter.convert(m as SDKMessage)).find((p) => p.type === "user_text");
-    if (!prompt) return "New session";
+    if (!prompt) {
+      if (stamp) untitledAt.set(id, stamp);
+      return "New session";
+    }
+    untitledAt.delete(id);
     clearedTitles.set(id, prompt.text);
     return prompt.text;
   }
@@ -725,28 +835,45 @@ export function createDaemon(opts: {
     return CLEARED.test(info.summary) ? clearedTitle(s.id, info.cwd ?? s.cwd) : info.summary;
   }
 
-  async function list(): Promise<ListResult> {
+  /**
+   * session.list: every tab asks on each sessions.changed, turn start and end and focus, often at once. Requests that arrive
+   * while a list runs share one list that starts after it (so it still sees what changed before them), not one list each.
+   */
+  let listing: Promise<ListResult> | undefined;
+  let nextListing: Promise<ListResult> | undefined;
+  function list(): Promise<ListResult> {
+    if (!listing) return (listing = listNow().finally(() => (listing = undefined)));
+    return (nextListing ??= listing.catch(() => {}).then(() => ((nextListing = undefined), list())));
+  }
+
+  async function listNow(): Promise<ListResult> {
     // The model list starts a CLI: not waiting longer than this offers no auto mode until it is there.
     await new Promise<void>((done) => {
       const t = setTimeout(done, opts.modelListWaitMs ?? MODEL_LIST_WAIT_MS);
       modelList().catch(() => {}).then(() => (clearTimeout(t), done()));
     });
     const items = new Map<string, SessionListItem>();
+    const all = await transcripts();
+    // One read of sessions.json per list: settings.get() reads the file again on every call (json-file.ts), once per transcript here.
+    const linked = new Map(settings.entries());
     // A coordinator is a session with a worker.
-    const coordinators = new Set(settings.entries().flatMap(([, l]) => (l.coordinatorId && l.name ? [l.coordinatorId] : [])));
+    const coordinators = new Set([...linked.values()].flatMap((l) => (l.coordinatorId && l.name ? [l.coordinatorId] : [])));
     const links = (id: string) => {
-      const l = settings.get(id);
+      const l = linked.get(id);
       return { ...(coordinators.has(id) && { coordinator: true as const }), ...(l?.coordinatorId && l.name && { coordinatorId: l.coordinatorId, workerName: l.name }) };
     };
-    const all = await transcripts();
     // Entries of sessions deleted outside this daemon (CLI, file removed): no transcript and not live (session-settings.ts prune).
     const known = new Set(all.map((t) => t.sessionId));
     saveSettings(() => settings.prune((id) => known.has(id) || sessions.has(id)));
+    // One realpath per distinct cwd per list, not two per transcript: each is a blocking call (slow on Windows), and hundreds of
+    // transcripts share a few dozen cwds.
+    const canonical = new Map<string, string | undefined>();
+    const allowedCwd = (cwd: string) => (canonical.has(cwd) ? canonical.get(cwd) : (canonical.set(cwd, allowed(cwd)), canonical.get(cwd)));
     for (const t of all) {
-      if (!t.cwd || !allowed(t.cwd)) continue;
+      if (!t.cwd || !allowedCwd(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
-      const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd)) : t.summary;
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: sessionCwd(t.cwd), title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
+      const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId, t) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
@@ -763,11 +890,10 @@ export function createDaemon(opts: {
       }
     // An added project whose directory is gone or left the roots is not listed (its New session would fail).
     const open = projects.list(listed).filter((cwd) => allowed(cwd));
-    // ponytail: one `git worktree list` per project per list (~5 ms each, in parallel); cache it if many projects make lists slow.
     const worktrees: Record<string, Worktree[]> = {};
     await Promise.all(
       open.map(async (cwd) => {
-        const found = (await listWorktrees(cwd))?.map((w) => ({ ...w, path: real(w.path) ?? w.path }));
+        const found = (await worktreesOf(cwd))?.map((w) => ({ ...w, path: real(w.path) ?? w.path }));
         // A subfolder of a repository (mono/pa, a folder of a dotfiles home) is no worktree: listed as a non-git project.
         if (found?.some((w) => w.path === (real(cwd) ?? cwd))) worktrees[cwd] = found.map((w) => (inRoots(w.path) ? w : { ...w, outsideRoots: true }));
       }),
@@ -1336,7 +1462,7 @@ export function createDaemon(opts: {
         case "git.status": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          return reply({ status: await gitStatus(cwd) });
+          return reply({ status: await statusOf(cwd) });
         }
         case "git.log":
         case "git.diff":

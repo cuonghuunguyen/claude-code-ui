@@ -9,12 +9,19 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, yielded } from "./fake-query.ts";
 
 /** A projects store with these cwds added. */
+// Counts `git worktree list` reads (the session list's cache); behaviour unchanged.
+vi.mock("../src/git.ts", async (importOriginal) => {
+  const git = await importOriginal<typeof import("../src/git.ts")>();
+  return { ...git, listWorktrees: vi.fn(git.listWorktrees) };
+});
+
 const added = (...cwds: string[]) => {
   const p = createProjects();
   cwds.forEach((c) => p.open(c));
@@ -1180,6 +1187,110 @@ describe("daemon", () => {
     }
   });
 
+  /** A repository at `<root>/repo` with one commit, added as the only project of a daemon whose transcripts are `listed`. */
+  const repoDaemon = async (prefix: string, listed: unknown[] = []) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+    const repo = join(root, "repo");
+    const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init");
+    const projects = added(repo);
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [root],
+      query: fakeQuery as never,
+      projects,
+      history: { listSessions: (async () => listed) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
+    type L = { result: { projects: string[]; worktrees: Record<string, { path: string; branch?: string }[]>; sessions: { id: string }[] } };
+    const list = async () => {
+      const r = ((await c.request({ type: "session.list" })) as L).result;
+      return { projects: r.projects, worktrees: r.worktrees[repo]?.map((w) => `${w.path}@${w.branch}`) ?? [], sessions: r.sessions.map((s) => s.id) };
+    };
+    return { root, repo, git, projects, d, c, list };
+  };
+
+  it("session.list shows a worktree added or removed from a terminal, and a branch checkout, on the very next list", async () => {
+    const listed: unknown[] = [];
+    const { root, repo, git, d, list } = await repoDaemon("wtstamp-", listed);
+    try {
+      const wt = join(root, "wt-outside");
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
+      git(repo, "worktree", "add", "-q", "-b", "outside", wt);
+      // A session in it (from the CLI) shows at once too: it is a worktree of the project.
+      listed.push({ sessionId: "11111111-2222-4333-8444-555555555555", summary: "in wt", lastModified: Date.now(), cwd: wt });
+      expect(await list()).toMatchObject({ worktrees: [`${repo}@main`, `${wt}@outside`], sessions: ["11111111-2222-4333-8444-555555555555"] });
+      git(repo, "checkout", "-q", "-b", "renamed-main");
+      git(wt, "checkout", "-q", "-b", "renamed-outside");
+      expect((await list()).worktrees).toEqual([`${repo}@renamed-main`, `${wt}@renamed-outside`]);
+      // A move renames the folder and rewrites only the path in .git/worktrees/<name>/gitdir.
+      const moved = join(root, "wt-moved");
+      git(repo, "worktree", "move", wt, moved);
+      expect((await list()).worktrees).toEqual([`${repo}@renamed-main`, `${moved}@renamed-outside`]);
+      git(repo, "worktree", "remove", moved);
+      expect(await list()).toMatchObject({ worktrees: [`${repo}@renamed-main`], sessions: [] });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.list reuses a project's git worktree list while its git files are unchanged; worktree.create and remove show at once", async () => {
+    const { repo, git, d, c, list } = await repoDaemon("wtcache-");
+    try {
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
+      const reads = vi.mocked(listWorktrees).mock.calls.filter(([cwd]) => cwd === repo).length;
+      expect(reads).toBe(1);
+      // Unchanged files: the cached list is answered without a git process (a commit does not touch HEAD).
+      git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "second");
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
+      expect(vi.mocked(listWorktrees).mock.calls.filter(([cwd]) => cwd === repo).length).toBe(reads);
+      const made = join(repo, ".claude", "worktrees", "feat");
+      expect(await c.request({ type: "worktree.create", cwd: repo, name: "feat" })).toMatchObject({ result: { path: made } });
+      expect((await list()).worktrees.map((w) => w.split("@")[0])).toEqual([repo, made]);
+      expect(await c.request({ type: "worktree.remove", cwd: repo, path: made })).toMatchObject({ type: "reply" });
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a session created in a worktree just made from a terminal does not add the worktree as its own project", async () => {
+    const { root, repo, git, projects, d, c, list } = await repoDaemon("wtadd-");
+    try {
+      expect((await list()).projects).toEqual([repo]);
+      const wt = join(root, "wt-fresh");
+      git(repo, "worktree", "add", "-q", "-b", "fresh", wt);
+      // No list in between: the daemon's last list does not have the worktree.
+      expect(await c.request({ type: "session.create", cwd: wt })).toMatchObject({ type: "reply" });
+      expect(projects.has(wt)).toBe(false);
+      expect(await list()).toMatchObject({ projects: [repo], worktrees: [`${repo}@main`, `${wt}@fresh`] });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a git worktree list that failed is read again on the next session.list, not reused", async () => {
+    const { repo, d, list } = await repoDaemon("wtfail-");
+    const before = process.env.GIT_DIR;
+    try {
+      // git fails without any change to the repository's files (as a killed process or a spawn error would).
+      process.env.GIT_DIR = join(repo, "no-such-git-dir");
+      expect((await list()).worktrees).toEqual([]);
+      if (before === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = before;
+      expect((await list()).worktrees).toEqual([`${repo}@main`]);
+    } finally {
+      if (before === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = before;
+      d.close();
+    }
+  });
+
   it("worktree.create replies path and branch and broadcasts sessions.changed; the new worktree is listed; bad names and cwds outside the roots are refused", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "wtcreate-")));
     const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "wtout-")));
@@ -1460,6 +1571,69 @@ describe("daemon", () => {
         [older, Date.parse("2026-10-01T10:00:05.000Z")],
         [noFile, 7_000],
       ]);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.list requests that arrive while a list runs share one next list, not one list each", async () => {
+    const p = added(webRoot);
+    const listProjects = vi.fn(p.list);
+    let scans = 0;
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      projects: { ...p, list: listProjects } as never,
+      history: { listSessions: (async () => (scans++, await new Promise((r) => setTimeout(r, 100)), [])) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.list" });
+      listProjects.mockClear();
+      const replies = await Promise.all(Array.from({ length: 6 }, () => c.request({ type: "session.list" })));
+      expect(replies.every((r) => r.type === "reply")).toBe(true);
+      // The first runs; the five that arrived meanwhile get one list that starts after it (it sees what changed before them).
+      expect(listProjects).toHaveBeenCalledTimes(2);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("does not open a transcript again for its last message time while the scan reports the same mtime and size", async () => {
+    const id = "7b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const cwd = join(webRoot, "stamp proj");
+    mkdirSync(cwd, { recursive: true });
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const dir = join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+    mkdirSync(dir);
+    const file = join(dir, `${id}.jsonl`);
+    const write = (at: string) => writeFileSync(file, JSON.stringify({ type: "user", timestamp: at }) + "\n");
+    write("2026-10-01T10:00:05.000Z");
+    const size = statSync(file).size;
+    const t = { sessionId: id, summary: "s", lastModified: 9_000, fileSize: size, cwd };
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      projectsDir,
+      projects: added(cwd),
+      history: { listSessions: (async () => [t]) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const at = async () => ((await c.request({ type: "session.list" })) as { result: { sessions: { lastActivity: number }[] } }).result.sessions[0]!.lastActivity;
+      expect(await at()).toBe(Date.parse("2026-10-01T10:00:05.000Z"));
+      // Same length, other time: the file is not read while the scan reports the same mtime and size.
+      write("2026-10-01T10:00:09.000Z");
+      expect(statSync(file).size).toBe(size);
+      expect(await at()).toBe(Date.parse("2026-10-01T10:00:05.000Z"));
+      t.lastModified = 9_500;
+      expect(await at()).toBe(Date.parse("2026-10-01T10:00:09.000Z"));
     } finally {
       d.close();
     }
@@ -2279,6 +2453,29 @@ describe("/clear", () => {
       const titled = async () => ((await c.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string }[] } }).result.sessions.find((s) => s.id === next)?.title;
       expect(await titled()).toBe("New session");
       expect(getSessionMessages.mock.calls.some((a) => (a as unknown[])[0] === next)).toBe(false);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.list reads a cleared session without a prompt once, not on every list, until its transcript changes", async () => {
+    const id = "8b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const t = { sessionId: id, summary: "/clear", lastModified: 1, fileSize: 10, cwd: webRoot };
+    let prompt = false;
+    const getSessionMessages = vi.fn(async () => (prompt ? [{ type: "user", uuid: randomUUID(), session_id: id, message: { role: "user", content: "later prompt" }, parent_tool_use_id: null, parent_agent_id: null }] : []));
+    const d = createDaemon({ webRoot, roots: [webRoot], projects: added(webRoot), query: fakeQuery as never, token, history: { listSessions: (async () => [t]) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: getSessionMessages as never, listSubagents: (async () => []) as never } });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const titled = async () => ((await c.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string }[] } }).result.sessions.find((s) => s.id === id)?.title;
+      expect(await titled()).toBe("New session");
+      expect(await titled()).toBe("New session");
+      expect(getSessionMessages).toHaveBeenCalledTimes(1);
+      // A prompt was written: the scan reports another size, the transcript is read again.
+      prompt = true;
+      t.fileSize = 99;
+      expect(await titled()).toBe("later prompt");
+      expect(getSessionMessages).toHaveBeenCalledTimes(2);
     } finally {
       d.close();
     }
