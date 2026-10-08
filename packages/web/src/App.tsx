@@ -40,7 +40,10 @@ import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
+import { usePhone } from "./lib/use-narrow.ts";
+import { useHideOnScroll } from "./lib/hide-on-scroll.ts";
 import { cancelFlight, launchFlight, useLanding } from "./flight.ts";
+import { clearing, heirView } from "./clear.ts";
 import { addPending, dropPending, movePending, pendingKey, promptedIds, pruneEchoed, titleLoading, unechoed, type Pending } from "./optimistic.ts";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
@@ -73,7 +76,7 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { useStableProps } from "@/lib/utils";
@@ -242,6 +245,10 @@ export function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
   const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
+  /** React key of a session tab: a /clear moves it to the session the tab follows to, so its prompt box (text, images, focus) stays mounted. */
+  const [tabKeys, setTabKeys] = useState<Record<string, string>>({});
+  /** A session a tab followed to after /clear, until its subscribe reply: the session it replaced. */
+  const [heirOf, setHeirOf] = useState<Record<string, string>>({});
   /** Titles from subscribe replies: a tab of a session not (yet) in the list, e.g. the page-load hash session. */
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
@@ -311,10 +318,14 @@ export function App() {
   const client = useRef<Client>(undefined);
   const viewsRef = useRef(views);
   viewsRef.current = views;
+  const statusRef = useRef(status);
+  statusRef.current = status;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const listRef = useRef(list);
   listRef.current = list;
+  /** Prompts sent while a session's /clear runs: they go to the session the tab follows to (or back to this one when the /clear ends without), keyed by the session they were typed in. */
+  const clearQueue = useRef<Record<string, { key: string; text: string; images: string[] }[]>>({});
   const requested = useRef(new Set<string>());
   /** Sessions subscribed holding on this connection: a tab shows them, the daemon keeps their CLI (docs/spec.md "Idle close"). */
   const held = useRef(new Set<string>());
@@ -396,6 +407,7 @@ export function App() {
       }
       setViews((v) => ({ ...v, [sessionId]: withSubscribe(v[sessionId] ?? emptySession(), r) }));
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
+      setHeirOf((h) => (h[sessionId] ? without(h, sessionId) : h));
       if (r.title) setTitles((t) => ({ ...t, [sessionId]: r.title }));
     } catch (e) {
       // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
@@ -459,10 +471,55 @@ export function App() {
 
   /** The tab of session `from` shows session `to` instead, in its place; the active one opens it, its prompt box keeps the focus. */
   function follow(from: string, to: string) {
+    if (tabsRef.current.includes(from)) {
+      setTabKeys((k) => ({ ...k, [to]: k[from] ?? from, [from]: pendingKey() }));
+      setHeirOf((h) => ({ ...h, [to]: from }));
+      // The event handler is a closure of the first render: the latest infos come from the updater, the list from its ref.
+      setInfos((i) => {
+        const old = i[from] ?? listRef.current.find((x) => x.id === from);
+        if (i[to] || !old) return i;
+        const { cwd, state, model, permissionMode, effort, permissionModes } = old;
+        return { ...i, [to]: { id: to, cwd, state, model, permissionMode, effort, permissionModes } };
+      });
+      // The daemon titles an unprompted heir "New session" (the tab shows that, not "Untitled", until the list or the reply).
+      setTitles((t) => (t[to] ? t : { ...t, [to]: "New session" }));
+    }
+    flushClearQueue(from, to);
     setTabs((t) => (t.includes(from) ? replaceTab(t, from, to) : t));
     if (hashId() !== from) return;
     if (document.activeElement && document.activeElement === shownPrompt()) refocus.current = to;
     open(to);
+  }
+
+  // A /clear that ended without moving the tab (it failed, or was a no-op): the queued prompts go to the session they were typed in.
+  useEffect(() => {
+    for (const id of Object.keys(clearQueue.current)) {
+      const v = views[id];
+      if (v && shownState(v) === "idle" && !clearing(v, optimistic[id])) flushClearQueue(id, id);
+    }
+  });
+
+  /** Sends the prompts queued during a /clear: the bubble moves from the old session to `to`. */
+  function flushClearQueue(from: string, to: string) {
+    const queued = clearQueue.current[from];
+    if (!queued) return;
+    delete clearQueue.current[from];
+    for (const q of queued) {
+      setOptimistic((o) => dropPending(o, from, q.key));
+      sendPrompt(to, q.text, q.images).catch((e: Error) => setError(`Prompt not sent: ${e.message}`));
+    }
+  }
+
+  /** A prompt of the user to session `id`: the bubble shows at once (GH-133); the daemon's user_text replaces it. */
+  function sendPrompt(id: string, text: string, images: string[]): Promise<unknown> {
+    // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
+    if (statusRef.current !== "connected") return Promise.reject(new Error(`the daemon is ${statusRef.current}`));
+    const key = pendingKey();
+    setOptimistic((o) => ({ ...o, [id]: addPending(o[id], viewsRef.current[id], { key, text, images }) }));
+    return client.current!.request({ type: "session.prompt", sessionId: id, text, images }).catch((e) => {
+      setOptimistic((o) => dropPending(o, id, key));
+      throw e;
+    });
   }
 
   /** Drops the view of a session this tab no longer follows; `unsubscribe`: also stops the daemon's events. */
@@ -480,6 +537,9 @@ export function App() {
     setOptimistic((o) => without(o, sessionId));
     setList((l) => l.filter((s) => s.id !== sessionId));
     setTabs((t) => t.filter((id) => id !== sessionId));
+    setHeirOf((h) => without(h, sessionId));
+    delete clearQueue.current[sessionId];
+    setTabKeys((k) => without(k, sessionId));
     if (hashId() === sessionId) {
       // Deleted like a closed tab: its neighbour becomes active.
       const next = deleted ? closeTab(tabsRef.current, sessionId, sessionId).active : undefined;
@@ -822,7 +882,10 @@ export function App() {
   useGroupedTabs(tabs, setTabs, groupOfTab);
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   // GH-133: a just-created session shows (with its pending prompt) before its subscribe reply.
-  const view = activeId ? (views[activeId] ?? (optimistic[activeId]?.length ? EMPTY_VIEW : undefined)) : undefined;
+  // A tab that followed a /clear shows the new session at once too: an empty timeline carrying the old one's settings.
+  const heirViews = useMemo(() => Object.fromEntries(Object.entries(heirOf).map(([to, from]) => [to, heirView(views[from])])), [heirOf, views]);
+  const viewOf = (id: string) => views[id] ?? heirViews[id] ?? (optimistic[id]?.length ? EMPTY_VIEW : undefined);
+  const view = activeId ? viewOf(activeId) : undefined;
   const shown = active && view ? active : undefined;
   // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
   useEffect(() => {
@@ -1245,10 +1308,10 @@ export function App() {
                   const s = id === NEW_TAB ? undefined : sessionOf(id);
                   const pend = optimistic[id];
                   // Just created: shown before its subscribe reply, so the card is never blank.
-                  const v = views[id] ?? (pend?.length ? EMPTY_VIEW : undefined);
+                  const v = viewOf(id);
                   if (!s || !v) return null;
                   return (
-                    <Activity key={id} mode={id === activeId ? "visible" : "hidden"}>
+                    <Activity key={tabKeys[id] ?? id} mode={id === activeId ? "visible" : "hidden"}>
                       <SessionTab
                         scrollKey={scrollKeys[id] ?? 0}
                         insert={id === activeId ? insert : undefined}
@@ -1267,22 +1330,21 @@ export function App() {
                         place={worktreeName(s.cwd, worktrees)}
                         view={v}
                         pending={pend}
-                        loading={!views[id]}
                         models={models}
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
                         onUpload={upload(s.cwd)}
                         onPrompt={(text, images) => {
-                          // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
-                          if (status !== "connected") return Promise.reject(new Error(`the daemon is ${status}`));
-                          // GH-133: the bubble shows at once; the daemon's user_text replaces it.
-                          const key = pendingKey();
-                          setOptimistic((o) => ({ ...o, [s.id]: addPending(o[s.id], viewsRef.current[s.id], { key, text, images }) }));
-                          return client.current!.request({ type: "session.prompt", sessionId: s.id, text, images }).catch((e) => {
-                            setOptimistic((o) => dropPending(o, s.id, key));
-                            throw e;
-                          });
+                          // While the /clear runs the message waits: its bubble shows now, it is sent once the tab follows (or the /clear ends without).
+                          if (!v.externalTurn && clearing(v, pend)) {
+                            if (status !== "connected") return Promise.reject(new Error(`the daemon is ${status}`));
+                            const key = pendingKey();
+                            setOptimistic((o) => ({ ...o, [s.id]: addPending(o[s.id], viewsRef.current[s.id], { key, text, images }) }));
+                            (clearQueue.current[s.id] ??= []).push({ key, text, images });
+                            return Promise.resolve();
+                          }
+                          return sendPrompt(s.id, text, images);
                         }}
                         onBash={(command) =>
                           status === "connected"
@@ -1670,19 +1732,21 @@ const EMPTY_VIEW = emptySession();
 
 /** The new-session tab while its first prompt creates the session (GH-133): SessionPane's layout with the prompt, Thinking and skeletons. */
 function StartingSession({ cwd, place, pending }: { cwd: string; place?: string; pending: Pending[] }) {
+  const phone = usePhone();
   return (
     <div className={`${card} flex-1`} data-testid="starting-session" aria-busy="true">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-        <ProjectAvatar cwd={cwd} />
-        <span className="min-w-0 truncate font-medium" title={cwd}>
-          {place ?? projectName(cwd)}
-        </span>
-        <SideBadge cwd={cwd} />
-        <span className="hidden min-w-0 truncate text-muted-foreground sm:inline" title={cwd}>
-          {cwd}
-        </span>
-        <Skeleton className="ml-auto h-5 w-12" data-testid="session-state-skeleton" />
-      </header>
+      {!phone && (
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4" data-testid="session-header">
+          <ProjectAvatar cwd={cwd} />
+          <span className="min-w-0 truncate font-medium" title={cwd}>
+            {place ?? projectName(cwd)}
+          </span>
+          <SideBadge cwd={cwd} />
+          <span className="min-w-0 truncate text-muted-foreground" title={cwd}>
+            {cwd}
+          </span>
+        </header>
+      )}
       <VirtualTimeline
         items={[] as TimelineItem[]}
         itemKey={timelineKey}
@@ -1696,7 +1760,7 @@ function StartingSession({ cwd, place, pending }: { cwd: string; place?: string;
           </>
         }
       />
-      <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4">
+      <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4 max-sm:px-2 max-sm:py-2">
         <Skeleton className="h-[104px] w-full rounded-lg" data-testid="prompt-skeleton" />
       </div>
     </div>
@@ -1931,7 +1995,6 @@ export function SessionPane({
   session,
   view,
   pending,
-  loading,
   models,
   onModel,
   onMode,
@@ -1975,8 +2038,6 @@ export function SessionPane({
   view: SessionView;
   /** Optimistic prompts not yet echoed (GH-133). */
   pending?: Pending[];
-  /** No subscribe reply yet: the view is a placeholder (GH-133). */
-  loading?: boolean;
   models: ModelInfo[];
   onModel: (model: string) => void;
   onMode: (mode: PermissionMode) => void;
@@ -2001,6 +2062,7 @@ export function SessionPane({
   /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
   onDialog?: (dialog: DialogName, arg?: string) => void;
 }) {
+  const phone = usePhone();
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
   const pendingAsk = pendingQuestion(view);
@@ -2010,6 +2072,7 @@ export function SessionPane({
   const modePicker = <ModePicker mode={view.permissionMode ?? session.permissionMode} modes={modesOf(session.permissionModes, view.model ?? session.model, models)} onMode={onMode} shortcut={false} />;
   // Waiting for a permission answer is part of the running turn.
   const turnRunning = view.state === "running" || view.state === "needs_input";
+  const isClearing = clearing(view, pending);
   // A bash mode command runs: Stop and Esc kill it.
   const shellRunning = bashRunning(view);
   // Stop agent of the shown run: pending until the run ends, or the request's error next to the button.
@@ -2063,6 +2126,12 @@ export function SessionPane({
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
   const prompt = useRef<HTMLTextAreaElement>(null);
   const dock = useRef<HTMLDivElement>(null);
+  // Phone: scrolling up through an idle transcript hides the prompt dock for reading space; scrolling down or the end brings it back (GH-166).
+  // Never while a turn or shell runs (Stop), a panel waits for an answer, or the dock has focus (typing).
+  const card = useRef<HTMLElement | null>(null);
+  useEffect(() => void (card.current = dock.current?.parentElement ?? null), []);
+  const [dockFocused, setDockFocused] = useState(false);
+  const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
 
   return (
     <CwdContext value={session.cwd}>
@@ -2070,29 +2139,25 @@ export function SessionPane({
       {current ? (
         <SubagentBar view={view} run={current} onOpen={onOpenRun} />
       ) : (
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+      phone ? null : (
+      // From sm up: where the session is (project, side, cwd). Below sm the tab switcher says it, so the reading space starts at the top (GH-165).
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4" data-testid="session-header">
         <ProjectAvatar cwd={session.cwd} />
         <span className="min-w-0 truncate font-medium" title={session.cwd} data-testid="session-project">
           {place ?? projectName(session.cwd)}
         </span>
         <SideBadge cwd={session.cwd} />
-        <span className="hidden min-w-0 truncate text-muted-foreground sm:inline" title={session.cwd}>
+        <span className="min-w-0 truncate text-muted-foreground" title={session.cwd}>
           {session.cwd}
         </span>
-        {loading ? (
-          <Skeleton className="ml-auto h-5 w-12" data-testid="session-state-skeleton" />
-        ) : (
+        {/* Idle, running and needs input show in the tab and the send button. Only error and closed have no other place. */}
+        {(shownState(view) === "error" || shownState(view) === "closed") && (
           <span className="ml-auto rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
             {shownState(view)}
           </span>
         )}
-        {turnRunning && (
-          <Button size="sm" variant="outline" className="h-6 px-2 text-xs pointer-coarse:h-11 pointer-coarse:px-3" title="Stop (Esc)" data-testid="stop" onClick={onInterrupt}>
-            <SquareIcon className="size-3 fill-current" />
-            Stop
-          </Button>
-        )}
       </header>
+      )
       )}
       {current ? (
         <Conversation key={`${scrollKey}:${current.id}`} className="flex-1">
@@ -2132,7 +2197,11 @@ export function SessionPane({
           }
           onReachTop={view.older && onLoadOlder ? (user) => onLoadOlder({ user }) : undefined}
           loadingOlder={loadingOlder}
-          renderItem={(item, index) =>
+          renderItem={(item, index) => {
+            // A finished turn (not running; the next top-level item is a prompt, or it is the last) ends with Copy response, with or without a usage footer: a restored transcript has none.
+            const next = items[index + 1];
+            const copyText = (next ? next.kind === "part" && (next.part.type === "user_text" || next.part.type === "bash") : !turnRunning && !view.externalTurn) ? turnText(items, index) : "";
+            const row = (
             item.kind === "context" ? (
               <ContextGroup calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
             ) : item.part.type === "user_text" && coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE) ? (
@@ -2184,15 +2253,29 @@ export function SessionPane({
             ) : (
               <PartView part={item.part} view={view} />
             )
-          }
+            );
+            return copyText ? (
+              <>
+                {row}
+                <MessageActions className="mt-1">
+                  <CopyAction text={copyText} label="Copy response" className="max-md:size-11" />
+                </MessageActions>
+              </>
+            ) : (
+              row
+            );
+          }}
         />
       )}
       <div
         ref={dock}
-        className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4"
+        className={`relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4 max-sm:px-2 max-sm:py-2 ${dockHidden ? "hidden" : ""}`}
+        data-hidden={dockHidden || undefined}
+        onFocus={() => setDockFocused(true)}
+        onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setDockFocused(false)}
       >
         {permission ? (
-          <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} mode={modePicker} />
+          <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} mode={modePicker} onStop={onInterrupt} />
         ) : question ? (
           <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} onDismiss={onInterrupt} mode={modePicker} />
         ) : current ? (
@@ -2224,11 +2307,13 @@ export function SessionPane({
               usage={view.contextUsage}
               stats={totals(view)}
               todos={showTodoDock(view.state, view.todos, false) ? view.todos : undefined}
-              blocked={view.externalTurn ? "A terminal CLI turn is running in this session" : undefined}
+              blocked={view.externalTurn ? "A terminal CLI turn is running in this session" : isClearing ? "Clearing the conversation… your message sends when it is done" : undefined}
+              queueing={!view.externalTurn && isClearing}
+              blockedIcon={!view.externalTurn && isClearing ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
               inputRef={prompt}
-              placeholder={turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
+              placeholder={phone ? (turnRunning ? "Claude is working…" : "Ask Claude…") : turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
             />
           </>
         )}
@@ -2278,6 +2363,7 @@ function PromptBox({
   disabled,
   blocked,
   blockedIcon,
+  queueing,
   inputRef,
   onDialog,
 }: {
@@ -2323,8 +2409,11 @@ function PromptBox({
   blocked?: string;
   /** Icon of the blocked dock; default the terminal icon. */
   blockedIcon?: React.ReactNode;
+  /** The block is a wait the app queues sends through (a /clear running): Enter sends the prompt, the app holds it. */
+  queueing?: boolean;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
+  const phone = usePhone();
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
   const [selected, setSelected] = useState(0);
@@ -2440,7 +2529,7 @@ function PromptBox({
       const arg = dialogArg(t);
       return arg ? onDialog(dialog, arg) : onDialog(dialog), edit("");
     }
-    if (blocked) return;
+    if (blocked && !queueing) return;
     const sent = images;
     setSendError(undefined);
     launchFlight(t, input.current?.getBoundingClientRect());
@@ -2629,8 +2718,8 @@ function PromptBox({
         aria-controls="command-picker"
         aria-activedescendant={pickerOpen ? `command-${selected}` : undefined}
         aria-label={bash ? "Shell command" : label}
-        className={`field-sizing-content max-h-[min(240px,40dvh)] min-h-[calc(2lh+1.5rem)] w-full resize-none bg-transparent pt-4 pb-2 text-sm outline-none pointer-coarse:text-base ${bash ? "pr-4 pl-8 font-mono" : "px-4"}`}
-        rows={2}
+        className={`field-sizing-content max-h-[min(240px,40dvh)] min-h-[calc(2lh+1.5rem)] max-sm:min-h-[calc(1lh+1.5rem)] w-full resize-none bg-transparent pt-4 pb-2 text-sm outline-none pointer-coarse:text-base ${bash ? "pr-4 pl-8 font-mono" : "px-4"}`}
+        rows={phone ? 1 : 2}
         placeholder={bash ? "Run a shell command (Esc to exit)" : placeholder}
         autoFocus={autoFocus}
         disabled={disabled}
@@ -2688,7 +2777,7 @@ function Timeline({ view, parentId }: { view: SessionView; parentId?: string }) 
   );
 }
 
-function CopyAction({ text }: { text: string }) {
+function CopyAction({ text, label = "Copy message", className = "" }: { text: string; label?: string; className?: string }) {
   const [copied, setCopied] = useState(false);
   // navigator.clipboard is undefined on a non-secure origin (http://<LAN IP>), so Copy does nothing there.
   const copy = () =>
@@ -2700,7 +2789,7 @@ function CopyAction({ text }: { text: string }) {
       () => {},
     );
   return (
-    <MessageAction title="Copy" label="Copy message" className="pointer-coarse:size-11" onClick={copy}>
+    <MessageAction title="Copy" label={label} className={`pointer-coarse:size-11 ${className}`} onClick={copy}>
       {copied ? <CheckIcon /> : <CopyIcon />}
     </MessageAction>
   );

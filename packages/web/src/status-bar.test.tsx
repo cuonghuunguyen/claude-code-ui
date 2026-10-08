@@ -105,3 +105,44 @@ it("totals add aux turn results of the unloaded region", () => {
   const v = { ...view(result("r2", 10, 5, 2000)), older: { before: "u2", pos: 9 }, aux: [{ part: result("r1", 100, 20, 1000, 50), pos: 3 }] };
   expect(totals(v)).toMatchObject({ input: 160, output: 25, cached: 3000 });
 });
+
+// GH-166: below sm the status line is one row: branch, diff, shells. In / Out / Cached are in the context ring's breakdown.
+const phone = (on: boolean) => {
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ matches: on && q.includes("40rem"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  return () => void (window.matchMedia = mm);
+};
+async function mountBar(v: SessionView, git?: () => Promise<GitStatus | null>) {
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  await act(async () => root.render(<StatusBar view={v} git={git} />));
+  await act(async () => {});
+  return { el, done: () => (root.unmount(), el.remove()) };
+}
+const fields = (el: HTMLElement) => [...el.querySelectorAll("[data-field]")].map((f) => (f as HTMLElement).dataset.field);
+const GIT: GitStatus = { branch: "main", added: 3, removed: 1 };
+
+it("GH-166: wide: branch, diff, In, Out, Cached and shells all show", async () => {
+  const v = view(result("r1", 100, 20, 1000), bash("a", { command: "npm run dev", run_in_background: true }, "running"));
+  const { el, done } = await mountBar(v, async () => GIT);
+  expect(fields(el)).toEqual(["branch", "diff", "in", "out", "cached", "shells"]);
+  done();
+});
+
+it("GH-166: phone: one non-wrapping row of branch, diff and shells, without In / Out / Cached", async () => {
+  const back = phone(true);
+  try {
+    const v = view(result("r1", 100, 20, 1000), bash("a", { command: "npm run dev", run_in_background: true }, "running"));
+    const { el, done } = await mountBar(v, async () => GIT);
+    expect(fields(el)).toEqual(["branch", "diff", "shells"]);
+    expect(el.querySelector('[data-testid="status-bar"]')!.className).toContain("max-sm:flex-nowrap");
+    done();
+    // Token totals alone: nothing else to show, so no row at all.
+    const bare = await mountBar(view(result("r1", 100, 20, 1000)));
+    expect(bare.el.querySelector('[data-testid="status-bar"]')).toBeNull();
+    bare.done();
+  } finally {
+    back();
+  }
+});

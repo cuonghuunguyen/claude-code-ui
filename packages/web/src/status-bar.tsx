@@ -2,6 +2,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Popover } from "@base-ui/react/popover";
 import type { GitStatus } from "@claude-ui/protocol";
+import { usePhone } from "./lib/use-narrow.ts";
 import { wholeParts, type SessionView, type ToolCall } from "./store.ts";
 
 /** 453, 241.1k, 54.4M. */
@@ -85,19 +86,22 @@ export function StatusBar(props: { view: SessionView; git?: () => Promise<GitSta
   const sum = totals(view);
   const shells = backgroundShells(view);
   const git = useGit(props.git, view.state);
+  // Phone (below sm): one short row. The token totals are in the context ring's breakdown (GH-166).
+  const phone = usePhone();
+  const tokensShown = sum && !phone;
   // No field has data (outside a git repo before the first turn): no row.
-  if (!git && !sum && !shells.length) return null;
+  if (!git && !tokensShown && !shells.length) return null;
   return (
-    <div data-testid="status-bar" className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-muted-foreground text-xs tabular-nums">
+    <div data-testid="status-bar" className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-muted-foreground text-xs tabular-nums max-sm:flex-nowrap max-sm:overflow-hidden max-sm:whitespace-nowrap">
       {git && <Field field="branch">{git.branch}</Field>}
       {git && (
         <Field field="diff">
           (<span className="text-success">+{git.added}</span>,<span className="text-destructive">-{git.removed}</span>)
         </Field>
       )}
-      {sum && <Field field="in">{`In: ${tokens(sum.input)}`}</Field>}
-      {sum && <Field field="out">{`Out: ${tokens(sum.output)}`}</Field>}
-      {sum && <Field field="cached">{`Cached: ${tokens(sum.cached)}`}</Field>}
+      {tokensShown && <Field field="in">{`In: ${tokens(sum.input)}`}</Field>}
+      {tokensShown && <Field field="out">{`Out: ${tokens(sum.output)}`}</Field>}
+      {tokensShown && <Field field="cached">{`Cached: ${tokens(sum.cached)}`}</Field>}
       {shells.length > 0 && (
         <Field
           field="shells"

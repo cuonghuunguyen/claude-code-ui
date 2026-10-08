@@ -546,6 +546,21 @@ describe("coordinator settle", () => {
 });
 
 describe("Session /clear", () => {
+  it("the session a /clear hands the query to is untitled until its first prompt", async () => {
+    const heirs: Session[] = [];
+    const s = new Session("/repo", { query: clearQuery as never, onCleared: (h) => heirs.push(h) });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hi");
+    await until(events, (e) => e.part.type === "turn_result");
+    s.prompt("/clear");
+    await until(events, (e) => e.part.type === "session_cleared");
+    expect(heirs[0]!.untitled()).toBe(true);
+    expect(s.untitled()).toBe(false);
+    heirs[0]!.prompt("x");
+    expect(heirs[0]!.untitled()).toBe(false);
+  });
+
   it("hands the live query to a new session under the CLI's next session ID; the old one keeps its history and resumes its own transcript", async () => {
     const heirs: Session[] = [];
     const s = new Session("/repo", { query: clearQuery as never, onCleared: (h) => heirs.push(h) });

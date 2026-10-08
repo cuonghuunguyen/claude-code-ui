@@ -1,7 +1,9 @@
 // Prompt box toolbar (OpenCode prompt input v2): attach, model, effort, permission mode; context meter, send / stop on the right.
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { ArrowUpIcon, BrainIcon, FilePenIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
+import { Popover } from "@base-ui/react/popover";
 import type { ContextUsage, Effort, ModelInfo, PermissionMode } from "@claude-ui/protocol";
+import { usePhone } from "./lib/use-narrow.ts";
 import { ContextMeter } from "./context-meter.tsx";
 import type { Totals } from "./status-bar.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -149,11 +151,25 @@ export function PromptToolbar(props: {
   // Keep the current value selectable while the list loads or if it is not in the list.
   const models = props.models.some((m) => m.value === props.model) ? props.models : [{ value: props.model, displayName: props.model, description: "" }, ...props.models];
   const efforts = effortOptions(props.models, props.model);
+  const phone = usePhone();
+  const effort = efforts.includes(props.effort) ? props.effort : "default";
+  const modelItems = models.map((m) => ({
+    value: m.value,
+    label: m.displayName,
+    description: m.description,
+    trigger:
+      shortModel(m.displayName) === m.displayName ? undefined : (
+        <span>
+          <span className="sm:hidden">{shortModel(m.displayName)}</span>
+          <span className="max-sm:hidden">{m.displayName}</span>
+        </span>
+      ),
+  }));
   return (
-    // Below sm (phone) the choosers and the right group wrap as one flex row (contents): the model row, then effort, agents, context ring and send.
-    <div className="@container flex items-end gap-1 px-2 py-2 pointer-coarse:gap-2 pointer-coarse:py-1 max-sm:flex-wrap" data-testid="prompt-toolbar">
+    // Phone (below sm): one row, attach, settings chip, agents, then the context ring and send on the right (GH-166).
+    <div className="@container flex items-end gap-1 px-2 py-2 pointer-coarse:gap-2 pointer-coarse:py-1" data-testid="prompt-toolbar">
       {/* flex-wrap: on a narrow screen a chooser moves to the next row at its full width; nothing shrinks away the model name. */}
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 pointer-coarse:gap-2 max-sm:contents">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 pointer-coarse:gap-2 max-sm:flex-nowrap">
         <button
           type="button"
           aria-label="Add images and files"
@@ -177,44 +193,60 @@ export function PromptToolbar(props: {
             if (files.length) props.onAttach(files);
           }}
         />
-        <ModePicker mode={props.mode} modes={props.modes} onMode={props.onMode} />
-        <Chooser
-          label="Model"
-          testId="session-model"
-          value={props.model}
-          onChange={props.onModel}
-          items={models.map((m) => ({
-            value: m.value,
-            label: m.displayName,
-            description: m.description,
-            trigger:
-              shortModel(m.displayName) === m.displayName ? undefined : (
-                <span>
-                  <span className="sm:hidden">{shortModel(m.displayName)}</span>
-                  <span className="max-sm:hidden">{m.displayName}</span>
-                </span>
-              ),
-          }))}
-          className="max-w-55"
-        />
-        {efforts.length > 0 && (
-          <Chooser
-            label="Thinking effort"
-            testId="effort-select"
-            value={efforts.includes(props.effort) ? props.effort : "default"}
-            onChange={props.onEffort}
-            icon={<BrainIcon className="size-4" />}
-            items={efforts.map((e) => ({ value: e, label: EFFORT_LABEL[e] }))}
-            className="shrink-0"
-          />
+        {phone ? (
+          <SettingsChip {...props} models={models} efforts={efforts} effort={effort} modelItems={modelItems} />
+        ) : (
+          <>
+            <ModePicker mode={props.mode} modes={props.modes} onMode={props.onMode} />
+            <Chooser label="Model" testId="session-model" value={props.model} onChange={props.onModel} items={modelItems} className="max-w-55" />
+            {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={props.onEffort} />}
+          </>
         )}
         {props.agents}
       </div>
-      <div className="flex items-end gap-1 pointer-coarse:gap-2 max-sm:ml-auto">
+      <div className="flex items-end gap-1 pointer-coarse:gap-2">
         {props.usage && <ContextMeter usage={props.usage} stats={props.stats} />}
         <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onStop={props.onStop} onFocusLost={props.onFocusLost} />
       </div>
     </div>
+  );
+}
+
+function EffortPicker({ efforts, effort, onEffort, className = "shrink-0" }: { efforts: Effort[]; effort: Effort; onEffort: (e: Effort) => void; className?: string }) {
+  return <Chooser label="Thinking effort" testId="effort-select" value={effort} onChange={onEffort} icon={<BrainIcon className="size-4" />} items={efforts.map((e) => ({ value: e, label: EFFORT_LABEL[e] }))} className={className} />;
+}
+
+/** Phone toolbar (GH-166): mode, model and effort behind one chip, so the toolbar is one row. The chip always shows the permission mode (Plan and Bypass matter for safety); the popover stacks the three choosers. */
+function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, efforts, effort, modelItems }: {
+  models: ModelInfo[]; model: string; mode: PermissionMode; modes: PermissionMode[]; onMode: (m: PermissionMode) => void; onModel: (m: string) => void; onEffort: (e: Effort) => void;
+  efforts: Effort[]; effort: Effort; modelItems: { value: string; label: string; description?: string; trigger?: ReactNode }[];
+}) {
+  const Mode = MODE_LABEL[mode].Icon;
+  const name = models.find((m) => m.value === model)?.displayName ?? model;
+  const visible = `${MODE_LABEL[mode].short} · ${shortModel(name)}`;
+  // The name starts with the visible text (WCAG 2.5.3), then lists every setting the chip opens.
+  const label = `${visible}, session settings: ${MODE_LABEL[mode].label}, ${name}${efforts.length ? `, effort ${EFFORT_LABEL[effort]}` : ""}`;
+  const wide = "w-full max-w-none justify-start max-sm:h-11!";
+  return (
+    <Popover.Root>
+      <Popover.Trigger aria-label={label} title={label} data-testid="session-settings" className={`${GHOST} flex min-w-0 shrink items-center`}>
+        <Mode aria-hidden className="size-4 shrink-0" />
+        <span className="truncate">{visible}</span>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Positioner side="top" align="start" sideOffset={6} className="z-50">
+          <Popover.Popup
+            data-testid="session-settings-popup"
+            aria-label="Session settings"
+            className="flex w-64 max-w-[calc(100vw-16px)] origin-(--transform-origin) flex-col gap-1 rounded-xl bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+          >
+            <ModePicker mode={mode} modes={modes} onMode={onMode} shortcut={false} className={wide} />
+            <Chooser label="Model" testId="session-model" value={model} onChange={onModel} items={modelItems} className={wide} />
+            {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={onEffort} className={wide} />}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 
@@ -249,6 +281,13 @@ function SendButton({ state, hasInput, onSend, onStop, onFocusLost }: { state: S
         : [`${state === "running" ? "Claude is working" : "Claude needs your input"}. ${steer ? "Steer" : "Stop"}`, steer ? " (Enter)" : " (Esc)"];
   const Icon = state === "disconnected" ? WifiOffIcon : busy && !steer ? SquareIcon : ArrowUpIcon;
   return (
+    <>
+    {/* Steering: the send button is Steer, so Stop (Esc, which a phone has not) gets its own button (GH-165). */}
+    {steer && (
+      <button type="button" aria-label="Stop" title="Stop (Esc)" data-testid="toolbar-stop" className={`${SEND_BASE} bg-secondary text-secondary-foreground`} onClick={onStop}>
+        <SquareIcon aria-hidden className="size-2.5 fill-current" />
+      </button>
+    )}
     <button
       type="button"
       aria-label={label}
@@ -267,5 +306,6 @@ function SendButton({ state, hasInput, onSend, onStop, onFocusLost }: { state: S
         <Icon aria-hidden className={Icon === SquareIcon ? "size-2.5 fill-current" : state === "running" ? "size-3" : "size-4"} />
       )}
     </button>
+    </>
   );
 }

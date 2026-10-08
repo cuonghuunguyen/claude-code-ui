@@ -12,6 +12,7 @@ import { NEW_TAB, avatarColor, closeTab, groupTabs, loadCollapsed, projectName, 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { GHOST, ROW } from "./toolbar.tsx";
+import { SideLabel } from "./sides.tsx";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
 export type TabInfo = {
@@ -33,6 +34,9 @@ const status = (id: string, t: TabInfo): TabStatus =>
   id === NEW_TAB ? "new" : t.state === "running" ? "running" : t.state === "needs_input" ? "needs_input" : t.unread ? "unread" : "idle";
 
 const STATUS_LABEL: Record<TabStatus, string> = { new: "", running: "running", needs_input: "needs input", unread: "unread", idle: "" };
+
+/** The states only the session header showed (GH-165): error and closed, noted in the switcher below md where the header row is gone. */
+const stateNote = (t: TabInfo) => (t.state === "error" || t.state === "closed" ? t.state : "");
 
 /** Avatar colors of the known projects (avatarColors), so no two of them look the same. */
 export const AvatarColors = createContext(new Map<string, AvatarColor>());
@@ -186,6 +190,9 @@ export function TabsBar({
     return () => ro.disconnect();
   }, [activeId, tabs.length, collapsed]);
   const active = activeId ? info(activeId) : undefined;
+  const sideOf = use(SideLabel);
+  // Below sm the session header row is gone: the switcher says where the session is, "<project or project · branch> · <side>" (GH-165).
+  const place = (t: TabInfo) => [t.worktree ?? (t.cwd ? projectName(t.cwd) : ""), t.cwd ? sideOf(t.cwd)?.label : ""].filter(Boolean).join(" · ");
   // Only one tab is in the Tab order; arrows, Home and End move between tabs (WAI-ARIA tabs, automatic activation). Delete closes.
   const focusable = activeId && visible.includes(activeId) ? activeId : visible[0];
   const onKeyDown = (e: KeyboardEvent) => {
@@ -278,17 +285,23 @@ export function TabsBar({
               className={`${GHOST} max-md:h-11! min-w-0 flex-1 bg-secondary! px-1.5 font-medium text-foreground max-md:my-2`}
             >
               {active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} /> : null}
-              <span className="truncate" data-slot="tab-switcher-title">{active?.titleLoading ? <TitleSkeleton title={active.title} /> : (active?.title ?? "Open tabs")}</span>
+              <span className="flex min-w-0 flex-col text-left">
+                <span className="truncate" data-slot="tab-switcher-title">{active?.titleLoading ? <TitleSkeleton title={active.title} /> : (active?.title ?? "Open tabs")}</span>
+                {active && place(active) && <span className="truncate font-normal text-muted-foreground text-xs leading-4" data-slot="tab-switcher-place">{place(active)}</span>}
+              </span>
               <span className="ml-auto text-muted-foreground tabular-nums">{given.length}</span>
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] rounded-md p-0.5 shadow-floating! ring-0">
               {given.map((id) => {
                 const t = info(id);
-                const label = STATUS_LABEL[status(id, t)];
+                const label = stateNote(t) || STATUS_LABEL[status(id, t)];
                 return (
                   <SelectItem key={id} value={id} className={ROW}>
                     <TabIcon s={status(id, t)} cwd={t.cwd} />
-                    {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="min-w-0 flex-1 truncate">{t.title}</span>}
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate">{t.title}</span>}
+                      {place(t) && <span className="truncate text-muted-foreground text-xs leading-4">{place(t)}</span>}
+                    </span>
                     {label && <span className="text-muted-foreground text-xs leading-none">{label}</span>}
                   </SelectItem>
                 );
