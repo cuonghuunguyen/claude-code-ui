@@ -899,4 +899,16 @@ describe("sidebar header actions (GH-152)", () => {
     expect(m("sidebar-menu-expand-all").textContent).toBe("Expand all (clear the search first)");
   });
 
+  it("Collapse all under Only active sessions also collapses a coordinator whose workers are all idle", async () => {
+    const l = [
+      item("co", "/home/u/api", "Coord", 3, "running"),
+      { ...item("w2", "/home/u/api", "W2", 5), coordinatorId: "co", workerName: "idle" },
+    ];
+    await render({ ...base, list: l, activeId: "none" });
+    const m = await open();
+    await act(async () => m("sidebar-opt-only-active").click());
+    await act(async () => q("sidebar-collapse-all").click());
+    expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toContain("coordinator:co");
+  });
+
 });

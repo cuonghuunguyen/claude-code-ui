@@ -269,7 +269,7 @@ export function SessionList({
   // The other view's worker group keys stay as they are.
   const otherView = (k: string) => (archived ? k.startsWith("coordinator:") : k.startsWith("archived:"));
   const expandAll = () => setAll((c) => [...c].filter(otherView));
-  const collapseAll = () => setAll((c) => [...c, ...collapseKeys(groups, workers, archived)]);
+  const collapseAll = () => setAll((c) => [...c, ...collapseKeys(groups, nested.workers, archived)]);
   // While searching every match shows, also in collapsed groups and rows.
   const isOpen = (key: string) => searching || !collapsed.has(key);
   const days = (all: SessionListItem[], depth: 0 | 1, key: string, name: string) => {
