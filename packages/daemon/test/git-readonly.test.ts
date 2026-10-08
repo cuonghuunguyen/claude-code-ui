@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { gitReadOnly, repoSafety, repoSafetyAsync } from "../src/git-readonly.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { gitReadOnly, gitThreadConfig, repoSafety, repoSafetyAsync } from "../src/git-readonly.ts";
 import { tier, tierAsync } from "../src/risk-tier.ts";
 
 // No symlinks here: this file runs on Windows too (risk-tier.test.ts holds the symlink rows).
@@ -301,5 +301,54 @@ describe("gitReadOnly", () => {
     expect(tier("Bash", { command: "git status" }, { cwd, bashCwdPinned: true })).toBe("low");
     expect(tier("Bash", { command: "git status" }, { cwd })).toBe("high");
     expect(tier("Bash", { command: "git status" }, { cwd, bashCwdPinned: true, blockedPath: "x" })).toBe("high");
+  });
+});
+
+describe("the git thread fails closed and recovers (GH-163 round 5 review m1-m3)", () => {
+  const defaults = { script: gitThreadConfig.script, queueTimeoutMs: gitThreadConfig.queueTimeoutMs, walkDeadlineMs: gitThreadConfig.walkDeadlineMs };
+  afterEach(() => {
+    Object.assign(gitThreadConfig, defaults);
+    gitThreadConfig.reset();
+    vi.restoreAllMocks();
+  });
+  const d = repo(join(root, "thread"));
+
+  it("a thread that errors is marked broken, logged, and child processes take over", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    gitThreadConfig.reset();
+    gitThreadConfig.script = "throw new Error('boom')";
+    expect(await repoSafetyAsync(d)).toMatchObject({ unsafe: true, failed: true });
+    expect(gitThreadConfig.broken).toBe(true);
+    expect(warn.mock.calls.flat().join(" ")).toMatch(/git thread failed/);
+    expect(await repoSafetyAsync(d)).toMatchObject({ unsafe: false, failed: false });
+  });
+
+  it("a thread that exits fails its reads; the next read starts a new thread", async () => {
+    gitThreadConfig.reset();
+    gitThreadConfig.script = "require('node:worker_threads').parentPort.on('message', () => process.exit(3));";
+    expect(await repoSafetyAsync(d)).toMatchObject({ unsafe: true, failed: true });
+    expect(gitThreadConfig.broken).toBe(false);
+    gitThreadConfig.script = defaults.script;
+    expect(await repoSafetyAsync(d)).toMatchObject({ unsafe: false, failed: false });
+  });
+
+  it("a thread that does not answer in time fails the read and is replaced", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    gitThreadConfig.reset();
+    gitThreadConfig.script = "require('node:worker_threads').parentPort.on('message', () => {});";
+    gitThreadConfig.queueTimeoutMs = 200;
+    expect(await repoSafetyAsync(d)).toMatchObject({ unsafe: true, failed: true });
+    gitThreadConfig.script = defaults.script;
+    gitThreadConfig.queueTimeoutMs = defaults.queueTimeoutMs;
+    expect(await repoSafetyAsync(d)).toMatchObject({ unsafe: false, failed: false });
+  });
+
+  it("a walk past its time limit is unsafe", async () => {
+    gitThreadConfig.walkDeadlineMs = -1;
+    writeFileSync(join(d, "f.txt"), "x");
+    const r = await repoSafetyAsync(d);
+    expect(r.unsafe).toBe(true);
+    expect(r.why.join()).toMatch(/took too long/);
+    expect(repoSafety(d).unsafe).toBe(true);
   });
 });

@@ -99,6 +99,8 @@ const RUNS = /^(core\.hookspath|core\.fsmonitor|diff\.external|diff\..+\.(textco
 const INCLUDE = /^(include\.path|includeif\..+\.path)$/;
 /** A full walk of a big tree costs more than a tier decision may: past this many entries, unsafe. */
 const WALK_LIMIT = 50_000;
+/** The walk's time limit (a slow or huge disk): past it, unsafe. */
+const WALK_DEADLINE_MS = 5000;
 /** Per git process; past it the scan fails, and a failed scan is unsafe. */
 const GIT_TIMEOUT_MS = 5000;
 
@@ -133,7 +135,10 @@ const gitSync = (cwd: string, args: string[]) => execFileSync("git", args, { ...
 /**
  * Git off the event loop. Even an async spawn creates the process on the main thread, and on Windows under load (antivirus)
  * that alone held the loop for hundreds of ms; so git runs in a worker thread (plain JS, eval'd: nothing to bundle), which
- * blocks only itself. Calls queue there one at a time. If the thread cannot start or dies, an async execFile is the fallback.
+ * blocks only itself. Calls queue there one at a time. Every failure fails the read closed (unsafe) and recovers for the next:
+ * a thread that errors (cannot start, throws) is marked broken and an async execFile takes over; a thread that exits is
+ * started again on the next call; a call queued past `queueTimeoutMs` terminates the thread (its queue fails) and the next call
+ * starts a new one.
  */
 const GIT_THREAD = `
 const { parentPort } = require("node:worker_threads");
@@ -145,14 +150,39 @@ parentPort.on("message", ({ id, args, opts }) => {
     parentPort.postMessage({ id, error: String((e && e.message) || e) });
   }
 });`;
+/** Test seam: the thread's script, the queue timeout and the walk deadline. `reset()` drops the thread and the broken mark. */
+export const gitThreadConfig = {
+  script: GIT_THREAD,
+  queueTimeoutMs: 4 * GIT_TIMEOUT_MS,
+  walkDeadlineMs: WALK_DEADLINE_MS,
+  reset() {
+    const w = thread;
+    thread = undefined;
+    threadBroken = false;
+    if (w) void w.terminate();
+  },
+  get broken() {
+    return threadBroken;
+  },
+};
 let thread: Worker | undefined;
 let threadBroken = false;
 let nextCall = 0;
-const calls = new Map<number, { ok: (out: string) => void; fail: (e: Error) => void; timer: NodeJS.Timeout }>();
+type Call = { ok: (out: string) => void; fail: (e: Error) => void; timer: NodeJS.Timeout; w: Worker };
+const calls = new Map<number, Call>();
+/** Fails every call queued in `w` (a thread that stopped or was replaced). */
+function failCalls(w: Worker, why: string) {
+  for (const [id, c] of calls)
+    if (c.w === w) {
+      calls.delete(id);
+      clearTimeout(c.timer);
+      c.fail(new Error(why));
+    }
+}
 function gitThread(): Worker | undefined {
   if (thread || threadBroken) return thread;
   try {
-    const w = new Worker(GIT_THREAD, { eval: true });
+    const w = new Worker(gitThreadConfig.script, { eval: true });
     w.on("message", ({ id, out, error }: { id: number; out?: string; error?: string }) => {
       const c = calls.get(id);
       if (!c) return;
@@ -161,20 +191,23 @@ function gitThread(): Worker | undefined {
       if (error === undefined) c.ok(out ?? "");
       else c.fail(new Error(error));
     });
-    const down = (e: unknown) => {
-      if (thread === w) thread = undefined;
-      for (const [id, c] of calls) {
-        calls.delete(id);
-        clearTimeout(c.timer);
-        c.fail(new Error(`git thread stopped: ${String(e)}`));
+    w.on("error", (e) => {
+      console.warn(`git-readonly: git thread failed, using child processes from now on: ${String(e)}`);
+      if (thread === w) {
+        thread = undefined;
+        threadBroken = true;
       }
-    };
-    w.on("error", down);
-    w.on("exit", down);
+      failCalls(w, `git thread failed: ${String(e)}`);
+    });
+    w.on("exit", (code) => {
+      if (thread === w) thread = undefined;
+      failCalls(w, `git thread exited (${code})`);
+    });
     // After the listeners: a listener added later refs the port again, and the thread would keep the daemon from exiting.
     w.unref();
     thread = w;
-  } catch {
+  } catch (e) {
+    console.warn(`git-readonly: git thread did not start, using child processes: ${String(e)}`);
     threadBroken = true;
   }
   return thread;
@@ -188,13 +221,15 @@ const gitAsync = (cwd: string, args: string[]) =>
       return;
     }
     const id = ++nextCall;
-    // Queued calls wait their turn in the thread: allow for the queue, then fail closed.
+    // Queued calls wait their turn in the thread: allow for the queue, then fail closed and replace the (stuck) thread.
     const timer = setTimeout(() => {
-      calls.delete(id);
-      fail(new Error("git timed out"));
-    }, 4 * GIT_TIMEOUT_MS);
+      console.warn("git-readonly: git thread did not answer in time; starting a new one");
+      if (thread === w) thread = undefined;
+      failCalls(w, "git timed out");
+      void w.terminate();
+    }, gitThreadConfig.queueTimeoutMs);
     timer.unref();
-    calls.set(id, { ok, fail, timer });
+    calls.set(id, { ok, fail, timer, w });
     w.postMessage({ id, args, opts: gitOpts(cwd) });
   });
 
@@ -262,9 +297,10 @@ function readConfig({ top, out, flag, inside }: Scan, text: string) {
 
 /** One folder's entries during the walk: false = stop (flagged). node_modules is not entered: git never runs anything from a
  * nested repository there unless it is a gitlink (the index check), and a low Write cannot create a `.git` or `.gitmodules`. */
-function visit({ top, flag }: Scan, d: string, depth: number, entries: Dirent[], seen: { n: number }, down: (dir: string) => void): boolean {
+function visit({ top, flag }: Scan, d: string, depth: number, entries: Dirent[], seen: { n: number; until: number }, down: (dir: string) => void): boolean {
   for (const e of entries) {
     if (++seen.n > WALK_LIMIT) return (flag("worktree too large to check"), false);
+    if (performance.now() > seen.until) return (flag("worktree walk took too long"), false);
     const n = e.name.toLowerCase();
     if (n === ".git" && depth > 0) return (flag(`nested repository ${relative(top, d) || "."}`), false);
     if (n === ".gitmodules") return (flag(relative(top, join(d, e.name))), false);
@@ -289,7 +325,7 @@ export function repoSafety(cwd: string): RepoSafety {
   try {
     s = begin(cwd);
     readConfig(s, gitSync(s.top, CONFIG_ARGS));
-    const seen = { n: 0 };
+    const seen = { n: 0, until: performance.now() + gitThreadConfig.walkDeadlineMs };
     const walk = (d: string, depth: number): boolean => {
       const subs: string[] = [];
       if (!visit(s!, d, depth, readdirSync(d, { withFileTypes: true }), seen, (x) => subs.push(x))) return false;
@@ -328,7 +364,7 @@ export function repoSafetyAsync(cwd: string, since = performance.now() - SHARE_M
     try {
       s = begin(cwd);
       readConfig(s, await gitAsync(s.top, CONFIG_ARGS));
-      const seen = { n: 0 };
+      const seen = { n: 0, until: performance.now() + gitThreadConfig.walkDeadlineMs };
       const walk = async (d: string, depth: number): Promise<boolean> => {
         const subs: string[] = [];
         if (!visit(s!, d, depth, await readdir(d, { withFileTypes: true }), seen, (x) => subs.push(x))) return false;

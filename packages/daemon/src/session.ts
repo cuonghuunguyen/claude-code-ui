@@ -44,6 +44,8 @@ import { tierAsync, type Tier, type TierContext } from "./risk-tier.ts";
 type Listener = (e: Event) => void;
 // Claude Code's wording, so Claude reads the feedback as the user's instruction rather than as tool output.
 const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
+/** A coordinator settle reads the tier at most this often while the session keeps changing; then it is refused. */
+const SETTLE_READS = 5;
 // Never the user's words: coordinator text is not user intent (docs/spec.md "Permission tiers").
 const COORDINATOR_DENIED = "The coordinator session denied this tool use; it was not run. Its reason:\n";
 type PermissionPart = Extract<Part, { type: "permission_request" }>;
@@ -757,12 +759,16 @@ export class Session {
   permissionTier(requestId: string): Promise<Tier | undefined> {
     const req = this.pending.get(requestId);
     if (req?.part.type !== "permission_request") return Promise.resolve(undefined);
-    if (req.tier?.epoch !== this.epoch) {
-      const read = this.opts.tier ?? tierAsync;
-      const { tool, input } = req.part;
-      req.tier = { epoch: this.epoch, value: Promise.resolve().then(() => read(tool, input, { cwd: this.cwd, bashCwdPinned: this.bashPinned, since: this.epochAt, ...req.ctx })).catch(() => "high" as const) };
-    }
+    if (req.tier?.epoch !== this.epoch) req.tier = { epoch: this.epoch, value: this.readTier(req.part, req.ctx, this.epochAt) };
     return req.tier.value;
+  }
+
+  /** One read of a request's tier off the event loop; `since`: share no repository scan that started before it. Any error is high. */
+  private readTier(part: PermissionPart, ctx: Omit<TierContext, "cwd"> | undefined, since: number): Promise<Tier> {
+    const read = this.opts.tier ?? tierAsync;
+    return Promise.resolve()
+      .then(() => read(part.tool, part.input, { cwd: this.cwd, bashCwdPinned: this.bashPinned, since, ...ctx }))
+      .catch(() => "high" as const);
   }
 
   /**
@@ -809,15 +815,23 @@ export class Session {
    * a time, and after the tier is read the request is looked up again and settled in the same synchronous step (no await
    * between). The worker's CLI is blocked on this request, so the worker itself writes nothing while it is decided; another
    * request of the same worker (parallel tool use) is decided only after this one settled, with its tier read again when this
-   * allow moved the epoch.
+   * allow moved the epoch. The settle reads the tier afresh (no cached read, no scan shared from before it started) and reads
+   * again while the epoch moved during the read, at most SETTLE_READS times.
    */
   coordinatorRespond(requestId: string, answer: Answer): Promise<boolean> {
     const run = this.settling.then(async () => {
-      if (!this.coordinatorAnswerOk(requestId, answer)) return false;
-      const t = await this.permissionTier(requestId);
-      const part = this.pending.get(requestId)?.part;
-      if (t !== "low" || part?.type !== "permission_request" || !this.coordinatorAnswerOk(requestId, answer)) return false;
-      return this.coordinatorSettle(requestId, part, answer);
+      // A fresh read, never the cached one: a change from outside this session (a terminal, another session, global config)
+      // moves no epoch. Read again while the epoch moved during the read (an allow or a tool end landed meanwhile).
+      for (let tries = 0; ; tries++) {
+        const req = this.pending.get(requestId);
+        if (!req || req.part.type !== "permission_request" || !this.coordinatorAnswerOk(requestId, answer) || tries >= SETTLE_READS) return false;
+        const epoch = this.epoch;
+        const t = await this.readTier(req.part, req.ctx, performance.now());
+        if (this.epoch !== epoch) continue;
+        const part = this.pending.get(requestId)?.part;
+        if (t !== "low" || part?.type !== "permission_request" || !this.coordinatorAnswerOk(requestId, answer)) return false;
+        return this.coordinatorSettle(requestId, part, answer);
+      }
     });
     this.settling = run.catch(() => undefined);
     return run;

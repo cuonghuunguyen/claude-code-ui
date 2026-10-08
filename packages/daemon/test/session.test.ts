@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1924,18 +1925,56 @@ describe("coordinator settle off the event loop (GH-163 round 5)", () => {
     expect(log).toEqual(["start a.ts", "end a.ts", "settled a.ts", "start b.ts", "end b.ts", "settled b.ts"]);
   });
 
-  it("a request's tier is read once and reused until something in the session changes", async () => {
+  it("the event and the coordinator's check share one read; the settle reads afresh", async () => {
     const { s, log, reqs } = await twoPending(1);
     expect(await s.permissionTier(reqs[1]!.requestId)).toBe("low");
     expect(await s.permissionTier(reqs[1]!.requestId)).toBe("low");
-    expect(await s.coordinatorRespond(reqs[1]!.requestId, { decision: "deny", message: "no" })).toBe(true);
-    // One read for the event, the coordinator check and the settle-time check.
     expect(log.filter((l) => l === "start b.ts")).toHaveLength(1);
-    expect(await s.permissionTier(reqs[0]!.requestId)).toBe("low");
-    // A deny changes nothing on disk: the tier read for the coordinator check is reused at settle.
-    expect(await s.coordinatorRespond(reqs[0]!.requestId, { decision: "allow", message: "r" })).toBe(true);
-    expect(log.filter((l) => l === "start a.ts")).toHaveLength(1);
+    expect(await s.coordinatorRespond(reqs[1]!.requestId, { decision: "deny", message: "no" })).toBe(true);
+    // The settle-time check never reuses a cached read: a change from outside the session (a terminal, global config) counts.
+    expect(log.filter((l) => l === "start b.ts")).toHaveLength(2);
   });
+
+  it("M1: an allow that lands while the settle reads the tier makes it read again; a high second read refuses", async () => {
+    const log: string[] = [];
+    let n = 0;
+    const tier = async (_tool: string, input: unknown) => {
+      const f = (input as { file_path: string }).file_path;
+      const k = ++n;
+      log.push(`start ${f}`);
+      await new Promise((r) => setTimeout(r, 80));
+      return k === 1 ? ("low" as const) : ("high" as const);
+    };
+    const s = new Session(cwd, { query: parallelPermissionQuery as never, tier });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt(JSON.stringify({ calls: [edit("a.ts"), edit("b.ts")] }));
+    await until(events, () => events.filter((e) => e.part.type === "permission_request").length >= 2);
+    const reqs = events.filter((e) => e.part.type === "permission_request").map((e) => e.part as Extract<Event["part"], { type: "permission_request" }>);
+    const coord = s.coordinatorRespond(reqs[1]!.requestId, { decision: "allow", message: "r" });
+    await new Promise((r) => setTimeout(r, 20));
+    // The user allows a while b's read runs: the epoch moves mid-read.
+    expect(s.respond(reqs[0]!.requestId, { decision: "allow" })).toBe(true);
+    expect(await coord).toBe(false);
+    expect(log.filter((l) => l === "start b.ts")).toHaveLength(2);
+    expect(s.pendingRequest(reqs[1]!.requestId)).toBeDefined();
+  });
+
+  it("M2: a change from outside the session after the tier was read is seen at settle (real git)", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "coord-outside-"));
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    const s = new Session(repo, { query: parallelPermissionQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt(JSON.stringify({ calls: [{ tool: "Write", input: { file_path: "tools/fsm.sh", content: "#!/bin/sh" } }] }));
+    await until(events, (e) => e.part.type === "permission_request");
+    const req = events.find((e) => e.part.type === "permission_request")!.part as Extract<Event["part"], { type: "permission_request" }>;
+    expect(await s.permissionTier(req.requestId)).toBe("low");
+    // Someone else (a terminal, another session) sets a config that runs the file the worker wants to write.
+    execFileSync("git", ["config", "core.fsmonitor", "./tools/fsm.sh"], { cwd: repo });
+    expect(await s.coordinatorRespond(req.requestId, { decision: "allow", message: "r" })).toBe(false);
+    expect(s.info().state).toBe("needs_input");
+  }, 60_000);
 
   it("an allow in the session makes a pending request's tier stale: it is read again before the coordinator settles it", async () => {
     const { s, log, reqs } = await twoPending(1);

@@ -438,9 +438,11 @@ export function createOrchestration(deps: OrchestrationDeps) {
           if ((await s.permissionTier(a.id)) !== "low")
             throw new ToolError(`Permission request ${a.id} (${p.tool}) is high risk: only the user answers it. Leave it, or hand it over with worker_escalate and a reason.`);
           if (!(await s.coordinatorRespond(a.id, { decision, message: a.reason }))) {
-            // Refused at settle: answered meanwhile, or its tier is no longer low.
-            if (s.pendingRequest(a.id)) throw new ToolError(`Permission request ${a.id} (${p.tool}) is high risk now: only the user answers it. Leave it, or hand it over with worker_escalate and a reason.`);
-            throw new ToolError(`Permission request ${a.id} was answered meanwhile.`);
+            // Refused at settle: answered or escalated meanwhile, or the repository changed and its tier is no longer low.
+            const now = s.pendingRequest(a.id);
+            if (!now) throw new ToolError(`Permission request ${a.id} was answered meanwhile.`);
+            if (now.escalated) throw new ToolError(`Permission request ${a.id} was escalated to the user meanwhile: only the user answers it.`);
+            throw new ToolError(`Permission request ${a.id} (${p.tool}) is no longer low risk: the worker folder or its git config changed since the request came in. Only the user answers it now; leave it, or hand it over with worker_escalate and a reason.`);
           }
           return { name: a.name, id: a.id, decision };
         },
