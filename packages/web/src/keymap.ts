@@ -10,7 +10,10 @@ const RESERVED = ["mod+t", "mod+w", "mod+n", "mod+shift+t", "mod+shift+n", "mod+
 
 /** Why `spec` cannot be a binding, or undefined when it can. */
 export function bindingError(spec: string, mac = IS_MAC) {
-  const mods = [...parseSpec(spec).mods];
+  const { key, mods: set } = parseSpec(spec);
+  const mods = [...set];
+  // Older builds stored "dead": it fires on every dead key.
+  if (["dead", "unidentified", "process", ""].includes(key)) return "This key cannot be a shortcut";
   if (!mods.some((m) => m === "mod" || m === "ctrl" || m === "meta" || m === "alt")) return "Use Ctrl, Cmd or Alt with the key, or it would fire while typing";
   if (RESERVED.some((r) => canon(r, mac) === canon(spec, mac))) return "The browser keeps this shortcut";
   return undefined;
@@ -80,19 +83,27 @@ export function conflictOf(id: string, spec: string, mac = IS_MAC): { id?: strin
   return undefined;
 }
 
-/** The spec of a key press for the recorder; undefined for a modifier alone. A letter is the typed one (`e.key`), as matchesKey compares it, so a rebind works on QWERTZ, AZERTY and Dvorak; only macOS Option, which changes `e.key`, records the physical key. */
+/** The spec of a key press for the recorder (check pressError first); undefined for a modifier alone. A letter is the typed one (`e.key`), as matchesKey compares it, so a rebind works on QWERTZ, AZERTY and Dvorak; only macOS Option, which changes `e.key`, records the physical key. */
 export function specFromEvent(e: KeyboardEvent, mac = IS_MAC) {
   if (["Control", "Shift", "Alt", "Meta", "AltGraph"].includes(e.key)) return undefined;
-  const key = mac && e.altKey && /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : /^Digit\d$/.test(e.code) ? e.code.slice(5) : e.code === "Backquote" ? "`" : e.key === " " ? "space" : e.key.toLowerCase();
+  const key = physicalKey(e, mac) ?? (e.key === " " ? "space" : e.key.toLowerCase());
   const mods = [e.ctrlKey && !mac && "mod", e.metaKey && mac && "mod", e.ctrlKey && mac && "ctrl", e.metaKey && !mac && "meta", e.altKey && "alt", e.shiftKey && "shift"].filter(Boolean);
   return [...mods, key].join("+");
 }
+
+/** The key a press is recorded by when the physical key decides (digits, `, macOS Option+letter; matchesKey compares them by `code` too), else undefined. */
+const physicalKey = (e: KeyboardEvent, mac: boolean) =>
+  mac && e.altKey && /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : /^Digit\d$/.test(e.code) ? e.code.slice(5) : e.code === "Backquote" ? "`" : undefined;
 
 /** Why the recorder refuses this key press, or undefined when it can be a binding (then specFromEvent and bindingError decide). */
 export function pressError(e: KeyboardEvent, mac = IS_MAC) {
   const altGr = altGrChar(e, mac);
   if (altGr === "Dead") return "Ctrl+Alt is AltGr on this keyboard and starts an accented letter with this key. Pick another key.";
   if (altGr) return `Ctrl+Alt is AltGr on this keyboard and types “${altGr}” with this key, so the shortcut would block typing it. Pick another key.`;
+  if (physicalKey(e, mac)) return undefined;
+  // Every dead key reports "Dead": a binding on one would fire on all of them.
+  if (e.key === "Dead") return "This is a dead key: it starts an accented letter. Pick another key.";
+  if (e.key === "Unidentified" || e.key === "Process") return "The browser does not say which key this is. Pick another key.";
   return undefined;
 }
 

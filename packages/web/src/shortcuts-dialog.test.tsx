@@ -107,6 +107,13 @@ it("an AltGr press (Ctrl+Alt typing a character) is refused with a message, so t
   expect(specOf("tab.close", false)).toBe("mod+alt+w");
 });
 
+it("a dead key is refused with a message", async () => {
+  await click("shortcut-edit-tab.close");
+  await press({ key: "Dead", code: "Equal", ctrlKey: true });
+  expect(q("shortcut-error")!.textContent).toBe("This is a dead key: it starts an accented letter. Pick another key.");
+  expect(specOf("tab.close", false)).toBe("mod+alt+w");
+});
+
 it("Reset all restores every default", async () => {
   await click("shortcut-edit-sidebar.toggle");
   await press({ key: "b", code: "KeyB", ctrlKey: true, altKey: true });

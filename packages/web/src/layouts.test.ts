@@ -166,3 +166,20 @@ describe("AltGr (Ctrl+Alt off macOS) typing a character is never a shortcut", ()
     for (const [name, mac, p] of ACCEPTED) expect(pressError(ev(p), mac), name).toBeUndefined();
   });
 });
+
+/** Presses whose key the browser does not name: [layout and press, macOS, the press]. A binding on them would fire on any dead key, so they are refused. */
+const UNNAMED: [string, boolean, Press][] = [
+  ["Czech Ctrl+´ (dead)", false, { key: "Dead", code: "Equal", ...C }],
+  ["US International Alt+' (dead)", false, { key: "Dead", code: "Quote", ...A }],
+  ["German Ctrl+´ (dead)", false, { key: "Dead", code: "Equal", ...C }],
+  ["mac German Cmd+´ (dead)", true, { key: "Dead", code: "Equal", ...M }],
+  ["mac Czech Ctrl+´ (dead)", true, { key: "Dead", code: "Equal", ...C }],
+  ["an unidentified key", false, { key: "Unidentified", code: "", ...C }],
+  ["a key while an input method composes", false, { key: "Process", code: "KeyA", ...C }],
+];
+
+describe("dead and unnamed keys are refused, not stored as \"dead\"", () => {
+  it.each(UNNAMED)("%s", (_, mac, p) => {
+    expect(pressError(ev(p), mac)).toMatch(/dead key|does not say which key/);
+  });
+});

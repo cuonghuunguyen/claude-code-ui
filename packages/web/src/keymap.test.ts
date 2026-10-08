@@ -52,6 +52,9 @@ it("a plain key and a browser-reserved combo are rejected", () => {
   expect(bindingError("ctrl+3", true)).toBeUndefined();
   expect(bindingError("alt+3", false)).toBeUndefined();
   expect(bindingError("mod+alt+b", false)).toBeUndefined();
+  // A "dead" spec from an older build fires on every dead key: dropped on load.
+  expect(bindingError("mod+alt+dead", false)).toBe("This key cannot be a shortcut");
+  expect(parseOverrides(JSON.stringify({ "tab.close": "mod+alt+dead" }))).toEqual({});
 });
 
 it("a binding used by another shortcut is a conflict; the shortcut's own binding is not", () => {
