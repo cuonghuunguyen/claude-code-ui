@@ -45,7 +45,7 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
 ];
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping }: { open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onShortcuts }: { open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; onShortcuts?: () => void }) {
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -126,6 +126,22 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
                 ))}
               </SelectContent>
             </Select>
+          </div>
+        </section>
+      )}
+      {onShortcuts && (
+        <section aria-labelledby="settings-keyboard" className="flex flex-col" data-testid="settings-keyboard">
+          <h3 id="settings-keyboard" className="pb-1 font-medium text-[13px] text-muted-foreground">
+            Keyboard
+          </h3>
+          <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+            <div className="min-w-0 flex-1">
+              <span id="settings-keyboard-label" className="block text-sm">Keyboard shortcuts</span>
+              <span id="settings-keyboard-hint" className="block text-muted-foreground text-xs">See every shortcut and rebind it. Kept in this browser.</span>
+            </div>
+            <button type="button" onClick={onShortcuts} aria-describedby="settings-keyboard-hint" className="h-8 rounded-md border px-3 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="settings-shortcuts">
+              Customize…
+            </button>
           </div>
         </section>
       )}
