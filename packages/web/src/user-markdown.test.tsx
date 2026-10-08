@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionPane } from "./App.tsx";
 import { markAppScroll, resetScrollRest } from "./scroll-rest.ts";
-import { resetUserCodePaint, SCROLL_REST } from "./user-code-paint.ts";
+import { pairOf, resetUserCodePaint, SCROLL_REST } from "./user-code-paint.ts";
 import { UserMarkdown } from "./user-markdown.tsx";
 import { applyEvent, emptySession } from "./store.ts";
 
@@ -249,6 +249,53 @@ it("the same long block twice in one message: both copies are painted", async ()
   await show(both);
   await slotsUntil(() => ranges(both[0]!) > 40 && ranges(both[1]!) > 40);
   expect(ranges(both[0]!)).toBe(ranges(both[1]!));
+});
+
+const SAMPLES: Record<string, string> = {
+  ts: Array.from(
+    { length: 6 },
+    (_, i) =>
+      `export async function handlerE${i}(req: Request<{ id: string }>, opts: Opts = {}): Promise<Result<number>> {\n  const items = await db.query("SELECT * FROM t WHERE id = ?", [req.id]); // row ${i}\n  /* a comment\n     over two lines */\n  return items.length + \`\${opts.x}\`.length;\n}`,
+  ).join("\n\n"),
+  python: Array.from({ length: 8 }, (_, i) => `class Foo${i}(Base):\n    """Doc\n    more"""\n    def run(self, x: int) -> int:\n        return [y for y in range(x) if y % ${i + 2}]\n\n@decorator\ndef bar${i}():\n    pass`).join("\n\n"),
+  json: JSON.stringify(Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`key${i}`, { n: i, s: `v${i}`, ok: i % 2 === 0, list: [1, null, "x"] }])), null, 2),
+};
+
+it.each(Object.keys(SAMPLES))("the painted colors of a long %s block are the colors of the whole block tokenized at once, also when tokenizing is slow", async (lang) => {
+  stubPaint();
+  const code = SAMPLES[lang]!;
+  const a = await mountMd(["```" + lang, code, "```"].join("\n"));
+  const [block] = blocksOf(a.el);
+  await show([block!]);
+  // A slow machine: every clock read is 20 ms later (a per-line time limit would cut lines short and corrupt the grammar state).
+  let t = Date.now();
+  for (let i = 0; i < 400 && !ranges(block!); i++) {
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => (t += 20));
+    try {
+      await slot();
+    } finally {
+      spy.mockRestore();
+    }
+    await wait(5);
+  }
+  expect(ranges(block!)).toBeGreaterThan(20);
+  const { createHighlighter } = await import("shiki");
+  const { createJavaScriptRegexEngine } = await import("shiki/engine/javascript");
+  const h = await createHighlighter({ themes: ["github-light", "github-dark"], langs: [lang], engine: createJavaScriptRegexEngine({ forgiving: true }) });
+  const want = h.codeToTokens(code, { lang: lang as never, themes: { light: "github-light", dark: "github-dark" } }).tokens.map((line) =>
+    line.flatMap((t) => [...t.content].map((ch) => (ch.trim() ? `${t.htmlStyle?.color}|${t.htmlStyle?.["--shiki-dark"]}` : ""))),
+  );
+  const lines = [...block!.querySelectorAll("code > span")];
+  const got = lines.map((l) => [...(l.textContent === "\n" ? "" : l.textContent!)].map(() => ""));
+  for (const hl of highlights.values())
+    for (const r of hl) {
+      const i = lines.findIndex((l) => l.contains(r.startContainer));
+      if (i < 0) continue;
+      for (let c = r.startOffset; c < r.endOffset; c++) got[i]![c] = pairOf(hl as never)!;
+    }
+  let chars = 0, same = 0;
+  want.forEach((line, i) => line.forEach((pair, c) => pair && (chars++, got[i]![c] === pair && same++)));
+  expect(`${same} of ${chars}`).toBe(`${chars} of ${chars}`);
 });
 
 it("a block that leaves the screen drops its ranges after the scroll and is painted again from the cache when it comes back", async () => {

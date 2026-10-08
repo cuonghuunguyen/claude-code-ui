@@ -10,7 +10,7 @@ import { sinceUserScroll } from "./scroll-rest.ts";
  * - only blocks on screen (IntersectionObserver), not the overscan rows around them; a block that leaves the screen drops its
  *   ranges (few ranges in the registry keep each change cheap);
  * - only once the user has not scrolled a timeline for SCROLL_REST ms (`scroll-rest.ts`);
- * - tokenized a few lines per idle slot (at most SLICE ms), so no long task; tokens are cached, a block seen before is
+ * - tokenized line by line in idle periods (at most IDLE_SLICE ms each), so no long task; tokens are cached, a block seen before is
  *   painted again from the cache (creating ranges, no tokenizing);
  * - the text nodes are never replaced, so a selection in the block stays as it is.
  * Browsers without `CSS.highlights` show these blocks plain.
@@ -18,8 +18,9 @@ import { sinceUserScroll } from "./scroll-rest.ts";
 
 /** Painting waits until the user has not scrolled a timeline for this long (ms). */
 export const SCROLL_REST = 500;
-/** Work per idle slot (ms): tokenizing stops after this and goes on in the next slot. */
+/** Work per slot (ms) when the browser gives no idle deadline; with one, up to IDLE_SLICE of it (below a 50 ms long task). */
 const SLICE = 8;
+const IDLE_SLICE = 30;
 const THEMES = { light: "github-light", dark: "github-dark" } as const;
 /** Tokenized blocks kept (by language and code). */
 const CACHE_MAX = 300;
@@ -130,7 +131,11 @@ function tokenize(b: Block, until: number): Paint | undefined | null {
   }
   do {
     const line = p.lines[p.i]!;
-    const r = ready!.codeToTokens(line, { lang: b.lang as never, themes: THEMES, grammarState: p.state, tokenizeMaxLineLength: LINE_MAX, tokenizeTimeLimit: SLICE });
+    const r = ready!.codeToTokens(line, { lang: b.lang as never, themes: THEMES, grammarState: p.state, tokenizeMaxLineLength: LINE_MAX,
+      // No time limit: a line cut short leaves a wrong grammar state and wrong colors for the rest of the block (a slow
+      // device hit the default per-line limit). LINE_MAX bounds a line's work instead.
+      tokenizeTimeLimit: 0,
+    });
     p.state = r.grammarState;
     let at = 0;
     for (const t of r.tokens[0] ?? []) {
@@ -173,15 +178,26 @@ function paint(b: Block, data: Paint) {
   return true;
 }
 
-/** Next block to paint: on screen, not painted. */
+/** A block on screen still to paint. */
 function nextBlock() {
   for (const b of blocks.values()) if (b.visible && !b.ranges && !b.skip) return b;
   return undefined;
 }
+/** The block on screen to paint first: the one nearest the middle of the viewport. */
+function pickBlock() {
+  let best: Block | undefined;
+  let bestDist = Infinity;
+  const mid = (globalThis.innerHeight ?? 0) / 2;
+  for (const b of blocks.values()) {
+    if (!b.visible || b.ranges || b.skip) continue;
+    const r = b.el.getBoundingClientRect();
+    const dist = r.top <= mid && r.bottom >= mid ? 0 : Math.min(Math.abs(r.top - mid), Math.abs(r.bottom - mid));
+    if (dist < bestDist) (best = b), (bestDist = dist);
+  }
+  return best;
+}
 
 let scheduled = false;
-/** The last slice ran out of time inside a block on screen: the next one runs as the next task, not in an idle slot. */
-let hot = false;
 let epoch = 0;
 function pump() {
   // While shiki or a language loads, its `finally` pumps again.
@@ -194,36 +210,34 @@ function pump() {
     scheduled = false;
     pump();
   };
-  if (rest > 0) return void ((hot = false), setTimeout(again, rest));
+  if (rest > 0) return void setTimeout(again, rest);
   const run = (d?: IdleDeadline) => {
     if (mine !== epoch) return;
-    hot = false;
-    if (sinceUserScroll() >= SCROLL_REST) hot = work(performance.now() + (d && !d.didTimeout ? Math.min(SLICE, Math.max(1, d.timeRemaining())) : SLICE));
+    if (sinceUserScroll() >= SCROLL_REST) work(performance.now() + (d && !d.didTimeout ? Math.min(IDLE_SLICE, Math.max(1, d.timeRemaining())) : SLICE));
     again();
   };
-  // A slice is at most SLICE ms (no long task); between slices the browser renders and handles input.
-  if (hot || !("requestIdleCallback" in globalThis)) setTimeout(run, 0);
-  else requestIdleCallback(run, { timeout: 1000 });
+  // A slice is at most IDLE_SLICE ms of an idle period (no long task); between slices the browser renders and handles input.
+  if ("requestIdleCallback" in globalThis) requestIdleCallback(run, { timeout: 200 });
+  else setTimeout(run, 16);
 }
 
-/** Paints blocks on screen until `until`; true when it stopped in the middle of tokenizing one. */
+/** Paints blocks on screen (nearest the middle first) until `until`. */
 function work(until: number) {
   for (const [h, r] of stale.splice(0)) h.delete(r);
-  for (let b = nextBlock(); b && performance.now() < until; b = nextBlock()) {
+  for (let b = pickBlock(); b && performance.now() < until; b = pickBlock()) {
     let data: Paint | null | undefined = cache.get(b.key);
     if (data) {
       cache.delete(b.key);
       cache.set(b.key, data);
     } else {
       const state = prepare(b.lang);
-      if (state === "wait") return false;
+      if (state === "wait") return;
       data = state === "ready" ? tokenize(b, until) : null;
-      if (data === undefined) return true;
+      if (data === undefined) return;
     }
     // The DOM is not the plain block (streamdown colored it after all): leave it.
     if (!data || !paint(b, data)) b.skip = true;
   }
-  return !!nextBlock();
 }
 
 function observer() {
@@ -246,6 +260,8 @@ export function watchBlock(el: HTMLElement) {
   if (!lang || lang === "text" || !code) return;
   blocks.set(el, { el, key: `${lang}\0${codeOf(code)}`, lang, visible: false });
   observer().observe(el);
+  // Load shiki and the grammar now (asynchronous, no tokenizing): the block is painted sooner once the scroll rests.
+  prepare(lang);
 }
 
 /** `el` left the page (its row unmounted, or its text changed): stop watching, drop its ranges in an idle slot. */
@@ -268,7 +284,6 @@ export function resetUserCodePaint() {
   progress.clear();
   cache.clear();
   failed.clear();
-  hot = false;
   io = undefined;
   for (const h of colors.values()) h.clear();
   colors.clear();
@@ -276,3 +291,6 @@ export function resetUserCodePaint() {
   sheet = undefined;
   if (paintSupported()) for (const name of [...CSS.highlights.keys()]) if (name.startsWith("user-code-")) CSS.highlights.delete(name);
 }
+
+/** For tests: the "light|dark" color pair a highlight paints. */
+export const pairOf = (h: Highlight) => [...colors].find(([, x]) => x === h)?.[0];
