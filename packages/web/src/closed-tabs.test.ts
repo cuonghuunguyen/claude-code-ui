@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { MAX_CLOSED, popClosed, pushClosed } from "./closed-tabs.ts";
+import { MAX_CLOSED, popClosed, pushClosed, restoreClosed } from "./closed-tabs.ts";
 
 it("keeps the last 10, newest on top, no duplicates", () => {
   let s = pushClosed([], "a", 0);
@@ -18,4 +18,12 @@ it("pop skips sessions that are gone or open again", () => {
   expect(r.rest).toEqual([{ id: "a", at: 0 }]);
   expect(popClosed(s, (id) => id !== "c", ["b"]).tab?.id).toBe("a");
   expect(popClosed(s, () => false, []).tab).toBeUndefined();
+});
+
+it("restore puts that exact entry back at its place (clamped), drops it from the stack, and ignores an open tab", () => {
+  const s = [{ id: "a", at: 0 }, { id: "b", at: 1 }, { id: "c", at: 5 }];
+  expect(restoreClosed(s, ["x", "y"], "b")).toEqual({ tabs: ["x", "b", "y"], stack: [{ id: "a", at: 0 }, { id: "c", at: 5 }] });
+  expect(restoreClosed(s, ["x", "y"], "c").tabs).toEqual(["x", "y", "c"]);
+  expect(restoreClosed(s, ["b"], "b")).toEqual({ tabs: ["b"], stack: s });
+  expect(restoreClosed(s, ["x"], "zz")).toEqual({ tabs: ["x"], stack: s });
 });

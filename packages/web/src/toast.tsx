@@ -15,7 +15,7 @@ export function ToastRegion({ children }: { children?: ReactNode }) {
   );
 }
 
-export function Toast({ message, onClose }: { message: string; onClose: () => void }) {
+export function Toast({ message, action, onClose }: { message: string; /** A text button after the message (Undo); it runs, then the toast goes. */ action?: { label: string; onClick: () => void }; onClose: () => void }) {
   const [open, setOpen] = useState(false);
   // Out: wait for the exit transition (none under reduced motion) before the owner drops the toast.
   const close = () => {
@@ -35,7 +35,18 @@ export function Toast({ message, onClose }: { message: string; onClose: () => vo
       data-state={open ? "open" : "closed"}
       className={`${TOAST_CARD} grid grid-cols-[minmax(0,1fr)_20px] gap-3 transition-[transform,opacity] duration-[280ms,160ms] ease-[cubic-bezier(0.2,0,0,1),ease-out] data-[state=closed]:translate-y-4 data-[state=closed]:opacity-0 motion-reduce:transition-none`}
     >
-      <p className="text-[13px] leading-5 font-medium tracking-[-0.04px]">{message}</p>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3">
+        <p className="min-w-0 break-words text-[13px] leading-5 font-medium tracking-[-0.04px]">{message}</p>
+        {action && (
+          <button
+            type="button"
+            onClick={() => (action.onClick(), close())}
+            className="cursor-pointer rounded-sm px-1 text-[13px] leading-5 font-medium text-info outline-none hover:underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:min-h-11"
+          >
+            {action.label}
+          </button>
+        )}
+      </div>
       <button
         type="button"
         aria-label="Dismiss"

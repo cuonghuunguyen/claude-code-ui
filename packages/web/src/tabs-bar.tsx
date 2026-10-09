@@ -2,7 +2,7 @@
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
 // Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
-import { createContext, memo, use, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { createContext, memo, use, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
 import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { GHOST, ROW } from "./toolbar.tsx";
 import { SideLabel } from "./sides.tsx";
+import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeState } from "./swipe.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
 export type TabInfo = {
@@ -88,6 +89,7 @@ export function TabsBar({
   info,
   onSelect,
   onClose,
+  onSwipeClose,
   onMove,
   onMoveGroup,
   onMoveGroupTo,
@@ -113,6 +115,8 @@ export function TabsBar({
   info: (id: string) => TabInfo;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
+  /** A row of the phone switcher closed by a left swipe or Delete (the list stays open); default `onClose`. The owner can offer Undo. */
+  onSwipeClose?: (id: string) => void;
   onMove: (from: string, to: string) => void;
   /** Moves the group of a project one place left or right. */
   onMoveGroup: (cwd: string, by: -1 | 1) => void;
@@ -213,6 +217,8 @@ export function TabsBar({
     ro.observe(el);
     return () => ro.disconnect();
   }, [activeId, tabs.length, collapsed]);
+  // When the last swipe on a switcher row ended: the click that follows it must not select the row (base-ui commits a selection on click).
+  const swiped = useRef(-Infinity);
   const active = activeId && activeId !== FOCUS_TAB ? info(activeId) : undefined;
   const sideOf = use(SideLabel);
   // Below sm the session header row is gone: the switcher says where the session is, "<project or project · branch> · <side>" (GH-165).
@@ -311,7 +317,11 @@ export function TabsBar({
       </div>
       {(given.length > 0 || focus) && (
         <div className="flex h-7 min-w-0 flex-1 max-md:h-11 md:hidden">
-          <Select value={activeId ?? null} onValueChange={(v) => v && onSelect(v)}>
+          <Select
+            value={activeId ?? null}
+            onValueChange={(v, d) => (justSwiped(swiped) ? d.cancel() : v && onSelect(v))}
+            onOpenChange={(o, d) => !o && d.reason === "item-press" && justSwiped(swiped) && d.cancel()}
+          >
             <SelectTrigger
               aria-label="Switch tab"
               data-testid="tab-switcher"
@@ -325,7 +335,7 @@ export function TabsBar({
               {focus && focus.count > 0 && <span className="ml-auto flex items-center gap-1 rounded-full bg-warning px-1.5 text-background text-xs tabular-nums" data-testid="focus-badge"><CircleAlertIcon className="size-3" aria-hidden />{focus.count}</span>}
               <span className={cn("text-muted-foreground tabular-nums", !(focus && focus.count > 0) && "ml-auto")}>{given.length}</span>
             </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] rounded-md p-0.5 shadow-floating! ring-0">
+            <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] overscroll-contain rounded-md p-0.5 shadow-floating! ring-0">
               {focus && (
                 <SelectItem value={FOCUS_TAB} className={ROW}>
                   <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden />
@@ -339,14 +349,14 @@ export function TabsBar({
                 const t = info(id);
                 const label = stateNote(t) || STATUS_LABEL[status(id, t)];
                 return (
-                  <SelectItem key={id} value={id} className={ROW}>
+                  <SwipeRow key={id} id={id} swiped={swiped} onClose={onSwipeClose ?? onClose}>
                     <TabIcon s={status(id, t)} cwd={t.cwd} />
                     <span className="flex min-w-0 flex-1 flex-col">
                       {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate">{t.title}</span>}
                       {place(t) && <span className="truncate text-muted-foreground text-xs leading-4">{place(t)}</span>}
                     </span>
                     {label && <span className="text-muted-foreground text-xs leading-none">{label}</span>}
-                  </SelectItem>
+                  </SwipeRow>
                 );
               })}
             </SelectContent>
@@ -361,6 +371,105 @@ export function TabsBar({
       <IconButton label="New session" onClick={onNew} testId="tab-new" command="session.new" ref={newButton}>
         <PlusIcon />
       </IconButton>
+    </div>
+  );
+}
+
+const SWIPE_CLICK_MS = 400;
+const justSwiped = (at: RefObject<number>) => performance.now() - at.current < SWIPE_CLICK_MS;
+const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+type RowView = { stage: "idle" | "drag" | "settle" | "out" | "collapse"; offset: number; width: number; height: number; sign: -1 | 1 };
+
+/**
+ * A row of the phone switcher (GH-209): a LEFT swipe closes its tab like iOS Safari's tab overview (a right swipe only rubber-bands), Delete does too.
+ * Touch and pen only; `touch-action: pan-y` leaves the list's vertical scroll to the browser, the horizontal move is ours (swipe.ts).
+ */
+function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefObject<number>; onClose: (id: string) => void; children: ReactNode }) {
+  const [view, setView] = useState<RowView>({ stage: "idle", offset: 0, width: 0, height: 0, sign: -1 });
+  const state = useRef<SwipeState>({ phase: "idle" });
+  const cfg = useRef(ROW_SWIPE);
+  const box = useRef({ width: 0, height: 0 });
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  const later = (fn: () => void, ms: number) => void timers.current.push(setTimeout(fn, ms));
+  const sign = (cfg.current.allow === "positive" ? 1 : -1) as -1 | 1;
+  const settle = () => {
+    setView((v) => ({ ...v, stage: "settle", offset: 0 }));
+    later(() => setView((v) => (v.stage === "settle" ? { ...v, stage: "idle" } : v)), 200);
+  };
+  const commit = () => {
+    const { width, height } = box.current;
+    if (reducedMotion()) return onClose(id);
+    setView({ stage: "out", offset: sign * width, width, height, sign });
+    later(() => setView({ stage: "collapse", offset: sign * width, width, height, sign }), 180);
+    later(() => (onClose(id), setView({ stage: "idle", offset: 0, width, height, sign })), 330);
+  };
+  const feed = (e: ReactPointerEvent<HTMLElement>, type: "down" | "move" | "up") => {
+    const before = state.current;
+    const next = swipe(before, { type, p: { x: e.clientX, y: e.clientY, t: performance.now() } }, cfg.current, box.current.width);
+    state.current = next;
+    if (next.phase === "dragging") {
+      swiped.current = performance.now();
+      if (before.phase !== "dragging") e.currentTarget.setPointerCapture?.(e.pointerId);
+      setView({ stage: "drag", offset: next.offset, width: box.current.width, height: box.current.height, sign });
+    } else if (next.phase === "committed") {
+      swiped.current = performance.now();
+      commit();
+    } else if (next.phase === "settling") {
+      swiped.current = performance.now();
+      settle();
+    }
+  };
+  const reveal = view.stage !== "idle" && Math.sign(view.offset) === view.sign;
+  const motion = { drag: "none", settle: "transform 200ms cubic-bezier(0.2,0,0,1), opacity 200ms", out: "transform 180ms ease-out, opacity 180ms ease-out", collapse: "none", idle: undefined }[view.stage];
+  return (
+    <div
+      role="presentation"
+      className="relative overflow-hidden"
+      style={view.stage === "out" || view.stage === "collapse" ? { height: view.stage === "out" ? view.height : 0, transition: view.stage === "collapse" ? "height 150ms ease-out" : undefined } : undefined}
+    >
+      {reveal && (
+        <div aria-hidden className={cn("absolute inset-0 flex items-center gap-1.5 bg-destructive/10 px-4 font-medium text-destructive text-sm", view.sign < 0 ? "justify-end" : "justify-start")}>
+          <XIcon className="size-4" />
+          Close
+        </div>
+      )}
+      <SelectItem
+        value={id}
+        className={cn(ROW, "touch-pan-y [-webkit-touch-callout:none]")}
+        aria-keyshortcuts="Delete"
+        style={view.stage === "idle" ? undefined : { transform: `translateX(${view.offset}px)`, opacity: opacityFor(view.offset, view.width), transition: motion }}
+        onPointerDown={(e) => {
+          if (e.pointerType === "mouse" || !e.isPrimary || view.stage === "out" || view.stage === "collapse") return;
+          const r = e.currentTarget.getBoundingClientRect();
+          box.current = { width: r.width, height: r.height };
+          cfg.current = getComputedStyle(e.currentTarget).direction === "rtl" ? { ...ROW_SWIPE, allow: mirror(ROW_SWIPE.allow) } : ROW_SWIPE;
+          feed(e, "down");
+        }}
+        onPointerMove={(e) => state.current.phase !== "idle" && feed(e, "move")}
+        onPointerUp={(e) => {
+          if (state.current.phase !== "idle") feed(e, "up");
+          if (!["dragging", "committed", "settling"].includes(state.current.phase)) state.current = { phase: "idle" };
+        }}
+        onPointerCancel={() => {
+          if (state.current.phase === "idle") return;
+          state.current = { phase: "idle" };
+          if (view.stage === "drag") settle();
+        }}
+        onClickCapture={(e) => {
+          if (!justSwiped(swiped)) return;
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== "Delete" && e.key !== "Backspace") return;
+          e.preventDefault();
+          onClose(id);
+        }}
+      >
+        {children}
+      </SelectItem>
     </div>
   );
 }

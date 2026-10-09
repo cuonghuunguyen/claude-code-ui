@@ -82,3 +82,14 @@ it("closes itself after 5 s", async () => {
   await act(async () => vi.advanceTimersByTime(5000 + 280));
   expect(onClose).toHaveBeenCalledTimes(1);
 });
+
+it("an action button (Undo) runs its callback and closes the toast, at once under reduced motion", async () => {
+  reduced(true);
+  const run = vi.fn();
+  const root = createRoot(el);
+  await act(async () => root.render(<Toast message="Closed Fix login" action={{ label: "Undo", onClick: run }} onClose={onClose} />));
+  const undo = [...toast().querySelectorAll("button")].find((b) => b.textContent === "Undo")!;
+  await act(async () => undo.click());
+  expect(run).toHaveBeenCalledOnce();
+  expect(onClose).toHaveBeenCalledOnce();
+});

@@ -102,7 +102,7 @@ import { GuideTour } from "./guide-tour.tsx";
 import { keyText, matchesKey, withKey } from "./shortcuts.ts";
 import { specOf, useKeymap } from "./keymap.ts";
 import { LEADER_MS, PREFIX_KEYS, leaderStep } from "./leader.ts";
-import { loadClosed, popClosed, pushClosed, saveClosed } from "./closed-tabs.ts";
+import { loadClosed, popClosed, pushClosed, restoreClosed, saveClosed } from "./closed-tabs.ts";
 import { ShortcutsDialog } from "./shortcuts-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
@@ -206,6 +206,8 @@ export function App() {
   // Closed session tabs (Reopen closed tab), per browser.
   const [closedTabs, setClosedTabs] = useState(loadClosed);
   useEffect(() => saveClosed(closedTabs), [closedTabs]);
+  const closedRef = useRef(closedTabs);
+  closedRef.current = closedTabs;
   // Prefix key: shows the second keys until one is pressed or the time is up.
   const [prefixOn, setPrefixOn] = useState(false);
   // New terminal shortcut: each bump adds a terminal to the shown terminal panel.
@@ -255,7 +257,7 @@ export function App() {
   useEffect(() => void (openingProject && refreshList()), [openingProject]);
   const [theme, setTheme] = useState<ThemePref>(loadPref);
   const [error, setError] = useState<string>();
-  const [toast, setToast] = useState<string>();
+  const [toast, setToast] = useState<string | { message: string; action: { label: string; onClick: () => void } }>();
   const closeToast = useCallback(() => setToast(undefined), []);
   // Guided tour (docs/spec.md "First-use guide"): `guideState` is the per-browser state, decided once after the first session list.
   const guideState = useRef<GuideState>(undefined);
@@ -666,6 +668,26 @@ export function App() {
     setTabs(r.tabs);
     release(id);
     activate(r.active);
+  }
+
+  /** A close from the phone switcher (swipe or Delete on a row): the toast offers Undo for that exact tab; the New session tab has nothing to reopen. */
+  function closeFromList(id: string) {
+    const title = listRef.current.find((s) => s.id === id)?.title || titles[id] || "Untitled";
+    close(id);
+    if (id === NEW_TAB) return;
+    setToast({
+      message: `Closed ${title}`,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          if (!listRef.current.some((s) => s.id === id)) return;
+          const r = restoreClosed(closedRef.current, tabsRef.current, id);
+          setClosedTabs(r.stack);
+          setTabs(r.tabs);
+          open(id);
+        },
+      },
+    });
   }
 
   /** What closing a session tab leaves behind: its place on the closed stack, and its subscription (live: followed in the background; else dropped). */
@@ -1414,6 +1436,7 @@ export function App() {
             onRenamed={renamed}
             onSelect={open}
             onClose={close}
+            onSwipeClose={closeFromList}
             grouping={grouping}
             compact={compact && grouping !== "none"}
             onMove={(from, to) => setTabs((t) => moveTabIn(t, groupOfTab, from, to))}
@@ -1929,7 +1952,7 @@ export function App() {
             }}
           />
         )}
-        {toast && <Toast message={toast} onClose={closeToast} />}
+        {toast && <Toast message={typeof toast === "string" ? toast : toast.message} action={typeof toast === "string" ? undefined : toast.action} onClose={closeToast} />}
         <NotificationStack
           items={cardItems}
           now={cardsNow}

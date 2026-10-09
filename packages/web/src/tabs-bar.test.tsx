@@ -31,10 +31,10 @@ async function render(props: Partial<Parameters<typeof TabsBar>[0]> = {}, side: 
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
-  const handlers = { onSelect: vi.fn(), onClose: vi.fn(), onMove: vi.fn(), onMoveGroup: vi.fn(), onMoveGroupTo: vi.fn(), onNew: vi.fn(), onAction: vi.fn(), onRenamed: vi.fn() };
+  const handlers = { onSelect: vi.fn(), onClose: vi.fn(), onSwipeClose: vi.fn(), onMove: vi.fn(), onMoveGroup: vi.fn(), onMoveGroupTo: vi.fn(), onNew: vi.fn(), onAction: vi.fn(), onRenamed: vi.fn() };
   await act(async () => root!.render(<SideLabel value={side}><TabsBar tabs={["a", "b", "c", "d", NEW_TAB]} activeId="c" info={(id) => INFO[id]!} {...handlers} {...props} /></SideLabel>));
   const tab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
-  return { el, tab, ...handlers };
+  return { el, tab, ...handlers, ...props };
 }
 
 it("a worktree session tab's tooltip names '<project> · <branch>' between title and path", async () => {
@@ -535,4 +535,151 @@ it("Focus shows no badge at 0, is selected while the page shows, and the arrow k
 it("without a Focus prop there is no Focus tab (GH-159)", async () => {
   const { el } = await render();
   expect(el.querySelector('[data-testid="focus-tab"]')).toBeNull();
+});
+
+// GH-209: phone switcher rows close on a left swipe (touch and pen only), a click after a swipe selects nothing.
+const swipeRows = () => [...document.querySelectorAll<HTMLElement>("[role=option]")];
+let now = 0;
+const tick = (ms: number) => ((now += ms), vi.spyOn(performance, "now").mockReturnValue(now));
+const touch = (target: Element, type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel", x: number, y = 0, pointerType = "touch") =>
+  act(async () => void target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerType, pointerId: 7, clientX: x, clientY: y, isPrimary: true } as PointerEventInit)));
+/** A finger from (0,0) by (dx, dy) over `ms`, in 16 ms steps, then lifted. */
+async function swipeBy(target: Element, dx: number, ms = 600, dy = 0, pointerType = "touch") {
+  tick(1000);
+  await touch(target, "pointerdown", 0, 0, pointerType);
+  const n = Math.max(1, Math.round(ms / 16));
+  for (let i = 1; i <= n; i++) {
+    tick(ms / n);
+    await touch(target, "pointermove", (dx * i) / n, (dy * i) / n, pointerType);
+  }
+  tick(1);
+  await touch(target, "pointerup", dx, dy, pointerType);
+}
+const shift = (row: Element) => parseFloat(/-?[\d.]+/.exec((row as HTMLElement).style.transform)?.[0] ?? "0");
+async function openList(props: Partial<Parameters<typeof TabsBar>[0]> = {}) {
+  const r = await render(props);
+  await act(async () => r.el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!.click());
+  for (const row of swipeRows()) row.getBoundingClientRect = () => ({ width: 300, height: 44, left: 0, top: 0, right: 300, bottom: 44, x: 0, y: 0, toJSON() {} });
+  return r;
+}
+const wait = (ms: number) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
+
+it("phone: a left swipe past the threshold closes the row's tab; the list stays open and nothing is selected", async () => {
+  const { onSwipeClose, onSelect } = await openList({ onSwipeClose: vi.fn() });
+  await swipeBy(swipeRows()[1]!, -200);
+  await wait(500);
+  expect(onSwipeClose).toHaveBeenCalledExactlyOnceWith("b");
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(swipeRows().length).toBe(5);
+});
+
+it("phone: a swipe shows the row following the finger, 'Close' behind it, and fades it", async () => {
+  await openList({ onSwipeClose: vi.fn() });
+  const row = swipeRows()[1]!;
+  tick(1000);
+  await touch(row, "pointerdown", 0);
+  for (const x of [-6, -20, -60, -100]) (tick(30), await touch(row, "pointermove", x));
+  expect(shift(row)).toBe(-90);
+  expect(Number(row.style.opacity)).toBeLessThan(1);
+  expect(row.parentElement!.textContent).toContain("Close");
+  await touch(row, "pointercancel", -100);
+  await wait(300);
+  expect(shift(row)).toBe(0);
+});
+
+it("phone: a right swipe moves the row 16px at most, closes nothing, selects nothing and springs back", async () => {
+  const { onSwipeClose, onSelect } = await openList({ onSwipeClose: vi.fn() });
+  const row = swipeRows()[1]!;
+  tick(1000);
+  await touch(row, "pointerdown", 0);
+  for (const x of [20, 80, 200]) (tick(30), await touch(row, "pointermove", x));
+  expect(shift(row)).toBeGreaterThan(0);
+  expect(shift(row)).toBeLessThanOrEqual(16);
+  tick(1);
+  await touch(row, "pointerup", 200);
+  await act(async () => row.click());
+  await wait(300);
+  expect(shift(row)).toBe(0);
+  expect(onSwipeClose).not.toHaveBeenCalled();
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+it("phone: a short slow left swipe springs back and closes nothing", async () => {
+  const { onSwipeClose } = await openList({ onSwipeClose: vi.fn() });
+  const row = swipeRows()[1]!;
+  await swipeBy(row, -30, 800);
+  await wait(300);
+  expect(shift(row)).toBe(0);
+  expect(onSwipeClose).not.toHaveBeenCalled();
+});
+
+it("phone: a fast left flick closes", async () => {
+  const { onSwipeClose } = await openList({ onSwipeClose: vi.fn() });
+  await swipeBy(swipeRows()[2]!, -45, 50);
+  await wait(500);
+  expect(onSwipeClose).toHaveBeenCalledWith("c");
+});
+
+it("phone: a click right after a swipe does not select the row, a later tap does", async () => {
+  const { onSelect } = await openList({ onSwipeClose: vi.fn() });
+  const row = swipeRows()[1]!;
+  await swipeBy(row, -30, 800);
+  await act(async () => row.click());
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+it("phone: a vertical drag on a row is left to the browser: nothing closes", async () => {
+  const { onSwipeClose, onSelect } = await openList({ onSwipeClose: vi.fn() });
+  await swipeBy(swipeRows()[1]!, -30, 400, 120);
+  expect(shift(swipeRows()[1]!)).toBe(0);
+  expect(onSwipeClose).not.toHaveBeenCalled();
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+it("phone: a mouse drag on a row does nothing", async () => {
+  const { onSwipeClose } = await openList({ onSwipeClose: vi.fn() });
+  await swipeBy(swipeRows()[1]!, -250, 600, 0, "mouse");
+  await wait(300);
+  expect(onSwipeClose).not.toHaveBeenCalled();
+  expect(shift(swipeRows()[1]!)).toBe(0);
+});
+
+it("phone: the Focus row never swipes away and has no handlers", async () => {
+  const { onSwipeClose } = await openList({ focus: { count: 2 }, onSwipeClose: vi.fn() });
+  const focus = swipeRows()[0]!;
+  expect(focus.textContent).toContain("Focus");
+  await swipeBy(focus, -250);
+  await wait(300);
+  expect(onSwipeClose).not.toHaveBeenCalled();
+  expect(shift(focus)).toBe(0);
+});
+
+it("phone: Delete on a row of the open list closes its tab and keeps the list open; rows are labelled", async () => {
+  const { onSwipeClose } = await openList({ onSwipeClose: vi.fn() });
+  const row = swipeRows()[3]!;
+  expect(row.getAttribute("aria-keyshortcuts")).toBe("Delete");
+  await act(async () => void row.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true })));
+  expect(onSwipeClose).toHaveBeenCalledWith("d");
+  expect(swipeRows().length).toBe(5);
+});
+
+it("phone: the list stays open when a close changes the active tab", async () => {
+  function Host() {
+    const [tabs, setTabs] = useState(["a", "b", "c", "d"]);
+    const [active, setActive] = useState("c");
+    return (
+      <TabsBar tabs={tabs} activeId={active} info={(id) => INFO[id]!} onSelect={setActive} onClose={() => {}} onMove={() => {}} onMoveGroup={() => {}} onMoveGroupTo={() => {}} onNew={() => {}} onAction={() => {}} onRenamed={() => {}}
+        onSwipeClose={(id) => { const r = closeTab(tabs, id, active); setTabs(r.tabs); setActive(r.active!); }} />
+    );
+  }
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root!.render(<Host />));
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!.click());
+  for (const row of swipeRows()) row.getBoundingClientRect = () => ({ width: 300, height: 44, left: 0, top: 0, right: 300, bottom: 44, x: 0, y: 0, toJSON() {} });
+  await swipeBy(swipeRows()[2]!, -200);
+  await wait(500);
+  expect(swipeRows().map((r) => r.textContent)).toEqual(["Fix loginwebrunning", "Docsdocsneeds input", "AOldapiclosed"]);
+  expect(el.querySelector('[data-testid="tab-switcher"] .truncate')!.textContent).toBe("Old");
 });
