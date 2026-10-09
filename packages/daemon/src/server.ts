@@ -777,7 +777,14 @@ export function createDaemon(opts: {
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
     models: () => known,
-    remove: (id) => deleteSessionById(id),
+    remove: async (id) => {
+      const err = await deleteSessionById(id);
+      if (err?.code !== "unknown_session") return err;
+      // Nothing to delete (transcript gone, not loaded): the worker's link still lists it and holds its name.
+      if (settings.get(id)) saveSettings(() => settings.delete([id]));
+      broadcast({ type: "sessions.changed", deleted: id });
+      return undefined;
+    },
     stopWaitMs: opts.stopWaitMs,
     buildNote: () => opts.buildInfo?.stale(),
   });
@@ -996,7 +1003,6 @@ export function createDaemon(opts: {
     broadcast({ type: "sessions.changed", deleted: id });
     return undefined;
   }
-
 
   const digest = (t: string) => createHash("sha256").update(t).digest();
   const expected = digest(opts.token);

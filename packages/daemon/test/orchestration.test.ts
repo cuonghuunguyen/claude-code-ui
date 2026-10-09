@@ -805,6 +805,82 @@ describe("orchestration", () => {
     expect((await call(coord, "worker_remove", { name: "Bad Name" })).error).toBeDefined();
   });
 
+  it("worker_remove is not in the no-permission-prompt tools (irreversible): no rules offered either", () => {
+    const sdk = { name: "orchestration", source: "sdk" };
+    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_remove", sdk)).toBe("no_rules");
+    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_close", sdk)).toBe("allow");
+  });
+
+  it("worker_remove closes an idle worker with a live CLI without a prior worker_close, frees the name and broadcasts the removal", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "rm4", cwd: dirB, prompt: "x" });
+    await until(async () => (await state(w.sessionId)) === "idle");
+    const seen = c.inbox.length;
+    expect(await call(coord, "worker_remove", { name: "rm4" })).toEqual({ name: "rm4", removed: true });
+    expect(runsOf(w.sessionId)[0]!.closed).toBe(true);
+    await until(() => c.inbox.slice(seen).some((m: any) => m.type === "sessions.changed" && m.deleted === w.sessionId));
+    expect(JSON.parse(readFileSync(settingsFile, "utf8"))[w.sessionId]).toBeUndefined();
+    expect((await call(coord, "worker_start", { name: "rm4", cwd: dirB, prompt: "again" })).name).toBe("rm4");
+  });
+
+  it("worker_remove refuses a worker waiting for input", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "rm5", cwd: dirB, prompt: "ask" });
+    await pendingQ(w.sessionId);
+    expect((await call(coord, "worker_remove", { name: "rm5" })).error).toMatch(/still running or waiting.*worker_close/s);
+    expect((await call(coord, "worker_list")).workers.map((x: { name: string }) => x.name)).toContain("rm5");
+  });
+
+  it("worker_remove deletes the transcript, and a worktree worker keeps its worktree and branch", async () => {
+    enable();
+    const repo = gitRepo(join(root, "wt-rm"));
+    await c.request({ type: "project.open", cwd: repo });
+    const coord = await coordinator();
+    const wt = join(repo, ".claude", "worktrees", "feat-rm");
+    const w = await call(coord, "worker_start", { name: "rm6", repo, branch: "feat-rm", prompt: "x" });
+    expect(w.cwd).toBe(wt);
+    await until(async () => (await state(w.sessionId)) === "idle");
+    const deleted: string[] = [];
+    const other = await start({ ...history, getSessionInfo: async (id: string) => (id === w.sessionId ? { sessionId: id, cwd: wt, summary: "w", lastModified: 1 } : undefined), deleteSession: async (id: string) => void deleted.push(id) });
+    try {
+      expect(await call(coord, "worker_remove", { name: "rm6" }, {}, other)).toEqual({ name: "rm6", removed: true });
+    } finally {
+      other.close();
+    }
+    expect(deleted).toEqual([w.sessionId]);
+    expect(existsSync(wt)).toBe(true);
+    expect(git(repo, "branch", "--list", "feat-rm")).toContain("feat-rm");
+    expect((await call(coord, "worker_list")).workers.find((x: { name: string }) => x.name === "rm6")).toBeUndefined();
+  });
+
+  it("worker_remove refuses a worker another process runs; a worker whose transcript is gone is then just unlisted", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "rm7", cwd: dirB, prompt: "x" });
+    await until(async () => (await state(w.sessionId)) === "idle");
+    await call(coord, "worker_close", { name: "rm7" });
+    const stored = JSON.parse(readFileSync(settingsFile, "utf8"));
+    stored[w.sessionId].port = 1;
+    writeFileSync(settingsFile, JSON.stringify(stored));
+    // A daemon restart: the worker is not loaded here and has no transcript.
+    const other = await start();
+    const held = join(claudeDir, "sessions", `${process.pid}.json`);
+    writeFileSync(held, JSON.stringify({ pid: process.pid, sessionId: w.sessionId, status: "idle" }));
+    try {
+      expect((await call(coord, "worker_remove", { name: "rm7" }, {}, other)).error).toMatch(/running in another process/);
+      expect((await call(coord, "worker_list", {}, {}, other)).workers.map((x: { name: string }) => x.name)).toContain("rm7");
+      rmSync(held);
+      expect(await call(coord, "worker_remove", { name: "rm7" }, {}, other)).toEqual({ name: "rm7", removed: true });
+      expect((await call(coord, "worker_list", {}, {}, other)).workers.map((x: { name: string }) => x.name)).not.toContain("rm7");
+      expect(JSON.parse(readFileSync(settingsFile, "utf8"))[w.sessionId]).toBeUndefined();
+    } finally {
+      rmSync(held, { force: true });
+      other.close();
+    }
+  });
+
   it("worker_close is a tool error when the worker does not stop in time", async () => {
     const slow = await start(history, undefined, 50, { settingsFile: ownLinks() });
     const sp = (slow.address() as AddressInfo).port;
