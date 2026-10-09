@@ -361,7 +361,7 @@ describe("keys follow the user's keymap", () => {
 });
 
 describe("a tour that ends where nothing was focused", () => {
-  it("palette Show guide with no session: Esc puts the focus back where the palette was opened from", async () => {
+  it("palette Show guide with no session: the control the palette was opened from has the focus after Esc (the tour's own return)", async () => {
     localStorage.setItem("claude-ui.tabs", "[]");
     await mount();
     const from = document.querySelector<HTMLElement>('[data-testid="tab-new"]')!;
@@ -386,6 +386,9 @@ describe("a palette-started tour that ends with nothing to return to", () => {
     Object.defineProperty(plus, "getClientRects", { value: () => [{}] });
     plus.getBoundingClientRect = () => ({ left: 100, top: 4, width: 32, height: 32, right: 132, bottom: 36, x: 100, y: 4, toJSON() {} });
     (document.activeElement as HTMLElement).blur();
+    // In a real browser body is "visible" (it has a size): the remembered opener must still be rejected.
+    Object.defineProperty(document.body, "getClientRects", { value: () => [{}], configurable: true });
+    const bodyRect = vi.spyOn(document.body, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, x: 0, y: 0, toJSON() {} });
     await press({ key: "k", code: "KeyK", ctrlKey: true });
     const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Show guide"))!;
     await act(async () => row.click());
@@ -394,6 +397,8 @@ describe("a palette-started tour that ends with nothing to return to", () => {
     await press({ key: "Escape" });
     expect(tour()).toBeNull();
     expect(document.activeElement).toBe(plus);
+    bodyRect.mockRestore();
+    delete (document.body as { getClientRects?: unknown }).getClientRects;
   });
 });
 

@@ -1871,7 +1871,7 @@ export function App() {
                 ? () => {
                     const o = paletteOpener.current;
                     // Opened with nothing focused and no session shown: the New session button, so the focus is never lost to the page.
-                    return o instanceof HTMLElement && o.isConnected && isVisible(o) ? o : shownPrompt() ?? [...document.querySelectorAll<HTMLElement>('[data-testid="tab-new"]')].find((b) => isVisible(b));
+                    return o instanceof HTMLElement && o !== document.body && o.isConnected && isVisible(o) ? o : shownPrompt() ?? [...document.querySelectorAll<HTMLElement>('[data-testid="tab-new"]')].find((b) => isVisible(b));
                   }
                 : undefined
           }
