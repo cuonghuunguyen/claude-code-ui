@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { compareVersions, createUpdater, installedVersions, installVersion, latestNewer, parseRegistry, pruneVersions, RESTART_CODE, type Runner } from "../src/update.ts";
+import { compareVersions, createUpdater, installedVersions, installVersion, latestNewer, parseRegistry, pruneVersions, RESTART_CODE, runCommand, winQuote, type Runner } from "../src/update.ts";
 
 const answer = (body: unknown, ok = true) => (async () => ({ ok, json: async () => body })) as unknown as typeof fetch;
 
@@ -226,4 +226,20 @@ describe("createUpdater", () => {
     const { u } = setup();
     await expect(u.install()).rejects.toThrow("no update available");
   });
+});
+
+describe("winQuote", () => {
+  it("wraps in double quotes and doubles trailing backslashes so they cannot escape the closing quote", () => {
+    expect(winQuote("--loglevel=error")).toBe('"--loglevel=error"');
+    expect(winQuote("C:\\a b\\c")).toBe('"C:\\a b\\c"');
+    expect(winQuote("C:\\claude-ui\\")).toBe('"C:\\claude-ui\\\\"');
+    expect(winQuote("C:\\x\\\\")).toBe('"C:\\x\\\\\\\\"');
+  });
+  it.skipIf(process.platform !== "win32")("npm pack of a folder path with a trailing backslash works through runCommand", async () => {
+    const d = mkdtempSync(join(tmpdir(), "pack-quote-"));
+    writeFileSync(join(d, "package.json"), JSON.stringify({ name: "tiny", version: "1.0.0" }));
+    const r = await runCommand("npm", ["pack", `${d}\\`,"--dry-run", "--ignore-scripts"]);
+    expect(r.output).not.toMatch(/ENOENT/);
+    expect(r.code).toBe(0);
+  }, 60_000);
 });

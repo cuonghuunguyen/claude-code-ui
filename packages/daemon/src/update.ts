@@ -94,12 +94,15 @@ export async function latestNewer(current: string, opts: { registry?: string; fe
 /** Runs a command; resolves with its exit code and combined output. */
 export type Runner = (cmd: string, args: string[]) => Promise<{ code: number | null; output: string }>;
 
+/** A Windows cmd.exe argument in double quotes; backslashes before the closing quote are doubled so `C:\dir\` cannot escape it. */
+export const winQuote = (arg: string) => `"${arg.replace(/(\\+)$/, "$1$1")}"`;
+
 export const runCommand: Runner = (cmd, args) =>
   new Promise((resolve) => {
     // Windows: npm is npm.cmd, which Node starts only through a shell: every argument is quoted, so `&` or spaces in the config
     // path stay text (Windows paths have no `"`; versions and the registry URL are checked). ponytail: `%NAME%` in a path still expands.
     const win = process.platform === "win32";
-    const child = spawn(win ? `${cmd}.cmd` : cmd, win ? args.map((a) => `"${a}"`) : args, { shell: win, windowsHide: true, timeout: INSTALL_TIMEOUT_MS });
+    const child = spawn(win ? `${cmd}.cmd` : cmd, win ? args.map(winQuote) : args, { shell: win, windowsHide: true, timeout: INSTALL_TIMEOUT_MS });
     let output = "";
     child.stdout.on("data", (d) => (output += d));
     child.stderr.on("data", (d) => (output += d));

@@ -10,7 +10,7 @@ import { createSettings } from "./settings.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
-import { listContainers, prepareDockerSide } from "./docker-side.ts";
+import { folderPath, listContainers, prepareDockerSide } from "./docker-side.ts";
 import { createSides, dockerExecArgs, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
 import { exitOnSignal, logExit } from "./exit-log.ts";
 import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
@@ -139,7 +139,7 @@ if (side) {
 
 /** The package folder (has dist/cli.js) a WSL or Docker side installs; a new build gets a new key, so the side installs it again. */
 function sidePackageDir() {
-  return fileURLToPath(existsSync(bundledWeb) ? new URL("..", import.meta.url) : new URL("../../claude-ui", import.meta.url));
+  return folderPath(existsSync(bundledWeb) ? new URL("..", import.meta.url) : new URL("../../claude-ui", import.meta.url));
 }
 function sideKeyOf(dir: string) {
   try {

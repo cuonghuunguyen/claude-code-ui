@@ -1,7 +1,8 @@
 // Docker sides (docs/spec.md "Sides"): discovery of running Linux containers and the copy of this claude-ui's package into one.
 import { execFile } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runCommand, type Runner } from "./update.ts";
 
 /** Runs a command without a shell; never rejects. `code` null: not started (ENOENT) or killed by the timeout. `stdinFile`: that file is the command's stdin. */
@@ -19,6 +20,9 @@ export const execRun: Exec = (cmd, args, timeoutMs = 10_000, stdinFile) =>
       src.pipe(child.stdin!);
     }
   });
+
+/** A folder URL as a path without a trailing separator: `npm pack <dir>\` through cmd.exe loses its closing quote. */
+export const folderPath = (url: URL) => resolve(fileURLToPath(url));
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 /** Container names from `docker ps --format {{.Names}}`: the first name of each line; Kubernetes pod containers (k8s_*) are no user side. */
@@ -44,6 +48,11 @@ const WAIT = "If a build is running, wait for the build to finish, then retry.";
 export function missingFile(output: string): string | undefined {
   if (!/enoent|no such file/i.test(output)) return undefined;
   return /^npm error path (.+)$/m.exec(output)?.[1]?.trim() ?? /no such file or directory, \w+ '([^'\n]+)'/.exec(output)?.[1];
+}
+/** True when `file` lies inside `<pkgDir>/dist`: only then is a missing file a build rewriting dist (a bad argument is not). */
+export function underDist(file: string, pkgDir: string): boolean {
+  const rel = relative(resolve(pkgDir, "dist"), resolve(file));
+  return rel !== "" && !rel.startsWith("..") && resolve(rel) !== rel;
 }
 export const safeKey = (key: string) => key.replace(/[^\w.-]/g, "_");
 const packing = new Map<string, Promise<string>>();
@@ -71,7 +80,8 @@ async function pack(o: { pkgDir: string; cacheDir: string; label: string; npm?: 
   if (code !== 0 || !file) {
     rmSync(partial, { recursive: true, force: true });
     const gone = missingFile(output);
-    throw new Error(`Packing claude-ui for ${o.label} failed: ${lastLines(output, 8) || `npm exited with ${code}`}${gone ? ` (missing: ${gone}). A build may be rewriting dist: wait for the build to finish, then retry.` : ""}`);
+    const hint = gone ? (underDist(gone, o.pkgDir) ? ` (missing: ${gone}). A build may be rewriting dist: wait for the build to finish, then retry.` : ` (missing: ${gone})`) : "";
+    throw new Error(`Packing claude-ui for ${o.label} failed: ${lastLines(output, 8) || `npm exited with ${code}`}${hint}`);
   }
   // Earlier versions and builds.
   for (const n of readdirSync(o.cacheDir)) if (n !== basename(partial)) rmSync(join(o.cacheDir, n), { recursive: true, force: true });
