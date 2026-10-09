@@ -120,8 +120,11 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** The daemon's VAPID public key, for `PushManager.subscribe()`. */
   | { type: "push.key" }
   | { type: "push.subscribe"; subscription: WebPushSubscription }
-  /** The session this tab shows while focused and visible (none otherwise); pushes for it are suppressed. */
-  | { type: "push.focus"; sessionId?: string }
+  /**
+   * The session this tab shows while focused and visible (none otherwise); pushes for it are suppressed.
+   * `covered` (GH-158): the sessions this page shows in-app notification cards for (in-app on, page focused and visible); no push or desktop notification for them either. Absent otherwise; an empty array is a page with in-app on and no listed session.
+   */
+  | { type: "push.focus"; sessionId?: string; covered?: string[] }
   /** Text files only; `mtime` (ms) identifies the disk version. */
   | { type: "fs.read"; path: string }
   /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). */
@@ -417,9 +420,10 @@ export type ConfigScope = "local" | "user" | "project";
 /** `orchestration.workerMode`: the permission mode of a new worker when the coordinator names none; `coordinator` = the coordinator's own mode. */
 export const WORKER_MODES = ["coordinator", "default", "acceptEdits", "plan", "auto"] as const;
 export type WorkerModeSetting = (typeof WORKER_MODES)[number];
-export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting }; usageLimit: { autoContinue: boolean } };
+export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean } };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
-export type SettingsResult = { settings: Settings };
+/** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
+export type SettingsResult = { settings: Settings; daemon?: { host: string; desktopForcedOff?: true } };
 export type ConfigKind = "mcp" | "plugins" | "skills";
 /** `McpServerStatus.status` of the SDK. */
 export type McpStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";

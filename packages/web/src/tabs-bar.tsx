@@ -68,6 +68,8 @@ function TabIcon({ s, cwd }: { s: TabStatus; cwd?: string }) {
 
 const DRAG_TYPE = "application/x-claude-ui-tab";
 const GROUP_DRAG_TYPE = "application/x-claude-ui-tab-group";
+// Hover time before a compact chip opens its menu: short enough to feel direct, long enough that a pointer passing over a chip does not flash it.
+const CHIP_HOVER_DELAY_MS = 100;
 
 /**
  * Keeps the stored tab list grouped by project, also once the session cwds arrive (the strip draws groups; close, next tab and moves use this order).
@@ -429,11 +431,11 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, m
     </>
   );
   if (menu)
-    // Compact: a menu button (click, Enter, Space, ArrowDown; hover after 300 ms). A path tooltip would fight the hover menu, so the menu header carries name and path.
+    // Compact: a menu button (click, Enter, Space, ArrowDown; hover after CHIP_HOVER_DELAY_MS). A path tooltip would fight the hover menu, so the menu header carries name and path.
     return (
       // Not modal: a modal menu opened by the press puts a backdrop over the other chips, and a chip drag could not drop. A drag start closes the menu.
       <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
-        <Menu.Trigger {...props} openOnHover delay={300}>
+        <Menu.Trigger {...props} openOnHover delay={CHIP_HOVER_DELAY_MS}>
           {body}
         </Menu.Trigger>
         <span id={pathId} hidden>{cwd}</span>

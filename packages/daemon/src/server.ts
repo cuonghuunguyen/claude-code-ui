@@ -1,7 +1,7 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { closeSync, constants, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -345,6 +345,9 @@ export function createDaemon(opts: {
   /** Interval of the WebSocket ping that drops a half-open socket (default 15 s; tests use a few hundred ms). */
   pingMs?: number;
   hostnames?: string[];
+  /** Name shown for this computer in Settings (default: the OS host name); `desktopForcedOff`: started with --no-os-notify. */
+  host?: string;
+  desktopForcedOff?: boolean;
   cli?: CliRunner;
   configHoldMs?: number;
   configPollMs?: number;
@@ -580,14 +583,17 @@ export function createDaemon(opts: {
     }
   };
 
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<WebSocket, string>();
+  /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */
+  const covered = new Map<WebSocket, Set<string>>();
   const pushTitleOf = async (sessionId: string) => {
     const info = await history.getSessionInfo(sessionId).catch(() => undefined);
     return info?.summary || basename(sessions.get(sessionId)?.cwd ?? "") || "Claude";
   };
   const notifier = createNotifier({
-    suppressed: (id) => [...focused.values()].includes(id),
+    suppressed: (id) => [...focused.values()].includes(id) || [...covered.values()].some((s) => s.has(id)),
     // A group's push (workers blocked on the same request) carries its tag and the coordinator's title.
     push: async (sessionId, body, { titleSession, ...extra } = {}) => void (await opts.push?.send({ sessionId, title: await pushTitleOf(titleSession ?? sessionId), body, ...extra })),
     // A request that settled: the same tag, silent (Web Push must show every push; one that only closes would show "updated in the background").
@@ -1116,6 +1122,7 @@ export function createDaemon(opts: {
       attached.forEach((d) => d());
       searching?.abort();
       focused.delete(ws);
+      covered.delete(ws);
     });
     const onMessage = async (data: RawData) => {
       let msg: ClientMessage;
@@ -1356,13 +1363,13 @@ export function createDaemon(opts: {
           broadcast({ type: "sessions.changed" });
           return reply({});
         case "settings.get":
-          return reply({ settings: appSettings.get() });
+          return reply({ settings: appSettings.get(), daemon: daemonInfo() });
         case "settings.set": {
           try {
             const settings = appSettings.set(msg.patch);
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
             broadcast({ type: "settings_changed", settings });
-            return reply({ settings });
+            return reply({ settings, daemon: daemonInfo() });
           } catch (err) {
             return fail("bad_settings", (err as Error).message);
           }
@@ -1517,9 +1524,13 @@ export function createDaemon(opts: {
           if (!opts.push) return fail("push_unavailable", "push is not configured");
           return opts.push.subscribe(msg.subscription) ? reply({}) : fail("bad_subscription", "subscription needs an https endpoint and keys");
         case "push.focus":
+          if (msg.sessionId !== undefined && typeof msg.sessionId !== "string") return fail("bad_request", "sessionId must be a string");
+          if (msg.covered !== undefined && !(Array.isArray(msg.covered) && msg.covered.length <= 2000 && msg.covered.every((x) => typeof x === "string" && x.length <= 200)))
+            return fail("bad_request", "covered must be an array of at most 2000 session ids");
           if (msg.sessionId === undefined) focused.delete(ws);
-          else if (typeof msg.sessionId === "string") focused.set(ws, msg.sessionId);
-          else return fail("bad_request", "sessionId must be a string");
+          else focused.set(ws, msg.sessionId);
+          if (msg.covered === undefined) covered.delete(ws);
+          else covered.set(ws, new Set(msg.covered));
           return reply({});
         case "fs.read": {
           const file = allowed(msg.path);
