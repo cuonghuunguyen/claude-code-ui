@@ -25,6 +25,12 @@ export function closeMany(tabs: string[], ids: string[], active?: string) {
   return { tabs: rest, active: tabs.slice(at + 1).find((t) => !gone.has(t)) ?? tabs.slice(0, at).reverse().find((t) => !gone.has(t)) };
 }
 
+/** The tab one step from `active` in `order` (by +1 or -1); none past either end (no wrap) or when `active` is not in the order. */
+export const stepNoWrap = (order: string[], active: string | undefined, by: 1 | -1) => {
+  const at = active === undefined ? -1 : order.indexOf(active);
+  return at < 0 ? undefined : order[at + by];
+};
+
 /** Drag reorder: `from` takes the slot of `to`. */
 export function moveTab(tabs: string[], from: string, to: string) {
   const at = tabs.indexOf(to);

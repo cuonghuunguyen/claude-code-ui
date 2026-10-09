@@ -2,19 +2,19 @@
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
 // Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
-import { createContext, memo, use, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
 import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
-import { FOCUS_TAB, NEW_TAB, avatarColor, closeTab, groupTabs, loadCollapsed, projectName, saveCollapsed, type AvatarColor } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColor, closeTab, groupTabs, loadCollapsed, projectName, saveCollapsed, stepNoWrap, type AvatarColor } from "./tabs.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { GHOST, ROW } from "./toolbar.tsx";
 import { SideLabel } from "./sides.tsx";
-import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeState } from "./swipe.ts";
+import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
 export type TabInfo = {
@@ -219,6 +219,8 @@ export function TabsBar({
   }, [activeId, tabs.length, collapsed]);
   // When the last swipe on a switcher row ended: the click that follows it must not select the row (base-ui commits a selection on click).
   const swiped = useRef(-Infinity);
+  // Vertical swipe on the switcher button: previous / next tab in the list's order (Focus first), no wrap.
+  const trigger = useTriggerSwipe(focus ? [FOCUS_TAB, ...given] : given, activeId, onSelect, swiped);
   const active = activeId && activeId !== FOCUS_TAB ? info(activeId) : undefined;
   const sideOf = use(SideLabel);
   // Below sm the session header row is gone: the switcher says where the session is, "<project or project · branch> · <side>" (GH-165).
@@ -320,15 +322,18 @@ export function TabsBar({
           <Select
             value={activeId ?? null}
             onValueChange={(v, d) => (justSwiped(swiped) ? d.cancel() : v && onSelect(v))}
-            onOpenChange={(o, d) => !o && d.reason === "item-press" && justSwiped(swiped) && d.cancel()}
+            onOpenChange={(o, d) => (o ? d.reason === "trigger-press" : d.reason === "item-press") && justSwiped(swiped) && d.cancel()}
           >
             <SelectTrigger
+              ref={trigger.ref}
               aria-label="Switch tab"
               data-testid="tab-switcher"
-              className={`${GHOST} max-md:h-11! min-w-0 flex-1 bg-secondary! px-1.5 font-medium text-foreground max-md:my-2`}
+              // touch-action none: a touch that starts here is never a browser scroll (no pull-to-refresh, no rubber band, no double-tap zoom), and the vertical swipe is ours.
+              className={`${GHOST} max-md:h-11! min-w-0 flex-1 touch-none bg-secondary! px-1.5 font-medium text-foreground max-md:my-2`}
+              {...trigger.props}
             >
               {activeId === FOCUS_TAB ? <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden /> : active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} /> : null}
-              <span className="flex min-w-0 flex-col text-left">
+              <span className="flex min-w-0 flex-col text-left" style={trigger.style}>
                 <span className="truncate" data-slot="tab-switcher-title">{activeId === FOCUS_TAB ? "Focus" : active?.titleLoading ? <TitleSkeleton title={active.title} /> : (active?.title ?? "Open tabs")}</span>
                 {active && place(active) && <span className="truncate font-normal text-muted-foreground text-xs leading-4" data-slot="tab-switcher-place">{place(active)}</span>}
               </span>
@@ -421,6 +426,13 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
       settle();
     }
   };
+  // touch-action pan-y already keeps the horizontal pan from the browser; this is the backup once the swipe is ours (never while the list scrolls).
+  const itemRef = useCallback((el: HTMLElement | null) => {
+    if (!el) return;
+    const cancel = (e: TouchEvent) => state.current.phase === "dragging" && e.cancelable && e.preventDefault();
+    el.addEventListener("touchmove", cancel, { passive: false });
+    return () => el.removeEventListener("touchmove", cancel);
+  }, []);
   const reveal = view.stage !== "idle" && Math.sign(view.offset) === view.sign;
   const motion = { drag: "none", settle: "transform 200ms cubic-bezier(0.2,0,0,1), opacity 200ms", out: "transform 180ms ease-out, opacity 180ms ease-out", collapse: "none", idle: undefined }[view.stage];
   return (
@@ -436,6 +448,7 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
         </div>
       )}
       <SelectItem
+        ref={itemRef}
         value={id}
         className={cn(ROW, "touch-pan-y [-webkit-touch-callout:none]")}
         aria-keyshortcuts="Delete"
@@ -472,6 +485,74 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
       </SelectItem>
     </div>
   );
+}
+
+const TRIGGER_EDGE = 16;
+const TRIGGER_BOUNCE = 12;
+
+/**
+ * The switcher button takes a vertical swipe: finger up = next tab, down = previous, one step per gesture, no wrap (the end rubber-bands).
+ * Horizontal does nothing and a tap opens the list (base-ui opens it on the tap's mousedown). A touch that starts in the top 16px of the page is left to the system.
+ * The browser's own scroll is stopped by `touch-action: none` on the button plus a non-passive touchmove here (React's touch listeners are passive); never on touchstart, which would kill the tap.
+ */
+function useTriggerSwipe(order: string[], activeId: string | undefined, onSelect: (id: string) => void, swiped: RefObject<number>) {
+  const [view, setView] = useState({ offset: 0, motion: false });
+  const state = useRef<SwipeState>({ phase: "idle" });
+  const cfg = useRef<SwipeConfig>({ ...ROW_SWIPE, axis: "y", allow: "both", commitFraction: 0.5, commitMin: 24, flickVelocity: 0.4, flickMin: 12, rubberLimit: TRIGGER_BOUNCE });
+  const height = useRef(0);
+  const edge = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const ref = useCallback((el: HTMLElement | null) => {
+    if (!el) return;
+    const start = (e: TouchEvent) => void (edge.current = (e.touches[0]?.clientY ?? Infinity) < TRIGGER_EDGE);
+    const move = (e: TouchEvent) => e.cancelable && !edge.current && e.preventDefault();
+    el.addEventListener("touchstart", start, { passive: true });
+    el.addEventListener("touchmove", move, { passive: false });
+    return () => (el.removeEventListener("touchstart", start), el.removeEventListener("touchmove", move));
+  }, []);
+  const feed = (e: ReactPointerEvent<HTMLElement>, type: "down" | "move" | "up") => {
+    const before = state.current;
+    const next = swipe(before, { type, p: { x: e.clientX, y: e.clientY, t: performance.now() } }, cfg.current, height.current);
+    state.current = next;
+    if (next.phase === "dragging") {
+      swiped.current = performance.now();
+      if (before.phase !== "dragging") e.currentTarget.setPointerCapture?.(e.pointerId);
+      setView({ offset: Math.max(-TRIGGER_BOUNCE, Math.min(TRIGGER_BOUNCE, next.offset)), motion: false });
+    } else if (next.phase === "committed" || next.phase === "settling") {
+      swiped.current = performance.now();
+      const to = next.phase === "committed" ? stepNoWrap(order, activeId, next.dir < 0 ? 1 : -1) : undefined;
+      if (to) onSelect(to);
+      // The new title slides in from the swiping direction (instant under reduced motion).
+      const slide = to && !reducedMotion() ? (next.phase === "committed" ? next.dir : 0) * TRIGGER_BOUNCE : 0;
+      setView({ offset: slide, motion: false });
+      timer.current = setTimeout(() => setView({ offset: 0, motion: !reducedMotion() }), 16);
+    }
+  };
+  const props = {
+    onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
+      if (e.pointerType === "mouse" || !e.isPrimary || e.clientY < TRIGGER_EDGE) return void (state.current = { phase: "idle" });
+      const i = activeId === undefined ? -1 : order.indexOf(activeId);
+      // Up (negative offset) goes to the next tab, down to the previous one.
+      const next = i >= 0 && i < order.length - 1;
+      const prev = i > 0;
+      cfg.current = { ...cfg.current, allow: next && prev ? "both" : next ? "negative" : prev ? "positive" : "none" };
+      height.current = e.currentTarget.getBoundingClientRect().height;
+      feed(e, "down");
+    },
+    onPointerMove: (e: ReactPointerEvent<HTMLElement>) => state.current.phase !== "idle" && feed(e, "move"),
+    onPointerUp: (e: ReactPointerEvent<HTMLElement>) => {
+      if (state.current.phase !== "idle") feed(e, "up");
+      state.current = { phase: "idle" };
+    },
+    onPointerCancel: () => {
+      if (state.current.phase === "idle") return;
+      state.current = { phase: "idle" };
+      setView({ offset: 0, motion: !reducedMotion() });
+    },
+  };
+  const style: CSSProperties | undefined = view.offset || view.motion ? { transform: `translateY(${view.offset}px)`, transition: view.motion ? "transform 150ms ease-out" : "none" } : undefined;
+  return { ref, props, style };
 }
 
 /** The pinned Focus tab: first in the strip, a count of the sessions waiting for the user (a shape and a number, not only a color). */

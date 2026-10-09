@@ -544,16 +544,16 @@ const tick = (ms: number) => ((now += ms), vi.spyOn(performance, "now").mockRetu
 const touch = (target: Element, type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel", x: number, y = 0, pointerType = "touch") =>
   act(async () => void target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerType, pointerId: 7, clientX: x, clientY: y, isPrimary: true } as PointerEventInit)));
 /** A finger from (0,0) by (dx, dy) over `ms`, in 16 ms steps, then lifted. */
-async function swipeBy(target: Element, dx: number, ms = 600, dy = 0, pointerType = "touch") {
+async function swipeBy(target: Element, dx: number, ms = 600, dy = 0, pointerType = "touch", y0 = 100) {
   tick(1000);
-  await touch(target, "pointerdown", 0, 0, pointerType);
+  await touch(target, "pointerdown", 0, y0, pointerType);
   const n = Math.max(1, Math.round(ms / 16));
   for (let i = 1; i <= n; i++) {
     tick(ms / n);
-    await touch(target, "pointermove", (dx * i) / n, (dy * i) / n, pointerType);
+    await touch(target, "pointermove", (dx * i) / n, y0 + (dy * i) / n, pointerType);
   }
   tick(1);
-  await touch(target, "pointerup", dx, dy, pointerType);
+  await touch(target, "pointerup", dx, y0 + dy, pointerType);
 }
 const shift = (row: Element) => parseFloat(/-?[\d.]+/.exec((row as HTMLElement).style.transform)?.[0] ?? "0");
 async function openList(props: Partial<Parameters<typeof TabsBar>[0]> = {}) {
@@ -682,4 +682,100 @@ it("phone: the list stays open when a close changes the active tab", async () =>
   await wait(500);
   expect(swipeRows().map((r) => r.textContent)).toEqual(["Fix loginwebrunning", "Docsdocsneeds input", "AOldapiclosed"]);
   expect(el.querySelector('[data-testid="tab-switcher"] .truncate')!.textContent).toBe("Old");
+});
+
+// GH-209 C2: a vertical swipe on the switcher button (not the list) goes to the next / previous tab, no wrap.
+const trigger = (el: Element) => el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!;
+
+it("phone: swiping up on the switcher button selects the next tab, down the previous; the list does not open", async () => {
+  const { el, onSelect } = await render();
+  await swipeBy(trigger(el), 0, 300, -40);
+  expect(onSelect).toHaveBeenLastCalledWith("d");
+  await swipeBy(trigger(el), 0, 300, 40);
+  expect(onSelect).toHaveBeenLastCalledWith("b");
+  expect(onSelect).toHaveBeenCalledTimes(2);
+  expect(swipeRows().length).toBe(0);
+});
+
+it("phone: the Focus tab comes first in the order; no wrap at either end", async () => {
+  const onSelect = vi.fn();
+  const { el } = await render({ focus: { count: 0 }, activeId: "a", onSelect });
+  await swipeBy(trigger(el), 0, 300, 40);
+  expect(onSelect).toHaveBeenLastCalledWith("focus");
+  onSelect.mockClear();
+  await act(async () => root!.render(<TabsBar tabs={["a", "b", "c", "d", NEW_TAB]} activeId="focus" focus={{ count: 0 }} info={(id) => INFO[id]!} onSelect={onSelect} onClose={() => {}} onMove={() => {}} onMoveGroup={() => {}} onMoveGroupTo={() => {}} onNew={() => {}} onAction={() => {}} onRenamed={() => {}} />));
+  await swipeBy(trigger(el), 0, 300, 40);
+  expect(onSelect).not.toHaveBeenCalled();
+  await act(async () => root!.render(<TabsBar tabs={["a", "b", "c", "d", NEW_TAB]} activeId={NEW_TAB} info={(id) => INFO[id]!} onSelect={onSelect} onClose={() => {}} onMove={() => {}} onMoveGroup={() => {}} onMoveGroupTo={() => {}} onNew={() => {}} onAction={() => {}} onRenamed={() => {}} />));
+  await swipeBy(trigger(el), 0, 300, -60);
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+it("phone: a 4px touch on the switcher button is a tap that still opens the list", async () => {
+  const { el, onSelect } = await render();
+  await swipeBy(trigger(el), 0, 60, -4);
+  expect(onSelect).not.toHaveBeenCalled();
+  // A tap ends with the compatibility mousedown, which is what opens base-ui's Select.
+  await act(async () => void trigger(el).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 })));
+  await wait(60);
+  expect(swipeRows().length).toBe(5);
+});
+
+it("phone: a swipe that starts in the top 16px of the page is not ours; a horizontal one does nothing", async () => {
+  const { el, onSelect, onClose } = await render();
+  await swipeBy(trigger(el), 0, 300, -40, "touch", 8);
+  expect(onSelect).not.toHaveBeenCalled();
+  await swipeBy(trigger(el), 60, 300, 0);
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(swipeRows().length).toBe(0);
+});
+
+it("phone: a mouse drag on the switcher button does not switch tabs", async () => {
+  const { el, onSelect } = await render();
+  await swipeBy(trigger(el), 0, 300, -40, "mouse");
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+it("phone: the switcher button has touch-action none and a non-passive touchmove that cancels the scroll, except from the top 16px", async () => {
+  const add = vi.spyOn(HTMLElement.prototype, "addEventListener");
+  const { el } = await render();
+  const t = trigger(el);
+  expect(t.className).toMatch(/touch-none/);
+  expect(add.mock.calls.some(([type, , o]) => type === "touchmove" && (o as AddEventListenerOptions)?.passive === false)).toBe(true);
+  add.mockRestore();
+  const fire = (type: string, y: number) => {
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(e, { touches: [{ clientX: 0, clientY: y }] });
+    t.dispatchEvent(e);
+    return e;
+  };
+  expect(fire("touchstart", 100).defaultPrevented).toBe(false);
+  expect(fire("touchmove", 90).defaultPrevented).toBe(true);
+  const uncancelable = new Event("touchmove", { bubbles: true, cancelable: false });
+  t.dispatchEvent(uncancelable);
+  expect(uncancelable.defaultPrevented).toBe(false);
+  fire("touchstart", 8);
+  expect(fire("touchmove", 40).defaultPrevented).toBe(false);
+});
+
+it("phone: a row's touchmove is cancelled only after the horizontal lock, never when the list scrolls", async () => {
+  await openList({ onSwipeClose: vi.fn() });
+  const row = swipeRows()[1]!;
+  const move = () => {
+    const e = new Event("touchmove", { bubbles: true, cancelable: true });
+    row.dispatchEvent(e);
+    return e.defaultPrevented;
+  };
+  tick(1000);
+  await touch(row, "pointerdown", 0, 100);
+  expect(move()).toBe(false);
+  await touch(row, "pointermove", -4, 101);
+  await touch(row, "pointermove", -40, 102);
+  expect(move()).toBe(true);
+  await touch(row, "pointercancel", -40, 102);
+  tick(1000);
+  await touch(row, "pointerdown", 0, 100);
+  await touch(row, "pointermove", 2, 140);
+  expect(move()).toBe(false);
 });
