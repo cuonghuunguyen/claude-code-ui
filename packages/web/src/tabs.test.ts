@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { FOCUS_TAB, NEW_TAB, keysFinal, avatarColor, avatarColors, closeTab, groupTabs, loadCollapsed, loadTabs, moveGroup, moveGroupTo, moveTab, moveTabIn, openTab, saveCollapsed, staleTabs, replaceTab, saveTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, keysFinal, avatarColor, avatarColors, closeMany, closeTab, stepNoWrap, groupTabs, loadCollapsed, loadTabs, moveGroup, moveGroupTo, moveTab, moveTabIn, openTab, saveCollapsed, staleTabs, replaceTab, saveTabs, tabFromHash, tabHash } from "./tabs.ts";
 
 describe("tabs", () => {
   it("restored tabs the daemon does not list are stale; the new-session tab always stays", () => {
@@ -173,5 +173,25 @@ describe("tab groups by project", () => {
     expect(moveTabIn(["a1", "b1", "a2"], () => "", "a2", "a1")).toEqual(["a2", "a1", "b1"]);
     const t = ["a1", "b1", "a2"];
     expect([...groupTabs(t, () => "").values()].flat()).toEqual(t);
+  });
+
+  it("closeMany: an active tab in the group moves to the first tab after it, else the last before it, else none", () => {
+    const tabs = ["a1", "a2", "b1", "b2"];
+    expect(closeMany(tabs, ["a1", "a2"], "a2")).toEqual({ tabs: ["b1", "b2"], active: "b1" });
+    expect(closeMany(tabs, ["b1", "b2"], "b1")).toEqual({ tabs: ["a1", "a2"], active: "a2" });
+    expect(closeMany(tabs, tabs, "a1")).toEqual({ tabs: [], active: undefined });
+    expect(closeMany(tabs, ["a1", "a2"], "b2")).toEqual({ tabs: ["b1", "b2"], active: "b2" });
+    expect(closeMany(tabs, ["zz"], "a1")).toEqual({ tabs, active: "a1" });
+    expect(closeMany(tabs, ["a1"], undefined)).toEqual({ tabs: ["a2", "b1", "b2"], active: undefined });
+  });
+
+  it("stepNoWrap: the neighbour in order, none past either end or for an unknown tab", () => {
+    const order = ["focus", "a", "b"];
+    expect(stepNoWrap(order, "focus", 1)).toBe("a");
+    expect(stepNoWrap(order, "a", -1)).toBe("focus");
+    expect(stepNoWrap(order, "b", 1)).toBeUndefined();
+    expect(stepNoWrap(order, "focus", -1)).toBeUndefined();
+    expect(stepNoWrap(order, "zz", 1)).toBeUndefined();
+    expect(stepNoWrap(order, undefined, 1)).toBeUndefined();
   });
 });

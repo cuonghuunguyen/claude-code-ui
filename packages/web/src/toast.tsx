@@ -1,6 +1,6 @@
 // One toast like OpenCode's toast-v2 in the corner region: bottom right (32px / 48px), 320px wide, 12px padding, radius 8, floating shadow, gone after 5 s.
 // At 600px and below it is full width (16px offsets). It slides in and out (280ms transform, 160ms opacity; none under reduced motion).
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
 
 /** Surface of a toast (Toast, UpdateToast, StaleToast, the notification card); the ToastRegion places it. */
@@ -15,27 +15,53 @@ export function ToastRegion({ children }: { children?: ReactNode }) {
   );
 }
 
-export function Toast({ message, onClose }: { message: string; onClose: () => void }) {
+export function Toast({ message, action, onClose }: { message: string; /** A text button after the message (Undo); it runs, then the toast goes. */ action?: { label: string; onClick: () => void }; onClose: () => void }) {
   const [open, setOpen] = useState(false);
+  const exit = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // A toast that is replaced while it leaves must not close its successor.
+  useEffect(() => () => clearTimeout(exit.current), []);
   // Out: wait for the exit transition (none under reduced motion) before the owner drops the toast.
+  const leaving = useRef(false);
   const close = () => {
+    leaving.current = true;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return onClose();
     setOpen(false);
-    setTimeout(onClose, 280);
+    exit.current = setTimeout(onClose, 280);
   };
+  // The 5 s run only while the pointer and the focus are elsewhere (WCAG 2.2.1): a keyboard user can reach Undo, a pointer can rest on it.
+  const [hover, setHover] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const held = hover || focused;
   useEffect(() => {
+    // Leaving for good: a pointer or focus change during the exit must not slide it back in.
+    if (leaving.current) return;
     const show = setTimeout(() => setOpen(true), 16);
-    const hide = setTimeout(close, 5000);
+    const hide = held ? undefined : setTimeout(close, 5000);
     return () => (clearTimeout(show), clearTimeout(hide));
-  }, [message]);
+  }, [message, held]);
   return (
     <div
       role="status"
       data-testid="toast"
       data-state={open ? "open" : "closed"}
+      onPointerEnter={() => setHover(true)}
+      onPointerLeave={() => setHover(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setFocused(false)}
       className={`${TOAST_CARD} grid grid-cols-[minmax(0,1fr)_20px] gap-3 transition-[transform,opacity] duration-[280ms,160ms] ease-[cubic-bezier(0.2,0,0,1),ease-out] data-[state=closed]:translate-y-4 data-[state=closed]:opacity-0 motion-reduce:transition-none`}
     >
-      <p className="text-[13px] leading-5 font-medium tracking-[-0.04px]">{message}</p>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3">
+        <p className="min-w-0 break-words text-[13px] leading-5 font-medium tracking-[-0.04px]">{message}</p>
+        {action && (
+          <button
+            type="button"
+            onClick={() => (action.onClick(), close())}
+            className="cursor-pointer rounded-sm px-1 text-[13px] leading-5 font-medium text-info outline-none hover:underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:min-h-11"
+          >
+            {action.label}
+          </button>
+        )}
+      </div>
       <button
         type="button"
         aria-label="Dismiss"
