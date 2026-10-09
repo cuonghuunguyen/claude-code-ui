@@ -1,6 +1,6 @@
 import { delimiter } from "node:path";
 import { describe, expect, it } from "vitest";
-import { HELP, parseCli } from "../src/cli.ts";
+import { HELP, PHONE_HINT, parseCli } from "../src/cli.ts";
 
 describe("parseCli", () => {
   it("defaults: port 4280, home root, no hostname, bypass off", () => {
@@ -23,6 +23,11 @@ describe("parseCli", () => {
     expect(parseCli(["--tailscale", "--hostname", "x"], {}, "/h")).toMatchObject({ kind: "error", message: expect.stringContaining("--tailscale sets the hostname") });
     expect(parseCli(["--tailscale"], { CLAUDE_UI_HOSTNAME: "x" }, "/h").kind).toBe("error");
     expect(HELP).toContain("--tailscale");
+  });
+  it("says app install needs HTTPS: --lan help, and a phone hint for an HTTPS start", () => {
+    expect(HELP).toMatch(/--lan[^]*app install/);
+    expect(PHONE_HINT).toContain("Add to Home Screen");
+    expect(PHONE_HINT).toContain("Install app");
   });
   it("help and version short-circuit", () => {
     expect(parseCli(["--help"], {}, "/h").kind).toBe("help");

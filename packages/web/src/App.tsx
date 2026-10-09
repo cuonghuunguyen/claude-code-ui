@@ -68,6 +68,9 @@ import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
+import { clearDrafts, loadDraft, NEW_TAB_DRAFT } from "./drafts.ts";
+import { PairingForm } from "./pairing-form.tsx";
+import { useDraft } from "./use-draft.ts";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
 import { ContinueDock } from "./continue-dock.tsx";
@@ -268,6 +271,8 @@ export function App() {
   const [stale, setStale] = useState<string>();
   const staleDismissed = useRef<string | undefined>(undefined);
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
+  // Unpaired: the drafts of this browser go with its token (drafts.ts).
+  useEffect(() => void (status === "unauthorized" && clearDrafts()), [status]);
   const [drawer, setDrawer] = useState(false);
   /** A `/resume` request for the sidebar search (SessionList `search`). */
   const [resumeSearch, setResumeSearch] = useState<{ text: string; seq: number }>();
@@ -1553,9 +1558,7 @@ export function App() {
           {status === "unauthorized" ? (
             // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
             <div className={`${card} flex-1`}>
-              <div className="m-auto max-w-sm p-4 text-center" role="alert" data-testid="pairing-needed">
-                The daemon rejected this browser: it is not paired. Open the pairing URL the daemon printed (…/#token=…).
-              </div>
+              <PairingForm />
             </div>
           ) : (
             <>
@@ -2173,6 +2176,7 @@ export function NewSession({
     <div className="flex w-full max-w-[720px] flex-col items-center gap-4">
       <div className="w-full">
         <PromptBox
+          draftKey={NEW_TAB_DRAFT}
           cwd={cwd}
           commands={commands}
           onDialog={cwd ? onDialog : undefined}
@@ -2617,6 +2621,7 @@ export function SessionPane({
           <>
             {view.continueAt !== undefined && <ContinueDock at={view.continueAt} onCancel={() => onCancelContinue?.()} />}
             <PromptBox
+              draftKey={session.id}
               cwd={session.cwd}
               commands={view.commands}
               onDialog={onDialog}
@@ -2684,6 +2689,7 @@ function PromptBox({
   insert,
   onInserted,
   draft,
+  draftKey,
   state = "idle",
   onInterrupt,
   usage,
@@ -2724,6 +2730,8 @@ function PromptBox({
   onInserted?: () => void;
   /** Replaces the text and images (rewind puts the original prompt back). */
   draft?: { text: string; images: string[] };
+  /** Keeps the unsent text across a reload (drafts.ts); a `draft` above wins. */
+  draftKey?: string;
   /** What the send button shows; default idle. */
   state?: SendState;
   onInterrupt?: () => void;
@@ -2747,7 +2755,8 @@ function PromptBox({
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   const phone = usePhone();
-  const [text, setText] = useState("");
+  const [initialText] = useState(() => (draftKey ? loadDraft(draftKey) : ""));
+  const [text, setText] = useState(initialText);
   const [images, setImages] = useState<string[]>([]);
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState(false);
@@ -2756,6 +2765,7 @@ function PromptBox({
   const [sendError, setSendError] = useState<string>();
   // Bash mode: the text is a shell command, the box looks like OpenCode's shell mode.
   const [bash, setBash] = useState(false);
+  const dropDraft = useDraft(draftKey, text, bash, initialText);
   // The prompt box covers the dock's bottom 36px (OpenCode prompt lift), only when it directly follows the dock.
   const lift = !!todos && !blocked && !sendError && !images.length;
   const input = useRef<HTMLTextAreaElement>(null);
@@ -2873,6 +2883,7 @@ function PromptBox({
       setImages((cur) => [...sent, ...cur]);
       setSendError(`Prompt not sent: ${e.message}`);
     });
+    dropDraft();
     edit("");
     setImages([]);
   };

@@ -56,6 +56,7 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 let emit: (e: unknown) => void = () => {};
 let sessionsChanged: (m: unknown) => void = () => {};
 let reconnect: () => void = () => {};
+let setStatus: (s: string) => void = () => {};
 let settingsChanged: (m: unknown) => void = () => {};
 const sent: { type: string }[] = [];
 vi.mock("./client.ts", async (orig) => ({
@@ -65,6 +66,7 @@ vi.mock("./client.ts", async (orig) => ({
     settingsChanged = opts.onSettingsChanged ?? (() => {});
     sessionsChanged = opts.onSessionsChanged ?? (() => {});
     reconnect = opts.onOpen ?? (() => {});
+    setStatus = opts.onStatus ?? (() => {});
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return { request: async (m: { type: string }) => (sent.push(m), typeof replies[m.type] === "function" ? (replies[m.type] as (m: unknown) => unknown)(m) : (replies[m.type] ?? {})), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
   },
@@ -82,7 +84,7 @@ beforeEach(async () => {
   await act(async () => root.render(<App />));
   await act(async () => {});
 });
-afterEach(() => (act(() => root.unmount()), el.remove()));
+afterEach(() => (act(() => root.unmount()), el.remove(), localStorage.clear())); // unmount flushes a draft: drop it before the next test
 
 const press = (init: KeyboardEventInit, target: EventTarget = document.body) =>
   act(async () => void target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
@@ -1378,4 +1380,19 @@ describe("idle close: holds and background follows", () => {
       restore();
     }
   });
+});
+
+it("a daemon that rejects this browser shows the pairing form in place of the session", async () => {
+  await act(async () => setStatus("unauthorized"));
+  expect(el.querySelector('[data-testid="pairing-needed"]')!.textContent).toContain("it is not paired");
+  expect(el.querySelector('[data-testid="pairing-input"]')).not.toBeNull();
+  await act(async () => setStatus("connected"));
+  expect(el.querySelector('[data-testid="pairing-needed"]')).toBeNull();
+});
+
+it("unpairing clears the prompt drafts of this browser", async () => {
+  localStorage.setItem("claude-ui.draft." + ID, "unsent");
+  localStorage.setItem("claude-ui.drafts", JSON.stringify({ [ID]: 1 }));
+  await act(async () => setStatus("unauthorized"));
+  expect(localStorage.getItem("claude-ui.draft." + ID)).toBeNull();
 });
