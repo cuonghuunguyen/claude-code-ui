@@ -3,13 +3,12 @@ import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { brotliCompressSync, gzipSync } from "node:zlib";
+import { brotliCompressSync, gunzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { serveStatic } from "../src/static.ts";
 
 const js = "export const hello = 'world';\n".repeat(200);
 const br = brotliCompressSync(js);
-const gz = gzipSync(js);
 let dir: string;
 let server: Server;
 let port: number;
@@ -23,7 +22,6 @@ beforeAll(async () => {
   writeFileSync(join(dir, "icon-192.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   writeFileSync(join(dir, "assets", "app-abc123.js"), js);
   writeFileSync(join(dir, "assets", "app-abc123.js.br"), br);
-  writeFileSync(join(dir, "assets", "app-abc123.js.gz"), gz);
   server = createServer((req, res) => {
     const path = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
     serveStatic(req, res, resolve(dir), path);
@@ -60,10 +58,20 @@ describe("static files: precompressed variants", () => {
     expect(r.body.equals(br)).toBe(true);
   });
 
-  it("falls back to .gz for a client without br, and to the plain file without any encoding or with br;q=0", async () => {
+  it("gzips on the fly for a client without br (cached, own ETag, 304), and serves to the plain file without any encoding or with br;q=0", async () => {
     const g = await get("/assets/app-abc123.js", { "accept-encoding": "gzip" });
     expect(g.headers["content-encoding"]).toBe("gzip");
-    expect(g.body.equals(gz)).toBe(true);
+    expect(gunzipSync(g.body).toString()).toBe(js);
+    expect(g.headers["content-length"]).toBe(String(g.body.length));
+    expect(g.headers.vary).toBe("accept-encoding");
+    expect(g.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+    const again = await get("/assets/app-abc123.js", { "accept-encoding": "gzip" });
+    expect(again.body.equals(g.body)).toBe(true);
+    expect(again.headers.etag).toBe(g.headers.etag);
+    expect((await get("/assets/app-abc123.js", { "accept-encoding": "gzip", "if-none-match": g.headers.etag as string })).status).toBe(304);
+    const head = await get("/assets/app-abc123.js", { "accept-encoding": "gzip" }, "HEAD");
+    expect(head.headers["content-length"]).toBe(String(g.body.length));
+    expect(head.body.length).toBe(0);
     for (const h of [{}, { "accept-encoding": "br;q=0" }, { "accept-encoding": "identity" }] as Record<string, string>[]) {
       const p = await get("/assets/app-abc123.js", h);
       expect(p.headers["content-encoding"]).toBeUndefined();

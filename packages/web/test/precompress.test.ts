@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomFillSync } from "node:crypto";
-import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { brotliDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { precompressDir } from "../precompress.ts";
 
@@ -10,7 +10,7 @@ let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("precompressDir", () => {
-  it("writes .br and .gz that decompress to the original, only where the file is big and compressible enough", async () => {
+  it("writes .br (and no .gz) that decompress to the original, only where the file is big and compressible enough", async () => {
     dir = mkdtempSync(join(tmpdir(), "claude-ui-precompress-"));
     mkdirSync(join(dir, "assets"));
     const big = "const a = 1;\n".repeat(500);
@@ -24,7 +24,7 @@ describe("precompressDir", () => {
     const r = await precompressDir(dir, { brotliQuality: 5 });
 
     expect(brotliDecompressSync(readFileSync(join(dir, "assets", "app.js.br"))).toString()).toBe(big);
-    expect(gunzipSync(readFileSync(join(dir, "assets", "app.js.gz"))).toString()).toBe(big);
+    expect(existsSync(join(dir, "assets", "app.js.gz"))).toBe(false);
     for (const skipped of ["index.html.br", "index.html.gz", "assets/font.woff2.br", "assets/font.woff2.gz", "icon.png.gz", "assets/noise.js.br", "assets/noise.js.gz"]) {
       expect(existsSync(join(dir, skipped)), skipped).toBe(false);
     }

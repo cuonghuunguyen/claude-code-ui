@@ -1,8 +1,10 @@
 // Static files of the built web app (docs/spec.md "Static files"): cache headers, ETag/304, precompressed
 // .br/.gz variants written by the web build, and a 404 (not index.html) for a missing asset.
 import { createReadStream, statSync, type Stats } from "node:fs";
+import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, join, sep } from "node:path";
+import { gzip } from "node:zlib";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -20,7 +22,7 @@ const MIME: Record<string, string> = {
   ".map": "application/json",
 };
 
-/** Types worth compressing; the web build writes .br/.gz next to these (packages/web/precompress.ts). */
+/** Types worth compressing; the web build writes .br next to these (packages/web/precompress.ts); gzip is made on request (below). */
 const COMPRESSIBLE = new Set([".js", ".css", ".html", ".svg", ".json", ".webmanifest", ".txt", ".wasm"]);
 
 /** Encodings the client accepts (q > 0), best first among those we have files for. */
@@ -45,6 +47,20 @@ const fileStat = (file: string): Stats | undefined => {
   } catch {
     return undefined;
   }
+};
+
+const MIN_GZIP_BYTES = 1024;
+/** On-the-fly gzip for a client without br (plain-http --lan): compressed once per file version, kept in memory (the web app is a few MB). */
+const gzipped = new Map<string, Promise<Buffer>>();
+const gzipOf = (file: string, etag: string): Promise<Buffer> => {
+  const key = `${file}|${etag}`;
+  let p = gzipped.get(key);
+  if (!p) {
+    p = readFile(file).then((data) => new Promise<Buffer>((ok, fail) => gzip(data, { level: 9 }, (e, out) => (e ? fail(e) : ok(out)))));
+    p.catch(() => gzipped.delete(key));
+    gzipped.set(key, p);
+  }
+  return p;
 };
 
 const etagOf = (st: Stats) => `W/"${st.size.toString(36)}-${Math.floor(st.mtimeMs).toString(36)}"`;
@@ -73,24 +89,36 @@ export function serveStatic(req: IncomingMessage, res: ServerResponse, root: str
     "content-type": MIME[ext] ?? "application/octet-stream",
     "cache-control": logical.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache",
   };
+  let gz = false;
   if (COMPRESSIBLE.has(ext)) {
     headers.vary = "accept-encoding";
     const accepted = acceptedEncodings(req.headers["accept-encoding"]);
-    for (const [enc, suffix] of [["br", ".br"], ["gzip", ".gz"]] as const) {
-      const variant = accepted.has(enc) ? fileStat(file + suffix) : undefined;
-      if (!variant) continue;
-      file += suffix;
-      st = variant;
-      headers["content-encoding"] = enc;
-      break;
+    const br = accepted.has("br") ? fileStat(file + ".br") : undefined;
+    if (br) {
+      file += ".br";
+      st = br;
+      headers["content-encoding"] = "br";
+    } else if (accepted.has("gzip") && st.size >= MIN_GZIP_BYTES) {
+      gz = true;
+      headers["content-encoding"] = "gzip";
     }
   }
-  headers.etag = etagOf(st);
+  headers.etag = gz ? etagOf(st).replace(/"$/, '-gz"') : etagOf(st);
   headers["last-modified"] = st.mtime.toUTCString();
   const inm = req.headers["if-none-match"];
   if (inm && (inm.trim() === "*" || inm.split(",").some((t) => t.trim().replace(/^W\//, "") === headers.etag.toString().replace(/^W\//, "")))) {
     delete headers["content-type"];
     return void res.writeHead(304, headers).end();
+  }
+  if (gz) {
+    const source = file;
+    return void gzipOf(source, headers.etag as string).then(
+      (body) => {
+        headers["content-length"] = body.length;
+        res.writeHead(200, headers).end(req.method === "HEAD" ? undefined : body);
+      },
+      () => res.destroy(),
+    );
   }
   headers["content-length"] = st.size;
   res.writeHead(200, headers);
