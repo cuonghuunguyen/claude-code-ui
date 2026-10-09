@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { loadDraft, saveDraft } from "./drafts.ts";
 import { clearToken, parsePairing, storeToken, takeToken } from "./pairing.ts";
 
 const storage = () => {
@@ -51,7 +52,9 @@ describe("storeToken and clearToken", () => {
     const s = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k) };
     storeToken(TOKEN, s);
     expect(takeToken({ hash: "", pathname: "/", search: "" }, s, () => {})).toBe(TOKEN);
+    saveDraft("s1", "unsent", s);
     clearToken(s);
+    expect(loadDraft("s1", s)).toBe("");
     expect(takeToken({ hash: "", pathname: "/", search: "" }, s, () => {})).toBeUndefined();
   });
 });

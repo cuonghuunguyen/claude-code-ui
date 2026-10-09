@@ -23,7 +23,7 @@ const models: ModelInfo[] = [
 ];
 const noop = () => {};
 let unmount = noop;
-afterEach(() => unmount());
+afterEach(() => (unmount(), localStorage.clear()));
 
 async function render(over: Partial<ComponentProps<typeof SessionPane>> = {}, view: SessionView = emptySession()) {
   const el = document.createElement("div");
@@ -858,4 +858,25 @@ it("/resume with an image attached still opens the session search and keeps the 
   expect(onDialog).toHaveBeenLastCalledWith("resume");
   expect(onPrompt).not.toHaveBeenCalled();
   expect($("image-strip")!.querySelectorAll("img")).toHaveLength(1);
+});
+
+it("an unsent prompt comes back after a reload of the page (a remount) and is gone once sent", async () => {
+  localStorage.clear();
+  const first = await render();
+  await type(first.box, "half a thought");
+  unmount(); // the page goes away: the draft is flushed on the way out
+  expect(localStorage.getItem("claude-ui.draft.s1")).toBe("half a thought");
+  const second = await render();
+  expect(second.box.value).toBe("half a thought");
+  await key(second.box, { key: "Enter" });
+  expect(second.box.value).toBe("");
+  expect(localStorage.getItem("claude-ui.draft.s1")).toBeNull();
+  unmount();
+  expect((await render()).box.value).toBe("");
+});
+
+it("a draft belongs to its session", async () => {
+  localStorage.setItem("claude-ui.draft.other", "not mine");
+  localStorage.setItem("claude-ui.draft.s1", "stored");
+  expect((await render()).box.value).toBe("stored");
 });
