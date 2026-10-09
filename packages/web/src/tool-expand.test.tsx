@@ -239,3 +239,24 @@ it("TodoWrite: the timeline card stays collapsed, the dock above the prompt show
   await render(view([running, ...todos("t1", false), { type: "session_state", id: "st", state: "idle" }, running]));
   expect(dock()).toBeNull();
 });
+
+it("TodoWrite card: summary counts completed todos and the expanded card lists each item with its status, also after the turn", async () => {
+  const items = [
+    { content: "Inspect", status: "completed" as const },
+    { content: "Test", status: "in_progress" as const, activeForm: "Testing" },
+    { content: "Ship", status: "pending" as const },
+  ];
+  const idle: Part = { type: "session_state", id: "st", state: "idle" };
+  await render(view([call("t1", "TodoWrite", { todos: items }), { type: "todo_update", id: "t1:todos", items }, idle]));
+  expect(el.querySelector('[data-testid="todo-dock"]')).toBeNull();
+  const card = cards()[0]!;
+  expect(card.textContent).toContain("1 of 3 todos completed");
+  expect(expanded(card)).toBe(false);
+  await toggle(card);
+  const rows = [...card.querySelectorAll<HTMLElement>('[data-testid="todo-card-item"]')];
+  expect(rows.map((r) => r.dataset.status)).toEqual(["completed", "in_progress", "pending"]);
+  // Screen readers get the status as text; the mark is hidden.
+  expect(rows.map((r) => r.textContent)).toEqual(["Completed: Inspect", "In progress: Test", "Pending: Ship"]);
+  expect(rows[1]!.className).toContain("font-medium");
+  expect(rows[0]!.className).toContain("line-through");
+});
