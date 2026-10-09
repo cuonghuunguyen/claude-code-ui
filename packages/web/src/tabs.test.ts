@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { FOCUS_TAB, NEW_TAB, avatarColor, avatarColors, closeMany, closeTab, stepNoWrap, groupTabs, loadCollapsed, loadTabs, moveGroup, moveGroupTo, moveTab, moveTabIn, openTab, saveCollapsed, staleTabs, replaceTab, saveTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, keysFinal, avatarColor, avatarColors, closeMany, closeTab, stepNoWrap, groupTabs, loadCollapsed, loadTabs, moveGroup, moveGroupTo, moveTab, moveTabIn, openTab, saveCollapsed, staleTabs, replaceTab, saveTabs, tabFromHash, tabHash } from "./tabs.ts";
 
 describe("tabs", () => {
   it("restored tabs the daemon does not list are stale; the new-session tab always stays", () => {
@@ -102,6 +102,27 @@ describe("tab groups by project", () => {
 
   it("a new tab of a project lands at the end of its group", () => {
     expect(flat(openTab(["a1", "b1", "c1"], "a2"))).toEqual(["a1", "a2", "b1", "c1"]);
+  });
+
+  it("keysFinal: needs the session list and every tab resolved; the new-session tab is always final", () => {
+    const known = new Set(["a", "b"]);
+    const has = (id: string) => known.has(id);
+    expect(keysFinal(["a", "b"], true, has)).toBe(true);
+    expect(keysFinal(["a", NEW_TAB, "b"], true, has)).toBe(true);
+    expect(keysFinal([], true, has)).toBe(true);
+    expect(keysFinal(["a", "b"], false, has)).toBe(false); // list not loaded yet
+    expect(keysFinal(["a", "c"], true, has)).toBe(false); // c not resolved yet
+  });
+
+  it("keysFinal: a tab whose subscribe failed counts as resolved, so it cannot hide the group chips forever (GH-201)", () => {
+    const has = (id: string) => id === "a";
+    expect(keysFinal(["a", "c"], true, has, new Set(["c"]))).toBe(true);
+    expect(keysFinal(["a", "c", "d"], true, has, new Set(["c"]))).toBe(false);
+    expect(keysFinal(["a", "c"], false, has, new Set(["c"]))).toBe(false);
+  });
+
+  it("moveTabIn with one shared key (keys not final) moves a tab across tabs of unknown project, not refused (GH-201)", () => {
+    expect(moveTabIn(["a", "b", "c"], () => "", "c", "a")).toEqual(["c", "a", "b"]);
   });
 
   it("moveTabIn reorders inside a group and ignores a move into another group", () => {

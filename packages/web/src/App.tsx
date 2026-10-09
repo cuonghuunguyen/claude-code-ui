@@ -68,6 +68,9 @@ import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
+import { clearDrafts, loadDraft, NEW_TAB_DRAFT } from "./drafts.ts";
+import { PairingForm } from "./pairing-form.tsx";
+import { useDraft } from "./use-draft.ts";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
 import { ContinueDock } from "./continue-dock.tsx";
@@ -108,7 +111,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
-import { FOCUS_TAB, NEW_TAB, avatarColors, closeMany, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
@@ -273,6 +276,8 @@ export function App() {
   const [stale, setStale] = useState<string>();
   const staleDismissed = useRef<string | undefined>(undefined);
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
+  // Unpaired: the drafts of this browser go with its token (drafts.ts).
+  useEffect(() => void (status === "unauthorized" && clearDrafts()), [status]);
   const [drawer, setDrawer] = useState(false);
   /** A `/resume` request for the sidebar search (SessionList `search`). */
   const [resumeSearch, setResumeSearch] = useState<{ text: string; seq: number }>();
@@ -407,6 +412,8 @@ export function App() {
   const restored = useRef<string[] | undefined>(tabs);
   /** True once a session list reply is in (never reset): the tab group keys are final only after it (GH-196). */
   const [listLoaded, setListLoaded] = useState(false);
+  /** Tabs whose subscribe failed for a reason other than unknown_session: their session never arrives, so they must not keep the group keys from becoming final (GH-201). */
+  const [failedTabs, setFailedTabs] = useState<ReadonlySet<string>>(new Set());
 
   async function refreshList() {
     try {
@@ -479,12 +486,16 @@ export function App() {
       }
       setViews((v) => ({ ...v, [sessionId]: withSubscribe(v[sessionId] ?? emptySession(), r) }));
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
+      setFailedTabs((f) => (f.has(sessionId) ? new Set([...f].filter((x) => x !== sessionId)) : f));
       setHeirOf((h) => (h[sessionId] ? without(h, sessionId) : h));
       if (r.title) setTitles((t) => ({ ...t, [sessionId]: r.title }));
     } catch (e) {
       // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
       if ((e as RequestError).code === "unknown_session") return forget(sessionId);
-      if ((e as Error).message !== "disconnected") setError((e as Error).message); // else resubscribed on reconnect
+      if ((e as Error).message !== "disconnected") {
+        setError((e as Error).message);
+        setFailedTabs((f) => (f.has(sessionId) ? f : new Set(f).add(sessionId)));
+      } // else resubscribed on reconnect
     }
   }
 
@@ -600,6 +611,7 @@ export function App() {
     requested.current.delete(sessionId);
     setViews((v) => without(v, sessionId));
     setInfos((i) => without(i, sessionId));
+    setFailedTabs((f) => (f.has(sessionId) ? new Set([...f].filter((x) => x !== sessionId)) : f));
     if (unsubscribe) client.current?.request({ type: "session.unsubscribe", sessionId }).catch(() => {});
   }
 
@@ -1065,7 +1077,7 @@ export function App() {
   const groupOfTab = (id: string) => (id === NEW_TAB ? "" : tabGroup(sessionOf(id)?.cwd, grouping, worktrees).key);
   // The stored list stays grouped by the Tab grouping setting (also once the session cwds arrive), so close, next/previous tab and moves all use the order the strip draws.
   // Regrouped only once every tab's key is final: on partial keys the unknown tabs gather in one group and the damaged order is stored (GH-196).
-  const keysFinal = listLoaded && tabs.every((id) => id === NEW_TAB || !!sessionOf(id));
+  const keysFinal = tabKeysFinal(tabs, listLoaded, (id) => !!sessionOf(id), failedTabs);
   useGroupedTabs(tabs, setTabs, groupOfTab, keysFinal);
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   // GH-133: a just-created session shows (with its pending prompt) before its subscribe reply.
@@ -1448,7 +1460,7 @@ export function App() {
             onSwipeClose={closeFromList}
             grouping={grouping}
             compact={compact && grouping !== "none"}
-            onMove={(from, to) => setTabs((t) => moveTabIn(t, groupOfTab, from, to))}
+            onMove={(from, to) => setTabs((t) => moveTabIn(t, keysFinal ? groupOfTab : () => "", from, to))}
             onMoveGroup={(cwd, by) => setTabs((t) => moveGroup(t, groupOfTab, cwd, by))}
             onMoveGroupTo={(from, to) => setTabs((t) => moveGroupTo(t, groupOfTab, from, to))}
             onCloseGroup={requestCloseGroup}
@@ -1629,9 +1641,7 @@ export function App() {
           {status === "unauthorized" ? (
             // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
             <div className={`${card} flex-1`}>
-              <div className="m-auto max-w-sm p-4 text-center" role="alert" data-testid="pairing-needed">
-                The daemon rejected this browser: it is not paired. Open the pairing URL the daemon printed (…/#token=…).
-              </div>
+              <PairingForm />
             </div>
           ) : (
             <>
@@ -2249,6 +2259,7 @@ export function NewSession({
     <div className="flex w-full max-w-[720px] flex-col items-center gap-4">
       <div className="w-full">
         <PromptBox
+          draftKey={NEW_TAB_DRAFT}
           cwd={cwd}
           commands={commands}
           onDialog={cwd ? onDialog : undefined}
@@ -2693,6 +2704,7 @@ export function SessionPane({
           <>
             {view.continueAt !== undefined && <ContinueDock at={view.continueAt} onCancel={() => onCancelContinue?.()} />}
             <PromptBox
+              draftKey={session.id}
               cwd={session.cwd}
               commands={view.commands}
               onDialog={onDialog}
@@ -2760,6 +2772,7 @@ function PromptBox({
   insert,
   onInserted,
   draft,
+  draftKey,
   state = "idle",
   onInterrupt,
   usage,
@@ -2800,6 +2813,8 @@ function PromptBox({
   onInserted?: () => void;
   /** Replaces the text and images (rewind puts the original prompt back). */
   draft?: { text: string; images: string[] };
+  /** Keeps the unsent text across a reload (drafts.ts); a `draft` above wins. */
+  draftKey?: string;
   /** What the send button shows; default idle. */
   state?: SendState;
   onInterrupt?: () => void;
@@ -2823,7 +2838,8 @@ function PromptBox({
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   const phone = usePhone();
-  const [text, setText] = useState("");
+  const [initialText] = useState(() => (draftKey ? loadDraft(draftKey) : ""));
+  const [text, setText] = useState(initialText);
   const [images, setImages] = useState<string[]>([]);
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState(false);
@@ -2832,6 +2848,7 @@ function PromptBox({
   const [sendError, setSendError] = useState<string>();
   // Bash mode: the text is a shell command, the box looks like OpenCode's shell mode.
   const [bash, setBash] = useState(false);
+  const dropDraft = useDraft(draftKey, text, bash, initialText);
   // The prompt box covers the dock's bottom 36px (OpenCode prompt lift), only when it directly follows the dock.
   const lift = !!todos && !blocked && !sendError && !images.length;
   const input = useRef<HTMLTextAreaElement>(null);
@@ -2949,6 +2966,7 @@ function PromptBox({
       setImages((cur) => [...sent, ...cur]);
       setSendError(`Prompt not sent: ${e.message}`);
     });
+    dropDraft();
     edit("");
     setImages([]);
   };

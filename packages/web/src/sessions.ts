@@ -251,18 +251,30 @@ export function activeOnly(groups: SessionGroup[], workers: Map<string, SessionL
   return { groups: out, idleTotal };
 }
 
+/**
+ * Classic layout: one list per project, the sessions of the main checkout and of every worktree merged newest first (as the flat order),
+ * no worktree rows; `branch` names the branch of each session that sits in a linked worktree.
+ */
+export function classicGroup(g: SessionGroup): { group: SessionGroup; branch: Map<string, string> } {
+  const branch = new Map<string, string>();
+  for (const r of g.worktrees) if (!r.main) for (const s of r.sessions) branch.set(s.id, r.branch ?? r.path.split("/").filter(Boolean).pop() ?? r.path);
+  const sessions = [...g.sessions, ...g.worktrees.flatMap((r) => r.sessions)].sort((a, b) => b.lastActivity - a.lastActivity);
+  return { group: { ...g, sessions, worktrees: [] }, branch };
+}
+
 /** Sidebar view settings, per browser (docs/spec.md "Layout"). */
-export type SidebarView = { alwaysSelect: boolean; dayHeaders: boolean; onlyActive: boolean; sort: SidebarSort };
+export type SidebarLayout = "default" | "classic";
+export type SidebarView = { alwaysSelect: boolean; dayHeaders: boolean; layout: SidebarLayout; onlyActive: boolean; sort: SidebarSort };
 const VIEW_KEY = "claude-ui.sidebarView";
 /** Fired on `window` by saveSidebarView. */
 export const VIEW_EVENT = "claude-ui:sidebar-view";
-const VIEW_DEFAULT: SidebarView = { alwaysSelect: false, dayHeaders: true, onlyActive: false, sort: "recent" };
+const VIEW_DEFAULT: SidebarView = { alwaysSelect: false, dayHeaders: true, layout: "default", onlyActive: false, sort: "recent" };
 
 export function loadSidebarView(): SidebarView {
   try {
     const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "{}") as Record<string, unknown>;
     const bool = (k: "alwaysSelect" | "dayHeaders" | "onlyActive") => (typeof v[k] === "boolean" ? (v[k] as boolean) : VIEW_DEFAULT[k]);
-    return { alwaysSelect: bool("alwaysSelect"), dayHeaders: bool("dayHeaders"), onlyActive: bool("onlyActive"), sort: v.sort === "name" ? "name" : "recent" };
+    return { alwaysSelect: bool("alwaysSelect"), dayHeaders: bool("dayHeaders"), layout: v.layout === "classic" ? "classic" : "default", onlyActive: bool("onlyActive"), sort: v.sort === "name" ? "name" : "recent" };
   } catch {
     return VIEW_DEFAULT;
   }
