@@ -4,7 +4,7 @@ import { ConfigDialog } from "./config-dialog.tsx";
 import { bind, bindingError, conflictOf, isChanged, pressError, resetAll, resetBinding, specFromEvent, specOf, useKeymap } from "./keymap.ts";
 import { PREFIX_KEYS } from "./leader.ts";
 import { FORMAT_KEYS } from "./markdown-toolbar.tsx";
-import { SHORTCUTS, keyLabels, type ShortcutGroup } from "./shortcuts.ts";
+import { IS_MAC, SHORTCUTS, keyLabels, type ShortcutGroup } from "./shortcuts.ts";
 
 const GROUPS: ShortcutGroup[] = ["General", "Tabs", "Panels", "Session", "Prefix"];
 const GROUP_TITLE: Record<ShortcutGroup, string> = { General: "General", Tabs: "Tabs", Panels: "Panels", Session: "Session", Prefix: "Prefix key" };
@@ -71,7 +71,7 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
       if (spec === "backspace" || spec === "delete") return (bind(recording, null), stop());
       const bad = pressError(e) ?? bindingError(spec);
       if (bad) return (setPending(undefined), setError(bad));
-      const clash = conflictOf(recording, spec);
+      const clash = conflictOf(recording, spec, IS_MAC, e);
       // A prompt box key cannot be taken over; another shortcut can (Replace).
       if (clash) return (setError(undefined), setPending({ id: recording, spec, with: clash }));
       bind(recording, spec);
