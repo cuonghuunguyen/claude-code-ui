@@ -2,7 +2,7 @@
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
 // Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
-import { createContext, memo, use, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
+import { createContext, memo, use, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
 import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
@@ -91,6 +91,7 @@ export function TabsBar({
   onMove,
   onMoveGroup,
   onMoveGroupTo,
+  onCloseGroup,
   onNew,
   home,
   onHome,
@@ -117,6 +118,8 @@ export function TabsBar({
   onMoveGroup: (cwd: string, by: -1 | 1) => void;
   /** Chip drag: the group of `from` takes the slot of the group of `to`. */
   onMoveGroupTo: (from: string, to: string) => void;
+  /** Closes a group's tabs (chip menu, middle click, Delete on the chip): `key` is the group key, `ids` its tabs in strip order. The owner asks first for 2 or more. */
+  onCloseGroup?: (key: string, ids: string[]) => void;
   onNew: () => void;
   /** Sidebar toggle (md and up), OpenCode's legacy-layout `sidebar` icon: aria-pressed while the sessions sidebar shows, no pressed fill.
    * Not OpenCode's `grid-plus`: that one opens its Home page, this one only shows and hides the sidebar. */
@@ -190,6 +193,10 @@ export function TabsBar({
     refocus.current = { id: closeTab(tabs, id, activeId ?? id).active };
     onClose(id);
   };
+  const closeGroup = (key: string) => {
+    const ids = groups.find(([k]) => k === key)?.[1];
+    if (ids?.length) onCloseGroup?.(key, ids);
+  };
   const moveBy = (id: string, by: -1 | 1) => {
     const to = tabs[tabs.indexOf(id) + by];
     if (!to || keyOf(to) !== keyOf(id)) return;
@@ -218,6 +225,10 @@ export function TabsBar({
     const target = e.target as HTMLElement;
     const chip = target.closest<HTMLElement>("[data-group-chip]")?.dataset.groupChip;
     if (chip !== undefined) {
+      if (e.key === "Delete" && chip) {
+        e.preventDefault();
+        return closeGroup(chip);
+      }
       const by = e.altKey && e.shiftKey ? ({ ArrowLeft: -1, ArrowRight: 1 } as Record<string, -1 | 1>)[e.key] : undefined;
       if (!by) return;
       e.preventDefault();
@@ -269,7 +280,7 @@ export function TabsBar({
         {groups.map(([cwd, ids]) => (
           // `contents`: groups are no boxes, tabs shrink in the strip as before. The chip is a button inside the tablist (a11y trade-off, no group role).
           <div key={cwd} role="none" className="contents" data-testid="tab-group">
-            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} menu={compact ? { activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) } : undefined} />}
+            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} onCloseGroup={() => closeGroup(cwd)} move={{ left: groups.findIndex(([k]) => k === cwd) > 0, right: groups.findIndex(([k]) => k === cwd) < groups.length - 1, by: (by) => ((refocus.current = { group: cwd }), onMoveGroup(cwd, by)) }} menu={compact ? { activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) } : undefined} />}
             {ids
               .filter((id) => !hidden(id))
               .map((id) => {
@@ -385,7 +396,7 @@ function FocusTab({ active, count, focusable, onSelect }: { active: boolean; cou
 }
 
 /** Group header: project color, name, tab count; a collapsed group shows its most urgent tab state. */
-function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, menu }: { menu?: { activeId?: string; onSelect: (id: string) => void; onClose: (id: string) => void }; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
+function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, onCloseGroup, move, menu }: { onCloseGroup: () => void; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void }; menu?: { activeId?: string; onSelect: (id: string) => void; onClose: (id: string) => void }; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
   const first = info(ids[0]!);
   const c = avatarColor(first.groupColor ?? cwd, use(AvatarColors));
   const states = hiddenIds.map((id) => status(id, info(id)));
@@ -403,6 +414,13 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, m
     className: "flex h-6 max-w-40 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-[color-mix(in_oklab,var(--av)_18%,var(--background))] px-1.5 font-medium text-foreground text-xs shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--av)_60%,transparent)] outline-none focus-visible:ring-2 focus-visible:ring-ring",
     style: { "--av": `var(--avatar-${c})` } as CSSProperties,
     draggable: true,
+    // Middle click closes the group; its mousedown would start autoscroll (and must not open the compact menu).
+    onMouseDown: (e: ReactMouseEvent) => e.button === 1 && e.preventDefault(),
+    onAuxClick: (e: ReactMouseEvent) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      onCloseGroup();
+    },
     onDragStart: (e: DragEvent) => {
       setOpen(false);
       e.dataTransfer.setData(GROUP_DRAG_TYPE, cwd);
@@ -471,22 +489,50 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, m
                   </Menu.Item>
                 );
               })}
+              <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
+              <Menu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
+                Close group
+              </Menu.Item>
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>
       </Menu.Root>
     );
   return (
-    <Tooltip>
-      <TooltipTrigger aria-expanded={!collapsed} {...props} onClick={onToggle}>
-        {body}
-      </TooltipTrigger>
-      <span id={pathId} hidden>{cwd}</span>
-      <TooltipContent className="flex-col items-start gap-0.5">
-        <span className="font-medium">{sub ?? name}</span>
-        <span className="break-all opacity-80">{cwd}</span>
-      </TooltipContent>
-    </Tooltip>
+    // Right click (long press on touch): the menu the compact chip has, for a chip whose click collapses.
+    <ContextMenu.Root>
+      <ContextMenu.Trigger className="contents">
+        <Tooltip>
+          <TooltipTrigger aria-expanded={!collapsed} {...props} onClick={onToggle}>
+            {body}
+          </TooltipTrigger>
+          <span id={pathId} hidden>{cwd}</span>
+          <TooltipContent className="flex-col items-start gap-0.5">
+            <span className="font-medium">{sub ?? name}</span>
+            <span className="break-all opacity-80">{cwd}</span>
+          </TooltipContent>
+        </Tooltip>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Positioner className="z-50">
+          <ContextMenu.Popup className={POPUP} data-testid="tab-group-menu">
+            <ContextMenu.Item className={ITEM} onClick={onToggle}>
+              {collapsed ? "Expand group" : "Collapse group"}
+            </ContextMenu.Item>
+            <ContextMenu.Item className={ITEM} disabled={!move.left} onClick={() => move.by(-1)}>
+              Move group left
+            </ContextMenu.Item>
+            <ContextMenu.Item className={ITEM} disabled={!move.right} onClick={() => move.by(1)}>
+              Move group right
+            </ContextMenu.Item>
+            <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+            <ContextMenu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
+              Close group
+            </ContextMenu.Item>
+          </ContextMenu.Popup>
+        </ContextMenu.Positioner>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 

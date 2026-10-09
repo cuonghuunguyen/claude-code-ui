@@ -16,6 +16,15 @@ export function closeTab(tabs: string[], id: string, active?: string) {
   return { tabs: rest, active: active === id ? (rest[at] ?? rest[at - 1]) : active };
 }
 
+/** Closes several tabs at once (a group). An active tab among them is replaced by the first tab after it, else the last one before it (Chrome), else none. */
+export function closeMany(tabs: string[], ids: string[], active?: string) {
+  const gone = new Set(ids);
+  const rest = tabs.filter((t) => !gone.has(t));
+  if (!active || !gone.has(active)) return { tabs: rest, active };
+  const at = tabs.indexOf(active);
+  return { tabs: rest, active: tabs.slice(at + 1).find((t) => !gone.has(t)) ?? tabs.slice(0, at).reverse().find((t) => !gone.has(t)) };
+}
+
 /** Drag reorder: `from` takes the slot of `to`. */
 export function moveTab(tabs: string[], from: string, to: string) {
   const at = tabs.indexOf(to);

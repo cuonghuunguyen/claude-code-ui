@@ -23,6 +23,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "tab.prev", title: "Previous tab", group: "Tabs", key: "mod+alt+arrowleft" },
   { id: "tab.next", title: "Next tab", group: "Tabs", key: "mod+alt+arrowright" },
   { id: "tab.close", title: "Close tab", group: "Tabs", key: "mod+alt+w" },
+  { id: "tab.closeGroup", title: "Close tab group", group: "Tabs", key: "mod+alt+shift+w" },
   { id: "tab.reopen", title: "Reopen closed tab", group: "Tabs", key: "alt+shift+t", mac: "ctrl+shift+t" },
   // Ctrl/Cmd+1..9 belong to the browser's tabs; Alt+digit is free on Windows and Linux, Ctrl+digit on macOS.
   ...[1, 2, 3, 4, 5, 6, 7, 8].map(gotoTab),

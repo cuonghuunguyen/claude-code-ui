@@ -108,7 +108,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
-import { FOCUS_TAB, NEW_TAB, avatarColors, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColors, closeMany, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
@@ -348,6 +348,9 @@ export function App() {
   const [deleting, setDeleting] = useState<string>();
   // Project cwd whose Remove waits for the confirmation.
   const [removing, setRemoving] = useState<string>();
+  const [closingGroup, setClosingGroup] = useState<{ ids: string[]; name: string }>();
+  const lastClosingGroup = useRef({ ids: [] as string[], name: "" });
+  if (closingGroup) lastClosingGroup.current = closingGroup;
   // Keeps the name while the dialog fades out.
   const lastRemoving = useRef("");
   // Set on Remove confirm, read by the dialog's final focus.
@@ -661,12 +664,39 @@ export function App() {
   function close(id: string) {
     const r = closeTab(tabs, id, activeId);
     setTabs(r.tabs);
-    if (id !== NEW_TAB) setClosedTabs((c) => pushClosed(c, id, tabs.indexOf(id)));
+    release(id);
+    activate(r.active);
+  }
+
+  /** What closing a session tab leaves behind: its place on the closed stack, and its subscription (live: followed in the background; else dropped). */
+  function release(id: string) {
+    if (id === NEW_TAB) return;
+    setClosedTabs((c) => pushClosed(c, id, tabs.indexOf(id)));
     const state = listRef.current.find((s) => s.id === id)?.state;
-    if (id !== NEW_TAB) state && state !== "closed" && state !== "error" ? void subscribe(id, false, false, true) : drop(id);
-    if (r.active === activeId) return;
-    open(r.active);
-    if (!r.active) history.replaceState(null, "", location.pathname + location.search);
+    state && state !== "closed" && state !== "error" ? void subscribe(id, false, false, true) : drop(id);
+  }
+
+  /** The tab that took over after a close; none: the hash goes. */
+  function activate(next: string | undefined) {
+    if (next === activeId) return;
+    open(next);
+    if (!next) history.replaceState(null, "", location.pathname + location.search);
+  }
+
+  /** Closes the tabs of a group in one step; each lands on the closed stack in strip order, so Reopen closed tab brings the last one back first. */
+  function closeGroup(ids: string[]) {
+    const r = closeMany(tabs, ids, activeId);
+    setTabs(r.tabs);
+    for (const id of tabs.filter((t) => ids.includes(t))) release(id);
+    activate(r.active);
+  }
+
+  /** Close group (chip menu, middle click, Delete on the chip, the command): a group of 2 or more tabs asks first, a single tab closes at once. */
+  function requestCloseGroup(key: string, ids: string[]) {
+    const own = ids.filter((id) => id !== NEW_TAB && tabs.includes(id));
+    if (own.length < 2) return closeGroup(own);
+    const g = tabGroup(sessionOf(own[0]!)?.cwd, grouping, worktrees);
+    setClosingGroup({ ids: own, name: `${g.label || projectName(key)}${g.sub ? ` (${g.sub})` : ""}` });
   }
 
   useEffect(() => {
@@ -1195,6 +1225,7 @@ export function App() {
     newSession: () => newSession(),
     selectTab: open,
     closeTab: close,
+    closeGroup: grouping !== "none" && activeId && groupOfTab(activeId) ? () => requestCloseGroup(groupOfTab(activeId), tabs.filter((id) => groupOfTab(id) === groupOfTab(activeId))) : undefined,
     quickOpen: showQuickOpen,
     // md: the sidebar breakpoint; below it the sidebar is a drawer.
     toggleSidebar: () => (wide(768) ? setSidebar((v) => !v) : setDrawer((v) => !v)),
@@ -1388,6 +1419,7 @@ export function App() {
             onMove={(from, to) => setTabs((t) => moveTabIn(t, groupOfTab, from, to))}
             onMoveGroup={(cwd, by) => setTabs((t) => moveGroup(t, groupOfTab, cwd, by))}
             onMoveGroupTo={(from, to) => setTabs((t) => moveGroupTo(t, groupOfTab, from, to))}
+            onCloseGroup={requestCloseGroup}
             onNew={() => newSession()}
             home={sidebar}
             onHome={() => setSidebar((v) => !v)}
@@ -1413,6 +1445,25 @@ export function App() {
         </div>
       </header>
       <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? "Untitled")} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
+      <ConfirmDialog
+        open={closingGroup !== undefined}
+        title={`Close ${lastClosingGroup.current.ids.length} tabs of ${lastClosingGroup.current.name}?`}
+        description="Sessions keep running. Reopen them from the sidebar or with Reopen closed tab."
+        confirm="Close group"
+        onConfirm={() => {
+          const g = closingGroup!;
+          setClosingGroup(undefined);
+          closeGroup(g.ids);
+        }}
+        onCancel={() => setClosingGroup(undefined)}
+        // Cancel: back to the chip; closed: the tab that took over (it is in the Tab order), else New session.
+        finalFocus={() =>
+          document.querySelector<HTMLElement>(`[data-group-chip="${CSS.escape(lastClosingGroup.current.ids[0] ? groupOfTab(lastClosingGroup.current.ids[0]) : "")}"]`) ??
+          document.querySelector<HTMLElement>('[data-testid="tab-strip"] [role="tab"][tabindex="0"]') ??
+          document.querySelector<HTMLElement>('[data-testid="tab-new"]')
+        }
+        testId="close-group"
+      />
       <ConfirmDialog
         open={removing !== undefined}
         title="Remove project?"

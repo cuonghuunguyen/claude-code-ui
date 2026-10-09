@@ -347,7 +347,8 @@ it("a tab switch re-renders only the tabs that lose or get the selection (GH-51)
   await show("c");
   tabRenders.n = 0;
   await show("a");
-  expect(tabRenders.n).toBe(2);
+  // Each group chip has a ContextMenu.Root too (Close group), and it re-renders with the bar: only the tabs are memoised.
+  expect(tabRenders.n - el.querySelectorAll('[data-testid="tab-group-chip"]').length).toBe(2);
   // A tab that did not re-render still closes with the latest handler.
   await act(async () => el.querySelector<HTMLElement>('[data-tab-id="b"] [data-testid="tab-close"]')!.click());
   expect(onClose).toHaveBeenCalledWith("b");
