@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { setFreshBrowser, GUIDE_KEY } from "./guide.ts";
 import { adapt, STEPS, type GuideStep } from "./guide-steps.ts";
+import { bind, resetAll } from "./keymap.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -86,6 +87,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   unmount();
+  resetAll();
   setFreshBrowser(false);
   document.body.innerHTML = "";
 });
@@ -231,11 +233,11 @@ describe("chapter Your session", () => {
     replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
     replies["git.status"] = { status: git ? { branch: "main" } : null };
   };
-  it("starts when a session shows and is idle: Tabs first, six steps in a git work tree", async () => {
+  it("starts when a session shows and is idle: Tabs first, seven steps in a git work tree", async () => {
     inSession(true);
     await mount();
     expect(tour()!.dataset.step).toBe("tabs");
-    expect(tour()!.textContent).toContain("Step 1 of 6");
+    expect(tour()!.textContent).toContain("Step 1 of 7");
   });
   it("waits for the git status, so a slow answer does not drop the Git graph step", async () => {
     inSession(true);
@@ -245,12 +247,12 @@ describe("chapter Your session", () => {
     await act(async () => new Promise((r) => setTimeout(r, 3500)));
     expect(tour()).toBeNull();
     await act(async () => answer({ status: { branch: "main" } }));
-    expect(tour()!.textContent).toContain("Step 1 of 6");
+    expect(tour()!.textContent).toContain("Step 1 of 7");
   });
   it("outside git the Git graph step is absent and the count is one less", async () => {
     inSession(false);
     await mount();
-    expect(tour()!.textContent).toContain("Step 1 of 5");
+    expect(tour()!.textContent).toContain("Step 1 of 6");
     for (let i = 0; i < 2; i++) await press({ key: "ArrowRight" });
     expect(tour()!.dataset.step).toBe("changes");
     await press({ key: "ArrowRight" });
@@ -259,8 +261,8 @@ describe("chapter Your session", () => {
   it("finishing it marks the chapter done and it does not start again", async () => {
     inSession(true);
     await mount();
-    for (let i = 0; i < 5; i++) await press({ key: "ArrowRight" });
-    expect(tour()!.dataset.step).toBe("replay");
+    for (let i = 0; i < 6; i++) await press({ key: "ArrowRight" });
+    expect(tour()!.dataset.step).toBe("shortcuts");
     await act(async () => [...tour()!.querySelectorAll("button")].find((b) => b.textContent === "Done")!.click());
     expect(tour()).toBeNull();
     expect(saved()).toMatchObject({ basics: "done", session: "done" });
@@ -282,7 +284,7 @@ describe("chapter Your session", () => {
   it("a fresh Basics run with a session already shown chains into it (no end card)", async () => {
     inSession(true, { v: 1, origin: "new", basics: "pending", session: "pending" });
     await mount();
-    expect(tour()!.textContent).toContain("Step 1 of 11");
+    expect(tour()!.textContent).toContain("Step 1 of 12");
   });
 });
 
@@ -312,4 +314,119 @@ describe("anchor drift guard: every step's anchors match an element of the rende
       for (const s of withAnchor) expect(hits(s, w < 768), `${s.id} at ${w}`).toBe(true);
     });
   }
+});
+
+const chips = () => [...tour()!.querySelectorAll('[data-testid="guide-keys"] kbd span')].map((s) => s.textContent);
+const stepTo = async (id: string) => {
+  for (let i = 0; i < 20 && tour()!.dataset.step !== id; i++) await press({ key: "ArrowRight" });
+  expect(tour()!.dataset.step).toBe(id);
+};
+
+describe("keys follow the user's keymap", () => {
+  const inSession = () => {
+    localStorage.setItem(GUIDE_KEY, JSON.stringify({ v: 1, origin: "new", basics: "done", session: "pending" }));
+    location.hash = `#${ID}`;
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    replies["git.status"] = { status: { branch: "main" } };
+  };
+  it("a rebound Show files shows the new chips on the Files step", async () => {
+    inSession();
+    bind("pane.files", "mod+alt+j");
+    await mount();
+    await stepTo("files");
+    expect(chips()).toEqual(["Ctrl", "Alt", "J"]);
+  });
+  it("rebinding while the tour shows updates the chips, and removing the key hides the line", async () => {
+    inSession();
+    await mount();
+    await stepTo("files");
+    expect(chips()).toEqual(["Ctrl", "Shift", "E"]);
+    await act(async () => bind("pane.files", "mod+alt+j"));
+    expect(chips()).toEqual(["Ctrl", "Alt", "J"]);
+    await act(async () => bind("pane.files", null));
+    expect(tour()!.querySelector('[data-testid="guide-keys"]')).toBeNull();
+  });
+  it("the last step shows the Keyboard shortcuts key; Show all shortcuts opens the dialog and finishes the chapter", async () => {
+    inSession();
+    bind("shortcuts.open", "mod+alt+k");
+    await mount();
+    await stepTo("shortcuts");
+    expect(chips()).toEqual(["Ctrl", "Alt", "K"]);
+    await act(async () => [...tour()!.querySelectorAll("button")].find((b) => b.textContent === "Show all shortcuts")!.click());
+    await act(async () => {});
+    expect(tour()).toBeNull();
+    expect(document.querySelector('[data-testid="shortcuts-filter"]')).not.toBeNull();
+    expect(saved()).toMatchObject({ basics: "done", session: "done" });
+  });
+});
+
+describe("a tour that ends where nothing was focused", () => {
+  it("palette Show guide with no session: Esc puts the focus back where the palette was opened from", async () => {
+    localStorage.setItem("claude-ui.tabs", "[]");
+    await mount();
+    const from = document.querySelector<HTMLElement>('[data-testid="tab-new"]')!;
+    Object.defineProperty(from, "getClientRects", { value: () => [{}] });
+    from.focus();
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Show guide"))!;
+    await act(async () => row.click());
+    await act(async () => {});
+    expect(tour()!.dataset.step).toBe("welcome");
+    await press({ key: "Escape" });
+    expect(tour()).toBeNull();
+    expect(document.activeElement).toBe(from);
+  });
+});
+
+describe("a palette-started tour that ends with nothing to return to", () => {
+  it("opened with nothing focused and no session shown: Esc lands on the New session button, not on the page", async () => {
+    localStorage.setItem("claude-ui.tabs", "[]");
+    await mount();
+    const plus = document.querySelector<HTMLElement>('[data-testid="tab-new"]')!;
+    Object.defineProperty(plus, "getClientRects", { value: () => [{}] });
+    plus.getBoundingClientRect = () => ({ left: 100, top: 4, width: 32, height: 32, right: 132, bottom: 36, x: 100, y: 4, toJSON() {} });
+    (document.activeElement as HTMLElement).blur();
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Show guide"))!;
+    await act(async () => row.click());
+    await act(async () => {});
+    expect(tour()).not.toBeNull();
+    await press({ key: "Escape" });
+    expect(tour()).toBeNull();
+    expect(document.activeElement).toBe(plus);
+  });
+});
+
+describe("the side panel hidden (crash regression, whole App)", () => {
+  it("walking the whole run with the side panel toggled off ends cleanly, Files to Git graph point at the toggle", async () => {
+    localStorage.setItem(GUIDE_KEY, JSON.stringify({ v: 1, origin: "existing", basics: "offered", session: "offered" }));
+    location.hash = `#${ID}`;
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    replies["git.status"] = { status: { branch: "main" } };
+    await mount();
+    const toggle = document.querySelector<HTMLElement>('[data-testid="panel-toggle"]')!;
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    // jsdom lays nothing out: only the toggle is "on screen", as in a browser with the panel hidden.
+    Object.defineProperty(toggle, "getClientRects", { value: () => [{}] });
+    toggle.getBoundingClientRect = () => ({ left: 900, top: 4, width: 32, height: 32, right: 932, bottom: 36, x: 900, y: 4, toJSON() {} });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="open-settings"]')!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-guide"]')!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-guide-restart"]')!.click());
+    await act(async () => {});
+    expect(tour()!.textContent).toContain("Step 1 of 12");
+    for (const id of ["files", "changes", "graph"]) {
+      await stepTo(id);
+      expect(tour()!.textContent).toContain("Show the side panel");
+      expect(document.querySelector('[data-testid="guide-spotlight"]')).not.toBeNull();
+    }
+    await stepTo("terminal");
+    expect(tour()!.textContent).toContain("A shell in the project folder");
+    await stepTo("shortcuts");
+    await act(async () => [...tour()!.querySelectorAll("button")].find((b) => b.textContent === "Done")!.click());
+    expect(tour()).toBeNull();
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
 });
