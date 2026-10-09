@@ -232,7 +232,7 @@ describe("sides", () => {
   });
 
   it("setup errors in a container name the container's next step", () => {
-    expect(setupMessage("not_logged_in", "", "Docker: dev", true)).toBe("Claude is not logged in in Docker: dev. Run claude login in the container or copy your ~/.claude/.credentials.json into it (or start it with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN set), then retry.");
+    expect(setupMessage("not_logged_in", "", "Docker: dev", true)).toBe("Claude is not logged in to Docker: dev. Run claude login in the container or copy your ~/.claude/.credentials.json into it (or start it with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN set), then retry.");
     expect(setupMessage("node_missing", "", "Docker: dev", true)).toBe("Node.js 22 or newer is not installed in Docker: dev. Use an image with Node.js 22+ (e.g. node:22) or install it in the container, then retry.");
     expect(setupMessage("build_tools_missing", "", "WSL: Ubuntu")).toBe("WSL: Ubuntu needs make, python3 and g++ to build the terminal support (node-pty). Install them there (Debian/Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++), then retry.");
   });
@@ -339,6 +339,28 @@ describe("sides", () => {
   });
 });
 
+describe("docker state freshness", () => {
+  it("a change of the Docker state alone (down, empty, ok) sends a change, so an open dialog updates its hint", async () => {
+    let engine: "ok" | "down" | "empty" | undefined;
+    let known: typeof engine;
+    // main.ts keeps the state it found inside discover.
+    const hub = createSides({ targets: [], discoverMs: 0, spawn: () => Promise.reject(new Error("unused")), dockerState: () => known, discover: async () => ((known = engine), []) });
+    let changes = 0;
+    hub.onChange(() => changes++);
+    for (const s of ["down", "empty", "ok", "down"] as const) {
+      engine = s;
+      const before = changes;
+      await hub.refresh();
+      expect(changes, s).toBe(before + 1);
+      expect(hub.docker()).toBe(s);
+    }
+    // The same state again: nothing to announce.
+    const same = changes;
+    await hub.refresh();
+    expect(changes).toBe(same);
+  });
+});
+
 const dockRoot = dir("dock-");
 const dockSession = "6e2f3a4b-5c6d-4e7f-8091-92b3c4d5e6f7";
 
@@ -348,6 +370,7 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
   mkdirSync(localRoot);
   let dockSaved: string[] = [];
   let containers = ["dev", "stopped"];
+  let dockerState: "ok" | "down" | "empty" | undefined = "ok";
   let devProc: SideProcess;
   let sideDaemon: ReturnType<typeof createDaemon>;
   const dsides = createSides({
@@ -356,6 +379,7 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
     posixLocal: true,
     discoverMs: 0,
     discover: async () => containers.map(dockerSide),
+    dockerState: () => dockerState,
     spawn: async (id) => (id === "docker:dev" ? (devProc = inProcessSide(dockRoot, dockSession, (d) => (sideDaemon = d))) : Promise.reject(new Error("Docker: stopped is not running. Start it (docker start stopped), then retry."))),
     save: (ids) => (dockSaved = ids),
   });
@@ -373,6 +397,19 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
       { id: "docker:dev", label: "Docker: dev", state: "off" },
       { id: "docker:stopped", label: "Docker: stopped", state: "off" },
     ]);
+    c.ws.close();
+  });
+
+  it("session.list carries the Docker state next to the sides, and leaves the field out when unknown", async () => {
+    const c = await client(await dport());
+    expect((await c.request({ type: "session.list" })).result.docker).toBe("ok");
+    for (const s of ["down", "empty"] as const) {
+      dockerState = s;
+      expect((await c.request({ type: "session.list" })).result.docker).toBe(s);
+    }
+    dockerState = undefined;
+    expect("docker" in (await c.request({ type: "session.list" })).result).toBe(false);
+    dockerState = "ok";
     c.ws.close();
   });
 

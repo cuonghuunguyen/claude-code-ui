@@ -334,7 +334,7 @@ export function TabsBar({
               aria-label="Switch tab"
               data-testid="tab-switcher"
               // touch-action none: a touch that starts here is never a browser scroll (no pull-to-refresh, no rubber band, no double-tap zoom), and the vertical swipe is ours.
-              className={`${GHOST} max-md:h-11! min-w-0 flex-1 touch-none bg-secondary! px-1.5 font-medium text-foreground max-md:my-2`}
+              className={`${GHOST} max-md:h-11! min-w-0 flex-1 touch-none bg-secondary! px-1.5 font-medium text-foreground`}
               {...trigger.props}
             >
               {activeId === FOCUS_TAB ? <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden /> : active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} /> : null}

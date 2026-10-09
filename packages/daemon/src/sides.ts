@@ -4,8 +4,11 @@
 // Frames are JSON lines. hub -> side: {c, o} opens virtual connection c, {c, m} a client message, {c, x} closes it.
 // side -> hub: {ready} once listening, {c, m} a server message, {push} a Web Push payload. Other stdout lines are ignored.
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
-import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideInfo } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
+import type { Exec } from "./docker-side.ts";
 
 /** A started side process: `wsl.exe -d <distro> ...` or `docker exec -i <name> ...` (tests: an in-process side). */
 export type SideProcess = { stdin: Writable; stdout: Readable; stderr: Readable; kill(): void; on(event: "exit", l: (code: number | null) => void): unknown };
@@ -36,9 +39,11 @@ export function setupMessage(code: string, detail: string, side: string, docker 
     case "node_old":
       return docker ? `Node.js ${detail} in ${side} is too old: 22 or newer is needed. Use an image with Node.js 22+ (e.g. node:22), then retry.` : `Node.js ${detail} in ${side} is too old: 22 or newer is needed. Update it there (e.g. nvm install 22), then retry.`;
     case "not_logged_in":
-      return docker ? `Claude is not logged in in ${side}. Run claude login in the container or copy your ~/.claude/.credentials.json into it (or start it with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN set), then retry.` : `Claude is not logged in in ${side}. Run claude login there, then retry.`;
+      return docker ? `Claude is not logged in to ${side}. Run claude login in the container or copy your ~/.claude/.credentials.json into it (or start it with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN set), then retry.` : `Claude is not logged in to ${side}. Run claude login there, then retry.`;
     case "build_tools_missing":
       return `${side} needs make, python3 and g++ to build the terminal support (node-pty). Install them there (Debian/Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++), then retry.`;
+    case "not_installed":
+      return `claude-ui is not installed in ${side} yet. Install it first.`;
     case "install_failed":
       return `Installing claude-ui in ${side} failed${detail ? `: ${detail}` : ""}. Check its network and npm, then retry.`;
     default:
@@ -52,8 +57,10 @@ export function setupMessage(code: string, detail: string, side: string, docker 
  * `key` (version and build), so no registry or unpublished version matters. wsl: `source` is the Windows package folder (read
  * through /mnt; npm packs it); docker: `source` is the tarball's path in the container. Then runs it.
  */
-export function setupScript(source: string, key: string, kind: "wsl" | "docker" = "wsl") {
+export function setupScript(source: string, key: string, kind: "wsl" | "docker" = "wsl", mode: SideSetup = "needed") {
   const docker = kind === "docker";
+  // never: only an installed build runs (else `not_installed`, the side stays off); force: installed again whatever is there.
+  const never = mode === "never";
   const src = source.replace(/'/g, "");
   return [
     "say() { printf 'CLAUDE_UI_SETUP %s\\n' \"$*\"; exit 3; }",
@@ -65,16 +72,20 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     'root="$HOME/.local/share/claude-ui/side"',
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
-    ...(docker ? [`src='${src}'`] : []),
+    ...(docker && !never ? [`src='${src}'`] : []),
     // npm skips an optional dependency it could not fetch: without the SDK's Linux binary (any arch or libc) the side lists no
     // models (no auto mode) and runs no query. Such an install is installed again: into an empty temp folder next to the old
     // install (npm does not fetch a missing optional dependency into an existing node_modules), checked there (dist/cli.js and the
     // binary), then swapped in. On any failure the old install stays (disk: both exist while npm runs).
     'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
-    'if [ ! -f "$cli" ] || ! sdk "$dir"; then',
+    ...(never
+      ? ['if [ ! -f "$cli" ] || ! sdk "$dir"; then say not_installed; fi']
+      : [
+    mode === "force" ? "if true; then" : 'if [ ! -f "$cli" ] || ! sdk "$dir"; then',
     docker
       ? `  [ -f "$src" ] || say install_failed "the claude-ui package was not copied in"`
       : `  src=$(wslpath -u '${src}') && [ -f "$src/dist/cli.js" ] || say install_failed "the Windows claude-ui package was not found"`,
+    "  printf 'CLAUDE_UI_PHASE %s\\n' installing",
     // node-pty has no Linux prebuilds: npm install compiles it.
     "  { command -v make && command -v python3 && { command -v g++ || command -v c++; }; } >/dev/null 2>&1 || say build_tools_missing",
     // Dot names: the sweep of earlier versions below ("$root"/*) never matches them.
@@ -92,9 +103,174 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     // Earlier versions and builds, leftovers of killed runs.
     '  for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || rm -rf "$d"; done',
     "fi",
-    ...(docker ? ['rm -f "$src" 2>/dev/null', '[ -n "$CLAUDE_UI_ROOTS" ] || case "$PWD" in /|"$HOME"|"$HOME"/*) export CLAUDE_UI_ROOTS="$HOME" ;; *) export CLAUDE_UI_ROOTS="$HOME:$PWD" ;; esac'] : []),
+    ]),
+    ...(docker && !never ? ['rm -f "$src" 2>/dev/null'] : []),
+    ...(docker ? ['[ -n "$CLAUDE_UI_ROOTS" ] || case "$PWD" in /|"$HOME"|"$HOME"/*) export CLAUDE_UI_ROOTS="$HOME" ;; *) export CLAUDE_UI_ROOTS="$HOME:$PWD" ;; esac'] : []),
+    "printf 'CLAUDE_UI_PHASE %s\\n' starting",
     'exec node "$cli" --side',
   ].join("\n");
+}
+
+/** Whether this claude-ui has the build a side installs: dist/cli.js (a Docker side also serves dist/web/index.html). */
+export const hasBuild = (pkgDir: string, docker: boolean) => existsSync(join(pkgDir, "dist", "cli.js")) && (!docker || existsSync(join(pkgDir, "dist", "web", "index.html")));
+
+/**
+ * Read-only script for `side.check`, run where the setup script runs (same shell, same nvm): prints `CLAUDE_UI_CHECK <k>=<v>` lines
+ * (node, make, python3, cxx, credentials, package [wsl], writable [docker], then installed and installedKey). It never installs,
+ * writes, copies, starts the side, reads a file's contents or prints an environment variable's value: HOME, PATH, NVM_DIR and
+ * CLAUDE_CONFIG_DIR only name places (a writable home folder is reported as the text $HOME).
+ */
+export function checkScript(key: string, kind: "wsl" | "docker", source = "") {
+  const docker = kind === "docker";
+  return [
+    "emit() { printf 'CLAUDE_UI_CHECK %s=%s\\n' \"$1\" \"$2\"; }",
+    ...(docker ? ['nvm="${NVM_DIR:-$HOME/.nvm}/nvm.sh"; [ -s "$nvm" ] && . "$nvm" >/dev/null 2>&1'] : []),
+    "if command -v node >/dev/null 2>&1; then emit node \"$(node -p 'process.versions.node' 2>/dev/null || echo none)\"; else emit node none; fi",
+    "command -v make >/dev/null 2>&1 && emit make 1 || emit make 0",
+    "command -v python3 >/dev/null 2>&1 && emit python3 1 || emit python3 0",
+    "{ command -v g++ || command -v c++; } >/dev/null 2>&1 && emit cxx 1 || emit cxx 0",
+    '[ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" ] && emit credentials 1 || emit credentials 0',
+    ...(docker
+      ? [`w=; wr() { [ -d "$1" ] && [ -w "$1" ] && w="$w\${w:+,}$2"; }; wr /tmp /tmp; wr /dev/shm /dev/shm; wr "$HOME" '$HOME'; emit writable "$w"`]
+      : [`src=$(wslpath -u '${source.replace(/'/g, "")}' 2>/dev/null) && [ -f "$src/dist/cli.js" ] && emit package 1 || emit package 0`]),
+    'root="$HOME/.local/share/claude-ui/side"',
+    `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
+    'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
+    // Same test as the setup script: a build without the SDK's Linux binary is not installed.
+    'if [ -f "$dir/node_modules/claude-code-ui/dist/cli.js" ] && sdk "$dir"; then emit installed current',
+    'else o=; for d in "$root"/*; do [ -d "$d" ] && [ "$d" != "$dir" ] && o="${d##*/}" && break; done',
+    '  if [ -n "$o" ]; then emit installed other; emit installedKey "$o"',
+    '  elif [ -d "$dir" ]; then emit installed other; emit installedKey "${dir##*/}"',
+    "  else emit installed none; fi",
+    "fi",
+  ].join("\n");
+}
+
+type Checked = {
+  node?: string;
+  make: boolean;
+  python3: boolean;
+  cxx: boolean;
+  credentials: boolean;
+  /** WSL: the Windows package is readable from the distro. */
+  packageVisible?: boolean;
+  /** Docker: writable folders. */
+  writable?: string[];
+  installed: "current" | "other" | "none";
+  installedKey?: string;
+};
+
+/** The `CLAUDE_UI_CHECK` lines of a check script's output (other lines are shell start-up noise); undefined when the script did not get to its last line. */
+export function parseCheck(out: string): Checked | undefined {
+  const kv = new Map<string, string>();
+  for (const line of out.split(/\r?\n/)) {
+    const m = /^CLAUDE_UI_CHECK ([a-zA-Z0-9]+)=(.*)$/.exec(line.trim());
+    if (m) kv.set(m[1]!, m[2]!.trim());
+  }
+  const inst = kv.get("installed");
+  if (inst !== "current" && inst !== "other" && inst !== "none") return undefined;
+  const node = kv.get("node");
+  const flag = (k: string) => kv.get(k) === "1";
+  return {
+    ...(node && node !== "none" && { node }),
+    make: flag("make"),
+    python3: flag("python3"),
+    cxx: flag("cxx"),
+    credentials: flag("credentials"),
+    ...(kv.has("package") && { packageVisible: flag("package") }),
+    ...(kv.has("writable") && { writable: kv.get("writable")!.split(",").filter(Boolean) }),
+    installed: inst,
+    ...(kv.get("installedKey") && { installedKey: kv.get("installedKey") }),
+  };
+}
+
+const nodeMajor = (v: string) => Number(/^v?(\d+)/.exec(v)?.[1] ?? NaN);
+
+/** The user's next step for a blocked check, in plain words (same source as `setupMessage`). `side`: the label; `detail`: a version, a name or a short reason. */
+export function checkMessage(reason: SideCheckReason, side: string, o: { docker?: boolean; detail?: string; name?: string } = {}) {
+  const d = o.detail ?? "";
+  switch (reason) {
+    case "gone":
+      return `${side} no longer exists. Pick another container.`;
+    case "not_running":
+      return `${side} is not running. Start it${o.name ? ` (docker start ${o.name})` : ""}, then check again.`;
+    case "unreachable":
+      return `${side} could not be reached${d ? `: ${d}` : ""}. Make sure it is available, then check again.`;
+    case "no_build":
+      return "This version of Claude UI has no complete build yet. Wait for a running build to finish, or run npm start, then check again.";
+    case "package_unreadable":
+      return `${side} cannot read the claude-ui files on Windows. Wait for a running build to finish, then check again.`;
+    case "node_missing":
+      return o.docker ? `Node.js is not installed in ${side}. Use an image with Node.js 22 or newer (for example node:22), or install it in the container. Then check again.` : `Node.js is not installed in ${side}. Install version 22 or newer there (for example nvm install 22). Then check again.`;
+    case "node_old":
+      return o.docker ? `Node.js ${d} in ${side} is too old. Version 22 or newer is needed. Use an image with Node.js 22 or newer (for example node:22). Then check again.` : `Node.js ${d} in ${side} is too old. Version 22 or newer is needed. Update it there (for example nvm install 22). Then check again.`;
+    case "build_tools_missing":
+      return `${side} needs ${d || "make, python3 and g++"} to install the terminal support. Install ${d ? "it" : "them"} there (Debian or Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++). Then check again.`;
+    case "not_logged_in":
+      return o.docker ? `Claude does not look logged in to ${side}. Run claude login in the container, or copy your ~/.claude/.credentials.json into it. If it logs in with an API key or token, you can install anyway.` : `Claude does not look logged in to ${side}. Run claude login there. If it logs in with an API key or token, you can install anyway.`;
+    case "no_writable_path":
+      return `${side} has no folder claude-ui can be put in: /tmp, /dev/shm and the home folder are read-only. Start the container with a writable /tmp (docker run --tmpfs /tmp), then check again.`;
+    case "check_failed":
+      return `The check of ${side} did not finish${d ? `: ${d}` : ""}. Check again.`;
+  }
+}
+
+/**
+ * The verdict for a side that runs: first hard blocks (no build, Node.js, and only when an install is needed: no writable folder,
+ * build tools, the package unreadable), then an installed side (starting it needs no login), then the soft block (no credentials
+ * file: an environment login cannot be seen; only when an install or update is needed). `cpUsable` (Docker): whether `docker cp` can write; with a writable folder one of the two copies the package in.
+ */
+export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker"; name?: string; build: boolean; checked: Checked; cpUsable?: boolean }): SideCheck {
+  const { checked: c, key, label } = o;
+  const docker = o.kind === "docker";
+  const nodeOk = c.node ? nodeMajor(c.node) >= 22 : undefined;
+  const facts: SideCheckFacts = {
+    reachable: true,
+    ...(docker && { running: true }),
+    ...(c.node && { node: c.node, nodeOk }),
+    buildTools: { make: c.make, python3: c.python3, cxx: c.cxx },
+    credentialsFile: c.credentials,
+    installed: c.installed,
+    ...(c.installedKey && { installedKey: c.installedKey }),
+    ...(c.writable && { writable: c.writable }),
+  };
+  const blocked = (reason: SideCheckReason, detail?: string): SideCheck => ({ verdict: "blocked", reason, message: checkMessage(reason, label, { docker, detail, name: o.name }), key, facts });
+  const needsInstall = c.installed !== "current";
+  if (!o.build) return blocked("no_build");
+  if (!c.node) return blocked("node_missing");
+  if (!nodeOk) return blocked("node_old", c.node);
+  if (needsInstall) {
+    if (docker && o.cpUsable === false && c.writable && c.writable.length === 0) return blocked("no_writable_path");
+    const missing = [!c.make && "make", !c.python3 && "python3", !c.cxx && "g++"].filter(Boolean) as string[];
+    if (missing.length) return blocked("build_tools_missing", missing.join(", "));
+    if (!docker && c.packageVisible === false) return blocked("package_unreadable");
+  }
+  // Installed (this build, complete): nothing to set up, so a missing credentials file (an environment login is invisible) does not block it.
+  if (c.installed === "current") return { verdict: "installed", key, facts };
+  if (!c.credentials) return blocked("not_logged_in");
+  const verdict = c.installed === "other" ? "update" : "install";
+  return { verdict, message: verdict === "update" ? `${label} has an older claude-ui. Update it to use it with this one.` : `claude-ui is not installed in ${label}. Install it to use it.`, key, facts };
+}
+
+/** A blocked verdict for a side that could not be asked (no answer, gone, not running). */
+export const blockedCheck = (key: string, label: string, reason: SideCheckReason, o: { docker?: boolean; detail?: string; name?: string; reachable?: boolean; running?: boolean } = {}): SideCheck => ({
+  verdict: "blocked",
+  reason,
+  message: checkMessage(reason, label, o),
+  key,
+  facts: { reachable: o.reachable ?? false, ...(o.running !== undefined && { running: o.running }), installed: "none" },
+});
+
+/** WSL: runs the check script in the distro (`wsl.exe` boots a stopped distro, nothing else changes). */
+export async function checkWslSide(o: { distro: string; pkgDir: string; key: string; exec: Exec; timeoutMs?: number }): Promise<SideCheck> {
+  const label = wslSide(o.distro).label;
+  const r = await o.exec("wsl.exe", wslArgs(o.distro, checkScript(o.key, "wsl", o.pkgDir)), o.timeoutMs ?? 30_000);
+  const checked = parseCheck(r.stdout);
+  if (!checked) {
+    const err = r.stderr.replace(/\0/g, "").trim().split(/\r?\n/).slice(-2).join(" ").trim();
+    return blockedCheck(o.key, label, r.code === null ? "unreachable" : "check_failed", { detail: r.code === null ? err || "no answer in time" : err || `exit code ${r.code}` });
+  }
+  return verdictOf({ key: o.key, label, kind: "wsl", build: hasBuild(o.pkgDir, false), checked });
 }
 
 /** Arguments for wsl.exe: the script travels base64-encoded (no quotes or newlines in the Windows command line) and is sourced. */
@@ -123,11 +299,18 @@ type Side = SideInfo & { proc?: SideProcess; starting?: Promise<void>; conns: Ma
 export function createSides(opts: {
   /** Static sides (WSL distros). */
   targets: SideTarget[];
-  spawn: (id: string) => SideProcess | Promise<SideProcess>;
+  spawn: (id: string, o: { setup: SideSetup; phase: (p: SidePhase) => void }) => SideProcess | Promise<SideProcess>;
+  /** Read-only look at a side that is not running (`side.check`); this claude-ui's build key is `key`. */
+  check?: (id: string) => Promise<SideCheck>;
+  key?: () => string;
+  /** Longest a check may take (default 30 s: a stopped WSL distro boots). */
+  checkMs?: number;
   /** Label of this daemon's own side (default "Windows"). */
   localLabel?: string;
   /** Dynamic sides (Docker containers), called by refresh(); never rejects (returns [] on failure). */
   discover?: () => Promise<SideTarget[]>;
+  /** The Docker engine state found by the last discover() (`session.list` reply `docker`); undefined: unknown yet or no docker command. */
+  dockerState?: () => DockerState | undefined;
   /** Minimum ms between two discover() runs (default 5000; tests 0). */
   discoverMs?: number;
   onPush?: (p: PushPayload) => void;
@@ -148,7 +331,8 @@ export function createSides(opts: {
   const autoStart = (id: string) => {
     if (!started.has(id) || autoTried.has(id)) return;
     autoTried.add(id);
-    start(id).catch((e) => console.error(`starting ${id} failed:`, (e as Error).message));
+    // Runs what is installed only: a claude-ui update is not installed silently (the side then offers Update).
+    start(id, "never").catch((e) => console.error(`starting ${id} failed:`, (e as Error).message));
   };
   /** Session ID -> side, terminal ID -> side, project/session cwd -> side (not local ones). */
   const sessionSide = new Map<string, string>();
@@ -162,20 +346,29 @@ export function createSides(opts: {
     }
   };
 
-  function start(id: string): Promise<void> {
+  const setPhase = (s: Side, phase: SidePhase | undefined) => {
+    if (s.phase === phase || (phase && s.state !== "starting")) return;
+    if (phase) s.phase = phase;
+    else delete s.phase;
+    changed();
+  };
+
+  function start(id: string, setup: SideSetup = "needed"): Promise<void> {
     const s = sides.get(id);
     if (!s) return Promise.reject(new Error(`unknown side ${id}`));
     if (s.state === "ready") return Promise.resolve();
     if (s.starting) return s.starting;
+    delete s.phase;
     Object.assign(s, { state: "starting", message: undefined });
     changed();
     s.starting = (async () => {
       let proc: SideProcess;
       try {
-        proc = await opts.spawn(s.id);
+        proc = await opts.spawn(s.id, { setup, phase: (p) => setPhase(s, p) });
       } catch (e) {
         const raw = (e as Error).message;
         const message = raw.startsWith(s.label) ? raw : `${s.label}: ${raw}`;
+        delete s.phase;
         Object.assign(s, { state: "error", message, proc: undefined });
         changed();
         throw new Error(message);
@@ -183,12 +376,15 @@ export function createSides(opts: {
       await new Promise<void>((resolve, reject) => {
       s.proc = proc;
       let setupError: string | undefined;
+      let setupCode: string | undefined;
       let stderr = "";
       proc.stderr.on("data", (d: Buffer) => (stderr = (stderr + d).slice(-2000)));
       proc.stdin.on("error", () => {});
       lines(proc.stdout, (line) => {
+        const phase = /^CLAUDE_UI_PHASE (installing|starting)$/.exec(line.trim());
+        if (phase) return setPhase(s, phase[1] as SidePhase);
         const setup = /^CLAUDE_UI_SETUP (\S+) ?(.*)$/.exec(line.trim());
-        if (setup) return void (setupError = setupMessage(setup[1]!, setup[2]!, s.label, isDocker(s.id)));
+        if (setup) return void ((setupCode = setup[1]), (setupError = setupMessage(setup[1]!, setup[2]!, s.label, isDocker(s.id))));
         let f: { ready?: boolean; c?: number; m?: ServerMessage; push?: PushPayload };
         try {
           f = JSON.parse(line);
@@ -197,6 +393,7 @@ export function createSides(opts: {
           return;
         }
         if (f.ready) {
+          delete s.phase;
           Object.assign(s, { state: "ready", message: undefined });
           started.add(s.id);
           opts.save?.([...started]);
@@ -210,7 +407,10 @@ export function createSides(opts: {
         const wasReady = s.state === "ready";
         const tail = stderr.trim().split("\n").filter((l) => !/cannot set terminal process group|no job control/.test(l)).slice(-3).join(" ");
         const message = setupError ?? (wasReady ? `${s.label} stopped (exit code ${code}). Retry to start it again.` : `${s.label} could not start (exit code ${code})${tail ? `: ${tail}` : ""}.`);
-        Object.assign(s, { state: "error", message, proc: undefined, starting: undefined });
+        // Nothing installed and none asked for (setup `never`): the side is as it was before, not failed.
+        const notInstalled = !wasReady && setupCode === "not_installed";
+        delete s.phase;
+        Object.assign(s, notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
         if (!wasReady) reject(new Error(message));
         routers.forEach((r) => r.detach(s.id));
@@ -269,6 +469,30 @@ export function createSides(opts: {
     return ready.length === 1 ? ready[0]!.id : undefined;
   }
 
+  /** One check per side at a time: a second request gets the running one's answer. */
+  const checking = new Map<string, Promise<SideCheck>>();
+  /**
+   * `side.check`: read-only. A ready side answers `running` and a starting one `starting` without running anything; otherwise
+   * `opts.check` looks at it (never rejects; no answer in `checkMs`: blocked `unreachable`).
+   */
+  function check(id: string): Promise<SideCheck> {
+    const s = sides.get(id)!;
+    const key = opts.key?.() ?? "";
+    const facts = (running: boolean): SideCheck["facts"] => ({ reachable: true, running, installed: "current" });
+    if (s.state === "ready") return Promise.resolve({ verdict: "running", key, facts: facts(true) });
+    if (s.state === "starting") return Promise.resolve({ verdict: "starting", key, facts: facts(true), ...(s.phase && { phase: s.phase }) });
+    const running = checking.get(id);
+    if (running) return running;
+    const docker = isDocker(id);
+    const ms = opts.checkMs ?? 30_000;
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<SideCheck>((resolve) => (timer = setTimeout(() => resolve(blockedCheck(key, s.label, "unreachable", { docker, detail: "no answer in time" })), ms)));
+    const asked = (opts.check ? opts.check(id) : Promise.resolve(blockedCheck(key, s.label, "check_failed", { docker, detail: "this version of Claude UI cannot check it" }))).catch((e) => blockedCheck(key, s.label, "check_failed", { docker, detail: (e as Error).message }));
+    const p = Promise.race([asked, timeout]).finally(() => (clearTimeout(timer), checking.delete(id)));
+    checking.set(id, p);
+    return p;
+  }
+
   for (const id of started) if (sides.has(id)) autoStart(id);
 
   let lastDiscover = 0;
@@ -281,11 +505,13 @@ export function createSides(opts: {
     if (discovering) return discovering;
     if (Date.now() - lastDiscover < (opts.discoverMs ?? 5000)) return Promise.resolve();
     lastDiscover = Date.now();
+    const before = opts.dockerState?.();
     return (discovering = opts
       .discover()
       .then(
         (found) => {
-          let diff = false;
+          // The Docker engine state (down, empty, ok) is part of the list: a change alone sends sessions.changed, so an open dialog updates its hint.
+          let diff = opts.dockerState?.() !== before;
           const ids = new Set(found.map((t) => t.id));
           for (const t of found)
             if (!sides.has(t.id)) {
@@ -309,8 +535,10 @@ export function createSides(opts: {
 
   return {
     /** Every side, local first. */
-    list: (): SideInfo[] => [{ id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" }, ...[...sides.values()].map(({ id, label, state, message }) => ({ id, label, state, ...(message && { message }) }))],
+    list: (): SideInfo[] => [{ id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" }, ...[...sides.values()].map(({ id, label, state, message, phase }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }) }))],
+    docker: () => opts.dockerState?.(),
     has: (id: string) => sides.has(id),
+    check,
     ready: () => [...sides.values()].filter((s) => s.state === "ready").map((s) => s.id),
     start,
     refresh,
@@ -436,6 +664,7 @@ export function createRouter(opts: {
     if (local.type !== "reply") return local;
     const merged = { ...(local.result as ListLike & object) } as ListLike & Record<string, unknown>;
     const cwdSides: Record<string, string> = {};
+    const docker = sides.docker();
     for (const [id, a] of answers.slice(1)) {
       // A side that fails its list leaves it out; its state shows in `sides`.
       if (a.type !== "reply") continue;
@@ -460,7 +689,7 @@ export function createRouter(opts: {
     merged.projects = order.sort((a, b) => (newest.get(b[0]) ?? -1) - (newest.get(a[0]) ?? -1) || a[1] - b[1]).map(([p]) => p);
     merged.sessions.sort((a, b) => b.lastActivity - a.lastActivity);
     merged.recentProjects.sort((a, b) => b.lastActivity - a.lastActivity);
-    return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), cwdSides } };
+    return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), ...(docker && { docker }), cwdSides } };
   }
 
   async function handle(msg: ClientMessage & Record<string, unknown>) {
@@ -469,13 +698,19 @@ export function createRouter(opts: {
         return send(await mergedList(msg));
       case "side.start": {
         if (typeof msg.side !== "string" || !sides.has(msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
+        if (msg.setup !== undefined && msg.setup !== "never" && msg.setup !== "needed" && msg.setup !== "force") return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "setup must be never, needed or force" });
         try {
-          await sides.start(msg.side);
+          await sides.start(msg.side, msg.setup);
           router.attach(msg.side);
           return send({ type: "reply", reqId: msg.reqId, result: {} });
         } catch (e) {
           return send({ type: "error", reqId: msg.reqId, code: "side_failed", message: (e as Error).message });
         }
+      }
+      case "side.check": {
+        // Read-only and the hub's own: never forwarded to a side.
+        if (typeof msg.side !== "string" || !sides.has(msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
+        return send({ type: "reply", reqId: msg.reqId, result: await sides.check(msg.side) });
       }
       case "settings.set": {
         const r = await opts.localCall(msg);

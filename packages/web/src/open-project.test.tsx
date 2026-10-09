@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FsEntry, RecentProject, SideInfo } from "@claude-ui/protocol";
+import type { DockerState, FsEntry, RecentProject, SideCheck, SideInfo } from "@claude-ui/protocol";
 import { OpenProjectDialog } from "./open-project.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -205,7 +205,13 @@ describe("side chooser", () => {
     return (winTree[path] ?? []).map((name) => ({ name, path: `${path}\\${name}`, isDir: true }));
   });
   const sideOf = (c: string) => (c.startsWith("/") ? "wsl:Ubuntu" : "local");
-  async function renderSides(s: SideInfo[], onStartSide = vi.fn(async (_id: string) => {}), keepStorage = false) {
+  const chk = (verdict: SideCheck["verdict"], more: Partial<SideCheck> = {}, facts: Partial<SideCheck["facts"]> = {}): SideCheck => ({
+    verdict,
+    key: "0.5.0-1",
+    facts: { reachable: true, node: "v22.1.0", nodeOk: true, buildTools: { make: true, python3: true, cxx: true }, credentialsFile: true, installed: verdict === "install" ? "none" : verdict === "update" ? "other" : "current", ...facts },
+    ...more,
+  });
+  async function renderSides(s: SideInfo[], onStartSide = vi.fn(async (_id: string, _setup?: string) => {}), keepStorage = false, onCheckSide = vi.fn(async (_id: string) => chk("install")), dockerState?: DockerState) {
     if (!keepStorage) localStorage.clear();
     const onPick = vi.fn(async (_cwd: string, _side?: string) => {});
     const recent: RecentProject[] = [{ cwd: "/home/u/api", sessionCount: 2, lastActivity: Date.now() }];
@@ -213,7 +219,7 @@ describe("side chooser", () => {
     document.body.append(el);
     root = createRoot(el);
     const show = (sides: SideInfo[]) =>
-      act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={sideList} onPick={onPick} sides={sides} onStartSide={onStartSide} recent={recent} sideOf={sideOf} />));
+      act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={sideList} onPick={onPick} sides={sides} docker={dockerState} onStartSide={onStartSide} onCheckSide={onCheckSide} recent={recent} sideOf={sideOf} />));
     await show(s);
     const input = () => document.querySelector<HTMLInputElement>('[data-testid="folder-input"]');
     const kinds = () => [...document.querySelectorAll<HTMLElement>('[data-testid="side-kind"]')];
@@ -236,20 +242,25 @@ describe("side chooser", () => {
     const click = (el: HTMLElement) => act(async () => el.click());
     const kind = (name: string) => kinds().find((k) => k.textContent === name)!;
     const items = () => [...document.querySelectorAll<HTMLElement>('[data-testid="side-target-item"]')];
-    return { input, kinds, checked, status, target, containers, rowEls, filter, type, typeIn, press, click, kind, items, show, onPick, onStartSide };
+    const byId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+    return { input, kinds, checked, status, target, containers, rowEls, filter, type, typeIn, press, click, kind, items, show, onPick, onStartSide, onCheckSide, byId };
   }
 
-  it("shows one chip per kind: Windows and WSL; choosing WSL sets the distro up, then browses its home folder and picks on that side", async () => {
+  it("shows one chip per kind: Windows and WSL; choosing WSL only checks the distro, Install sets it up, then it browses its home folder and picks on that side", async () => {
     let done!: () => void;
-    const { input, checked, kind, click, status, target, onPick, onStartSide, kinds } = await renderSides(sides(), vi.fn(() => new Promise<void>((r) => (done = r))));
+    const { input, checked, kind, click, byId, target, onPick, onStartSide, onCheckSide, kinds } = await renderSides(sides(), vi.fn(() => new Promise<void>((r) => (done = r))));
     expect(kinds().map((o) => o.textContent)).toEqual(["Windows", "WSL"]);
     expect(checked()).toEqual(["Windows"]);
     expect(target()).toBeNull();
     expect(input()!.value).toBe("C:\\Users\\me\\");
     await click(kind("WSL"));
-    expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu");
-    expect(status()).toBe("Setting up WSL: Ubuntu…");
+    expect(onCheckSide).toHaveBeenCalledWith("wsl:Ubuntu");
+    expect(onStartSide).not.toHaveBeenCalled();
+    expect(byId("side-install")!.textContent).toBe("Install");
     expect(target()!.textContent).toBe("Ubuntu");
+    await click(byId("side-install")!);
+    expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu", "needed");
+    expect(byId("side-status")!.textContent).toContain("Installing");
     await act(async () => done());
     expect(input()!.value).toBe("/home/u/");
     await click(document.querySelector<HTMLElement>('[data-testid="open-folder"]')!);
@@ -259,15 +270,62 @@ describe("side chooser", () => {
     expect(localStorage.getItem("claude-ui.side.wsl")).toBe("wsl:Ubuntu");
   });
 
-  it("a side that cannot start says what to do; Retry starts it again", async () => {
+  it("a failed install says what to do; Retry installs again", async () => {
     const msg = "Node.js 22 or newer is not installed in WSL: Ubuntu. Install it there (e.g. nvm install 22), then retry.";
     const onStartSide = vi.fn(async (_id: string) => {}).mockRejectedValueOnce(new Error(msg));
-    const { kind, click, status, input } = await renderSides(sides(), onStartSide);
+    const { kind, click, status, input, byId } = await renderSides(sides(), onStartSide);
     await click(kind("WSL"));
-    expect(status()).toBe(`${msg}Retry`);
+    await click(byId("side-install")!);
+    expect(status()).toContain(msg);
+    expect(status()).toContain("Retry");
+    expect(document.activeElement).toBe(byId("side-retry"));
     await click(document.querySelector<HTMLElement>('[data-testid="side-retry"]')!);
     expect(onStartSide).toHaveBeenCalledTimes(2);
+    // The same mode again: an install that failed is not turned into something else.
+    expect(onStartSide).toHaveBeenLastCalledWith("wsl:Ubuntu", "needed");
     expect(input()!.value).toBe("/home/u/");
+  });
+
+  it("a very long error with unbreakable paths stays inside the dialog: wraps anywhere, scrolls on its own, Retry stays outside the scrolled text and below the controls", async () => {
+    const msg = `npm pack failed: ${"C:/Users/someone/AppData/Local/Temp/claude-ui-pack/node_modules/daemon/".repeat(10)}`;
+    expect(msg.length).toBeGreaterThan(600);
+    const onStartSide = vi.fn(async (_id: string) => {}).mockRejectedValueOnce(new Error(msg));
+    const { kind, click, status, byId } = await renderSides(sides(), onStartSide);
+    await click(kind("WSL"));
+    await click(byId("side-install")!);
+    expect(status()).toContain(msg);
+    const box = document.querySelector<HTMLElement>('[data-testid="side-status"]')!;
+    const text = box.querySelector<HTMLElement>('[data-testid="side-error"]')!;
+    const retry = document.querySelector<HTMLElement>('[data-testid="side-retry"]')!;
+    // The text breaks inside words, is height-capped with its own scroll, and stays selectable.
+    expect(text.className).toContain("[overflow-wrap:anywhere]");
+    expect(text.className).toContain("max-h-");
+    expect(text.className).toContain("overflow-y-auto");
+    // npm's lines keep their line breaks.
+    expect(text.className).toContain("whitespace-pre-wrap");
+    expect(text.className).not.toContain("select-none");
+    // Retry is not inside the scrolling text; the block is in normal flow (never absolute) and may shrink and scroll in the dialog.
+    expect(text.contains(retry)).toBe(false);
+    expect(box.className).toContain("min-h-0");
+    expect(box.className).toContain("overflow-y-auto");
+    expect(box.className.split(" ")).not.toEqual(expect.arrayContaining(["absolute"]));
+    expect(retry.className).toContain("max-md:h-11");
+    // The controls come first in the document, so the error sits below them.
+    const row = document.querySelector<HTMLElement>('[data-testid="side-kind"]')!;
+    expect(row.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("the browser's refusal line wraps and scrolls instead of being cut off or overlapping", { timeout: 20_000 }, async () => {
+    const msg = `outside the allowlisted roots: ${"C:/very/long/path/".repeat(40)}`;
+    const { type, key } = await render(vi.fn(async () => Promise.reject(new Error(msg))));
+    await type("/home/u/");
+    await key("Enter");
+    const alert = document.querySelector<HTMLElement>('[role="alert"]')!;
+    expect(alert.textContent).toBe(msg);
+    expect(alert.className).toContain("[overflow-wrap:anywhere]");
+    expect(alert.className).toContain("max-h-");
+    expect(alert.className).toContain("overflow-y-auto");
+    expect(alert.className).not.toContain("truncate");
   });
 
   it("a typed path picks its side: /home goes to WSL, C:\\ back to Windows, \\\\wsl.localhost\\Ubuntu to that distro", async () => {
@@ -304,7 +362,7 @@ describe("side chooser", () => {
   });
 
   it("two WSL distros: the dropdown picks the distro and shows which are not set up", async () => {
-    const { kind, click, target, items, input, status, onStartSide } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu"), S("wsl:Debian", "WSL: Debian", "off")]);
+    const { kind, click, target, items, input, byId, onStartSide, onCheckSide } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu"), S("wsl:Debian", "WSL: Debian", "off")]);
     await click(kind("WSL"));
     expect(target()!.textContent).toBe("Ubuntu");
     expect(input()!.value).toBe("/home/u/");
@@ -313,8 +371,10 @@ describe("side chooser", () => {
     let done!: () => void;
     onStartSide.mockImplementationOnce(() => new Promise<void>((r) => (done = r)));
     await click(items()[1]!);
-    expect(onStartSide).toHaveBeenCalledWith("wsl:Debian");
-    expect(status()).toBe("Setting up WSL: Debian…");
+    expect(onCheckSide).toHaveBeenCalledWith("wsl:Debian");
+    expect(onStartSide).not.toHaveBeenCalled();
+    await click(byId("side-install")!);
+    expect(onStartSide).toHaveBeenCalledWith("wsl:Debian", "needed");
     await act(async () => done());
     expect(target()!.textContent).toBe("Debian");
     expect(input()!.value).toBe("/home/u/");
@@ -380,6 +440,7 @@ describe("side chooser", () => {
     await click(kind("WSL"));
     await click(target()!);
     await click(items()[1]!);
+    await click(document.querySelector<HTMLElement>('[data-testid="side-install"]')!);
     await click(target()!);
     expect(items().map((i) => i.textContent)).toEqual(["Ubuntu", "DebianError"]);
   });
@@ -392,6 +453,380 @@ describe("side chooser", () => {
     await click(kind("Windows"));
     await click(kind("WSL"));
     expect(target()!.textContent).toBe("Debian");
+  });
+
+  describe("check and install", () => {
+    const withCheck = (c: SideCheck | Error, start = vi.fn(async (_id: string, _setup?: string) => {})) => renderSides(sides(), start, false, vi.fn(async (_id: string) => (c instanceof Error ? Promise.reject(c) : c)));
+
+    it("picking a side that is not installed shows the check rows and an Install button and starts nothing", async () => {
+      const { kind, click, byId, onStartSide, input } = await withCheck(chk("install"));
+      await click(kind("WSL"));
+      expect(byId("side-check")).not.toBeNull();
+      const rows = [...document.querySelectorAll('[data-testid="side-check-row"]')].map((r) => r.textContent);
+      expect(rows).toHaveLength(5);
+      expect(rows.join("|")).toMatch(/Node\.js 22\+.*v22\.1\.0/);
+      expect(rows.join("|")).toMatch(/claude-ui.*Not installed/);
+      expect(byId("side-install")!.textContent).toBe("Install");
+      expect(byId("side-check-again")!.textContent).toBe("Check again");
+      expect(onStartSide).not.toHaveBeenCalled();
+      expect(input()).toBeNull();
+    });
+
+    it("Install shows a busy button with progress, then the folder browser with the folder input focused", async () => {
+      let done!: () => void;
+      const { kind, click, byId, input } = await withCheck(chk("install"), vi.fn(() => new Promise<void>((r) => (done = r))));
+      await click(kind("WSL"));
+      await click(byId("side-install")!);
+      const busy = byId("side-install")!;
+      expect(busy.textContent).toBe("Installing…");
+      expect(busy.getAttribute("aria-busy")).toBe("true");
+      expect((busy as HTMLButtonElement).disabled).toBe(true);
+      // The live region is the part that says what happens; it is not the whole panel, and the elapsed seconds are not read out.
+      expect(byId("side-live")!.getAttribute("role")).toBe("status");
+      expect(byId("side-live")!.getAttribute("aria-live")).toBe("polite");
+      expect(byId("side-status")!.getAttribute("aria-live")).toBeNull();
+      expect(byId("side-status")!.getAttribute("role")).toBeNull();
+      expect(byId("side-status")!.getAttribute("aria-busy")).toBe("true");
+      expect(byId("side-elapsed")!.getAttribute("aria-hidden")).toBe("true");
+      await act(async () => done());
+      expect(input()!.value).toBe("/home/u/");
+      expect(document.activeElement).toBe(input());
+    });
+
+    it("an update shows Update", async () => {
+      const { kind, click, byId, onStartSide } = await withCheck(chk("update"));
+      await click(kind("WSL"));
+      expect(byId("side-install")!.textContent).toBe("Update");
+      await click(byId("side-install")!);
+      expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu", "needed");
+    });
+
+    it("a blocked side shows its reason and fix and Check again, and no Install; Check again checks again", async () => {
+      const blocked = chk("blocked", { reason: "node_missing", message: "Install Node.js 22 in WSL: Ubuntu (for example nvm install 22), then check again." }, { node: undefined, nodeOk: false });
+      const { kind, click, byId, status, onCheckSide } = await withCheck(blocked);
+      await click(kind("WSL"));
+      expect(status()).toContain("Install Node.js 22 in WSL: Ubuntu");
+      // Plain words: the label, not "side".
+      expect(status()).toContain("WSL: Ubuntu can't be set up yet.");
+      expect(status()).not.toMatch(/\bside\b|daemon/i);
+      expect(byId("side-install")).toBeNull();
+      await click(byId("side-check-again")!);
+      expect(onCheckSide).toHaveBeenCalledTimes(2);
+    });
+
+    it("a missing login is a soft block: the fix text and an Install anyway button that installs", async () => {
+      const { kind, click, byId, status, onStartSide } = await withCheck(chk("blocked", { reason: "not_logged_in" }, { credentialsFile: false }));
+      await click(kind("WSL"));
+      expect(status()).toMatch(/log ?in/i);
+      expect(byId("side-install")!.textContent).toBe("Install anyway");
+      await click(byId("side-install")!);
+      expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu", "needed");
+    });
+
+    it("a running side opens the browser at once, nothing started", async () => {
+      const { kind, click, input, onStartSide } = await withCheck(chk("running"));
+      await click(kind("WSL"));
+      expect(input()!.value).toBe("/home/u/");
+      expect(onStartSide).not.toHaveBeenCalled();
+    });
+
+    it("a side the sides list says is ready opens the browser with no request at all", async () => {
+      const { kind, click, input, onStartSide, onCheckSide } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu", "ready")]);
+      await click(kind("WSL"));
+      expect(input()!.value).toBe("/home/u/");
+      expect(onStartSide).not.toHaveBeenCalled();
+      expect(onCheckSide).not.toHaveBeenCalled();
+    });
+
+    it("an installed side picked by hand starts by itself with setup never (it installs nothing), then the browser opens; there is no Start button", async () => {
+      const { kind, click, byId, onStartSide, input, status } = await withCheck(chk("installed"));
+      await click(kind("WSL"));
+      expect(onStartSide).toHaveBeenCalledTimes(1);
+      expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu", "never");
+      expect(input()!.value).toBe("/home/u/");
+      expect(byId("side-install")).toBeNull();
+      expect(document.body.textContent).not.toContain("Start it");
+      expect(status() ?? "").not.toContain("Start");
+    });
+
+    it("a remembered installed side starts with setup never when the dialog opens, then shows the browser", async () => {
+      localStorage.setItem("claude-ui.side", "wsl:Ubuntu");
+      const { input, onStartSide, onCheckSide } = await renderSides(sides(), undefined, true, vi.fn(async () => chk("installed")));
+      expect(onCheckSide).toHaveBeenCalledWith("wsl:Ubuntu");
+      expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu", "never");
+      expect(input()!.value).toBe("/home/u/");
+    });
+
+    it("a remembered side that needs an update shows the panel and starts nothing", async () => {
+      localStorage.setItem("claude-ui.side", "wsl:Ubuntu");
+      const { byId, input, onStartSide } = await renderSides(sides(), undefined, true, vi.fn(async () => chk("update")));
+      expect(byId("side-install")!.textContent).toBe("Update");
+      expect(onStartSide).not.toHaveBeenCalled();
+      expect(input()).toBeNull();
+    });
+
+    it("a remembered container is checked and started like a distro; one never picked is not", async () => {
+      localStorage.setItem("claude-ui.side", "docker:a");
+      const sd = [S("local", "Linux"), S("docker:a", "Docker: a", "off"), S("docker:b", "Docker: b", "off")];
+      const { onCheckSide, onStartSide, input } = await renderSides(sd, undefined, true, vi.fn(async () => chk("installed")));
+      expect(onCheckSide.mock.calls).toEqual([["docker:a"]]);
+      expect(onStartSide).toHaveBeenCalledWith("docker:a", "never");
+      expect(input()).not.toBeNull();
+    });
+
+    it("switching the kind only checks; it never calls onStartSide", async () => {
+      const { kind, click, onStartSide, onCheckSide } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu", "off"), ...docker("a")]);
+      await click(kind("WSL"));
+      await click(kind("Windows"));
+      await click(kind("WSL"));
+      expect(onCheckSide).toHaveBeenCalledWith("wsl:Ubuntu");
+      expect(onStartSide).not.toHaveBeenCalled();
+    });
+
+    it("a failed start of an installed side shows Retry (never again) and Check again; only after a check is Reinstall the main button, and its Retry sends force", async () => {
+      const start = vi.fn(async (_id: string, _setup?: string) => {}).mockRejectedValueOnce(new Error("npm failed")).mockRejectedValueOnce(new Error("npm failed again"));
+      const { kind, click, byId, status } = await withCheck(chk("installed"), start);
+      await click(kind("WSL"));
+      expect(start).toHaveBeenLastCalledWith("wsl:Ubuntu", "never");
+      expect(byId("side-error")!.getAttribute("role")).toBe("alert");
+      expect(status()).toContain("npm failed");
+      // The check shows it installed and its start failed: Reinstall is offered; Check again does not start it a second time.
+      expect(byId("side-install")!.textContent).toBe("Reinstall");
+      await click(byId("side-check-again")!);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(byId("side-install")!.textContent).toBe("Reinstall");
+      await click(byId("side-install")!);
+      expect(start).toHaveBeenLastCalledWith("wsl:Ubuntu", "force");
+      expect(status()).toContain("npm failed again");
+      await click(byId("side-retry")!);
+      expect(start).toHaveBeenCalledTimes(3);
+      expect(start).toHaveBeenLastCalledWith("wsl:Ubuntu", "force");
+    });
+
+    it("a failed update stays an update on Retry and is not offered as Reinstall", async () => {
+      const start = vi.fn(async (_id: string, _setup?: string) => {}).mockRejectedValueOnce(new Error("npm failed"));
+      const { kind, click, byId } = await withCheck(chk("update"), start);
+      await click(kind("WSL"));
+      await click(byId("side-install")!);
+      expect(byId("side-install")!.textContent).toBe("Update");
+      await click(byId("side-retry")!);
+      expect(start.mock.calls).toEqual([["wsl:Ubuntu", "needed"], ["wsl:Ubuntu", "needed"]]);
+    });
+
+    it("a side error the dialog did not cause (a stopped container) offers Retry that only starts what is installed, never Reinstall", async () => {
+      const stopped = sides("error", "WSL: Ubuntu stopped (exit code 1). Retry to start it again.");
+      const { kind, click, byId, status, onStartSide } = await renderSides(stopped, undefined, false, vi.fn(async () => chk("installed")));
+      await click(kind("WSL"));
+      expect(status()).toContain("stopped (exit code 1)");
+      expect(byId("side-install")).toBeNull();
+      expect(onStartSide).not.toHaveBeenCalled();
+      await click(byId("side-retry")!);
+      expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu", "never");
+    });
+
+    it("the error alert sits outside the live region", async () => {
+      const start = vi.fn(async (_id: string, _setup?: string) => {}).mockRejectedValueOnce(new Error("npm failed"));
+      const { kind, click, byId } = await withCheck(chk("install"), start);
+      await click(kind("WSL"));
+      await click(byId("side-install")!);
+      const alert = byId("side-error")!;
+      expect(alert.closest('[role="status"]')).toBeNull();
+      expect(alert.closest("[aria-live]")).toBeNull();
+    });
+
+    describe("keyboard focus", () => {
+      it("Check again keeps the focus while it checks (aria-disabled, never disabled) and after", async () => {
+        let release!: () => void;
+        const check = vi.fn(async (_id: string) => chk("install")).mockResolvedValueOnce(chk("install")).mockImplementationOnce(() => new Promise<SideCheck>((r) => (release = () => r(chk("install")))));
+        const { kind, click, byId } = await renderSides(sides(), undefined, false, check);
+        await click(kind("WSL"));
+        const again = byId("side-check-again") as HTMLButtonElement;
+        again.focus();
+        await click(again);
+        expect(check).toHaveBeenCalledTimes(2);
+        expect(byId("side-check-again")).toBe(again);
+        expect(again.disabled).toBe(false);
+        expect(again.getAttribute("aria-disabled")).toBe("true");
+        expect(document.activeElement).toBe(again);
+        // Pressing it while it checks asks nothing more.
+        await click(again);
+        expect(check).toHaveBeenCalledTimes(2);
+        await act(async () => release());
+        expect(again.getAttribute("aria-disabled")).toBeNull();
+        expect(document.activeElement).toBe(byId("side-check-again"));
+        expect(document.activeElement).toBe(again);
+      });
+
+      it.each([
+        ["Install", chk("install"), "needed"],
+        ["Update", chk("update"), "needed"],
+        ["Install anyway", chk("blocked", { reason: "not_logged_in" }, { credentialsFile: false }), "needed"],
+      ] as const)("%s: the focus moves to the progress area, then to the folder input", async (label, c, mode) => {
+        let done!: () => void;
+        const { kind, click, byId, input, onStartSide } = await withCheck(c, vi.fn(() => new Promise<void>((r) => (done = r))));
+        await click(kind("WSL"));
+        const button = byId("side-install") as HTMLButtonElement;
+        expect(button.textContent).toBe(label);
+        button.focus();
+        await click(button);
+        expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu", mode);
+        expect(document.activeElement).toBe(byId("side-status"));
+        expect(byId("side-status")!.getAttribute("tabindex")).toBe("-1");
+        await act(async () => done());
+        expect(document.activeElement).toBe(input());
+      });
+
+      it("a start that fails puts the focus on Retry; Retry again keeps it moving to the progress area and back", async () => {
+        let done!: (e?: Error) => void;
+        const start = vi.fn(() => new Promise<void>((_, rej) => (done = (e) => rej(e ?? new Error("npm failed")))));
+        const { kind, click, byId } = await withCheck(chk("install"), start as never);
+        await click(kind("WSL"));
+        (byId("side-install") as HTMLElement).focus();
+        await click(byId("side-install")!);
+        expect(document.activeElement).toBe(byId("side-status"));
+        await act(async () => done());
+        expect(document.activeElement).toBe(byId("side-retry"));
+        (byId("side-retry") as HTMLElement).focus();
+        await click(byId("side-retry")!);
+        expect(document.activeElement).toBe(byId("side-status"));
+        await act(async () => done(new Error("still failing")));
+        expect(document.activeElement).toBe(byId("side-retry"));
+      });
+
+      it("a focus elsewhere in the dialog is left alone when a run starts", async () => {
+        const { kind, click, byId, onStartSide } = await withCheck(chk("install"), vi.fn(() => new Promise<void>(() => {})));
+        await click(kind("WSL"));
+        const chip = kind("WSL");
+        chip.focus();
+        await click(byId("side-install")!);
+        expect(onStartSide).toHaveBeenCalled();
+        expect(document.activeElement).toBe(chip);
+      });
+
+      it("a Check again that finds the side running opens the browser with the folder input focused", async () => {
+        const check = vi.fn(async (_id: string) => chk("blocked", { reason: "unreachable" })).mockResolvedValueOnce(chk("install")).mockResolvedValueOnce(chk("running"));
+        const { kind, click, byId, input } = await renderSides(sides(), undefined, false, check);
+        await click(kind("WSL"));
+        (byId("side-check-again") as HTMLElement).focus();
+        await click(byId("side-check-again")!);
+        expect(input()).not.toBeNull();
+        expect(document.activeElement).toBe(input());
+      });
+    });
+
+    it.each(["unknown_type", "side_not_ready", "bad_request"])("an older hub (error code %s) cannot check: plain text and an Install button that sends side.start without a setup field", async (code) => {
+      const old = Object.assign(new Error(code === "side_not_ready" ? "WSL: Ubuntu is not running. Open it in the project picker to start it." : "unknown message type side.check"), { code });
+      const { kind, click, byId, status, onStartSide, onCheckSide } = await withCheck(old);
+      await click(kind("WSL"));
+      expect(status()).toContain("This version of Claude UI can't check WSL: Ubuntu. You can still install it.");
+      expect(status()).not.toMatch(/daemon|\bside\b/i);
+      expect(byId("side-check-row")).toBeNull();
+      expect(byId("side-check-again")).toBeNull();
+      expect(onStartSide).not.toHaveBeenCalled();
+      await click(byId("side-install")!);
+      expect(onCheckSide).toHaveBeenCalledTimes(1);
+      expect(onStartSide).toHaveBeenCalledTimes(1);
+      expect(onStartSide.mock.calls[0]).toEqual(["wsl:Ubuntu"]);
+    });
+
+    it("an older hub: a failed plain install says why and Retry sends the plain start again", async () => {
+      const old = Object.assign(new Error("unknown message type side.check"), { code: "side_not_ready" });
+      const start = vi.fn(async (_id: string, _setup?: string) => {}).mockRejectedValueOnce(new Error("npm failed"));
+      const { kind, click, byId, status, input } = await withCheck(old, start);
+      await click(kind("WSL"));
+      await click(byId("side-install")!);
+      expect(status()).toContain("npm failed");
+      await click(byId("side-retry")!);
+      expect(start.mock.calls).toEqual([["wsl:Ubuntu"], ["wsl:Ubuntu"]]);
+      expect(input()!.value).toBe("/home/u/");
+    });
+
+    it("Check again that finds an older hub moves the focus to the panel, not the body", async () => {
+      const old = Object.assign(new Error("unknown message type side.check"), { code: "unknown_type" });
+      const check = vi.fn(async (_id: string) => chk("install")).mockRejectedValueOnce(new Error("timed out")).mockRejectedValueOnce(old);
+      const { kind, click, byId } = await renderSides(sides(), undefined, false, check);
+      await click(kind("WSL"));
+      (byId("side-check-again") as HTMLElement).focus();
+      await click(byId("side-check-again")!);
+      expect(byId("side-check-again")).toBeNull();
+      expect(byId("side-install")).not.toBeNull();
+      expect(document.activeElement).toBe(byId("side-status"));
+    });
+
+    it("a check of a side the hub does not know (unknown_side) is a check failure, not an older hub", async () => {
+      const { kind, click, byId, status } = await withCheck(Object.assign(new Error("unknown side wsl:Ubuntu"), { code: "unknown_side" }));
+      await click(kind("WSL"));
+      expect(status()).toContain("Could not check");
+      expect(byId("side-install")).toBeNull();
+    });
+
+        it("another check failure says so and offers Check again, no Install", async () => {
+      const { kind, click, byId, status } = await withCheck(new Error("timed out"));
+      await click(kind("WSL"));
+      expect(status()).toContain("timed out");
+      expect(byId("side-install")).toBeNull();
+      expect(byId("side-check-again")).not.toBeNull();
+    });
+
+    it("the select sits below the kind row, inside the content, and stays while the panel shows", async () => {
+      const { kind, click, byId } = await withCheck(chk("install"));
+      await click(kind("WSL"));
+      const row = byId("side-chooser")!;
+      const select = byId("side-target")!;
+      expect(row.contains(select)).toBe(false);
+      expect(row.compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(select.compareDocumentPosition(byId("side-check")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("the buttons are real buttons in Tab order (select, Check again, Install) and 44 px high below md", async () => {
+      const { kind, click, byId } = await withCheck(chk("install"));
+      await click(kind("WSL"));
+      const order = [byId("side-target")!, byId("side-check-again")!, byId("side-install")!];
+      for (let i = 1; i < order.length; i++) expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      for (const b of order.slice(1)) {
+        expect(b.tagName).toBe("BUTTON");
+        expect(b.className).toContain("max-md:h-11");
+      }
+    });
+  });
+
+  describe("Docker engine state", () => {
+    const only = [S("local", "Windows")];
+    const texts = { down: "Docker is not running. Start Docker, then reopen this dialog.", empty: "No running containers. Start one, then reopen this dialog." } as const;
+    for (const state of ["down", "empty"] as const) {
+      it(`${state}: the Docker chip shows with no container, with a status hint and no request`, async () => {
+        const { kinds, kind, click, checked, byId, onStartSide, onCheckSide } = await renderSides(only, undefined, false, undefined, state);
+        expect(kinds().map((o) => o.textContent)).toEqual(["Windows", "Docker"]);
+        await click(kind("Docker"));
+        expect(checked()).toEqual(["Docker"]);
+        const hint = byId("docker-hint")!;
+        expect(hint.textContent).toBe(texts[state]);
+        expect(hint.getAttribute("role")).toBe("status");
+        expect(document.querySelector('[data-testid="container-row"]')).toBeNull();
+        expect(onStartSide).not.toHaveBeenCalled();
+        expect(onCheckSide).not.toHaveBeenCalled();
+      });
+    }
+
+    it("ok with containers keeps the list and filter, and no hint", async () => {
+      const { kind, click, containers, filter, byId } = await renderSides([S("local", "Windows"), ...docker("a", "b")], undefined, false, undefined, "ok");
+      await click(kind("Docker"));
+      expect(containers()).toHaveLength(2);
+      expect(filter()).not.toBeNull();
+      expect(byId("docker-hint")).toBeNull();
+    });
+
+    it("a daemon without the field shows no Docker chip when no container is listed", async () => {
+      const { kinds } = await renderSides(only);
+      expect(kinds()).toHaveLength(0);
+      expect(document.querySelector('[data-testid="side-chooser"]')).toBeNull();
+    });
+
+    it("the hint stays inside a 390px dialog: it wraps, no fixed width", async () => {
+      const { kind, click, byId } = await renderSides(only, undefined, false, undefined, "down");
+      await click(kind("Docker"));
+      expect(byId("docker-hint")!.className).not.toMatch(/whitespace-nowrap|w-\[/);
+    });
   });
 
   describe("Docker", () => {
@@ -414,7 +849,7 @@ describe("side chooser", () => {
       expect(onStartSide).not.toHaveBeenCalled();
       expect(input()).toBeNull();
       expect(document.activeElement).toBe(filter());
-      expect(target()!.textContent).toBe("Choose container");
+      expect(target()).toBeNull();
       await typeIn(filter, "no");
       expect(containers()).toEqual(["cui-nologin", "cui-node"]);
       await typeIn(filter, "zzz");
@@ -432,26 +867,30 @@ describe("side chooser", () => {
       expect(onPick).toHaveBeenCalledWith("/home/u", "docker:cui-node");
     });
 
-    it("a container that is not set up starts when picked, then browses", async () => {
-      const { kind, click, containers, rowEls, status, input, onStartSide } = await renderSides([S("local", "Linux"), S("docker:a", "Docker: a", "off"), S("docker:b", "Docker: b")]);
+    it("a container that is not set up is only checked when picked; Install sets it up, then it browses", async () => {
+      const { kind, click, containers, rowEls, byId, input, onStartSide, onCheckSide } = await renderSides([S("local", "Linux"), S("docker:a", "Docker: a", "off"), S("docker:b", "Docker: b")]);
       await click(kind("Docker"));
       expect(containers()).toEqual(["b", "aNot set up"]);
       await click(rowEls()[1]!);
-      expect(onStartSide).toHaveBeenCalledWith("docker:a");
-      expect(status()).toBeUndefined();
+      expect(onCheckSide).toHaveBeenCalledWith("docker:a");
+      expect(onStartSide).not.toHaveBeenCalled();
+      expect(input()).toBeNull();
+      await click(byId("side-install")!);
+      expect(onStartSide).toHaveBeenCalledWith("docker:a", "needed");
       expect(input()!.value).toBe("/home/u/");
     });
 
-    it("one container that is not running yet is highlighted but never set up until the user confirms it", async () => {
-      const { kind, click, containers, rowEls, press, filter, onStartSide, input } = await renderSides([S("local", "Linux"), S("docker:solo", "Docker: solo", "off")]);
+    it("one container that is not set up is highlighted; Enter only checks it, it is never installed without the Install button", async () => {
+      const { kind, click, containers, rowEls, press, filter, onStartSide, onCheckSide, input } = await renderSides([S("local", "Linux"), S("docker:solo", "Docker: solo", "off")]);
       expect(onStartSide).not.toHaveBeenCalled();
       await click(kind("Docker"));
       expect(containers()).toEqual(["soloNot set up"]);
       expect(rowEls()[0]!.getAttribute("aria-selected")).toBe("true");
-      expect(onStartSide).not.toHaveBeenCalled();
+      expect(onCheckSide).not.toHaveBeenCalled();
       await press(filter(), "Enter");
-      expect(onStartSide).toHaveBeenCalledWith("docker:solo");
-      expect(input()).not.toBeNull();
+      expect(onCheckSide).toHaveBeenCalledWith("docker:solo");
+      expect(onStartSide).not.toHaveBeenCalled();
+      expect(input()).toBeNull();
     });
 
     it("the dropdown switches container; the last container comes back next time", async () => {

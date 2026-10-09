@@ -1,7 +1,10 @@
 // Docker sides (docs/spec.md "Sides"): discovery of running Linux containers and the copy of this claude-ui's package into one.
 import { execFile } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { DockerState, SideCheck, SideCheckReason, SidePhase, SideSetup } from "@claude-ui/protocol";
+import { blockedCheck, checkScript, dockerExecArgs, hasBuild, parseCheck, verdictOf } from "./sides.ts";
 import { runCommand, type Runner } from "./update.ts";
 
 /** Runs a command without a shell; never rejects. `code` null: not started (ENOENT) or killed by the timeout. `stdinFile`: that file is the command's stdin. */
@@ -20,6 +23,9 @@ export const execRun: Exec = (cmd, args, timeoutMs = 10_000, stdinFile) =>
     }
   });
 
+/** A folder URL as a path without a trailing separator: `npm pack <dir>\` through cmd.exe loses its closing quote. */
+export const folderPath = (url: URL) => resolve(fileURLToPath(url));
+
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 /** Container names from `docker ps --format {{.Names}}`: the first name of each line; Kubernetes pod containers (k8s_*) are no user side. */
 export function parseContainers(out: string): string[] {
@@ -30,12 +36,22 @@ export function parseContainers(out: string): string[] {
   return [...new Set(names)];
 }
 
+/**
+ * What a hub with the docker command sees (`ListResult.docker`): `down` = the engine does not answer (or runs Windows containers),
+ * `empty` = the engine runs no Linux container of ours, `ok` = at least one. `containers`: their names.
+ */
+export async function dockerStatus(exec: Exec = execRun): Promise<{ state: DockerState; containers: string[] }> {
+  const v = await exec("docker", ["version", "--format", "{{.Server.Os}}"], 10_000);
+  if (v.code !== 0 || v.stdout.trim() !== "linux") return { state: "down", containers: [] };
+  const ps = await exec("docker", ["ps", "--filter", "status=running", "--format", "{{.Names}}"], 10_000);
+  if (ps.code !== 0) return { state: "down", containers: [] };
+  const containers = parseContainers(ps.stdout);
+  return { state: containers.length ? "ok" : "empty", containers };
+}
+
 /** Running Linux containers; [] when the CLI is missing, the engine is down or runs Windows containers. */
 export async function listContainers(exec: Exec = execRun): Promise<string[]> {
-  const v = await exec("docker", ["version", "--format", "{{.Server.Os}}"], 10_000);
-  if (v.code !== 0 || v.stdout.trim() !== "linux") return [];
-  const ps = await exec("docker", ["ps", "--filter", "status=running", "--format", "{{.Names}}"], 10_000);
-  return ps.code === 0 ? parseContainers(ps.stdout) : [];
+  return (await dockerStatus(exec)).containers;
 }
 
 const lastLines = (s: string, n = 1) => s.trim().split(/\r?\n/).slice(-n).join(" ").trim();
@@ -44,6 +60,11 @@ const WAIT = "If a build is running, wait for the build to finish, then retry.";
 export function missingFile(output: string): string | undefined {
   if (!/enoent|no such file/i.test(output)) return undefined;
   return /^npm error path (.+)$/m.exec(output)?.[1]?.trim() ?? /no such file or directory, \w+ '([^'\n]+)'/.exec(output)?.[1];
+}
+/** True when `file` lies inside `<pkgDir>/dist`: only then is a missing file a build rewriting dist (a bad argument is not). */
+export function underDist(file: string, pkgDir: string): boolean {
+  const rel = relative(resolve(pkgDir, "dist"), resolve(file));
+  return rel !== "" && !rel.startsWith("..") && resolve(rel) !== rel;
 }
 export const safeKey = (key: string) => key.replace(/[^\w.-]/g, "_");
 const packing = new Map<string, Promise<string>>();
@@ -71,7 +92,8 @@ async function pack(o: { pkgDir: string; cacheDir: string; label: string; npm?: 
   if (code !== 0 || !file) {
     rmSync(partial, { recursive: true, force: true });
     const gone = missingFile(output);
-    throw new Error(`Packing claude-ui for ${o.label} failed: ${lastLines(output, 8) || `npm exited with ${code}`}${gone ? ` (missing: ${gone}). A build may be rewriting dist: wait for the build to finish, then retry.` : ""}`);
+    const hint = gone ? (underDist(gone, o.pkgDir) ? ` (missing: ${gone}). A build may be rewriting dist: wait for the build to finish, then retry.` : ` (missing: ${gone})`) : "";
+    throw new Error(`Packing claude-ui for ${o.label} failed: ${lastLines(output, 8) || `npm exited with ${code}`}${hint}`);
   }
   // Earlier versions and builds.
   for (const n of readdirSync(o.cacheDir)) if (n !== basename(partial)) rmSync(join(o.cacheDir, n), { recursive: true, force: true });
@@ -84,15 +106,43 @@ async function pack(o: { pkgDir: string; cacheDir: string; label: string; npm?: 
  * Before `docker exec`: the container must run; this claude-ui's package goes in as a tarball. Resolves with the tarball's
  * path in the container; rejects with the user's next step (the side shows it, side_failed).
  */
-export async function prepareDockerSide(o: { name: string; pkgDir: string; key: string; cacheDir: string; exec?: Exec; npm?: Runner }): Promise<string> {
+export async function prepareDockerSide(o: { name: string; pkgDir: string; key: string; cacheDir: string; exec?: Exec; npm?: Runner; setup?: SideSetup; onPhase?: (p: SidePhase) => void }): Promise<string> {
   const exec = o.exec ?? execRun;
   const label = `Docker: ${o.name}`;
   const st = await exec("docker", ["inspect", "-f", "{{.State.Running}}", o.name], 10_000);
   if (st.code !== 0) throw new Error(/no such (object|container)/i.test(st.stderr) ? `${label} no longer exists. Pick another container.` : `${label} could not be checked: ${lastLines(st.stderr) || "docker inspect failed"}.`);
   if (st.stdout.trim() !== "true") throw new Error(`${label} is not running. Start it (docker start ${o.name}), then retry.`);
+  // never: only an installed build runs, so nothing is packed or copied ("" : the setup script does not use a tarball).
+  if (o.setup === "never") return "";
+  o.onPhase?.("packing");
   mkdirSync(o.cacheDir, { recursive: true });
   const tgz = await packSide({ pkgDir: o.pkgDir, key: o.key, cacheDir: o.cacheDir, label, npm: o.npm });
+  o.onPhase?.("copying");
   return sendTarball(exec, o.name, label, tgz, `claude-ui-side-${safeKey(o.key)}.tgz`);
+}
+
+/**
+ * `side.check` of a container: read-only. `docker inspect` (running?), the mounts inspect (can `docker cp` write /tmp), then one
+ * `docker exec <name> sh -c <check script>`. Never packs, copies or writes; the inspect formats never print the environment.
+ * Whether the package gets in by `docker cp` or by a stream is not told: it only matters that one of them can (else `no_writable_path`).
+ */
+export async function checkDockerSide(o: { name: string; pkgDir: string; key: string; exec?: Exec; timeoutMs?: number }): Promise<SideCheck> {
+  const exec = o.exec ?? execRun;
+  const label = `Docker: ${o.name}`;
+  const ms = o.timeoutMs ?? 30_000;
+  const blocked = (reason: SideCheckReason, detail?: string, running?: boolean) => blockedCheck(o.key, label, reason, { docker: true, detail, name: o.name, reachable: reason !== "unreachable" && reason !== "gone", running });
+  const st = await exec("docker", ["inspect", "-f", "{{.State.Running}}", o.name], 10_000);
+  if (st.code !== 0) {
+    if (/no such (object|container)/i.test(st.stderr)) return blocked("gone");
+    return blocked("unreachable", lastLines(st.stderr).replace(/\.$/, "") || (st.code === null ? "no answer in time" : "docker inspect failed"));
+  }
+  if (st.stdout.trim() !== "true") return blocked("not_running", undefined, false);
+  const ins = await exec("docker", ["inspect", "-f", INSPECT_FORMAT, o.name], 10_000);
+  const cp = ins.code === 0 ? cpUsable(ins.stdout) : undefined;
+  const r = await exec("docker", dockerExecArgs(o.name, checkScript(o.key, "docker")).filter((a) => a !== "-i"), ms);
+  const checked = parseCheck(r.stdout);
+  if (!checked) return blocked(r.code === null ? "unreachable" : "check_failed", r.code === null ? "no answer in time" : lastLines(r.stderr).replace(/\.$/, "") || `exit code ${r.code}`, true);
+  return verdictOf({ key: o.key, label, kind: "docker", name: o.name, build: hasBuild(o.pkgDir, true), checked, cpUsable: cp });
 }
 
 /** Directories tried in order; "HOME" is the container user's $HOME. */
