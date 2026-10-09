@@ -55,3 +55,24 @@ it("a smooth scroll that never arrives is over after a while", () => {
   scrollTo(el, 300);
   expect(sinceUserScroll()).toBe(0);
 });
+
+const key = (target: Element, k: string) => target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+
+it("a scrolling key outside a text field ends a smooth app scroll", () => {
+  const el = log();
+  markAppScroll(el, 1000, true);
+  key(document.body, "PageDown");
+  scrollTo(el, 300);
+  expect(sinceUserScroll()).toBeLessThan(1000);
+});
+
+it("typing, or a scrolling key inside a text field, does not end a smooth app scroll", () => {
+  const el = log();
+  const input = document.createElement("textarea");
+  document.body.append(input);
+  markAppScroll(el, 1000, true);
+  key(input, "ArrowDown");
+  key(document.body, "a");
+  scrollTo(el, 300);
+  expect(sinceUserScroll()).toBe(Infinity);
+});

@@ -9,7 +9,7 @@ import { UserMarkdown } from "./user-markdown.tsx";
 import { applyEvent, emptySession } from "./store.ts";
 
 // Shiki loads can be made to fail (once) to see the painting recover.
-const flaky = vi.hoisted(() => ({ create: 0, language: 0, made: 0, cut: 0 }));
+const flaky = vi.hoisted(() => ({ create: 0, language: 0, made: 0, cut: 0, skip: 0 }));
 /** Only the painter's loads fail (streamdown loads shiki too, at any time). */
 const ours = () => {
   const limit = Error.stackTraceLimit;
@@ -36,7 +36,7 @@ vi.mock("shiki", async (orig) => {
           const orig = g.tokenizeLine2.bind(g);
           g.tokenizeLine2 = (...x) => {
             const r = orig(...x);
-            return ours() && flaky.cut-- > 0 ? { ...r, stoppedEarly: true } : r;
+            return ours() && flaky.skip-- <= 0 && flaky.cut-- > 0 ? { ...r, stoppedEarly: true } : r;
           };
         }
         return g;
@@ -228,7 +228,7 @@ const timeline = () => {
   return log;
 };
 afterEach(async () => {
-  flaky.create = flaky.language = flaky.cut = 0;
+  flaky.create = flaky.language = flaky.cut = flaky.skip = 0;
   mounted.splice(0).forEach((m) => m.unmount());
   resetUserCodePaint();
   resetScrollRest();
@@ -686,7 +686,7 @@ it("a first line that shiki cuts twice is tried again later (not cached as plain
   flaky.cut = 1;
   const a = await mountMd(fence(longCode(101)));
   await show(blocksOf(a.el));
-  await slotsUntil(() => painted(a.el));
+  await settle(held, { skip: skewClock }, () => painted(a.el));
   expect(paintedLines(a.el).size).toBe(40);
   expect(cacheStats().entries).toBe(1);
   await show(blocksOf(a.el), false);
@@ -703,10 +703,22 @@ it("a first line that shiki cuts twice is tried again later (not cached as plain
   const spy = later(CUT_RETRY_MS + 10);
   try {
     await fire(held);
-    await slotsUntil(() => painted(b.el));
+    await settle(held, { skip: skewClock }, () => painted(b.el));
     expect(paintedLines(b.el).size).toBe(40);
     expect(cacheStats().entries).toBe(1);
   } finally {
     spy.mockRestore();
   }
+});
+
+it("a block cut after its first line keeps the colors of the lines before the cut and is not cached", async () => {
+  stubPaint();
+  // Lines 0-2 pass (two theme passes each), both attempts of line 3 are cut.
+  flaky.skip = 6;
+  flaky.cut = 4;
+  const a = await mountMd(fence(longCode(111)));
+  await show(blocksOf(a.el));
+  await slotsUntil(() => painted(a.el));
+  expect([...paintedLines(a.el)].sort((x, y) => x - y)).toEqual([0, 1, 2]);
+  expect(cacheStats().entries).toBe(0);
 });
