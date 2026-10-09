@@ -49,11 +49,13 @@ import { Message, MessageAction, MessageActions, MessageContent, MessageResponse
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
-import { Toast } from "./toast.tsx";
+import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
+import { NotificationStack, useNotifications, type CardItem } from "./notifications.tsx";
+import { cardText, describeCard, IN_APP_EVENT, loadInApp, type Card } from "./notify.ts";
 import { McpDialog } from "./mcp-dialog.tsx";
 import { SkillsDialog } from "./skills-dialog.tsx";
 import { SettingsDialog } from "./settings-dialog.tsx";
@@ -81,8 +83,8 @@ import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpande
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
 import { FoldRow } from "./signal-fold.tsx";
-import { FocusPage, FocusRow } from "./focus-page.tsx";
-import { nextWaiting, waitingCount, waitingRequests } from "./focus.ts";
+import { FocusPage, FocusRow, useNow } from "./focus-page.tsx";
+import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
 import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
@@ -290,7 +292,17 @@ export function App() {
   /** Titles from subscribe replies: a tab of a session not (yet) in the list, e.g. the page-load hash session. */
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
+  // In-app notifications (GH-158): `notifyRef` takes every event; the choice is per browser and Settings tells this page by event.
+  const notifyRef = useRef<(e: Event, live: boolean) => void>(undefined);
+  const [inApp, setInApp] = useState(loadInApp);
+  useEffect(() => {
+    const sync = (e: globalThis.Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
+    window.addEventListener(IN_APP_EVENT, sync);
+    return () => window.removeEventListener(IN_APP_EVENT, sync);
+  }, []);
   const [pushOn, setPushOn] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState<string>();
   // Per session, bumped by a notification click: remounts its conversation, which starts scrolled to the bottom.
   const [scrollKeys, setScrollKeys] = useState<Record<string, number>>({});
   const focused = usePageFocused();
@@ -664,6 +676,7 @@ export function App() {
         // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
         // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
         const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+        notifyRef.current?.(e, live);
         // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
         if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
         if (e.part.type === "session_state" && live) void refreshList();
@@ -728,12 +741,16 @@ export function App() {
     };
   }, []);
 
+  // Listed sessions this page covers with in-app cards: only while in-app notifications are on and the page is focused and visible.
+  const coveredKey = inApp && focused ? list.filter((s) => !s.archived).map((s) => s.id).sort().slice(0, 2000).join(",") : undefined;
   // The daemon suppresses pushes for the session a focused, visible tab shows; resent after every reconnect.
   useEffect(() => {
     if (status !== "connected") return;
     const sessionId = focused && activeId !== NEW_TAB && activeId !== FOCUS_TAB ? activeId : undefined;
-    client.current!.request(sessionId ? { type: "push.focus", sessionId } : { type: "push.focus" }).catch(() => {});
-  }, [status, focused, activeId]);
+    // One event, one channel: what this page shows as in-app cards needs no push (the Focus page covers every session too).
+    const covered = coveredKey === undefined ? undefined : coveredKey.split(",").filter(Boolean);
+    client.current!.request({ type: "push.focus", ...(sessionId && { sessionId }), ...(covered && { covered }) }).catch(() => {});
+  }, [status, focused, activeId, coveredKey]);
 
   const activeView = activeId ? views[activeId] : undefined;
   useEffect(() => {
@@ -763,14 +780,51 @@ export function App() {
     setFavicon(faviconHref(waitingN));
   }, [waitingN]);
 
+  // Settings › Notifications owns the switch; its error shows under the row (not in the sidebar).
+  // In-app notification cards: live events of sessions this page does not show (docs/spec.md "In-app notifications").
+  const [cardNote, setCardNote] = useState<{ card: Card; hint: boolean; at?: number }>();
+  const hinted = useRef(false);
+  const notify = useNotifications(
+    { enabled: inApp, focused, focusPage: activeId === FOCUS_TAB, shown: (id) => id === activeId, list, views },
+    (card: Card) => {
+      // Said once per page load: how to reach the cards without the mouse. The text itself is made at render, with the session's title as the card shows it.
+      const hint = !hinted.current && !!specOf("notifications.focus");
+      hinted.current = true;
+      setCardNote({ card, hint });
+    },
+  );
+  notifyRef.current = notify.observe;
+  const noteText = (() => {
+    if (!cardNote) return undefined;
+    // The card as it is now: one that moved on to its session's next request says that request, not the settled one.
+    const card = notify.cards.find((c) => c.sessionId === cardNote.card.sessionId && (c.kind === cardNote.card.kind || (!!c.requestId && !!cardNote.card.requestId))) ?? cardNote.card;
+    const s = list.find((x) => x.id === card.sessionId);
+    const d = describeCard(card, views[card.sessionId], s?.cwd ?? "");
+    const keys = specOf("notifications.focus");
+    return cardText({ kind: d.kind, title: s?.title || "Untitled", body: d.summary }) + (cardNote.hint && keys ? ` ${keyText(keys)} goes to notifications.` : "");
+  })();
+  // The note holds for the count it was said with; another count takes over with the plain count text.
+  useEffect(() => setCardNote((n) => (n && n.at === undefined ? { ...n, at: waitingN } : n && n.at !== waitingN ? undefined : n)), [waitingN, cardNote]);
+  const [cardFocus, setCardFocus] = useState(0);
+  const cardItems: CardItem[] = notify.cards.map((card) => {
+    const s = list.find((x) => x.id === card.sessionId);
+    const cwd = s?.cwd ?? "";
+    return { card, d: describeCard(card, views[card.sessionId], cwd), title: s?.title || "Untitled", place: cwd ? (worktreeName(cwd, worktrees) ?? projectName(cwd)) : "", cwd: cwd || undefined };
+  });
+  const cardsNow = useNow(60_000);
+
   async function togglePush() {
-    setError(undefined);
+    setPushError(undefined);
+    setPushBusy(true);
     try {
       if (pushOn) await disablePush();
       else await enablePush(client.current!);
       setPushOn(!pushOn);
     } catch (e) {
-      setError(`notifications: ${(e as Error).message}`);
+      const m = (e as Error).message;
+      setPushError(/blocked/.test(m) ? "Notifications are blocked for this site in the browser. Allow them in the site settings, then turn this on again." : m);
+    } finally {
+      setPushBusy(false);
     }
   }
 
@@ -1178,6 +1232,7 @@ export function App() {
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
     openFocus: () => open(FOCUS_TAB),
+    focusNotifications: notify.cards.length ? () => setCardFocus((n) => n + 1) : undefined,
     nextWaiting: waiting.length ? () => (open(FOCUS_TAB), setFocusSel(nextWaiting(waiting, activeId === FOCUS_TAB ? focusSel ?? waiting[0]?.part.id : undefined)?.part.id)) : undefined,
     toggleSignalOnly: () => saveSignalOnly(!loadSignalOnly()),
     openSettings: () => setSettingsOpen(true),
@@ -1452,13 +1507,6 @@ export function App() {
               <ThemeIcon />
             </IconButton>
           </div>
-          <label
-            className="flex items-center gap-2 pointer-coarse:min-h-11"
-            title={pushSupported() ? "Push notification when a session needs input or finishes" : "Web Push needs HTTPS or localhost and a browser with Web Push. Without it, the daemon shows desktop notifications on its own machine."}
-          >
-            <input type="checkbox" checked={pushOn} disabled={!pushSupported()} onChange={togglePush} data-testid="push-toggle" />
-            Notifications
-          </label>
           {error && <p className="text-destructive">{error}</p>}
           {status !== "unauthorized" && <FocusRow count={waitingN} active={activeId === FOCUS_TAB} onOpen={() => open(FOCUS_TAB)} />}
           {status !== "unauthorized" && (
@@ -1707,7 +1755,7 @@ export function App() {
         </main>
       </div>
       <div role="status" aria-live="polite" className="sr-only" data-testid="attention-status">
-        {announcement(waitingN, everWaiting.current)}
+        {noteText !== undefined ? noteText + (waitingN ? ` ${waitingStatus(waitingN)}.` : "") : announcement(waitingN, everWaiting.current)}
       </div>
       <QuoteButton onQuote={(q) => (setInsert(q), setPane("session"))} />
       {guideRun && (
@@ -1801,7 +1849,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
+      <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       {/* Always mounted so a screen reader announces the hint when it fills in. */}
       <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 left-1/2 z-50 w-max max-w-[calc(100vw-24px)] -translate-x-1/2" data-testid="prefix-hint">
@@ -1819,17 +1867,31 @@ export function App() {
           </p>
         )}
       </div>
-      {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
-      {stale && !update && (
-        <StaleToast
-          note={stale}
-          onDismiss={() => {
-            staleDismissed.current = stale;
-            setStale(undefined);
-          }}
+      <ToastRegion>
+        {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
+        {stale && !update && (
+          <StaleToast
+            note={stale}
+            onDismiss={() => {
+              staleDismissed.current = stale;
+              setStale(undefined);
+            }}
+          />
+        )}
+        {toast && <Toast message={toast} onClose={closeToast} />}
+        <NotificationStack
+          items={cardItems}
+          now={cardsNow}
+          focusTick={cardFocus}
+          hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || openingProject}
+          onRespond={(card, decision) => client.current!.request({ type: "permission.respond", requestId: card.requestId!, decision })}
+          onOpenFocus={(card) => (open(FOCUS_TAB), setFocusSel(card.requestId))}
+          onOpenSession={(card) => (open(card.sessionId), setScrollKeys((k) => ({ ...k, [card.sessionId]: (k[card.sessionId] ?? 0) + 1 })))}
+          onDismiss={notify.dismiss}
+          onOpenAll={() => open(FOCUS_TAB)}
+          restoreFocus={() => (activeId === FOCUS_TAB ? document.querySelector<HTMLElement>("main")?.focus() : focusShownPrompt())}
         />
-      )}
-      {toast && <Toast message={toast} onClose={closeToast} />}
+      </ToastRegion>
     </div>
     </SideLabel>
     </AvatarColors>

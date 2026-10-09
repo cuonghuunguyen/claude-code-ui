@@ -237,6 +237,19 @@ it("Open Focus is always listed when App offers it; Next waiting request only wh
   expect(KEYS["focus.next"]).not.toMatch(/escape/);
 });
 
+it("Go to notifications is listed only while a card shows, on Ctrl+Alt+N (GH-158)", () => {
+  const focusNotifications = vi.fn();
+  expect(appCommands(ctx()).some((i) => i.id === "notifications.focus")).toBe(false);
+  const c = ctx({ focusNotifications });
+  expect(appCommands(c).find((i) => i.id === "notifications.focus")?.title).toBe("Go to notifications");
+  run(c, "notifications.focus");
+  expect(focusNotifications).toHaveBeenCalledOnce();
+  expect(shortcutFor(appCommands(c), ev("n", { ctrlKey: true, altKey: true }))?.id).toBe("notifications.focus");
+  expect(shortcutFor(appCommands(ctx()), ev("n", { ctrlKey: true, altKey: true }))).toBeUndefined();
+  // Never Escape: Esc stops the running turn.
+  expect(KEYS["notifications.focus"]).not.toMatch(/escape/);
+});
+
 it("lists Show guide without a shortcut and runs startGuide", () => {
   const c = ctx();
   const row = run(c, "guide.start");

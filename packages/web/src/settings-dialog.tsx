@@ -1,6 +1,6 @@
 // Settings dialog (docs/spec.md "Settings"): two panes on the ConfigDialog shell, a list of groups on the left and the settings of the
 // selected group on the right (below md: the list first, a group drills in with a Back button). App-wide, daemon-side settings come from
-// SECTIONS, per-browser choices (Timeline, Changes, Sidebar, Tabs, Keyboard, Guide) never reach the daemon.
+// SECTIONS, per-browser choices (Notifications, Timeline, Changes, Sidebar, Tabs, Keyboard, Guide) never reach the daemon.
 // A later setting is one more row in SECTIONS; a later group is one more entry in `groups`.
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Settings, SettingsPatch, SettingsResult } from "@claude-ui/protocol";
@@ -14,6 +14,7 @@ import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
 import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
 import { GuideSection } from "./guide-settings.tsx";
 import { saveSignalOnly, useSignalOnly } from "./signal.ts";
+import { IN_APP_EVENT, loadInApp, saveInApp } from "./notify.ts";
 import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { ChevronLeftIcon } from "lucide-react";
@@ -93,10 +94,14 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
   },
 ];
 
+/** This browser's Web Push switch (App owns the subscription: it needs the daemon connection). */
+export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
+
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, onShortcuts, onRestartGuide }: { open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, onShortcuts, onRestartGuide, push }: { push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
+  const [daemon, setDaemon] = useState<SettingsResult["daemon"]>();
   const [saving, setSaving] = useState(false);
   // "Show only active sessions": the sidebar's own per-browser setting (its options menu writes it too).
   const [onlyActive, setOnlyActive] = useState(() => loadSidebarView().onlyActive);
@@ -106,6 +111,13 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     window.addEventListener(VIEW_EVENT, sync);
     return () => window.removeEventListener(VIEW_EVENT, sync);
   }, [open]);
+  // In-app notifications: per browser; the page (App) hears the choice through IN_APP_EVENT.
+  const [inApp, setInApp] = useState(loadInApp);
+  useEffect(() => {
+    const sync = (e: Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
+    window.addEventListener(IN_APP_EVENT, sync);
+    return () => window.removeEventListener(IN_APP_EVENT, sync);
+  }, []);
   // The number field's text while typing; committed on Enter or blur.
   const [draft, setDraft] = useState<Record<string, string>>({});
   const diffMode = useDefaultDiffMode();
@@ -116,7 +128,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     if (!open) return;
     let live = true;
     ask.current<SettingsResult>({ type: "settings.get" }).then(
-      (r) => live && (setSettings(r.settings), setError(undefined), setDraft({})),
+      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setError(undefined), setDraft({})),
       (e: Error) => live && setError(e.message),
     );
     return () => void (live = false);
@@ -125,7 +137,9 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const save = async (patch: SettingsPatch, field?: string) => {
     setSaving(true);
     try {
-      setSettings((await ask.current<SettingsResult>({ type: "settings.set", patch })).settings);
+      const r = await ask.current<SettingsResult>({ type: "settings.set", patch });
+      setSettings(r.settings);
+      setDaemon(r.daemon);
       setError(undefined);
       if (field) setDraft(({ [field]: _, ...rest }) => rest);
     } catch (e) {
@@ -201,6 +215,66 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   // One entry per group; a later group (e.g. Notifications) is one more line here.
   const groups: Group[] = [
     { id: "timeline", title: "Timeline", body: <TimelineSection /> },
+    {
+      id: "notifications",
+      title: "Notifications",
+      body: (
+        <section aria-labelledby="settings-notifications-title" className="flex flex-col" data-testid="settings-notifications">
+          <h3 id="settings-notifications-title" className="pb-1 font-medium text-[13px] text-muted-foreground">
+            Notifications
+          </h3>
+          <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+            <div className="min-w-0 flex-1">
+              <span className="block text-sm">In-app notifications</span>
+              <span id="settings-in-app-hint" className="block text-muted-foreground text-xs">
+                A notice in this page when a session you are not looking at needs input or finishes. Read-only requests can be allowed or denied from the notice. Kept in this browser.
+              </span>
+            </div>
+            <Switch on={inApp} label="In-app notifications" held={false} onToggle={(on) => (setInApp(on), saveInApp(on))} title="In-app notifications" describedBy="settings-in-app-hint" testId="settings-in-app" />
+          </div>
+          {push && (
+            <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+              <div className="min-w-0 flex-1">
+                <span className="block text-sm">Push notifications</span>
+                <span id="settings-push-hint" className="block text-muted-foreground text-xs">
+                  {push.supported
+                    ? "This browser notifies you when a session needs input or finishes, also with the page closed. Not sent while this page is in front and shows in-app notifications. Kept in this browser."
+                    : "Not available in this browser here: Web Push needs HTTPS or localhost. The daemon's desktop notifications are used instead."}
+                </span>
+                {push.error && (
+                  <span role="alert" className="mt-1 block text-destructive text-xs">
+                    {push.error}
+                  </span>
+                )}
+              </div>
+              <Switch on={push.on} label="Push notifications" held={!push.supported || push.busy} onToggle={push.toggle} title="Push notifications" describedBy="settings-push-hint" testId="settings-push" />
+            </div>
+          )}
+          {/* An older daemon sends no `notifications`: no row. */}
+          {settings?.notifications && (
+            <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+              <div className="min-w-0 flex-1">
+                <span className="block text-sm">{daemon?.host ? `Desktop notifications on ${daemon.host}` : "Desktop notifications on the daemon's computer"}</span>
+                <span id="settings-notifications-desktop-hint" className="block text-muted-foreground text-xs">
+                  {daemon?.desktopForcedOff
+                    ? "Turned off when the daemon started (--no-os-notify or CLAUDE_UI_OS_NOTIFY=0)."
+                    : "The daemon's computer shows a system notification when no browser has push notifications on. For every browser of this daemon."}
+                </span>
+              </div>
+              <Switch
+                on={settings.notifications.desktop && !daemon?.desktopForcedOff}
+                label="Desktop notifications"
+                held={saving || !!daemon?.desktopForcedOff}
+                onToggle={(on) => void save({ notifications: { desktop: on } })}
+                title="Desktop notifications"
+                describedBy="settings-notifications-desktop-hint"
+                testId="settings-notifications-desktop"
+              />
+            </div>
+          )}
+        </section>
+      ),
+    },
     {
       id: "changes",
       title: "Changes",

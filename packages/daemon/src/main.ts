@@ -72,7 +72,7 @@ if (side) {
 } else {
   const token = loadToken();
   const sidesFile = join(configDir(), "sides.json");
-  const push = createPush(osNotify === false ? { notify: false } : {});
+  const push = createPush({ desktop: () => state.appSettings.get().notifications.desktop, ...(osNotify === false && { notify: false as const }) });
   const distros = process.platform === "win32" ? wslDistros() : [];
   const sidePackage = sidePackageDir();
   const sideKey = () => sideKeyOf(sidePackage);
@@ -116,7 +116,7 @@ if (side) {
   const update = updateCheck !== false && version !== "dev" && launched ? { current: version, dir: versionsDir(), registry, exit: (code: number) => void setTimeout(() => process.exit(code), 200) } : undefined;
   // A source checkout compares its files with the start; a release compares its version with the installed ones (build-info.ts).
   const buildInfo = createBuildInfo({ version, srcDirs: [fileURLToPath(new URL("../src", import.meta.url)), fileURLToPath(new URL("../../protocol/src", import.meta.url))], versionsDir: versionsDir() });
-  createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo }).listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
+  createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false }).listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
     if (ts && "cli" in ts) {
       if (ts.serve) {
         const serve = startServe({ cli: ts.cli, port, spawn, log: console.error, platform: process.platform });

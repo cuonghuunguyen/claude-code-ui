@@ -17,14 +17,15 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ failGet = false, group }: { failGet?: boolean; group?: string } = {}) {
+async function render({ failGet = false, group, daemon = { host: "box" } as { host: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; group?: string; daemon?: { host: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
+  const toggle = vi.fn();
   localStorage.removeItem("claude-ui.settingsGroup");
   if (group) localStorage.setItem("claude-ui.settingsGroup", group);
   const onTabGrouping = vi.fn();
   const onRestartGuide = vi.fn();
   const onTabCompact = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true } };
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
@@ -32,9 +33,9 @@ async function render({ failGet = false, group }: { failGet?: boolean; group?: s
     if (msg.type === "settings.set") {
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) } };
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) } };
     }
-    return { settings };
+    return { settings, ...(daemon && { daemon }) };
   });
   const el = document.createElement("div");
   const prompt = document.createElement("textarea");
@@ -49,6 +50,7 @@ async function render({ failGet = false, group }: { failGet?: boolean; group?: s
       <SettingsDialog
         open={open}
         onShortcuts={onShortcuts}
+        push={{ ...push, toggle }}
         request={request as never}
         onClose={() => set(false)}
         tabCompact={compact}
@@ -69,7 +71,7 @@ async function render({ failGet = false, group }: { failGet?: boolean; group?: s
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const pick = async (group: string) => void (await act(async () => q(`settings-group-${group}`)!.click()));
-  return { calls, q, pick, prompt, onTabGrouping, onTabCompact, onShortcuts, onRestartGuide };
+  return { calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onShortcuts, onRestartGuide };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -220,7 +222,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups: Timeline first, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Timeline", "Changes", "Sidebar", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits"]);
+  expect(ids).toEqual(["Timeline", "Notifications", "Changes", "Sidebar", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
 });
 
@@ -250,7 +252,7 @@ it("shows one group at a time: the first by default, picking another swaps the p
 });
 
 it("an unknown remembered group falls back to the first", async () => {
-  const { q } = await render({ group: "notifications" });
+  const { q } = await render({ group: "nope" });
   expect(q("settings-timeline")).not.toBeNull();
 });
 
@@ -259,11 +261,11 @@ it("arrow keys move through the groups (roving tabindex), Home and End jump, and
   const key = (k: string) => act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
   await act(async () => q("settings-group-timeline")!.focus());
   await key("ArrowDown");
-  expect(document.activeElement).toBe(q("settings-group-changes"));
-  expect(q("settings-group-changes")!.getAttribute("aria-selected")).toBe("true");
+  expect(document.activeElement).toBe(q("settings-group-notifications"));
+  expect(q("settings-group-notifications")!.getAttribute("aria-selected")).toBe("true");
   expect(q("settings-group-timeline")!.getAttribute("tabindex")).toBe("-1");
-  expect(q("settings-group-changes")!.getAttribute("tabindex")).toBe("0");
-  expect(q("settings-changes")).not.toBeNull();
+  expect(q("settings-group-notifications")!.getAttribute("tabindex")).toBe("0");
+  expect(q("settings-notifications")).not.toBeNull();
   await key("End");
   expect(document.activeElement).toBe(q("settings-group-usageLimit"));
   await key("ArrowDown");
@@ -315,4 +317,69 @@ it("the Signal only key hint is the live binding of signal.toggle and follows a 
   await act(async () => bind("signal.toggle", null));
   expect(q("settings-signal-keys")).toBeNull();
   await act(async () => resetAll());
+});
+
+it("Settings > Notifications is a group with In-app, Push and Desktop rows, in that order (GH-158)", async () => {
+  const { q, pick } = await render();
+  await pick("notifications");
+  expect(q("settings-notifications")?.querySelector("h3")?.textContent).toBe("Notifications");
+  const rows = [...q("settings-notifications")!.querySelectorAll('[role="switch"]')].map((b) => b.getAttribute("data-testid"));
+  expect(rows).toEqual(["settings-in-app", "settings-push", "settings-notifications-desktop"]);
+});
+
+it("the Push switch shows the browser's subscription and calls the toggle", async () => {
+  const { q, pick, toggle } = await render({ push: { on: true, supported: true, busy: false, error: undefined } });
+  await pick("notifications");
+  expect(q("settings-push")?.getAttribute("aria-checked")).toBe("true");
+  await act(async () => q("settings-push")!.click());
+  expect(toggle).toHaveBeenCalledTimes(1);
+});
+
+it("Push unsupported: aria-disabled with the reason, a click does nothing; an error is an alert under the row", async () => {
+  const { q, pick, toggle } = await render({ push: { on: false, supported: false, busy: false, error: "blocked for this site" } });
+  await pick("notifications");
+  expect(q("settings-push")?.getAttribute("aria-disabled")).toBe("true");
+  expect(document.getElementById(q("settings-push")!.getAttribute("aria-describedby")!)?.textContent).toContain("Web Push needs HTTPS or localhost");
+  await act(async () => q("settings-push")!.click());
+  expect(toggle).not.toHaveBeenCalled();
+  expect(q("settings-notifications")!.querySelector('[role="alert"]')?.textContent).toContain("blocked for this site");
+});
+
+it("the Desktop row names the daemon's host and writes notifications.desktop; without a host it says the daemon's computer", async () => {
+  const { q, pick, calls } = await render();
+  await pick("notifications");
+  expect(q("settings-notifications")?.textContent).toContain("Desktop notifications on box");
+  await act(async () => q("settings-notifications-desktop")!.click());
+  expect(calls.find((c) => c.type === "settings.set")).toMatchObject({ patch: { notifications: { desktop: false } } });
+  expect(q("settings-notifications-desktop")?.getAttribute("aria-checked")).toBe("false");
+});
+
+it("no daemon host: the daemon's computer; --no-os-notify: the switch is aria-disabled with the flag hint and does not save", async () => {
+  const a = await render({ daemon: null });
+  await a.pick("notifications");
+  expect(a.q("settings-notifications")?.textContent).toContain("Desktop notifications on the daemon's computer");
+  act(() => root?.unmount());
+  document.body.innerHTML = "";
+  const { q, pick, calls } = await render({ daemon: { host: "box", desktopForcedOff: true } });
+  await pick("notifications");
+  expect(q("settings-notifications-desktop")?.getAttribute("aria-disabled")).toBe("true");
+  expect(q("settings-notifications")?.textContent).toContain("--no-os-notify");
+  await act(async () => q("settings-notifications-desktop")!.click());
+  expect(calls.some((c) => c.type === "settings.set")).toBe(false);
+});
+
+it("the In-app switch is on by default, writes the per-browser choice and tells the page", async () => {
+  localStorage.removeItem("claude-ui.inAppNotifications");
+  const heard: boolean[] = [];
+  const on = (e: Event) => heard.push((e as CustomEvent<boolean>).detail);
+  window.addEventListener("claude-ui:in-app", on);
+  const { q, pick } = await render();
+  await pick("notifications");
+  expect(q("settings-in-app")?.getAttribute("aria-checked")).toBe("true");
+  await act(async () => q("settings-in-app")!.click());
+  expect(localStorage.getItem("claude-ui.inAppNotifications")).toBe("off");
+  expect(q("settings-in-app")?.getAttribute("aria-checked")).toBe("false");
+  await act(async () => q("settings-in-app")!.click());
+  expect(heard).toEqual([false, true]);
+  window.removeEventListener("claude-ui:in-app", on);
 });
