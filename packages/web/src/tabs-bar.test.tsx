@@ -112,6 +112,13 @@ it("+ opens a new-session tab; the narrow switcher lists the tabs with their sta
   expect(onSelect).toHaveBeenCalledWith("b");
 });
 
+it("phone: the switcher chip has no vertical margin, so it stays inside the 44px titlebar (GH-251)", async () => {
+  const { el } = await render();
+  const sw = el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!;
+  expect(sw.className).not.toMatch(/(?:^|\s)(?:max-md:)?m[ty]?-|(?:^|\s)(?:max-md:)?my-/);
+  expect(sw.parentElement!.className).toContain("max-md:h-11");
+});
+
 it("phone: the switcher shows '<project or project · branch> · <side>' under the title, in the trigger and the rows (GH-165)", async () => {
   const lookup = (cwd: string) => (cwd.startsWith("/home/u/web") ? { label: "WSL: Ubuntu", short: "WSL" } : undefined);
   const info = (id: string) => (id === "a" ? { ...INFO.a!, cwd: "/home/u/web-wt", worktree: "web · feature-x" } : INFO[id]!);
