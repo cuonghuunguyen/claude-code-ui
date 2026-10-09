@@ -620,7 +620,7 @@ it("phone: a fast left flick closes", async () => {
   expect(onSwipeClose).toHaveBeenCalledWith("c");
 });
 
-it("phone: a click right after a swipe does not select the row, a later tap does", async () => {
+it("phone: a click right after a swipe does not select the row", async () => {
   const { onSelect } = await openList({ onSwipeClose: vi.fn() });
   const row = swipeRows()[1]!;
   await swipeBy(row, -30, 800);
@@ -687,7 +687,7 @@ it("phone: the list stays open when a close changes the active tab", async () =>
 // GH-209 C2: a vertical swipe on the switcher button (not the list) goes to the next / previous tab, no wrap.
 const trigger = (el: Element) => el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!;
 
-it("phone: swiping up on the switcher button selects the next tab, down the previous; the list does not open", async () => {
+it("phone: swiping up on the switcher button selects the next tab, down the previous", async () => {
   const { el, onSelect } = await render();
   await swipeBy(trigger(el), 0, 300, -40);
   expect(onSelect).toHaveBeenLastCalledWith("d");
@@ -711,7 +711,7 @@ it("phone: the Focus tab comes first in the order; no wrap at either end", async
   expect(onSelect).not.toHaveBeenCalled();
 });
 
-it("phone: a 4px touch on the switcher button is a tap that still opens the list", async () => {
+it("phone: a 4px touch on the switcher button selects nothing, and the tap's mousedown opens the list", async () => {
   const { el, onSelect } = await render();
   await swipeBy(trigger(el), 0, 60, -4);
   expect(onSelect).not.toHaveBeenCalled();
@@ -796,4 +796,111 @@ it("phone: the slide-out of a swipe closes with the latest onSwipeClose, not the
   await wait(500);
   expect(stale).not.toHaveBeenCalled();
   expect(latest).toHaveBeenCalledExactlyOnceWith("a");
+});
+
+// GH-209 review fixes.
+const SIZE_BOX = () => ({ width: 300, height: 44, left: 0, top: 0, right: 300, bottom: 44, x: 0, y: 0, toJSON() {} });
+const stdHandlers = { onSelect: () => {}, onClose: () => {}, onMove: () => {}, onMoveGroup: () => {}, onMoveGroupTo: () => {}, onNew: () => {}, onAction: () => {}, onRenamed: () => {} };
+
+it("phone: pointer moves after a finished swipe do not run it again (no blocked click, no repeated close)", async () => {
+  const { onSwipeClose, onSelect } = await openList({ onSwipeClose: vi.fn() });
+  await swipeBy(swipeRows()[0]!, -200);
+  await touch(swipeRows()[0]!, "pointermove", -210, 100, "mouse");
+  await touch(swipeRows()[0]!, "pointermove", -220, 100, "pen");
+  await wait(600);
+  expect(onSwipeClose).toHaveBeenCalledExactlyOnceWith("a");
+  await swipeBy(swipeRows()[1]!, -30, 800);
+  await wait(300);
+  now += 2000;
+  tick(0);
+  await touch(swipeRows()[1]!, "pointermove", -50, 100, "mouse");
+  await act(async () => swipeRows()[2]!.click());
+  expect(onSelect).toHaveBeenCalledWith("c");
+});
+
+it("phone: a second finger does not drive the first finger's swipe", async () => {
+  const { onSwipeClose } = await openList({ onSwipeClose: vi.fn() });
+  const row = swipeRows()[1]!;
+  tick(1000);
+  await touch(row, "pointerdown", 0, 100);
+  tick(30);
+  await touch(row, "pointermove", -15, 100);
+  const other = (type: string, x: number) => act(async () => void row.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "touch", pointerId: 8, isPrimary: false, clientX: x, clientY: 100 } as PointerEventInit)));
+  await other("pointermove", -250);
+  tick(1);
+  await other("pointerup", -250);
+  await wait(500);
+  expect(onSwipeClose).not.toHaveBeenCalled();
+});
+
+it("phone: a second finger on the switcher button does not leave its title shifted", async () => {
+  const { el } = await render();
+  const t = trigger(el);
+  tick(1000);
+  await touch(t, "pointerdown", 0, 100);
+  tick(30);
+  await touch(t, "pointermove", 0, 85);
+  tick(30);
+  await touch(t, "pointermove", 0, 80);
+  await act(async () => void t.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch", pointerId: 8, isPrimary: false, clientX: 0, clientY: 100 } as PointerEventInit)));
+  tick(1);
+  await touch(t, "pointerup", 0, 80);
+  await wait(100);
+  const title = t.querySelector<HTMLElement>(".flex.min-w-0.flex-col")!;
+  expect(parseFloat(/-?[\d.]+/.exec(title.style.transform)?.[0] ?? "0")).toBe(0);
+});
+
+it("phone: a short horizontal move on the switcher button also blocks the tap's open", async () => {
+  const { el } = await render();
+  await swipeBy(trigger(el), 14, 200, 1);
+  await act(async () => void trigger(el).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 })));
+  await wait(60);
+  expect(swipeRows().length).toBe(0);
+});
+
+function ListHost() {
+  const [tabs, setTabs] = useState(["a", "b", "c", "d"]);
+  const [active, setActive] = useState("a");
+  return <TabsBar {...stdHandlers} tabs={tabs} activeId={active} info={(id) => INFO[id]!} onSelect={setActive} onSwipeClose={(id) => { const r = closeTab(tabs, id, active); setTabs(r.tabs); setActive(r.active!); }} />;
+}
+
+it("phone: Delete on a row moves the focus to the next row (else the previous one) when the tab is really removed", async () => {
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root!.render(<ListHost />));
+  await act(async () => trigger(el).click());
+  await wait(50);
+  const del = (row: Element) => act(async () => void row.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true })));
+  let rows = swipeRows();
+  await act(async () => rows[1]!.focus());
+  const next = rows[2]!;
+  await del(rows[1]!);
+  await wait(50);
+  expect(swipeRows().length).toBe(3);
+  expect(document.activeElement).toBe(next);
+  rows = swipeRows();
+  const last = rows[2]!;
+  await act(async () => last.focus());
+  const before = rows[1]!;
+  await del(last);
+  await wait(50);
+  expect(document.activeElement).toBe(before);
+});
+
+it("Delete on the chip of a one-tab group leaves the focus on a control", async () => {
+  function Host() {
+    const [tabs, setTabs] = useState(["a", "b", "c"]);
+    return <TabsBar {...stdHandlers} tabs={tabs} activeId="a" info={(id) => ({ ...INFO[id]!, group: INFO[id]!.cwd })} onCloseGroup={(_, ids) => setTabs((t) => t.filter((x) => !ids.includes(x)))} />;
+  }
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root!.render(<Host />));
+  const chip = el.querySelector<HTMLElement>('[data-group-chip="/home/u/docs"]')!;
+  await act(async () => chip.focus());
+  await act(async () => void chip.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true })));
+  await wait(30);
+  expect(el.querySelector('[data-group-chip="/home/u/docs"]')).toBeNull();
+  expect(document.activeElement).not.toBe(document.body);
 });

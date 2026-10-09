@@ -9,7 +9,7 @@ import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, Pane
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
-import { FOCUS_TAB, NEW_TAB, avatarColor, closeTab, groupTabs, loadCollapsed, projectName, saveCollapsed, stepNoWrap, type AvatarColor } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColor, closeMany, closeTab, groupTabs, loadCollapsed, projectName, saveCollapsed, stepNoWrap, type AvatarColor } from "./tabs.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { GHOST, ROW } from "./toolbar.tsx";
@@ -199,7 +199,10 @@ export function TabsBar({
   };
   const closeGroup = (key: string) => {
     const ids = groups.find(([k]) => k === key)?.[1];
-    if (ids?.length) onCloseGroup?.(key, ids);
+    if (!ids?.length) return;
+    // One tab closes at once (no dialog): focus the tab that takes over.
+    if (ids.length === 1) refocus.current = { id: closeMany(tabs, ids, activeId ?? ids[0]).active };
+    onCloseGroup?.(key, ids);
   };
   const moveBy = (id: string, by: -1 | 1) => {
     const to = tabs[tabs.indexOf(id) + by];
@@ -401,13 +404,16 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const later = (fn: () => void, ms: number) => void timers.current.push(setTimeout(fn, ms));
-  const sign = (cfg.current.allow === "positive" ? 1 : -1) as -1 | 1;
+  // The pointer that started the gesture: other fingers and pointers are ignored until it ends.
+  const pointer = useRef(-1);
+  const signOf = () => (cfg.current.allow === "positive" ? 1 : -1) as -1 | 1;
   const settle = () => {
     setView((v) => ({ ...v, stage: "settle", offset: 0 }));
     later(() => setView((v) => (v.stage === "settle" ? { ...v, stage: "idle" } : v)), 200);
   };
   const commit = () => {
     const { width, height } = box.current;
+    const sign = signOf();
     if (reducedMotion()) return onClose(id);
     setView({ stage: "out", offset: sign * width, width, height, sign });
     later(() => setView({ stage: "collapse", offset: sign * width, width, height, sign }), 180);
@@ -420,7 +426,7 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
     if (next.phase === "dragging") {
       swiped.current = performance.now();
       if (before.phase !== "dragging") e.currentTarget.setPointerCapture?.(e.pointerId);
-      setView({ stage: "drag", offset: next.offset, width: box.current.width, height: box.current.height, sign });
+      setView({ stage: "drag", offset: next.offset, width: box.current.width, height: box.current.height, sign: signOf() });
     } else if (next.phase === "committed") {
       swiped.current = performance.now();
       commit();
@@ -436,6 +442,7 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
     el.addEventListener("touchmove", cancel, { passive: false });
     return () => el.removeEventListener("touchmove", cancel);
   }, []);
+  const active = (e: ReactPointerEvent<HTMLElement>) => e.pointerId === pointer.current && (state.current.phase === "pending" || state.current.phase === "dragging");
   const reveal = view.stage !== "idle" && Math.sign(view.offset) === view.sign;
   const motion = { drag: "none", settle: "transform 200ms cubic-bezier(0.2,0,0,1), opacity 200ms", out: "transform 180ms ease-out, opacity 180ms ease-out", collapse: "none", idle: undefined }[view.stage];
   return (
@@ -458,18 +465,21 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
         style={view.stage === "idle" ? undefined : { transform: `translateX(${view.offset}px)`, opacity: opacityFor(view.offset, view.width), transition: motion }}
         onPointerDown={(e) => {
           if (e.pointerType === "mouse" || !e.isPrimary || view.stage === "out" || view.stage === "collapse") return;
+          pointer.current = e.pointerId;
           const r = e.currentTarget.getBoundingClientRect();
           box.current = { width: r.width, height: r.height };
           cfg.current = getComputedStyle(e.currentTarget).direction === "rtl" ? { ...ROW_SWIPE, allow: mirror(ROW_SWIPE.allow) } : ROW_SWIPE;
           feed(e, "down");
         }}
-        onPointerMove={(e) => state.current.phase !== "idle" && feed(e, "move")}
+        onPointerMove={(e) => active(e) && feed(e, "move")}
         onPointerUp={(e) => {
-          if (state.current.phase !== "idle") feed(e, "up");
-          if (!["dragging", "committed", "settling"].includes(state.current.phase)) state.current = { phase: "idle" };
+          if (!active(e)) return;
+          feed(e, "up");
+          // Done: later moves (a mouse, a pen above the screen) must not run the outcome again.
+          state.current = { phase: "idle" };
         }}
-        onPointerCancel={() => {
-          if (state.current.phase === "idle") return;
+        onPointerCancel={(e) => {
+          if (!active(e)) return;
           state.current = { phase: "idle" };
           if (view.stage === "drag") settle();
         }}
@@ -481,6 +491,10 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
         onKeyDown={(e) => {
           if (e.key !== "Delete" && e.key !== "Backspace") return;
           e.preventDefault();
+          // The highlight and the focus go to the next row (else the previous one): the focused row is about to be removed.
+          const rows = [...(e.currentTarget.closest('[role="listbox"]')?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])];
+          const at = rows.indexOf(e.currentTarget);
+          (rows[at + 1] ?? rows[at - 1])?.focus();
           onClose(id);
         }}
       >
@@ -504,6 +518,7 @@ function useTriggerSwipe(order: string[], activeId: string | undefined, onSelect
   const cfg = useRef<SwipeConfig>({ ...ROW_SWIPE, axis: "y", allow: "both", commitFraction: 0.5, commitMin: 24, flickVelocity: 0.4, flickMin: 12, rubberLimit: TRIGGER_BOUNCE });
   const height = useRef(0);
   const edge = useRef(false);
+  const pointer = useRef(-1);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
   const ref = useCallback((el: HTMLElement | null) => {
@@ -518,6 +533,8 @@ function useTriggerSwipe(order: string[], activeId: string | undefined, onSelect
     const before = state.current;
     const next = swipe(before, { type, p: { x: e.clientX, y: e.clientY, t: performance.now() } }, cfg.current, height.current);
     state.current = next;
+    // A horizontal lock does nothing, but the touch may still end as a tap whose mousedown would open the list.
+    if (next.phase === "ignored") swiped.current = performance.now();
     if (next.phase === "dragging") {
       swiped.current = performance.now();
       if (before.phase !== "dragging") e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -534,7 +551,9 @@ function useTriggerSwipe(order: string[], activeId: string | undefined, onSelect
   };
   const props = {
     onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
-      if (e.pointerType === "mouse" || !e.isPrimary || e.clientY < TRIGGER_EDGE) return void (state.current = { phase: "idle" });
+      if (e.pointerType === "mouse" || !e.isPrimary) return;
+      if (e.clientY < TRIGGER_EDGE) return void (state.current = { phase: "idle" });
+      pointer.current = e.pointerId;
       const i = activeId === undefined ? -1 : order.indexOf(activeId);
       // Up (negative offset) goes to the next tab, down to the previous one.
       const next = i >= 0 && i < order.length - 1;
@@ -543,13 +562,14 @@ function useTriggerSwipe(order: string[], activeId: string | undefined, onSelect
       height.current = e.currentTarget.getBoundingClientRect().height;
       feed(e, "down");
     },
-    onPointerMove: (e: ReactPointerEvent<HTMLElement>) => state.current.phase !== "idle" && feed(e, "move"),
+    onPointerMove: (e: ReactPointerEvent<HTMLElement>) => e.pointerId === pointer.current && state.current.phase !== "idle" && feed(e, "move"),
     onPointerUp: (e: ReactPointerEvent<HTMLElement>) => {
-      if (state.current.phase !== "idle") feed(e, "up");
+      if (e.pointerId !== pointer.current || state.current.phase === "idle") return;
+      feed(e, "up");
       state.current = { phase: "idle" };
     },
-    onPointerCancel: () => {
-      if (state.current.phase === "idle") return;
+    onPointerCancel: (e: ReactPointerEvent<HTMLElement>) => {
+      if (e.pointerId !== pointer.current || state.current.phase === "idle") return;
       state.current = { phase: "idle" };
       setView({ offset: 0, motion: !reducedMotion() });
     },

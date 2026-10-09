@@ -103,3 +103,22 @@ it("a toast replaced while it leaves does not close the next one", async () => {
   await act(async () => void vi.advanceTimersByTime(300));
   expect(first).not.toHaveBeenCalled();
 });
+
+it("the 5 s timer waits while the toast has the pointer or the focus (the Undo button), then runs again", async () => {
+  const root = createRoot(el);
+  await act(async () => root.render(<Toast message="Closed x" action={{ label: "Undo", onClick: () => {} }} onClose={onClose} />));
+  const undo = [...toast().querySelectorAll("button")].find((b) => b.textContent === "Undo")!;
+  await act(async () => void undo.focus());
+  await act(async () => void vi.advanceTimersByTime(8000));
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => void undo.blur());
+  await act(async () => void vi.advanceTimersByTime(4000));
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => void vi.advanceTimersByTime(2000));
+  expect(onClose).toHaveBeenCalled();
+  onClose.mockClear();
+  await act(async () => root.render(<Toast key="2" message="again" onClose={onClose} />));
+  await act(async () => void toast().dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+  await act(async () => void vi.advanceTimersByTime(8000));
+  expect(onClose).not.toHaveBeenCalled();
+});

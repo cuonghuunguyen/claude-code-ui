@@ -26,16 +26,24 @@ export function Toast({ message, action, onClose }: { message: string; /** A tex
     setOpen(false);
     exit.current = setTimeout(onClose, 280);
   };
+  // The 5 s run only while the pointer and the focus are elsewhere (WCAG 2.2.1): a keyboard user can reach Undo, a pointer can rest on it.
+  const [hover, setHover] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const held = hover || focused;
   useEffect(() => {
     const show = setTimeout(() => setOpen(true), 16);
-    const hide = setTimeout(close, 5000);
+    const hide = held ? undefined : setTimeout(close, 5000);
     return () => (clearTimeout(show), clearTimeout(hide));
-  }, [message]);
+  }, [message, held]);
   return (
     <div
       role="status"
       data-testid="toast"
       data-state={open ? "open" : "closed"}
+      onPointerEnter={() => setHover(true)}
+      onPointerLeave={() => setHover(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setFocused(false)}
       className={`${TOAST_CARD} grid grid-cols-[minmax(0,1fr)_20px] gap-3 transition-[transform,opacity] duration-[280ms,160ms] ease-[cubic-bezier(0.2,0,0,1),ease-out] data-[state=closed]:translate-y-4 data-[state=closed]:opacity-0 motion-reduce:transition-none`}
     >
       <div className="flex min-w-0 flex-wrap items-center gap-x-3">
