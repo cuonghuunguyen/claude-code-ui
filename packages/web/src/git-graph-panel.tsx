@@ -88,7 +88,7 @@ export function GraphPanel({ client, cwd }: { client: Client; cwd: string }) {
   const ROW = narrow ? 44 : 28;
   const [text, setText] = useState("");
   const [author, setAuthor] = useState("");
-  const [ref, setRef] = useState(ALL);
+  const [ref, setRef] = useState(HEAD);
   const [q, setQ] = useState({ text: "", author: "" });
   useEffect(() => {
     const t = setTimeout(() => setQ({ text: text.trim(), author: author.trim() }), 300);
@@ -229,7 +229,7 @@ export function GraphPanel({ client, cwd }: { client: Client; cwd: string }) {
                 {error}
               </p>
             )}
-            {!error && !commits.length && !loading && <p className="m-auto p-4 text-muted-foreground">{filtered || ref !== ALL ? "No commits match." : "No commits yet."}</p>}
+            {!error && !commits.length && !loading && <p className="m-auto p-4 text-muted-foreground">{filtered || (ref !== ALL && ref !== HEAD) ? "No commits match." : "No commits yet."}</p>}
             <div
               ref={scroller}
               role="listbox"
