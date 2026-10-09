@@ -288,6 +288,13 @@ it("arrow keys move through the groups (roving tabindex), Home and End jump, and
   expect(document.activeElement).toBe(q("settings-group-timeline"));
 });
 
+it("tapping a group moves the focus to the Back button of the drilled-in panel", async () => {
+  const { q, pick } = await render();
+  await pick("sidebar");
+  await act(async () => void new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(q("settings-back"));
+});
+
 it("the Back button shows on the drill-in panel and returns the focus to the group in the list", async () => {
   const { q, pick } = await render();
   await pick("sidebar");
