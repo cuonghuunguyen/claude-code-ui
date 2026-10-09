@@ -96,3 +96,29 @@ it("reset text: time today, weekday otherwise, relative part", () => {
   expect(resetText(base + 26 * 3_600_000, base)).toMatch(/^Resets Fri.* \(in 1d 2h\)$/);
   expect(resetText(base - 1, base)).toBe("Resets now");
 });
+
+const set = (v?: string) => (v ? localStorage.setItem("claude-ui.usageRing", v) : localStorage.removeItem("claude-ui.usageRing"));
+afterEach(() => set());
+
+it("Usage ring shows Weekly: the weekly window's percent and ring, the popover still lists every window", async () => {
+  set("weekly");
+  const el = await render(usage);
+  expect(meter(el).textContent).toBe("44%");
+  expect(meter(el).getAttribute("aria-label")).toContain("Current week (all models) 44%");
+  await act(async () => meter(el).click());
+  expect(document.querySelectorAll('[data-testid="plan-window"]').length).toBe(3);
+});
+
+it("Usage ring shows Session while a weekly window is at its limit: session percent, limit icon and level stay", async () => {
+  set("session");
+  const el = await render({ ...usage, windows: [usage.windows[0]!, { ...usage.windows[1]!, percent: 100 }, usage.windows[2]!] });
+  expect(meter(el).textContent).toBe("55%");
+  expect(meter(el).dataset.level).toBe("limit");
+  expect(el.querySelector('[data-testid="plan-warning-icon"]')).not.toBeNull();
+});
+
+it("Usage ring shows a missing window: falls back to the highest", async () => {
+  set("session");
+  const el = await render({ ...usage, windows: usage.windows.slice(1) });
+  expect(meter(el).textContent).toBe("44%");
+});

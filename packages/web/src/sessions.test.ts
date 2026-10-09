@@ -323,16 +323,18 @@ describe("sidebar actions (GH-152)", () => {
 
   describe("sidebar view settings", () => {
     afterEach(() => localStorage.clear());
-    const def = { alwaysSelect: false, dayHeaders: true, onlyActive: false, sort: "recent" };
+    const def = { alwaysSelect: false, dayHeaders: true, layout: "default", onlyActive: false, sort: "recent" };
     it("defaults when missing, corrupt or of the wrong type", () => {
       expect(loadSidebarView()).toEqual(def);
       localStorage.setItem("claude-ui.sidebarView", "{nope");
       expect(loadSidebarView()).toEqual(def);
-      localStorage.setItem("claude-ui.sidebarView", JSON.stringify({ alwaysSelect: "yes", dayHeaders: 0, sort: 3 }));
+      localStorage.setItem("claude-ui.sidebarView", JSON.stringify({ alwaysSelect: "yes", dayHeaders: 0, sort: 3, layout: "wide" }));
       expect(loadSidebarView()).toEqual(def);
+      localStorage.setItem("claude-ui.sidebarView", JSON.stringify({ sort: "name" }));
+      expect(loadSidebarView().layout).toBe("default");
     });
     it("round-trips", () => {
-      const v = { alwaysSelect: true, dayHeaders: false, onlyActive: true, sort: "name" as const };
+      const v = { alwaysSelect: true, dayHeaders: false, layout: "classic" as const, onlyActive: true, sort: "name" as const };
       saveSidebarView(v);
       expect(loadSidebarView()).toEqual(v);
     });

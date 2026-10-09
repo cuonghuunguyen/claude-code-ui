@@ -56,6 +56,7 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 let emit: (e: unknown) => void = () => {};
 let sessionsChanged: (m: unknown) => void = () => {};
 let reconnect: () => void = () => {};
+let setStatus: (s: string) => void = () => {};
 let settingsChanged: (m: unknown) => void = () => {};
 const sent: { type: string }[] = [];
 vi.mock("./client.ts", async (orig) => ({
@@ -65,6 +66,7 @@ vi.mock("./client.ts", async (orig) => ({
     settingsChanged = opts.onSettingsChanged ?? (() => {});
     sessionsChanged = opts.onSessionsChanged ?? (() => {});
     reconnect = opts.onOpen ?? (() => {});
+    setStatus = opts.onStatus ?? (() => {});
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return { request: async (m: { type: string }) => (sent.push(m), typeof replies[m.type] === "function" ? (replies[m.type] as (m: unknown) => unknown)(m) : (replies[m.type] ?? {})), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
   },
@@ -82,7 +84,7 @@ beforeEach(async () => {
   await act(async () => root.render(<App />));
   await act(async () => {});
 });
-afterEach(() => (act(() => root.unmount()), el.remove()));
+afterEach(() => (act(() => root.unmount()), el.remove(), localStorage.clear())); // unmount flushes a draft: drop it before the next test
 
 const press = (init: KeyboardEventInit, target: EventTarget = document.body) =>
   act(async () => void target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
@@ -1014,6 +1016,47 @@ describe("a reload keeps the stored tab order while the session list is late (GH
   });
 });
 
+describe("a tab that never resolves, and moves while the list loads (GH-201)", () => {
+  const mk = (id: string, cwd: string) => ({ ...session, id, title: id.slice(0, 1), cwd });
+  const ids = { A: "aaaaaaaa-2222-3333-4444-555555555555", B: "bbbbbbbb-2222-3333-4444-555555555555", H: "dddddddd-2222-3333-4444-555555555555" };
+  afterEach(() => localStorage.removeItem("claude-ui.tabs"));
+
+  it("a tab whose subscribe fails with another code than unknown_session does not hide the group chips", async () => {
+    const { A, B, H } = ids;
+    const all = [mk(A, "/p/one"), mk(B, "/p/two")];
+    location.hash = `#${H}`;
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([A, B, H]));
+    const restore = await remount({
+      "session.list": { sessions: all, projects: ["/p/one", "/p/two"] },
+      "session.subscribe": (m: { sessionId: string }) => {
+        if (m.sessionId === H) throw Object.assign(new Error("boom"), { code: "internal" });
+        return { logEpoch: "e1", session: all.find((x) => x.id === m.sessionId) };
+      },
+    });
+    try {
+      await act(async () => {});
+      expect(el.querySelectorAll("[data-group-chip]").length).toBe(2);
+    } finally {
+      restore();
+    }
+  });
+
+  it("a move while the session list is not in is applied, not refused silently", async () => {
+    const { A, B } = ids;
+    const C = "cccccccc-2222-3333-4444-555555555555";
+    const all = [mk(A, "/p/one"), mk(B, "/p/two"), mk(C, "/p/one")];
+    location.hash = `#${A}`;
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([A, B, C]));
+    const restore = await remount({ "session.list": new Promise(() => {}), "session.subscribe": (m: { sessionId: string }) => ({ logEpoch: "e1", session: all.find((x) => x.id === m.sessionId) ?? all[0] }) });
+    try {
+      await press({ key: "ArrowRight", altKey: true, shiftKey: true }, el.querySelector(`[data-tab-id="${A}"] [role="tab"]`)!);
+      expect(JSON.parse(localStorage.getItem("claude-ui.tabs")!)).toEqual([B, A, C]);
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe("worktrees", () => {
   const main = { path: "/p/demo", branch: "main", main: true };
   const managed = "/p/demo/.claude/worktrees/x";
@@ -1337,4 +1380,19 @@ describe("idle close: holds and background follows", () => {
       restore();
     }
   });
+});
+
+it("a daemon that rejects this browser shows the pairing form in place of the session", async () => {
+  await act(async () => setStatus("unauthorized"));
+  expect(el.querySelector('[data-testid="pairing-needed"]')!.textContent).toContain("it is not paired");
+  expect(el.querySelector('[data-testid="pairing-input"]')).not.toBeNull();
+  await act(async () => setStatus("connected"));
+  expect(el.querySelector('[data-testid="pairing-needed"]')).toBeNull();
+});
+
+it("unpairing clears the prompt drafts of this browser", async () => {
+  localStorage.setItem("claude-ui.draft." + ID, "unsent");
+  localStorage.setItem("claude-ui.drafts", JSON.stringify({ [ID]: 1 }));
+  await act(async () => setStatus("unauthorized"));
+  expect(localStorage.getItem("claude-ui.draft." + ID)).toBeNull();
 });

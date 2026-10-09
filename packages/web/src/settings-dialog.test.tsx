@@ -8,6 +8,7 @@ import { SettingsDialog } from "./settings-dialog.tsx";
 import { loadSignalOnly, saveSignalOnly } from "./signal.ts";
 import { bind, resetAll } from "./keymap.ts";
 import type { TabGrouping } from "./tab-grouping.ts";
+import { WEB_VERSION } from "./version.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -17,7 +18,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ failGet = false, group, daemon = { host: "box" } as { host: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; group?: string; daemon?: { host: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
+async function render({ failGet = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
   const toggle = vi.fn();
   localStorage.removeItem("claude-ui.settingsGroup");
   if (group) localStorage.setItem("claude-ui.settingsGroup", group);
@@ -208,6 +209,18 @@ it("Sidebar section: Show only active sessions is the sidebar's own per-browser 
   expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).onlyActive).toBe(false);
 });
 
+it("Sidebar section: Layout is Default or Classic, stored in the sidebarView object and applied at once (GH-222)", async () => {
+  localStorage.clear();
+  const { q, pick } = await render();
+  await pick("sidebar");
+  expect(q("settings-sidebar-layout")!.textContent).toContain("Default");
+  await act(async () => q("settings-sidebar-layout")!.click());
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-sidebar-layout-classic]")!.click());
+  expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).layout).toBe("classic");
+  expect(q("settings-sidebar-layout")!.textContent).toContain("Classic");
+  localStorage.clear();
+});
+
 it("shows a Guide section whose Restart guide button calls onRestartGuide", async () => {
   const { q, onRestartGuide, pick } = await render();
   await pick("guide");
@@ -222,7 +235,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups: Timeline first, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Timeline", "Notifications", "Changes", "Sidebar", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits"]);
+  expect(ids).toEqual(["Timeline", "Notifications", "Changes", "Sidebar", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "About"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
 });
 
@@ -267,13 +280,20 @@ it("arrow keys move through the groups (roving tabindex), Home and End jump, and
   expect(q("settings-group-notifications")!.getAttribute("tabindex")).toBe("0");
   expect(q("settings-notifications")).not.toBeNull();
   await key("End");
-  expect(document.activeElement).toBe(q("settings-group-usageLimit"));
+  expect(document.activeElement).toBe(q("settings-group-about"));
   await key("ArrowDown");
   expect(document.activeElement).toBe(q("settings-group-timeline"));
   await key("ArrowUp");
-  expect(document.activeElement).toBe(q("settings-group-usageLimit"));
+  expect(document.activeElement).toBe(q("settings-group-about"));
   await key("Home");
   expect(document.activeElement).toBe(q("settings-group-timeline"));
+});
+
+it("tapping a group moves the focus to the Back button of the drilled-in panel", async () => {
+  const { q, pick } = await render();
+  await pick("sidebar");
+  await act(async () => void new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(q("settings-back"));
 });
 
 it("the Back button shows on the drill-in panel and returns the focus to the group in the list", async () => {
@@ -385,10 +405,44 @@ it("the In-app switch is on by default, writes the per-browser choice and tells 
   const { q, pick } = await render();
   await pick("notifications");
   expect(q("settings-in-app")?.getAttribute("aria-checked")).toBe("true");
+  expect(document.getElementById(q("settings-in-app")!.getAttribute("aria-describedby")!)?.textContent).toContain("Kept in this browser");
   await act(async () => q("settings-in-app")!.click());
   expect(localStorage.getItem("claude-ui.inAppNotifications")).toBe("off");
   expect(q("settings-in-app")?.getAttribute("aria-checked")).toBe("false");
+  expect(heard).toEqual([false]);
   await act(async () => q("settings-in-app")!.click());
   expect(heard).toEqual([false, true]);
   window.removeEventListener("claude-ui:in-app", on);
+});
+
+it("About, the last group, shows the web version and the daemon's as selectable text, with no extra request", async () => {
+  const { q, pick, calls } = await render({ daemon: { host: "box", version: "1.2.3" } });
+  const before = calls.length;
+  await pick("about");
+  const about = q("settings-about")!;
+  expect(about.textContent).toContain("Web app");
+  expect(q("settings-about-web")!.textContent).toBe(WEB_VERSION);
+  expect(q("settings-about-daemon")!.textContent).toBe("1.2.3");
+  expect(getComputedStyle(q("settings-about-web")!).userSelect).not.toBe("none");
+  expect(calls.length).toBe(before);
+});
+
+it("About omits the daemon version when an older daemon does not send it", async () => {
+  const { q, pick } = await render();
+  await pick("about");
+  expect(q("settings-about-web")).not.toBeNull();
+  expect(q("settings-about-daemon")).toBeNull();
+});
+
+it("Usage limits: Usage ring shows is a per-browser choice, Highest usage by default, and sends no settings.set", async () => {
+  localStorage.removeItem("claude-ui.usageRing");
+  const { q, calls, pick } = await render();
+  await pick("usageLimit");
+  expect(q("settings-usage-ring")?.textContent).toContain("Highest usage");
+  await act(async () => q("settings-usage-ring")!.click());
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-usage-ring-weekly]")!.click());
+  expect(localStorage.getItem("claude-ui.usageRing")).toBe("weekly");
+  expect(q("settings-usage-ring")?.textContent).toContain("Weekly");
+  expect(calls.some((c) => c.type === "settings.set")).toBe(false);
+  localStorage.removeItem("claude-ui.usageRing");
 });

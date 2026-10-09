@@ -3,7 +3,7 @@
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { TabsBar, type TabInfo } from "./tabs-bar.tsx";
+import { CHIP_HOVER_DELAY_MS, TabsBar, type TabInfo } from "./tabs-bar.tsx";
 import { NEW_TAB } from "./tabs.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -123,29 +123,31 @@ it("compact: a middle click on a menu item closes that tab and keeps the menu", 
   expect(items().length).toBe(2);
 });
 
-it("compact: hovering the chip opens the menu after a short delay", async () => {
+it("compact: hovering the chip opens the menu at once, with no opening animation", async () => {
   const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
   const c = chip(el, A);
   for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove"]) {
     await act(async () => void c.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, { bubbles: true, pointerType: "mouse" } as PointerEventInit)));
   }
-  expect(items().length).toBe(0);
-  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
-  expect(items().length).toBe(0);
-  await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
   expect(items().length).toBe(2);
+  // The popup fades and scales out on close only: no starting-style that is not the resting look.
+  const cls = document.querySelector('[data-testid="tab-group-menu"]')!.className;
+  expect(cls).toContain("data-ending-style:opacity-0");
+  expect(cls).not.toContain("data-starting-style:opacity-0");
+  expect(cls).not.toContain("data-starting-style:scale-95");
+  expect(CHIP_HOVER_DELAY_MS).toBe(0);
 });
 
-it("compact: a pointer passing over the chip (gone within 50 ms) opens no menu", async () => {
+it("compact: leaving the chip closes the hover menu", async () => {
   const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
   const c = chip(el, A);
   const fire = async (types: string[]) => {
     for (const type of types) await act(async () => void c.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, { bubbles: true, pointerType: "mouse" } as PointerEventInit)));
   };
   await fire(["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove"]);
-  await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+  expect(items().length).toBe(2);
   await fire(["pointerout", "pointerleave", "mouseout", "mouseleave"]);
-  await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
   expect(items().length).toBe(0);
 });
 

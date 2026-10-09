@@ -115,6 +115,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "fs.search"; cwd: string; query: string }
   /** Content search (docs/spec.md "Wire protocol"): streams `sessions.search.result`, then the reply SessionsSearchResult. A new search on the connection cancels the running one; a query under MIN_SEARCH_CHARS only cancels. */
   | { type: "sessions.search"; query: string; cwd?: string }
+  /** Liveness probe: answered with `{}` by the daemon itself (never routed to a side). The page sends it after waking to find a zombie socket. */
+  | { type: "ping" }
   /** The daemon's VAPID public key, for `PushManager.subscribe()`. */
   | { type: "push.key" }
   | { type: "push.subscribe"; subscription: WebPushSubscription }
@@ -421,7 +423,7 @@ export type WorkerModeSetting = (typeof WORKER_MODES)[number];
 export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean } };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
-export type SettingsResult = { settings: Settings; daemon?: { host: string; desktopForcedOff?: true } };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true } };
 export type ConfigKind = "mcp" | "plugins" | "skills";
 /** `McpServerStatus.status` of the SDK. */
 export type McpStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";
