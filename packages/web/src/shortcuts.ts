@@ -17,6 +17,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "file.open", title: "Open file", group: "General", key: "mod+p" },
   { id: "settings.open", title: "Open settings", group: "General", key: "mod+," },
   { id: "shortcuts.open", title: "Keyboard shortcuts", group: "General", key: "mod+/" },
+  { id: "notifications.focus", title: "Go to notifications", group: "General", key: "mod+alt+n" },
   { id: "session.new", title: "New session", group: "Tabs", key: "mod+shift+s" },
   // The browser keeps Ctrl+Tab and Ctrl+W (OpenCode's other tab keys) for its own tabs.
   { id: "tab.prev", title: "Previous tab", group: "Tabs", key: "mod+alt+arrowleft" },

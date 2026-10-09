@@ -4,7 +4,7 @@ import { useState } from "react";
 import { DownloadIcon } from "lucide-react";
 import type { ServerMessage, UpdateState } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
-import { TOAST_FRAME } from "./toast.tsx";
+import { TOAST_CARD } from "./toast.tsx";
 
 export type UpdateInfo = { version: string; current: string; state?: UpdateState };
 export type UpdateMessage = Extract<ServerMessage, { type: "update_available" | "update_state" }>;
@@ -73,7 +73,7 @@ export function UpdateToast({ update, request }: { update: UpdateInfo; request: 
   const actions: [string, () => void][] =
     error || !phase ? [[error ? "Try again" : "Update and restart", install], ["Not yet", notYet]] : phase === "waiting" ? [["Restart now", () => void request({ type: "update.restart", now: true }).catch(fail)]] : [];
   return (
-    <div role="status" data-testid="update-toast" className={`${TOAST_FRAME} flex items-start gap-2.5`}>
+    <div role="status" data-testid="update-toast" className={`${TOAST_CARD} flex items-start gap-2.5`}>
       <DownloadIcon aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <p className="truncate text-[13px] leading-5 font-medium">{title}</p>

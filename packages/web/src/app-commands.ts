@@ -57,6 +57,8 @@ export type CommandContext = {
   openFocus?: () => void;
   /** Opens Focus on the next waiting request; none while nothing waits. */
   nextWaiting?: () => void;
+  /** Moves focus to the newest in-app notification card; none while no card shows (GH-158). */
+  focusNotifications?: () => void;
   /** Toggles Signal only, the browser-wide setting (GH-205). */
   toggleSignalOnly: () => void;
   /** Opens the Settings dialog. */
@@ -99,6 +101,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     cmd("shortcuts.open", "Keyboard shortcuts", c.openShortcuts),
     c.openFocus && cmd("focus.open", "Open Focus", c.openFocus),
     c.nextWaiting && cmd("focus.next", "Next waiting request", c.nextWaiting),
+    c.focusNotifications && cmd("notifications.focus", "Go to notifications", c.focusNotifications),
     cmd("settings.open", "Open settings", c.openSettings),
     cmd("guide.start", "Show guide", c.startGuide),
     cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar),

@@ -1672,6 +1672,27 @@ describe("daemon", () => {
     }
   });
 
+  it("settings.get and settings.set replies name the daemon's host, and say when desktop notifications were turned off at start (GH-158)", async () => {
+    const run = async (extra: object) => {
+      const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, ...extra });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        const got = await c.request({ type: "settings.get" });
+        const set = await c.request({ type: "settings.set", patch: { notifications: { desktop: false } } });
+        return [got, set];
+      } finally {
+        d.close();
+      }
+    };
+    const [got, set] = await run({ host: "box" });
+    expect(got).toMatchObject({ result: { settings: { notifications: { desktop: true } }, daemon: { host: "box" } } });
+    expect((got as { result: { daemon: object } }).result.daemon).not.toHaveProperty("desktopForcedOff");
+    expect(set).toMatchObject({ result: { settings: { notifications: { desktop: false } }, daemon: { host: "box" } } });
+    const [forced] = await run({ host: "box", desktopForcedOff: true });
+    expect(forced).toMatchObject({ result: { daemon: { host: "box", desktopForcedOff: true } } });
+  });
+
   describe("added projects", () => {
     const cwdOf = (n: string) => mkdtempSync(join(webRoot, `${n}-`));
     const sid = (n: number) => `0b2c3d4e-5f60-4718-8a9b-${String(n).padStart(12, "0")}`;
@@ -2610,6 +2631,54 @@ describe("push", () => {
     const none = await daemon();
     expect(await none.c.request({ type: "push.key" })).toMatchObject({ code: "push_unavailable" });
     none.d.close();
+  });
+
+  it("push.focus covered: the sessions an in-app page shows cards for get no push; an empty push.focus and a closed socket lift it; bad values are refused (GH-158)", async () => {
+    const f = fakePush();
+    const { d, c } = await daemon(f.push);
+    try {
+      const create = async () => ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      const covered = await create();
+      const other = await create();
+      for (const id of [covered, other]) await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      for (const bad of ["x", [1], Array.from({ length: 2001 }, () => "a"), ["a".repeat(201)]])
+        expect(await c.request({ type: "push.focus", covered: bad })).toMatchObject({ code: "bad_request" });
+      await c.request({ type: "push.focus", covered: [covered] });
+      await c.request({ type: "session.prompt", sessionId: covered, text: "run tests" });
+      await c.waitFor((m) => m.type === "event" && m.sessionId === covered && m.part.type === "permission_request");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(f.sent).toEqual([]);
+      // Not covered: pushed as before.
+      await c.request({ type: "session.prompt", sessionId: other, text: "run tests" });
+      await vi.waitFor(() => expect(f.sent).toHaveLength(1));
+      expect(f.sent[0]!.sessionId).toBe(other);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("push.focus without covered lifts the suppression, and so does closing the connection that set it (GH-158)", async () => {
+    const f = fakePush();
+    const { d, c } = await daemon(f.push);
+    try {
+      const create = async () => ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      const a = await create();
+      const b = await create();
+      for (const id of [a, b]) await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      const page = await client((d.address() as AddressInfo).port);
+      await page.request({ type: "push.focus", covered: [a, b] });
+      await page.request({ type: "push.focus", covered: [a] });
+      await page.request({ type: "push.focus" });
+      await c.request({ type: "session.prompt", sessionId: a, text: "run tests" });
+      await vi.waitFor(() => expect(f.sent.map((p) => p.sessionId)).toEqual([a]));
+      await page.request({ type: "push.focus", covered: [b] });
+      page.ws.close();
+      await new Promise((r) => setTimeout(r, 50));
+      await c.request({ type: "session.prompt", sessionId: b, text: "run tests" });
+      await vi.waitFor(() => expect(f.sent.map((p) => p.sessionId)).toEqual([a, b]));
+    } finally {
+      d.close();
+    }
   });
 
   it("a request handler that throws fails that request (internal_error) and the daemon keeps running", async () => {

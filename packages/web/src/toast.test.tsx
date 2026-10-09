@@ -2,7 +2,8 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { Toast } from "./toast.tsx";
+import { StaleToast } from "./stale-toast.tsx";
+import { Toast, ToastRegion } from "./toast.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const reduced = (on: boolean) => (window.matchMedia = ((q: string) => ({ matches: on && q.includes("reduce"), media: q })) as never);
@@ -26,13 +27,34 @@ async function mount() {
 }
 
 // OpenCode toast-v2: 320px from 600px up (right 32 / bottom 48), full width with 16px offsets at 600px and below.
-it("is full width at phone widths and 320px from 600px up", async () => {
-  await mount();
-  const c = toast().className;
+it("sits in the toast region: full width at phone widths and 320px from 600px up", async () => {
+  const root = createRoot(el);
+  await act(async () => root.render(<ToastRegion><Toast message="hi" onClose={onClose} /></ToastRegion>));
+  const c = el.querySelector('[data-testid="toast-region"]')!.className;
   expect(c).toContain("w-[calc(100vw-2rem)]");
   expect(c).toContain("min-[601px]:w-80");
   expect(c).toContain("min-[601px]:right-8");
   expect(c).toContain("min-[601px]:bottom-12");
+  // The card itself is not positioned: the region places it.
+  expect(toast().className).not.toContain("fixed");
+});
+
+it("two toasts at once stack in one region instead of covering each other (GH-158)", async () => {
+  const root = createRoot(el);
+  await act(async () =>
+    root.render(
+      <ToastRegion>
+        <Toast message="first" onClose={onClose} />
+        <StaleToast note="n" onDismiss={() => {}} />
+      </ToastRegion>,
+    ),
+  );
+  const region = el.querySelector('[data-testid="toast-region"]')!;
+  expect(region.className).toContain("flex-col-reverse");
+  expect(region.className).toContain("gap-2");
+  expect(region.querySelectorAll('[data-testid="toast"], [data-testid="stale-toast"]')).toHaveLength(2);
+  expect(region.className).toContain("pointer-events-none");
+  expect(toast().className).toContain("pointer-events-auto");
 });
 
 it("slides and fades in, and out before it closes (280ms transform, 160ms opacity; none under reduced motion)", async () => {

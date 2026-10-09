@@ -16,7 +16,7 @@ import { projectName } from "./tabs.ts";
 import { toolSummary } from "./tools.ts";
 
 /** Re-renders every `ms`: the wait times tick. */
-function useNow(ms: number) {
+export function useNow(ms: number) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), ms);

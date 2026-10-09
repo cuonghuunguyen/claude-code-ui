@@ -7,7 +7,7 @@ import { createSettings, DEFAULTS } from "../src/settings.ts";
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" }, usageLimit: { autoContinue: false } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -115,4 +115,22 @@ it("usageLimit.autoContinue defaults off, is saved when on, refuses a non-boolea
   s.set({ usageLimit: { autoContinue: true } });
   expect(createSettings({ file: f }).get().usageLimit).toEqual({ autoContinue: true });
   expect(() => s.set({ usageLimit: { autoContinue: "yes" as never } })).toThrow("Continue automatically after a usage limit resets must be on or off");
+});
+
+it("notifications.desktop is on by default, off is stored and read, true is not stored, a non-boolean in the file falls back (GH-158)", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.get().notifications).toEqual({ desktop: true });
+  expect(s.set({ notifications: { desktop: false } }).notifications).toEqual({ desktop: false });
+  expect(createSettings({ file: f }).get().notifications.desktop).toBe(false);
+  s.set({ notifications: { desktop: true } });
+  expect(JSON.parse(readFileSync(f, "utf8")).notifications?.desktop).toBeUndefined();
+  writeFileSync(f, JSON.stringify({ notifications: { desktop: "no" } }));
+  expect(createSettings({ file: f }).get().notifications.desktop).toBe(true);
+});
+
+it("a notifications patch with a non-boolean or an unknown field is refused", () => {
+  const s = createSettings({ file: file() });
+  expect(() => s.set({ notifications: { desktop: "x" as never } })).toThrow("Desktop notifications must be on or off");
+  expect(() => s.set({ notifications: { foo: true } as never })).toThrow("unknown setting notifications.foo");
 });
