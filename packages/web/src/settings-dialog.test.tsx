@@ -411,3 +411,16 @@ it("About omits the daemon version when an older daemon does not send it", async
   expect(q("settings-about-web")).not.toBeNull();
   expect(q("settings-about-daemon")).toBeNull();
 });
+
+it("Usage limits: Usage ring shows is a per-browser choice, Highest usage by default, and sends no settings.set", async () => {
+  localStorage.removeItem("claude-ui.usageRing");
+  const { q, calls, pick } = await render();
+  await pick("usageLimit");
+  expect(q("settings-usage-ring")?.textContent).toContain("Highest usage");
+  await act(async () => q("settings-usage-ring")!.click());
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-usage-ring-weekly]")!.click());
+  expect(localStorage.getItem("claude-ui.usageRing")).toBe("weekly");
+  expect(q("settings-usage-ring")?.textContent).toContain("Weekly");
+  expect(calls.some((c) => c.type === "settings.set")).toBe(false);
+  localStorage.removeItem("claude-ui.usageRing");
+});

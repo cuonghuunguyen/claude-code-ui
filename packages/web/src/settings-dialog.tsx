@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
 import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
 import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
+import { USAGE_RINGS, saveUsageRing, useUsageRing, type UsageRing } from "./usage-ring.ts";
 import { GuideSection } from "./guide-settings.tsx";
 import { AboutSection } from "./about-settings.tsx";
 import { saveSignalOnly, useSignalOnly } from "./signal.ts";
@@ -37,6 +38,31 @@ const saveGroup = (id: string) => {
 };
 
 type Group = { id: string; title: string; body: ReactNode };
+
+/** The titlebar usage ring's window (per browser); a row of the Usage limits group. */
+function UsageRingRow() {
+  const ring = useUsageRing();
+  return (
+    <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11" data-testid="settings-usage-ring-row">
+      <div className="min-w-0 flex-1">
+        <span id="settings-usage-ring-label" className="block text-sm">Usage ring shows</span>
+        <span id="settings-usage-ring-hint" className="block text-muted-foreground text-xs">The window the titlebar ring and percent show. The warning color and icon always follow the worst window. Kept in this browser.</span>
+      </div>
+      <Select value={ring} onValueChange={(v) => v && saveUsageRing(v as UsageRing)}>
+        <SelectTrigger aria-labelledby="settings-usage-ring-label" aria-describedby="settings-usage-ring-hint" data-testid="settings-usage-ring" className="w-40 max-md:data-[size=default]:h-11">
+          <SelectValue>{(v: UsageRing) => USAGE_RINGS.find((r) => r.value === v)?.label ?? v}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {USAGE_RINGS.map((r) => (
+            <SelectItem key={r.value} value={r.value} data-testid={`settings-usage-ring-${r.value}`}>
+              {r.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
 
 /** The Signal only row (GH-205): one browser-wide preference, also toggled by the palette command and its shortcut. */
 function TimelineSection() {
@@ -392,7 +418,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         ]
       : []),
     ...(onRestartGuide ? [{ id: "guide", title: "Guide", body: <GuideSection onRestart={onRestartGuide} /> }] : []),
-    ...SECTIONS.map((sec) => ({ id: sec.id, title: sec.title, body: daemonSection(sec) })),
+    ...SECTIONS.map((sec) => ({ id: sec.id, title: sec.title, body: sec.id === "usageLimit" ? <>{daemonSection(sec)}<UsageRingRow /></> : daemonSection(sec) })),
     { id: "about", title: "About", body: <AboutSection daemonVersion={daemon?.version} /> },
   ];
   const selected = groups.find((g) => g.id === pick) ?? groups[0]!;
