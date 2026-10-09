@@ -4,8 +4,10 @@
 // whose folders it lists (VS Code's "Connect to WSL", then the folder); Docker lists the containers first.
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Dialog } from "@base-ui/react/dialog";
-import { BoxIcon, FolderIcon, LoaderCircleIcon, SearchIcon, XIcon } from "lucide-react";
+import { BoxIcon, FolderIcon, SearchIcon, XIcon } from "lucide-react";
 import { LOCAL_SIDE, type FsEntry, type RecentProject, type SideInfo } from "@claude-ui/protocol";
+import { SidePanel, type PanelState, type RunMode } from "./side-panel.tsx";
+import type { SideCheck, SidePhase, SideSetup } from "./side-check-types.ts";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -19,7 +21,8 @@ import { defaultTarget, fromMnt, fromWslUnc, kindsOf, loadSide, loadSideFor, loc
 
 /**
  * `list()`: the roots; `list(path)`: the entries of a directory inside them; `side`: of that side. `onPick` rejects when the
- * daemon refuses. `sides`: every side (more than one shows the chooser); `onStartSide` sets one up, rejecting with the next step.
+ * daemon refuses. `sides`: every side (more than one shows the chooser); `onCheckSide` is the read-only check of a side;
+ * `onStartSide` sets one up (`setup` absent: a daemon without side.check), rejecting with the next step.
  */
 export function OpenProjectDialog({
   open,
@@ -30,6 +33,7 @@ export function OpenProjectDialog({
   finalFocus,
   sides,
   onStartSide,
+  onCheckSide,
   sideOf = () => LOCAL_SIDE,
 }: {
   open: boolean;
@@ -37,7 +41,8 @@ export function OpenProjectDialog({
   list: (path?: string, side?: string) => Promise<FsEntry[]>;
   onPick: (cwd: string, side?: string) => Promise<unknown>;
   sides?: SideInfo[];
-  onStartSide?: (side: string) => Promise<unknown>;
+  onStartSide?: (side: string, setup?: SideSetup) => Promise<unknown>;
+  onCheckSide?: (side: string) => Promise<SideCheck>;
   /** Side of a recent project. */
   sideOf?: (cwd: string) => string;
   /** Projects that are not added but have sessions, newest first: offered above the folders (OpenCode's "Recent projects"). */
@@ -81,7 +86,7 @@ export function OpenProjectDialog({
             </Dialog.Close>
           </div>
           {sides && sides.length > 1 ? (
-            <SidePicker input={input} list={list} onPick={pick} recent={recent} sides={sides} onStartSide={onStartSide} sideOf={sideOf} />
+            <SidePicker input={input} list={list} onPick={pick} recent={recent} sides={sides} onStartSide={onStartSide} onCheckSide={onCheckSide} sideOf={sideOf} />
           ) : (
             <Browser input={input} list={list} onPick={pick} recent={recent} />
           )}
@@ -92,9 +97,10 @@ export function OpenProjectDialog({
 }
 
 /**
- * The side chooser (kind row, distro or container dropdown) and the browser of the chosen side (default: the last used). A side
- * that is not running starts when chosen: "Setting up" until it is ready, or what to do and Retry. Docker asks for the container
- * first and sets up nothing until one is picked. A typed path of another side switches to it.
+ * The side chooser (kind row; below it the distro or container dropdown) and the browser of the chosen side (default: the last
+ * used). A side that is not running is only checked (read-only) when chosen: the panel shows the result and the Install, Update or
+ * Start button; nothing is installed without it. The exception is the remembered side that is installed: it starts at once (setup
+ * never). Docker asks for the container first. A typed path of another side switches to it and only checks it.
  */
 function SidePicker({
   input,
@@ -103,6 +109,7 @@ function SidePicker({
   recent = [],
   sides,
   onStartSide,
+  onCheckSide,
   sideOf,
 }: {
   input: React.RefObject<HTMLInputElement | null>;
@@ -110,7 +117,8 @@ function SidePicker({
   onPick: (cwd: string, side?: string) => Promise<unknown>;
   recent?: RecentProject[];
   sides: SideInfo[];
-  onStartSide?: (side: string) => Promise<unknown>;
+  onStartSide?: (side: string, setup?: SideSetup) => Promise<unknown>;
+  onCheckSide?: (side: string) => Promise<SideCheck>;
   sideOf: (cwd: string) => string;
 }) {
   // The chosen kind and, for WSL and Docker, its side; Docker without one shows the container list.
@@ -122,7 +130,10 @@ function SidePicker({
   const [start, setStart] = useState<{ value?: string; n: number }>({ n: 0 });
   // Started here: ready before the next session list says so.
   const [started, setStarted] = useState<Set<string>>(new Set());
-  const [status, setStatus] = useState<{ side: string; error?: string }>();
+  const [panels, setPanels] = useState<Record<string, PanelState>>({});
+  const patch = (id: string, p: PanelState) => setPanels((all) => ({ ...all, [id]: { ...all[id], ...p } }));
+  // The Browser's folder input takes the focus once the side became ready through a button here.
+  const focusInput = useRef(false);
   const [targetOpen, setTargetOpen] = useState(false);
   const targetTrigger = useRef<HTMLButtonElement>(null);
   const kinds = kindsOf(sides);
@@ -133,22 +144,42 @@ function SidePicker({
   const side = current?.id;
   const isReady = (s: SideInfo) => s.id === LOCAL_SIDE || started.has(s.id) || s.state === "ready";
   const ready = !!current && isReady(current);
-  const choose = async (id: string, value?: string) => {
+  /** Runs `side.start` for a button (or the remembered installed side). "plain": no setup field, for a daemon without side.check. */
+  const run = async (id: string, mode: RunMode) => {
+    if (!onStartSide) return;
+    patch(id, { busy: { mode }, error: undefined });
+    try {
+      await (mode === "plain" ? onStartSide(id) : onStartSide(id, mode));
+      focusInput.current = true;
+      setStarted((s) => new Set(s).add(id));
+      patch(id, { busy: undefined, error: undefined, failed: undefined });
+    } catch (e) {
+      patch(id, { busy: undefined, error: (e as Error).message, failed: mode });
+    }
+  };
+  /** The read-only check. `auto`: the remembered side, which starts when it turns out installed. */
+  const runCheck = async (id: string, auto = false) => {
+    if (!onCheckSide) return patch(id, { legacy: true, checking: false });
+    patch(id, { checking: true, checkError: undefined, legacy: false });
+    try {
+      const check = await onCheckSide(id);
+      patch(id, { checking: false, check });
+      if (check.verdict === "running") setStarted((s) => new Set(s).add(id));
+      else if (auto && check.verdict === "installed") void run(id, "never");
+    } catch (e) {
+      const err = e as Error & { code?: string };
+      patch(id, err.code === "unknown_type" ? { checking: false, legacy: true } : { checking: false, checkError: err.message });
+    }
+  };
+  const choose = (id: string, value?: string) => {
     const k = sideKind(id);
     setChosen({ kind: k, target: id });
     saveSide(id);
     if (k !== "local") saveSideFor(k, id);
     setStart((s) => ({ value, n: s.n + 1 }));
     const to = sides.find((s) => s.id === id);
-    if (id === LOCAL_SIDE || started.has(id) || to?.state === "ready" || !onStartSide) return setStatus(undefined);
-    setStatus({ side: id });
-    try {
-      await onStartSide(id);
-      setStarted((s) => new Set(s).add(id));
-      setStatus((s) => (s?.side === id ? undefined : s));
-    } catch (e) {
-      setStatus((s) => (s?.side === id ? { side: id, error: (e as Error).message } : s));
-    }
+    if (id === LOCAL_SIDE || started.has(id) || to?.state === "ready" || to?.state === "starting" || panels[id]?.busy) return;
+    void runCheck(id);
   };
   const chooseKind = (k: SideKind) => {
     if (k === kind) return;
@@ -157,13 +188,16 @@ function SidePicker({
     if (to) return void choose(to.id);
     // Docker: the user picks the container, nothing starts.
     setChosen({ kind: k });
-    setStatus(undefined);
   };
   // The side used before per-kind memory existed becomes its kind's remembered one (leaving it for another kind keeps it).
   useEffect(() => void (current && kind !== "local" && saveSideFor(kind, current.id)), []);
-  // The last used side, not running: start it (a failed one waits for Retry).
-  useEffect(() => void (current && !ready && current.state !== "error" && choose(current.id)), []);
-  const shown = !current ? undefined : status?.side === side ? status : !ready && current.state === "error" ? { side: current.id, error: current.message ?? `${current.label} is not running.` } : undefined;
+  // The last used side, not running: check it; installed, it starts (setup never) and opens. A failed one shows its message and is checked under it.
+  useEffect(() => void (current && !ready && current.state !== "starting" && runCheck(current.id, current.state !== "error")), []);
+  useEffect(() => {
+    if (!ready || !focusInput.current) return;
+    focusInput.current = false;
+    input.current?.focus();
+  });
   const winLocal = localIsWindows(sides);
   /** A path of another side: switch to it with the path typed (Windows hub only: there is no Docker path syntax). */
   const onTyped = (v: string) => {
@@ -198,16 +232,21 @@ function SidePicker({
     targetTrigger.current?.focus();
   };
   const members = sides.filter((s) => sideKind(s.id) === kind);
-  const stateWord = (s: SideInfo) => (isReady(s) ? undefined : status?.side === s.id ? (status.error ? "Error" : "Setting up…") : s.state === "error" ? "Error" : s.state === "starting" ? "Setting up…" : "Not set up");
+  const stateWord = (s: SideInfo) => {
+    const p = panels[s.id];
+    return isReady(s) ? undefined : p?.busy || s.state === "starting" ? "Setting up…" : p?.error || s.state === "error" ? "Error" : "Not set up";
+  };
   const kindLabel = (k: SideKind) => (k === "local" ? (sides.find((s) => s.id === LOCAL_SIDE)?.label ?? "This machine") : k === "wsl" ? "WSL" : "Docker");
   return (
     <>
       <div className="flex items-center gap-1 px-3 pb-2 max-md:flex-wrap">
         <KindRow kinds={kinds} kind={kind} label={kindLabel} onChoose={chooseKind} />
-        {kind !== "local" && (
+      </div>
+      {kind !== "local" && current && (
+        <div className="flex items-center gap-1 px-3 pb-2 max-md:flex-wrap">
           <Select value={side ?? null} onValueChange={(id) => id && choose(id)} open={targetOpen} onOpenChange={setTargetOpen}>
             <SelectTrigger ref={targetTrigger} aria-label={kind === "wsl" ? "WSL distro" : "Docker container"} size="sm" className="min-w-0 max-w-full max-md:h-11! max-md:flex-1" data-testid="side-target">
-              <span className={cn("truncate", !current && "text-muted-foreground")}>{current ? sideName(current) : "Choose container"}</span>
+              <span className="truncate">{sideName(current)}</span>
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] rounded-md p-0.5" onKeyDown={onPopupKey}>
               {members.map((s) => (
@@ -218,26 +257,12 @@ function SidePicker({
               ))}
             </SelectContent>
           </Select>
-        )}
-      </div>
+        </div>
+      )}
       {!current ? (
         <ContainerStep input={input} containers={members} stateWord={stateWord} isReady={isReady} onPick={(id) => void choose(id)} />
-      ) : shown ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-6 py-8 text-center text-sm *:first:mt-auto *:last:mb-auto" role={shown.error ? "alert" : "status"} data-testid="side-status">
-          {shown.error ? (
-            <>
-              <p className="max-h-[min(12rem,40dvh)] w-full max-w-md shrink-0 select-text overflow-y-auto text-destructive [overflow-wrap:anywhere]">{shown.error}</p>
-              <Button size="sm" onClick={() => choose(current.id)} className="shrink-0 max-md:h-11" data-testid="side-retry">
-                Retry
-              </Button>
-            </>
-          ) : (
-            <p className="flex items-center gap-2 text-muted-foreground">
-              <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
-              Setting up {current.label}…
-            </p>
-          )}
-        </div>
+      ) : !ready ? (
+        <SidePanel key={current.id} side={current as SideInfo & { phase?: SidePhase }} state={panels[current.id] ?? {}} onRun={(m) => void run(current.id, m)} onCheck={() => void runCheck(current.id)} />
       ) : (
         <Browser
           key={`${side}:${start.n}`}
