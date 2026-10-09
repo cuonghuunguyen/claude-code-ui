@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Event } from "@claude-ui/protocol";
-import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, queuedQuery, Session, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
+import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, INTERRUPT_GRACE_MS, queuedQuery, Session, STALE_TURN_MS, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
 import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped } from "./fake-query.ts";
 
@@ -1845,10 +1845,11 @@ describe("Session background work", () => {
   const log = (events: Event[]) => events.filter((e) => e.part.type === "session_state").map((e) => { const p = e.part as { state: string; working?: true }; return p.working ? `${p.state}+working` : p.state; });
 
   /** A prompted session whose query yields what the test sends; `send` waits until `expected` states are logged. */
-  async function setup() {
+  async function setup(opts: ConstructorParameters<typeof Session>[1] = {}) {
     let next!: (m: unknown) => void;
-    const query = () => Object.assign((async function* () { for (;;) yield await new Promise((r) => (next = r)); })(), { supportedCommands: async () => [], stopTask: async () => {}, close() {} });
-    const s = started({ query: query as never });
+    let options!: Options;
+    const query = (a: { options: Options }) => (options = a.options) && Object.assign((async function* () { for (;;) yield await new Promise((r) => (next = r)); })(), { supportedCommands: async () => [], stopTask: async () => {}, interrupt: async () => {}, close() {} });
+    const s = started({ ...opts, query: query as never });
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
     await until(events, () => !!next);
@@ -1859,7 +1860,7 @@ describe("Session background work", () => {
       await new Promise<void>((r) => { const t = setInterval(() => next !== was && (clearInterval(t), r()), 2); });
       expect(log(events)).toEqual(expected);
     };
-    return { s, events, send };
+    return { s, events, send, options: () => options };
   }
   const bg = async (send: Awaited<ReturnType<typeof setup>>["send"]) => {
     await send(call("agent-bg", "Agent", { description: "Sweep", run_in_background: true }), ["running"]);
@@ -1947,6 +1948,287 @@ describe("Session background work", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // GH-239: an Artifact publish arms the CLI's comment monitor, a monitor_ws task flagged ambient that lives as long as the artifact
+  // is watched; it never gets a task_notification while the CLI is idle.
+  const level = (...tasks: { task_id: string; ambient?: boolean }[]) => ({ type: "system", subtype: "background_tasks_changed", uuid: randomUUID(), session_id: "x", tasks: tasks.map((t) => ({ task_type: "local_agent", description: "d", ...t })) });
+
+  it("an ambient task (the Artifact comment monitor) is no background work: the turn ends idle without working (GH-239)", async () => {
+    const { s, send } = await setup();
+    await send(call("art-1", "Artifact", { action: "publish" }), ["running"]);
+    await send(task("task_started", "m1", "art-1", { description: "Artifact comments", task_type: "monitor_ws", ambient: true }), ["running"]);
+    await send(result(), ["running", "idle"]);
+    expect(s.working()).toBe(false);
+  });
+
+  it("a background task the background_tasks_changed level drops ends its working after the wait without its notification (GH-239)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { events, send } = await setup();
+      await send(level({ task_id: "t1" }), ["running"]);
+      await bg(send);
+      await send(result(), ["running", "idle+working"]);
+      await send(level(), ["running", "idle+working"]);
+      vi.advanceTimersByTime(CLI_TURN_WAIT_MS);
+      expect(log(events)).toEqual(["running", "idle+working", "idle"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a level that drops a task before its notification does not flash idle: the CLI's own turn follows (GH-239)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { events, send } = await setup();
+      await send(level({ task_id: "t1" }), ["running"]);
+      await bg(send);
+      await send(result(), ["running", "idle+working"]);
+      await send(level(), ["running", "idle+working"]);
+      await send(done("t1", "agent-bg"), ["running", "idle+working", "idle+working"]);
+      await send(say(), ["running", "idle+working", "idle+working", "running"]);
+      vi.advanceTimersByTime(CLI_TURN_WAIT_MS);
+      await send(result(), ["running", "idle+working", "idle+working", "running", "idle"]);
+      expect(log(events)).toEqual(["running", "idle+working", "idle+working", "running", "idle"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a level that flags a tracked task ambient drops it; a foreground run the level never named stays (GH-239)", async () => {
+    const { s, send } = await setup();
+    await send(call("agent-fg", "Agent", { description: "Sweep" }), ["running"]);
+    await send(task("task_started", "t0", "agent-fg", { is_backgrounded: false }), ["running"]);
+    await bg(send);
+    await send(level({ task_id: "t1", ambient: true }), ["running"]);
+    expect(await s.stopSubagent("agent-bg")).toBe(false);
+    expect(await s.stopSubagent("agent-fg")).toBe(true);
+  });
+
+  it("a task the level names again within the wait stays; so does a new run started on the same call (GH-239)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { s, events, send } = await setup();
+      await send(level({ task_id: "t1" }), ["running"]);
+      await bg(send);
+      await send(result(), ["running", "idle+working"]);
+      await send(level(), ["running", "idle+working"]);
+      await send(level({ task_id: "t1" }), ["running", "idle+working"]);
+      vi.advanceTimersByTime(CLI_TURN_WAIT_MS);
+      expect(log(events).at(-1)).toBe("idle+working");
+      expect(await s.stopSubagent("agent-bg")).toBe(true);
+      // The level drops t1 and its notification ends it; a new task of the same call starts before the wait is over.
+      await send(level(), ["running", "idle+working"]);
+      await send(done("t1", "agent-bg"), ["running", "idle+working", "idle+working"]);
+      await send(task("task_started", "t2", "agent-bg", { is_backgrounded: true }), ["running", "idle+working", "idle+working"]);
+      vi.advanceTimersByTime(CLI_TURN_WAIT_MS);
+      expect(await s.stopSubagent("agent-bg")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a task whose ambient flag turns false is tracked again (GH-239)", async () => {
+    const { s, send } = await setup();
+    await send(call("art-1", "Artifact", { action: "publish" }), ["running"]);
+    await send(task("task_started", "m1", "art-1", { task_type: "monitor_ws", ambient: true }), ["running"]);
+    await send(result(), ["running", "idle"]);
+    await send(level({ task_id: "m1" }), ["running", "idle", "idle+working"]);
+    expect(await s.stopSubagent("art-1")).toBe(true);
+    await send(level({ task_id: "m1", ambient: true }), ["running", "idle", "idle+working", "idle"]);
+  });
+
+  describe("Stop on an idle session that still counts background work (GH-239)", () => {
+    it("drops the tasks the CLI's level does not name and shows idle", async () => {
+      const { s, events, send } = await setup();
+      // A run whose task_notification the session missed: it is in no level.
+      await send(call("agent-x", "Agent", { description: "Lost" }), ["running"]);
+      await send(task("task_started", "t9", "agent-x", { is_backgrounded: false }), ["running"]);
+      await send(result(), ["running", "idle+working"]);
+      await s.interrupt();
+      expect(log(events)).toEqual(["running", "idle+working", "idle"]);
+      expect(s.working()).toBe(false);
+    });
+
+    it("keeps a background run the level still names", async () => {
+      const { s, events, send } = await setup();
+      await send(level({ task_id: "t1" }), ["running"]);
+      await bg(send);
+      await send(call("agent-x", "Agent", { description: "Lost" }), ["running"]);
+      await send(task("task_started", "t9", "agent-x", { is_backgrounded: false }), ["running"]);
+      await send(result(), ["running", "idle+working"]);
+      await s.interrupt();
+      expect(log(events)).toEqual(["running", "idle+working", "idle+working"]);
+      expect(await s.stopSubagent("agent-bg")).toBe(true);
+      expect(await s.stopSubagent("agent-x")).toBe(false);
+    });
+  });
+
+  describe("a turn whose end the session missed (GH-239 safety net)", () => {
+    const reply = (stop_reason: string) => ({ type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "assistant", stop_reason, content: [{ type: "text", text: "x" }] } });
+    const sys = (subtype: string, extra = {}) => ({ type: "system", subtype, uuid: randomUUID(), session_id: "x", ...extra });
+    /** A prompted session whose turn streamed one reply and then nothing; `end` is the transcript end each check reads. */
+    const quiet = async (end: () => Promise<{ size: number; last?: unknown }>, busy = () => false) => {
+      const ctx = await setup({ cliTurnRunning: busy, transcriptEnd: end as never });
+      await ctx.send(say(), ["running"]);
+      return ctx;
+    };
+    const ended = (size = 100) => async () => ({ size, last: reply("end_turn") });
+    const flush = () => new Promise((r) => setImmediate(r));
+    const fake = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    it("goes idle after two quiet checks that find the CLI idle and the same transcript ending with end_turn", async () => {
+      fake();
+      try {
+        const { events } = await quiet(ended());
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS);
+        await flush();
+        expect(log(events).at(-1)).toBe("running");
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS);
+        await until(events, () => log(events).at(-1) === "idle");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a transcript that grew between the checks needs another quiet check", async () => {
+      fake();
+      try {
+        let size = 100;
+        const { events } = await quiet(async () => ({ size: size++, last: reply("end_turn") }));
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS * 2);
+        await flush();
+        expect(log(events).at(-1)).toBe("running");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stays running while the transcript's turn is open (a long tool call)", async () => {
+      fake();
+      try {
+        const { events } = await quiet(async () => ({ size: 1, last: reply("tool_use") }));
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS * 3);
+        await flush();
+        expect(log(events).at(-1)).toBe("running");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stays running while the CLI reports the session busy", async () => {
+      fake();
+      try {
+        const { events } = await quiet(ended(), () => true);
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS * 3);
+        await flush();
+        expect(log(events).at(-1)).toBe("running");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stays running during a compaction (status compacting until compact_boundary)", async () => {
+      fake();
+      try {
+        const { events, send } = await quiet(ended());
+        await send(sys("status", { status: "compacting" }), ["running"]);
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS * 3);
+        await flush();
+        expect(log(events).at(-1)).toBe("running");
+        await send(sys("compact_boundary", { compact_metadata: { trigger: "manual", pre_tokens: 1 } }), ["running"]);
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS * 2);
+        await until(events, () => log(events).at(-1) === "idle");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stays running while a hook runs (hook_started without its hook_response); the query asks for hook events", async () => {
+      fake();
+      try {
+        const { events, send, options } = await quiet(ended());
+        expect(options().includeHookEvents).toBe(true);
+        await send(sys("hook_started", { hook_id: "h1", hook_name: "Stop", hook_event: "Stop" }), ["running"]);
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS * 3);
+        await flush();
+        expect(log(events).at(-1)).toBe("running");
+        await send(sys("hook_response", { hook_id: "h1", hook_name: "Stop", hook_event: "Stop", output: "", stdout: "", stderr: "", outcome: "success" }), ["running"]);
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS * 2);
+        await until(events, () => log(events).at(-1) === "idle");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a stream message that arrives during the transcript read keeps the turn running", async () => {
+      fake();
+      try {
+        let release!: () => void;
+        let reads = 0;
+        const end = async () => {
+          if (++reads === 2) await new Promise<void>((r) => (release = r));
+          return { size: 100, last: reply("end_turn") };
+        };
+        const { events, send } = await quiet(end);
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS * 2);
+        await until(events, () => !!release);
+        await send(sys("status", { status: null }), ["running"]);
+        release();
+        await flush();
+        expect(log(events).at(-1)).toBe("running");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a permission request that arrives during the transcript read keeps it waiting for the answer", async () => {
+      fake();
+      try {
+        let release!: () => void;
+        let reads = 0;
+        const end = async () => {
+          if (++reads === 2) await new Promise<void>((r) => (release = r));
+          return { size: 100, last: reply("end_turn") };
+        };
+        const { events, options } = await quiet(end);
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS * 2);
+        await until(events, () => !!release);
+        void options().canUseTool!("Bash", { command: "rm -rf x" }, { signal: new AbortController().signal, toolUseID: "tu-1", suggestions: [] } as never);
+        await until(events, () => log(events).includes("needs_input"));
+        release();
+        await flush();
+        expect(log(events).at(-1)).toBe("needs_input");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("Stop resets it within seconds: the idle CLI sends no result for the interrupt", async () => {
+      fake();
+      try {
+        const { s, events } = await quiet(ended());
+        await s.interrupt();
+        await vi.advanceTimersByTimeAsync(INTERRUPT_GRACE_MS);
+        await until(events, () => log(events).at(-1) === "idle");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("close() clears the quiet check", async () => {
+      fake();
+      try {
+        let reads = 0;
+        const { s } = await quiet(async () => (reads++, { size: 1, last: reply("end_turn") }));
+        const closing = s.close();
+        await vi.advanceTimersByTimeAsync(STALE_TURN_MS * 3);
+        await closing;
+        expect(reads).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getSessionMessages } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
-import { cliTurnRunning, JsonlTail } from "../src/transcript.ts";
+import { cliTurnRunning, JsonlTail, transcriptEnd } from "../src/transcript.ts";
 
 const line = (o: object) => JSON.stringify(o) + "\n";
 
@@ -65,5 +65,24 @@ describe("cliTurnRunning", () => {
     expect(cliTurnRunning(claudeDir, "s1")).toBe(false);
     writeFileSync(join(claudeDir, "sessions", "7.json"), "{not json");
     expect(cliTurnRunning(claudeDir, "s1")).toBe(false);
+  });
+});
+
+describe("transcriptEnd (GH-239)", () => {
+  const rec = (type: string, extra = {}) => line({ type, uuid: `${type}-${Math.random()}`, ...extra });
+  it("gives the size and the last main-chain user or assistant record; skips subagent records, other types and a cut last line", async () => {
+    const file = join(mkdtempSync(join(tmpdir(), "end-")), "t.jsonl");
+    const text = rec("user") + rec("assistant", { message: { stop_reason: "end_turn" } }) + rec("assistant", { isSidechain: true }) + rec("artifact-autoreact-ledger") + '{"type":"user","cut';
+    writeFileSync(file, text);
+    const end = await transcriptEnd(file);
+    expect(end.size).toBe(Buffer.byteLength(text));
+    expect(end.last).toMatchObject({ type: "assistant", message: { stop_reason: "end_turn" }, parent_tool_use_id: null });
+  });
+
+  it("reads only the tail: a record before it is not found, a cut first line is skipped", async () => {
+    const file = join(mkdtempSync(join(tmpdir(), "end-")), "t.jsonl");
+    writeFileSync(file, rec("assistant") + rec("summary", { pad: "x".repeat(200) }));
+    expect((await transcriptEnd(file, 100)).last).toBeUndefined();
+    expect((await transcriptEnd(file)).last?.type).toBe("assistant");
   });
 });

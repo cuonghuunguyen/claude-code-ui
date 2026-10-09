@@ -22,7 +22,7 @@ import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
 import { createPlugins, redact, type PluginsRequest } from "./plugins.ts";
 import { searchTranscripts } from "./content-search.ts";
-import { cliTurnRunning, interleaveRuns, JsonlTail } from "./transcript.ts";
+import { cliTurnRunning, interleaveRuns, JsonlTail, transcriptEnd } from "./transcript.ts";
 import { createRouter, type SideSocket, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUpdater, type Updater } from "./update.ts";
@@ -394,6 +394,8 @@ export function createDaemon(opts: {
     uploadDir: uploadParent,
     query: opts.query,
     readTranscript,
+    // The stale-turn check reads only the transcript's tail, not the chain and its subagent runs (GH-239).
+    transcriptEnd: (id: string, cwd: string) => transcriptEnd(transcriptFile(projectsDir, transcriptCwd(id, cwd), id)),
     cliTurnRunning: (id: string) => cliTurnRunning(claudeDir, id),
     // Only the fields this change set: a daemon on another port may have changed the others of the same session (GH-91).
     onSettings: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => saveSettings(() => settings.set(id, s, fields)),

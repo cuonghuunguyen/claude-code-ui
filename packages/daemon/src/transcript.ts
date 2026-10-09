@@ -114,11 +114,42 @@ export class JsonlTail {
   }
 }
 
+/** What the stale-turn check reads of a transcript: its size and its last main-chain user or assistant record. */
+export type TranscriptEnd = { size: number; last?: SessionMessage };
+
+/**
+ * The end of a JSONL transcript without parsing all of it (GH-239): the file size and the last record of type user or assistant
+ * that is not a subagent's (`isSidechain`), from the last `tailBytes`. None found there (a huge last record): no `last`.
+ */
+export async function transcriptEnd(file: string, tailBytes = 256 * 1024): Promise<TranscriptEnd> {
+  const fh = await open(file, "r");
+  try {
+    const { size } = await fh.stat();
+    const from = Math.max(0, size - tailBytes);
+    const buf = Buffer.alloc(size - from);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, from);
+    const lines = buf.toString("utf8", 0, bytesRead).split("\n");
+    for (let i = lines.length - 1; i >= (from ? 1 : 0); i--) {
+      try {
+        const r = JSON.parse(lines[i]!) as { type?: string; isSidechain?: boolean; uuid?: string; message?: unknown };
+        if ((r.type === "user" || r.type === "assistant") && !r.isSidechain) return { size, last: { ...r, parent_tool_use_id: null } as unknown as SessionMessage };
+      } catch {
+        // A cut last line (a write in progress), or not JSON.
+      }
+    }
+    return { size };
+  } finally {
+    await fh.close();
+  }
+}
+
 /**
  * Whether a running Claude Code process reports a turn of this session: each interactive CLI writes
  * `<claudeDir>/sessions/<pid>.json` with its `sessionId` and `status` (`busy`, `waiting` for a permission prompt, `idle`).
  * A file of an exited process stays behind, so the PID must be alive. A CLI without `status` (before 2.1.2xx) counts as not running.
  * `anyStatus`: whether any live CLI process runs the session, idle too (SDK-spawned CLIs write the file as well, entrypoint `sdk-ts`).
+ * Probed (GH-239, CLI 2.1.285): an SDK-spawned CLI writes `busy` from its init through a turn, a silent 6 s Bash call and a
+ * background task included, `idle` at the result, and removes the file when its query closes.
  * ponytail: a reused PID of a stale file reads as alive; compare `procStart` if that shows up.
  */
 export function cliTurnRunning(claudeDir: string, sessionId: string, anyStatus = false) {
