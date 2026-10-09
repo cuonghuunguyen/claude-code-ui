@@ -105,8 +105,12 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const [saving, setSaving] = useState(false);
   // "Show only active sessions": the sidebar's own per-browser setting (its options menu writes it too).
   const [onlyActive, setOnlyActive] = useState(() => loadSidebarView().onlyActive);
+  const [layout, setLayout] = useState(() => loadSidebarView().layout);
   useEffect(() => {
-    const sync = () => setOnlyActive(loadSidebarView().onlyActive);
+    const sync = () => {
+      setOnlyActive(loadSidebarView().onlyActive);
+      setLayout(loadSidebarView().layout);
+    };
     sync();
     window.addEventListener(VIEW_EVENT, sync);
     return () => window.removeEventListener(VIEW_EVENT, sync);
@@ -318,6 +322,21 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           <span id="settings-sidebar-active-hint" className="block text-muted-foreground text-xs">Lists sessions that are running or need input. Search still finds every session, and the one you have open stays listed. Kept in this browser.</span>
         </div>
         <Switch on={onlyActive} label="Show only active sessions" held={false} onToggle={(on) => saveSidebarView({ ...loadSidebarView(), onlyActive: on })} title="Show only active sessions" describedBy="settings-sidebar-active-hint" testId="settings-sidebar-active-only" />
+      </div>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-sidebar-layout-label" className="block text-sm">Layout</span>
+          <span id="settings-sidebar-layout-hint" className="block text-muted-foreground text-xs">Default groups a project's sessions by worktree. Classic lists them directly under the project, with each session's state as text. Kept in this browser.</span>
+        </div>
+        <Select value={layout} onValueChange={(v) => v && saveSidebarView({ ...loadSidebarView(), layout: v as "default" | "classic" })}>
+          <SelectTrigger aria-labelledby="settings-sidebar-layout-label" aria-describedby="settings-sidebar-layout-hint" data-testid="settings-sidebar-layout" className="w-40 max-md:data-[size=default]:h-11">
+            <SelectValue>{(v: string) => (v === "classic" ? "Classic" : "Default")}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="default" data-testid="settings-sidebar-layout-default">Default</SelectItem>
+            <SelectItem value="classic" data-testid="settings-sidebar-layout-classic">Classic</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
     </section>
       ),
