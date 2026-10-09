@@ -225,6 +225,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
   const { q, onRestartGuide, pick } = await render();
   await pick("guide");
   expect(q("settings-guide")!.textContent).toContain("Guided tour");
+  expect(document.getElementById("settings-guide-tour-hint")!.textContent).toMatch(/Kept in this browser\.$/);
   const button = q("settings-guide-restart") as HTMLButtonElement;
   expect(button.textContent).toBe("Restart guide");
   expect(button.getAttribute("aria-describedby")).toBe("settings-guide-tour-hint");

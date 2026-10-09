@@ -143,6 +143,15 @@ export const STEPS: GuideStep[] = [
     body: "Settings › Guide restarts this tour.",
     side: "right",
   },
+  {
+    id: "shortcuts",
+    chapter: "session",
+    anchors: [],
+    title: "All shortcuts",
+    body: "Every shortcut in one list. You can rebind any of them, the tmux-style prefix key included.",
+    keys: ["shortcuts.open"],
+    action: { label: "Show all shortcuts", run: "openShortcuts" },
+  },
 ];
 
 const byId = new Map(STEPS.map((s) => [s.id, s]));

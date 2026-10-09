@@ -270,7 +270,7 @@ export function App() {
   const guideDecided = useRef(false);
   const [guideReady, setGuideReady] = useState(false);
   const guideStep = useRef<string>(undefined);
-  const [guideRun, setGuideRun] = useState<{ n: number; ids: string[]; chapters: ChapterId[]; start?: string; from?: "settings" }>();
+  const [guideRun, setGuideRun] = useState<{ n: number; ids: string[]; chapters: ChapterId[]; start?: string; from?: "settings" | "palette" }>();
   const [update, setUpdate] = useState<UpdateInfo>();
   // The daemon's "runs older code" note; a dismissed note stays hidden until the page reloads.
   const [stale, setStale] = useState<string>();
@@ -1312,31 +1312,32 @@ export function App() {
     nextWaiting: waiting.length ? () => (open(FOCUS_TAB), setFocusSel(nextWaiting(waiting, activeId === FOCUS_TAB ? focusSel ?? waiting[0]?.part.id : undefined)?.part.id)) : undefined,
     toggleSignalOnly: () => saveSignalOnly(!loadSignalOnly()),
     openSettings: () => setSettingsOpen(true),
-    startGuide: () => startGuide(),
+    startGuide: () => startGuide("palette"),
     openMcp: project ? () => openMcp() : undefined,
     openSkills: project ? openSkills : undefined,
     openPlugins: project ? openPlugins : undefined,
   });
-  // Guided tour. The tour gets its key text only from here; the palette rows carry the keys.
+  // Guided tour. The tour gets its key text only from here (the user's keymap, not the palette rows).
   const sessionIdle = !!shown && shownState(view) === "idle";
   const guideHost: GuideHost = {
     // The user's own bindings (a rebound or removed key shows as such); App re-renders on a keymap change.
     keyOf: (id) => specOf(id),
     openProject: () => (setDrawer(false), setOpeningProject(true)),
     openSettings: () => setSettingsOpen(true),
+    openShortcuts: () => setShortcutsOpen(true),
     closeDrawer: () => setDrawer(false),
   };
-  const startRun = (chapter: ChapterId, from?: "settings") => {
+  const startRun = (chapter: ChapterId, from?: "settings" | "palette") => {
     const ids = stepsFor(chapter, { session: !!shown, git: isGit, narrow: !wide(768) }).map((s) => s.id);
     const step = guideState.current?.step;
     setGuideRun((r) => ({ n: (r?.n ?? 0) + 1, ids, chapters: chaptersOf(ids), start: step && ids.includes(step) ? step : undefined, from }));
   };
   // Settings > Guide > Restart guide and the palette's "Show guide": both chapters pending again, from the first step.
-  const startGuide = (from?: "settings") => {
+  const startGuide = (from?: "settings" | "palette") => {
     guideState.current = restartGuide(guideState.current ?? decideFirstUse(false, 0));
     saveGuide(guideState.current);
     setGuideReady(true);
-    if (from) setSettingsOpen(false);
+    if (from === "settings") setSettingsOpen(false);
     setDrawer(false);
     startRun("basics", from);
   };
@@ -1862,7 +1863,18 @@ export function App() {
           onStep={(id) => ((guideStep.current = id), guideState.current && saveGuide((guideState.current = withStep(guideState.current, id))))}
           onEnd={endGuide}
           // Started from Settings: the focus goes back to its button (a closed drawer has none on a phone: the prompt box).
-          returnFocus={guideRun.from === "settings" ? () => [...document.querySelectorAll<HTMLElement>('[data-testid="open-settings"]')].find((b) => isVisible(b)) ?? shownPrompt() : undefined}
+          // Started from the palette: back to where it was opened from, else the prompt box, else the New session button.
+          returnFocus={
+            guideRun.from === "settings"
+              ? () => [...document.querySelectorAll<HTMLElement>('[data-testid="open-settings"]')].find((b) => isVisible(b)) ?? shownPrompt()
+              : guideRun.from === "palette"
+                ? () => {
+                    const o = paletteOpener.current;
+                    // Opened with nothing focused and no session shown: the New session button, so the focus is never lost to the page.
+                    return o instanceof HTMLElement && o !== document.body && o.isConnected && isVisible(o) ? o : shownPrompt() ?? [...document.querySelectorAll<HTMLElement>('[data-testid="tab-new"]')].find((b) => isVisible(b));
+                  }
+                : undefined
+          }
         />
       )}
       {quickOpen && shown && (

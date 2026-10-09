@@ -19,7 +19,7 @@ let host: HTMLElement;
 let root: ReturnType<typeof createRoot>;
 let opener: HTMLButtonElement;
 const keys: Record<string, string> = { "palette.open": "mod+k", "session.new": "mod+shift+s" };
-const guestHost: GuideHost = { keyOf: (id) => keys[id], openProject: vi.fn(), openSettings: vi.fn() };
+const guestHost: GuideHost = { keyOf: (id) => keys[id], openProject: vi.fn(), openSettings: vi.fn(), openShortcuts: vi.fn() };
 
 beforeEach(() => {
   reduced = false;
@@ -262,4 +262,25 @@ it("walking every step with no anchor visible (panel hidden) never crashes, and 
     if (id === "terminal") expect(pop().textContent).toContain("A shell in the project folder");
     if (id !== "replay") await key("ArrowRight");
   }
+});
+
+it("the shortcuts step offers Show all shortcuts: it opens the dialog through the host and ends the tour as done", async () => {
+  const openShortcuts = vi.fn();
+  const { onEnd } = await show({ ids: ["replay", "shortcuts"], start: "shortcuts", host: { ...guestHost, openShortcuts, keyOf: (id) => ({ "shortcuts.open": "mod+/" })[id] } });
+  expect(pop().textContent).toContain("Step 2 of 2");
+  expect([...q("guide-keys")!.querySelectorAll("kbd span")].map((s) => s.textContent)).toEqual(["Ctrl", "/"]);
+  await click("Show all shortcuts");
+  expect(openShortcuts).toHaveBeenCalledOnce();
+  expect(onEnd).toHaveBeenCalledWith("done");
+});
+
+it("a key rebound while a step shows changes its chips at once, and a removed key hides the line", async () => {
+  const props = { ids: IDS, start: "new-session", narrow: false, onEnd: () => {}, visible: () => true };
+  const chips = () => [...q("guide-keys")!.querySelectorAll("kbd span")].map((s) => s.textContent);
+  await act(async () => root.render(<GuideTour {...props} host={{ ...guestHost, keyOf: () => "mod+shift+s" }} />));
+  expect(chips()).toEqual(["Ctrl", "Shift", "S"]);
+  await act(async () => root.render(<GuideTour {...props} host={{ ...guestHost, keyOf: () => "mod+alt+n" }} />));
+  expect(chips()).toEqual(["Ctrl", "Alt", "N"]);
+  await act(async () => root.render(<GuideTour {...props} host={{ ...guestHost, keyOf: () => undefined }} />));
+  expect(q("guide-keys")).toBeNull();
 });

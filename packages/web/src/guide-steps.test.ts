@@ -46,16 +46,19 @@ describe("step data", () => {
 
 describe("chapter Your session", () => {
   const withSession = { session: true, git: true, narrow: false };
-  it("has six steps in a git work tree and five outside it (no git graph)", () => {
-    expect(stepsFor("session", withSession).map((s) => s.id)).toEqual(["tabs", "files", "changes", "graph", "terminal", "replay"]);
-    expect(stepsFor("session", { ...withSession, git: false }).map((s) => s.id)).toEqual(["tabs", "files", "changes", "terminal", "replay"]);
+  it("has seven steps in a git work tree and six outside it (no git graph), ending on the shortcuts step", () => {
+    expect(stepsFor("session", withSession).map((s) => s.id)).toEqual(["tabs", "files", "changes", "graph", "terminal", "replay", "shortcuts"]);
+    expect(stepsFor("session", { ...withSession, git: false }).map((s) => s.id)).toEqual(["tabs", "files", "changes", "terminal", "replay", "shortcuts"]);
   });
-  it("Basics with a session shown carries on into it without its end card: 11 steps, 10 outside git", () => {
+  it("the shortcuts step shows the key of the Keyboard shortcuts dialog and offers a button that opens it", () => {
+    expect(stepById("shortcuts")).toMatchObject({ chapter: "session", anchors: [], keys: ["shortcuts.open"], action: { label: "Show all shortcuts", run: "openShortcuts" } });
+  });
+  it("Basics with a session shown carries on into it without its end card: 12 steps, 11 outside git", () => {
     const ids = stepsFor("basics", withSession).map((s) => s.id);
-    expect(ids).toHaveLength(11);
+    expect(ids).toHaveLength(12);
     expect(ids).not.toContain("basics-end");
     expect(ids.slice(0, 5)).toEqual(["welcome", "project", "new-session", "sidebar", "palette"]);
-    expect(stepsFor("basics", { ...withSession, git: false })).toHaveLength(10);
+    expect(stepsFor("basics", { ...withSession, git: false })).toHaveLength(11);
     expect(chaptersOf(ids)).toEqual(["basics", "session"]);
     expect(chaptersOf(stepsFor("basics", ctx).map((s) => s.id))).toEqual(["basics"]);
   });

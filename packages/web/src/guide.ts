@@ -14,7 +14,7 @@ export type GuideState = {
 };
 
 /** Actions a step may offer as a button. */
-export type GuideActions = { openProject: () => void };
+export type GuideActions = { openProject: () => void; openShortcuts: () => void };
 /** What the tour needs from the app. `keyOf` is the only way it gets key text. */
 export type GuideHost = GuideActions & {
   /** Key spec ("mod+k") of a command id, undefined when it has none. */
