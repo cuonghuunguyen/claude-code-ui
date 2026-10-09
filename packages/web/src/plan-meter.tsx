@@ -4,6 +4,7 @@ import { Popover } from "@base-ui/react/popover";
 import { TriangleAlertIcon } from "lucide-react";
 import type { PlanUsage, PlanWindow } from "@claude-ui/protocol";
 import { Ring } from "./context-meter.tsx";
+import { ringWindow, useUsageRing } from "./usage-ring.ts";
 
 /** A window at or past this percent shows the warning state, also when the server still grades it normal. */
 const WARN_PERCENT = 80;
@@ -121,7 +122,8 @@ export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bo
 
 export function PlanMeter({ usage }: { usage: PlanUsage }) {
   const level = planLevel(usage);
-  const head = headline(usage.windows, level);
+  // Settings > Usage limits > Usage ring shows: the number and ring follow the chosen window; level, color and icon stay with the worst one.
+  const head = ringWindow(usage.windows, useUsageRing()) ?? headline(usage.windows, level);
   const limited = usage.status === "rejected";
   const summary = limited
     ? `Plan usage: ${lower(limitText(usage))}${usage.statusResetsAt ? `, ${lower(resetText(usage.statusResetsAt))}` : ""}`
