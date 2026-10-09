@@ -2,6 +2,55 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.5.0 - 2026-10-09
+
+### Added
+
+- Install as an app on Android and iOS: HTTPS through `--tailscale`, PNG and apple-touch icons, offline shell caching, reconnect on wake, a pairing field, and prompt drafts that survive a reload ([#177](https://github.com/cuonghuunguyen/claude-code-ui/issues/177)).
+- Focus page: one place for every session that needs you ([#159](https://github.com/cuonghuunguyen/claude-code-ui/issues/159)).
+- In-app notifications, with a Notifications group in Settings ([#158](https://github.com/cuonghuunguyen/claude-code-ui/issues/158)).
+- Interactive guide on first use: a skippable tour of projects, tabs, files, diff, git, terminal and keyboard shortcuts ([#156](https://github.com/cuonghuunguyen/claude-code-ui/issues/156)).
+- Keyboard shortcuts: one registry, Alt+1..9 to switch tabs, an Alt+A prefix and a shortcuts dialog ([#155](https://github.com/cuonghuunguyen/claude-code-ui/issues/155)).
+- Shortcut recorder handles AltGr brackets, Option on Mac, Alt+numpad and editing keys ([#195](https://github.com/cuonghuunguyen/claude-code-ui/issues/195)).
+- Compact tabs switch: tabs group into chips with a menu listing the group's sessions and their state ([#154](https://github.com/cuonghuunguyen/claude-code-ui/issues/154)).
+- Close a tab group with a middle click, the menu or a shortcut; on the phone, swipe to close tabs and to switch tabs ([#209](https://github.com/cuonghuunguyen/claude-code-ui/issues/209)).
+- Sidebar classic layout: sessions listed under each project with their state ([#222](https://github.com/cuonghuunguyen/claude-code-ui/issues/222)).
+- Projects header actions like IntelliJ: select the active session, expand or collapse all, options menu ([#152](https://github.com/cuonghuunguyen/claude-code-ui/issues/152)).
+- Changes panel can diff the session, your uncommitted work or a branch ([#148](https://github.com/cuonghuunguyen/claude-code-ui/issues/148)).
+- Markdown formatting buttons in the prompt box and markdown with colored code in your own messages ([#153](https://github.com/cuonghuunguyen/claude-code-ui/issues/153)).
+- Image thumbnails keep their shape and open in a lightbox ([#207](https://github.com/cuonghuunguyen/claude-code-ui/issues/207)).
+- TodoWrite card shows its todo list after the turn ends ([#230](https://github.com/cuonghuunguyen/claude-code-ui/issues/230)).
+- Copy response button on every finished assistant turn ([#151](https://github.com/cuonghuunguyen/claude-code-ui/issues/151)).
+- Cards for Artifact, ArtifactComments and ArtifactData calls ([#101](https://github.com/cuonghuunguyen/claude-code-ui/issues/101)).
+- `/resume` opens session search filtered to the current project ([#100](https://github.com/cuonghuunguyen/claude-code-ui/issues/100)).
+- Sessions stopped by the plan usage limit continue by themselves after the reset (setting) ([#164](https://github.com/cuonghuunguyen/claude-code-ui/issues/164)).
+- Usage ring setting: choose which usage window the titlebar ring shows.
+- Settings: a two-pane dialog with a group list, and an About group with the web app and daemon versions.
+- The terminal panel shows Nerd Font icons ([#149](https://github.com/cuonghuunguyen/claude-code-ui/issues/149)).
+
+### Changed
+
+- Signal only is one switch in Settings instead of a per-session control ([#205](https://github.com/cuonghuunguyen/claude-code-ui/issues/205)).
+- One Stop button, in the prompt box, and more room to read the transcript on phones ([#165](https://github.com/cuonghuunguyen/claude-code-ui/issues/165), [#166](https://github.com/cuonghuunguyen/claude-code-ui/issues/166)).
+- `/clear` keeps your prompt box and shows the new session at once ([#150](https://github.com/cuonghuunguyen/claude-code-ui/issues/150)).
+- Open project picks WSL or Docker from one row and a dropdown ([#161](https://github.com/cuonghuunguyen/claude-code-ui/issues/161)).
+- Compact tab chip: the group menu opens at once on hover ([#206](https://github.com/cuonghuunguyen/claude-code-ui/issues/206)).
+- Graph: the branch filter defaults to HEAD.
+- Reinstall builds the new install in a temporary folder and keeps the old one until the new one runs ([#197](https://github.com/cuonghuunguyen/claude-code-ui/issues/197)).
+- Orchestration: a coordinator can stop workers, read-only git commands are low risk, and the worker mode is a setting ([#163](https://github.com/cuonghuunguyen/claude-code-ui/issues/163)).
+
+### Fixed
+
+- Tab order stays put after reloading the page, and a tab that never resolves no longer hides group chips ([#196](https://github.com/cuonghuunguyen/claude-code-ui/issues/196), [#201](https://github.com/cuonghuunguyen/claude-code-ui/issues/201)).
+- A session no longer stays "running" after its last turn ended ([#239](https://github.com/cuonghuunguyen/claude-code-ui/issues/239)).
+- Docker side: installing claude-ui works on containers with a read-only file system, and errors name the missing file ([#231](https://github.com/cuonghuunguyen/claude-code-ui/issues/231)).
+- A WSL or Docker side without the SDK's Linux binary is installed again.
+- Scrolling a session with long code prompts no longer stutters ([#188](https://github.com/cuonghuunguyen/claude-code-ui/issues/188)).
+- Colored code in your messages: a very long line, an error or a failed load no longer freezes the page ([#202](https://github.com/cuonghuunguyen/claude-code-ui/issues/202)).
+- Settings and dialogs: Tab moves from the group list into the panel on desktop and skips controls in closed sections ([#214](https://github.com/cuonghuunguyen/claude-code-ui/issues/214), [#216](https://github.com/cuonghuunguyen/claude-code-ui/issues/216)).
+- Notifications: focus no longer jumps into a card ([#217](https://github.com/cuonghuunguyen/claude-code-ui/issues/217)).
+- Header diff stats never run repository diff drivers; the session list no longer blocks the daemon.
+
 ## 0.4.1 - 2026-10-07
 
 ### Added
