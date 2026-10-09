@@ -1,6 +1,6 @@
 // Docker sides (docs/spec.md "Sides"): discovery of running Linux containers and the copy of this claude-ui's package into one.
 import { execFile } from "node:child_process";
-import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { runCommand, type Runner } from "./update.ts";
 
@@ -97,22 +97,58 @@ export async function prepareDockerSide(o: { name: string; pkgDir: string; key: 
 
 /** Directories tried in order; "HOME" is the container user's $HOME. */
 const DEST_DIRS = ["/tmp", "/dev/shm", "HOME"];
-const COPY_SCRIPT = 'd=$1; if [ "$d" = HOME ]; then d=$HOME; fi; [ -n "$d" ] || exit 3; f="$d/$2"; cat > "$f" || { rm -f "$f"; exit 1; }; echo "$f"';
+const CP_DIR = "/tmp";
+/** $1 dir, $2 file name, $3 expected size: a stream cut off midway (size differs) is removed, never installed. */
+const COPY_SCRIPT =
+  'd=$1; if [ "$d" = HOME ]; then d=$HOME; fi; [ -n "$d" ] || exit 3; f="$d/$2"; cat > "$f" || { rm -f "$f"; exit 1; }; n=$(wc -c < "$f" | tr -d " \t"); if [ "$n" != "$3" ]; then rm -f "$f"; echo "size mismatch: wrote ${n:-?} of $3 bytes to $f" >&2; exit 4; fi; echo "$f"';
+const INSPECT_FORMAT = '{{.HostConfig.ReadonlyRootfs}}{{"\n"}}{{range .Mounts}}{{.Destination}} {{.RW}}{{"\n"}}{{end}}{{json .HostConfig.Tmpfs}}';
+
+/** Whether `docker cp` can write CP_DIR: from the inspect output (read-only root, mounts as `<dest> <rw>` lines, the tmpfs map as JSON on the last line). undefined: not parseable. */
+export function cpUsable(out: string): boolean | undefined {
+  const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const root = lines[0];
+  if ((root !== "true" && root !== "false") || lines.length < 2) return undefined;
+  if (root === "true") return false;
+  const under = (p: string) => p === CP_DIR || CP_DIR.startsWith(p.replace(/\/+$/, "") + "/");
+  for (const l of lines.slice(1, -1)) {
+    const i = l.lastIndexOf(" ");
+    if (i < 0) return undefined;
+    if (l.slice(i + 1) !== "true" || under(l.slice(0, i))) return false;
+  }
+  try {
+    const tmpfs = JSON.parse(lines[lines.length - 1]!) as Record<string, string> | null;
+    if (tmpfs && Object.keys(tmpfs).some(under)) return false;
+  } catch {
+    return undefined;
+  }
+  return true;
+}
 
 /**
- * `docker cp` prepares the container's mounts, so it fails on a read-only root file system or read-only bind mounts even for
- * /tmp. The tarball is fed to `docker exec -i <name> sh -c 'cat > <dest>'` instead (a tmpfs /tmp or /dev/shm is writable there).
+ * `docker cp` first when the container allows it (root and mounts writable, /tmp on the plain root file system): it fails
+ * on a read-only root file system, read-only mounts and tmpfs /tmp. Otherwise, or when the cp fails, the tarball is fed to
+ * `docker exec -i <name> sh -c 'cat > <dest>'` (a tmpfs /tmp or /dev/shm is writable there) and its size is checked.
  * Resolves with the path that took it.
  */
 async function sendTarball(exec: Exec, name: string, label: string, tgz: string, file: string): Promise<string> {
+  let cpError = "";
+  const ins = await exec("docker", ["inspect", "-f", INSPECT_FORMAT, name], 10_000);
+  if (ins.code !== 0 || cpUsable(ins.stdout) !== false) {
+    const dest = `${CP_DIR}/${file}`;
+    const cp = await exec("docker", ["cp", tgz, `${name}:${dest}`], 120_000);
+    if (cp.code === 0) return dest;
+    cpError = lastLines(cp.stderr) || `exit code ${cp.code}`;
+  }
+  const size = String(statSync(tgz).size);
   const errors: string[] = [];
   for (const d of DEST_DIRS) {
-    const r = await exec("docker", ["exec", "-i", name, "sh", "-c", COPY_SCRIPT, "sh", d, file], 120_000, tgz);
+    const r = await exec("docker", ["exec", "-i", name, "sh", "-c", COPY_SCRIPT, "sh", d, file, size], 120_000, tgz);
     const path = r.stdout.trim().split(/\r?\n/).pop() ?? "";
     if (r.code === 0 && path) return path;
     errors.push(lastLines(r.stderr) || `exit code ${r.code}`);
   }
   const tried = DEST_DIRS.map((d) => (d === "HOME" ? "$HOME" : d)).join(", ");
   const why = errors.every((e) => /read-only file system/i.test(e)) ? "the container's file system is read-only (no writable /tmp, /dev/shm or home); mount a tmpfs on /tmp (docker run --tmpfs /tmp)" : errors[0]!;
-  throw new Error(`Copying claude-ui into ${label} failed: no writable path (tried ${tried}): ${why.replace(/\.$/, "")}.`);
+  const first = cpError ? `docker cp was tried first and failed (${cpError.replace(/\.$/, "")}); then docker exec: ` : "";
+  throw new Error(`Copying claude-ui into ${label} failed: ${first}no writable path (tried ${tried}): ${why.replace(/\.$/, "")}.`);
 }
