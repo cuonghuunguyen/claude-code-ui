@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Part } from "@claude-ui/protocol";
 import { applyEvent, emptySession, timeline } from "./store.ts";
-import { artifactSummary, claudeUrl, editFiles, filePath, isClaudeUrl, toolSummary } from "./tools.ts";
+import { artifactSummary, claudeUrl, editFiles, filePath, isClaudeUrl, todoItems, todoSummary, toolSummary } from "./tools.ts";
 
 const call = (id: string, tool: string, input: unknown = {}): Part => ({
   type: "tool_call",
@@ -174,5 +174,17 @@ describe("artifact tool edge cases", () => {
   });
   it("action names read as words", () => {
     expect(artifactSummary("ArtifactData", { action: "str_replace", collection: "c", doc_id: "d" })).toBe("Str replace c/d");
+  });
+});
+
+describe("todoItems / todoSummary", () => {
+  it("keeps well-formed items and counts the completed ones", () => {
+    const items = todoItems({ todos: [{ content: "a", status: "completed" }, { content: "b", status: "in_progress" }, { content: 3, status: "pending" }, null, { content: "c", status: "x" }] });
+    expect(items.map((i) => i.content)).toEqual(["a", "b"]);
+    expect(todoSummary(items)).toBe("1 of 2 todos completed");
+  });
+  it("is empty while the input is not a list", () => {
+    expect(todoItems({})).toEqual([]);
+    expect(todoItems(null)).toEqual([]);
   });
 });

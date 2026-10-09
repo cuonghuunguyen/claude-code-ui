@@ -30,6 +30,8 @@ export type CommandContext = {
   newWorktree?: () => void;
   selectTab: (id: string) => void;
   closeTab: (id: string) => void;
+  /** Closes the active tab's group (asks first for 2 or more tabs); none while the active tab is in no named group. */
+  closeGroup?: () => void;
   quickOpen: () => void;
   toggleSidebar: () => void;
   toggleSidePanel: () => void;
@@ -94,6 +96,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.tabs.length > 1 && cmd("tab.next", "Next tab", () => go(step(1))),
     c.tabs.length > 1 && cmd("tab.prev", "Previous tab", () => go(step(-1))),
     at >= 0 && cmd("tab.close", "Close tab", () => c.closeTab(c.activeId!)),
+    c.closeGroup && cmd("tab.closeGroup", "Close tab group", c.closeGroup),
     c.canReopen && cmd("tab.reopen", "Reopen closed tab", c.reopenTab),
     // Tab N: only for tabs that exist; found by typing "go to tab".
     ...Array.from({ length: Math.min(8, c.tabs.length) }, (_, i) => cmd(`tab.goto${i + 1}`, `Go to tab ${i + 1}`, () => go(c.tabs[i]!), true)),

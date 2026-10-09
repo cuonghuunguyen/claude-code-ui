@@ -2,18 +2,19 @@
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
 // Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
-import { createContext, memo, use, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
+import { createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
 import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
-import { FOCUS_TAB, NEW_TAB, avatarColor, closeTab, groupTabs, loadCollapsed, projectName, saveCollapsed, type AvatarColor } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColor, closeMany, closeTab, groupTabs, loadCollapsed, projectName, saveCollapsed, stepNoWrap, type AvatarColor } from "./tabs.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { GHOST, ROW } from "./toolbar.tsx";
 import { SideLabel } from "./sides.tsx";
+import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
 export type TabInfo = {
@@ -68,8 +69,10 @@ function TabIcon({ s, cwd }: { s: TabStatus; cwd?: string }) {
 
 const DRAG_TYPE = "application/x-claude-ui-tab";
 const GROUP_DRAG_TYPE = "application/x-claude-ui-tab-group";
-// Hover time before a compact chip opens its menu: short enough to feel direct, long enough that a pointer passing over a chip does not flash it.
-const CHIP_HOVER_DELAY_MS = 100;
+// Hover time before a compact chip opens its menu: none. Base UI's `delay` on a menu trigger is a rest time (the pointer must stop moving that long), so any value above 0 shows up as waiting; with 0 the menu opens on mouseenter. Mouse only (touch opens by tap); a drag fires no mouseenter, and the drag start closes the menu.
+export const CHIP_HOVER_DELAY_MS = 0;
+// The menu popup without its opening fade and scale (POPUP animates in over 100 ms, which read as a delay on top of the hover); closing keeps the fade.
+export const CHIP_POPUP = cn(POPUP, "max-w-80 data-starting-style:scale-100 data-starting-style:opacity-100");
 
 /**
  * Keeps the stored tab list grouped by project, also once the session cwds arrive (the strip draws groups; close, next tab and moves use this order).
@@ -88,9 +91,11 @@ export function TabsBar({
   info,
   onSelect,
   onClose,
+  onSwipeClose,
   onMove,
   onMoveGroup,
   onMoveGroupTo,
+  onCloseGroup,
   onNew,
   home,
   onHome,
@@ -112,11 +117,15 @@ export function TabsBar({
   info: (id: string) => TabInfo;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
+  /** A row of the phone switcher closed by a left swipe or Delete (the list stays open); default `onClose`. The owner can offer Undo. */
+  onSwipeClose?: (id: string) => void;
   onMove: (from: string, to: string) => void;
   /** Moves the group of a project one place left or right. */
   onMoveGroup: (cwd: string, by: -1 | 1) => void;
   /** Chip drag: the group of `from` takes the slot of the group of `to`. */
   onMoveGroupTo: (from: string, to: string) => void;
+  /** Closes a group's tabs (chip menu, middle click, Delete on the chip): `key` is the group key, `ids` its tabs in strip order. The owner asks first for 2 or more. */
+  onCloseGroup?: (key: string, ids: string[]) => void;
   onNew: () => void;
   /** Sidebar toggle (md and up), OpenCode's legacy-layout `sidebar` icon: aria-pressed while the sessions sidebar shows, no pressed fill.
    * Not OpenCode's `grid-plus`: that one opens its Home page, this one only shows and hides the sidebar. */
@@ -190,6 +199,13 @@ export function TabsBar({
     refocus.current = { id: closeTab(tabs, id, activeId ?? id).active };
     onClose(id);
   };
+  const closeGroup = (key: string) => {
+    const ids = groups.find(([k]) => k === key)?.[1];
+    if (!ids?.length) return;
+    // One tab closes at once (no dialog): focus the tab that takes over.
+    if (ids.length === 1) refocus.current = { id: closeMany(tabs, ids, activeId ?? ids[0]).active };
+    onCloseGroup?.(key, ids);
+  };
   const moveBy = (id: string, by: -1 | 1) => {
     const to = tabs[tabs.indexOf(id) + by];
     if (!to || keyOf(to) !== keyOf(id)) return;
@@ -206,6 +222,10 @@ export function TabsBar({
     ro.observe(el);
     return () => ro.disconnect();
   }, [activeId, tabs.length, collapsed]);
+  // When the last swipe on a switcher row ended: the click that follows it must not select the row (base-ui commits a selection on click).
+  const swiped = useRef(-Infinity);
+  // Vertical swipe on the switcher button: previous / next tab in the list's order (Focus first), no wrap.
+  const trigger = useTriggerSwipe(focus ? [FOCUS_TAB, ...given] : given, activeId, onSelect, swiped);
   const active = activeId && activeId !== FOCUS_TAB ? info(activeId) : undefined;
   const sideOf = use(SideLabel);
   // Below sm the session header row is gone: the switcher says where the session is, "<project or project · branch> · <side>" (GH-165).
@@ -218,6 +238,10 @@ export function TabsBar({
     const target = e.target as HTMLElement;
     const chip = target.closest<HTMLElement>("[data-group-chip]")?.dataset.groupChip;
     if (chip !== undefined) {
+      if (e.key === "Delete" && chip) {
+        e.preventDefault();
+        return closeGroup(chip);
+      }
       const by = e.altKey && e.shiftKey ? ({ ArrowLeft: -1, ArrowRight: 1 } as Record<string, -1 | 1>)[e.key] : undefined;
       if (!by) return;
       e.preventDefault();
@@ -269,7 +293,7 @@ export function TabsBar({
         {groups.map(([cwd, ids]) => (
           // `contents`: groups are no boxes, tabs shrink in the strip as before. The chip is a button inside the tablist (a11y trade-off, no group role).
           <div key={cwd} role="none" className="contents" data-testid="tab-group">
-            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} menu={compact ? { activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) } : undefined} />}
+            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} onCloseGroup={() => closeGroup(cwd)} move={{ left: groups.findIndex(([k]) => k === cwd) > 0, right: groups.findIndex(([k]) => k === cwd) < groups.length - 1, by: (by) => ((refocus.current = { group: cwd }), onMoveGroup(cwd, by)) }} menu={compact ? { activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) } : undefined} />}
             {ids
               .filter((id) => !hidden(id))
               .map((id) => {
@@ -300,21 +324,28 @@ export function TabsBar({
       </div>
       {(given.length > 0 || focus) && (
         <div className="flex h-7 min-w-0 flex-1 max-md:h-11 md:hidden">
-          <Select value={activeId ?? null} onValueChange={(v) => v && onSelect(v)}>
+          <Select
+            value={activeId ?? null}
+            onValueChange={(v, d) => (justSwiped(swiped) ? d.cancel() : v && onSelect(v))}
+            onOpenChange={(o, d) => (o ? d.reason === "trigger-press" : d.reason === "item-press") && justSwiped(swiped) && d.cancel()}
+          >
             <SelectTrigger
+              ref={trigger.ref}
               aria-label="Switch tab"
               data-testid="tab-switcher"
-              className={`${GHOST} max-md:h-11! min-w-0 flex-1 bg-secondary! px-1.5 font-medium text-foreground max-md:my-2`}
+              // touch-action none: a touch that starts here is never a browser scroll (no pull-to-refresh, no rubber band, no double-tap zoom), and the vertical swipe is ours.
+              className={`${GHOST} max-md:h-11! min-w-0 flex-1 touch-none bg-secondary! px-1.5 font-medium text-foreground max-md:my-2`}
+              {...trigger.props}
             >
               {activeId === FOCUS_TAB ? <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden /> : active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} /> : null}
-              <span className="flex min-w-0 flex-col text-left">
+              <span className="flex min-w-0 flex-col text-left" style={trigger.style}>
                 <span className="truncate" data-slot="tab-switcher-title">{activeId === FOCUS_TAB ? "Focus" : active?.titleLoading ? <TitleSkeleton title={active.title} /> : (active?.title ?? "Open tabs")}</span>
                 {active && place(active) && <span className="truncate font-normal text-muted-foreground text-xs leading-4" data-slot="tab-switcher-place">{place(active)}</span>}
               </span>
               {focus && focus.count > 0 && <span className="ml-auto flex items-center gap-1 rounded-full bg-warning px-1.5 text-background text-xs tabular-nums" data-testid="focus-badge"><CircleAlertIcon className="size-3" aria-hidden />{focus.count}</span>}
               <span className={cn("text-muted-foreground tabular-nums", !(focus && focus.count > 0) && "ml-auto")}>{given.length}</span>
             </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] rounded-md p-0.5 shadow-floating! ring-0">
+            <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] overscroll-contain rounded-md p-0.5 shadow-floating! ring-0">
               {focus && (
                 <SelectItem value={FOCUS_TAB} className={ROW}>
                   <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden />
@@ -328,14 +359,14 @@ export function TabsBar({
                 const t = info(id);
                 const label = stateNote(t) || STATUS_LABEL[status(id, t)];
                 return (
-                  <SelectItem key={id} value={id} className={ROW}>
+                  <SwipeRow key={id} id={id} swiped={swiped} onClose={onSwipeClose ?? onClose}>
                     <TabIcon s={status(id, t)} cwd={t.cwd} />
                     <span className="flex min-w-0 flex-1 flex-col">
                       {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate">{t.title}</span>}
                       {place(t) && <span className="truncate text-muted-foreground text-xs leading-4">{place(t)}</span>}
                     </span>
                     {label && <span className="text-muted-foreground text-xs leading-none">{label}</span>}
-                  </SelectItem>
+                  </SwipeRow>
                 );
               })}
             </SelectContent>
@@ -352,6 +383,203 @@ export function TabsBar({
       </IconButton>
     </div>
   );
+}
+
+const SWIPE_CLICK_MS = 400;
+const justSwiped = (at: RefObject<number>) => performance.now() - at.current < SWIPE_CLICK_MS;
+const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+type RowView = { stage: "idle" | "drag" | "settle" | "out" | "collapse"; offset: number; width: number; height: number; sign: -1 | 1 };
+
+/**
+ * A row of the phone switcher (GH-209): a LEFT swipe closes its tab like iOS Safari's tab overview (a right swipe only rubber-bands), Delete does too.
+ * Touch and pen only; `touch-action: pan-y` leaves the list's vertical scroll to the browser, the horizontal move is ours (swipe.ts).
+ */
+function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefObject<number>; onClose: (id: string) => void; children: ReactNode }) {
+  const [view, setView] = useState<RowView>({ stage: "idle", offset: 0, width: 0, height: 0, sign: -1 });
+  const state = useRef<SwipeState>({ phase: "idle" });
+  const cfg = useRef(ROW_SWIPE);
+  const box = useRef({ width: 0, height: 0 });
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  // The slide-out timer outlives the render that started it: it must call the latest callback.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const later = (fn: () => void, ms: number) => void timers.current.push(setTimeout(fn, ms));
+  // The pointer that started the gesture: other fingers and pointers are ignored until it ends.
+  const pointer = useRef(-1);
+  const signOf = () => (cfg.current.allow === "positive" ? 1 : -1) as -1 | 1;
+  const settle = () => {
+    setView((v) => ({ ...v, stage: "settle", offset: 0 }));
+    later(() => setView((v) => (v.stage === "settle" ? { ...v, stage: "idle" } : v)), 200);
+  };
+  const commit = () => {
+    const { width, height } = box.current;
+    const sign = signOf();
+    if (reducedMotion()) return onClose(id);
+    setView({ stage: "out", offset: sign * width, width, height, sign });
+    later(() => setView({ stage: "collapse", offset: sign * width, width, height, sign }), 180);
+    later(() => (closeRef.current(id), setView({ stage: "idle", offset: 0, width, height, sign })), 330);
+  };
+  const feed = (e: ReactPointerEvent<HTMLElement>, type: "down" | "move" | "up") => {
+    const before = state.current;
+    const next = swipe(before, { type, p: { x: e.clientX, y: e.clientY, t: performance.now() } }, cfg.current, box.current.width);
+    state.current = next;
+    if (next.phase === "dragging") {
+      swiped.current = performance.now();
+      if (before.phase !== "dragging") e.currentTarget.setPointerCapture?.(e.pointerId);
+      setView({ stage: "drag", offset: next.offset, width: box.current.width, height: box.current.height, sign: signOf() });
+    } else if (next.phase === "committed") {
+      swiped.current = performance.now();
+      commit();
+    } else if (next.phase === "settling") {
+      swiped.current = performance.now();
+      settle();
+    }
+  };
+  // touch-action pan-y already keeps the horizontal pan from the browser; this is the backup once the swipe is ours (never while the list scrolls).
+  const itemRef = useCallback((el: HTMLElement | null) => {
+    if (!el) return;
+    const cancel = (e: TouchEvent) => state.current.phase === "dragging" && e.cancelable && e.preventDefault();
+    el.addEventListener("touchmove", cancel, { passive: false });
+    return () => el.removeEventListener("touchmove", cancel);
+  }, []);
+  const active = (e: ReactPointerEvent<HTMLElement>) => e.pointerId === pointer.current && (state.current.phase === "pending" || state.current.phase === "dragging");
+  const reveal = view.stage !== "idle" && Math.sign(view.offset) === view.sign;
+  const motion = { drag: "none", settle: "transform 200ms cubic-bezier(0.2,0,0,1), opacity 200ms", out: "transform 180ms ease-out, opacity 180ms ease-out", collapse: "none", idle: undefined }[view.stage];
+  return (
+    <div
+      role="presentation"
+      className="relative overflow-hidden"
+      style={view.stage === "out" || view.stage === "collapse" ? { height: view.stage === "out" ? view.height : 0, transition: view.stage === "collapse" ? "height 150ms ease-out" : undefined } : undefined}
+    >
+      {reveal && (
+        <div aria-hidden className={cn("absolute inset-0 flex items-center gap-1.5 bg-destructive/10 px-4 font-medium text-destructive text-sm", view.sign < 0 ? "justify-end" : "justify-start")}>
+          <XIcon className="size-4" />
+          Close
+        </div>
+      )}
+      <SelectItem
+        ref={itemRef}
+        value={id}
+        className={cn(ROW, "touch-pan-y [-webkit-touch-callout:none]")}
+        aria-keyshortcuts="Delete"
+        style={view.stage === "idle" ? undefined : { transform: `translateX(${view.offset}px)`, opacity: opacityFor(view.offset, view.width), transition: motion }}
+        onPointerDown={(e) => {
+          if (e.pointerType === "mouse" || !e.isPrimary || view.stage === "out" || view.stage === "collapse") return;
+          pointer.current = e.pointerId;
+          const r = e.currentTarget.getBoundingClientRect();
+          box.current = { width: r.width, height: r.height };
+          cfg.current = getComputedStyle(e.currentTarget).direction === "rtl" ? { ...ROW_SWIPE, allow: mirror(ROW_SWIPE.allow) } : ROW_SWIPE;
+          feed(e, "down");
+        }}
+        onPointerMove={(e) => active(e) && feed(e, "move")}
+        onPointerUp={(e) => {
+          if (!active(e)) return;
+          feed(e, "up");
+          // Done: later moves (a mouse, a pen above the screen) must not run the outcome again.
+          state.current = { phase: "idle" };
+        }}
+        onPointerCancel={(e) => {
+          if (!active(e)) return;
+          state.current = { phase: "idle" };
+          if (view.stage === "drag") settle();
+        }}
+        onClickCapture={(e) => {
+          if (!justSwiped(swiped)) return;
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== "Delete" && e.key !== "Backspace") return;
+          e.preventDefault();
+          // The highlight and the focus go to the next row (else the previous one): the focused row is about to be removed.
+          const rows = [...(e.currentTarget.closest('[role="listbox"]')?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])];
+          const at = rows.indexOf(e.currentTarget);
+          const to = rows[at + 1] ?? rows[at - 1];
+          onClose(id);
+          // After the closed row left the list: focusing it earlier leaves the list's highlight index one too high for the next ArrowDown/ArrowUp.
+          setTimeout(() => to?.isConnected && to.focus(), 0);
+        }}
+      >
+        {children}
+      </SelectItem>
+    </div>
+  );
+}
+
+const TRIGGER_EDGE = 16;
+const TRIGGER_BOUNCE = 12;
+
+/**
+ * The switcher button takes a vertical swipe: finger up = next tab, down = previous, one step per gesture, no wrap (the end rubber-bands).
+ * Horizontal does nothing and a tap opens the list (base-ui opens it on the tap's mousedown). A touch that starts in the top 16px of the page is left to the system.
+ * The browser's own scroll is stopped by `touch-action: none` on the button plus a non-passive touchmove here (React's touch listeners are passive); never on touchstart, which would kill the tap.
+ */
+function useTriggerSwipe(order: string[], activeId: string | undefined, onSelect: (id: string) => void, swiped: RefObject<number>) {
+  const [view, setView] = useState({ offset: 0, motion: false });
+  const state = useRef<SwipeState>({ phase: "idle" });
+  const cfg = useRef<SwipeConfig>({ ...ROW_SWIPE, axis: "y", allow: "both", commitFraction: 0.5, commitMin: 24, flickVelocity: 0.4, flickMin: 12, rubberLimit: TRIGGER_BOUNCE });
+  const height = useRef(0);
+  const edge = useRef(false);
+  const pointer = useRef(-1);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const ref = useCallback((el: HTMLElement | null) => {
+    if (!el) return;
+    const start = (e: TouchEvent) => void (edge.current = (e.touches[0]?.clientY ?? Infinity) < TRIGGER_EDGE);
+    const move = (e: TouchEvent) => e.cancelable && !edge.current && e.preventDefault();
+    el.addEventListener("touchstart", start, { passive: true });
+    el.addEventListener("touchmove", move, { passive: false });
+    return () => (el.removeEventListener("touchstart", start), el.removeEventListener("touchmove", move));
+  }, []);
+  const feed = (e: ReactPointerEvent<HTMLElement>, type: "down" | "move" | "up") => {
+    const before = state.current;
+    const next = swipe(before, { type, p: { x: e.clientX, y: e.clientY, t: performance.now() } }, cfg.current, height.current);
+    state.current = next;
+    // A horizontal lock does nothing, but the touch may still end as a tap whose mousedown would open the list.
+    if (next.phase === "ignored") swiped.current = performance.now();
+    if (next.phase === "dragging") {
+      swiped.current = performance.now();
+      if (before.phase !== "dragging") e.currentTarget.setPointerCapture?.(e.pointerId);
+      setView({ offset: Math.max(-TRIGGER_BOUNCE, Math.min(TRIGGER_BOUNCE, next.offset)), motion: false });
+    } else if (next.phase === "committed" || next.phase === "settling") {
+      swiped.current = performance.now();
+      const to = next.phase === "committed" ? stepNoWrap(order, activeId, next.dir < 0 ? 1 : -1) : undefined;
+      if (to) onSelect(to);
+      // The new title slides in from the swiping direction (instant under reduced motion).
+      const slide = to && !reducedMotion() ? (next.phase === "committed" ? next.dir : 0) * TRIGGER_BOUNCE : 0;
+      setView({ offset: slide, motion: false });
+      timer.current = setTimeout(() => setView({ offset: 0, motion: !reducedMotion() }), 16);
+    }
+  };
+  const props = {
+    onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
+      if (e.pointerType === "mouse" || !e.isPrimary) return;
+      if (e.clientY < TRIGGER_EDGE) return void (state.current = { phase: "idle" });
+      pointer.current = e.pointerId;
+      const i = activeId === undefined ? -1 : order.indexOf(activeId);
+      // Up (negative offset) goes to the next tab, down to the previous one.
+      const next = i >= 0 && i < order.length - 1;
+      const prev = i > 0;
+      cfg.current = { ...cfg.current, allow: next && prev ? "both" : next ? "negative" : prev ? "positive" : "none" };
+      height.current = e.currentTarget.getBoundingClientRect().height;
+      feed(e, "down");
+    },
+    onPointerMove: (e: ReactPointerEvent<HTMLElement>) => e.pointerId === pointer.current && state.current.phase !== "idle" && feed(e, "move"),
+    onPointerUp: (e: ReactPointerEvent<HTMLElement>) => {
+      if (e.pointerId !== pointer.current || state.current.phase === "idle") return;
+      feed(e, "up");
+      state.current = { phase: "idle" };
+    },
+    onPointerCancel: (e: ReactPointerEvent<HTMLElement>) => {
+      if (e.pointerId !== pointer.current || state.current.phase === "idle") return;
+      state.current = { phase: "idle" };
+      setView({ offset: 0, motion: !reducedMotion() });
+    },
+  };
+  const style: CSSProperties | undefined = view.offset || view.motion ? { transform: `translateY(${view.offset}px)`, transition: view.motion ? "transform 150ms ease-out" : "none" } : undefined;
+  return { ref, props, style };
 }
 
 /** The pinned Focus tab: first in the strip, a count of the sessions waiting for the user (a shape and a number, not only a color). */
@@ -385,7 +613,7 @@ function FocusTab({ active, count, focusable, onSelect }: { active: boolean; cou
 }
 
 /** Group header: project color, name, tab count; a collapsed group shows its most urgent tab state. */
-function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, menu }: { menu?: { activeId?: string; onSelect: (id: string) => void; onClose: (id: string) => void }; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
+function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, onCloseGroup, move, menu }: { onCloseGroup: () => void; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void }; menu?: { activeId?: string; onSelect: (id: string) => void; onClose: (id: string) => void }; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
   const first = info(ids[0]!);
   const c = avatarColor(first.groupColor ?? cwd, use(AvatarColors));
   const states = hiddenIds.map((id) => status(id, info(id)));
@@ -403,6 +631,13 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, m
     className: "flex h-6 max-w-40 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-[color-mix(in_oklab,var(--av)_18%,var(--background))] px-1.5 font-medium text-foreground text-xs shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--av)_60%,transparent)] outline-none focus-visible:ring-2 focus-visible:ring-ring",
     style: { "--av": `var(--avatar-${c})` } as CSSProperties,
     draggable: true,
+    // Middle click closes the group; its mousedown would start autoscroll (and must not open the compact menu).
+    onMouseDown: (e: ReactMouseEvent) => e.button === 1 && e.preventDefault(),
+    onAuxClick: (e: ReactMouseEvent) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      onCloseGroup();
+    },
     onDragStart: (e: DragEvent) => {
       setOpen(false);
       e.dataTransfer.setData(GROUP_DRAG_TYPE, cwd);
@@ -431,7 +666,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, m
     </>
   );
   if (menu)
-    // Compact: a menu button (click, Enter, Space, ArrowDown; hover after CHIP_HOVER_DELAY_MS). A path tooltip would fight the hover menu, so the menu header carries name and path.
+    // Compact: a menu button (click, Enter, Space, ArrowDown; hover, at once). A path tooltip would fight the hover menu, so the menu header carries name and path.
     return (
       // Not modal: a modal menu opened by the press puts a backdrop over the other chips, and a chip drag could not drop. A drag start closes the menu.
       <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
@@ -441,7 +676,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, m
         <span id={pathId} hidden>{cwd}</span>
         <Menu.Portal>
           <Menu.Positioner align="start" sideOffset={4} className="z-50">
-            <Menu.Popup className={cn(POPUP, "max-w-80")} data-testid="tab-group-menu">
+            <Menu.Popup className={CHIP_POPUP} data-testid="tab-group-menu">
               <div className="flex flex-col px-2 py-1 text-xs" aria-hidden>
                 <span className="font-medium">{sub ?? name}</span>
                 <span className="truncate text-muted-foreground">{cwd}</span>
@@ -471,22 +706,50 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, m
                   </Menu.Item>
                 );
               })}
+              <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
+              <Menu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
+                Close group
+              </Menu.Item>
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>
       </Menu.Root>
     );
   return (
-    <Tooltip>
-      <TooltipTrigger aria-expanded={!collapsed} {...props} onClick={onToggle}>
-        {body}
-      </TooltipTrigger>
-      <span id={pathId} hidden>{cwd}</span>
-      <TooltipContent className="flex-col items-start gap-0.5">
-        <span className="font-medium">{sub ?? name}</span>
-        <span className="break-all opacity-80">{cwd}</span>
-      </TooltipContent>
-    </Tooltip>
+    // Right click (long press on touch): the menu the compact chip has, for a chip whose click collapses.
+    <ContextMenu.Root>
+      <ContextMenu.Trigger className="contents">
+        <Tooltip>
+          <TooltipTrigger aria-expanded={!collapsed} {...props} onClick={onToggle}>
+            {body}
+          </TooltipTrigger>
+          <span id={pathId} hidden>{cwd}</span>
+          <TooltipContent className="flex-col items-start gap-0.5">
+            <span className="font-medium">{sub ?? name}</span>
+            <span className="break-all opacity-80">{cwd}</span>
+          </TooltipContent>
+        </Tooltip>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Positioner className="z-50">
+          <ContextMenu.Popup className={POPUP} data-testid="tab-group-menu">
+            <ContextMenu.Item className={ITEM} onClick={onToggle}>
+              {collapsed ? "Expand group" : "Collapse group"}
+            </ContextMenu.Item>
+            <ContextMenu.Item className={ITEM} disabled={!move.left} onClick={() => move.by(-1)}>
+              Move group left
+            </ContextMenu.Item>
+            <ContextMenu.Item className={ITEM} disabled={!move.right} onClick={() => move.by(1)}>
+              Move group right
+            </ContextMenu.Item>
+            <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+            <ContextMenu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
+              Close group
+            </ContextMenu.Item>
+          </ContextMenu.Popup>
+        </ContextMenu.Positioner>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 

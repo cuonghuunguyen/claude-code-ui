@@ -82,3 +82,55 @@ it("closes itself after 5 s", async () => {
   await act(async () => vi.advanceTimersByTime(5000 + 280));
   expect(onClose).toHaveBeenCalledTimes(1);
 });
+
+it("an action button (Undo) runs its callback and closes the toast, at once under reduced motion", async () => {
+  reduced(true);
+  const run = vi.fn();
+  const root = createRoot(el);
+  await act(async () => root.render(<Toast message="Closed Fix login" action={{ label: "Undo", onClick: run }} onClose={onClose} />));
+  const undo = [...toast().querySelectorAll("button")].find((b) => b.textContent === "Undo")!;
+  await act(async () => undo.click());
+  expect(run).toHaveBeenCalledOnce();
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+it("a toast replaced while it leaves does not close the next one", async () => {
+  const first = vi.fn();
+  const root = createRoot(el);
+  await act(async () => root.render(<Toast key="1" message="a" action={{ label: "Undo", onClick: () => {} }} onClose={first} />));
+  await act(async () => void toast().querySelector<HTMLElement>('[aria-label="Dismiss"]')!.click());
+  await act(async () => root.render(<Toast key="2" message="b" onClose={onClose} />));
+  await act(async () => void vi.advanceTimersByTime(300));
+  expect(first).not.toHaveBeenCalled();
+});
+
+it("the 5 s timer waits while the toast has the pointer or the focus (the Undo button), then runs again", async () => {
+  const root = createRoot(el);
+  await act(async () => root.render(<Toast message="Closed x" action={{ label: "Undo", onClick: () => {} }} onClose={onClose} />));
+  const undo = [...toast().querySelectorAll("button")].find((b) => b.textContent === "Undo")!;
+  await act(async () => void undo.focus());
+  await act(async () => void vi.advanceTimersByTime(8000));
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => void undo.blur());
+  await act(async () => void vi.advanceTimersByTime(4000));
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => void vi.advanceTimersByTime(2000));
+  expect(onClose).toHaveBeenCalled();
+  onClose.mockClear();
+  await act(async () => root.render(<Toast key="2" message="again" onClose={onClose} />));
+  await act(async () => void toast().dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+  await act(async () => void vi.advanceTimersByTime(8000));
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it("a toast that is closing stays closing when the pointer leaves during its exit", async () => {
+  const root = createRoot(el);
+  await act(async () => root.render(<Toast message="x" onClose={onClose} />));
+  await act(async () => void vi.advanceTimersByTime(20));
+  await act(async () => void toast().dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+  await act(async () => void toast().querySelector<HTMLElement>('[aria-label="Dismiss"]')!.click());
+  expect(toast().dataset.state).toBe("closed");
+  await act(async () => void toast().dispatchEvent(new PointerEvent("pointerout", { bubbles: true })));
+  await act(async () => void vi.advanceTimersByTime(20));
+  expect(toast().dataset.state).toBe("closed");
+});

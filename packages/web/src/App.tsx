@@ -105,13 +105,13 @@ import { GuideTour } from "./guide-tour.tsx";
 import { keyText, matchesKey, withKey } from "./shortcuts.ts";
 import { specOf, useKeymap } from "./keymap.ts";
 import { LEADER_MS, PREFIX_KEYS, leaderStep } from "./leader.ts";
-import { loadClosed, popClosed, pushClosed, saveClosed } from "./closed-tabs.ts";
+import { loadClosed, popClosed, pushClosed, restoreClosed, saveClosed } from "./closed-tabs.ts";
 import { ShortcutsDialog } from "./shortcuts-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
-import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
@@ -209,6 +209,8 @@ export function App() {
   // Closed session tabs (Reopen closed tab), per browser.
   const [closedTabs, setClosedTabs] = useState(loadClosed);
   useEffect(() => saveClosed(closedTabs), [closedTabs]);
+  const closedRef = useRef(closedTabs);
+  closedRef.current = closedTabs;
   // Prefix key: shows the second keys until one is pressed or the time is up.
   const [prefixOn, setPrefixOn] = useState(false);
   // New terminal shortcut: each bump adds a terminal to the shown terminal panel.
@@ -258,8 +260,11 @@ export function App() {
   useEffect(() => void (openingProject && refreshList()), [openingProject]);
   const [theme, setTheme] = useState<ThemePref>(loadPref);
   const [error, setError] = useState<string>();
-  const [toast, setToast] = useState<string>();
-  const closeToast = useCallback(() => setToast(undefined), []);
+  const [toast, setToastState] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
+  const toastKey = useRef(0);
+  // Every toast is its own element (a key): a closing one cannot clear the next, and the same text restarts the timer.
+  const setToast = useCallback((t: string | { message: string; action: { label: string; onClick: () => void } } | undefined) => setToastState(t === undefined ? undefined : { key: ++toastKey.current, ...(typeof t === "string" ? { message: t } : t) }), []);
+  const closeToast = useCallback(() => setToast(undefined), [setToast]);
   // Guided tour (docs/spec.md "First-use guide"): `guideState` is the per-browser state, decided once after the first session list.
   const guideState = useRef<GuideState>(undefined);
   const guideDecided = useRef(false);
@@ -353,6 +358,9 @@ export function App() {
   const [deleting, setDeleting] = useState<string>();
   // Project cwd whose Remove waits for the confirmation.
   const [removing, setRemoving] = useState<string>();
+  const [closingGroup, setClosingGroup] = useState<{ ids: string[]; name: string }>();
+  const lastClosingGroup = useRef({ ids: [] as string[], name: "" });
+  if (closingGroup) lastClosingGroup.current = closingGroup;
   // Keeps the name while the dialog fades out.
   const lastRemoving = useRef("");
   // Set on Remove confirm, read by the dialog's final focus.
@@ -377,6 +385,8 @@ export function App() {
   statusRef.current = status;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+  const activeRef = useRef(activeId);
+  activeRef.current = activeId;
   const listRef = useRef(list);
   listRef.current = list;
   /** Prompts sent while a session's /clear runs: they go to the session the tab follows to (or back to this one when the /clear ends without), keyed by the session they were typed in. */
@@ -670,15 +680,67 @@ export function App() {
   }, []);
 
   /** Closes the tab; the session stays in the sidebar. A live session is followed in the background only (its CLI closes after the idle time), any other is unsubscribed. */
+  // These read the latest tabs and active tab (refs): a close can run from a timer of an earlier render (a swipe's slide-out), after another close.
   function close(id: string) {
-    const r = closeTab(tabs, id, activeId);
+    const r = closeTab(tabsRef.current, id, activeRef.current);
     setTabs(r.tabs);
-    if (id !== NEW_TAB) setClosedTabs((c) => pushClosed(c, id, tabs.indexOf(id)));
+    release(id);
+    activate(r.active);
+  }
+
+  /** A close from the phone switcher (swipe or Delete on a row): the toast offers Undo for that exact tab; the New session tab has nothing to reopen. */
+  function closeFromList(id: string) {
+    const title = listRef.current.find((s) => s.id === id)?.title || titles[id] || "Untitled";
+    const wasActive = activeRef.current === id;
+    close(id);
+    if (id === NEW_TAB) return;
+    setToast({
+      message: `Closed ${title}`,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          if (!listRef.current.some((s) => s.id === id)) return;
+          const r = restoreClosed(closedRef.current, tabsRef.current, id);
+          setClosedTabs(r.stack);
+          setTabs(r.tabs);
+          // Back in place; it becomes the shown tab only if it was the one shown when swiped away.
+          if (wasActive) open(id);
+          // A tab that was not shown is held again like any open tab (the close left it followed in the background, or dropped).
+          else void subscribe(id); // no `held` check: the close's background subscribe may still be in flight and would win
+        },
+      },
+    });
+  }
+
+  /** What closing a session tab leaves behind: its place on the closed stack, and its subscription (live: followed in the background; else dropped). */
+  function release(id: string) {
+    if (id === NEW_TAB) return;
+    setClosedTabs((c) => pushClosed(c, id, tabsRef.current.indexOf(id)));
     const state = listRef.current.find((s) => s.id === id)?.state;
-    if (id !== NEW_TAB) state && state !== "closed" && state !== "error" ? void subscribe(id, false, false, true) : drop(id);
-    if (r.active === activeId) return;
-    open(r.active);
-    if (!r.active) history.replaceState(null, "", location.pathname + location.search);
+    state && state !== "closed" && state !== "error" ? void subscribe(id, false, false, true) : drop(id);
+  }
+
+  /** The tab that took over after a close; none: the hash goes. */
+  function activate(next: string | undefined) {
+    if (next === activeRef.current) return;
+    open(next);
+    if (!next) history.replaceState(null, "", location.pathname + location.search);
+  }
+
+  /** Closes the tabs of a group in one step; each lands on the closed stack in strip order, so Reopen closed tab brings the last one back first. */
+  function closeGroup(ids: string[]) {
+    const r = closeMany(tabsRef.current, ids, activeRef.current);
+    setTabs(r.tabs);
+    for (const id of tabsRef.current.filter((t) => ids.includes(t))) release(id);
+    activate(r.active);
+  }
+
+  /** Close group (chip menu, middle click, Delete on the chip, the command): a group of 2 or more tabs asks first, a single tab closes at once. */
+  function requestCloseGroup(key: string, ids: string[]) {
+    const own = ids.filter((id) => id !== NEW_TAB && tabs.includes(id));
+    if (own.length < 2) return closeGroup(own);
+    const g = tabGroup(sessionOf(own[0]!)?.cwd, grouping, worktrees);
+    setClosingGroup({ ids: own, name: `${g.label || projectName(key)}${g.sub ? ` (${g.sub})` : ""}` });
   }
 
   useEffect(() => {
@@ -1207,6 +1269,8 @@ export function App() {
     newSession: () => newSession(),
     selectTab: open,
     closeTab: close,
+    // Only while a chip shows for the group (2 or more groups, or compact tabs), like the chip menu.
+    closeGroup: grouping !== "none" && activeId && groupOfTab(activeId) && (compact || new Set(tabs.map(groupOfTab).filter(Boolean)).size > 1) ? () => requestCloseGroup(groupOfTab(activeId), tabs.filter((id) => groupOfTab(id) === groupOfTab(activeId))) : undefined,
     quickOpen: showQuickOpen,
     // md: the sidebar breakpoint; below it the sidebar is a drawer.
     toggleSidebar: () => (wide(768) ? setSidebar((v) => !v) : setDrawer((v) => !v)),
@@ -1396,11 +1460,13 @@ export function App() {
             onRenamed={renamed}
             onSelect={open}
             onClose={close}
+            onSwipeClose={closeFromList}
             grouping={grouping}
             compact={compact && grouping !== "none"}
             onMove={(from, to) => setTabs((t) => moveTabIn(t, keysFinal ? groupOfTab : () => "", from, to))}
             onMoveGroup={(cwd, by) => setTabs((t) => moveGroup(t, groupOfTab, cwd, by))}
             onMoveGroupTo={(from, to) => setTabs((t) => moveGroupTo(t, groupOfTab, from, to))}
+            onCloseGroup={requestCloseGroup}
             onNew={() => newSession()}
             home={sidebar}
             onHome={() => setSidebar((v) => !v)}
@@ -1426,6 +1492,25 @@ export function App() {
         </div>
       </header>
       <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? "Untitled")} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
+      <ConfirmDialog
+        open={closingGroup !== undefined}
+        title={`Close ${lastClosingGroup.current.ids.length} tabs of ${lastClosingGroup.current.name}?`}
+        description="Sessions keep running. Reopen them from the sidebar or with Reopen closed tab."
+        confirm="Close group"
+        onConfirm={() => {
+          const g = closingGroup!;
+          setClosingGroup(undefined);
+          closeGroup(g.ids);
+        }}
+        onCancel={() => setClosingGroup(undefined)}
+        // Cancel: back to the chip; closed: the tab that took over (it is in the Tab order), else New session.
+        finalFocus={() =>
+          document.querySelector<HTMLElement>(`[data-group-chip="${CSS.escape(lastClosingGroup.current.ids[0] ? groupOfTab(lastClosingGroup.current.ids[0]) : "")}"]`) ??
+          document.querySelector<HTMLElement>('[data-testid="tab-strip"] [role="tab"][tabindex="0"]') ??
+          document.querySelector<HTMLElement>('[data-testid="tab-new"]')
+        }
+        testId="close-group"
+      />
       <ConfirmDialog
         open={removing !== undefined}
         title="Remove project?"
@@ -1900,7 +1985,7 @@ export function App() {
             }}
           />
         )}
-        {toast && <Toast message={toast} onClose={closeToast} />}
+        {toast && <Toast key={toast.key} message={toast.message} action={toast.action} onClose={closeToast} />}
         <NotificationStack
           items={cardItems}
           now={cardsNow}

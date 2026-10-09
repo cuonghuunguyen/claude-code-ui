@@ -318,6 +318,18 @@ it("a focused Allow once does not carry over to the session's next request: focu
   expect(h.onRespond).not.toHaveBeenCalled();
 });
 
+it("focus that left the cards on its own is not pulled back into a card when another card arrives, and Finished timers resume", async () => {
+  const h = await show([item("a")]);
+  await act(async () => button("Deny")!.focus());
+  await act(async () => button("Deny")!.blur());
+  expect(document.activeElement).toBe(document.body);
+  await show([item("a"), item("b", "finished")], { onDismiss: h.onDismiss });
+  expect(document.activeElement).toBe(document.body);
+  expect(el.contains(document.activeElement)).toBe(false);
+  await act(async () => void vi.advanceTimersByTime(9000));
+  expect(h.onDismiss).toHaveBeenCalledWith("b");
+});
+
 it("an answer button answers only the request the card shows right now", async () => {
   const h = await show([item("b", "permission", { requestId: "beta" })]);
   const allow = button("Allow once")!;

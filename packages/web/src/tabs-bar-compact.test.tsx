@@ -3,7 +3,7 @@
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { TabsBar, type TabInfo } from "./tabs-bar.tsx";
+import { CHIP_HOVER_DELAY_MS, TabsBar, type TabInfo } from "./tabs-bar.tsx";
 import { NEW_TAB } from "./tabs.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -76,7 +76,7 @@ it("compact: a chip click lists the group's tabs; picking one selects it and the
   const el = await mount(view("a1"));
   await act(async () => chip(el, A).click());
   await settle();
-  expect(items().length).toBe(2);
+  expect(items().length).toBe(3); // two tabs and Close group
   expect(items()[0]!.textContent).toContain("First");
   expect(items()[0]!.getAttribute("aria-current")).toBe("true");
   expect(items()[1]!.textContent).toContain("Second");
@@ -99,7 +99,7 @@ it("compact, keyboard: ArrowDown opens the menu on its first item, Escape closes
   await act(async () => c.focus());
   await key(c, "ArrowDown");
   await settle();
-  expect(items().length).toBe(2);
+  expect(items().length).toBe(3); // two tabs and Close group
   expect(document.activeElement).toBe(items()[0]);
   await key(document.activeElement!, "Escape");
   await settle();
@@ -120,32 +120,34 @@ it("compact: a middle click on a menu item closes that tab and keeps the menu", 
   });
   expect(onClose).toHaveBeenCalledWith("a2");
   expect(onSelect).not.toHaveBeenCalled();
-  expect(items().length).toBe(2);
+  expect(items().length).toBe(3); // two tabs and Close group
 });
 
-it("compact: hovering the chip opens the menu after a short delay", async () => {
+it("compact: hovering the chip opens the menu at once, with no opening animation", async () => {
   const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
   const c = chip(el, A);
   for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove"]) {
     await act(async () => void c.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, { bubbles: true, pointerType: "mouse" } as PointerEventInit)));
   }
-  expect(items().length).toBe(0);
-  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
-  expect(items().length).toBe(0);
-  await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
-  expect(items().length).toBe(2);
+  expect(items().length).toBe(3); // two tabs and Close group
+  // The popup fades and scales out on close only: no starting-style that is not the resting look.
+  const cls = document.querySelector('[data-testid="tab-group-menu"]')!.className;
+  expect(cls).toContain("data-ending-style:opacity-0");
+  expect(cls).not.toContain("data-starting-style:opacity-0");
+  expect(cls).not.toContain("data-starting-style:scale-95");
+  expect(CHIP_HOVER_DELAY_MS).toBe(0);
 });
 
-it("compact: a pointer passing over the chip (gone within 50 ms) opens no menu", async () => {
+it("compact: leaving the chip closes the hover menu", async () => {
   const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
   const c = chip(el, A);
   const fire = async (types: string[]) => {
     for (const type of types) await act(async () => void c.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, { bubbles: true, pointerType: "mouse" } as PointerEventInit)));
   };
   await fire(["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove"]);
-  await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+  expect(items().length).toBe(3); // two tabs and Close group
   await fire(["pointerout", "pointerleave", "mouseout", "mouseleave"]);
-  await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
   expect(items().length).toBe(0);
 });
 
@@ -229,4 +231,60 @@ it("compact: closing the last tab of a group by middle click leaves focus on a c
   await settle();
   expect(el.querySelector('[data-group-chip="/p/alpha"]')).toBeNull();
   expect(document.activeElement).not.toBe(document.body);
+});
+
+const middle = async (target: Element) =>
+  act(async () => {
+    for (const type of ["mousedown", "mouseup", "auxclick"]) target.dispatchEvent(new MouseEvent(type, { button: 1, bubbles: true, cancelable: true }));
+  });
+
+it("close group: a middle click on a chip asks to close its tabs; compact does not open the menu, not compact does not collapse", async () => {
+  const onCloseGroup = vi.fn();
+  const el = await mount(<TabsBar {...noop} compact onCloseGroup={onCloseGroup} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
+  await middle(chip(el, A));
+  await settle();
+  expect(onCloseGroup).toHaveBeenCalledWith(A, ["a1", "a2"]);
+  expect(items().length).toBe(0);
+  await act(async () => root!.render(<TabsBar {...noop} onCloseGroup={onCloseGroup} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />));
+  await middle(chip(el, B));
+  expect(onCloseGroup).toHaveBeenLastCalledWith(B, ["b1"]);
+  expect(chip(el, B).getAttribute("aria-expanded")).toBe("true");
+  expect(localStorage.getItem("claude-ui.tab-groups-collapsed")).toBeNull();
+});
+
+it("close group: the compact menu ends with Close group after a separator", async () => {
+  const onCloseGroup = vi.fn();
+  const el = await mount(<TabsBar {...noop} compact onCloseGroup={onCloseGroup} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
+  await act(async () => chip(el, A).click());
+  await settle();
+  const last = items().at(-1)!;
+  expect(last.textContent).toBe("Close group");
+  expect(last.previousElementSibling?.getAttribute("role")).toBe("separator");
+  await act(async () => last.click());
+  expect(onCloseGroup).toHaveBeenCalledWith(A, ["a1", "a2"]);
+});
+
+it("close group: not compact, the chip's context menu has Collapse, Move left (off at the first group), Move right and Close group", async () => {
+  const onCloseGroup = vi.fn();
+  const onMoveGroup = vi.fn();
+  const el = await mount(<TabsBar {...noop} onCloseGroup={onCloseGroup} onMoveGroup={onMoveGroup} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
+  await act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  await settle();
+  expect(items().map((i) => i.textContent)).toEqual(["Collapse group", "Move group left", "Move group right", "Close group"]);
+  expect(items()[1]!.hasAttribute("data-disabled")).toBe(true);
+  await act(async () => items()[3]!.click());
+  expect(onCloseGroup).toHaveBeenCalledWith(A, ["a1", "a2"]);
+  await settle();
+  expect(chip(el, A).getAttribute("aria-expanded")).toBe("true");
+});
+
+it("close group: Delete on a focused chip asks to close; Alt+Shift+Arrow still moves", async () => {
+  const onCloseGroup = vi.fn();
+  const onMoveGroup = vi.fn();
+  const el = await mount(<TabsBar {...noop} onCloseGroup={onCloseGroup} onMoveGroup={onMoveGroup} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
+  await act(async () => chip(el, A).focus());
+  await key(chip(el, A), "Delete");
+  expect(onCloseGroup).toHaveBeenCalledWith(A, ["a1", "a2"]);
+  await key(chip(el, A), "ArrowRight", { altKey: true, shiftKey: true });
+  expect(onMoveGroup).toHaveBeenCalledWith(A, 1);
 });

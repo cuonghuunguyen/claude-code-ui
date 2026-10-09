@@ -295,3 +295,13 @@ it("a remapped key matches and the old key no longer does; a removed binding mat
   expect(appCommands(ctx()).find((i) => i.id === "sidebar.toggle")?.keys).toBeUndefined();
   resetAll();
 });
+
+it("tab.closeGroup is listed only when the active tab is in a named group, with mod+alt+shift+w", () => {
+  expect(appCommands(ctx()).some((i) => i.id === "tab.closeGroup")).toBe(false);
+  const closeGroup = vi.fn();
+  const items = appCommands(ctx({ closeGroup }));
+  const i = items.find((x) => x.id === "tab.closeGroup")!;
+  expect([i.title, i.keys]).toEqual(["Close tab group", "mod+alt+shift+w"]);
+  run(ctx({ closeGroup }), "tab.closeGroup");
+  expect(closeGroup).toHaveBeenCalled();
+});
