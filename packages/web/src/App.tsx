@@ -79,8 +79,8 @@ import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
-import { loadSignalIds, saveSignalOnly, signalItems, type SignalItem } from "./signal.ts";
-import { FoldRow, SignalSwitch } from "./signal-fold.tsx";
+import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
+import { FoldRow } from "./signal-fold.tsx";
 import { FocusPage, FocusRow } from "./focus-page.tsx";
 import { nextWaiting, waitingCount, waitingRequests } from "./focus.ts";
 import { announcement, faviconHref, setFavicon } from "./attention.ts";
@@ -234,17 +234,8 @@ export function App() {
   const [focusSel, setFocusSel] = useState<string>();
   // When this browser first saw a request that came without the daemon's `at`.
   const firstSeen = useRef(new Map<string, number>());
-  // Sessions shown in Signal only (GH-159), per browser.
-  const [signalIds, setSignalIds] = useState(loadSignalIds);
-  const setSignalOnly = (id: string, on: boolean) => {
-    saveSignalOnly(id, on);
-    setSignalIds((s) => {
-      const next = new Set(s);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
+  // Signal only (GH-159, one setting for the browser since GH-205), set in Settings.
+  const signalOnly = useSignalOnly();
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
   const changeGrouping = (g: TabGrouping) => {
     setGrouping(g);
@@ -1188,7 +1179,7 @@ export function App() {
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
     openFocus: () => open(FOCUS_TAB),
     nextWaiting: waiting.length ? () => (open(FOCUS_TAB), setFocusSel(nextWaiting(waiting, activeId === FOCUS_TAB ? focusSel ?? waiting[0]?.part.id : undefined)?.part.id)) : undefined,
-    toggleSignalOnly: shown ? () => setSignalOnly(shown.id, !signalIds.has(shown.id)) : undefined,
+    toggleSignalOnly: () => saveSignalOnly(!loadSignalOnly()),
     openSettings: () => setSettingsOpen(true),
     startGuide: () => startGuide(),
     openMcp: project ? () => openMcp() : undefined,
@@ -1581,8 +1572,7 @@ export function App() {
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
-                        signalOnly={signalIds.has(s.id)}
-                        onSignalOnly={(on) => setSignalOnly(s.id, on)}
+                        signalOnly={signalOnly}
                         onAnswer={answer}
                         connected={status === "connected"}
                         onGitStatus={() =>
@@ -2279,12 +2269,10 @@ export function SessionPane({
   onGitStatus,
   onDialog,
   signalOnly = false,
-  onSignalOnly,
 }: {
   scrollKey: number;
-  /** Signal only: runs of tool cards fold into one line (GH-159). Kept by App per session. */
+  /** Signal only: runs of tool cards fold into one line (GH-159). The browser-wide setting. */
   signalOnly?: boolean;
-  onSignalOnly?: (on: boolean) => void;
   /** Subagent run whose subagent view shows; an unknown one shows the session view. */
   run?: string;
   /** Opens a run's subagent view; undefined: the session view. */
@@ -2333,7 +2321,6 @@ export function SessionPane({
   /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
   onDialog?: (dialog: DialogName, arg?: string) => void;
 }) {
-  const signalKey = useKeymap()("signal.toggle");
   const phone = usePhone();
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
@@ -2423,7 +2410,6 @@ export function SessionPane({
         <span className="min-w-0 truncate text-muted-foreground" title={session.cwd}>
           {session.cwd}
         </span>
-        {onSignalOnly && <SignalSwitch on={signalOnly} onChange={onSignalOnly} keys={keyText(signalKey)} />}
         {/* Idle, running and needs input show in the tab and the send button. Only error and closed have no other place. */}
         {(shownState(view) === "error" || shownState(view) === "closed") && (
           <span className="rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">

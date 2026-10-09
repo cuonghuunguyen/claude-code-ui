@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { Part } from "@claude-ui/protocol";
 import { describe, expect, it } from "vitest";
-import { foldLabel, loadSignalOnly, saveSignalOnly, signalItems } from "./signal.ts";
+import { foldLabel, loadSignalOnly, saveSignalOnly, signalItems, subscribeSignalOnly } from "./signal.ts";
 import { timeline, type ToolCall } from "./store.ts";
 import { applyEvent, emptySession } from "./store.ts";
 
@@ -48,13 +48,28 @@ describe("foldLabel", () => {
   });
 });
 
-describe("per-session setting", () => {
-  it("is remembered per session id", () => {
+describe("global setting", () => {
+  it("is one value for the browser, off by default, and ignores the old per-session list", () => {
     localStorage.clear();
-    saveSignalOnly("a", true);
-    expect(loadSignalOnly("a")).toBe(true);
-    expect(loadSignalOnly("b")).toBe(false);
-    saveSignalOnly("a", false);
-    expect(loadSignalOnly("a")).toBe(false);
+    localStorage.setItem("claude-ui.signal-only", JSON.stringify(["a"]));
+    expect(loadSignalOnly()).toBe(false);
+    saveSignalOnly(true);
+    expect(loadSignalOnly()).toBe(true);
+    expect(localStorage.getItem("claude-ui.signalOnly")).toBe("1");
+    saveSignalOnly(false);
+    expect(loadSignalOnly()).toBe(false);
+    expect(localStorage.getItem("claude-ui.signalOnly")).toBeNull();
+  });
+
+  it("tells subscribers when it changes", () => {
+    localStorage.clear();
+    const seen: boolean[] = [];
+    const un = subscribeSignalOnly(() => seen.push(loadSignalOnly()));
+    saveSignalOnly(true);
+    saveSignalOnly(false);
+    un();
+    saveSignalOnly(true);
+    expect(seen).toEqual([true, false]);
+    saveSignalOnly(false);
   });
 });
