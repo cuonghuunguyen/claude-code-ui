@@ -10,8 +10,9 @@ import { createSettings } from "./settings.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
-import { folderPath, listContainers, prepareDockerSide } from "./docker-side.ts";
-import { createSides, dockerExecArgs, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
+import { checkDockerSide, execRun, folderPath, listContainers, prepareDockerSide } from "./docker-side.ts";
+import { checkWslSide, createSides, dockerExecArgs, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
+import type { SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
 import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
 import { startServe, tailscalePreflight } from "./tailscale.ts";
@@ -78,10 +79,10 @@ if (side) {
   const sideKey = () => sideKeyOf(sidePackage);
   const docker = dockerCli();
   /** Docker side: the container must run and gets this package, then `docker exec -i <name> sh -c <setup script>`. */
-  const spawnDocker = async (name: string): Promise<SideProcess> => {
+  const spawnDocker = async (name: string, setup: SideSetup, onPhase: (p: SidePhase) => void): Promise<SideProcess> => {
     const key = sideKey();
-    const tgz = await prepareDockerSide({ name, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack") });
-    return sideChild(spawn("docker", dockerExecArgs(name, setupScript(tgz, key, "docker")), { stdio: "pipe", windowsHide: true }));
+    const tgz = await prepareDockerSide({ name, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, onPhase });
+    return sideChild(spawn("docker", dockerExecArgs(name, setupScript(tgz, key, "docker", setup)), { stdio: "pipe", windowsHide: true }));
   };
   const sides =
     distros.length || docker
@@ -91,7 +92,10 @@ if (side) {
           posixLocal: process.platform !== "win32",
           ...(docker && { discover: async () => (await listContainers()).map(dockerSide) }),
           // This claude-ui's own package runs in the side: the installed package, or packages/claude-ui of a source checkout (npm start builds it).
-          spawn: (id) => (id.startsWith("docker:") ? spawnDocker(id.slice("docker:".length)) : sideChild(spawn("wsl.exe", wslArgs(id.slice("wsl:".length), setupScript(sidePackage, sideKey())), { stdio: "pipe", windowsHide: true }))),
+          spawn: (id, { setup, phase }) => (id.startsWith("docker:") ? spawnDocker(id.slice("docker:".length), setup, phase) : sideChild(spawn("wsl.exe", wslArgs(id.slice("wsl:".length), setupScript(sidePackage, sideKey(), "wsl", setup)), { stdio: "pipe", windowsHide: true }))),
+          // side.check: read-only (docker inspect + one docker exec, or one wsl.exe run of the check script).
+          key: sideKey,
+          check: (id) => (id.startsWith("docker:") ? checkDockerSide({ name: id.slice("docker:".length), pkgDir: sidePackage, key: sideKey() }) : checkWslSide({ distro: id.slice("wsl:".length), pkgDir: sidePackage, key: sideKey(), exec: execRun })),
           onPush: (p) => void push.send(p),
           saved: readSaved(sidesFile),
           save: (ids) => writeFileSync(sidesFile, JSON.stringify(ids)),

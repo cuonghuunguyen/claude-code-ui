@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { cpUsable, folderPath, listContainers, parseContainers, prepareDockerSide, underDist, type Exec } from "../src/docker-side.ts";
+import { checkDockerSide, cpUsable, folderPath, listContainers, parseContainers, prepareDockerSide, underDist, type Exec } from "../src/docker-side.ts";
 import type { Runner } from "../src/update.ts";
 
 // `docker inspect -f` output of the mounts check: read-only root flag, `<dest> <rw>` lines, the tmpfs map as JSON.
@@ -269,5 +269,85 @@ describe("folderPath / underDist", () => {
     expect(underDist(join(pkgDir, "dist"), pkgDir)).toBe(false);
     expect(underDist(join(pkgDir, "src", "a.js"), pkgDir)).toBe(false);
     expect(underDist(join(tmpdir(), "other", "dist", "a.js"), pkgDir)).toBe(false);
+  });
+});
+
+describe("checkDockerSide (side.check of a container)", () => {
+  const out = (lines: string[]) => lines.map((l) => `CLAUDE_UI_CHECK ${l}`).join("\n");
+  const ALL = ["node=22.4.0", "make=1", "python3=1", "cxx=1", "credentials=1", "writable=/tmp", "installed=none"];
+  const running = { inspect: { code: 0, stdout: "true\n" } };
+  const run = (answers: Record<string, Answer>, pkgDir = pkg()) => {
+    const f = fake({ ...running, ...answers });
+    const npm = fakeNpm();
+    return { f, npm, result: checkDockerSide({ name: "dev", pkgDir, key: "0.5.0-1", exec: f.exec }) };
+  };
+
+  it("a container that is gone, not running or not answering is blocked, nothing else runs", async () => {
+    const gone = run({ inspect: { code: 1, stderr: "Error: No such object: dev" } });
+    expect(await gone.result).toMatchObject({ verdict: "blocked", reason: "gone", facts: { reachable: false } });
+    expect(gone.f.calls).toHaveLength(1);
+    const stopped = run({ inspect: { code: 0, stdout: "false\n" } });
+    expect(await stopped.result).toMatchObject({ verdict: "blocked", reason: "not_running", message: expect.stringContaining("docker start dev"), facts: { reachable: true, running: false } });
+    expect(stopped.f.calls).toHaveLength(1);
+    expect(await run({ inspect: { code: 1, stderr: "Cannot connect to the Docker daemon" } }).result).toMatchObject({ verdict: "blocked", reason: "unreachable" });
+    expect(await run({ inspect: { code: null } }).result).toMatchObject({ verdict: "blocked", reason: "unreachable" });
+  });
+
+  it("a running container: inspect, the mounts inspect and one docker exec of the check script; nothing is packed, copied or written", async () => {
+    const r = run({ exec: { code: 0, stdout: out(ALL) } });
+    expect(await r.result).toMatchObject({ verdict: "install", key: "0.5.0-1", facts: { reachable: true, running: true, node: "22.4.0", installed: "none", writable: ["/tmp"] } });
+    const kinds = r.f.calls.map((c) => c[1]);
+    expect(kinds).toEqual(["inspect", "inspect", "exec"]);
+    expect(r.f.calls.some((c) => c[1] === "cp")).toBe(false);
+    const exec = r.f.calls[2]!;
+    expect(exec.slice(0, 4)).toEqual(["docker", "exec", "dev", "sh"]);
+    expect(exec).not.toContain("-i");
+    expect(exec[5]).toContain("CLAUDE_UI_CHECK");
+    expect(exec[5]).not.toMatch(/\bcat\b/);
+    expect(r.f.stdin.every((s) => s === undefined)).toBe(true);
+    expect(r.npm.calls).toEqual([]);
+  });
+
+  it("never reads the environment: no inspect format names Config.Env, and no packing folder is made", async () => {
+    const cacheDir = join(dir("never-"), "side-pack");
+    const r = run({ exec: { code: 0, stdout: out(ALL) } });
+    await r.result;
+    for (const c of r.f.calls) expect(c.join(" ")).not.toMatch(/Config\.Env|\.Env\b/);
+    expect(existsSync(cacheDir)).toBe(false);
+  });
+
+  it("no writable path only when neither docker cp nor a writable folder can take the package", async () => {
+    const nothing = [...ALL.filter((l) => !l.startsWith("writable")), "writable="];
+    expect(await run({ exec: { code: 0, stdout: out(nothing) }, mounts: { code: 0, stdout: RO_ROOT } }).result).toMatchObject({ verdict: "blocked", reason: "no_writable_path", message: expect.not.stringMatching(/docker cp|docker exec|\bcp\b/i) });
+    expect(await run({ exec: { code: 0, stdout: out(nothing) }, mounts: { code: 0, stdout: WRITABLE } }).result).toMatchObject({ verdict: "install" });
+    expect(await run({ exec: { code: 0, stdout: out(ALL) }, mounts: { code: 0, stdout: RO_ROOT } }).result).toMatchObject({ verdict: "install" });
+    // Already installed: nothing is copied, so a read-only file system is no block.
+    const current = [...nothing.filter((l) => !l.startsWith("installed")), "installed=current"];
+    expect(await run({ exec: { code: 0, stdout: out(current) }, mounts: { code: 0, stdout: RO_ROOT } }).result).toMatchObject({ verdict: "installed" });
+  });
+
+  it("the facts never carry a copy method", async () => {
+    const r = await run({ exec: { code: 0, stdout: out(ALL) } }).result;
+    expect(JSON.stringify(r)).not.toMatch(/"copy"|docker cp/);
+  });
+
+  it("no build is blocked; an exec that fails or prints nothing is check_failed, a timeout unreachable", async () => {
+    expect(await run({ exec: { code: 0, stdout: out(ALL) } }, dir("nobuild-")).result).toMatchObject({ verdict: "blocked", reason: "no_build" });
+    expect(await run({ exec: { code: 126, stderr: "OCI runtime exec failed: exec failed: sh: no such file" } }).result).toMatchObject({ verdict: "blocked", reason: "check_failed", facts: { running: true } });
+    expect(await run({ exec: { code: null } }).result).toMatchObject({ verdict: "blocked", reason: "unreachable" });
+  });
+
+  it("prepareDockerSide with setup never only inspects: nothing packed or copied; needed reports its phases", async () => {
+    const cacheDir = join(dir("prep-"), "cache");
+    const f = fake({ inspect: { code: 0, stdout: "true\n" } });
+    const n = fakeNpm();
+    expect(await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir, exec: f.exec, npm: n.npm, setup: "never" })).toBe("");
+    expect(f.calls).toEqual([["docker", "inspect", "-f", "{{.State.Running}}", "dev"]]);
+    expect(n.calls).toEqual([]);
+    expect(existsSync(cacheDir)).toBe(false);
+    const phases: string[] = [];
+    const g = fake({ inspect: { code: 0, stdout: "true\n" }, mounts: { code: 0, stdout: WRITABLE }, cp: { code: 0 } });
+    await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir, exec: g.exec, npm: fakeNpm().npm, onPhase: (p) => phases.push(p) });
+    expect(phases).toEqual(["packing", "copying"]);
   });
 });
