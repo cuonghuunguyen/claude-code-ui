@@ -83,6 +83,8 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     `  out=$(npm install --prefix "$new" ${docker ? "" : "--install-links "}--omit=dev --no-save --no-fund --no-audit --loglevel=error "$src" 2>&1 >/dev/null) || { rm -rf "$new"; say install_failed "$(printf '%s' "$out" | tail -n 3 | tr '\\n' ' ')"; }`,
     '  [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] || { rm -rf "$new"; say install_failed "the package has no dist/cli.js"; }',
     '  sdk "$new" || { rm -rf "$new"; say install_failed "npm did not install the Claude Agent SDK binary for Linux (an optional dependency)"; }',
+    // The new install must run (node exits non-zero on a missing or unloadable dependency) before it replaces the old one.
+    '  node "$new/node_modules/claude-code-ui/dist/cli.js" --version >/dev/null 2>&1 || { rm -rf "$new"; say install_failed "the new install does not start"; }',
     // Swap: mv onto an existing folder would move into it, so the old one moves aside first (put back if the new one cannot move in).
     '  if [ -e "$dir" ]; then mv "$dir" "$old" || { rm -rf "$new"; say install_failed "the old install could not be moved aside"; }; fi',
     '  mv "$new" "$dir" || { rm -rf "$dir" "$new"; [ -e "$old" ] && mv "$old" "$dir"; say install_failed "the new install could not be moved in"; }',
