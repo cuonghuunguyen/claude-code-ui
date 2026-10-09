@@ -1014,6 +1014,47 @@ describe("a reload keeps the stored tab order while the session list is late (GH
   });
 });
 
+describe("a tab that never resolves, and moves while the list loads (GH-201)", () => {
+  const mk = (id: string, cwd: string) => ({ ...session, id, title: id.slice(0, 1), cwd });
+  const ids = { A: "aaaaaaaa-2222-3333-4444-555555555555", B: "bbbbbbbb-2222-3333-4444-555555555555", H: "dddddddd-2222-3333-4444-555555555555" };
+  afterEach(() => localStorage.removeItem("claude-ui.tabs"));
+
+  it("a tab whose subscribe fails with another code than unknown_session does not hide the group chips", async () => {
+    const { A, B, H } = ids;
+    const all = [mk(A, "/p/one"), mk(B, "/p/two")];
+    location.hash = `#${H}`;
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([A, B, H]));
+    const restore = await remount({
+      "session.list": { sessions: all, projects: ["/p/one", "/p/two"] },
+      "session.subscribe": (m: { sessionId: string }) => {
+        if (m.sessionId === H) throw Object.assign(new Error("boom"), { code: "internal" });
+        return { logEpoch: "e1", session: all.find((x) => x.id === m.sessionId) };
+      },
+    });
+    try {
+      await act(async () => {});
+      expect(el.querySelectorAll("[data-group-chip]").length).toBe(2);
+    } finally {
+      restore();
+    }
+  });
+
+  it("a move while the session list is not in is applied, not refused silently", async () => {
+    const { A, B } = ids;
+    const C = "cccccccc-2222-3333-4444-555555555555";
+    const all = [mk(A, "/p/one"), mk(B, "/p/two"), mk(C, "/p/one")];
+    location.hash = `#${A}`;
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([A, B, C]));
+    const restore = await remount({ "session.list": new Promise(() => {}), "session.subscribe": (m: { sessionId: string }) => ({ logEpoch: "e1", session: all.find((x) => x.id === m.sessionId) ?? all[0] }) });
+    try {
+      await press({ key: "ArrowRight", altKey: true, shiftKey: true }, el.querySelector(`[data-tab-id="${A}"] [role="tab"]`)!);
+      expect(JSON.parse(localStorage.getItem("claude-ui.tabs")!)).toEqual([B, A, C]);
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe("worktrees", () => {
   const main = { path: "/p/demo", branch: "main", main: true };
   const managed = "/p/demo/.claude/worktrees/x";

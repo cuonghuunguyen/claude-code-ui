@@ -38,7 +38,7 @@ export function groupTabs(tabs: string[], cwdOf: CwdOf) {
 
 /**
  * True when every tab's group key is final, so the strip may draw group chips and the stored list may be regrouped (GH-196).
- * Needs the first session list (`listLoaded`) and, per tab, either its session known (`known`) or its subscribe given up (`failed`: any error but unknown_session, e.g. a timeout, which would otherwise hide every chip until the tab is closed; such a tab keeps the group "" like the new-session tab). The new-session tab has no session and is always final.
+ * Needs the first session list (`listLoaded`) and, per tab, either its session known (`known`) or its subscribe failed (`failed`: any error but unknown_session and a dropped connection; there is no timeout, and such a tab would otherwise hide every chip until it is closed; such a tab keeps the group "" like the new-session tab). The new-session tab has no session and is always final.
  */
 export function keysFinal(tabs: string[], listLoaded: boolean, known: (id: string) => boolean, failed: ReadonlySet<string> = new Set()) {
   return listLoaded && tabs.every((id) => id === NEW_TAB || known(id) || failed.has(id));

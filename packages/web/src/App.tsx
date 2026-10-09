@@ -596,6 +596,7 @@ export function App() {
     requested.current.delete(sessionId);
     setViews((v) => without(v, sessionId));
     setInfos((i) => without(i, sessionId));
+    setFailedTabs((f) => (f.has(sessionId) ? new Set([...f].filter((x) => x !== sessionId)) : f));
     if (unsubscribe) client.current?.request({ type: "session.unsubscribe", sessionId }).catch(() => {});
   }
 
