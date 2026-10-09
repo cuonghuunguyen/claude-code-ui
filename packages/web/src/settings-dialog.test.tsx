@@ -208,6 +208,18 @@ it("Sidebar section: Show only active sessions is the sidebar's own per-browser 
   expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).onlyActive).toBe(false);
 });
 
+it("Sidebar section: Layout is Default or Classic, stored in the sidebarView object and applied at once (GH-222)", async () => {
+  localStorage.clear();
+  const { q, pick } = await render();
+  await pick("sidebar");
+  expect(q("settings-sidebar-layout")!.textContent).toContain("Default");
+  await act(async () => q("settings-sidebar-layout")!.click());
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-sidebar-layout-classic]")!.click());
+  expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).layout).toBe("classic");
+  expect(q("settings-sidebar-layout")!.textContent).toContain("Classic");
+  localStorage.clear();
+});
+
 it("shows a Guide section whose Restart guide button calls onRestartGuide", async () => {
   const { q, onRestartGuide, pick } = await render();
   await pick("guide");
