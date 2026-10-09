@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { cpUsable, listContainers, parseContainers, prepareDockerSide, type Exec } from "../src/docker-side.ts";
+import { cpUsable, folderPath, listContainers, parseContainers, prepareDockerSide, underDist, type Exec } from "../src/docker-side.ts";
 import type { Runner } from "../src/update.ts";
 
 // `docker inspect -f` output of the mounts check: read-only root flag, `<dest> <rw>` lines, the tmpfs map as JSON.
@@ -224,12 +225,20 @@ describe("docker sides", () => {
   it("a failed pack names the missing file and the last lines of npm's output", async () => {
     const cacheDir = dir("cache-");
     const f = fake({ inspect: { code: 0, stdout: "true\n" } });
-    const bad = fakeNpm({ code: 1, output: "npm error code ENOENT\nnpm error syscall open\nnpm error path /repo/packages/claude-ui/dist/web/assets/a.js\nnpm error errno -2\nnpm error enoent ENOENT: no such file or directory, open '/repo/packages/claude-ui/dist/web/assets/a.js'\n\n" });
-    const err = await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k1", cacheDir, exec: f.exec, npm: bad.npm }).catch((e: Error) => e.message);
+    const pkgDir = pkg();
+    const gone = join(pkgDir, "dist", "web", "assets", "a.js");
+    const bad = fakeNpm({ code: 1, output: `npm error code ENOENT\nnpm error syscall open\nnpm error path ${gone}\nnpm error errno -2\nnpm error enoent ENOENT: no such file or directory, open '${gone}'\n\n` });
+    const err = await prepareDockerSide({ name: "dev", pkgDir, key: "k1", cacheDir, exec: f.exec, npm: bad.npm }).catch((e: Error) => e.message);
     expect(err).toContain("Packing claude-ui for Docker: dev failed");
-    expect(err).toContain("/repo/packages/claude-ui/dist/web/assets/a.js");
+    expect(err).toContain(gone);
     expect(err).toContain("wait for the build to finish, then retry");
     expect(existsSync(join(cacheDir, "k1.partial"))).toBe(false);
+    // A missing file outside dist (a bad argument) is no build in progress: no wait hint.
+    const elsewhere = join(dir("else-"), "claude-ui");
+    const arg = fakeNpm({ code: 1, output: `npm error code ENOENT\nnpm error path ${elsewhere}\nnpm error enoent ENOENT: no such file or directory, open '${elsewhere}'\n` });
+    const err3 = await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k6", cacheDir, exec: f.exec, npm: arg.npm }).catch((e: Error) => e.message);
+    expect(err3).toContain(`(missing: ${elsewhere})`);
+    expect(err3).not.toContain("wait for the build");
     const plain = fakeNpm({ code: 1, output: "1\n2\n3\n4\n5\n6\n7\n8\n9\nnpm error x\n" });
     const err2 = await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k4", cacheDir, exec: f.exec, npm: plain.npm }).catch((e: Error) => e.message);
     expect(err2).toContain("3 4 5 6 7 8 9 npm error x");
@@ -245,5 +254,20 @@ describe("docker sides", () => {
     mkdirSync(join(half, "dist"));
     writeFileSync(join(half, "dist", "cli.js"), "");
     await expect(prepareDockerSide({ name: "dev", pkgDir: half, key: "k5", cacheDir, exec: f.exec, npm: fakeNpm().npm })).rejects.toThrow(/dist\/web.*wait for the build to finish/s);
+  });
+});
+
+describe("folderPath / underDist", () => {
+  it("a folder URL has no trailing separator", () => {
+    const p = folderPath(pathToFileURL(join(tmpdir(), "claude-ui") + sep));
+    expect(p.endsWith(sep)).toBe(false);
+    expect(p).toBe(join(tmpdir(), "claude-ui"));
+  });
+  it("only files under the package's dist count as a build in progress", () => {
+    const pkgDir = join(tmpdir(), "p");
+    expect(underDist(join(pkgDir, "dist", "cli.js"), pkgDir)).toBe(true);
+    expect(underDist(join(pkgDir, "dist"), pkgDir)).toBe(false);
+    expect(underDist(join(pkgDir, "src", "a.js"), pkgDir)).toBe(false);
+    expect(underDist(join(tmpdir(), "other", "dist", "a.js"), pkgDir)).toBe(false);
   });
 });
