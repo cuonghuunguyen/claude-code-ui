@@ -2,15 +2,19 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { listContainers, parseContainers, prepareDockerSide, type Exec } from "../src/docker-side.ts";
+import { cpUsable, listContainers, parseContainers, prepareDockerSide, type Exec } from "../src/docker-side.ts";
 import type { Runner } from "../src/update.ts";
 
-const dir = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
+// `docker inspect -f` output of the mounts check: read-only root flag, `<dest> <rw>` lines, the tmpfs map as JSON.
+const RO_ROOT = "true\n\nnull\n";
+const WRITABLE = "false\n/data true\nnull\n";
+const isMounts = (args: string[]) => args[0] === "inspect" && String(args[2]).includes("ReadonlyRootfs");
+const dir =(p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
 type Answer = { code: number | null; stdout?: string; stderr?: string };
 function fake(answers: Record<string, Answer>) {
   const calls: string[][] = [];
   const stdin: (string | undefined)[] = [];
-  const exec: Exec = async (cmd, args, _t, stdinFile) => (calls.push([cmd, ...args]), stdin.push(stdinFile), { stdout: "", stderr: "", ...(answers[args[0]!] ?? { code: 0 }) } as { code: number | null; stdout: string; stderr: string });
+  const exec: Exec = async (cmd, args, _t, stdinFile) => (calls.push([cmd, ...args]), stdin.push(stdinFile), { stdout: "", stderr: "", ...(answers[isMounts(args) ? "mounts" : args[0]!] ?? (isMounts(args) ? { code: 0, stdout: RO_ROOT } : { code: 0 })) } as { code: number | null; stdout: string; stderr: string });
   return { calls, stdin, exec };
 }
 function fakeNpm(result: { code: number | null; output: string } = { code: 0, output: "" }) {
@@ -79,7 +83,7 @@ describe("docker sides", () => {
     expect(execs(f)).toHaveLength(1);
     expect(execs(f)[0]!.slice(0, 5)).toEqual(["docker", "exec", "-i", "dev", "sh"]);
     expect(execs(f)[0]!.join(" ")).toContain("cat >");
-    expect(execs(f)[0]!.slice(-2)).toEqual(["/tmp", "claude-ui-side-0.2.0-1.tgz"]);
+    expect(execs(f)[0]!.slice(-3, -1)).toEqual(["/tmp", "claude-ui-side-0.2.0-1.tgz"]);
     expect(f.stdin[f.calls.findIndex((c) => c[1] === "exec")]).toBe(tgzOf(cacheDir, "0.2.0-1"));
     await run("0.2.0-1");
     expect(n.calls).toHaveLength(1);
@@ -99,8 +103,8 @@ describe("docker sides", () => {
     const calls: string[][] = [];
     const exec: Exec = async (cmd, args) => {
       calls.push([cmd, ...args]);
-      if (args[0] === "inspect") return { code: 0, stdout: "true\n", stderr: "" };
-      const dirArg = args[args.length - 2]!;
+      if (args[0] === "inspect") return { code: 0, stdout: isMounts(args) ? RO_ROOT : "true\n", stderr: "" };
+      const dirArg = args[args.length - 3]!;
       tried.push(dirArg);
       return dirArg === "HOME" ? { code: 0, stdout: "/home/esaca/claude-ui-side-k.tgz\n", stderr: "" } : { code: 1, stdout: "", stderr: `sh: 1: cannot create ${dirArg}/claude-ui-side-k.tgz: Read-only file system
 ` };
@@ -120,6 +124,91 @@ describe("docker sides", () => {
     expect(err2).toContain("/tmp, /dev/shm, $HOME");
     expect(err2).toContain("No space left on device");
     expect(err2).not.toMatch(/file system is read-only/);
+  });
+
+  describe("docker cp first, docker exec stdin as the fallback", () => {
+    const cps = (f: { calls: string[][] }) => f.calls.filter((c) => c[1] === "cp");
+    const mountCalls = (f: { calls: string[][] }) => f.calls.filter((c) => isMounts(c.slice(1)));
+    const go = (f: { exec: Exec }, cacheDir = dir("cache-")) => prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir, exec: f.exec, npm: fakeNpm().npm });
+
+    it("the check prints only the needed fields, never the environment", async () => {
+      const f = fake({ inspect: { code: 0, stdout: "true\n" }, mounts: { code: 0, stdout: WRITABLE } });
+      await go(f);
+      expect(mountCalls(f)).toHaveLength(1);
+      const format = mountCalls(f)[0]![3]!;
+      expect(format).toContain("{{.HostConfig.ReadonlyRootfs}}");
+      expect(format).toContain("{{range .Mounts}}{{.Destination}} {{.RW}}");
+      expect(format).toContain("{{json .HostConfig.Tmpfs}}");
+      expect(format).not.toMatch(/Env/);
+      expect(format).not.toContain("{{json .}}");
+    });
+
+    it("everything writable: only docker cp is called", async () => {
+      const cacheDir = dir("cache-");
+      const f = fake({ inspect: { code: 0, stdout: "true\n" }, mounts: { code: 0, stdout: WRITABLE } });
+      expect(await go(f, cacheDir)).toBe("/tmp/claude-ui-side-k.tgz");
+      expect(cps(f)).toEqual([["docker", "cp", tgzOf(cacheDir, "k"), "dev:/tmp/claude-ui-side-k.tgz"]]);
+      expect(execs(f)).toEqual([]);
+    });
+
+    it("a read-only mount, a read-only root or a mount or tmpfs on /tmp: docker cp is never called, exec is used", async () => {
+      for (const stdout of ["false\n/data false\nnull\n", "true\n\nnull\n", "false\n/tmp true\nnull\n", 'false\n\n{"/tmp":"rw,size=64m"}\n']) {
+        const f = fake({ inspect: { code: 0, stdout: "true\n" }, mounts: { code: 0, stdout }, exec: { code: 0, stdout: "/tmp/x.tgz\n" } });
+        expect(await go(f)).toBe("/tmp/x.tgz");
+        expect(cps(f)).toEqual([]);
+        expect(execs(f)).toHaveLength(1);
+      }
+    });
+
+    it("cpUsable reads the inspect output", () => {
+      expect(cpUsable(WRITABLE)).toBe(true);
+      expect(cpUsable("false\n/var/lib/data true\n/tmp/sub true\nnull\n")).toBe(true);
+      expect(cpUsable('false\n\n{"/run":"rw"}\n')).toBe(true);
+      expect(cpUsable("false\n/tmp/sub false\nnull\n")).toBe(false);
+      expect(cpUsable("")).toBeUndefined();
+      expect(cpUsable("false\n\nnot json\n")).toBeUndefined();
+    });
+
+    it("docker cp fails: the exec fallback takes the file", async () => {
+      const f = fake({ inspect: { code: 0, stdout: "true\n" }, mounts: { code: 0, stdout: WRITABLE }, cp: { code: 1, stderr: "Error: unlinkat /tmp: device or resource busy\n" }, exec: { code: 0, stdout: "/tmp/claude-ui-side-k.tgz\n" } });
+      expect(await go(f)).toBe("/tmp/claude-ui-side-k.tgz");
+      expect(cps(f)).toHaveLength(1);
+      expect(execs(f)).toHaveLength(1);
+    });
+
+    it("the check fails: docker cp is tried anyway, then the fallback", async () => {
+      const ok = fake({ inspect: { code: 0, stdout: "true\n" }, mounts: { code: 1, stderr: "boom" } });
+      expect(await go(ok)).toBe("/tmp/claude-ui-side-k.tgz");
+      expect(cps(ok)).toHaveLength(1);
+      expect(execs(ok)).toHaveLength(0);
+      const bad = fake({ inspect: { code: 0, stdout: "true\n" }, mounts: { code: 1, stderr: "boom" }, cp: { code: 1, stderr: "cp: no" }, exec: { code: 0, stdout: "/dev/shm/x.tgz\n" } });
+      expect(await go(bad)).toBe("/dev/shm/x.tgz");
+      expect(cps(bad)).toHaveLength(1);
+      expect(execs(bad)).toHaveLength(1);
+    });
+
+    it("both fail: the message says docker cp was tried first and why it failed, then the exec reason", async () => {
+      const f = fake({ inspect: { code: 0, stdout: "true\n" }, mounts: { code: 0, stdout: WRITABLE }, cp: { code: 1, stderr: "Error response from daemon: rootfs is marked read-only\n" }, exec: { code: 1, stderr: "cat: write error: No space left on device\n" } });
+      const err = await go(f).catch((e: Error) => e.message);
+      expect(err).toContain("docker cp was tried first and failed (Error response from daemon: rootfs is marked read-only)");
+      expect(err).toContain("No space left on device");
+      expect(err).toContain("/tmp, /dev/shm, $HOME");
+      expect(execs(f)).toHaveLength(3);
+    });
+
+    it("exec: a size mismatch (cut-off stream) fails that dir and the next one is tried; the expected size is passed", async () => {
+      const calls: string[][] = [];
+      const exec: Exec = async (cmd, args) => {
+        calls.push([cmd, ...args]);
+        if (args[0] === "inspect") return { code: 0, stdout: isMounts(args) ? RO_ROOT : "true\n", stderr: "" };
+        return args[args.length - 3] === "/tmp" ? { code: 4, stdout: "", stderr: "size mismatch: wrote 1 of 3 bytes to /tmp/x\n" } : { code: 0, stdout: "/dev/shm/x.tgz\n", stderr: "" };
+      };
+      expect(await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec, npm: fakeNpm().npm })).toBe("/dev/shm/x.tgz");
+      const ex = calls.filter((c) => c[1] === "exec");
+      expect(ex.map((c) => c[c.length - 3])).toEqual(["/tmp", "/dev/shm"]);
+      expect(ex[0]![ex[0]!.length - 1]).toBe("3"); // the tarball is "tgz"
+      expect(ex[0]![ex[0]!.indexOf("-c") + 1]).toMatch(/wc -c.*rm -f/);
+    });
   });
 
   it("two sides starting at once pack once", async () => {
