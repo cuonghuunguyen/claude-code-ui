@@ -68,7 +68,7 @@ describe("image lightbox", () => {
     expect(box()).toBeNull();
     expect(document.activeElement).toBe(thumb(2));
 
-    await act(async () => thumb(1).click());
+    await act(async () => { thumb(1).focus(); thumb(1).click(); });
     expect(box()).not.toBeNull();
     await act(async () => {
       document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
