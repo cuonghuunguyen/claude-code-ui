@@ -488,6 +488,23 @@ it("useGroupedTabs regroups an interleaved stored list (App uses it for its tab 
   expect(seen).toEqual(["a1", "a2", "b1"]);
 });
 
+it("useGroupedTabs leaves the list alone while not ready, and regroups once ready (GH-196)", async () => {
+  const cwds: Record<string, string> = { a1: "/a", b1: "/b", a2: "/a" };
+  let seen: string[] = [];
+  function H({ ready }: { ready: boolean }) {
+    const [t, set] = useState(["a1", "b1", "a2"]);
+    useGroupedTabs(t, set, (id) => cwds[id], ready);
+    seen = t;
+    return null;
+  }
+  const el = document.createElement("div");
+  root = createRoot(el);
+  await act(async () => root!.render(<H ready={false} />));
+  expect(seen).toEqual(["a1", "b1", "a2"]);
+  await act(async () => root!.render(<H ready={true} />));
+  expect(seen).toEqual(["a1", "a2", "b1"]);
+});
+
 it("the pinned Focus tab comes first with the number of waiting sessions, cannot be closed, and selects the page (GH-159)", async () => {
   const { el, tab, onSelect, onClose } = await render({ focus: { count: 3 } });
   const strip = el.querySelector('[data-testid="tab-strip"]')!;
