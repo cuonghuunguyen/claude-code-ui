@@ -385,9 +385,11 @@ it("the In-app switch is on by default, writes the per-browser choice and tells 
   const { q, pick } = await render();
   await pick("notifications");
   expect(q("settings-in-app")?.getAttribute("aria-checked")).toBe("true");
+  expect(document.getElementById(q("settings-in-app")!.getAttribute("aria-describedby")!)?.textContent).toContain("Kept in this browser");
   await act(async () => q("settings-in-app")!.click());
   expect(localStorage.getItem("claude-ui.inAppNotifications")).toBe("off");
   expect(q("settings-in-app")?.getAttribute("aria-checked")).toBe("false");
+  expect(heard).toEqual([false]);
   await act(async () => q("settings-in-app")!.click());
   expect(heard).toEqual([false, true]);
   window.removeEventListener("claude-ui:in-app", on);

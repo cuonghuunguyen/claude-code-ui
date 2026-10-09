@@ -283,6 +283,11 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
       onFocus={(e) => {
         focusedSession.current = (e.target as Element).closest("article")?.getAttribute("data-session") ?? undefined;
       }}
+      onBlur={(e) => {
+        // Focus left the cards (a click on a blank area, another control): forget the card, so a later arrival never pulls it back.
+        // A card removed under focus is not a departure: the effect above still hands the focus over.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null) && (e.target as Element).isConnected) focusedSession.current = undefined;
+      }}
     >
       {visible.map(({ card, d, title, place, cwd }) => {
         const id = `n-${card.sessionId}`;
