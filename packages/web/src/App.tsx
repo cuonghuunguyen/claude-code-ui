@@ -108,7 +108,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
-import { FOCUS_TAB, NEW_TAB, avatarColors, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
@@ -397,6 +397,8 @@ export function App() {
   const restored = useRef<string[] | undefined>(tabs);
   /** True once a session list reply is in (never reset): the tab group keys are final only after it (GH-196). */
   const [listLoaded, setListLoaded] = useState(false);
+  /** Tabs whose subscribe failed for a reason other than unknown_session: their session never arrives, so they must not keep the group keys from becoming final (GH-201). */
+  const [failedTabs, setFailedTabs] = useState<ReadonlySet<string>>(new Set());
 
   async function refreshList() {
     try {
@@ -469,12 +471,16 @@ export function App() {
       }
       setViews((v) => ({ ...v, [sessionId]: withSubscribe(v[sessionId] ?? emptySession(), r) }));
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
+      setFailedTabs((f) => (f.has(sessionId) ? new Set([...f].filter((x) => x !== sessionId)) : f));
       setHeirOf((h) => (h[sessionId] ? without(h, sessionId) : h));
       if (r.title) setTitles((t) => ({ ...t, [sessionId]: r.title }));
     } catch (e) {
       // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
       if ((e as RequestError).code === "unknown_session") return forget(sessionId);
-      if ((e as Error).message !== "disconnected") setError((e as Error).message); // else resubscribed on reconnect
+      if ((e as Error).message !== "disconnected") {
+        setError((e as Error).message);
+        setFailedTabs((f) => (f.has(sessionId) ? f : new Set(f).add(sessionId)));
+      } // else resubscribed on reconnect
     }
   }
 
@@ -1005,7 +1011,7 @@ export function App() {
   const groupOfTab = (id: string) => (id === NEW_TAB ? "" : tabGroup(sessionOf(id)?.cwd, grouping, worktrees).key);
   // The stored list stays grouped by the Tab grouping setting (also once the session cwds arrive), so close, next/previous tab and moves all use the order the strip draws.
   // Regrouped only once every tab's key is final: on partial keys the unknown tabs gather in one group and the damaged order is stored (GH-196).
-  const keysFinal = listLoaded && tabs.every((id) => id === NEW_TAB || !!sessionOf(id));
+  const keysFinal = tabKeysFinal(tabs, listLoaded, (id) => !!sessionOf(id), failedTabs);
   useGroupedTabs(tabs, setTabs, groupOfTab, keysFinal);
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   // GH-133: a just-created session shows (with its pending prompt) before its subscribe reply.
@@ -1385,7 +1391,7 @@ export function App() {
             onClose={close}
             grouping={grouping}
             compact={compact && grouping !== "none"}
-            onMove={(from, to) => setTabs((t) => moveTabIn(t, groupOfTab, from, to))}
+            onMove={(from, to) => setTabs((t) => moveTabIn(t, keysFinal ? groupOfTab : () => "", from, to))}
             onMoveGroup={(cwd, by) => setTabs((t) => moveGroup(t, groupOfTab, cwd, by))}
             onMoveGroupTo={(from, to) => setTabs((t) => moveGroupTo(t, groupOfTab, from, to))}
             onNew={() => newSession()}
