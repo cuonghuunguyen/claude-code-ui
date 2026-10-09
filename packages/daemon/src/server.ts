@@ -777,6 +777,14 @@ export function createDaemon(opts: {
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
     models: () => known,
+    remove: async (id) => {
+      const err = await deleteSessionById(id);
+      if (err?.code !== "unknown_session") return err;
+      // Nothing to delete (transcript gone, not loaded): the worker's link still lists it and holds its name.
+      if (settings.get(id)) saveSettings(() => settings.delete([id]));
+      broadcast({ type: "sessions.changed", deleted: id });
+      return undefined;
+    },
     stopWaitMs: opts.stopWaitMs,
     buildNote: () => opts.buildInfo?.stale(),
   });
@@ -967,6 +975,33 @@ export function createDaemon(opts: {
     const info = await history.getSessionInfo(id).catch(() => undefined);
     const cwd = live?.cwd ?? (info?.cwd && allowed(info.cwd));
     return cwd ? { cwd, live, transcript: !!info } : undefined;
+  }
+
+  /** session.delete, also the web app's Remove and worker_remove: the error to report, or undefined once the session is gone. */
+  async function deleteSessionById(id: string): Promise<{ code: string; message: string } | undefined> {
+    // A restore already in flight would put the session back after the delete; let it finish, then close it below.
+    await restoring.get(id);
+    const at = await locate(id);
+    if (!at) return { code: "unknown_session", message: `no session ${id}` };
+    const state = at.live?.info().state;
+    if (state === "running" || state === "needs_input") return { code: "session_running", message: "stop the session before deleting it" };
+    // The CLI exits first: it writes session metadata on exit, which would recreate the transcript. A failed delete keeps the transcript.
+    autoContinue.cancel(id);
+    deleting.add(id);
+    sessions.delete(id);
+    touched.delete(id);
+    try {
+      await at.live?.close();
+      if (at.transcript) await history.deleteSession(id, { dir: at.cwd });
+    } catch (e) {
+      return { code: "delete_failed", message: (e as Error).message };
+    } finally {
+      deleting.delete(id);
+    }
+    caches.delete(id);
+    if (settings.get(id)) saveSettings(() => settings.delete([id]));
+    broadcast({ type: "sessions.changed", deleted: id });
+    return undefined;
   }
 
   const digest = (t: string) => createHash("sha256").update(t).digest();
@@ -1395,29 +1430,8 @@ export function createDaemon(opts: {
           return reply({});
         }
         case "session.delete": {
-          // A restore already in flight would put the session back after the delete; let it finish, then close it below.
-          await restoring.get(msg.sessionId);
-          const at = await locate(msg.sessionId);
-          if (!at) return fail("unknown_session", `no session ${msg.sessionId}`);
-          const state = at.live?.info().state;
-          if (state === "running" || state === "needs_input") return fail("session_running", "stop the session before deleting it");
-          // The CLI exits first: it writes session metadata on exit, which would recreate the transcript. A failed delete keeps the transcript.
-          autoContinue.cancel(msg.sessionId);
-          deleting.add(msg.sessionId);
-          sessions.delete(msg.sessionId);
-          touched.delete(msg.sessionId);
-          try {
-            await at.live?.close();
-            if (at.transcript) await history.deleteSession(msg.sessionId, { dir: at.cwd });
-          } catch (e) {
-            return fail("delete_failed", (e as Error).message);
-          } finally {
-            deleting.delete(msg.sessionId);
-          }
-          caches.delete(msg.sessionId);
-          if (settings.get(msg.sessionId)) saveSettings(() => settings.delete([msg.sessionId]));
-          broadcast({ type: "sessions.changed", deleted: msg.sessionId });
-          return reply({});
+          const err = await deleteSessionById(msg.sessionId);
+          return err ? fail(err.code, err.message) : reply({});
         }
         case "fs.list": {
           if (msg.path === undefined)
