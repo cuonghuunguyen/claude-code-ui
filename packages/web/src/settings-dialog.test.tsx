@@ -383,3 +383,28 @@ it("the In-app switch is on by default, writes the per-browser choice and tells 
   expect(heard).toEqual([false, true]);
   window.removeEventListener("claude-ui:in-app", on);
 });
+
+function tabKey(shiftKey = false) {
+  const e = new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true });
+  document.activeElement!.dispatchEvent(e);
+}
+
+it("on desktop Tab from the selected group reaches the first visible panel control, past the hidden phone Back button, and Shift+Tab returns (GH-214)", async () => {
+  localStorage.clear();
+  const { q } = await render({ group: "timeline" });
+  // md:hidden is display:none on desktop; jsdom loads no Tailwind (and applies no stylesheet rule to computed style).
+  q("settings-back")!.style.display = "none";
+  q("settings-group-timeline")!.focus();
+  await act(async () => tabKey());
+  expect(document.activeElement).toBe(q("settings-signal-only"));
+  await act(async () => tabKey(true));
+  expect(document.activeElement).toBe(q("settings-group-timeline"));
+});
+
+it("below md the Back button is a tab stop in the drilled panel (GH-214)", async () => {
+  const { q, pick } = await render();
+  await pick("sidebar");
+  q("settings-group-sidebar")!.focus();
+  await act(async () => tabKey());
+  expect(document.activeElement).toBe(q("settings-back"));
+});

@@ -4,6 +4,16 @@ const TABBABLE = 'button:not(:disabled), input:not(:disabled), select:not(:disab
 // tabindex="-1" (a roving tabindex group's other members) is not a tab stop.
 const SKIP = '[tabindex="-1"]';
 
+/** Whether the browser would give the element a focus ring: jsdom has no layout, so this reads styles and attributes, not client rects. */
+function rendered(el: HTMLElement, root: HTMLElement) {
+  if (getComputedStyle(el).visibility === "hidden") return false;
+  for (let n: HTMLElement | null = el; n; n = n.parentElement) {
+    if (n.hidden || n.hasAttribute("inert") || getComputedStyle(n).display === "none") return false;
+    if (n === root) break;
+  }
+  return true;
+}
+
 /**
  * Keydown handler for a modal popup: Tab and Shift+Tab wrap among its controls.
  * Base UI's focus guards move the focus back asynchronously, so fast Shift+Tab presses reached the page behind the dialog.
@@ -12,7 +22,7 @@ export function trapTab(e: KeyboardEvent<HTMLElement>) {
   if (e.key !== "Tab" || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
   // A portaled popup (a select's list) inside the dialog bubbles here: it handles its own Tab.
   if (!e.currentTarget.contains(e.target as Node)) return;
-  const all = [...e.currentTarget.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => !el.hasAttribute("data-base-ui-focus-guard") && !el.matches(SKIP));
+  const all = [...e.currentTarget.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => !el.hasAttribute("data-base-ui-focus-guard") && !el.matches(SKIP) && rendered(el, e.currentTarget));
   if (!all.length) return;
   e.preventDefault();
   const active = document.activeElement as HTMLElement;
