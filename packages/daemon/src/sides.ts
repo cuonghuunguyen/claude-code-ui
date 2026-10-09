@@ -39,7 +39,7 @@ export function setupMessage(code: string, detail: string, side: string, docker 
     case "node_old":
       return docker ? `Node.js ${detail} in ${side} is too old: 22 or newer is needed. Use an image with Node.js 22+ (e.g. node:22), then retry.` : `Node.js ${detail} in ${side} is too old: 22 or newer is needed. Update it there (e.g. nvm install 22), then retry.`;
     case "not_logged_in":
-      return docker ? `Claude is not logged in in ${side}. Run claude login in the container or copy your ~/.claude/.credentials.json into it (or start it with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN set), then retry.` : `Claude is not logged in in ${side}. Run claude login there, then retry.`;
+      return docker ? `Claude is not logged in to ${side}. Run claude login in the container or copy your ~/.claude/.credentials.json into it (or start it with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN set), then retry.` : `Claude is not logged in to ${side}. Run claude login there, then retry.`;
     case "build_tools_missing":
       return `${side} needs make, python3 and g++ to build the terminal support (node-pty). Install them there (Debian/Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++), then retry.`;
     case "not_installed":
@@ -117,8 +117,8 @@ export const hasBuild = (pkgDir: string, docker: boolean) => existsSync(join(pkg
 /**
  * Read-only script for `side.check`, run where the setup script runs (same shell, same nvm): prints `CLAUDE_UI_CHECK <k>=<v>` lines
  * (node, make, python3, cxx, credentials, package [wsl], writable [docker], then installed and installedKey). It never installs,
- * writes, copies, starts the side, reads a file's contents or looks at an environment variable's value: HOME, PATH, NVM_DIR and
- * CLAUDE_CONFIG_DIR only name places.
+ * writes, copies, starts the side, reads a file's contents or prints an environment variable's value: HOME, PATH, NVM_DIR and
+ * CLAUDE_CONFIG_DIR only name places (a writable home folder is reported as the text $HOME).
  */
 export function checkScript(key: string, kind: "wsl" | "docker", source = "") {
   const docker = kind === "docker";
@@ -131,7 +131,7 @@ export function checkScript(key: string, kind: "wsl" | "docker", source = "") {
     "{ command -v g++ || command -v c++; } >/dev/null 2>&1 && emit cxx 1 || emit cxx 0",
     '[ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" ] && emit credentials 1 || emit credentials 0',
     ...(docker
-      ? ['w=; for d in /tmp /dev/shm "$HOME"; do [ -d "$d" ] && [ -w "$d" ] && w="$w${w:+,}$d"; done; emit writable "$w"']
+      ? [`w=; wr() { [ -d "$1" ] && [ -w "$1" ] && w="$w\${w:+,}$2"; }; wr /tmp /tmp; wr /dev/shm /dev/shm; wr "$HOME" '$HOME'; emit writable "$w"`]
       : [`src=$(wslpath -u '${source.replace(/'/g, "")}' 2>/dev/null) && [ -f "$src/dist/cli.js" ] && emit package 1 || emit package 0`]),
     'root="$HOME/.local/share/claude-ui/side"',
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
@@ -197,7 +197,7 @@ export function checkMessage(reason: SideCheckReason, side: string, o: { docker?
     case "unreachable":
       return `${side} could not be reached${d ? `: ${d}` : ""}. Make sure it is available, then check again.`;
     case "no_build":
-      return "This claude-ui has no complete build yet. Wait for a running build to finish, or run npm start, then check again.";
+      return "This version of Claude UI has no complete build yet. Wait for a running build to finish, or run npm start, then check again.";
     case "package_unreadable":
       return `${side} cannot read the claude-ui files on Windows. Wait for a running build to finish, then check again.`;
     case "node_missing":
@@ -207,7 +207,7 @@ export function checkMessage(reason: SideCheckReason, side: string, o: { docker?
     case "build_tools_missing":
       return `${side} needs ${d || "make, python3 and g++"} to install the terminal support. Install ${d ? "it" : "them"} there (Debian or Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++). Then check again.`;
     case "not_logged_in":
-      return o.docker ? `Claude does not look logged in in ${side}. Run claude login in the container, or copy your ~/.claude/.credentials.json into it. If it logs in with an API key or token, you can install anyway.` : `Claude does not look logged in in ${side}. Run claude login there. If it logs in with an API key or token, you can install anyway.`;
+      return o.docker ? `Claude does not look logged in to ${side}. Run claude login in the container, or copy your ~/.claude/.credentials.json into it. If it logs in with an API key or token, you can install anyway.` : `Claude does not look logged in to ${side}. Run claude login there. If it logs in with an API key or token, you can install anyway.`;
     case "no_writable_path":
       return `${side} has no folder claude-ui can be put in: /tmp, /dev/shm and the home folder are read-only. Start the container with a writable /tmp (docker run --tmpfs /tmp), then check again.`;
     case "check_failed":
@@ -217,8 +217,8 @@ export function checkMessage(reason: SideCheckReason, side: string, o: { docker?
 
 /**
  * The verdict for a side that runs: first hard blocks (no build, Node.js, and only when an install is needed: no writable folder,
- * build tools, the package unreadable), then the soft block (no credentials file: an environment login cannot be seen), then what
- * is installed. `cpUsable` (Docker): whether `docker cp` can write; with a writable folder one of the two copies the package in.
+ * build tools, the package unreadable), then an installed side (starting it needs no login), then the soft block (no credentials
+ * file: an environment login cannot be seen; only when an install or update is needed). `cpUsable` (Docker): whether `docker cp` can write; with a writable folder one of the two copies the package in.
  */
 export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker"; name?: string; build: boolean; checked: Checked; cpUsable?: boolean }): SideCheck {
   const { checked: c, key, label } = o;
@@ -245,8 +245,9 @@ export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker
     if (missing.length) return blocked("build_tools_missing", missing.join(", "));
     if (!docker && c.packageVisible === false) return blocked("package_unreadable");
   }
-  if (!c.credentials) return blocked("not_logged_in");
+  // Installed (this build, complete): nothing to set up, so a missing credentials file (an environment login is invisible) does not block it.
   if (c.installed === "current") return { verdict: "installed", key, facts };
+  if (!c.credentials) return blocked("not_logged_in");
   const verdict = c.installed === "other" ? "update" : "install";
   return { verdict, message: verdict === "update" ? `${label} has an older claude-ui. Update it to use it with this one.` : `claude-ui is not installed in ${label}. Install it to use it.`, key, facts };
 }
@@ -486,7 +487,7 @@ export function createSides(opts: {
     const ms = opts.checkMs ?? 30_000;
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<SideCheck>((resolve) => (timer = setTimeout(() => resolve(blockedCheck(key, s.label, "unreachable", { docker, detail: "no answer in time" })), ms)));
-    const asked = (opts.check ? opts.check(id) : Promise.resolve(blockedCheck(key, s.label, "check_failed", { docker, detail: "this daemon cannot check it" }))).catch((e) => blockedCheck(key, s.label, "check_failed", { docker, detail: (e as Error).message }));
+    const asked = (opts.check ? opts.check(id) : Promise.resolve(blockedCheck(key, s.label, "check_failed", { docker, detail: "this version of Claude UI cannot check it" }))).catch((e) => blockedCheck(key, s.label, "check_failed", { docker, detail: (e as Error).message }));
     const p = Promise.race([asked, timeout]).finally(() => (clearTimeout(timer), checking.delete(id)));
     checking.set(id, p);
     return p;
@@ -504,11 +505,13 @@ export function createSides(opts: {
     if (discovering) return discovering;
     if (Date.now() - lastDiscover < (opts.discoverMs ?? 5000)) return Promise.resolve();
     lastDiscover = Date.now();
+    const before = opts.dockerState?.();
     return (discovering = opts
       .discover()
       .then(
         (found) => {
-          let diff = false;
+          // The Docker engine state (down, empty, ok) is part of the list: a change alone sends sessions.changed, so an open dialog updates its hint.
+          let diff = opts.dockerState?.() !== before;
           const ids = new Set(found.map((t) => t.id));
           for (const t of found)
             if (!sides.has(t.id)) {

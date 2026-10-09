@@ -29,6 +29,13 @@ describe("checkScript", () => {
     });
   }
 
+  it("the script never prints the value of an environment variable (HOME is reported as the text $HOME)", () => {
+    const d = checkScript(KEY, "docker");
+    expect(d).toContain("wr \"$HOME\" '$HOME'");
+    // Every printf goes through emit; no echo of a variable.
+    expect(d).not.toMatch(/echo/);
+  });
+
   it("docker lists writable folders; wsl looks for the Windows package with wslpath and sources no nvm", () => {
     const d = checkScript(KEY, "docker");
     expect(d).toContain("writable");
@@ -74,6 +81,8 @@ describe("verdictOf", () => {
       ["tools missing", { make: false, cxx: false }, {}, "blocked", "build_tools_missing"],
       ["tools missing but installed", { make: false, installed: "current" }, {}, "installed", undefined],
       ["no credentials", {}, {}, "blocked", "not_logged_in"],
+      ["no credentials but update needed", { installed: "other" }, {}, "blocked", "not_logged_in"],
+      ["no credentials but installed", { installed: "current" }, {}, "installed", undefined],
       ["package unreadable", { packageVisible: false }, {}, "blocked", "package_unreadable"],
       ["package unreadable but installed", { packageVisible: false, installed: "current" }, {}, "installed", undefined],
       ["old node beats tools", { node: "18.0.0", make: false }, {}, "blocked", "node_old"],
@@ -85,7 +94,7 @@ describe("verdictOf", () => {
       ["docker: nothing writable but installed", { writable: [], installed: "current" }, { kind: "docker", cpUsable: false }, "installed", undefined],
     ];
     for (const [name, checked, o, v, reason] of table) {
-      const creds = name === "no credentials" ? { credentials: false } : {};
+      const creds = name.startsWith("no credentials") ? { credentials: false } : {};
       const r = verdict({ ...checked, ...creds }, o);
       expect([name, r.verdict, r.reason]).toEqual([name, v, reason]);
       expect(r.key).toBe(KEY);
@@ -178,7 +187,9 @@ describe.skipIf(!hasSh || process.platform === "win32")("the check and setup scr
   it("nothing installed: install", () => {
     const c = check({});
     expect(c.parsed).toMatchObject({ node: "22.4.0", make: true, python3: true, cxx: true, credentials: true, installed: "none" });
-    expect(c.parsed!.writable).toContain(c.home);
+    // Home is reported as the text $HOME, never as its value.
+    expect(c.parsed!.writable).toContain("$HOME");
+    expect(c.out).not.toContain(c.home);
     expect(c.unchanged).toBe(true);
     expect(c.calls().filter((l) => l.startsWith("npm"))).toEqual([]);
     // Only `node -p <version>` ever ran, never the claude-ui entry.
@@ -205,6 +216,7 @@ describe.skipIf(!hasSh || process.platform === "win32")("the check and setup scr
       const c = check(o);
       expect(c.unchanged, JSON.stringify(o)).toBe(true);
       expect(c.out + c.err).not.toContain("SECRET");
+      expect(c.out + c.err).not.toContain(c.home);
     }
   });
   it("the WSL variant reports the package flag (no wslpath here: not visible)", () => {

@@ -100,9 +100,9 @@ export function OpenProjectDialog({
 
 /**
  * The side chooser (kind row; below it the distro or container dropdown) and the browser of the chosen side (default: the last
- * used). A side that is not running is only checked (read-only) when chosen: the panel shows the result and the Install, Update or
- * Start button; nothing is installed without it. The exception is the remembered side that is installed: it starts at once (setup
- * never). Docker asks for the container first. A typed path of another side switches to it and only checks it.
+ * used). A side that is not running is only checked (read-only) when chosen: the panel shows the result and the Install or Update
+ * button; nothing is installed without it. A side that turns out installed starts at once (setup
+ * never: installs nothing) and the browser opens. Docker asks for the container first. A typed path of another side switches to it and only checks it.
  */
 function SidePicker({
   input,
@@ -148,7 +148,7 @@ function SidePicker({
   const side = current?.id;
   const isReady = (s: SideInfo) => s.id === LOCAL_SIDE || started.has(s.id) || s.state === "ready";
   const ready = !!current && isReady(current);
-  /** Runs `side.start` for a button (or the remembered installed side). "plain": no setup field, for a daemon without side.check. */
+  /** Runs `side.start` for a button (or an installed side). "plain": no setup field, for a daemon without side.check. */
   const run = async (id: string, mode: RunMode) => {
     if (!onStartSide) return;
     patch(id, { busy: { mode }, error: undefined });
@@ -161,18 +161,21 @@ function SidePicker({
       patch(id, { busy: undefined, error: (e as Error).message, failed: mode });
     }
   };
-  /** The read-only check. `auto`: the remembered side, which starts when it turns out installed. */
-  const runCheck = async (id: string, auto = false) => {
+  /** The read-only check. A side that turns out installed starts by itself (setup never: installs nothing), unless a start from this dialog failed or the side is in error: its panel then shows Retry and Reinstall. */
+  const runCheck = async (id: string) => {
     if (!onCheckSide) return patch(id, { legacy: true, checking: false });
     patch(id, { checking: true, checkError: undefined, legacy: false });
     try {
       const check = await onCheckSide(id);
       patch(id, { checking: false, check });
-      if (check.verdict === "running") setStarted((s) => new Set(s).add(id));
-      else if (auto && check.verdict === "installed") void run(id, "never");
+      if (check.verdict === "running") {
+        focusInput.current = true;
+        setStarted((s) => new Set(s).add(id));
+      } else if (check.verdict === "installed" && !panels[id]?.failed && sides.find((x) => x.id === id)?.state !== "error") void run(id, "never");
     } catch (e) {
+      // An older hub does not know side.check: it answers unknown_type, or side_not_ready (its router forwards a message that names a side to a side that is not running). Any error reply but unknown_side means it cannot check; a timeout or a lost connection has no code.
       const err = e as Error & { code?: string };
-      patch(id, err.code === "unknown_type" ? { checking: false, legacy: true } : { checking: false, checkError: err.message });
+      patch(id, err.code && err.code !== "unknown_side" ? { checking: false, legacy: true } : { checking: false, checkError: err.message });
     }
   };
   const choose = (id: string, value?: string) => {
@@ -195,8 +198,8 @@ function SidePicker({
   };
   // The side used before per-kind memory existed becomes its kind's remembered one (leaving it for another kind keeps it).
   useEffect(() => void (current && kind !== "local" && saveSideFor(kind, current.id)), []);
-  // The last used side, not running: check it; installed, it starts (setup never) and opens. A failed one shows its message and is checked under it.
-  useEffect(() => void (current && !ready && current.state !== "starting" && runCheck(current.id, current.state !== "error")), []);
+  // The last used side, not running: check it; installed, it starts (setup never) and opens. A failed one shows its message and is checked under it (it is not started again).
+  useEffect(() => void (current && !ready && current.state !== "starting" && runCheck(current.id)), []);
   useEffect(() => {
     if (!ready || !focusInput.current) return;
     focusInput.current = false;
@@ -298,7 +301,7 @@ function KindRow({ kinds, kind, label, onChoose }: { kinds: SideKind[]; kind: Si
     refs.current[(to + kinds.length) % kinds.length]?.focus();
   };
   return (
-    <div role="radiogroup" aria-label="Side" className="flex shrink-0 gap-1" data-testid="side-chooser">
+    <div role="radiogroup" aria-label="Where to open projects" className="flex shrink-0 gap-1" data-testid="side-chooser">
       {kinds.map((k, i) => (
         <button
           key={k}
