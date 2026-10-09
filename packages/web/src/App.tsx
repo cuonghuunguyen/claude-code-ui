@@ -48,6 +48,7 @@ import { addPending, dropPending, movePending, pendingKey, promptedIds, pruneEch
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
+import type { SideCheck } from "./side-check-types.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
@@ -1916,7 +1917,9 @@ export function App() {
         onPick={openProject}
         recent={recentProjects}
         sides={sides}
-        onStartSide={(side) => client.current!.request({ type: "side.start", side })}
+        // TODO(GH-248): drop the casts once @claude-ui/protocol has side.check and the side.start `setup` field (see side-check-types.ts).
+        onStartSide={(side, setup) => client.current!.request({ type: "side.start", side, ...(setup && { setup }) } as Request)}
+        onCheckSide={(side) => client.current!.request<SideCheck>({ type: "side.check", side } as unknown as Request)}
         sideOf={sideOf.sideOf}
         // Focus goes to the new-session prompt, not back to the button that opened the dialog.
         finalFocus={newPrompt}
