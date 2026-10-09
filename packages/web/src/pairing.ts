@@ -15,3 +15,17 @@ export function takeToken(
   }
   return storage.getItem(KEY) ?? undefined;
 }
+
+/** Daemon tokens are 43-char base64url; a shorter one is a typo or something else pasted. */
+const TOKEN_SHAPE = /^[A-Za-z0-9_-]{16,}$/;
+
+/** The token out of what a person pastes into the pairing field: a pairing URL (any origin), `#token=…`, `token=…` or the bare token. */
+export function parsePairing(input: string): string | undefined {
+  const text = input.trim();
+  const hash = text.slice(text.indexOf("#") + 1); // no "#": the whole text
+  const token = hash.includes("=") ? new URLSearchParams(hash).get("token") : hash;
+  return token && TOKEN_SHAPE.test(token) ? token : undefined;
+}
+
+export const storeToken = (token: string, storage: Pick<Storage, "setItem"> = localStorage) => storage.setItem(KEY, token);
+export const clearToken = (storage: Pick<Storage, "removeItem"> = localStorage) => storage.removeItem(KEY);

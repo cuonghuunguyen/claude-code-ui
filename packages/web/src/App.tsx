@@ -66,6 +66,7 @@ import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
+import { PairingForm } from "./pairing-form.tsx";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
 import { ContinueDock } from "./continue-dock.tsx";
@@ -1502,9 +1503,7 @@ export function App() {
           {status === "unauthorized" ? (
             // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
             <div className={`${card} flex-1`}>
-              <div className="m-auto max-w-sm p-4 text-center" role="alert" data-testid="pairing-needed">
-                The daemon rejected this browser: it is not paired. Open the pairing URL the daemon printed (…/#token=…).
-              </div>
+              <PairingForm />
             </div>
           ) : (
             <>
