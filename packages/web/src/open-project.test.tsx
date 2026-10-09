@@ -270,6 +270,45 @@ describe("side chooser", () => {
     expect(input()!.value).toBe("/home/u/");
   });
 
+  it("a very long error with unbreakable paths stays inside the dialog: wraps anywhere, scrolls on its own, Retry stays outside the scrolled text and below the controls", async () => {
+    const msg = `npm pack failed: ${"C:/Users/someone/AppData/Local/Temp/claude-ui-pack/node_modules/daemon/".repeat(10)}`;
+    expect(msg.length).toBeGreaterThan(600);
+    const onStartSide = vi.fn(async (_id: string) => {}).mockRejectedValueOnce(new Error(msg));
+    const { kind, click, status } = await renderSides(sides(), onStartSide);
+    await click(kind("WSL"));
+    expect(status()).toBe(`${msg}Retry`);
+    const box = document.querySelector<HTMLElement>('[data-testid="side-status"]')!;
+    const text = box.querySelector<HTMLElement>("p")!;
+    const retry = document.querySelector<HTMLElement>('[data-testid="side-retry"]')!;
+    // The text breaks inside words, is height-capped with its own scroll, and stays selectable.
+    expect(text.className).toContain("[overflow-wrap:anywhere]");
+    expect(text.className).toContain("max-h-");
+    expect(text.className).toContain("overflow-y-auto");
+    expect(text.className).not.toContain("select-none");
+    // Retry is not inside the scrolling text; the block is in normal flow (never absolute) and may shrink and scroll in the dialog.
+    expect(text.contains(retry)).toBe(false);
+    expect(box.className).toContain("min-h-0");
+    expect(box.className).toContain("overflow-y-auto");
+    expect(box.className.split(" ")).not.toEqual(expect.arrayContaining(["absolute"]));
+    expect(retry.className).toContain("max-md:h-11");
+    // The controls come first in the document, so the error sits below them.
+    const row = document.querySelector<HTMLElement>('[data-testid="side-kind"]')!;
+    expect(row.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("the browser's refusal line wraps and scrolls instead of being cut off or overlapping", { timeout: 20_000 }, async () => {
+    const msg = `outside the allowlisted roots: ${"C:/very/long/path/".repeat(40)}`;
+    const { type, key } = await render(vi.fn(async () => Promise.reject(new Error(msg))));
+    await type("/home/u/");
+    await key("Enter");
+    const alert = document.querySelector<HTMLElement>('[role="alert"]')!;
+    expect(alert.textContent).toBe(msg);
+    expect(alert.className).toContain("[overflow-wrap:anywhere]");
+    expect(alert.className).toContain("max-h-");
+    expect(alert.className).toContain("overflow-y-auto");
+    expect(alert.className).not.toContain("truncate");
+  });
+
   it("a typed path picks its side: /home goes to WSL, C:\\ back to Windows, \\\\wsl.localhost\\Ubuntu to that distro", async () => {
     const { input, checked, target, type } = await renderSides(sides("ready"));
     await type("/home/u/cl");

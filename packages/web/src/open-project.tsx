@@ -223,11 +223,11 @@ function SidePicker({
       {!current ? (
         <ContainerStep input={input} containers={members} stateWord={stateWord} isReady={isReady} onPick={(id) => void choose(id)} />
       ) : shown ? (
-        <div className="flex min-h-30 flex-1 flex-col items-center justify-center gap-3 px-6 py-8 text-center text-sm" role={shown.error ? "alert" : "status"} data-testid="side-status">
+        <div className="flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-6 py-8 text-center text-sm *:first:mt-auto *:last:mb-auto" role={shown.error ? "alert" : "status"} data-testid="side-status">
           {shown.error ? (
             <>
-              <p className="max-w-md text-destructive">{shown.error}</p>
-              <Button size="sm" onClick={() => choose(current.id)} className="max-md:h-11" data-testid="side-retry">
+              <p className="max-h-[min(12rem,40dvh)] w-full max-w-md shrink-0 select-text overflow-y-auto text-destructive [overflow-wrap:anywhere]">{shown.error}</p>
+              <Button size="sm" onClick={() => choose(current.id)} className="shrink-0 max-md:h-11" data-testid="side-retry">
                 Retry
               </Button>
             </>
@@ -569,7 +569,10 @@ function Browser({
       </div>
       {hint?.(value)}
       <div className="flex items-center gap-2 border-t px-4 py-2">
-        <p className="min-w-0 flex-1 truncate text-sm" role={error ? "alert" : undefined}>
+        <p
+          className={cn("min-w-0 flex-1 text-sm", error ? "max-h-[min(6rem,20dvh)] select-text overflow-y-auto [overflow-wrap:anywhere]" : "truncate")}
+          role={error ? "alert" : undefined}
+        >
           {error ? <span className="text-destructive">{error}</span> : <span className="text-muted-foreground">{dir}</span>}
         </p>
         <Button size="sm" disabled={!dir || busy} onClick={() => dir && pick(dir)} data-testid="open-folder" className="max-md:h-11">
