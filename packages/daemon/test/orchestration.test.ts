@@ -774,6 +774,37 @@ describe("orchestration", () => {
     expect(runsOf(w.sessionId)[0]!.closed).toBe(true);
   });
 
+  it("worker_remove clears a closed worker from worker_list, keeps its worktree folder", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "rm1", cwd: dirB, prompt: "hold" });
+    await until(() => runsOf(w.sessionId)[0]?.texts.length);
+    await call(coord, "worker_close", { name: "rm1" });
+    expect(await call(coord, "worker_remove", { name: "rm1" })).toEqual({ name: "rm1", removed: true });
+    expect((await call(coord, "worker_list")).workers.find((x: { name: string }) => x.name === "rm1")).toBeUndefined();
+    expect(existsSync(dirB)).toBe(true);
+    expect((await call(coord, "worker_read", { name: "rm1" })).error).toMatch(/No worker named rm1/);
+  });
+
+  it("worker_remove refuses a running worker and tells the coordinator to close it first", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "rm2", cwd: dirB, prompt: "hold" });
+    await until(() => runsOf(w.sessionId)[0]?.texts.length);
+    expect((await call(coord, "worker_remove", { name: "rm2" })).error).toMatch(/still running.*worker_close/s);
+    expect((await call(coord, "worker_list")).workers.find((x: { name: string }) => x.name === "rm2")).toBeDefined();
+  });
+
+  it("worker_remove is a tool error for an unknown name or a worker of another coordinator", async () => {
+    enable();
+    const coord = await coordinator();
+    const other = await coordinator();
+    await call(coord, "worker_start", { name: "rm3", cwd: dirB, prompt: "hold" });
+    expect((await call(coord, "worker_remove", { name: "nobody" })).error).toMatch(/No worker named nobody/);
+    expect((await call(other, "worker_remove", { name: "rm3" })).error).toMatch(/No worker named rm3/);
+    expect((await call(coord, "worker_remove", { name: "Bad Name" })).error).toBeDefined();
+  });
+
   it("worker_close is a tool error when the worker does not stop in time", async () => {
     const slow = await start(history, undefined, 50, { settingsFile: ownLinks() });
     const sp = (slow.address() as AddressInfo).port;
