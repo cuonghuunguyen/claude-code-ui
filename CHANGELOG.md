@@ -2,7 +2,7 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
-## 0.5.0 - 2026-10-09
+## 0.5.0 - 2026-10-10
 
 ### Added
 
@@ -38,6 +38,8 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 - Graph: the branch filter defaults to HEAD.
 - Reinstall builds the new install in a temporary folder and keeps the old one until the new one runs ([#197](https://github.com/cuonghuunguyen/claude-code-ui/issues/197)).
 - Orchestration: a coordinator can stop workers, read-only git commands are low risk, and the worker mode is a setting ([#163](https://github.com/cuonghuunguyen/claude-code-ui/issues/163)).
+- Orchestration: a new `worker_remove` tool lets the coordinator clear a finished worker ([#253](https://github.com/cuonghuunguyen/claude-code-ui/issues/253)).
+- Open project: picking a WSL distro or Docker container no longer starts an install. Select inside the content, then use the Check button and the Install, Update or Reinstall button. The Docker tab always shows, with a hint when Docker is not found ([#248](https://github.com/cuonghuunguyen/claude-code-ui/issues/248)).
 
 ### Fixed
 
@@ -49,6 +51,9 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 - Colored code in your messages: a very long line, an error or a failed load no longer freezes the page ([#202](https://github.com/cuonghuunguyen/claude-code-ui/issues/202)).
 - Settings and dialogs: Tab moves from the group list into the panel on desktop and skips controls in closed sections ([#214](https://github.com/cuonghuunguyen/claude-code-ui/issues/214), [#216](https://github.com/cuonghuunguyen/claude-code-ui/issues/216)).
 - Notifications: focus no longer jumps into a card ([#217](https://github.com/cuonghuunguyen/claude-code-ui/issues/217)).
+- Docker side on Windows: packing claude-ui no longer fails on a package path that ends in a backslash ([#246](https://github.com/cuonghuunguyen/claude-code-ui/issues/246)).
+- Open project: a long error text scrolls inside the dialog and no longer covers the Docker container select ([#247](https://github.com/cuonghuunguyen/claude-code-ui/issues/247)).
+- Compact tab chips no longer overlap on the phone ([#251](https://github.com/cuonghuunguyen/claude-code-ui/issues/251)).
 - Header diff stats never run repository diff drivers; the session list no longer blocks the daemon.
 
 ## 0.4.1 - 2026-10-07
