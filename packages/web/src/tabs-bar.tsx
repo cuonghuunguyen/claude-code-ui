@@ -397,6 +397,9 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
   const box = useRef({ width: 0, height: 0 });
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  // The slide-out timer outlives the render that started it: it must call the latest callback.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   const later = (fn: () => void, ms: number) => void timers.current.push(setTimeout(fn, ms));
   const sign = (cfg.current.allow === "positive" ? 1 : -1) as -1 | 1;
   const settle = () => {
@@ -408,7 +411,7 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
     if (reducedMotion()) return onClose(id);
     setView({ stage: "out", offset: sign * width, width, height, sign });
     later(() => setView({ stage: "collapse", offset: sign * width, width, height, sign }), 180);
-    later(() => (onClose(id), setView({ stage: "idle", offset: 0, width, height, sign })), 330);
+    later(() => (closeRef.current(id), setView({ stage: "idle", offset: 0, width, height, sign })), 330);
   };
   const feed = (e: ReactPointerEvent<HTMLElement>, type: "down" | "move" | "up") => {
     const before = state.current;

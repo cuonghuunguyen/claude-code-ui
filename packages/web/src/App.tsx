@@ -257,8 +257,11 @@ export function App() {
   useEffect(() => void (openingProject && refreshList()), [openingProject]);
   const [theme, setTheme] = useState<ThemePref>(loadPref);
   const [error, setError] = useState<string>();
-  const [toast, setToast] = useState<string | { message: string; action: { label: string; onClick: () => void } }>();
-  const closeToast = useCallback(() => setToast(undefined), []);
+  const [toast, setToastState] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
+  const toastKey = useRef(0);
+  // Every toast is its own element (a key): a closing one cannot clear the next, and the same text restarts the timer.
+  const setToast = useCallback((t: string | { message: string; action: { label: string; onClick: () => void } } | undefined) => setToastState(t === undefined ? undefined : { key: ++toastKey.current, ...(typeof t === "string" ? { message: t } : t) }), []);
+  const closeToast = useCallback(() => setToast(undefined), [setToast]);
   // Guided tour (docs/spec.md "First-use guide"): `guideState` is the per-browser state, decided once after the first session list.
   const guideState = useRef<GuideState>(undefined);
   const guideDecided = useRef(false);
@@ -377,6 +380,8 @@ export function App() {
   statusRef.current = status;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+  const activeRef = useRef(activeId);
+  activeRef.current = activeId;
   const listRef = useRef(list);
   listRef.current = list;
   /** Prompts sent while a session's /clear runs: they go to the session the tab follows to (or back to this one when the /clear ends without), keyed by the session they were typed in. */
@@ -663,8 +668,9 @@ export function App() {
   }, []);
 
   /** Closes the tab; the session stays in the sidebar. A live session is followed in the background only (its CLI closes after the idle time), any other is unsubscribed. */
+  // These read the latest tabs and active tab (refs): a close can run from a timer of an earlier render (a swipe's slide-out), after another close.
   function close(id: string) {
-    const r = closeTab(tabs, id, activeId);
+    const r = closeTab(tabsRef.current, id, activeRef.current);
     setTabs(r.tabs);
     release(id);
     activate(r.active);
@@ -673,6 +679,7 @@ export function App() {
   /** A close from the phone switcher (swipe or Delete on a row): the toast offers Undo for that exact tab; the New session tab has nothing to reopen. */
   function closeFromList(id: string) {
     const title = listRef.current.find((s) => s.id === id)?.title || titles[id] || "Untitled";
+    const wasActive = activeRef.current === id;
     close(id);
     if (id === NEW_TAB) return;
     setToast({
@@ -684,7 +691,8 @@ export function App() {
           const r = restoreClosed(closedRef.current, tabsRef.current, id);
           setClosedTabs(r.stack);
           setTabs(r.tabs);
-          open(id);
+          // Back in place; it becomes the shown tab only if it was the one shown when swiped away.
+          if (wasActive) open(id);
         },
       },
     });
@@ -693,23 +701,23 @@ export function App() {
   /** What closing a session tab leaves behind: its place on the closed stack, and its subscription (live: followed in the background; else dropped). */
   function release(id: string) {
     if (id === NEW_TAB) return;
-    setClosedTabs((c) => pushClosed(c, id, tabs.indexOf(id)));
+    setClosedTabs((c) => pushClosed(c, id, tabsRef.current.indexOf(id)));
     const state = listRef.current.find((s) => s.id === id)?.state;
     state && state !== "closed" && state !== "error" ? void subscribe(id, false, false, true) : drop(id);
   }
 
   /** The tab that took over after a close; none: the hash goes. */
   function activate(next: string | undefined) {
-    if (next === activeId) return;
+    if (next === activeRef.current) return;
     open(next);
     if (!next) history.replaceState(null, "", location.pathname + location.search);
   }
 
   /** Closes the tabs of a group in one step; each lands on the closed stack in strip order, so Reopen closed tab brings the last one back first. */
   function closeGroup(ids: string[]) {
-    const r = closeMany(tabs, ids, activeId);
+    const r = closeMany(tabsRef.current, ids, activeRef.current);
     setTabs(r.tabs);
-    for (const id of tabs.filter((t) => ids.includes(t))) release(id);
+    for (const id of tabsRef.current.filter((t) => ids.includes(t))) release(id);
     activate(r.active);
   }
 
@@ -1247,7 +1255,8 @@ export function App() {
     newSession: () => newSession(),
     selectTab: open,
     closeTab: close,
-    closeGroup: grouping !== "none" && activeId && groupOfTab(activeId) ? () => requestCloseGroup(groupOfTab(activeId), tabs.filter((id) => groupOfTab(id) === groupOfTab(activeId))) : undefined,
+    // Only while a chip shows for the group (2 or more groups, or compact tabs), like the chip menu.
+    closeGroup: grouping !== "none" && activeId && groupOfTab(activeId) && (compact || new Set(tabs.map(groupOfTab).filter(Boolean)).size > 1) ? () => requestCloseGroup(groupOfTab(activeId), tabs.filter((id) => groupOfTab(id) === groupOfTab(activeId))) : undefined,
     quickOpen: showQuickOpen,
     // md: the sidebar breakpoint; below it the sidebar is a drawer.
     toggleSidebar: () => (wide(768) ? setSidebar((v) => !v) : setDrawer((v) => !v)),
@@ -1952,7 +1961,7 @@ export function App() {
             }}
           />
         )}
-        {toast && <Toast message={typeof toast === "string" ? toast : toast.message} action={typeof toast === "string" ? undefined : toast.action} onClose={closeToast} />}
+        {toast && <Toast key={toast.key} message={toast.message} action={toast.action} onClose={closeToast} />}
         <NotificationStack
           items={cardItems}
           now={cardsNow}

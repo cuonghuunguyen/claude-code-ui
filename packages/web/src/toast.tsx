@@ -1,6 +1,6 @@
 // One toast like OpenCode's toast-v2 in the corner region: bottom right (32px / 48px), 320px wide, 12px padding, radius 8, floating shadow, gone after 5 s.
 // At 600px and below it is full width (16px offsets). It slides in and out (280ms transform, 160ms opacity; none under reduced motion).
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
 
 /** Surface of a toast (Toast, UpdateToast, StaleToast, the notification card); the ToastRegion places it. */
@@ -17,11 +17,14 @@ export function ToastRegion({ children }: { children?: ReactNode }) {
 
 export function Toast({ message, action, onClose }: { message: string; /** A text button after the message (Undo); it runs, then the toast goes. */ action?: { label: string; onClick: () => void }; onClose: () => void }) {
   const [open, setOpen] = useState(false);
+  const exit = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // A toast that is replaced while it leaves must not close its successor.
+  useEffect(() => () => clearTimeout(exit.current), []);
   // Out: wait for the exit transition (none under reduced motion) before the owner drops the toast.
   const close = () => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return onClose();
     setOpen(false);
-    setTimeout(onClose, 280);
+    exit.current = setTimeout(onClose, 280);
   };
   useEffect(() => {
     const show = setTimeout(() => setOpen(true), 16);

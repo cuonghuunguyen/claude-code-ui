@@ -779,3 +779,21 @@ it("phone: a row's touchmove is cancelled only after the horizontal lock, never 
   await touch(row, "pointermove", 2, 140);
   expect(move()).toBe(false);
 });
+
+it("phone: the slide-out of a swipe closes with the latest onSwipeClose, not the one of the render that started it", async () => {
+  const stale = vi.fn();
+  const latest = vi.fn();
+  const handlers = { onSelect: () => {}, onClose: () => {}, onMove: () => {}, onMoveGroup: () => {}, onMoveGroupTo: () => {}, onNew: () => {}, onAction: () => {}, onRenamed: () => {} };
+  const view = (cb: (id: string) => void) => <TabsBar {...handlers} tabs={["a", "b", "c", "d", NEW_TAB]} activeId="c" info={(id) => INFO[id]!} onSwipeClose={cb} />;
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root!.render(view(stale)));
+  await act(async () => trigger(el).click());
+  for (const row of swipeRows()) row.getBoundingClientRect = () => ({ width: 300, height: 44, left: 0, top: 0, right: 300, bottom: 44, x: 0, y: 0, toJSON() {} });
+  await swipeBy(swipeRows()[0]!, -200);
+  await act(async () => root!.render(view(latest)));
+  await wait(500);
+  expect(stale).not.toHaveBeenCalled();
+  expect(latest).toHaveBeenCalledExactlyOnceWith("a");
+});

@@ -93,3 +93,13 @@ it("an action button (Undo) runs its callback and closes the toast, at once unde
   expect(run).toHaveBeenCalledOnce();
   expect(onClose).toHaveBeenCalledOnce();
 });
+
+it("a toast replaced while it leaves does not close the next one", async () => {
+  const first = vi.fn();
+  const root = createRoot(el);
+  await act(async () => root.render(<Toast key="1" message="a" action={{ label: "Undo", onClick: () => {} }} onClose={first} />));
+  await act(async () => void toast().querySelector<HTMLElement>('[aria-label="Dismiss"]')!.click());
+  await act(async () => root.render(<Toast key="2" message="b" onClose={onClose} />));
+  await act(async () => void vi.advanceTimersByTime(300));
+  expect(first).not.toHaveBeenCalled();
+});
