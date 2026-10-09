@@ -9,14 +9,16 @@ const appTop = new WeakMap<Element, number>();
 
 /** Smooth app scrolls under way (Jump to latest): every scroll event on the way to `top` is the app's, until it arrives, the user touches the timeline, or `until` passes. */
 const smooth = new WeakMap<Element, { top: number; until: number }>();
+/** Timelines with a smooth app scroll under way (for the keys). */
+const active = new Set<Element>();
 /** A smooth scroll that has not arrived by then is over (the browser stopped it). */
 const SMOOTH_MAX = 1500;
 
 /** The app scrolled `el` to `top` (default: where it is now, read after an instant scroll); `smooth`: an animated scroll to `top`. */
 export function markAppScroll(el: Element, top = el.scrollTop, animated = false) {
   appTop.set(el, top);
-  if (animated) smooth.set(el, { top, until: performance.now() + SMOOTH_MAX });
-  else smooth.delete(el);
+  if (animated) (smooth.set(el, { top, until: performance.now() + SMOOTH_MAX }), active.add(el));
+  else (smooth.delete(el), active.delete(el));
 }
 
 /** Milliseconds since the user last scrolled a timeline (Infinity: never). */
@@ -34,24 +36,32 @@ if (typeof document !== "undefined")
       const el = e.target;
       if (!(el instanceof Element) || el.getAttribute("role") !== "log") return;
       const top = appTop.get(el);
-      if (top !== undefined && Math.abs(el.scrollTop - top) < 1) return void smooth.delete(el);
+      if (top !== undefined && Math.abs(el.scrollTop - top) < 1) return void (smooth.delete(el), active.delete(el));
       const s = smooth.get(el);
       if (s && performance.now() < s.until) return;
       smooth.delete(el);
+      active.delete(el);
       appTop.delete(el);
       lastUser = performance.now();
     },
     { capture: true, passive: true },
   );
 
-// The user takes over a smooth app scroll: from then on its scroll events are the user's.
+// The user takes over a smooth app scroll: from then on its scroll events are the user's. A wheel, touch or pointer event on a
+// timeline ends that timeline's; keys that scroll (focus outside a text field) end all.
+const scrollKeys = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown", " "]);
 if (typeof document !== "undefined")
   for (const type of ["wheel", "touchstart", "pointerdown", "keydown"])
     document.addEventListener(
       type,
       (e) => {
-        const el = e.target instanceof Element ? e.target.closest('[role="log"]') : null;
-        if (el) smooth.delete(el);
+        const t = e.target instanceof Element ? e.target : null;
+        if (type === "keydown") {
+          if (!t?.closest("input, textarea, select, [contenteditable]") && scrollKeys.has((e as KeyboardEvent).key)) for (const el of active) (smooth.delete(el), active.delete(el));
+          return;
+        }
+        const el = t?.closest('[role="log"]');
+        if (el) (smooth.delete(el), active.delete(el));
       },
       { capture: true, passive: true },
     );

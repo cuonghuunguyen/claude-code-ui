@@ -28,6 +28,9 @@ let cacheLimit = 8 * 1024 * 1024;
 const LINE_TIME = 40;
 /** A failed shiki or grammar load is tried again after this long (ms). */
 export const RETRY_MS = 30_000;
+/** A block whose first line was cut (a busy machine, a cold grammar) is tried again after this long (ms), at most CUT_TRIES times. */
+export const CUT_RETRY_MS = 3000;
+const CUT_TRIES = 3;
 /** Ranges painted (or removed) between two clock reads. */
 const CHUNK = 100;
 
@@ -43,7 +46,15 @@ let ready: Highlighter | undefined;
 const loading = new Set<string>();
 /** Language -> when it may be loaded again (a failed load, also of shiki itself). */
 const failed = new Map<string, number>();
-const cooling = (lang: string) => (failed.get(lang) ?? 0) > performance.now();
+/** The painter's clock (ms); tests move it (`skewClock`, `tickClock`) without touching `performance.now` that React uses. */
+let skew = 0;
+let tick = 0;
+const now = () => performance.now() + (skew += tick);
+/** For tests: the painter's clock jumps `ms` ahead. */
+export const skewClock = (ms: number) => void (skew += ms);
+/** For tests: the painter's clock moves `ms` on every read (a slow machine). */
+export const tickClock = (ms: number) => void (tick = ms);
+const cooling = (lang: string) => (failed.get(lang) ?? 0) > now();
 /** Longer lines stay plain (one shiki call per line: no long task). */
 const LINE_MAX = 1000;
 /** Blocks half tokenized kept (a block that left the screen goes on where it stopped). */
@@ -83,7 +94,11 @@ type Block = {
   at: number;
   done: boolean;
   skip?: boolean;
+  /** Not tokenized before this time (now) after a cut first line; `tries`: how often that happened. */
+  wait?: number;
+  tries: number;
 };
+const held = (b: Block) => (b.wait ?? 0) > now();
 const blocks = new Map<HTMLElement, Block>();
 /** Ranges of blocks that left the screen or the page; removed from the highlights in a slot after the scroll, not during it. */
 const stale: [Highlight, StaticRange][] = [];
@@ -125,28 +140,59 @@ function colorOf(t: ThemedToken) {
   return i;
 }
 
+/** Pumps at `at` (now); a timer that fires early arms itself again. */
+const timers = new Set<ReturnType<typeof setTimeout>>();
+function pumpAt(at: number) {
+  const id = setTimeout(() => {
+    timers.delete(id);
+    if (now() < at) pumpAt(at);
+    else pump();
+  }, Math.max(0, at - now()) + 1);
+  timers.add(id);
+}
+
+/** Set by the grammar when shiki stopped a line at its time limit (the line's colors and the grammar state after it are wrong). */
+let cutSeen = false;
+const watched = new WeakSet<object>();
+function watchCut(lang: string) {
+  const g = ready!.getLanguage(lang as never) as unknown as { tokenizeLine2: (...a: unknown[]) => { stoppedEarly?: boolean } };
+  if (watched.has(g)) return;
+  watched.add(g);
+  const orig = g.tokenizeLine2.bind(g);
+  g.tokenizeLine2 = (...a) => {
+    const r = orig(...a);
+    if (r.stoppedEarly) cutSeen = true;
+    return r;
+  };
+}
+
 /** The lines of a plain streamdown block (`code` > a span per line; an empty line holds "\n"). */
 const linesOf = (code: Element) => [...code.children].map((l) => (l.textContent === "\n" ? "" : (l.textContent ?? "")));
 /** The code a plain streamdown block shows (the code given to the plugin: trailing newlines trimmed). */
 export const codeOf = (code: Element) => linesOf(code).join("\n");
 
 /** "ready" when shiki and the language are loaded; else starts loading them ("wait") and pumps again when done. */
-function prepare(lang: string): "ready" | "wait" | "fail" {
-  if (cooling(lang)) return "fail";
+function prepare(lang: string): "ready" | "wait" {
+  if (cooling(lang)) return "wait";
   if (ready?.getLoadedLanguages().includes(lang)) return "ready";
   if (loading.has(lang)) return "wait";
   loading.add(lang);
-  shiki ??= createHighlighter({ themes: [THEMES.light, THEMES.dark], langs: [], engine: createJavaScriptRegexEngine({ forgiving: true }) });
+  if (!shiki) {
+    const created = createHighlighter({ themes: [THEMES.light, THEMES.dark], langs: [], engine: createJavaScriptRegexEngine({ forgiving: true }) });
+    shiki = created;
+    // Only a failed creation makes a new instance: a failed language never does (one instance holds the languages).
+    created.catch(() => void (shiki === created && (shiki = undefined)));
+  }
   shiki
     .then(async (h) => {
       await h.loadLanguage(lang as never);
       ready = h;
     })
     .catch((e) => {
-      // Tried again later (a network blip must not leave the blocks plain until reload); shiki itself is created anew.
-      if (!ready) shiki = undefined;
-      failed.set(lang, performance.now() + RETRY_MS);
-      setTimeout(pump, RETRY_MS + 1);
+      // Tried again later (a network blip must not leave the blocks plain until reload).
+      const at = now() + RETRY_MS;
+      failed.set(lang, at);
+      pumpAt(at);
       console.error("[user code] could not load", lang, e);
     })
     .finally(() => {
@@ -156,8 +202,13 @@ function prepare(lang: string): "ready" | "wait" | "fail" {
   return "wait";
 }
 
-/** Tokenizes lines of `b` until `until`; the finished paint data, undefined (not done yet) or null (no code element). */
-function tokenize(b: Block, until: number): Paint | undefined | null {
+/**
+ * Tokenizes lines of `b` until `until`; the finished paint data, undefined (not done yet), null (no code element) or "later"
+ * (the first line was cut: tried again after CUT_RETRY_MS). A line is cut when shiki stops it at LINE_TIME (its own signal,
+ * `stoppedEarly`): the line's colors and the grammar state after it are wrong, so the block stays plain from that line on and
+ * is not cached (a later view tokenizes it again).
+ */
+function tokenize(b: Block, until: number): Paint | undefined | null | "later" {
   let p = progress.get(b.key);
   if (!p) {
     const code = b.el.querySelector("code");
@@ -166,19 +217,19 @@ function tokenize(b: Block, until: number): Paint | undefined | null {
     progress.set(b.key, p);
     if (progress.size > PROGRESS_MAX) progress.delete(progress.keys().next().value!);
   }
+  watchCut(b.lang);
+  let cut = false;
   do {
     const line = p.lines[p.i]!;
-    // One line may not block the page: shiki stops a line after LINE_TIME. A line cut short leaves a wrong grammar state,
-    // so the block stays plain from that line on (the lines before it keep their colors, which are right). A cut line
-    // is tried once more: the first run of a grammar compiles its regular expressions, the second is fast.
+    // A cut line is tried once more: the first run of a grammar compiles its regular expressions, the second is fast.
     let r: ReturnType<Highlighter["codeToTokens"]> | undefined;
     for (let attempt = 0; attempt < 2 && !r; attempt++) {
-      const t0 = Date.now();
+      cutSeen = false;
       const x = ready!.codeToTokens(line, { lang: b.lang as never, themes: THEMES, grammarState: p.state, tokenizeMaxLineLength: LINE_MAX, tokenizeTimeLimit: LINE_TIME });
-      if (Date.now() - t0 < LINE_TIME) r = x;
+      if (!cutSeen) r = x;
     }
     if (!r) {
-      p.i = p.lines.length;
+      cut = true;
       break;
     }
     p.state = r.grammarState;
@@ -195,11 +246,16 @@ function tokenize(b: Block, until: number): Paint | undefined | null {
       at = end;
     }
     p.i++;
-  } while (p.i < p.lines.length && performance.now() < until);
-  if (p.i < p.lines.length) return undefined;
+  } while (p.i < p.lines.length && now() < until);
+  if (!cut && p.i < p.lines.length) return undefined;
   progress.delete(b.key);
+  if (cut && !p.i && ++b.tries < CUT_TRIES) {
+    b.wait = now() + CUT_RETRY_MS;
+    pumpAt(b.wait);
+    return "later";
+  }
   const paint = Int32Array.from(p.out);
-  remember(b.key, paint);
+  if (!cut) remember(b.key, paint);
   return paint;
 }
 
@@ -210,7 +266,7 @@ function paint(b: Block, data: Paint, until: number): "more" | "done" | "bad" {
   const lines = [...code.children];
   const ranges = (b.ranges ??= []);
   for (let i = b.at, n = 0; i < data.length; i += 4, n++) {
-    if (n && n % CHUNK === 0 && performance.now() >= until) return "more";
+    if (n && n % CHUNK === 0 && now() >= until) return "more";
     const line = lines[data[i]!];
     let node = line?.firstChild ?? null;
     while (node && !(node instanceof Text)) node = node.firstChild;
@@ -235,7 +291,7 @@ function release(b: Block) {
 
 /** A block on screen still to paint. */
 function nextBlock() {
-  for (const b of blocks.values()) if (b.visible && !b.done && !b.skip && !cooling(b.lang)) return b;
+  for (const b of blocks.values()) if (b.visible && !b.done && !b.skip && !cooling(b.lang) && !held(b)) return b;
   return undefined;
 }
 /** The block on screen to paint first: the one nearest the middle of the viewport. */
@@ -244,7 +300,7 @@ function pickBlock() {
   let bestDist = Infinity;
   const mid = (globalThis.innerHeight ?? 0) / 2;
   for (const b of blocks.values()) {
-    if (!b.visible || b.done || b.skip || cooling(b.lang)) continue;
+    if (!b.visible || b.done || b.skip || cooling(b.lang) || held(b)) continue;
     const r = b.el.getBoundingClientRect();
     const dist = r.top <= mid && r.bottom >= mid ? 0 : Math.min(Math.abs(r.top - mid), Math.abs(r.bottom - mid));
     if (dist < bestDist) (best = b), (bestDist = dist);
@@ -269,7 +325,7 @@ function pump() {
   const run = (d?: IdleDeadline) => {
     if (mine !== epoch) return;
     try {
-      if (sinceUserScroll() >= SCROLL_REST) work(performance.now() + (d && !d.didTimeout ? Math.min(IDLE_SLICE, Math.max(1, d.timeRemaining())) : SLICE));
+      if (sinceUserScroll() >= SCROLL_REST) work(now() + (d && !d.didTimeout ? Math.min(IDLE_SLICE, Math.max(1, d.timeRemaining())) : SLICE));
     } catch (e) {
       console.error("[user code] painting failed", e);
     } finally {
@@ -286,7 +342,7 @@ function pump() {
 function sweep(until: number) {
   while (stale.length) {
     for (const [h, r] of stale.splice(0, CHUNK)) h.delete(r);
-    if (performance.now() >= until) break;
+    if (now() >= until) break;
   }
   return !stale.length;
 }
@@ -294,18 +350,18 @@ function sweep(until: number) {
 /** Paints blocks on screen (nearest the middle first) until `until`. */
 function work(until: number) {
   if (!sweep(until)) return;
-  for (let b = pickBlock(); b && performance.now() < until; b = pickBlock()) {
+  for (let b = pickBlock(); b && now() < until; b = pickBlock()) {
     try {
       let data: Paint | null | undefined = b.data;
       if (!data) {
         data = cache.get(b.key);
         if (data) remember(b.key, data);
         else {
-          const state = prepare(b.lang);
-          if (state === "wait") return;
-          if (state === "fail") return;
-          data = tokenize(b, until);
-          if (data === undefined) return;
+          if (prepare(b.lang) === "wait") return;
+          const t = tokenize(b, until);
+          if (t === undefined) return;
+          if (t === "later") continue;
+          data = t;
         }
       }
       // The DOM is not the plain block (streamdown colored it after all): leave it.
@@ -341,7 +397,7 @@ export function watchBlock(el: HTMLElement) {
   const lang = langOf(el.dataset.language);
   const code = el.querySelector("code");
   if (!lang || lang === "text" || !code) return;
-  blocks.set(el, { el, key: `${lang}\0${codeOf(code)}`, lang, visible: false, at: 0, done: false });
+  blocks.set(el, { el, key: `${lang}\0${codeOf(code)}`, lang, visible: false, at: 0, done: false, tries: 0 });
   observer().observe(el);
   // Load shiki and the grammar now (asynchronous, no tokenizing): the block is painted sooner once the scroll rests.
   prepare(lang);
@@ -367,6 +423,8 @@ export function resetUserCodePaint() {
   progress.clear();
   cache.clear();
   cacheBytes = 0;
+  for (const id of timers) clearTimeout(id);
+  timers.clear();
   cacheLimit = 8 * 1024 * 1024;
   failed.clear();
   io = undefined;
@@ -384,6 +442,8 @@ export const pairOf = (h: Highlight) => [...colors].find(([, x]) => x === h)?.[0
 export const cacheStats = () => ({ entries: cache.size, bytes: cacheBytes });
 /** For tests: the cache size limit in bytes (reset to the default by `resetUserCodePaint`). */
 export const limitCache = (bytes: number) => void (cacheLimit = bytes);
+/** For tests: whether `el` (a watched block) is completely painted. */
+export const isPainted = (el: HTMLElement) => blocks.get(el)?.done === true;
 /** For tests: shiki is created anew (and its languages loaded again) on next use. */
 export function resetShiki() {
   shiki = ready = undefined;
