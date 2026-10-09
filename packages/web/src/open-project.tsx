@@ -5,7 +5,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { BoxIcon, FolderIcon, SearchIcon, XIcon } from "lucide-react";
-import { LOCAL_SIDE, type FsEntry, type RecentProject, type SideCheck, type SideInfo, type SideSetup } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type FsEntry, type RecentProject, type DockerState, type SideCheck, type SideInfo, type SideSetup } from "@claude-ui/protocol";
 import { SidePanel, type PanelState, type RunMode } from "./side-panel.tsx";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -16,7 +16,7 @@ import { sepOf, withSep } from "./paths.ts";
 import { isImeKey } from "./ime.ts";
 import { timeAgo } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
-import { defaultTarget, fromMnt, fromWslUnc, kindsOf, loadSide, loadSideFor, localIsWindows, saveSide, saveSideFor, SideBadge, sideKind, sideName, type SideKind } from "./sides.tsx";
+import { defaultTarget, DOCKER_HINT, fromMnt, fromWslUnc, kindsOf, loadSide, loadSideFor, localIsWindows, saveSide, saveSideFor, SideBadge, sideKind, sideName, type SideKind } from "./sides.tsx";
 
 /**
  * `list()`: the roots; `list(path)`: the entries of a directory inside them; `side`: of that side. `onPick` rejects when the
@@ -31,6 +31,7 @@ export function OpenProjectDialog({
   recent,
   finalFocus,
   sides,
+  docker,
   onStartSide,
   onCheckSide,
   sideOf = () => LOCAL_SIDE,
@@ -40,6 +41,8 @@ export function OpenProjectDialog({
   list: (path?: string, side?: string) => Promise<FsEntry[]>;
   onPick: (cwd: string, side?: string) => Promise<unknown>;
   sides?: SideInfo[];
+  /** The Docker engine as the hub sees it: any value shows the Docker kind (even with no container), absent: no docker command or an older daemon. */
+  docker?: DockerState;
   onStartSide?: (side: string, setup?: SideSetup) => Promise<unknown>;
   onCheckSide?: (side: string) => Promise<SideCheck>;
   /** Side of a recent project. */
@@ -84,8 +87,8 @@ export function OpenProjectDialog({
               <XIcon className="size-4" />
             </Dialog.Close>
           </div>
-          {sides && sides.length > 1 ? (
-            <SidePicker input={input} list={list} onPick={pick} recent={recent} sides={sides} onStartSide={onStartSide} onCheckSide={onCheckSide} sideOf={sideOf} />
+          {sides && (sides.length > 1 || docker) ? (
+            <SidePicker input={input} list={list} onPick={pick} recent={recent} sides={sides} docker={docker} onStartSide={onStartSide} onCheckSide={onCheckSide} sideOf={sideOf} />
           ) : (
             <Browser input={input} list={list} onPick={pick} recent={recent} />
           )}
@@ -107,6 +110,7 @@ function SidePicker({
   onPick,
   recent = [],
   sides,
+  docker,
   onStartSide,
   onCheckSide,
   sideOf,
@@ -116,6 +120,7 @@ function SidePicker({
   onPick: (cwd: string, side?: string) => Promise<unknown>;
   recent?: RecentProject[];
   sides: SideInfo[];
+  docker?: DockerState;
   onStartSide?: (side: string, setup?: SideSetup) => Promise<unknown>;
   onCheckSide?: (side: string) => Promise<SideCheck>;
   sideOf: (cwd: string) => string;
@@ -135,7 +140,7 @@ function SidePicker({
   const focusInput = useRef(false);
   const [targetOpen, setTargetOpen] = useState(false);
   const targetTrigger = useRef<HTMLButtonElement>(null);
-  const kinds = kindsOf(sides);
+  const kinds = kindsOf(sides, docker);
   // A kind or container that left the list falls back: the machine itself, or the container list.
   const info = chosen.kind === "local" ? sides.find((s) => s.id === LOCAL_SIDE) : sides.find((s) => s.id === chosen.target && sideKind(s.id) === chosen.kind);
   const kind: SideKind = kinds.includes(chosen.kind) && (info || chosen.kind === "docker") ? chosen.kind : "local";
@@ -258,7 +263,11 @@ function SidePicker({
           </Select>
         </div>
       )}
-      {!current ? (
+      {!current && !members.length && docker && docker !== "ok" ? (
+        <p role="status" className="px-4 py-3 text-sm text-muted-foreground" data-testid="docker-hint">
+          {DOCKER_HINT[docker]}
+        </p>
+      ) : !current ? (
         <ContainerStep input={input} containers={members} stateWord={stateWord} isReady={isReady} onPick={(id) => void choose(id)} />
       ) : !ready ? (
         <SidePanel key={current.id} side={current} state={panels[current.id] ?? {}} onRun={(m) => void run(current.id, m)} onCheck={() => void runCheck(current.id)} />

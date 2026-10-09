@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FsEntry, RecentProject, SideCheck, SideInfo } from "@claude-ui/protocol";
+import type { DockerState, FsEntry, RecentProject, SideCheck, SideInfo } from "@claude-ui/protocol";
 import { OpenProjectDialog } from "./open-project.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -211,7 +211,7 @@ describe("side chooser", () => {
     facts: { reachable: true, node: "v22.1.0", nodeOk: true, buildTools: { make: true, python3: true, cxx: true }, credentialsFile: true, installed: verdict === "install" ? "none" : verdict === "update" ? "other" : "current", ...facts },
     ...more,
   });
-  async function renderSides(s: SideInfo[], onStartSide = vi.fn(async (_id: string, _setup?: string) => {}), keepStorage = false, onCheckSide = vi.fn(async (_id: string) => chk("install"))) {
+  async function renderSides(s: SideInfo[], onStartSide = vi.fn(async (_id: string, _setup?: string) => {}), keepStorage = false, onCheckSide = vi.fn(async (_id: string) => chk("install")), dockerState?: DockerState) {
     if (!keepStorage) localStorage.clear();
     const onPick = vi.fn(async (_cwd: string, _side?: string) => {});
     const recent: RecentProject[] = [{ cwd: "/home/u/api", sessionCount: 2, lastActivity: Date.now() }];
@@ -219,7 +219,7 @@ describe("side chooser", () => {
     document.body.append(el);
     root = createRoot(el);
     const show = (sides: SideInfo[]) =>
-      act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={sideList} onPick={onPick} sides={sides} onStartSide={onStartSide} onCheckSide={onCheckSide} recent={recent} sideOf={sideOf} />));
+      act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={sideList} onPick={onPick} sides={sides} docker={dockerState} onStartSide={onStartSide} onCheckSide={onCheckSide} recent={recent} sideOf={sideOf} />));
     await show(s);
     const input = () => document.querySelector<HTMLInputElement>('[data-testid="folder-input"]');
     const kinds = () => [...document.querySelectorAll<HTMLElement>('[data-testid="side-kind"]')];
@@ -619,6 +619,45 @@ describe("side chooser", () => {
         expect(b.tagName).toBe("BUTTON");
         expect(b.className).toContain("max-md:h-11");
       }
+    });
+  });
+
+  describe("Docker engine state", () => {
+    const only = [S("local", "Windows")];
+    const texts = { down: "Docker is not running. Start Docker, then reopen this dialog.", empty: "No running containers. Start one, then reopen this dialog." } as const;
+    for (const state of ["down", "empty"] as const) {
+      it(`${state}: the Docker chip shows with no container, with a status hint and no request`, async () => {
+        const { kinds, kind, click, checked, byId, onStartSide, onCheckSide } = await renderSides(only, undefined, false, undefined, state);
+        expect(kinds().map((o) => o.textContent)).toEqual(["Windows", "Docker"]);
+        await click(kind("Docker"));
+        expect(checked()).toEqual(["Docker"]);
+        const hint = byId("docker-hint")!;
+        expect(hint.textContent).toBe(texts[state]);
+        expect(hint.getAttribute("role")).toBe("status");
+        expect(document.querySelector('[data-testid="container-row"]')).toBeNull();
+        expect(onStartSide).not.toHaveBeenCalled();
+        expect(onCheckSide).not.toHaveBeenCalled();
+      });
+    }
+
+    it("ok with containers keeps the list and filter, and no hint", async () => {
+      const { kind, click, containers, filter, byId } = await renderSides([S("local", "Windows"), ...docker("a", "b")], undefined, false, undefined, "ok");
+      await click(kind("Docker"));
+      expect(containers()).toHaveLength(2);
+      expect(filter()).not.toBeNull();
+      expect(byId("docker-hint")).toBeNull();
+    });
+
+    it("a daemon without the field shows no Docker chip when no container is listed", async () => {
+      const { kinds } = await renderSides(only);
+      expect(kinds()).toHaveLength(0);
+      expect(document.querySelector('[data-testid="side-chooser"]')).toBeNull();
+    });
+
+    it("the hint stays inside a 390px dialog: it wraps, no fixed width", async () => {
+      const { kind, click, byId } = await renderSides(only, undefined, false, undefined, "down");
+      await click(kind("Docker"));
+      expect(byId("docker-hint")!.className).not.toMatch(/whitespace-nowrap|w-\[/);
     });
   });
 

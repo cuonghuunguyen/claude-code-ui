@@ -348,6 +348,7 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
   mkdirSync(localRoot);
   let dockSaved: string[] = [];
   let containers = ["dev", "stopped"];
+  let dockerState: "ok" | "down" | "empty" | undefined = "ok";
   let devProc: SideProcess;
   let sideDaemon: ReturnType<typeof createDaemon>;
   const dsides = createSides({
@@ -356,6 +357,7 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
     posixLocal: true,
     discoverMs: 0,
     discover: async () => containers.map(dockerSide),
+    dockerState: () => dockerState,
     spawn: async (id) => (id === "docker:dev" ? (devProc = inProcessSide(dockRoot, dockSession, (d) => (sideDaemon = d))) : Promise.reject(new Error("Docker: stopped is not running. Start it (docker start stopped), then retry."))),
     save: (ids) => (dockSaved = ids),
   });
@@ -373,6 +375,19 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
       { id: "docker:dev", label: "Docker: dev", state: "off" },
       { id: "docker:stopped", label: "Docker: stopped", state: "off" },
     ]);
+    c.ws.close();
+  });
+
+  it("session.list carries the Docker state next to the sides, and leaves the field out when unknown", async () => {
+    const c = await client(await dport());
+    expect((await c.request({ type: "session.list" })).result.docker).toBe("ok");
+    for (const s of ["down", "empty"] as const) {
+      dockerState = s;
+      expect((await c.request({ type: "session.list" })).result.docker).toBe(s);
+    }
+    dockerState = undefined;
+    expect("docker" in (await c.request({ type: "session.list" })).result).toBe(false);
+    dockerState = "ok";
     c.ws.close();
   });
 

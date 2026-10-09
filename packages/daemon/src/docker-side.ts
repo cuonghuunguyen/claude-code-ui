@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SideCheck, SideCheckReason, SidePhase, SideSetup } from "@claude-ui/protocol";
+import type { DockerState, SideCheck, SideCheckReason, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { blockedCheck, checkScript, dockerExecArgs, hasBuild, parseCheck, verdictOf } from "./sides.ts";
 import { runCommand, type Runner } from "./update.ts";
 
@@ -36,12 +36,22 @@ export function parseContainers(out: string): string[] {
   return [...new Set(names)];
 }
 
+/**
+ * What a hub with the docker command sees (`ListResult.docker`): `down` = the engine does not answer (or runs Windows containers),
+ * `empty` = the engine runs no Linux container of ours, `ok` = at least one. `containers`: their names.
+ */
+export async function dockerStatus(exec: Exec = execRun): Promise<{ state: DockerState; containers: string[] }> {
+  const v = await exec("docker", ["version", "--format", "{{.Server.Os}}"], 10_000);
+  if (v.code !== 0 || v.stdout.trim() !== "linux") return { state: "down", containers: [] };
+  const ps = await exec("docker", ["ps", "--filter", "status=running", "--format", "{{.Names}}"], 10_000);
+  if (ps.code !== 0) return { state: "down", containers: [] };
+  const containers = parseContainers(ps.stdout);
+  return { state: containers.length ? "ok" : "empty", containers };
+}
+
 /** Running Linux containers; [] when the CLI is missing, the engine is down or runs Windows containers. */
 export async function listContainers(exec: Exec = execRun): Promise<string[]> {
-  const v = await exec("docker", ["version", "--format", "{{.Server.Os}}"], 10_000);
-  if (v.code !== 0 || v.stdout.trim() !== "linux") return [];
-  const ps = await exec("docker", ["ps", "--filter", "status=running", "--format", "{{.Names}}"], 10_000);
-  return ps.code === 0 ? parseContainers(ps.stdout) : [];
+  return (await dockerStatus(exec)).containers;
 }
 
 const lastLines = (s: string, n = 1) => s.trim().split(/\r?\n/).slice(-n).join(" ").trim();

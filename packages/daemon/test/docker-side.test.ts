@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { checkDockerSide, cpUsable, folderPath, listContainers, parseContainers, prepareDockerSide, underDist, type Exec } from "../src/docker-side.ts";
+import { checkDockerSide, cpUsable, dockerStatus, folderPath, listContainers, parseContainers, prepareDockerSide, underDist, type Exec } from "../src/docker-side.ts";
 import type { Runner } from "../src/update.ts";
 
 // `docker inspect -f` output of the mounts check: read-only root flag, `<dest> <rw>` lines, the tmpfs map as JSON.
@@ -47,6 +47,15 @@ describe("docker sides", () => {
       expect(await listContainers(f.exec)).toEqual([]);
       expect(f.calls.some((c) => c[1] === "ps")).toBe(false);
     }
+  });
+
+  it("tells the Docker state: down (no CLI, engine down, Windows containers, ps fails), empty (nothing runs, only k8s_*), ok", async () => {
+    for (const version of [{ code: null, stderr: "spawn docker ENOENT" }, { code: 1 }, { code: 0, stdout: "windows\n" }]) expect((await dockerStatus(fake({ version }).exec)).state).toBe("down");
+    const linux = { code: 0, stdout: "linux\n" };
+    expect(await dockerStatus(fake({ version: linux, ps: { code: 1 } }).exec)).toEqual({ state: "down", containers: [] });
+    expect(await dockerStatus(fake({ version: linux, ps: { code: 0, stdout: "" } }).exec)).toEqual({ state: "empty", containers: [] });
+    expect(await dockerStatus(fake({ version: linux, ps: { code: 0, stdout: "k8s_POD_a\nk8s_b\n" } }).exec)).toEqual({ state: "empty", containers: [] });
+    expect(await dockerStatus(fake({ version: linux, ps: { code: 0, stdout: "k8s_POD_a\ndev\n" } }).exec)).toEqual({ state: "ok", containers: ["dev"] });
   });
 
   it("lists running Linux containers", async () => {

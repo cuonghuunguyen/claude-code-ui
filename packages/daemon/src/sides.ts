@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
-import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import type { Exec } from "./docker-side.ts";
 
 /** A started side process: `wsl.exe -d <distro> ...` or `docker exec -i <name> ...` (tests: an in-process side). */
@@ -308,6 +308,8 @@ export function createSides(opts: {
   localLabel?: string;
   /** Dynamic sides (Docker containers), called by refresh(); never rejects (returns [] on failure). */
   discover?: () => Promise<SideTarget[]>;
+  /** The Docker engine state found by the last discover() (`session.list` reply `docker`); undefined: unknown yet or no docker command. */
+  dockerState?: () => DockerState | undefined;
   /** Minimum ms between two discover() runs (default 5000; tests 0). */
   discoverMs?: number;
   onPush?: (p: PushPayload) => void;
@@ -531,6 +533,7 @@ export function createSides(opts: {
   return {
     /** Every side, local first. */
     list: (): SideInfo[] => [{ id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" }, ...[...sides.values()].map(({ id, label, state, message, phase }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }) }))],
+    docker: () => opts.dockerState?.(),
     has: (id: string) => sides.has(id),
     check,
     ready: () => [...sides.values()].filter((s) => s.state === "ready").map((s) => s.id),
@@ -658,6 +661,7 @@ export function createRouter(opts: {
     if (local.type !== "reply") return local;
     const merged = { ...(local.result as ListLike & object) } as ListLike & Record<string, unknown>;
     const cwdSides: Record<string, string> = {};
+    const docker = sides.docker();
     for (const [id, a] of answers.slice(1)) {
       // A side that fails its list leaves it out; its state shows in `sides`.
       if (a.type !== "reply") continue;
@@ -682,7 +686,7 @@ export function createRouter(opts: {
     merged.projects = order.sort((a, b) => (newest.get(b[0]) ?? -1) - (newest.get(a[0]) ?? -1) || a[1] - b[1]).map(([p]) => p);
     merged.sessions.sort((a, b) => b.lastActivity - a.lastActivity);
     merged.recentProjects.sort((a, b) => b.lastActivity - a.lastActivity);
-    return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), cwdSides } };
+    return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), ...(docker && { docker }), cwdSides } };
   }
 
   async function handle(msg: ClientMessage & Record<string, unknown>) {

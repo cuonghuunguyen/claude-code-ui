@@ -47,6 +47,7 @@ it("splits sides into kinds and names them without the prefix", () => {
   expect([sideName(S("docker:cui-node", "Docker: cui-node")), sideName(S("wsl:Ubuntu", "WSL: Ubuntu")), sideName(S("local", "Windows"))]).toEqual(["cui-node", "Ubuntu", "Windows"]);
   const local = S("local", "Linux");
   expect(kindsOf([local])).toEqual(["local"]);
+  expect(kindsOf([local], "down")).toEqual(["local", "docker"]);
   expect(kindsOf([local, S("docker:a", "Docker: a"), S("docker:b", "Docker: b")])).toEqual(["local", "docker"]);
   expect(kindsOf([local, S("docker:a", "Docker: a"), S("wsl:U", "WSL: U")])).toEqual(["local", "wsl", "docker"]);
 });

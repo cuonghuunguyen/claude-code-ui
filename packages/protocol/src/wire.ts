@@ -348,6 +348,11 @@ export type ListResult = {
   permissionModes: PermissionMode[];
   /** A daemon with sides (WSL distros, Docker containers): every side, this daemon's own ("local": Windows, Linux or macOS) first. Absent: no sides. */
   sides?: SideInfo[];
+  /**
+   * A hub with the docker command: `ok` (a running Linux container exists), `empty` (the engine runs none) or `down` (the engine does not answer).
+   * Absent: no docker command, or a daemon without this field (the Docker kind then shows only when a Docker side is listed).
+   */
+  docker?: DockerState;
   /** Side of each listed project, recent project and session cwd that is not local. */
   cwdSides?: Record<string, string>;
   /** Git worktrees of each listed project that is in a git repository (docs/spec.md "Projects"), the main worktree first. */
@@ -374,6 +379,8 @@ export function worktreeNameError(name: string): string | undefined {
 export type SideInfo = { id: string; label: string; state: "off" | "starting" | "ready" | "error"; message?: string; phase?: SidePhase };
 /** What a starting side is doing (`SideInfo.phase`, only while `state` is `starting`). */
 export type SidePhase = "packing" | "copying" | "installing" | "starting";
+/** The Docker engine as the hub sees it (`ListResult.docker`). */
+export type DockerState = "ok" | "down" | "empty";
 /** `side.start` setup mode: run only what is installed, install when needed (default), install again. */
 export type SideSetup = "never" | "needed" | "force";
 /** `running`/`starting`: the side is up (nothing was run); `installed`: this build is installed (can start); `install`/`update`: setup is needed; `blocked`: see `reason`. */
