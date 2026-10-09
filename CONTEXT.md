@@ -116,7 +116,7 @@ A notice card in the open page about another session that needs input or finishe
 _Avoid_: toast (the component), alert, banner
 
 **Signal only**:
-A per-session, per-browser timeline view that folds each run of tool cards into one line ("4 tool calls · Read 3 · Grep 1"); prompts, text, errors and pending requests stay expanded.
+A browser-wide timeline setting (Settings > Timeline, palette, Ctrl+Alt+S; one value for every session) that folds each run of tool cards into one line ("4 tool calls · Read 3 · Grep 1"); prompts, text, errors and pending requests stay expanded.
 _Avoid_: compact mode
 
 **Permission tier**:

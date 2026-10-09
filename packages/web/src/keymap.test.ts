@@ -108,3 +108,29 @@ it("terminal: tab keys, palette, terminal and prefix keys leave xterm; Ctrl+lett
   expect(leavesTerminal(ev("b", { ctrlKey: true }))).toBe(false);
   expect(leavesTerminal(ev("l", { ctrlKey: true }))).toBe(false);
 });
+
+it("AltGr, macOS Option and editing keys are refused as stored bindings and dropped on load", () => {
+  expect(bindingError("mod+alt+[", false)).toMatch(/AltGr/);
+  expect(parseOverrides('{"file.open":"mod+alt+["}')).toEqual({});
+  expect(bindingError("mod+alt+[", true)).toBeUndefined();
+  expect(bindingError("mod+alt++", false)).toBeUndefined();
+  expect(bindingError("alt+l", true)).toMatch(/Option/);
+  expect(bindingError("alt+f2", true)).toBeUndefined();
+  expect(bindingError("ctrl+alt+l", true)).toBeUndefined();
+  expect(bindingError("mod+v", false)).toMatch(/prompt box uses this key \(Paste\)/);
+  expect(parseOverrides('{"file.open":"mod+v","tab.close":"mod+alt+b"}')).toEqual({ "tab.close": "mod+alt+b" });
+});
+
+it("the conflict check also compares the press: a spec string that differs can still fire on the same press", () => {
+  // Hand-edited "alt++" would fire on Czech Alt+1 only through the old digit fallback; now it does not.
+  bind("file.open", "alt++");
+  const czechAlt1 = ev("+", { altKey: true, code: "Digit1" });
+  expect(conflictOf("tab.goto1", "alt+1", false, czechAlt1)).toBeUndefined();
+  const numpadPlus = ev("+", { altKey: true, code: "NumpadAdd" });
+  expect(conflictOf("tab.goto1", "alt++", false, numpadPlus)?.id).toBe("file.open");
+  // A QWERTZ press whose spec string differs from the bound one but fires on it.
+  bind("sidebar.toggle", "mod+shift+z");
+  const e = ev("Z", { ctrlKey: true, shiftKey: true, code: "KeyY" });
+  expect(conflictOf("panel.toggle", "mod+shift+y", false, e)?.id).toBe("sidebar.toggle");
+});
+

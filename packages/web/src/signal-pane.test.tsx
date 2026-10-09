@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import type { Part } from "@claude-ui/protocol";
-import { act, useState } from "react";
+import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it } from "vitest";
 import { SessionPane } from "./App.tsx";
-import { loadSignalOnly, saveSignalOnly } from "./signal.ts";
+import { saveSignalOnly, useSignalOnly } from "./signal.ts";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -25,15 +25,15 @@ document.body.append(el);
 const root = createRoot(el);
 afterEach(() => act(() => root.render(<></>)));
 
-/** Keeps the setting like App does: per session id, in localStorage. */
-function Pane({ id, v }: { id: string; v: SessionView }) {
-  const [on, setOn] = useState(() => loadSignalOnly(id));
+/** Reads the browser-wide setting like App does. */
+function Pane({ v }: { v: SessionView }) {
+  const on = useSignalOnly();
   return (
     <SessionPane
       scrollKey={0}
       onInserted={noop}
       connected
-      session={{ id, cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [] }}
+      session={{ id: "s1", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [] }}
       view={v}
       models={[]}
       onModel={noop}
@@ -48,24 +48,27 @@ function Pane({ id, v }: { id: string; v: SessionView }) {
       onRespond={noop}
       onAnswer={noop}
       signalOnly={on}
-      onSignalOnly={(next) => (saveSignalOnly(id, next), setOn(next))}
     />
   );
 }
-const render = (id: string, v: SessionView) => act(async () => root.render(<Pane id={id} v={v} />));
+const render = (v: SessionView) => act(async () => root.render(<Pane v={v} />));
 const parts = [call("e1", "Edit"), call("e2", "Edit"), text("t1"), call("b1", "Bash", "error"), call("e3", "Edit")];
-const sw = () => el.querySelector<HTMLElement>('[data-testid="signal-switch"]')!;
 const folds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="signal-fold"]')];
 const cards = () => el.querySelectorAll('[data-testid="tool-card"]');
 
-it("the switch folds tool runs into one line each, keeping text and errors, and clicking a fold shows its cards in place", async () => {
+it("the session pane has no Signal only switch", async () => {
   localStorage.clear();
-  await render("s1", view(parts));
-  expect(sw().getAttribute("aria-checked")).toBe("false");
+  await render(view(parts));
+  expect(el.querySelector('[data-testid="signal-switch"]')).toBeNull();
+  expect(el.textContent).not.toContain("Signal only");
+});
+
+it("with the setting on, tool runs fold into one line each, keeping text and errors, and clicking a fold shows its cards in place", async () => {
+  localStorage.clear();
+  await render(view(parts));
   expect(folds()).toHaveLength(0);
   expect(cards()).toHaveLength(4);
-  await act(async () => sw().click());
-  expect(sw().getAttribute("aria-checked")).toBe("true");
+  await act(async () => saveSignalOnly(true));
   expect(folds().map((f) => f.textContent)).toEqual(["2 tool calls · Edit 2", "1 tool call · Edit 1"]);
   // The error card and Claude's text stay expanded.
   expect(cards()).toHaveLength(1);
@@ -73,26 +76,26 @@ it("the switch folds tool runs into one line each, keeping text and errors, and 
   await act(async () => folds()[0]!.querySelector("button")!.click());
   expect(folds()[0]!.querySelector("button")!.getAttribute("aria-expanded")).toBe("true");
   expect(cards()).toHaveLength(3);
+  await act(async () => saveSignalOnly(false));
+  expect(folds()).toHaveLength(0);
 });
 
-it("is remembered per session: a reload keeps it on for that session and off for another", async () => {
+it("applies to every session and survives a reload", async () => {
   localStorage.clear();
-  await render("s1", view(parts));
-  await act(async () => sw().click());
-  await act(() => root.render(<></>));
-  await render("s1", view(parts));
-  expect(sw().getAttribute("aria-checked")).toBe("true");
+  saveSignalOnly(true);
+  await render(view(parts));
   expect(folds()).toHaveLength(2);
   await act(() => root.render(<></>));
-  await render("s2", view(parts));
-  expect(sw().getAttribute("aria-checked")).toBe("false");
-  expect(folds()).toHaveLength(0);
+  await render(view([call("x", "Read")]));
+  expect(folds()).toHaveLength(1);
+  saveSignalOnly(false);
 });
 
 it("a call waiting for a permission answer stays expanded in Signal only", async () => {
   localStorage.clear();
-  saveSignalOnly("s1", true);
-  await render("s1", view([call("x1", "Edit"), call("b2", "Bash", "running"), permission("b2")]));
+  saveSignalOnly(true);
+  await render(view([call("x1", "Edit"), call("b2", "Bash", "running"), permission("b2")]));
   expect(folds().map((f) => f.textContent)).toEqual(["1 tool call · Edit 1"]);
   expect(cards()).toHaveLength(1);
+  saveSignalOnly(false);
 });
