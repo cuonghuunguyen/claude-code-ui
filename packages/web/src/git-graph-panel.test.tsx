@@ -246,6 +246,18 @@ it("a parent link selects that commit and scrolls the list to it", async () => {
   expect(el.querySelector(`#commit-${hash(2)}`)).not.toBeNull();
 });
 
+it("the branch filter defaults to HEAD: the trigger says so and the first git.log asks for ref HEAD", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  expect(el.querySelector("[data-testid=graph-filter-branch]")!.textContent).toContain("HEAD (main)");
+  expect(c.sent.find((m) => m.type === "git.log")).toMatchObject({ ref: "HEAD", skip: 0 });
+});
+
+it("a fresh repo with no commits says No commits yet. under the default HEAD", async () => {
+  await mount(fake([]));
+  expect(el.textContent).toContain("No commits yet.");
+});
+
 it("the branch select has a HEAD entry (with the current branch) that asks for ref HEAD", async () => {
   const c = fake(history(3));
   await mount(c);
