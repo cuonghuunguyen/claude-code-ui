@@ -157,7 +157,6 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
   const [sending, setSending] = useState<Record<string, boolean>>({});
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [over, setOver] = useState(false);
-  const [inside, setInside] = useState(false);
 
   // A finished card goes after 8 s, unless the pointer is over the region or focus is inside it (WCAG 2.2.1); the timer waits while the page is hidden.
   const left = useRef(new Map<string, number>());
@@ -169,7 +168,8 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
     for (const k of [...left.current.keys()]) if (!live.has(k)) left.current.delete(k);
     if (!live.size) return;
     const t = setInterval(() => {
-      if (over || inside || document.visibilityState === "hidden") return;
+      // Read at the tick, not tracked by events: a card that leaves with the focused button inside fires no blur.
+      if (over || region.current?.contains(document.activeElement) || document.visibilityState === "hidden") return;
       for (const k of live) {
         const rest = (left.current.get(k) ?? FINISHED_MS) - 250;
         left.current.set(k, rest);
@@ -181,7 +181,7 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
       }
     }, 250);
     return () => clearInterval(t);
-  }, [finishedKeys, over, inside]);
+  }, [finishedKeys, over]);
 
   const actions = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>("[data-action]")].filter((b) => b.closest("article"));
   /** Focus after a card leaves: the neighbour card, else what had focus before, else the prompt box. */
@@ -258,10 +258,8 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
       onMouseEnter={() => setOver(true)}
       onMouseLeave={() => setOver(false)}
       onFocus={(e) => {
-        setInside(true);
         focusedSession.current = (e.target as Element).closest("article")?.getAttribute("data-session") ?? undefined;
       }}
-      onBlur={(e) => !region.current?.contains(e.relatedTarget as Node | null) && setInside(false)}
     >
       {visible.map(({ card, d, title, place, cwd }) => {
         const id = `n-${card.sessionId}`;

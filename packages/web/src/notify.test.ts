@@ -199,3 +199,10 @@ it("loadInApp: on by default and when storage throws, off after saveInApp(false)
   expect(loadInApp(ls)).toBe(true);
   expect(loadInApp({ getItem: () => { throw new Error("blocked"); } })).toBe(true);
 });
+
+it("lastLine shows markdown as plain text: links keep their title, list and emphasis markers go", () => {
+  expect(lastLine("done\n- [Fix login](https://example.com/a?b=1)")).toBe("Fix login");
+  expect(lastLine("**All** `12` tests pass")).toBe("All 12 tests pass");
+  expect(lastLine("## Summary\n")).toBe("Summary");
+  expect(lastLine("![alt](x.png)")).toBe("alt");
+});

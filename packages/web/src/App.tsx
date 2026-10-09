@@ -788,22 +788,25 @@ export function App() {
 
   // Settings › Notifications owns the switch; its error shows under the row (not in the sidebar).
   // In-app notification cards: live events of sessions this page does not show (docs/spec.md "In-app notifications").
-  const [cardNote, setCardNote] = useState<{ text: string; at?: number }>();
+  const [cardNote, setCardNote] = useState<{ card: Card; hint: boolean; at?: number }>();
   const hinted = useRef(false);
   const notify = useNotifications(
     { enabled: inApp, focused, focusPage: activeId === FOCUS_TAB, shown: (id) => id === activeId, list, views },
     (card: Card) => {
-      const s = listRef.current.find((x) => x.id === card.sessionId);
-      const d = describeCard(card, viewsRef.current[card.sessionId], s?.cwd ?? "");
-      let text = cardText({ kind: d.kind, title: s?.title || "Untitled", body: d.summary });
-      // Said once per page load: how to reach the cards without the mouse.
-      const keys = specOf("notifications.focus");
-      if (!hinted.current && keys) text += ` ${keyText(keys)} goes to notifications.`;
+      // Said once per page load: how to reach the cards without the mouse. The text itself is made at render, with the session's title as the card shows it.
+      const hint = !hinted.current && !!specOf("notifications.focus");
       hinted.current = true;
-      setCardNote({ text });
+      setCardNote({ card, hint });
     },
   );
   notifyRef.current = notify.observe;
+  const noteText = (() => {
+    if (!cardNote) return undefined;
+    const s = list.find((x) => x.id === cardNote.card.sessionId);
+    const d = describeCard(cardNote.card, views[cardNote.card.sessionId], s?.cwd ?? "");
+    const keys = specOf("notifications.focus");
+    return cardText({ kind: d.kind, title: s?.title || "Untitled", body: d.summary }) + (cardNote.hint && keys ? ` ${keyText(keys)} goes to notifications.` : "");
+  })();
   // The note holds for the count it was said with; another count takes over with the plain count text.
   useEffect(() => setCardNote((n) => (n && n.at === undefined ? { ...n, at: waitingN } : n && n.at !== waitingN ? undefined : n)), [waitingN, cardNote]);
   const [cardFocus, setCardFocus] = useState(0);
@@ -1755,7 +1758,7 @@ export function App() {
         </main>
       </div>
       <div role="status" aria-live="polite" className="sr-only" data-testid="attention-status">
-        {cardNote ? cardNote.text + (waitingN ? ` ${waitingStatus(waitingN)}.` : "") : announcement(waitingN, everWaiting.current)}
+        {noteText !== undefined ? noteText + (waitingN ? ` ${waitingStatus(waitingN)}.` : "") : announcement(waitingN, everWaiting.current)}
       </div>
       <QuoteButton onQuote={(q) => (setInsert(q), setPane("session"))} />
       {guideRun && (

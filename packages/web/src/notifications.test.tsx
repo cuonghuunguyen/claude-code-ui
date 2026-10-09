@@ -265,3 +265,15 @@ it("a request whose render has not landed yet still makes its card: the hook wai
   await act(async () => void vi.advanceTimersByTime(120));
   expect(q('[data-testid="n"]').textContent).toBe("1");
 });
+
+it("a card that leaves with the focused button inside it does not pause the next finished card's 8 s timer", async () => {
+  const onDismiss = vi.fn();
+  await show([item("b")], { onDismiss });
+  await act(async () => button("Allow once")!.focus());
+  // Answered elsewhere: the card goes, no blur fires on a removed element.
+  await show([], { onDismiss });
+  await show([item("e", "finished", { body: "ok" })], { onDismiss });
+  expect(q("section").contains(document.activeElement)).toBe(false);
+  await act(async () => void vi.advanceTimersByTime(8500));
+  expect(onDismiss).toHaveBeenCalledWith("e");
+});

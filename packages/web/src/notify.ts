@@ -14,8 +14,17 @@ export type Signal =
   | { type: "finish"; sessionId: string; kind: "finished" | "error"; text: string }
   | { type: "resume"; sessionId: string };
 
-/** The last non-empty line of `text`, as the daemon's push uses for "finished". */
-export const lastLine = (text?: string) => text?.split("\n").map((l) => l.trim()).filter(Boolean).at(-1);
+/** One line of markdown as plain text: links and images keep their text, emphasis, code ticks and list, quote and heading markers go. */
+export const plainLine = (line: string) =>
+  line
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s*(?:[-*+>]\s+|#{1,6}\s+|\d+[.)]\s+)+/, "")
+    .replace(/(\*\*|__|\*|`|~~)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** The last non-empty line of `text` as plain text (the daemon's push keeps the raw line). */
+export const lastLine = (text?: string) => text?.split("\n").map(plainLine).filter(Boolean).at(-1);
 
 type Seen = { state?: SessionState; text?: string; error?: string };
 
