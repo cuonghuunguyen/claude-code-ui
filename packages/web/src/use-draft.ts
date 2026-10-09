@@ -9,7 +9,7 @@ export const DRAFT_DEBOUNCE_MS = 400;
  * `text` is what the box holds; `initial` what it started with (the stored draft). Bash mode text (a half-typed command) is not saved.
  * A new `key` (the box follows its text into the session /clear started) moves the draft: the old key's draft is dropped.
  */
-export function useDraft(key: string | undefined, text: string, bash: boolean, initial: string): void {
+export function useDraft(key: string | undefined, text: string, bash: boolean, initial: string): () => void {
   const saved = useRef(initial);
   const keyRef = useRef(key);
   const latest = useRef({ text, bash });
@@ -32,6 +32,12 @@ export function useDraft(key: string | undefined, text: string, bash: boolean, i
     const t = setTimeout(flush, DRAFT_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [text, bash, key]);
+  /** The prompt was sent: drop the draft now. The box may unmount before it renders the emptied text, and its flush would see the old text as already saved. */
+  const drop = () => {
+    latest.current = { ...latest.current, text: "" };
+    saved.current = "";
+    if (keyRef.current) saveDraft(keyRef.current, "");
+  };
   useEffect(() => {
     const hide = () => document.visibilityState === "hidden" && flush();
     document.addEventListener("visibilitychange", hide);
@@ -42,4 +48,5 @@ export function useDraft(key: string | undefined, text: string, bash: boolean, i
       flush();
     };
   }, []);
+  return drop;
 }

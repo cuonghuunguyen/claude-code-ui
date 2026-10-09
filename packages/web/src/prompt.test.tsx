@@ -880,3 +880,15 @@ it("a draft belongs to its session", async () => {
   localStorage.setItem("claude-ui.draft.s1", "stored");
   expect((await render()).box.value).toBe("stored");
 });
+
+it("sending drops the stored draft even when the box unmounts before it renders the emptied text (the new-session card)", async () => {
+  const { box } = await render();
+  await type(box, "Reply with just the word alpha.");
+  await act(async () => void (await new Promise((r) => setTimeout(r, 500)))); // past the debounce: the draft is stored
+  expect(localStorage.getItem("claude-ui.draft.s1")).toBe("Reply with just the word alpha.");
+  await act(async () => {
+    box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    unmount();
+  });
+  expect(localStorage.getItem("claude-ui.draft.s1")).toBeNull();
+});

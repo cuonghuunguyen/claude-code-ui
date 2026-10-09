@@ -2710,7 +2710,7 @@ function PromptBox({
   const [sendError, setSendError] = useState<string>();
   // Bash mode: the text is a shell command, the box looks like OpenCode's shell mode.
   const [bash, setBash] = useState(false);
-  useDraft(draftKey, text, bash, initialText);
+  const dropDraft = useDraft(draftKey, text, bash, initialText);
   // The prompt box covers the dock's bottom 36px (OpenCode prompt lift), only when it directly follows the dock.
   const lift = !!todos && !blocked && !sendError && !images.length;
   const input = useRef<HTMLTextAreaElement>(null);
@@ -2828,6 +2828,7 @@ function PromptBox({
       setImages((cur) => [...sent, ...cur]);
       setSendError(`Prompt not sent: ${e.message}`);
     });
+    dropDraft();
     edit("");
     setImages([]);
   };
