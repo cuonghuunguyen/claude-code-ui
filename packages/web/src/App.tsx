@@ -21,6 +21,7 @@ import type {
   RewindPreview,
   RespondResult,
   SessionInfo,
+  SideCheck,
   PlanUsage,
   SessionListItem,
   SetModelResult,
@@ -183,6 +184,7 @@ export function App() {
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   // Sides (WSL distros, Docker containers): every side, and the side of each listed cwd that is not local.
   const [sides, setSides] = useState<ListResult["sides"]>();
+  const [docker, setDocker] = useState<ListResult["docker"]>();
   const [cwdSides, setCwdSides] = useState<Record<string, string>>({});
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
   const sideOf = useMemo(() => sideLookup(sides, cwdSides), [sides, cwdSides]);
@@ -417,7 +419,7 @@ export function App() {
 
   async function refreshList() {
     try {
-      const { sessions, projects, recentProjects = [], permissionModes, sides, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
+      const { sessions, projects, recentProjects = [], permissionModes, sides, docker, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
       const listed = new Set(sessions.map((s) => s.id));
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
@@ -434,6 +436,7 @@ export function App() {
       }
       setRecentProjects(recentProjects);
       setSides(sides);
+      setDocker(docker);
       setCwdSides(cwdSides);
       setWorktrees(worktrees);
       setListLoaded(true);
@@ -1916,7 +1919,9 @@ export function App() {
         onPick={openProject}
         recent={recentProjects}
         sides={sides}
-        onStartSide={(side) => client.current!.request({ type: "side.start", side })}
+        docker={docker}
+        onStartSide={(side, setup) => client.current!.request({ type: "side.start", side, ...(setup && { setup }) })}
+        onCheckSide={(side) => client.current!.request<SideCheck>({ type: "side.check", side })}
         sideOf={sideOf.sideOf}
         // Focus goes to the new-session prompt, not back to the button that opened the dialog.
         finalFocus={newPrompt}

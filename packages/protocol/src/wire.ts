@@ -107,8 +107,14 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.delete"; sessionId: string }
   /** Without `path`: the allowlisted roots (of `side`). */
   | { type: "fs.list"; path?: string }
-  /** Sets up and starts a side (WSL distro, Docker container); replies when it is ready, `side_failed` with the next step for the user otherwise. */
-  | { type: "side.start"; side: string }
+  /**
+   * Starts a side (WSL distro, Docker container); replies when it is ready, `side_failed` with the next step for the user otherwise.
+   * `setup`: `never` runs only a build that is installed (none: `side_failed`, the side stays `off`), `needed` (default) installs it
+   * first when this build is not installed, `force` installs it again.
+   */
+  | { type: "side.start"; side: string; setup?: SideSetup }
+  /** Read-only look at a side (nothing is installed or started; the hub answers it, a side never sees it): reply `SideCheck`, error `unknown_side`. */
+  | { type: "side.check"; side: string }
   | { type: "session.rewindPreview"; sessionId: string; userMessageId: string }
   | { type: "session.rewind"; sessionId: string; userMessageId: string; mode: RewindMode }
   /** @-mention autocomplete: fuzzy matches under `cwd` (a session's cwd, inside the roots). */
@@ -342,6 +348,11 @@ export type ListResult = {
   permissionModes: PermissionMode[];
   /** A daemon with sides (WSL distros, Docker containers): every side, this daemon's own ("local": Windows, Linux or macOS) first. Absent: no sides. */
   sides?: SideInfo[];
+  /**
+   * A hub with the docker command: `ok` (a running Linux container exists), `empty` (the engine runs none) or `down` (the engine does not answer).
+   * Absent: no docker command, or a daemon without this field (the Docker kind then shows only when a Docker side is listed).
+   */
+  docker?: DockerState;
   /** Side of each listed project, recent project and session cwd that is not local. */
   cwdSides?: Record<string, string>;
   /** Git worktrees of each listed project that is in a git repository (docs/spec.md "Projects"), the main worktree first. */
@@ -365,7 +376,33 @@ export function worktreeNameError(name: string): string | undefined {
  * One Claude Code install the daemon reaches: its own (`local`), a WSL distro (`wsl:<distro>`) or a running Docker container (`docker:<name>`), each with its own login,
  * transcripts, settings, MCP servers and plugins. `off`: not started yet (side.start sets it up); `error`: `message` says what to do.
  */
-export type SideInfo = { id: string; label: string; state: "off" | "starting" | "ready" | "error"; message?: string };
+export type SideInfo = { id: string; label: string; state: "off" | "starting" | "ready" | "error"; message?: string; phase?: SidePhase };
+/** What a starting side is doing (`SideInfo.phase`, only while `state` is `starting`). */
+export type SidePhase = "packing" | "copying" | "installing" | "starting";
+/** The Docker engine as the hub sees it (`ListResult.docker`). */
+export type DockerState = "ok" | "down" | "empty";
+/** `side.start` setup mode: run only what is installed, install when needed (default), install again. */
+export type SideSetup = "never" | "needed" | "force";
+/** `running`/`starting`: the side is up (nothing was run); `installed`: this build is installed (can start); `install`/`update`: setup is needed; `blocked`: see `reason`. */
+export type SideCheckVerdict = "running" | "starting" | "installed" | "install" | "update" | "blocked";
+/** Why a check is blocked. `not_logged_in` is soft: no credentials file, but a login by environment variable cannot be seen, so a setup may still work. */
+export type SideCheckReason = "gone" | "not_running" | "unreachable" | "no_build" | "package_unreadable" | "node_missing" | "node_old" | "build_tools_missing" | "not_logged_in" | "no_writable_path" | "check_failed";
+export type SideCheckFacts = {
+  reachable: boolean;
+  running?: boolean;
+  /** Node.js version, e.g. "22.4.0"; absent when there is none. */
+  node?: string;
+  nodeOk?: boolean;
+  buildTools?: { make: boolean; python3: boolean; cxx: boolean };
+  credentialsFile?: boolean;
+  /** This build (`current`), another build (`other`, named by `installedKey`) or nothing. */
+  installed: "current" | "other" | "none";
+  installedKey?: string;
+  /** Docker: the writable folders among /tmp, /dev/shm and the home folder. */
+  writable?: string[];
+};
+/** Reply of `side.check`. `message`: the user's next step in plain words (blocked, install, update). `key`: this claude-ui build. */
+export type SideCheck = { verdict: SideCheckVerdict; reason?: SideCheckReason; message?: string; key: string; facts: SideCheckFacts; phase?: SidePhase };
 export const LOCAL_SIDE = "local";
 /** `lastActivity`: ms of its newest session. */
 export type RecentProject = { cwd: string; sessionCount: number; lastActivity: number };

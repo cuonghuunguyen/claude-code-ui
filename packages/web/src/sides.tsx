@@ -1,6 +1,6 @@
 // Sides (docs/spec.md "Sides"): each project and session belongs to this machine, a WSL distro or a Docker container.
 import { createContext, use } from "react";
-import { LOCAL_SIDE, type SideInfo } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type DockerState, type SideInfo } from "@claude-ui/protocol";
 
 /**
  * Side label of a cwd (`Windows`, `WSL: Ubuntu`, `Docker: dev`) and its short form for narrow rows (`Win`, `WSL` or the distro
@@ -75,7 +75,13 @@ export const sideKind = (id: string): SideKind => (id.startsWith("wsl:") ? "wsl"
 /** Distro or container name: the label without its `WSL: ` / `Docker: ` prefix. */
 export const sideName = (s: Pick<SideInfo, "label">) => s.label.replace(/^(?:WSL|Docker): /, "");
 /** The kinds that have members, in chooser order: local first. */
-export const kindsOf = (sides: SideInfo[]): SideKind[] => (["local", "wsl", "docker"] as const).filter((k) => k === "local" || sides.some((s) => sideKind(s.id) === k));
+export const kindsOf = (sides: SideInfo[], docker?: DockerState): SideKind[] =>
+  (["local", "wsl", "docker"] as const).filter((k) => k === "local" || sides.some((s) => sideKind(s.id) === k) || (k === "docker" && !!docker));
+/** What the Docker tab says when there is no container to list (the engine is not running, or runs nothing). */
+export const DOCKER_HINT: Record<"down" | "empty", string> = {
+  down: "Docker is not running. Start Docker, then reopen this dialog.",
+  empty: "No running containers. Start one, then reopen this dialog.",
+};
 /**
  * The side a kind opens on: the remembered one when still listed; for WSL else the first ready distro, else the first; for
  * Docker none (the user picks the container: nothing is set up for an unpicked one).
