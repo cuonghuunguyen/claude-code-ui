@@ -3,6 +3,9 @@ import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionPane } from "./App.tsx";
+import { markAppScroll, resetScrollRest } from "./scroll-rest.ts";
+import { pairOf, resetUserCodePaint, SCROLL_REST } from "./user-code-paint.ts";
+import { UserMarkdown } from "./user-markdown.tsx";
 import { applyEvent, emptySession } from "./store.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -92,6 +95,294 @@ it("Copy copies the raw markdown", async () => {
   const { el } = await render("**bold**");
   await act(async () => void el.querySelector<HTMLElement>('button[title="Copy"]')!.click());
   expect(writeText).toHaveBeenCalledWith("**bold**");
+});
+
+const TOKENS = '[data-streamdown="code-block"] span[style*="--sdm-c: #"]';
+const longCode = (n: number) => Array.from({ length: 40 }, (_, i) => `export const v${n}_${i} = (x: number) => x + ${i}; // line ${i}`).join("\n");
+const fence = (code: string) => ["```ts", code, "```"].join("\n");
+
+it("a short code block in a user message is colored", async () => {
+  const { bubble } = await render(fence("const a = 1;"));
+  await vi.waitFor(() => expect(bubble.querySelectorAll(TOKENS).length).toBeGreaterThan(2), { timeout: 10_000 });
+});
+
+// Long blocks: plain DOM, colors painted with the CSS Custom Highlight API. jsdom has neither that nor IntersectionObserver.
+class FakeHighlight extends Set<StaticRange> {}
+let views: { cb: IntersectionObserverCallback; els: Set<Element> }[] = [];
+class FakeIO {
+  v = { cb: (() => {}) as IntersectionObserverCallback, els: new Set<Element>() };
+  constructor(cb: IntersectionObserverCallback) {
+    this.v.cb = cb;
+    views.push(this.v);
+  }
+  observe(el: Element) {
+    this.v.els.add(el);
+  }
+  unobserve(el: Element) {
+    this.v.els.delete(el);
+  }
+  disconnect() {}
+}
+let highlights = new Map<string, FakeHighlight>();
+/** Idle slots by hand: `slot()` runs the oldest idle callback the way the browser would (a generous deadline). */
+let idle: ((d: IdleDeadline) => void)[] = [];
+const slot = () => act(async () => void idle.shift()?.({ didTimeout: false, timeRemaining: () => 50 }));
+function stubPaint() {
+  views = [];
+  idle = [];
+  highlights = new Map();
+  vi.stubGlobal("Highlight", FakeHighlight);
+  vi.stubGlobal("IntersectionObserver", FakeIO);
+  vi.stubGlobal("CSS", { ...globalThis.CSS, escape: (s: string) => s, highlights });
+  vi.stubGlobal("requestIdleCallback", (cb: (d: IdleDeadline) => void) => idle.push(cb));
+}
+/** The blocks come on screen (`on`) or leave it. */
+const show = (blocks: Element[], on = true) =>
+  act(async () => {
+    for (const v of views) {
+      const entries = blocks.filter((b) => v.els.has(b)).map((target) => ({ target, isIntersecting: on }) as unknown as IntersectionObserverEntry);
+      if (entries.length) v.cb(entries, {} as IntersectionObserver);
+    }
+  });
+/** Painted ranges over the text of `el`. */
+const ranges = (el: Element) => [...highlights.values()].reduce((n, h) => n + [...h].filter((r) => el.contains(r.startContainer)).length, 0);
+/** Runs idle slots until `done` holds (shiki loads asynchronously first). */
+async function slotsUntil(done: () => boolean) {
+  await vi.waitFor(
+    async () => {
+      await slot();
+      expect(done()).toBe(true);
+    },
+    { timeout: 10_000, interval: 20 },
+  );
+}
+const wait = (ms: number) => act(async () => new Promise((r) => setTimeout(r, ms)));
+const blocksOf = (el: Element) => [...el.querySelectorAll('[data-streamdown="code-block"]')];
+
+const mounted: { unmount: () => void }[] = [];
+async function mountMd(text: string) {
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  await act(async () => root.render(<UserMarkdown text={text} />));
+  await wait(0);
+  const m = { el, unmount: () => (root.unmount(), el.remove()) };
+  mounted.push(m);
+  return m;
+}
+const timeline = () => {
+  const log = document.createElement("div");
+  log.setAttribute("role", "log");
+  document.body.append(log);
+  mounted.push({ unmount: () => log.remove() });
+  return log;
+};
+afterEach(async () => {
+  mounted.splice(0).forEach((m) => m.unmount());
+  resetUserCodePaint();
+  resetScrollRest();
+  vi.unstubAllGlobals();
+});
+
+it("a long code block stays plain DOM; once on screen and idle its colors are painted over the same text nodes", async () => {
+  stubPaint();
+  const { bubble } = await render(fence(longCode(1)));
+  const [block] = blocksOf(bubble);
+  expect(block!.textContent).toContain("export const v1_0");
+  const texts = () => [...block!.querySelectorAll("code > span")].map((l) => l.firstChild?.firstChild);
+  const before = texts();
+  await wait(300);
+  await slot();
+  // Not on screen yet: nothing painted, no colored spans.
+  expect(ranges(block!)).toBe(0);
+  await show([block!]);
+  await slotsUntil(() => ranges(block!) > 40);
+  expect(bubble.querySelectorAll(TOKENS)).toHaveLength(0);
+  // Same text nodes: a selection inside the block does not move when the colors arrive.
+  expect(texts().every((t, i) => t === before[i])).toBe(true);
+});
+
+it("a selection in a plain block stays the same when the block is painted", async () => {
+  stubPaint();
+  const a = await mountMd(fence(longCode(2)));
+  const [block] = blocksOf(a.el);
+  const lines = [...block!.querySelectorAll("code > span")];
+  const sel = getSelection()!;
+  const range = document.createRange();
+  range.setStart(lines[2]!.firstChild!.firstChild!, 3);
+  range.setEnd(lines[9]!.firstChild!.firstChild!, 7);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  const text = sel.toString();
+  await show([block!]);
+  await slotsUntil(() => ranges(block!) > 40);
+  expect(sel.rangeCount).toBe(1);
+  expect(sel.toString()).toBe(text);
+  expect(sel.getRangeAt(0).startContainer).toBe(lines[2]!.firstChild!.firstChild);
+  sel.removeAllRanges();
+});
+
+it("only the blocks on screen are painted, not the rows mounted around them (overscan)", async () => {
+  stubPaint();
+  const a = await mountMd(fence(longCode(11)));
+  const b = await mountMd(fence(longCode(12)));
+  const c = await mountMd(fence(longCode(13)));
+  // All three rows are mounted; only the first is on screen. A queue in mount order (FIFO or newest first) paints b or c.
+  await show(blocksOf(a.el));
+  await slotsUntil(() => ranges(a.el) > 40);
+  for (let i = 0; i < 10; i++) await slot();
+  await wait(50);
+  expect(ranges(b.el)).toBe(0);
+  expect(ranges(c.el)).toBe(0);
+  expect(idle).toHaveLength(0);
+  // c scrolls into view: it is painted.
+  await show(blocksOf(c.el));
+  await slotsUntil(() => ranges(c.el) > 40);
+  expect(ranges(b.el)).toBe(0);
+});
+
+it("the same long block twice in one message: both copies are painted", async () => {
+  stubPaint();
+  const a = await mountMd([fence(longCode(21)), "and again:", fence(longCode(21))].join("\n\n"));
+  const both = blocksOf(a.el);
+  expect(both).toHaveLength(2);
+  await show(both);
+  await slotsUntil(() => ranges(both[0]!) > 40 && ranges(both[1]!) > 40);
+  expect(ranges(both[0]!)).toBe(ranges(both[1]!));
+});
+
+const SAMPLES: Record<string, string> = {
+  ts: Array.from(
+    { length: 6 },
+    (_, i) =>
+      `export async function handlerE${i}(req: Request<{ id: string }>, opts: Opts = {}): Promise<Result<number>> {\n  const items = await db.query("SELECT * FROM t WHERE id = ?", [req.id]); // row ${i}\n  /* a comment\n     over two lines */\n  return items.length + \`\${opts.x}\`.length;\n}`,
+  ).join("\n\n"),
+  python: Array.from({ length: 8 }, (_, i) => `class Foo${i}(Base):\n    """Doc\n    more"""\n    def run(self, x: int) -> int:\n        return [y for y in range(x) if y % ${i + 2}]\n\n@decorator\ndef bar${i}():\n    pass`).join("\n\n"),
+  json: JSON.stringify(Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`key${i}`, { n: i, s: `v${i}`, ok: i % 2 === 0, list: [1, null, "x"] }])), null, 2),
+};
+
+it.each(Object.keys(SAMPLES))("the painted colors of a long %s block are the colors of the whole block tokenized at once, also when tokenizing is slow", async (lang) => {
+  stubPaint();
+  const code = SAMPLES[lang]!;
+  const a = await mountMd(["```" + lang, code, "```"].join("\n"));
+  const [block] = blocksOf(a.el);
+  await show([block!]);
+  // A slow machine: every clock read is 20 ms later (a per-line time limit would cut lines short and corrupt the grammar state).
+  let t = Date.now();
+  for (let i = 0; i < 400 && !ranges(block!); i++) {
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => (t += 20));
+    try {
+      await slot();
+    } finally {
+      spy.mockRestore();
+    }
+    await wait(5);
+  }
+  expect(ranges(block!)).toBeGreaterThan(20);
+  const { createHighlighter } = await import("shiki");
+  const { createJavaScriptRegexEngine } = await import("shiki/engine/javascript");
+  const h = await createHighlighter({ themes: ["github-light", "github-dark"], langs: [lang], engine: createJavaScriptRegexEngine({ forgiving: true }) });
+  const want = h.codeToTokens(code, { lang: lang as never, themes: { light: "github-light", dark: "github-dark" } }).tokens.map((line) =>
+    line.flatMap((t) => [...t.content].map((ch) => (ch.trim() ? `${t.htmlStyle?.color}|${t.htmlStyle?.["--shiki-dark"]}` : ""))),
+  );
+  const lines = [...block!.querySelectorAll("code > span")];
+  const got = lines.map((l) => [...(l.textContent === "\n" ? "" : l.textContent!)].map(() => ""));
+  for (const hl of highlights.values())
+    for (const r of hl) {
+      const i = lines.findIndex((l) => l.contains(r.startContainer));
+      if (i < 0) continue;
+      for (let c = r.startOffset; c < r.endOffset; c++) got[i]![c] = pairOf(hl as never)!;
+    }
+  let chars = 0, same = 0;
+  want.forEach((line, i) => line.forEach((pair, c) => pair && (chars++, got[i]![c] === pair && same++)));
+  expect(`${same} of ${chars}`).toBe(`${chars} of ${chars}`);
+});
+
+it("a block that leaves the screen drops its ranges after the scroll and is painted again from the cache when it comes back", async () => {
+  stubPaint();
+  const a = await mountMd(fence(longCode(25)));
+  const blocks = blocksOf(a.el);
+  await show(blocks);
+  await slotsUntil(() => ranges(a.el) > 40);
+  const n = ranges(a.el);
+  await show(blocks, false);
+  await slotsUntil(() => ranges(a.el) === 0);
+  await show(blocks);
+  await slot();
+  expect(ranges(a.el)).toBe(n);
+});
+
+it("a message whose code changes is painted for the new code", async () => {
+  stubPaint();
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  mounted.push({ unmount: () => (root.unmount(), el.remove()) });
+  await act(async () => root.render(<UserMarkdown text={fence(longCode(26))} />));
+  await wait(0);
+  await show(blocksOf(el));
+  await slotsUntil(() => ranges(el) > 40);
+  await act(async () => root.render(<UserMarkdown text={fence(longCode(27) + "\nconst extra = 1;")} />));
+  await wait(0);
+  await show(blocksOf(el));
+  await slotsUntil(() => [...highlights.values()].some((h) => [...h].some((r) => r.startContainer.isConnected && r.startContainer.textContent!.includes("extra"))));
+});
+
+it("a row that mounts again while the user scrolls renders no colored spans and is painted only after the scroll rests", async () => {
+  stubPaint();
+  const log = timeline();
+  const a = await mountMd(fence(longCode(31)));
+  await show(blocksOf(a.el));
+  await slotsUntil(() => ranges(a.el) > 40);
+  a.unmount();
+  // The user scrolls the timeline (no wheel or key event: a scrollbar drag or a touch fling) and the row comes back.
+  log.dispatchEvent(new Event("scroll"));
+  const b = await mountMd(fence(longCode(31)));
+  expect(b.el.querySelectorAll(TOKENS)).toHaveLength(0);
+  await show(blocksOf(b.el));
+  await slot();
+  await wait(100);
+  await slot();
+  expect(ranges(b.el)).toBe(0);
+  await wait(SCROLL_REST + 50);
+  // From the cache: one slot paints it.
+  await slot();
+  expect(ranges(b.el)).toBeGreaterThan(40);
+  // The gone row's ranges are dropped.
+  expect(ranges(a.el)).toBe(0);
+});
+
+it("the app's own scroll (following a streaming turn) and typing do not hold the painting back", async () => {
+  stubPaint();
+  const log = timeline();
+  const a = await mountMd(fence(longCode(41)));
+  markAppScroll(log);
+  log.dispatchEvent(new Event("scroll"));
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+  await show(blocksOf(a.el));
+  await slotsUntil(() => ranges(a.el) > 40);
+});
+
+it("a scroll of another element (a code block's own scroll) does not count as scrolling the timeline", async () => {
+  stubPaint();
+  const a = await mountMd(fence(longCode(42)));
+  blocksOf(a.el)[0]!.dispatchEvent(new Event("scroll"));
+  await show(blocksOf(a.el));
+  await slotsUntil(() => ranges(a.el) > 40);
+});
+
+it("a message colors the first 1200 characters of its code at once, the rest is painted", async () => {
+  stubPaint();
+  const small = (n: number) => fence(`${"x".repeat(5)}${n}\n` + "const a = 1;\n".repeat(80));
+  const a = await mountMd([small(1), small(2), small(3)].join("\n\n"));
+  const blocks = blocksOf(a.el);
+  expect(blocks).toHaveLength(3);
+  await vi.waitFor(() => expect(blocks[0]!.querySelectorAll('span[style*="--sdm-c: #"]').length).toBeGreaterThan(5), { timeout: 10_000 });
+  expect(blocks[1]!.querySelectorAll('span[style*="--sdm-c: #"]')).toHaveLength(0);
+  expect(blocks[2]!.querySelectorAll('span[style*="--sdm-c: #"]')).toHaveLength(0);
+  await show(blocks);
+  await slotsUntil(() => ranges(blocks[1]!) > 40 && ranges(blocks[2]!) > 40);
+  expect(ranges(blocks[0]!)).toBe(0);
 });
 
 it("uploads and images are unaffected", async () => {

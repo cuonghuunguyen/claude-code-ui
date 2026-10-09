@@ -1,6 +1,7 @@
-import { measureElement, observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
+import { elementScroll, measureElement, observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDownIcon, LoaderCircleIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { markAppScroll } from "./scroll-rest.ts";
 
 /** Scrolling down to this distance from the end returns to the bottom (follow output, no scroll button). */
 const END_THRESHOLD = 80;
@@ -121,11 +122,19 @@ export function VirtualTimeline<T>({
         if (hidden.current) {
           hidden.current = false;
           el.scrollTop = pin.current ? el.scrollHeight : offset.current;
+          markAppScroll(el);
         } else if (pin.current) {
           el.scrollTop = el.scrollHeight;
           offset.current = el.scrollTop;
+          markAppScroll(el);
         }
       }),
+    // The virtualizer's own scrolls (reveal, sticky button, Jump to latest, keeping the end in view) are the app's, not the user's.
+    scrollToFn: (to, options, inst) => {
+      elementScroll(to, options, inst);
+      const el = inst.scrollElement;
+      if (el) markAppScroll(el, options.behavior === "smooth" ? Math.min(to + (options.adjustments ?? 0), el.scrollHeight - el.clientHeight) : el.scrollTop);
+    },
     measureElement: (el, entry, inst) =>
       (inst.scrollElement as HTMLElement | null)?.clientHeight
         ? measureElement(el, entry, inst)
@@ -179,6 +188,7 @@ export function VirtualTimeline<T>({
     el.scrollTop = el.scrollHeight;
     // A user scroll up before this scroll's event still compares with the followed position.
     offset.current = el.scrollTop;
+    markAppScroll(el);
   });
   // A page that did not fill the screen (or a short session) asks for the next one at once.
   useLayoutEffect(() => {
