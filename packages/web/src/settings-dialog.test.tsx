@@ -8,6 +8,7 @@ import { SettingsDialog } from "./settings-dialog.tsx";
 import { loadSignalOnly, saveSignalOnly } from "./signal.ts";
 import { bind, resetAll } from "./keymap.ts";
 import type { TabGrouping } from "./tab-grouping.ts";
+import { WEB_VERSION } from "./version.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -404,9 +405,11 @@ it("the In-app switch is on by default, writes the per-browser choice and tells 
   const { q, pick } = await render();
   await pick("notifications");
   expect(q("settings-in-app")?.getAttribute("aria-checked")).toBe("true");
+  expect(document.getElementById(q("settings-in-app")!.getAttribute("aria-describedby")!)?.textContent).toContain("Kept in this browser");
   await act(async () => q("settings-in-app")!.click());
   expect(localStorage.getItem("claude-ui.inAppNotifications")).toBe("off");
   expect(q("settings-in-app")?.getAttribute("aria-checked")).toBe("false");
+  expect(heard).toEqual([false]);
   await act(async () => q("settings-in-app")!.click());
   expect(heard).toEqual([false, true]);
   window.removeEventListener("claude-ui:in-app", on);
@@ -418,7 +421,7 @@ it("About, the last group, shows the web version and the daemon's as selectable 
   await pick("about");
   const about = q("settings-about")!;
   expect(about.textContent).toContain("Web app");
-  expect(q("settings-about-web")!.textContent).toBe("dev");
+  expect(q("settings-about-web")!.textContent).toBe(WEB_VERSION);
   expect(q("settings-about-daemon")!.textContent).toBe("1.2.3");
   expect(getComputedStyle(q("settings-about-web")!).userSelect).not.toBe("none");
   expect(calls.length).toBe(before);
