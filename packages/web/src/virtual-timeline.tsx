@@ -133,7 +133,10 @@ export function VirtualTimeline<T>({
     scrollToFn: (to, options, inst) => {
       elementScroll(to, options, inst);
       const el = inst.scrollElement;
-      if (el) markAppScroll(el, options.behavior === "smooth" ? Math.min(to + (options.adjustments ?? 0), el.scrollHeight - el.clientHeight) : el.scrollTop);
+      if (el) {
+        const animated = options.behavior === "smooth";
+        markAppScroll(el, animated ? Math.min(to + (options.adjustments ?? 0), el.scrollHeight - el.clientHeight) : el.scrollTop, animated);
+      }
     },
     measureElement: (el, entry, inst) =>
       (inst.scrollElement as HTMLElement | null)?.clientHeight
