@@ -11,11 +11,12 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolChevron, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark, toolRowClass } from "@/components/ai-elements/tool";
 import { CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { Mark, statusText } from "./todo-dock.tsx";
 import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
 import { relPath } from "./paths.ts";
 import { fileSize } from "./files.ts";
-import { ARTIFACT_TOOLS, artifactSummary, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, toolSummary } from "./tools.ts";
+import { ARTIFACT_TOOLS, artifactSummary, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 
@@ -80,6 +81,7 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
   const stats = useMemo(() => diffStats(call.tool, call.input), [call.tool, call.input]);
   const artifact = ARTIFACT_TOOLS.has(call.tool);
   // An Artifact publish names the long scratchpad file_path: the row shows the title instead.
+  const todos = call.tool === "TodoWrite" ? todoItems(call.input) : [];
   const path = artifact ? "" : field(call.input, "file_path") || field(call.input, "notebook_path");
   const decided = call.coordinator && (call.coordinator.decision === "allow" ? "Approved by coordinator" : "Denied by coordinator");
   return (
@@ -91,7 +93,7 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
         statusLabel={awaiting ? undefined : LABEL[call.status]}
         // Next to the tool name, which is never truncated like the summary.
         title={call.editedByUser ? `${call.tool} · edited by you` : decided ? `${call.tool} · ${decided}` : undefined}
-        summary={path ? <FileSummary path={path} range={range} /> : artifact ? artifactSummary(call.tool, call.input) : toolSummary(call.input)}
+        summary={path ? <FileSummary path={path} range={range} /> : todos.length ? todoSummary(todos) : artifact ? artifactSummary(call.tool, call.input) : toolSummary(call.input)}
         tooltip={path || undefined}
         meta={
           stats && (
@@ -194,6 +196,33 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
     case "Edit":
     case "Write":
       return <EditDiff call={call} result={result} />;
+    case "TodoWrite": {
+      // The list the call wrote, still readable after the turn (the pinned dock only shows while it runs).
+      const items = todoItems(call.input);
+      if (!items.length) break;
+      return (
+        <ul data-testid="todo-card-list" className="space-y-1.5">
+          {items.map((item, i) => (
+            <li
+              key={i}
+              data-testid="todo-card-item"
+              data-status={item.status}
+              className={cn(
+                "flex gap-2 break-words text-[14px]/[1.3]",
+                item.status === "completed" ? "text-muted-foreground line-through" : "text-foreground",
+                item.status === "in_progress" && "font-medium",
+              )}
+            >
+              <Mark status={item.status} />
+              <span className="min-w-0">
+                <span className="sr-only">{statusText[item.status]}: </span>
+                {item.content}
+              </span>
+            </li>
+          ))}
+        </ul>
+      );
+    }
     case "Artifact":
     case "ArtifactComments":
     case "ArtifactData":
