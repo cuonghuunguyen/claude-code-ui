@@ -741,6 +741,18 @@ describe("side chooser", () => {
       expect(input()!.value).toBe("/home/u/");
     });
 
+    it("Check again that finds an older hub moves the focus to the panel, not the body", async () => {
+      const old = Object.assign(new Error("unknown message type side.check"), { code: "unknown_type" });
+      const check = vi.fn(async (_id: string) => chk("install")).mockRejectedValueOnce(new Error("timed out")).mockRejectedValueOnce(old);
+      const { kind, click, byId } = await renderSides(sides(), undefined, false, check);
+      await click(kind("WSL"));
+      (byId("side-check-again") as HTMLElement).focus();
+      await click(byId("side-check-again")!);
+      expect(byId("side-check-again")).toBeNull();
+      expect(byId("side-install")).not.toBeNull();
+      expect(document.activeElement).toBe(byId("side-status"));
+    });
+
     it("a check of a side the hub does not know (unknown_side) is a check failure, not an older hub", async () => {
       const { kind, click, byId, status } = await withCheck(Object.assign(new Error("unknown side wsl:Ubuntu"), { code: "unknown_side" }));
       await click(kind("WSL"));

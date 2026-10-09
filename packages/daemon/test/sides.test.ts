@@ -344,7 +344,7 @@ describe("docker state freshness", () => {
     let engine: "ok" | "down" | "empty" | undefined;
     let known: typeof engine;
     // main.ts keeps the state it found inside discover.
-    const hub = createSides({ targets: [], discoverMs: 0, dockerState: () => known, discover: async () => ((known = engine), []) });
+    const hub = createSides({ targets: [], discoverMs: 0, spawn: () => Promise.reject(new Error("unused")), dockerState: () => known, discover: async () => ((known = engine), []) });
     let changes = 0;
     hub.onChange(() => changes++);
     for (const s of ["down", "empty", "ok", "down"] as const) {

@@ -145,6 +145,11 @@ export function SidePanel({
     const a = document.activeElement;
     if (inProgress && (!a || a === document.body || a.getAttribute("role") === "dialog" || region.current?.contains(a))) region.current?.focus();
   }, [inProgress]);
+  // An older hub: Check again goes away for the plain Install view, so the focus would fall to the body.
+  useEffect(() => {
+    const a = document.activeElement;
+    if (state.legacy && (!a || a === document.body)) region.current?.focus();
+  }, [state.legacy]);
   const btn = "max-md:h-11 max-md:w-full";
   const check = state.check;
   const action = check ? actionOf(check, failed !== undefined) : undefined;
