@@ -122,3 +122,15 @@ it("the 5 s timer waits while the toast has the pointer or the focus (the Undo b
   await act(async () => void vi.advanceTimersByTime(8000));
   expect(onClose).not.toHaveBeenCalled();
 });
+
+it("a toast that is closing stays closing when the pointer leaves during its exit", async () => {
+  const root = createRoot(el);
+  await act(async () => root.render(<Toast message="x" onClose={onClose} />));
+  await act(async () => void vi.advanceTimersByTime(20));
+  await act(async () => void toast().dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+  await act(async () => void toast().querySelector<HTMLElement>('[aria-label="Dismiss"]')!.click());
+  expect(toast().dataset.state).toBe("closed");
+  await act(async () => void toast().dispatchEvent(new PointerEvent("pointerout", { bubbles: true })));
+  await act(async () => void vi.advanceTimersByTime(20));
+  expect(toast().dataset.state).toBe("closed");
+});

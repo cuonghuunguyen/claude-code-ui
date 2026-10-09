@@ -706,7 +706,7 @@ export function App() {
           // Back in place; it becomes the shown tab only if it was the one shown when swiped away.
           if (wasActive) open(id);
           // A tab that was not shown is held again like any open tab (the close left it followed in the background, or dropped).
-          else if (!held.current.has(id)) void subscribe(id);
+          else void subscribe(id); // no `held` check: the close's background subscribe may still be in flight and would win
         },
       },
     });

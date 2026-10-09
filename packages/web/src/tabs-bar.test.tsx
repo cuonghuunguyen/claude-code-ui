@@ -879,6 +879,14 @@ it("phone: Delete on a row moves the focus to the next row (else the previous on
   await wait(50);
   expect(swipeRows().length).toBe(3);
   expect(document.activeElement).toBe(next);
+  // The list's own highlight follows: one ArrowDown moves one row, ArrowUp comes back.
+  const arrow = (k: string) => act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })));
+  const texts = () => swipeRows().map((r) => r.textContent);
+  await arrow("ArrowDown");
+  expect(document.activeElement).toBe(swipeRows()[2]);
+  await arrow("ArrowUp");
+  expect(document.activeElement).toBe(swipeRows()[1]);
+  expect(texts().length).toBe(3);
   rows = swipeRows();
   const last = rows[2]!;
   await act(async () => last.focus());

@@ -21,7 +21,9 @@ export function Toast({ message, action, onClose }: { message: string; /** A tex
   // A toast that is replaced while it leaves must not close its successor.
   useEffect(() => () => clearTimeout(exit.current), []);
   // Out: wait for the exit transition (none under reduced motion) before the owner drops the toast.
+  const leaving = useRef(false);
   const close = () => {
+    leaving.current = true;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return onClose();
     setOpen(false);
     exit.current = setTimeout(onClose, 280);
@@ -31,6 +33,8 @@ export function Toast({ message, action, onClose }: { message: string; /** A tex
   const [focused, setFocused] = useState(false);
   const held = hover || focused;
   useEffect(() => {
+    // Leaving for good: a pointer or focus change during the exit must not slide it back in.
+    if (leaving.current) return;
     const show = setTimeout(() => setOpen(true), 16);
     const hide = held ? undefined : setTimeout(close, 5000);
     return () => (clearTimeout(show), clearTimeout(hide));

@@ -494,8 +494,10 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
           // The highlight and the focus go to the next row (else the previous one): the focused row is about to be removed.
           const rows = [...(e.currentTarget.closest('[role="listbox"]')?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])];
           const at = rows.indexOf(e.currentTarget);
-          (rows[at + 1] ?? rows[at - 1])?.focus();
+          const to = rows[at + 1] ?? rows[at - 1];
           onClose(id);
+          // After the closed row left the list: focusing it earlier leaves the list's highlight index one too high for the next ArrowDown/ArrowUp.
+          setTimeout(() => to?.isConnected && to.focus(), 0);
         }}
       >
         {children}
