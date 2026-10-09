@@ -316,3 +316,12 @@ it("the Signal only key hint is the live binding of signal.toggle and follows a 
   expect(q("settings-signal-keys")).toBeNull();
   await act(async () => resetAll());
 });
+
+it("Tab from the group list reaches the first visible control of the panel, not the hidden phone Back button (GH-214)", async () => {
+  const { q } = await render();
+  // jsdom has no Tailwind: hide the Back button the way `md:hidden` does from md up.
+  q("settings-back")!.style.display = "none";
+  await act(async () => q("settings-group-timeline")!.focus());
+  await act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
+  expect(document.activeElement).toBe(q("settings-signal-only"));
+});
