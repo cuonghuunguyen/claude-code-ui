@@ -22,6 +22,7 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   toggleSidePanel: vi.fn(),
   toggleFileTree: vi.fn(),
   toggleTerminal: vi.fn(),
+  toggleSignalOnly: vi.fn(),
   showPane: vi.fn(),
   newTerminal: vi.fn(),
   reopenTab: vi.fn(),
@@ -66,6 +67,7 @@ it("lists the issue's commands with shortcuts, then the sessions", () => {
     ["pane.files", "mod+shift+e"],
     ["pane.changes", "mod+shift+g"],
     ["terminal.toggle", "ctrl+`"],
+    ["signal.toggle", "mod+alt+s"],
     ["terminal.new", "ctrl+shift+`"],
     ["prompt.focus", "ctrl+l"],
     ["model.choose", "mod+'"],
@@ -136,7 +138,7 @@ it("rewind lists prompts newest first; hidden while a turn runs, when Stop shows
 
 it("without a shown session only the app-level commands remain", () => {
   const items = appCommands(ctx({ session: undefined, canQuickOpen: false, tabs: ["new"], activeId: "new", sessions: [] }));
-  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "guide.start", "sidebar.toggle"]);
+  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "guide.start", "sidebar.toggle", "signal.toggle"]);
 });
 
 it("a shortcut finds its command; Esc, Shift+Tab and plain keys run nothing from here", () => {
@@ -211,14 +213,14 @@ it("New worktree… shows only with a git project, right after New session, and 
   expect(appCommands(ctx()).some((i) => i.id === "worktree.new")).toBe(false);
 });
 
-it("Toggle signal only runs from the palette and Mod+Alt+S, only for a session that is not a draft", () => {
+it("Toggle signal only runs from the palette and Mod+Alt+S, with or without a session", () => {
   const toggleSignalOnly = vi.fn();
   const c = ctx({ toggleSignalOnly });
   run(c, "signal.toggle");
   expect(toggleSignalOnly).toHaveBeenCalledOnce();
   expect(shortcutFor(appCommands(c), ev("s", { ctrlKey: true, altKey: true }))?.id).toBe("signal.toggle");
-  expect(appCommands(ctx({ toggleSignalOnly, session: { ...ctx().session!, draft: true } })).some((i) => i.id === "signal.toggle")).toBe(false);
-  expect(appCommands(ctx({ toggleSignalOnly, session: undefined })).some((i) => i.id === "signal.toggle")).toBe(false);
+  expect(appCommands(ctx({ toggleSignalOnly, session: { ...ctx().session!, draft: true } })).some((i) => i.id === "signal.toggle")).toBe(true);
+  expect(appCommands(ctx({ toggleSignalOnly, session: undefined })).some((i) => i.id === "signal.toggle")).toBe(true);
 });
 
 it("Open Focus is always listed when App offers it; Next waiting request only while something waits, on Ctrl+Alt+Down", () => {

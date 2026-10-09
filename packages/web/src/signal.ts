@@ -1,4 +1,5 @@
 // Signal only (docs/spec.md "Session view UX"): a run of tool cards folds into one line; prompts, text, errors and pending requests stay.
+import { useSyncExternalStore } from "react";
 import type { TimelineItem, ToolCall } from "./store.ts";
 
 /** A folded run of tool items; `items` are what it hides, shown again in place when the row is expanded. */
@@ -38,29 +39,41 @@ export function signalItems(items: TimelineItem[], awaiting: (call: ToolCall) =>
   return out;
 }
 
-const KEY = "claude-ui.signal-only";
-const MAX = 500;
+// One preference for the whole browser (GH-205). The per-session list of GH-159 (`claude-ui.signal-only`) is ignored and left alone.
+const KEY = "claude-ui.signalOnly";
+const listeners = new Set<() => void>();
+// Storage blocked: the choice lasts while the page is open.
+let memory = false;
 
-const loadIds = (): string[] => {
+/** Whether this browser folds tool runs in every session. */
+export function loadSignalOnly(): boolean {
   try {
-    const v: unknown = JSON.parse(localStorage.getItem(KEY) ?? "[]");
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    return localStorage.getItem(KEY) === "1";
   } catch {
-    return [];
-  }
-};
-
-/** The sessions this browser shows in Signal only. */
-export const loadSignalIds = () => new Set(loadIds());
-
-/** Whether this browser shows the session in Signal only. */
-export const loadSignalOnly = (sessionId: string) => loadIds().includes(sessionId);
-
-export function saveSignalOnly(sessionId: string, on: boolean) {
-  try {
-    const rest = loadIds().filter((id) => id !== sessionId);
-    localStorage.setItem(KEY, JSON.stringify((on ? [...rest, sessionId] : rest).slice(-MAX)));
-  } catch {
-    // Storage blocked: the setting lasts until the page reloads.
+    return memory;
   }
 }
+
+export function saveSignalOnly(on: boolean) {
+  memory = on;
+  try {
+    if (on) localStorage.setItem(KEY, "1");
+    else localStorage.removeItem(KEY);
+  } catch {
+    // See `memory`.
+  }
+  listeners.forEach((l) => l());
+}
+
+export function subscribeSignalOnly(l: () => void) {
+  listeners.add(l);
+  // Another tab of this browser changed it.
+  const onStorage = (e: StorageEvent) => (e.key === KEY || e.key === null) && l();
+  window.addEventListener("storage", onStorage);
+  return () => {
+    listeners.delete(l);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+/** The setting; re-renders when it changes here (Settings, palette, shortcut) or in another tab. */
+export const useSignalOnly = (): boolean => useSyncExternalStore(subscribeSignalOnly, loadSignalOnly, () => false);

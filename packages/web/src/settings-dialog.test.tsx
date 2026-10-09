@@ -5,6 +5,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Settings } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { SettingsDialog } from "./settings-dialog.tsx";
+import { loadSignalOnly, saveSignalOnly } from "./signal.ts";
+import { bind, resetAll } from "./keymap.ts";
 import type { TabGrouping } from "./tab-grouping.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -15,7 +17,9 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ failGet = false } = {}) {
+async function render({ failGet = false, group }: { failGet?: boolean; group?: string } = {}) {
+  localStorage.removeItem("claude-ui.settingsGroup");
+  if (group) localStorage.setItem("claude-ui.settingsGroup", group);
   const onTabGrouping = vi.fn();
   const onRestartGuide = vi.fn();
   const onTabCompact = vi.fn();
@@ -64,11 +68,13 @@ async function render({ failGet = false } = {}) {
   root = createRoot(el);
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
-  return { calls, q, prompt, onTabGrouping, onTabCompact, onShortcuts, onRestartGuide };
+  const pick = async (group: string) => void (await act(async () => q(`settings-group-${group}`)!.click()));
+  return { calls, q, pick, prompt, onTabGrouping, onTabCompact, onShortcuts, onRestartGuide };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
-  const { q } = await render();
+  const { q, pick } = await render();
+  await pick("orchestration");
   expect(q("settings-dialog")?.textContent).toContain("Orchestration");
   expect(q("settings-orchestration-enabled")?.getAttribute("aria-checked")).toBe("false");
   expect(q("settings-orchestration-coordinatorPermissions")?.getAttribute("aria-checked")).toBe("true");
@@ -84,14 +90,16 @@ it("shows the Orchestration section with labelled controls, loaded from the daem
 });
 
 it("a switch sends a patch of its field only", async () => {
-  const { q, calls } = await render();
+  const { q, calls, pick } = await render();
+  await pick("orchestration");
   await act(async () => q("settings-orchestration-enabled")!.click());
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { enabled: true } } });
   expect(q("settings-orchestration-enabled")?.getAttribute("aria-checked")).toBe("true");
 });
 
 it("an out-of-range cap shows the daemon's error in a Banner", async () => {
-  const { q } = await render();
+  const { q, pick } = await render();
+  await pick("orchestration");
   const input = q("settings-orchestration-workerCap") as HTMLInputElement;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "25");
@@ -102,7 +110,8 @@ it("an out-of-range cap shows the daemon's error in a Banner", async () => {
 });
 
 it("Compact tabs is a switch that applies at once, and is disabled with a hint while grouping is None", async () => {
-  const { q, calls, onTabCompact } = await render();
+  const { q, calls, onTabCompact, pick } = await render();
+  await pick("tabs");
   const sw = q("settings-tabs-compact")!;
   expect(sw.getAttribute("role")).toBe("switch");
   expect(sw.getAttribute("aria-checked")).toBe("false");
@@ -121,7 +130,8 @@ it("Compact tabs is a switch that applies at once, and is disabled with a hint w
 });
 
 it("Tab grouping shows By project by default and picking By worktree applies at once without a daemon request", async () => {
-  const { q, calls, onTabGrouping } = await render();
+  const { q, calls, onTabGrouping, pick } = await render();
+  await pick("tabs");
   expect(q("settings-tabs-grouping")?.textContent).toContain("By project");
   await act(async () => q("settings-tabs-grouping")!.click());
   expect([...document.querySelectorAll("[role=option]")].map((o) => o.textContent)).toEqual(["By project", "By worktree", "None"]);
@@ -132,7 +142,8 @@ it("Tab grouping shows By project by default and picking By worktree applies at 
 });
 
 it("Worker mode shows the daemon's value and picking Auto sends a patch of that field only", async () => {
-  const { q, calls } = await render();
+  const { q, calls, pick } = await render();
+  await pick("orchestration");
   expect(q("settings-orchestration-workerMode")?.textContent).toContain("Coordinator's mode");
   expect(document.getElementById(q("settings-orchestration-workerMode")!.getAttribute("aria-describedby")!)?.textContent).toContain("still asks you on the worker_start card");
   await act(async () => q("settings-orchestration-workerMode")!.click());
@@ -143,8 +154,9 @@ it("Worker mode shows the daemon's value and picking Auto sends a patch of that 
 });
 
 it("the Tabs section shows while daemon settings load or fail", async () => {
-  const { q } = await render({ failGet: true });
+  const { q, pick } = await render({ failGet: true });
   expect(q("banner-error")?.textContent).toContain("daemon unreachable");
+  await pick("tabs");
   expect(q("settings-tabs")).not.toBeNull();
 });
 
@@ -157,7 +169,8 @@ it("Esc closes the dialog and the focus returns to the prompt box", async () => 
 });
 
 it("shows Usage limits: the continue switch is off by default and sends its patch only", async () => {
-  const { q, calls } = await render();
+  const { q, calls, pick } = await render();
+  await pick("usageLimit");
   expect(q("settings-usageLimit")?.textContent).toContain("Continue automatically after a usage limit resets");
   expect(q("settings-usageLimit")?.textContent).toContain("A daemon restart drops scheduled continues");
   expect(q("settings-usageLimit-autoContinue")?.getAttribute("aria-checked")).toBe("false");
@@ -168,7 +181,8 @@ it("shows Usage limits: the continue switch is off by default and sends its patc
 
 it("Default diff view is a per-browser choice: picking Uncommitted saves it and sends no settings.set", async () => {
   localStorage.removeItem("claude-ui.diffMode");
-  const { q, calls } = await render();
+  const { q, calls, pick } = await render();
+  await pick("changes");
   expect(q("settings-diff-mode")?.textContent).toContain("Session changes");
   await act(async () => q("settings-diff-mode")!.click());
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-diff-mode-uncommitted]")!.click());
@@ -180,7 +194,8 @@ it("Default diff view is a per-browser choice: picking Uncommitted saves it and 
 
 it("Sidebar section: Show only active sessions is the sidebar's own per-browser setting, off by default (GH-159)", async () => {
   localStorage.clear();
-  const { q } = await render();
+  const { q, pick } = await render();
+  await pick("sidebar");
   const sw = q("settings-sidebar-active-only")!;
   expect(q("settings-sidebar")!.textContent).toContain("Lists sessions that are running or need input. Search still finds every session, and the one you have open stays listed.");
   expect(sw.getAttribute("aria-checked")).toBe("false");
@@ -192,7 +207,8 @@ it("Sidebar section: Show only active sessions is the sidebar's own per-browser 
 });
 
 it("shows a Guide section whose Restart guide button calls onRestartGuide", async () => {
-  const { q, onRestartGuide } = await render();
+  const { q, onRestartGuide, pick } = await render();
+  await pick("guide");
   expect(q("settings-guide")!.textContent).toContain("Guided tour");
   const button = q("settings-guide-restart") as HTMLButtonElement;
   expect(button.textContent).toBe("Restart guide");
@@ -201,14 +217,102 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
   expect(onRestartGuide).toHaveBeenCalledTimes(1);
 });
 
-it("lists the Guide section after Tabs", async () => {
+it("lists the groups: Timeline first, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
-  expect(q("settings-tabs")!.compareDocumentPosition(q("settings-guide")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
+  expect(ids).toEqual(["Timeline", "Changes", "Sidebar", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits"]);
+  expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
 });
 
 it("the Keyboard section's Customize button opens the shortcuts dialog", async () => {
-  const { q, onShortcuts } = await render();
+  const { q, onShortcuts, pick } = await render();
+  await pick("keyboard");
   expect(q("settings-keyboard")?.textContent).toContain("Keyboard");
   await act(async () => q("settings-shortcuts")!.click());
   expect(onShortcuts).toHaveBeenCalledOnce();
+});
+
+it("shows one group at a time: the first by default, picking another swaps the panel and the choice is remembered per browser", async () => {
+  const { q, pick } = await render();
+  expect(document.querySelector('[role=tab][aria-selected=true]')?.textContent).toBe("Timeline");
+  expect(q("settings-timeline")).not.toBeNull();
+  expect(q("settings-tabs")).toBeNull();
+  expect(q("settings-panel")?.getAttribute("aria-labelledby")).toBe("settings-tab-timeline");
+  await pick("tabs");
+  expect(q("settings-tabs")).not.toBeNull();
+  expect(q("settings-timeline")).toBeNull();
+  expect(localStorage.getItem("claude-ui.settingsGroup")).toBe("tabs");
+  act(() => root?.unmount());
+  document.body.innerHTML = "";
+  const again = await render({ group: "tabs" });
+  expect(again.q("settings-tabs")).not.toBeNull();
+  expect(document.querySelector('[role=tab][aria-selected=true]')?.textContent).toBe("Tabs");
+});
+
+it("an unknown remembered group falls back to the first", async () => {
+  const { q } = await render({ group: "notifications" });
+  expect(q("settings-timeline")).not.toBeNull();
+});
+
+it("arrow keys move through the groups (roving tabindex), Home and End jump, and the panel follows", async () => {
+  const { q } = await render();
+  const key = (k: string) => act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
+  await act(async () => q("settings-group-timeline")!.focus());
+  await key("ArrowDown");
+  expect(document.activeElement).toBe(q("settings-group-changes"));
+  expect(q("settings-group-changes")!.getAttribute("aria-selected")).toBe("true");
+  expect(q("settings-group-timeline")!.getAttribute("tabindex")).toBe("-1");
+  expect(q("settings-group-changes")!.getAttribute("tabindex")).toBe("0");
+  expect(q("settings-changes")).not.toBeNull();
+  await key("End");
+  expect(document.activeElement).toBe(q("settings-group-usageLimit"));
+  await key("ArrowDown");
+  expect(document.activeElement).toBe(q("settings-group-timeline"));
+  await key("ArrowUp");
+  expect(document.activeElement).toBe(q("settings-group-usageLimit"));
+  await key("Home");
+  expect(document.activeElement).toBe(q("settings-group-timeline"));
+});
+
+it("the Back button shows on the drill-in panel and returns the focus to the group in the list", async () => {
+  const { q, pick } = await render();
+  await pick("sidebar");
+  expect(q("settings-back")?.textContent).toBe("Settings");
+  expect(q("settings-groups")!.className).toContain("max-md:hidden");
+  expect(q("settings-panel")!.className).not.toContain("max-md:hidden");
+  await act(async () => q("settings-back")!.click());
+  await act(async () => void new Promise((r) => setTimeout(r, 50)));
+  expect(q("settings-groups")!.className).not.toContain("max-md:hidden");
+  expect(q("settings-panel")!.className).toContain("max-md:hidden");
+  expect(document.activeElement).toBe(q("settings-group-sidebar"));
+});
+
+it("Signal only is a per-browser switch in the Timeline group, off by default, that saves at once and sends no settings.set (GH-205)", async () => {
+  localStorage.clear();
+  const { q, calls } = await render();
+  const sw = q("settings-signal-only")!;
+  expect(sw.getAttribute("role")).toBe("switch");
+  expect(sw.getAttribute("aria-checked")).toBe("false");
+  expect(q("settings-timeline")!.textContent).toContain("Kept in this browser.");
+  expect(document.getElementById(sw.getAttribute("aria-describedby")!)?.textContent).toContain("in every session");
+  await act(async () => sw.click());
+  expect(sw.getAttribute("aria-checked")).toBe("true");
+  expect(loadSignalOnly()).toBe(true);
+  expect(localStorage.getItem("claude-ui.signalOnly")).toBe("1");
+  expect(calls.some((c) => c.type === "settings.set")).toBe(false);
+  // The palette command and the shortcut write the same setting: the switch follows.
+  await act(async () => saveSignalOnly(false));
+  expect(q("settings-signal-only")!.getAttribute("aria-checked")).toBe("false");
+});
+
+it("the Signal only key hint is the live binding of signal.toggle and follows a rebinding", async () => {
+  localStorage.clear();
+  resetAll();
+  const { q } = await render();
+  expect(q("settings-signal-keys")?.textContent).toMatch(/Alt\+S$/);
+  await act(async () => bind("signal.toggle", "mod+alt+j"));
+  expect(q("settings-signal-keys")?.textContent).toMatch(/Alt\+J$/);
+  await act(async () => bind("signal.toggle", null));
+  expect(q("settings-signal-keys")).toBeNull();
+  await act(async () => resetAll());
 });
