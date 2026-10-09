@@ -4,9 +4,28 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionPane } from "./App.tsx";
 import { markAppScroll, resetScrollRest } from "./scroll-rest.ts";
-import { pairOf, resetUserCodePaint, SCROLL_REST } from "./user-code-paint.ts";
+import { cacheStats, limitCache, pairOf, resetShiki, resetUserCodePaint, RETRY_MS, SCROLL_REST } from "./user-code-paint.ts";
 import { UserMarkdown } from "./user-markdown.tsx";
 import { applyEvent, emptySession } from "./store.ts";
+
+// Shiki loads can be made to fail (once) to see the painting recover.
+const flaky = vi.hoisted(() => ({ create: 0, language: 0 }));
+vi.mock("shiki", async (orig) => {
+  const m = await orig<typeof import("shiki")>();
+  return {
+    ...m,
+    createHighlighter: async (...a: Parameters<typeof m.createHighlighter>) => {
+      if (flaky.create-- > 0) throw new Error("offline");
+      const h = await m.createHighlighter(...a);
+      const load = h.loadLanguage.bind(h);
+      h.loadLanguage = (async (...l: never[]) => {
+        if (flaky.language-- > 0) throw new Error("offline");
+        return load(...l);
+      }) as never;
+      return h;
+    },
+  };
+});
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -178,6 +197,7 @@ const timeline = () => {
   return log;
 };
 afterEach(async () => {
+  flaky.create = flaky.language = 0;
   mounted.splice(0).forEach((m) => m.unmount());
   resetUserCodePaint();
   resetScrollRest();
@@ -261,24 +281,13 @@ const SAMPLES: Record<string, string> = {
   json: JSON.stringify(Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`key${i}`, { n: i, s: `v${i}`, ok: i % 2 === 0, list: [1, null, "x"] }])), null, 2),
 };
 
-it.each(Object.keys(SAMPLES))("the painted colors of a long %s block are the colors of the whole block tokenized at once, also when tokenizing is slow", async (lang) => {
+it.each(Object.keys(SAMPLES))("the painted colors of a long %s block are the colors of the whole block tokenized at once", async (lang) => {
   stubPaint();
   const code = SAMPLES[lang]!;
   const a = await mountMd(["```" + lang, code, "```"].join("\n"));
   const [block] = blocksOf(a.el);
   await show([block!]);
-  // A slow machine: every clock read is 20 ms later (a per-line time limit would cut lines short and corrupt the grammar state).
-  let t = Date.now();
-  for (let i = 0; i < 400 && !ranges(block!); i++) {
-    const spy = vi.spyOn(Date, "now").mockImplementation(() => (t += 20));
-    try {
-      await slot();
-    } finally {
-      spy.mockRestore();
-    }
-    await wait(5);
-  }
-  expect(ranges(block!)).toBeGreaterThan(20);
+  await slotsUntil(() => ranges(block!) > 20);
   const { createHighlighter } = await import("shiki");
   const { createJavaScriptRegexEngine } = await import("shiki/engine/javascript");
   const h = await createHighlighter({ themes: ["github-light", "github-dark"], langs: [lang], engine: createJavaScriptRegexEngine({ forgiving: true }) });
@@ -390,4 +399,194 @@ it("uploads and images are unaffected", async () => {
   expect(bubble.querySelector("img")).not.toBeNull();
   expect(bubble.textContent).not.toContain("u-Xy34Ef");
   expect(el.querySelector('[data-testid="attachment"]')).not.toBeNull();
+});
+
+/** The lines (indexes) that hold painted ranges of `el`. */
+const paintedLines = (el: Element) => {
+  const lines = [...el.querySelectorAll("code > span")];
+  return new Set([...highlights.values()].flatMap((h) => [...h].map((r) => lines.findIndex((l) => l.contains(r.startContainer))).filter((i) => i >= 0)));
+};
+const bigCode = (n: number, rows: number) => Array.from({ length: rows }, (_, i) => `export const v${n}_${i} = (x: number) => x + ${i}; // line ${i}`).join("\n");
+
+it("a line that takes too long to tokenize leaves the rest of its block plain; the lines before keep their colors", async () => {
+  stubPaint();
+  const a = await mountMd(fence(longCode(51)));
+  const [block] = blocksOf(a.el);
+  await show([block!]);
+  await slotsUntil(() => ranges(block!) > 40);
+  const all = paintedLines(block!).size;
+  expect(all).toBe(40);
+  // The same code in another message, tokenized from scratch, on a clock that makes every line slow after a while.
+  resetUserCodePaint();
+  const b = await mountMd(fence(longCode(51)));
+  const [block2] = blocksOf(b.el);
+  await show([block2!]);
+  let calls = 0;
+  let clock = Date.now();
+  const spy = vi.spyOn(Date, "now").mockImplementation(() => (++calls > 60 ? (clock += 100) : clock));
+  try {
+    await slotsUntil(() => ranges(block2!) > 0);
+    for (let i = 0; i < 20; i++) await slot();
+  } finally {
+    spy.mockRestore();
+  }
+  const painted = [...paintedLines(block2!)].sort((x, y) => x - y);
+  expect(painted.length).toBeGreaterThan(0);
+  expect(painted.length).toBeLessThan(all);
+  // The colored lines are the first ones, without a gap; the cut block is not tried again.
+  expect(painted).toEqual(painted.map((_, i) => i));
+  const n = ranges(block2!);
+  for (let i = 0; i < 5; i++) await slot();
+  expect(ranges(block2!)).toBe(n);
+});
+
+it("the block nearest the middle of the screen is painted first", async () => {
+  stubPaint();
+  const order: Node[] = [];
+  vi.stubGlobal(
+    "Highlight",
+    class extends FakeHighlight {
+      add(r: StaticRange) {
+        order.push(r.startContainer);
+        return super.add(r);
+      }
+    },
+  );
+  vi.stubGlobal("innerHeight", 1000);
+  const a = await mountMd(fence(longCode(61)));
+  const b = await mountMd(fence(longCode(62)));
+  const c = await mountMd(fence(longCode(63)));
+  const at = (m: { el: Element }, top: number) => {
+    blocksOf(m.el)[0]!.getBoundingClientRect = () => ({ top, bottom: top + 100, height: 100, left: 0, right: 0, width: 0, x: 0, y: top, toJSON() {} });
+  };
+  at(a, 0);
+  at(b, 900);
+  at(c, 440);
+  await show([...blocksOf(a.el), ...blocksOf(b.el), ...blocksOf(c.el)]);
+  await slotsUntil(() => ranges(a.el) > 0 && ranges(b.el) > 0 && ranges(c.el) > 0);
+  const firstOf = (m: { el: Element }) => order.findIndex((n) => m.el.contains(n));
+  expect(firstOf(c)).toBe(0);
+  expect(firstOf(a)).toBeGreaterThan(firstOf(c));
+  expect(firstOf(b)).toBeGreaterThan(firstOf(a));
+});
+
+it("a block with many ranges is painted over several slots, not all at once", async () => {
+  stubPaint();
+  const a = await mountMd(fence(bigCode(71, 300)));
+  const [block] = blocksOf(a.el);
+  await show([block!]);
+  await slotsUntil(() => ranges(block!) > 600);
+  const total = ranges(block!);
+  await show([block!], false);
+  await slotsUntil(() => ranges(block!) === 0);
+  // From the cache, on a slow machine (every clock read 5 ms later): a slot adds some of the ranges.
+  let t = 0;
+  const spy = vi.spyOn(performance, "now").mockImplementation(() => (t += 5));
+  try {
+    await show([block!]);
+    await slot();
+    const first = ranges(block!);
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(total);
+    // Leaving in the middle of it: the half painted block drops its ranges and comes back whole.
+    await show([block!], false);
+    await show([block!]);
+    await slotsUntil(() => ranges(block!) === total);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("an exception while painting one block does not stop the painting of the others", async () => {
+  stubPaint();
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  let thrown = 0;
+  vi.stubGlobal(
+    "Highlight",
+    class extends FakeHighlight {
+      add(r: StaticRange) {
+        if (!thrown++) throw new Error("boom");
+        return super.add(r);
+      }
+    },
+  );
+  const a = await mountMd(fence(longCode(81)));
+  const b = await mountMd(fence(longCode(82)));
+  await show([...blocksOf(a.el), ...blocksOf(b.el)]);
+  await slotsUntil(() => ranges(a.el) + ranges(b.el) > 40);
+  expect(log).toHaveBeenCalled();
+  // Later slots still work: a third block that comes on screen is painted.
+  const c = await mountMd(fence(longCode(83)));
+  await show(blocksOf(c.el));
+  await slotsUntil(() => ranges(c.el) > 40);
+  log.mockRestore();
+});
+
+it("the token cache is limited by its size, the newest entry stays", async () => {
+  stubPaint();
+  const a = await mountMd(fence(longCode(91)));
+  await show(blocksOf(a.el));
+  await slotsUntil(() => ranges(a.el) > 40);
+  const one = cacheStats();
+  expect(one.entries).toBe(1);
+  expect(one.bytes).toBeGreaterThan(longCode(91).length);
+  limitCache(Math.floor(one.bytes * 1.5));
+  const b = await mountMd(fence(longCode(92)));
+  await show(blocksOf(b.el));
+  await slotsUntil(() => ranges(b.el) > 40);
+  expect(cacheStats().entries).toBe(1);
+  limitCache(1);
+  const c = await mountMd(fence(longCode(93)));
+  await show(blocksOf(c.el));
+  await slotsUntil(() => ranges(c.el) > 40);
+  expect(cacheStats().entries).toBe(1);
+});
+
+it("a language that failed to load is tried again later and the block gets its colors", async () => {
+  stubPaint();
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  flaky.language = 1;
+  const code = Array.from({ length: 40 }, (_, i) => `func f${i}(x int) int { return x + ${i} } // line ${i}`).join("\n");
+  const a = await mountMd(["```go", code, "```"].join("\n"));
+  const [block] = blocksOf(a.el);
+  await show([block!]);
+  await vi.waitFor(() => expect(log).toHaveBeenCalled(), { timeout: 10_000 });
+  for (let i = 0; i < 5; i++) await slot();
+  expect(ranges(block!)).toBe(0);
+  // No busy retrying while it cools down.
+  expect(idle).toHaveLength(0);
+  // After the wait the next sign of life (the block scrolls in again) tries again.
+  const now = performance.now();
+  const spy = vi.spyOn(performance, "now").mockImplementation(() => now + RETRY_MS + 10);
+  try {
+    await show([block!], false);
+    await show([block!]);
+    await slotsUntil(() => ranges(block!) > 40);
+  } finally {
+    spy.mockRestore();
+    log.mockRestore();
+  }
+});
+
+it("when shiki itself fails to load the blocks are colored once it loads again", async () => {
+  stubPaint();
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  resetShiki();
+  flaky.create = 1;
+  const code = Array.from({ length: 40 }, (_, i) => `fn f${i}(x: i32) -> i32 { x + ${i} } // line ${i}`).join("\n");
+  const a = await mountMd(["```rust", code, "```"].join("\n"));
+  const [block] = blocksOf(a.el);
+  await show([block!]);
+  await vi.waitFor(() => expect(log).toHaveBeenCalled(), { timeout: 10_000 });
+  expect(ranges(block!)).toBe(0);
+  const now = performance.now();
+  const spy = vi.spyOn(performance, "now").mockImplementation(() => now + RETRY_MS + 10);
+  try {
+    await show([block!], false);
+    await show([block!]);
+    await slotsUntil(() => ranges(block!) > 40);
+  } finally {
+    spy.mockRestore();
+    log.mockRestore();
+  }
 });
