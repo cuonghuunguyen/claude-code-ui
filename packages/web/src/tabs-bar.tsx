@@ -69,8 +69,10 @@ function TabIcon({ s, cwd }: { s: TabStatus; cwd?: string }) {
 
 const DRAG_TYPE = "application/x-claude-ui-tab";
 const GROUP_DRAG_TYPE = "application/x-claude-ui-tab-group";
-// Hover time before a compact chip opens its menu: short enough to feel direct, long enough that a pointer passing over a chip does not flash it.
-const CHIP_HOVER_DELAY_MS = 100;
+// Hover time before a compact chip opens its menu: none. Base UI's `delay` on a menu trigger is a rest time (the pointer must stop moving that long), so any value above 0 shows up as waiting; with 0 the menu opens on mouseenter. Mouse only (touch opens by tap); a drag fires no mouseenter, and the drag start closes the menu.
+export const CHIP_HOVER_DELAY_MS = 0;
+// The menu popup without its opening fade and scale (POPUP animates in over 100 ms, which read as a delay on top of the hover); closing keeps the fade.
+export const CHIP_POPUP = cn(POPUP, "max-w-80 data-starting-style:scale-100 data-starting-style:opacity-100");
 
 /**
  * Keeps the stored tab list grouped by project, also once the session cwds arrive (the strip draws groups; close, next tab and moves use this order).
@@ -664,7 +666,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
     </>
   );
   if (menu)
-    // Compact: a menu button (click, Enter, Space, ArrowDown; hover after CHIP_HOVER_DELAY_MS). A path tooltip would fight the hover menu, so the menu header carries name and path.
+    // Compact: a menu button (click, Enter, Space, ArrowDown; hover, at once). A path tooltip would fight the hover menu, so the menu header carries name and path.
     return (
       // Not modal: a modal menu opened by the press puts a backdrop over the other chips, and a chip drag could not drop. A drag start closes the menu.
       <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
@@ -674,7 +676,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
         <span id={pathId} hidden>{cwd}</span>
         <Menu.Portal>
           <Menu.Positioner align="start" sideOffset={4} className="z-50">
-            <Menu.Popup className={cn(POPUP, "max-w-80")} data-testid="tab-group-menu">
+            <Menu.Popup className={CHIP_POPUP} data-testid="tab-group-menu">
               <div className="flex flex-col px-2 py-1 text-xs" aria-hidden>
                 <span className="font-medium">{sub ?? name}</span>
                 <span className="truncate text-muted-foreground">{cwd}</span>

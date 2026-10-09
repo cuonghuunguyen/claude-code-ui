@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -110,6 +110,19 @@ describe("sides", () => {
     expect(script).toContain('exec node "$cli" --side');
   });
 
+  it("the setup script installs into a temp folder, checks it, and only then moves it over the old install", () => {
+    for (const kind of ["wsl", "docker"] as const) {
+      const s = setupScript(kind === "docker" ? "/tmp/a.tgz" : "C:\\p", "1.2.3-1", kind);
+      const at = (part: string) => { const i = s.indexOf(part); expect(i, part).toBeGreaterThan(-1); return i; };
+      const order = [at('npm install --prefix "$new"'), at('[ -f "$new/node_modules/claude-code-ui/dist/cli.js" ]'), at('sdk "$new"'), at('node "$new/node_modules/claude-code-ui/dist/cli.js" --version'), at('mv "$dir" "$old"'), at('mv "$new" "$dir"')];
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+      expect(s).not.toContain('npm install --prefix "$dir"');
+      expect(s).not.toMatch(/rm -rf "\$dir"; mkdir/);
+      expect(s).toContain("install_failed");
+      expect(s.split("\n").some((l) => /^ *\[ -e "\$dir" \]|if \[ -e "\$dir" \]/.test(l))).toBe(true);
+    }
+  });
+
   it("the docker setup script runs in plain sh: the tarball, no wslpath, roots from the working dir", () => {
     const s = setupScript("/tmp/claude-ui-side-0.2.0-1.tgz", "0.2.0-1", "docker");
     for (const part of ["src='/tmp/claude-ui-side-0.2.0-1.tgz'", 'CLAUDE_UI_ROOTS="$HOME:$PWD"', "say build_tools_missing", "CLAUDE_CODE_OAUTH_TOKEN", 'exec node "$cli" --side', 'rm -f "$src"']) expect(s).toContain(part);
@@ -122,7 +135,7 @@ describe("sides", () => {
   describe.skipIf(!hasSh || process.platform === "win32")("the setup script and the SDK's Linux binary", () => {
     const key = "0.4.1-1";
     /** Runs the docker setup script with a fake npm (writes the package; the SDK binary only when `native`); the npm calls and the output. */
-    function setup({ installed, native }: { installed?: "complete" | "no-binary"; native: boolean }) {
+    function setup({ installed, native, fail, seed, broken }: { installed?: "complete" | "no-binary"; native: boolean; fail?: boolean; broken?: boolean; seed?: string[] }) {
       const home = dir("side-home-");
       const bin = dir("side-bin-");
       const log = join(home, "npm.log");
@@ -133,23 +146,33 @@ describe("sides", () => {
       };
       const sideDir = join(home, ".local/share/claude-ui/side", key);
       if (installed) pkg(sideDir, installed === "complete");
+      const root = join(home, ".local/share/claude-ui/side");
+      for (const s of seed ?? []) pkg(join(root, s), true);
       for (const tool of ["make", "python3", "g++"]) writeFileSync(join(bin, tool), "#!/bin/sh\n", { mode: 0o755 });
       // Like npm: an existing node_modules without the optional dependency does not get it.
       const writeBinary = native ? '[ "$fresh" = 1 ] && mkdir -p "$p/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"' : "";
-      const npm = `#!/bin/sh\necho npm >> '${log}'\nwhile [ "$1" != --prefix ]; do shift; done; p=$2\nfresh=1; [ -d "$p/node_modules" ] && fresh=0\nmkdir -p "$p/node_modules/claude-code-ui/dist"\necho 'console.log("side started")' > "$p/node_modules/claude-code-ui/dist/cli.js"\n${writeBinary}\n`;
+      const failNow = fail ? '\necho "npm ERR! network request failed" >&2\nexit 1' : "";
+      const cliSource = broken ? "process.exit(1)" : 'console.log("side started")';
+      const npm = `#!/bin/sh\nwhile [ "$1" != --prefix ]; do shift; done; p=$2\necho "$p" >> '${log}'\nfresh=1; [ -d "$p/node_modules" ] && fresh=0\nmkdir -p "$p/node_modules/claude-code-ui/dist"\n${fail ? 'echo partial > "$p/node_modules/partial"' : `echo '${cliSource}' > "$p/node_modules/claude-code-ui/dist/cli.js"`}${failNow}\n${writeBinary}\n`;
       writeFileSync(join(bin, "npm"), npm, { mode: 0o755 });
       const tgz = join(home, "side.tgz");
       writeFileSync(tgz, "");
       const r = spawnSync("sh", ["-c", setupScript(tgz, key, "docker")], { cwd: home, encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}`, HOME: home, ANTHROPIC_API_KEY: "test" } });
-      const calls = spawnSync("sh", ["-c", `cat '${log}' 2>/dev/null | wc -l`], { encoding: "utf8" }).stdout.trim();
-      return { status: r.status, out: r.stdout, npmCalls: Number(calls), sideDir };
+      const prefixes = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : [];
+      const entries = existsSync(root) ? readdirSync(root).sort() : [];
+      return { status: r.status, out: r.stdout, npmCalls: prefixes.length, prefixes, entries, root, sideDir };
     }
+    const cliOf = (d: string) => join(d, "node_modules/claude-code-ui/dist/cli.js");
+    const binOf = (d: string) => join(d, "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64");
 
-    it("installs again over an install without the binary, then starts", () => {
+    it("installs into a temp folder, then swaps it in over an install without the binary, then starts", () => {
       const r = setup({ installed: "no-binary", native: true });
       expect(r.npmCalls).toBe(1);
+      expect(r.prefixes[0]).not.toBe(r.sideDir);
+      expect(r.prefixes[0]).toMatch(/\.new-\d+$/);
       expect(r.out).toContain("side started");
-      expect(existsSync(join(r.sideDir, "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"))).toBe(true);
+      expect(existsSync(binOf(r.sideDir))).toBe(true);
+      expect(r.entries).toEqual([key]);
     });
 
     it("fails the setup with install_failed when npm leaves the binary out", () => {
@@ -158,6 +181,47 @@ describe("sides", () => {
       expect(r.out).toMatch(/^CLAUDE_UI_SETUP install_failed .*Claude Agent SDK/m);
       expect(r.out).not.toContain("side started");
       expect(existsSync(r.sideDir)).toBe(false);
+      expect(r.entries).toEqual([]);
+    });
+
+    it("keeps the old install when npm fails", () => {
+      const r = setup({ installed: "no-binary", native: true, fail: true });
+      expect(r.status).toBe(3);
+      expect(r.out).toMatch(/^CLAUDE_UI_SETUP install_failed .*npm ERR! network/m);
+      expect(existsSync(cliOf(r.sideDir))).toBe(true);
+      expect(r.entries).toEqual([key]);
+    });
+
+    it("keeps the old install when npm leaves the binary out again", () => {
+      const r = setup({ installed: "no-binary", native: false });
+      expect(r.status).toBe(3);
+      expect(r.out).toMatch(/^CLAUDE_UI_SETUP install_failed .*Claude Agent SDK/m);
+      expect(existsSync(cliOf(r.sideDir))).toBe(true);
+      expect(r.entries).toEqual([key]);
+    });
+
+    it("a failed install leaves earlier versions alone; a successful one removes them", () => {
+      const failed = setup({ installed: "no-binary", native: true, fail: true, seed: ["0.4.0-1"] });
+      expect(failed.entries).toEqual(["0.4.0-1", key]);
+      expect(existsSync(cliOf(join(failed.root, "0.4.0-1")))).toBe(true);
+      const ok = setup({ installed: "no-binary", native: true, seed: ["0.4.0-1"] });
+      expect(ok.entries).toEqual([key]);
+    });
+
+    it("sweeps the leftovers of a killed run after a successful install", () => {
+      const r = setup({ installed: "no-binary", native: true, seed: [".new-123", ".old-456"] });
+      expect(r.out).toContain("side started");
+      expect(r.entries).toEqual([key]);
+    });
+
+    it("keeps the old install when the new one does not run", () => {
+      const r = setup({ installed: "no-binary", native: true, broken: true });
+      expect(r.status).toBe(3);
+      expect(r.out).toMatch(/^CLAUDE_UI_SETUP install_failed .*does not start/m);
+      expect(r.out).not.toContain("side started");
+      expect(existsSync(cliOf(r.sideDir))).toBe(true);
+      expect(existsSync(binOf(r.sideDir))).toBe(false);
+      expect(r.entries).toEqual([key]);
     });
 
     it("starts a complete install without npm", () => {
