@@ -145,7 +145,7 @@ it("compact: leaving the chip closes the hover menu", async () => {
     for (const type of types) await act(async () => void c.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, { bubbles: true, pointerType: "mouse" } as PointerEventInit)));
   };
   await fire(["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove"]);
-  expect(items().length).toBe(2);
+  expect(items().length).toBe(3); // two tabs and Close group
   await fire(["pointerout", "pointerleave", "mouseout", "mouseleave"]);
   await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
   expect(items().length).toBe(0);
