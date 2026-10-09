@@ -3,9 +3,8 @@
 // by itself: the owner calls onRun when a button is pressed (docs/spec.md "Sides").
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon, LoaderCircleIcon, MinusIcon, TriangleAlertIcon } from "lucide-react";
-import type { SideInfo } from "@claude-ui/protocol";
+import type { SideCheck, SideInfo, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
-import type { SideCheck, SidePhase, SideSetup } from "./side-check-types.ts";
 
 /** What a button asks `side.start` for: a setup mode, or "plain" (a daemon without side.check: no setup field). */
 export type RunMode = SideSetup | "plain";
@@ -114,7 +113,7 @@ export function SidePanel({
   onRun,
   onCheck,
 }: {
-  side: SideInfo & { phase?: SidePhase };
+  side: SideInfo;
   state: PanelState;
   onRun: (mode: RunMode) => void;
   onCheck: () => void;

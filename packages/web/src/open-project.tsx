@@ -5,9 +5,8 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { BoxIcon, FolderIcon, SearchIcon, XIcon } from "lucide-react";
-import { LOCAL_SIDE, type FsEntry, type RecentProject, type SideInfo } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type FsEntry, type RecentProject, type SideCheck, type SideInfo, type SideSetup } from "@claude-ui/protocol";
 import { SidePanel, type PanelState, type RunMode } from "./side-panel.tsx";
-import type { SideCheck, SidePhase, SideSetup } from "./side-check-types.ts";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -262,7 +261,7 @@ function SidePicker({
       {!current ? (
         <ContainerStep input={input} containers={members} stateWord={stateWord} isReady={isReady} onPick={(id) => void choose(id)} />
       ) : !ready ? (
-        <SidePanel key={current.id} side={current as SideInfo & { phase?: SidePhase }} state={panels[current.id] ?? {}} onRun={(m) => void run(current.id, m)} onCheck={() => void runCheck(current.id)} />
+        <SidePanel key={current.id} side={current} state={panels[current.id] ?? {}} onRun={(m) => void run(current.id, m)} onCheck={() => void runCheck(current.id)} />
       ) : (
         <Browser
           key={`${side}:${start.n}`}

@@ -2,9 +2,8 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FsEntry, RecentProject, SideInfo } from "@claude-ui/protocol";
+import type { FsEntry, RecentProject, SideCheck, SideInfo } from "@claude-ui/protocol";
 import { OpenProjectDialog } from "./open-project.tsx";
-import type { SideCheck } from "./side-check-types.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
