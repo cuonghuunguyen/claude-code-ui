@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
-import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, loadCollapsed, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveSidebarView, nestWorkers, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SidebarView, type WorktreeRow } from "./sessions.ts";
+import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, loadCollapsed, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SidebarView, type WorktreeRow } from "./sessions.ts";
 import { useNow } from "./plan-meter.tsx";
 import { projectName } from "./tabs.ts";
 import { ICON_BUTTON, IconButton, ProjectAvatar } from "./tabs-bar.tsx";
@@ -230,7 +230,17 @@ export function SessionList({
   const filtering = view.onlyActive && !searching && !archived;
   const workers = filtering ? activeWorkers(nested.workers, keepActive) : nested.workers;
   const filtered = filtering ? activeOnly(shown, nested.workers, keepActive) : undefined;
-  const groups = filtered ? filtered.groups : shown;
+  const kept = filtered ? filtered.groups : shown;
+  // Classic: the worktrees' sessions merge into the project's list (no worktree rows); `branches` labels those of a linked worktree.
+  const classic = view.layout === "classic";
+  const branches = new Map<string, string>();
+  const groups = classic
+    ? kept.map((g) => {
+        const c = classicGroup(g);
+        c.branch.forEach((b, id) => branches.set(id, b));
+        return c.group;
+      })
+    : kept;
   const activeSession = list.find((s) => s.id === activeId);
   // Select active session: open what hides the row (clearing a search or switching to the row's archived view first), then scroll to it; `focus`: move the focus to it.
   const [reveal, setReveal] = useState<{ id: string; focus: boolean }>();
@@ -301,7 +311,7 @@ export function SessionList({
               const k = workerKey(s.id, archived);
               const needs = ws.some((w) => state(w) === "needs_input");
               const row = (x: SessionListItem, d: Depth, worker?: { workerName: string; place: string }) => (
-                <SessionRow key={x.id} s={x} ago={timeAgo(x.lastActivity, now)} st={state(x)} loading={!!titleLoading?.(x)} unread={unread.has(x.id)} active={x.id === activeId} renaming={renaming === x.id} depth={d} {...worker} {...rowProps} />
+                <SessionRow key={x.id} s={x} ago={timeAgo(x.lastActivity, now)} st={state(x)} loading={!!titleLoading?.(x)} unread={unread.has(x.id)} active={x.id === activeId} renaming={renaming === x.id} depth={d} classic={classic} branch={branches.get(x.id)} {...worker} {...rowProps} />
               );
               return (
                 <Fragment key={s.id}>
@@ -569,6 +579,8 @@ const SessionRow = memo(function SessionRow({
   active,
   renaming,
   depth,
+  classic,
+  branch,
   workerName,
   place,
   onOpen,
@@ -586,6 +598,9 @@ const SessionRow = memo(function SessionRow({
   renaming: boolean;
   /** Indent level (PAD). */
   depth: Depth;
+  /** Classic layout: the row says its state as text and, in a linked worktree, its branch. */
+  classic?: boolean;
+  branch?: string;
   /** A worker under its coordinator: the row shows its name, place and state as text. */
   workerName?: string;
   place?: string;
@@ -594,6 +609,8 @@ const SessionRow = memo(function SessionRow({
   onRenamed: (id: string, title: string | undefined) => void;
 }) {
   const label = STATE_LABEL[st];
+  // Classic: every state reads as text (workers already do).
+  const stateText = classic && !workerName ? WORKER_STATE[st] : undefined;
   const target = { title: s.title, archived: s.archived, busy: st === "running" || st === "needs_input", transcript: s.transcript };
   const act = (a: SessionAction) => onAction(s.id, a);
   if (renaming)
@@ -616,14 +633,22 @@ const SessionRow = memo(function SessionRow({
           )}
           aria-current={active ? "page" : undefined}
           data-worker={workerName}
-          aria-label={(workerName ? [workerName, "worker", WORKER_STATE[st], place, unread && "unread"] : [s.title, label, unread && "unread"]).filter(Boolean).join(", ")}
+          aria-label={(workerName ? [workerName, "worker", WORKER_STATE[st], place, unread && "unread"] : [s.title, stateText ?? label, branch && `branch ${branch}`, unread && "unread"]).filter(Boolean).join(", ")}
           onClick={() => onOpen(s.id)}
-          title={workerName ? `${s.title}\n${s.cwd}` : label ? `${s.title} (${label})` : s.title}
+          title={workerName ? `${s.title}\n${s.cwd}` : stateText ? `${s.title} (${stateText}${branch ? `, ${branch}` : ""})` : label ? `${s.title} (${label})` : s.title}
         >
           {workerName ? (
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="truncate font-medium text-foreground">{workerName}</span>
               <span className="truncate text-muted-foreground text-xs">{`${place} · ${WORKER_STATE[st]}`}</span>
+            </span>
+          ) : stateText ? (
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="flex min-w-0 items-baseline gap-1.5">
+                {loading ? <TitleSkeleton title={s.title} className="h-3.5 w-28" /> : <span className="min-w-0 truncate font-medium text-foreground">{s.title}</span>}
+                {branch && <span className="min-w-0 shrink-[2] truncate text-muted-foreground text-xs" data-testid="session-branch">{branch}</span>}
+              </span>
+              <span className="truncate text-muted-foreground text-xs" data-testid="session-state">{stateText}</span>
             </span>
           ) : loading ? (
             <TitleSkeleton title={s.title} className="h-3.5 w-28" />

@@ -132,8 +132,12 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const [saving, setSaving] = useState(false);
   // "Show only active sessions": the sidebar's own per-browser setting (its options menu writes it too).
   const [onlyActive, setOnlyActive] = useState(() => loadSidebarView().onlyActive);
+  const [layout, setLayout] = useState(() => loadSidebarView().layout);
   useEffect(() => {
-    const sync = () => setOnlyActive(loadSidebarView().onlyActive);
+    const sync = () => {
+      setOnlyActive(loadSidebarView().onlyActive);
+      setLayout(loadSidebarView().layout);
+    };
     sync();
     window.addEventListener(VIEW_EVENT, sync);
     return () => window.removeEventListener(VIEW_EVENT, sync);
@@ -346,6 +350,21 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         </div>
         <Switch on={onlyActive} label="Show only active sessions" held={false} onToggle={(on) => saveSidebarView({ ...loadSidebarView(), onlyActive: on })} title="Show only active sessions" describedBy="settings-sidebar-active-hint" testId="settings-sidebar-active-only" />
       </div>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-sidebar-layout-label" className="block text-sm">Layout</span>
+          <span id="settings-sidebar-layout-hint" className="block text-muted-foreground text-xs">Default groups a project's sessions by worktree. Classic lists them directly under the project, with each session's state as text. Kept in this browser.</span>
+        </div>
+        <Select value={layout} onValueChange={(v) => v && saveSidebarView({ ...loadSidebarView(), layout: v as "default" | "classic" })}>
+          <SelectTrigger aria-labelledby="settings-sidebar-layout-label" aria-describedby="settings-sidebar-layout-hint" data-testid="settings-sidebar-layout" className="w-40 max-md:data-[size=default]:h-11">
+            <SelectValue>{(v: string) => (v === "classic" ? "Classic" : "Default")}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="default" data-testid="settings-sidebar-layout-default">Default</SelectItem>
+            <SelectItem value="classic" data-testid="settings-sidebar-layout-classic">Classic</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
     </section>
       ),
     },
@@ -435,6 +454,14 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     choose(groups[to]!.id, true);
   };
   // Back from a drilled-in group: the focus returns to its entry in the list.
+  const backRef = useRef<HTMLButtonElement>(null);
+  // Drilling in below md hides the list, so the tapped group loses its focus (it fell to the dialog): the Back button takes it.
+  // On desktop the Back button is not shown, focus() does nothing and the group keeps the focus.
+  const drillIn = (id: string) => {
+    choose(id);
+    setDrilled(true);
+    setTimeout(() => backRef.current?.focus(), 0);
+  };
   const back = () => {
     setDrilled(false);
     setTimeout(() => tabRefs.current.get(selected.id)?.focus(), 0);
@@ -455,7 +482,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
               aria-selected={g.id === selected.id}
               aria-controls="settings-panel"
               tabIndex={g.id === selected.id ? 0 : -1}
-              onClick={() => (choose(g.id), setDrilled(true))}
+              onClick={() => drillIn(g.id)}
               className={`flex h-8 items-center rounded-md px-3 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 ${g.id === selected.id ? "bg-accent text-foreground md:font-medium" : "text-muted-foreground hover:bg-accent/60"}`}
               data-testid={`settings-group-${g.id}`}
             >
@@ -464,7 +491,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           ))}
         </div>
         <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${selected.id}`} className={`flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto ${drilled ? "" : "max-md:hidden"}`} data-testid="settings-panel">
-          <button type="button" onClick={back} className="flex h-11 items-center gap-1 self-start rounded-md pr-3 text-muted-foreground text-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden" data-testid="settings-back">
+          <button ref={backRef} type="button" onClick={back} className="flex h-11 items-center gap-1 self-start rounded-md pr-3 text-muted-foreground text-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden" data-testid="settings-back">
             <ChevronLeftIcon className="size-4" />
             Settings
           </button>

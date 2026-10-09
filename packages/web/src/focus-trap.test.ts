@@ -49,3 +49,38 @@ it("still wraps among visible controls and ignores a root with none", () => {
   const none = dialog('<button style="display:none"></button>');
   expect(tab(none)).toBe(false);
 });
+
+it("skips a control inside a closed <details> but not one in an open one", () => {
+  const root = dialog('<button id="a"></button><details><summary id="s">s</summary><button id="x"></button></details><details open><button id="o"></button></details>');
+  $("a").focus();
+  tab(root);
+  expect(document.activeElement).toBe($("o"));
+});
+
+it("skips a control that checkVisibility reports hidden (content-visibility:hidden)", () => {
+  const proto = HTMLElement.prototype as unknown as { checkVisibility?: unknown };
+  proto.checkVisibility = function (this: HTMLElement) {
+    return !this.closest("[data-cv]");
+  };
+  try {
+    const root = dialog('<button id="a"></button><div data-cv><button id="x"></button></div><button id="z"></button>');
+    $("a").focus();
+    expect(tab(root)).toBe(true);
+    expect(document.activeElement).toBe($("z"));
+  } finally {
+    delete proto.checkVisibility;
+  }
+});
+
+it("tries the next control when one refuses the focus, and leaves the Tab alone when none takes it", () => {
+  const root = dialog('<button id="a"></button><button id="stuck"></button><button id="z"></button>');
+  $("stuck").focus = () => {};
+  $("a").focus();
+  expect(tab(root)).toBe(true);
+  expect(document.activeElement).toBe($("z"));
+  const lone = dialog('<button id="only"></button>');
+  $("only").focus();
+  $("only").blur();
+  $("only").focus = () => {};
+  expect(tab(lone)).toBe(false);
+});
