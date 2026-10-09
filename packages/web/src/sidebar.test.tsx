@@ -335,6 +335,31 @@ describe("worktrees", () => {
     expect(rows[1]!.textContent).toContain("No sessions yet");
   });
 
+  it("Classic layout (GH-222): one merged newest-first list per project, no worktree rows, branch suffix and state text on every row", async () => {
+    localStorage.setItem("claude-ui.sidebarView", JSON.stringify({ layout: "classic" }));
+    const l = [item("a", "/home/u/web", "Fix login", 10, "idle"), item("w", "/home/u/orca/web/fix", "Worktree job", 2, "running"), item("n", "/home/u/web", "Newest", 1, "needs_input")];
+    const { el, rows } = await render({ ...props, list: l });
+    expect(worktreeRows(el)).toEqual([]);
+    expect(rows().map((r) => r.dataset.sessionId)).toEqual(["n", "w", "a"]);
+    expect(rows().map((r) => r.querySelector('[data-testid="session-state"]')!.textContent)).toEqual(["needs input", "running", "idle"]);
+    expect(rows().map((r) => r.querySelector('[data-testid="session-branch"]')?.textContent)).toEqual([undefined, "fix-login", undefined]);
+    expect(rows()[1]!.getAttribute("aria-label")).toBe("Worktree job, running, branch fix-login");
+    expect(rows()[1]!.querySelector("svg.animate-spin")).not.toBeNull();
+    expect(el.querySelectorAll('[data-testid="day-header"]').length).toBe(1);
+  });
+
+  it("Classic layout keeps only-active and search; Default shows no state text; a stored view without layout is Default", async () => {
+    localStorage.setItem("claude-ui.sidebarView", JSON.stringify({ onlyActive: true, layout: "classic" }));
+    const l = [item("a", "/home/u/web", "Fix login", 10, "idle"), item("w", "/home/u/orca/web/fix", "Worktree job", 2, "running")];
+    const c = await render({ ...props, list: l, activeId: null });
+    expect(c.rows().map((r) => r.dataset.sessionId)).toEqual(["w"]);
+    root!.unmount();
+    localStorage.setItem("claude-ui.sidebarView", JSON.stringify({ onlyActive: false }));
+    const d = await render({ ...props, list: l });
+    expect(d.el.querySelector('[data-testid="session-state"]')).toBeNull();
+    expect(worktreeRows(d.el).length).toBe(3);
+  });
+
   it("a row collapses and stays collapsed after a reload, apart from its project group", async () => {
     let r = await render(props);
     await act(async () => rowToggle(r.el, "/home/u/web").click());
