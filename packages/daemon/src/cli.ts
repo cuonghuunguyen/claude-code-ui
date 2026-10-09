@@ -13,7 +13,8 @@ Options (a flag overrides its environment variable):
   --tailscale         serve on your tailnet with tailscale serve and print its https link
                                                              (CLAUDE_UI_TAILSCALE=1)
   --lan               also listen on the local network, plain HTTP: the token is
-                      readable on the network; no browser push or Copy (CLAUDE_UI_LAN=1)
+                      readable on the network; no browser push, Copy or app install
+                                                             (CLAUDE_UI_LAN=1)
   --allow-bypass      offer the "Bypass permissions" mode    (CLAUDE_UI_ALLOW_BYPASS=1)
   --no-update-check   do not check npm for a newer version   (CLAUDE_UI_UPDATE_CHECK=0)
   --no-os-notify      no desktop notification on this machine when no browser
@@ -21,6 +22,9 @@ Options (a flag overrides its environment variable):
   -v, --version       print the version
   -h, --help          print this help
 `;
+
+/** Printed under the pairing URL of an HTTPS start (--tailscale, --hostname): installing the app needs HTTPS. */
+export const PHONE_HINT = "Phone: open the link, then Install app (Android Chrome) or Share > Add to Home Screen (iOS Safari); on iOS paste the link into the app's pairing field.";
 
 /** `side`: run as a WSL side of a Windows daemon (sides.ts): wire protocol over stdio, no HTTP. Not in HELP: the Windows daemon starts it. */
 export type Cli = { kind: "run"; port: number; roots: string[]; hostname: string | undefined; lan: boolean; allowBypass: boolean; idleCloseMinutes: number; tailscale?: true; side?: boolean; updateCheck?: false; osNotify?: false } | { kind: "update" } | { kind: "help" } | { kind: "version" } | { kind: "error"; message: string };

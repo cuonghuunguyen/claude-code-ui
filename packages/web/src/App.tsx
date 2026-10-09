@@ -49,11 +49,13 @@ import { Message, MessageAction, MessageActions, MessageContent, MessageResponse
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
-import { Toast } from "./toast.tsx";
+import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
+import { NotificationStack, useNotifications, type CardItem } from "./notifications.tsx";
+import { cardText, describeCard, IN_APP_EVENT, loadInApp, type Card } from "./notify.ts";
 import { McpDialog } from "./mcp-dialog.tsx";
 import { SkillsDialog } from "./skills-dialog.tsx";
 import { SettingsDialog } from "./settings-dialog.tsx";
@@ -66,6 +68,9 @@ import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
+import { clearDrafts, loadDraft, NEW_TAB_DRAFT } from "./drafts.ts";
+import { PairingForm } from "./pairing-form.tsx";
+import { useDraft } from "./use-draft.ts";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
 import { ContinueDock } from "./continue-dock.tsx";
@@ -79,10 +84,10 @@ import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
-import { loadSignalIds, saveSignalOnly, signalItems, type SignalItem } from "./signal.ts";
-import { FoldRow, SignalSwitch } from "./signal-fold.tsx";
-import { FocusPage, FocusRow } from "./focus-page.tsx";
-import { nextWaiting, waitingCount, waitingRequests } from "./focus.ts";
+import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
+import { FoldRow } from "./signal-fold.tsx";
+import { FocusPage, FocusRow, useNow } from "./focus-page.tsx";
+import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
 import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
@@ -106,7 +111,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
-import { FOCUS_TAB, NEW_TAB, avatarColors, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
@@ -234,17 +239,8 @@ export function App() {
   const [focusSel, setFocusSel] = useState<string>();
   // When this browser first saw a request that came without the daemon's `at`.
   const firstSeen = useRef(new Map<string, number>());
-  // Sessions shown in Signal only (GH-159), per browser.
-  const [signalIds, setSignalIds] = useState(loadSignalIds);
-  const setSignalOnly = (id: string, on: boolean) => {
-    saveSignalOnly(id, on);
-    setSignalIds((s) => {
-      const next = new Set(s);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
+  // Signal only (GH-159, one setting for the browser since GH-205), set in Settings.
+  const signalOnly = useSignalOnly();
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
   const changeGrouping = (g: TabGrouping) => {
     setGrouping(g);
@@ -275,6 +271,8 @@ export function App() {
   const [stale, setStale] = useState<string>();
   const staleDismissed = useRef<string | undefined>(undefined);
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
+  // Unpaired: the drafts of this browser go with its token (drafts.ts).
+  useEffect(() => void (status === "unauthorized" && clearDrafts()), [status]);
   const [drawer, setDrawer] = useState(false);
   /** A `/resume` request for the sidebar search (SessionList `search`). */
   const [resumeSearch, setResumeSearch] = useState<{ text: string; seq: number }>();
@@ -299,7 +297,17 @@ export function App() {
   /** Titles from subscribe replies: a tab of a session not (yet) in the list, e.g. the page-load hash session. */
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
+  // In-app notifications (GH-158): `notifyRef` takes every event; the choice is per browser and Settings tells this page by event.
+  const notifyRef = useRef<(e: Event, live: boolean) => void>(undefined);
+  const [inApp, setInApp] = useState(loadInApp);
+  useEffect(() => {
+    const sync = (e: globalThis.Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
+    window.addEventListener(IN_APP_EVENT, sync);
+    return () => window.removeEventListener(IN_APP_EVENT, sync);
+  }, []);
   const [pushOn, setPushOn] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState<string>();
   // Per session, bumped by a notification click: remounts its conversation, which starts scrolled to the bottom.
   const [scrollKeys, setScrollKeys] = useState<Record<string, number>>({});
   const focused = usePageFocused();
@@ -394,6 +402,8 @@ export function App() {
   const restored = useRef<string[] | undefined>(tabs);
   /** True once a session list reply is in (never reset): the tab group keys are final only after it (GH-196). */
   const [listLoaded, setListLoaded] = useState(false);
+  /** Tabs whose subscribe failed for a reason other than unknown_session: their session never arrives, so they must not keep the group keys from becoming final (GH-201). */
+  const [failedTabs, setFailedTabs] = useState<ReadonlySet<string>>(new Set());
 
   async function refreshList() {
     try {
@@ -466,12 +476,16 @@ export function App() {
       }
       setViews((v) => ({ ...v, [sessionId]: withSubscribe(v[sessionId] ?? emptySession(), r) }));
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
+      setFailedTabs((f) => (f.has(sessionId) ? new Set([...f].filter((x) => x !== sessionId)) : f));
       setHeirOf((h) => (h[sessionId] ? without(h, sessionId) : h));
       if (r.title) setTitles((t) => ({ ...t, [sessionId]: r.title }));
     } catch (e) {
       // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
       if ((e as RequestError).code === "unknown_session") return forget(sessionId);
-      if ((e as Error).message !== "disconnected") setError((e as Error).message); // else resubscribed on reconnect
+      if ((e as Error).message !== "disconnected") {
+        setError((e as Error).message);
+        setFailedTabs((f) => (f.has(sessionId) ? f : new Set(f).add(sessionId)));
+      } // else resubscribed on reconnect
     }
   }
 
@@ -587,6 +601,7 @@ export function App() {
     requested.current.delete(sessionId);
     setViews((v) => without(v, sessionId));
     setInfos((i) => without(i, sessionId));
+    setFailedTabs((f) => (f.has(sessionId) ? new Set([...f].filter((x) => x !== sessionId)) : f));
     if (unsubscribe) client.current?.request({ type: "session.unsubscribe", sessionId }).catch(() => {});
   }
 
@@ -673,6 +688,7 @@ export function App() {
         // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
         // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
         const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+        notifyRef.current?.(e, live);
         // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
         if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
         if (e.part.type === "session_state" && live) void refreshList();
@@ -737,12 +753,16 @@ export function App() {
     };
   }, []);
 
+  // Listed sessions this page covers with in-app cards: only while in-app notifications are on and the page is focused and visible.
+  const coveredKey = inApp && focused ? list.filter((s) => !s.archived).map((s) => s.id).sort().slice(0, 2000).join(",") : undefined;
   // The daemon suppresses pushes for the session a focused, visible tab shows; resent after every reconnect.
   useEffect(() => {
     if (status !== "connected") return;
     const sessionId = focused && activeId !== NEW_TAB && activeId !== FOCUS_TAB ? activeId : undefined;
-    client.current!.request(sessionId ? { type: "push.focus", sessionId } : { type: "push.focus" }).catch(() => {});
-  }, [status, focused, activeId]);
+    // One event, one channel: what this page shows as in-app cards needs no push (the Focus page covers every session too).
+    const covered = coveredKey === undefined ? undefined : coveredKey.split(",").filter(Boolean);
+    client.current!.request({ type: "push.focus", ...(sessionId && { sessionId }), ...(covered && { covered }) }).catch(() => {});
+  }, [status, focused, activeId, coveredKey]);
 
   const activeView = activeId ? views[activeId] : undefined;
   useEffect(() => {
@@ -772,14 +792,51 @@ export function App() {
     setFavicon(faviconHref(waitingN));
   }, [waitingN]);
 
+  // Settings › Notifications owns the switch; its error shows under the row (not in the sidebar).
+  // In-app notification cards: live events of sessions this page does not show (docs/spec.md "In-app notifications").
+  const [cardNote, setCardNote] = useState<{ card: Card; hint: boolean; at?: number }>();
+  const hinted = useRef(false);
+  const notify = useNotifications(
+    { enabled: inApp, focused, focusPage: activeId === FOCUS_TAB, shown: (id) => id === activeId, list, views },
+    (card: Card) => {
+      // Said once per page load: how to reach the cards without the mouse. The text itself is made at render, with the session's title as the card shows it.
+      const hint = !hinted.current && !!specOf("notifications.focus");
+      hinted.current = true;
+      setCardNote({ card, hint });
+    },
+  );
+  notifyRef.current = notify.observe;
+  const noteText = (() => {
+    if (!cardNote) return undefined;
+    // The card as it is now: one that moved on to its session's next request says that request, not the settled one.
+    const card = notify.cards.find((c) => c.sessionId === cardNote.card.sessionId && (c.kind === cardNote.card.kind || (!!c.requestId && !!cardNote.card.requestId))) ?? cardNote.card;
+    const s = list.find((x) => x.id === card.sessionId);
+    const d = describeCard(card, views[card.sessionId], s?.cwd ?? "");
+    const keys = specOf("notifications.focus");
+    return cardText({ kind: d.kind, title: s?.title || "Untitled", body: d.summary }) + (cardNote.hint && keys ? ` ${keyText(keys)} goes to notifications.` : "");
+  })();
+  // The note holds for the count it was said with; another count takes over with the plain count text.
+  useEffect(() => setCardNote((n) => (n && n.at === undefined ? { ...n, at: waitingN } : n && n.at !== waitingN ? undefined : n)), [waitingN, cardNote]);
+  const [cardFocus, setCardFocus] = useState(0);
+  const cardItems: CardItem[] = notify.cards.map((card) => {
+    const s = list.find((x) => x.id === card.sessionId);
+    const cwd = s?.cwd ?? "";
+    return { card, d: describeCard(card, views[card.sessionId], cwd), title: s?.title || "Untitled", place: cwd ? (worktreeName(cwd, worktrees) ?? projectName(cwd)) : "", cwd: cwd || undefined };
+  });
+  const cardsNow = useNow(60_000);
+
   async function togglePush() {
-    setError(undefined);
+    setPushError(undefined);
+    setPushBusy(true);
     try {
       if (pushOn) await disablePush();
       else await enablePush(client.current!);
       setPushOn(!pushOn);
     } catch (e) {
-      setError(`notifications: ${(e as Error).message}`);
+      const m = (e as Error).message;
+      setPushError(/blocked/.test(m) ? "Notifications are blocked for this site in the browser. Allow them in the site settings, then turn this on again." : m);
+    } finally {
+      setPushBusy(false);
     }
   }
 
@@ -960,7 +1017,7 @@ export function App() {
   const groupOfTab = (id: string) => (id === NEW_TAB ? "" : tabGroup(sessionOf(id)?.cwd, grouping, worktrees).key);
   // The stored list stays grouped by the Tab grouping setting (also once the session cwds arrive), so close, next/previous tab and moves all use the order the strip draws.
   // Regrouped only once every tab's key is final: on partial keys the unknown tabs gather in one group and the damaged order is stored (GH-196).
-  const keysFinal = listLoaded && tabs.every((id) => id === NEW_TAB || !!sessionOf(id));
+  const keysFinal = tabKeysFinal(tabs, listLoaded, (id) => !!sessionOf(id), failedTabs);
   useGroupedTabs(tabs, setTabs, groupOfTab, keysFinal);
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   // GH-133: a just-created session shows (with its pending prompt) before its subscribe reply.
@@ -1187,8 +1244,9 @@ export function App() {
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
     openFocus: () => open(FOCUS_TAB),
+    focusNotifications: notify.cards.length ? () => setCardFocus((n) => n + 1) : undefined,
     nextWaiting: waiting.length ? () => (open(FOCUS_TAB), setFocusSel(nextWaiting(waiting, activeId === FOCUS_TAB ? focusSel ?? waiting[0]?.part.id : undefined)?.part.id)) : undefined,
-    toggleSignalOnly: shown ? () => setSignalOnly(shown.id, !signalIds.has(shown.id)) : undefined,
+    toggleSignalOnly: () => saveSignalOnly(!loadSignalOnly()),
     openSettings: () => setSettingsOpen(true),
     startGuide: () => startGuide(),
     openMcp: project ? () => openMcp() : undefined,
@@ -1264,7 +1322,7 @@ export function App() {
   useEffect(() => {
     if (status === "unauthorized") return;
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.defaultPrevented || document.querySelector('[aria-modal="true"]')) return;
+      if (e.defaultPrevented || isImeKey(e) || document.querySelector('[aria-modal="true"]')) return;
       const isPalette = [specOf("palette.open"), specOf("palette.alt")].some((k) => k && matchesKey(k, e));
       const c = isPalette ? undefined : shortcutFor(latestCommands.current, e);
       if (!isPalette && !c) return;
@@ -1339,7 +1397,7 @@ export function App() {
             onClose={close}
             grouping={grouping}
             compact={compact && grouping !== "none"}
-            onMove={(from, to) => setTabs((t) => moveTabIn(t, groupOfTab, from, to))}
+            onMove={(from, to) => setTabs((t) => moveTabIn(t, keysFinal ? groupOfTab : () => "", from, to))}
             onMoveGroup={(cwd, by) => setTabs((t) => moveGroup(t, groupOfTab, cwd, by))}
             onMoveGroupTo={(from, to) => setTabs((t) => moveGroupTo(t, groupOfTab, from, to))}
             onNew={() => newSession()}
@@ -1461,13 +1519,6 @@ export function App() {
               <ThemeIcon />
             </IconButton>
           </div>
-          <label
-            className="flex items-center gap-2 pointer-coarse:min-h-11"
-            title={pushSupported() ? "Push notification when a session needs input or finishes" : "Web Push needs HTTPS or localhost and a browser with Web Push. Without it, the daemon shows desktop notifications on its own machine."}
-          >
-            <input type="checkbox" checked={pushOn} disabled={!pushSupported()} onChange={togglePush} data-testid="push-toggle" />
-            Notifications
-          </label>
           {error && <p className="text-destructive">{error}</p>}
           {status !== "unauthorized" && <FocusRow count={waitingN} active={activeId === FOCUS_TAB} onOpen={() => open(FOCUS_TAB)} />}
           {status !== "unauthorized" && (
@@ -1507,9 +1558,7 @@ export function App() {
           {status === "unauthorized" ? (
             // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
             <div className={`${card} flex-1`}>
-              <div className="m-auto max-w-sm p-4 text-center" role="alert" data-testid="pairing-needed">
-                The daemon rejected this browser: it is not paired. Open the pairing URL the daemon printed (…/#token=…).
-              </div>
+              <PairingForm />
             </div>
           ) : (
             <>
@@ -1581,8 +1630,7 @@ export function App() {
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
-                        signalOnly={signalIds.has(s.id)}
-                        onSignalOnly={(on) => setSignalOnly(s.id, on)}
+                        signalOnly={signalOnly}
                         onAnswer={answer}
                         connected={status === "connected"}
                         onGitStatus={() =>
@@ -1717,7 +1765,7 @@ export function App() {
         </main>
       </div>
       <div role="status" aria-live="polite" className="sr-only" data-testid="attention-status">
-        {announcement(waitingN, everWaiting.current)}
+        {noteText !== undefined ? noteText + (waitingN ? ` ${waitingStatus(waitingN)}.` : "") : announcement(waitingN, everWaiting.current)}
       </div>
       <QuoteButton onQuote={(q) => (setInsert(q), setPane("session"))} />
       {guideRun && (
@@ -1811,7 +1859,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
+      <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       {/* Always mounted so a screen reader announces the hint when it fills in. */}
       <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 left-1/2 z-50 w-max max-w-[calc(100vw-24px)] -translate-x-1/2" data-testid="prefix-hint">
@@ -1829,17 +1877,31 @@ export function App() {
           </p>
         )}
       </div>
-      {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
-      {stale && !update && (
-        <StaleToast
-          note={stale}
-          onDismiss={() => {
-            staleDismissed.current = stale;
-            setStale(undefined);
-          }}
+      <ToastRegion>
+        {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
+        {stale && !update && (
+          <StaleToast
+            note={stale}
+            onDismiss={() => {
+              staleDismissed.current = stale;
+              setStale(undefined);
+            }}
+          />
+        )}
+        {toast && <Toast message={toast} onClose={closeToast} />}
+        <NotificationStack
+          items={cardItems}
+          now={cardsNow}
+          focusTick={cardFocus}
+          hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || openingProject}
+          onRespond={(card, decision) => client.current!.request({ type: "permission.respond", requestId: card.requestId!, decision })}
+          onOpenFocus={(card) => (open(FOCUS_TAB), setFocusSel(card.requestId))}
+          onOpenSession={(card) => (open(card.sessionId), setScrollKeys((k) => ({ ...k, [card.sessionId]: (k[card.sessionId] ?? 0) + 1 })))}
+          onDismiss={notify.dismiss}
+          onOpenAll={() => open(FOCUS_TAB)}
+          restoreFocus={() => (activeId === FOCUS_TAB ? document.querySelector<HTMLElement>("main")?.focus() : focusShownPrompt())}
         />
-      )}
-      {toast && <Toast message={toast} onClose={closeToast} />}
+      </ToastRegion>
     </div>
     </SideLabel>
     </AvatarColors>
@@ -2114,6 +2176,7 @@ export function NewSession({
     <div className="flex w-full max-w-[720px] flex-col items-center gap-4">
       <div className="w-full">
         <PromptBox
+          draftKey={NEW_TAB_DRAFT}
           cwd={cwd}
           commands={commands}
           onDialog={cwd ? onDialog : undefined}
@@ -2279,12 +2342,10 @@ export function SessionPane({
   onGitStatus,
   onDialog,
   signalOnly = false,
-  onSignalOnly,
 }: {
   scrollKey: number;
-  /** Signal only: runs of tool cards fold into one line (GH-159). Kept by App per session. */
+  /** Signal only: runs of tool cards fold into one line (GH-159). The browser-wide setting. */
   signalOnly?: boolean;
-  onSignalOnly?: (on: boolean) => void;
   /** Subagent run whose subagent view shows; an unknown one shows the session view. */
   run?: string;
   /** Opens a run's subagent view; undefined: the session view. */
@@ -2333,7 +2394,6 @@ export function SessionPane({
   /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
   onDialog?: (dialog: DialogName, arg?: string) => void;
 }) {
-  const signalKey = useKeymap()("signal.toggle");
   const phone = usePhone();
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
@@ -2423,7 +2483,6 @@ export function SessionPane({
         <span className="min-w-0 truncate text-muted-foreground" title={session.cwd}>
           {session.cwd}
         </span>
-        {onSignalOnly && <SignalSwitch on={signalOnly} onChange={onSignalOnly} keys={keyText(signalKey)} />}
         {/* Idle, running and needs input show in the tab and the send button. Only error and closed have no other place. */}
         {(shownState(view) === "error" || shownState(view) === "closed") && (
           <span className="rounded bg-muted px-2 py-0.5 text-xs" data-testid="session-state">
@@ -2562,6 +2621,7 @@ export function SessionPane({
           <>
             {view.continueAt !== undefined && <ContinueDock at={view.continueAt} onCancel={() => onCancelContinue?.()} />}
             <PromptBox
+              draftKey={session.id}
               cwd={session.cwd}
               commands={view.commands}
               onDialog={onDialog}
@@ -2629,6 +2689,7 @@ function PromptBox({
   insert,
   onInserted,
   draft,
+  draftKey,
   state = "idle",
   onInterrupt,
   usage,
@@ -2669,6 +2730,8 @@ function PromptBox({
   onInserted?: () => void;
   /** Replaces the text and images (rewind puts the original prompt back). */
   draft?: { text: string; images: string[] };
+  /** Keeps the unsent text across a reload (drafts.ts); a `draft` above wins. */
+  draftKey?: string;
   /** What the send button shows; default idle. */
   state?: SendState;
   onInterrupt?: () => void;
@@ -2692,7 +2755,8 @@ function PromptBox({
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   const phone = usePhone();
-  const [text, setText] = useState("");
+  const [initialText] = useState(() => (draftKey ? loadDraft(draftKey) : ""));
+  const [text, setText] = useState(initialText);
   const [images, setImages] = useState<string[]>([]);
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState(false);
@@ -2701,6 +2765,7 @@ function PromptBox({
   const [sendError, setSendError] = useState<string>();
   // Bash mode: the text is a shell command, the box looks like OpenCode's shell mode.
   const [bash, setBash] = useState(false);
+  const dropDraft = useDraft(draftKey, text, bash, initialText);
   // The prompt box covers the dock's bottom 36px (OpenCode prompt lift), only when it directly follows the dock.
   const lift = !!todos && !blocked && !sendError && !images.length;
   const input = useRef<HTMLTextAreaElement>(null);
@@ -2818,6 +2883,7 @@ function PromptBox({
       setImages((cur) => [...sent, ...cur]);
       setSendError(`Prompt not sent: ${e.message}`);
     });
+    dropDraft();
     edit("");
     setImages([]);
   };

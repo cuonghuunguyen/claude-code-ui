@@ -130,10 +130,23 @@ it("compact: hovering the chip opens the menu after a short delay", async () => 
     await act(async () => void c.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, { bubbles: true, pointerType: "mouse" } as PointerEventInit)));
   }
   expect(items().length).toBe(0);
-  await act(async () => { await new Promise((r) => setTimeout(r, 200)); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
   expect(items().length).toBe(0);
-  await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
   expect(items().length).toBe(2);
+});
+
+it("compact: a pointer passing over the chip (gone within 50 ms) opens no menu", async () => {
+  const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
+  const c = chip(el, A);
+  const fire = async (types: string[]) => {
+    for (const type of types) await act(async () => void c.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, { bubbles: true, pointerType: "mouse" } as PointerEventInit)));
+  };
+  await fire(["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove"]);
+  await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+  await fire(["pointerout", "pointerleave", "mouseout", "mouseleave"]);
+  await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+  expect(items().length).toBe(0);
 });
 
 it("not compact: a chip click still collapses the group and no menu opens", async () => {

@@ -1,7 +1,7 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { closeSync, constants, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -28,6 +28,7 @@ import { createSessionSettings } from "./session-settings.ts";
 import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
+import { serveStatic } from "./static.ts";
 
 export { MAX_SETTINGS } from "./session-settings.ts";
 
@@ -62,20 +63,9 @@ const IDLE_CHECK_MS = 60_000;
 
 /** A new connection gets a fresh plan usage read when the last one is older (reset times pass without a turn). */
 const PLAN_STALE_MS = 5 * 60_000;
+const PING_MS = 15_000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const MIME: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".json": "application/json",
-  ".webmanifest": "application/manifest+json",
-  ".woff2": "font/woff2",
-};
 
 type History = {
   listSessions: typeof listSessions;
@@ -352,7 +342,12 @@ export function createDaemon(opts: {
   /** Test seam (GH-164): delays of auto-continue.ts. */
   autoContinue?: { graceMs?: number; gapMs?: number; retryMs?: number };
   listCache?: boolean;
+  /** Interval of the WebSocket ping that drops a half-open socket (default 15 s; tests use a few hundred ms). */
+  pingMs?: number;
   hostnames?: string[];
+  /** Name shown for this computer in Settings (default: the OS host name); `desktopForcedOff`: started with --no-os-notify. */
+  host?: string;
+  desktopForcedOff?: boolean;
   cli?: CliRunner;
   configHoldMs?: number;
   configPollMs?: number;
@@ -362,7 +357,7 @@ export function createDaemon(opts: {
   /** WSL distros and Docker containers this daemon routes to (sides.ts). */
   sides?: Sides;
   /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
-  buildInfo?: { stale(): string | undefined };
+  buildInfo?: { version?: string; stale(): string | undefined };
   /** How long worker_stop and worker_close wait for a stopped worker to leave running/needs_input (orchestration.ts); tests shorten it. */
   stopWaitMs?: number;
   /** Update checks and installs (update.ts); none: no update_available, update.* fail. Checks start with the daemon. */
@@ -588,14 +583,17 @@ export function createDaemon(opts: {
     }
   };
 
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<WebSocket, string>();
+  /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */
+  const covered = new Map<WebSocket, Set<string>>();
   const pushTitleOf = async (sessionId: string) => {
     const info = await history.getSessionInfo(sessionId).catch(() => undefined);
     return info?.summary || basename(sessions.get(sessionId)?.cwd ?? "") || "Claude";
   };
   const notifier = createNotifier({
-    suppressed: (id) => [...focused.values()].includes(id),
+    suppressed: (id) => [...focused.values()].includes(id) || [...covered.values()].some((s) => s.has(id)),
     // A group's push (workers blocked on the same request) carries its tag and the coordinator's title.
     push: async (sessionId, body, { titleSession, ...extra } = {}) => void (await opts.push?.send({ sessionId, title: await pushTitleOf(titleSession ?? sessionId), body, ...extra })),
     // A request that settled: the same tag, silent (Web Push must show every push; one that only closes would show "updated in the background").
@@ -1052,13 +1050,7 @@ export function createDaemon(opts: {
     }
     // Pairing probe: a browser cannot read the 401 of a rejected WebSocket upgrade, so it asks here (client.ts).
     if (path === "/auth") return void res.writeHead(isToken(/^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1]) ? 204 : 401).end();
-    let file = resolve(join(root, path));
-    if (!file.startsWith(root + sep) && file !== root) return void res.writeHead(403).end();
-    // SPA fallback: unknown paths serve index.html.
-    if (!existsSync(file) || statSync(file).isDirectory()) file = join(root, "index.html");
-    if (!existsSync(file)) return void res.writeHead(404).end("web app not built: run npm run build");
-    res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
-    createReadStream(file).pipe(res);
+    serveStatic(req, res, root, path);
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, handleProtocols: (offered) => (offered.has(WS_PROTOCOL) ? WS_PROTOCOL : false) });
@@ -1078,8 +1070,29 @@ export function createDaemon(opts: {
   /** This daemon has the session: live, or a transcript inside the roots. */
   const isLocalSession = async (id: string) => sessions.has(id) || (UUID.test(id) && !!allowed((await history.getSessionInfo(id).catch(() => undefined))?.cwd));
 
+  // Ping each socket every interval; one that did not pong since the previous tick is half-open (phone asleep, wifi gone, no FIN):
+  // terminate it so its close handler runs (focused tab, subscriptions, watches), else its stale "focused" entry mutes push.
+  const answered = new WeakSet<WebSocket>();
+  const pinger = setInterval(() => {
+    for (const ws of connections) {
+      if (!answered.has(ws)) {
+        ws.terminate();
+        continue;
+      }
+      answered.delete(ws);
+      try {
+        ws.ping();
+      } catch {
+        ws.terminate();
+      }
+    }
+  }, opts.pingMs ?? PING_MS).unref();
+  http.on("close", () => clearInterval(pinger));
+
   wss.on("connection", (ws: WebSocket) => {
     connections.add(ws);
+    answered.add(ws);
+    ws.on("pong", () => answered.add(ws));
     const usage = plan.current();
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
     if (plan.age() > PLAN_STALE_MS) void plan.reread();
@@ -1109,6 +1122,7 @@ export function createDaemon(opts: {
       attached.forEach((d) => d());
       searching?.abort();
       focused.delete(ws);
+      covered.delete(ws);
     });
     const onMessage = async (data: RawData) => {
       let msg: ClientMessage;
@@ -1119,6 +1133,7 @@ export function createDaemon(opts: {
       }
       if (typeof msg !== "object" || msg === null || Array.isArray(msg))
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
+      if (msg.type === "ping") return send(ws, { type: "reply", reqId: msg.reqId, result: {} });
       if (router) return router.handle(msg as ClientMessage & Record<string, unknown>);
       return local(msg, (m) => send(ws, m));
     };
@@ -1348,13 +1363,13 @@ export function createDaemon(opts: {
           broadcast({ type: "sessions.changed" });
           return reply({});
         case "settings.get":
-          return reply({ settings: appSettings.get() });
+          return reply({ settings: appSettings.get(), daemon: daemonInfo() });
         case "settings.set": {
           try {
             const settings = appSettings.set(msg.patch);
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
             broadcast({ type: "settings_changed", settings });
-            return reply({ settings });
+            return reply({ settings, daemon: daemonInfo() });
           } catch (err) {
             return fail("bad_settings", (err as Error).message);
           }
@@ -1509,9 +1524,13 @@ export function createDaemon(opts: {
           if (!opts.push) return fail("push_unavailable", "push is not configured");
           return opts.push.subscribe(msg.subscription) ? reply({}) : fail("bad_subscription", "subscription needs an https endpoint and keys");
         case "push.focus":
+          if (msg.sessionId !== undefined && typeof msg.sessionId !== "string") return fail("bad_request", "sessionId must be a string");
+          if (msg.covered !== undefined && !(Array.isArray(msg.covered) && msg.covered.length <= 2000 && msg.covered.every((x) => typeof x === "string" && x.length <= 200)))
+            return fail("bad_request", "covered must be an array of at most 2000 session ids");
           if (msg.sessionId === undefined) focused.delete(ws);
-          else if (typeof msg.sessionId === "string") focused.set(ws, msg.sessionId);
-          else return fail("bad_request", "sessionId must be a string");
+          else focused.set(ws, msg.sessionId);
+          if (msg.covered === undefined) covered.delete(ws);
+          else covered.set(ws, new Set(msg.covered));
           return reply({});
         case "fs.read": {
           const file = allowed(msg.path);

@@ -66,8 +66,20 @@ it("registry: ids are unique, no default is browser-reserved, no two defaults co
   for (const mac of [false, true]) {
     const specs = SHORTCUTS.map((s) => canon(defaultSpec(s, mac), mac));
     expect(new Set(specs).size).toBe(specs.length);
-    for (const s of SHORTCUTS) expect(bindingError(defaultSpec(s, mac), mac)).toBeUndefined();
+    // The macOS prefix key Option+A is the one default the recorder would refuse for a user's own binding (it types å).
+    for (const s of SHORTCUTS) if (!(mac && s.id === "leader")) expect(bindingError(defaultSpec(s, mac), mac)).toBeUndefined();
   }
+});
+
+it("Go to notifications is Ctrl/Cmd+Alt+N: a modifier, not Escape, no clash (GH-158)", () => {
+  const spec = KEYS["notifications.focus"]!;
+  expect(spec).toBe("mod+alt+n");
+  expect(spec).not.toMatch(/escape/);
+  expect(SHORTCUTS.filter((s) => canon(defaultSpec(s)) === canon(spec))).toHaveLength(1);
+  expect(bindingError(spec)).toBeUndefined();
+  expect(matchesKey(spec, ev("n", { ctrlKey: true, altKey: true }), false)).toBe(true);
+  // A Polish AltGr+N types "ń": typing, not the shortcut.
+  expect(matchesKey(spec, ev("ń", { ctrlKey: true, altKey: true, code: "KeyN" }), false)).toBe(false);
 });
 
 it("tab-by-number defaults: Alt+1..8 and Alt+9 (last) off macOS, Ctrl on macOS", () => {
@@ -104,4 +116,17 @@ it("the + key: \"mod++\" is Ctrl and +, \"mod+shift++\" is Ctrl, Shift and +", (
 it("a button hint names its key, and is the bare label when the binding is removed", () => {
   expect(withKey("New terminal", "ctrl+shift+`")).toMatch(/^New terminal \(.+\)$/);
   expect(withKey("New terminal", undefined)).toBe("New terminal");
+});
+
+it("Alt+number pad digits (a Windows Alt code) fire no shortcut off macOS; the top row and macOS are unchanged", () => {
+  expect(matchesKey("alt+1", ev("1", { altKey: true, code: "Numpad1" }), false)).toBe(false);
+  expect(matchesKey("alt+1", ev("1", { altKey: true, code: "Digit1" }), false)).toBe(true);
+  expect(matchesKey("ctrl+1", ev("1", { ctrlKey: true, code: "Numpad1" }), true)).toBe(true);
+  expect(matchesKey("mod+alt+5", ev("5", { ctrlKey: true, altKey: true, code: "Numpad5" }), false)).toBe(true);
+});
+
+it("a digit or ` press matches only the spec of its physical key", () => {
+  expect(matchesKey("alt++", ev("+", { altKey: true, code: "Digit1" }), false)).toBe(false);
+  expect(matchesKey("mod+0", ev("0", { ctrlKey: true, code: "Backquote" }), false)).toBe(false);
+  expect(matchesKey("mod+`", ev("0", { ctrlKey: true, code: "Backquote" }), false)).toBe(true);
 });

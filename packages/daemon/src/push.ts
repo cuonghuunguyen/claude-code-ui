@@ -192,7 +192,7 @@ function readJson<T>(file: string): T | undefined {
 }
 
 /** Owns the VAPID key pair (generated on first run) and the stored subscriptions. `send` is web-push's, replaced in tests. */
-export function createPush({ dir = configDir(), send = webpush.sendNotification, notify = osNotify }: { dir?: string; send?: typeof webpush.sendNotification; notify?: ((p: PushPayload) => Promise<unknown>) | false } = {}) {
+export function createPush({ dir = configDir(), send = webpush.sendNotification, notify = osNotify, desktop = () => true }: { dir?: string; send?: typeof webpush.sendNotification; notify?: ((p: PushPayload) => Promise<unknown>) | false; /** Settings › Notifications › Desktop: read at send time; `notify: false` (--no-os-notify) wins. */ desktop?: () => boolean } = {}) {
   const keyFile = join(dir, "vapid.json");
   const subFile = join(dir, "push-subscriptions.json");
   let keys = readJson<{ publicKey: string; privateKey: string }>(keyFile);
@@ -219,7 +219,7 @@ export function createPush({ dir = configDir(), send = webpush.sendNotification,
       if (!subs.length) {
         // An OS toast cannot be withdrawn: a replacement would only show a second one.
         if (payload.replace) return;
-        if (notify && !notifyMissing)
+        if (notify && desktop() && !notifyMissing)
           await notify(payload).catch((e: NodeJS.ErrnoException) => {
             if (e.code === "ENOENT") notifyMissing = true;
             if (!notifyFailed) (notifyFailed = true), console.error(`desktop notification failed (${e.code ?? "error"}); further failures are not logged`);

@@ -1,7 +1,7 @@
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, describe, expect, it } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type WebSocket as ServerSocket } from "ws";
 import { backoffMs, connect, type ConnectionStatus } from "./client.ts";
 
 const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
@@ -103,5 +103,142 @@ describe("connect", () => {
     expect(got).toEqual(["s1"]);
     expect(done.scannedFiles).toBe(1);
     c.close();
+  });
+});
+
+describe("redial on wake", () => {
+  /** A daemon on its own port: `refuse` makes the upgrade fail like a down daemon (the page sees an error, no open); `/auth` answers 204. */
+  async function daemon(onSocket: (s: ServerSocket, n: number) => void = () => {}) {
+    const http = createServer((_req, res) => res.writeHead(204).end());
+    const w = new WebSocketServer({ noServer: true });
+    const state = { refuse: false, upgrades: 0, sockets: [] as ServerSocket[] };
+    http.on("upgrade", (req, socket, head) => {
+      state.upgrades++;
+      if (state.refuse) return void socket.destroy();
+      w.handleUpgrade(req, socket, head, (s) => (state.sockets.push(s), onSocket(s, state.sockets.length), w.emit("connection", s, req)));
+    });
+    await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
+    const stop = () => (w.clients.forEach((c) => c.terminate()), http.close());
+    return { http: http as Server, state, url: `ws://127.0.0.1:${(http.address() as AddressInfo).port}/ws`, stop };
+  }
+
+  /** Wake events the test fires by hand. */
+  const fakeWake = () => {
+    let onWake!: (force?: boolean) => void;
+    let onHide!: () => void;
+    return { events: (w: typeof onWake, h: typeof onHide) => ((onWake = w), (onHide = h), () => {}), wake: (force?: boolean) => onWake(force), hide: () => onHide() };
+  };
+
+  it("a wake skips the backoff: connected within a moment instead of after the pending timer", async () => {
+    const d = await daemon();
+    d.state.refuse = true;
+    const w = fakeWake();
+    const statuses: ConnectionStatus[] = [];
+    let opens = 0;
+    const c = connect({ url: d.url, token: "t", onEvent: () => {}, onOpen: () => opens++, onStatus: (s) => statuses.push(s), wakeEvents: w.events });
+    await until(() => d.state.upgrades >= 3); // 0.5 s + 1 s of backoff: the next retry is 2 s away
+    d.state.refuse = false;
+    const t0 = Date.now();
+    w.wake();
+    await until(() => opens === 1);
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(statuses.at(-1)).toBe("connected");
+    c.close();
+    d.stop();
+  });
+
+  it("wakes fired in a row while a dial is in flight make one connection", async () => {
+    const d = await daemon();
+    const w = fakeWake();
+    const statuses: ConnectionStatus[] = [];
+    let opens = 0;
+    const c = connect({ url: d.url, token: "t", onEvent: () => {}, onOpen: () => opens++, onStatus: (s) => statuses.push(s), wakeEvents: w.events });
+    await until(() => opens === 1);
+    d.state.sockets[0]!.terminate();
+    await until(() => statuses.includes("reconnecting"));
+    w.wake();
+    w.wake();
+    w.wake();
+    await until(() => opens === 2);
+    await new Promise((r) => setTimeout(r, 700)); // past the 500 ms timer the wake replaced
+    expect(d.state.upgrades).toBe(2);
+    expect(opens).toBe(2);
+    c.close();
+    d.stop();
+  });
+
+  it("a wake with the socket open and the page hidden only briefly sends nothing; after a long hide it probes and redials a socket that does not answer", async () => {
+    const received: string[] = [];
+    const d = await daemon((s, n) => n === 1 && s.on("message", (m) => received.push(String(m)))); // the first socket never replies: half-open
+    const w = fakeWake();
+    const statuses: ConnectionStatus[] = [];
+    let opens = 0;
+    const c = connect({ url: d.url, token: "t", onEvent: () => {}, onOpen: () => opens++, onStatus: (s) => statuses.push(s), wakeEvents: w.events, probeAfterMs: 50, probeTimeoutMs: 100 });
+    await until(() => opens === 1);
+    w.hide();
+    w.wake(); // hidden for ~0 ms
+    await new Promise((r) => setTimeout(r, 30));
+    expect(received).toEqual([]);
+
+    w.hide();
+    await new Promise((r) => setTimeout(r, 80));
+    w.wake();
+    await until(() => received.length === 1);
+    expect(JSON.parse(received[0]!)).toMatchObject({ type: "ping" });
+    await until(() => opens === 2);
+    expect(statuses).toEqual(["connected", "reconnecting", "connected"]);
+    expect(d.state.upgrades).toBe(2);
+
+    // The abandoned socket closing later is not news.
+    d.state.sockets[0]!.terminate();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(statuses).toEqual(["connected", "reconnecting", "connected"]);
+    c.close();
+    d.stop();
+  });
+
+  it("keeps a socket that answers the probe, and a wake with force (online, bfcache) probes without a long hide", async () => {
+    const d = await daemon((s) => s.on("message", (m) => s.send(JSON.stringify({ type: "reply", reqId: JSON.parse(String(m)).reqId, result: {} }))));
+    const w = fakeWake();
+    const statuses: ConnectionStatus[] = [];
+    let opens = 0;
+    const c = connect({ url: d.url, token: "t", onEvent: () => {}, onOpen: () => opens++, onStatus: (s) => statuses.push(s), wakeEvents: w.events, probeAfterMs: 20, probeTimeoutMs: 100 });
+    await until(() => opens === 1);
+    w.hide();
+    await new Promise((r) => setTimeout(r, 40));
+    w.wake();
+    w.wake(); // one probe at a time
+    await new Promise((r) => setTimeout(r, 250));
+    expect(d.state.upgrades).toBe(1);
+    expect(statuses).toEqual(["connected"]);
+    c.close();
+    d.stop();
+
+    const z = await daemon((s) => s.on("message", () => {}));
+    const w2 = fakeWake();
+    let opens2 = 0;
+    const c2 = connect({ url: z.url, token: "t", onEvent: () => {}, onOpen: () => opens2++, wakeEvents: w2.events, probeAfterMs: 60_000, probeTimeoutMs: 50 });
+    await until(() => opens2 === 1);
+    w2.wake(true);
+    await until(() => opens2 === 2);
+    c2.close();
+    z.stop();
+  });
+
+  it("does not dial after the daemon rejected the token", async () => {
+    const http = createServer((_req, res) => res.writeHead(401).end());
+    let upgrades = 0;
+    http.on("upgrade", (_req, socket) => (upgrades++, socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")));
+    await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
+    const w = fakeWake();
+    const statuses: ConnectionStatus[] = [];
+    const c = connect({ url: `ws://127.0.0.1:${(http.address() as AddressInfo).port}/ws`, token: "bad", onEvent: () => {}, onStatus: (s) => statuses.push(s), wakeEvents: w.events });
+    await until(() => statuses.includes("unauthorized"));
+    w.wake(true);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(upgrades).toBe(1);
+    expect(statuses).toEqual(["unauthorized"]);
+    c.close();
+    http.close();
   });
 });

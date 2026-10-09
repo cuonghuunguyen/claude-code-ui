@@ -122,7 +122,7 @@ export const STEPS: GuideStep[] = [
     anchors: [cmd("pane.graph")],
     alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph.", keys: ["panel.toggle"] },
     title: "Git graph",
-    body: "Commits of all branches. Pick one to see its files and diffs.",
+    body: "Commits of the current branch. Pick one to see its files and diffs.",
     keys: ["pane.graph"],
     side: "left",
   },

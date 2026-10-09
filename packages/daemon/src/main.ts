@@ -5,7 +5,7 @@ import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
-import { HELP, parseCli } from "./cli.ts";
+import { HELP, PHONE_HINT, parseCli } from "./cli.ts";
 import { createSettings } from "./settings.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
@@ -72,7 +72,7 @@ if (side) {
 } else {
   const token = loadToken();
   const sidesFile = join(configDir(), "sides.json");
-  const push = createPush(osNotify === false ? { notify: false } : {});
+  const push = createPush({ desktop: () => state.appSettings.get().notifications.desktop, ...(osNotify === false && { notify: false as const }) });
   const distros = process.platform === "win32" ? wslDistros() : [];
   const sidePackage = sidePackageDir();
   const sideKey = () => sideKeyOf(sidePackage);
@@ -116,7 +116,7 @@ if (side) {
   const update = updateCheck !== false && version !== "dev" && launched ? { current: version, dir: versionsDir(), registry, exit: (code: number) => void setTimeout(() => process.exit(code), 200) } : undefined;
   // A source checkout compares its files with the start; a release compares its version with the installed ones (build-info.ts).
   const buildInfo = createBuildInfo({ version, srcDirs: [fileURLToPath(new URL("../src", import.meta.url)), fileURLToPath(new URL("../../protocol/src", import.meta.url))], versionsDir: versionsDir() });
-  createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo }).listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
+  createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false }).listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
     if (ts && "cli" in ts) {
       if (ts.serve) {
         const serve = startServe({ cli: ts.cli, port, spawn, log: console.error, platform: process.platform });
@@ -129,8 +129,10 @@ if (side) {
     // The pairing URLs are the one place the token is printed; keep it out of every other log line.
     console.log(
       `claude-ui daemon on ${lan ? `port ${port} of every network interface (--lan)` : `http://127.0.0.1:${port}`}, roots: ${roots.join(delimiter)}${distros.length ? `, WSL: ${distros.join(", ")}` : ""}` +
-        (lan ? "\nLAN mode: plain HTTP, anyone on this network can read the token while you pair or use it. Browser push notifications and Copy need HTTPS" + (osNotify === false ? "." : "; this machine shows desktop notifications instead (no browser subscribed).") : "") +
-        `\nPair a browser: open ${urls.join("\n  or ")}\n${await QRCode.toString(urls[0]!, { type: "terminal", small: true })}`,
+        (lan ? "\nLAN mode: plain HTTP, anyone on this network can read the token while you pair or use it. Browser push notifications, Copy and installing the app (Add to Home Screen) need HTTPS: use --tailscale" + (osNotify === false ? "." : "; this machine shows desktop notifications instead (no browser subscribed).") : "") +
+        `\nPair a browser: open ${urls.join("\n  or ")}` +
+        (hostname ? `\n${PHONE_HINT}` : "") +
+        `\n${await QRCode.toString(urls[0]!, { type: "terminal", small: true })}`,
     );
   });
 }

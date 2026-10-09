@@ -1,11 +1,11 @@
 // "Daemon runs older code" notice (docs/spec.md "Updates"): the daemon sent `daemon_stale` on connect, so tools or permission
 // modes the user expects may be missing until it restarts. Persistent until dismissed (per page load); the user restarts the daemon.
 import { TriangleAlertIcon } from "lucide-react";
-import { TOAST_FRAME } from "./toast.tsx";
+import { TOAST_CARD } from "./toast.tsx";
 
 export function StaleToast({ note, onDismiss }: { note: string; onDismiss: () => void }) {
   return (
-    <div role="status" data-testid="stale-toast" className={`${TOAST_FRAME} flex items-start gap-2.5`}>
+    <div role="status" data-testid="stale-toast" className={`${TOAST_CARD} flex items-start gap-2.5`}>
       <TriangleAlertIcon aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <p className="truncate text-[13px] leading-5 font-medium">The daemon runs older code</p>

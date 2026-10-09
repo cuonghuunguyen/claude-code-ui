@@ -57,8 +57,10 @@ export type CommandContext = {
   openFocus?: () => void;
   /** Opens Focus on the next waiting request; none while nothing waits. */
   nextWaiting?: () => void;
-  /** Toggles Signal only of the shown session; none without a session. */
-  toggleSignalOnly?: () => void;
+  /** Moves focus to the newest in-app notification card; none while no card shows (GH-158). */
+  focusNotifications?: () => void;
+  /** Toggles Signal only, the browser-wide setting (GH-205). */
+  toggleSignalOnly: () => void;
   /** Opens the Settings dialog. */
   openSettings: () => void;
   /** Restarts the guided tour from its first step. */
@@ -99,6 +101,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     cmd("shortcuts.open", "Keyboard shortcuts", c.openShortcuts),
     c.openFocus && cmd("focus.open", "Open Focus", c.openFocus),
     c.nextWaiting && cmd("focus.next", "Next waiting request", c.nextWaiting),
+    c.focusNotifications && cmd("notifications.focus", "Go to notifications", c.focusNotifications),
     cmd("settings.open", "Open settings", c.openSettings),
     cmd("guide.start", "Show guide", c.startGuide),
     cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar),
@@ -108,7 +111,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s && !s.draft && cmd("pane.changes", "Show changes", () => c.showPane("changes")),
     s && !s.draft && c.isGit && cmd("pane.graph", "Show git graph", () => c.showPane("graph")),
     s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
-    s && !s.draft && c.toggleSignalOnly && cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
+    cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
     s && !s.draft && cmd("terminal.new", "New terminal", c.newTerminal),
     s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
     s &&
