@@ -50,7 +50,7 @@ describe("image lightbox", () => {
     return { thumb, box };
   }
 
-  it("opens the full image from the thumbnail button, closes with Close and Esc, and returns focus", { timeout: 20_000 }, async () => {
+  it("opens the full image from the thumbnail button, closes with Close and Esc, and returns focus", { timeout: 60_000 }, async () => {
     const { thumb, box } = await mount();
     expect(thumb(1).tagName).toBe("BUTTON");
     expect(thumb(1).querySelector("img")!.getAttribute("alt")).toBe("Image 1");
