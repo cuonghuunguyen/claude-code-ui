@@ -9,8 +9,9 @@ const dir = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
 type Answer = { code: number | null; stdout?: string; stderr?: string };
 function fake(answers: Record<string, Answer>) {
   const calls: string[][] = [];
-  const exec: Exec = async (cmd, args) => (calls.push([cmd, ...args]), { stdout: "", stderr: "", ...(answers[args[0]!] ?? { code: 0 }) } as { code: number | null; stdout: string; stderr: string });
-  return { calls, exec };
+  const stdin: (string | undefined)[] = [];
+  const exec: Exec = async (cmd, args, _t, stdinFile) => (calls.push([cmd, ...args]), stdin.push(stdinFile), { stdout: "", stderr: "", ...(answers[args[0]!] ?? { code: 0 }) } as { code: number | null; stdout: string; stderr: string });
+  return { calls, stdin, exec };
 }
 function fakeNpm(result: { code: number | null; output: string } = { code: 0, output: "" }) {
   const calls: string[][] = [];
@@ -25,6 +26,8 @@ const pkg = () => {
   const d = dir("pkg-");
   mkdirSync(join(d, "dist"));
   writeFileSync(join(d, "dist", "cli.js"), "");
+  mkdirSync(join(d, "dist", "web"));
+  writeFileSync(join(d, "dist", "web", "index.html"), "");
   return d;
 };
 
@@ -61,41 +64,97 @@ describe("docker sides", () => {
     expect(n.calls).toEqual([]);
   });
 
-  it("packs the package once per build and copies it into the container", async () => {
+  const execs = (f: { calls: string[][] }) => f.calls.filter((c) => c[1] === "exec");
+  const tgzOf = (cacheDir: string, key: string) => join(cacheDir, key, "claude-code-ui-0.2.0.tgz");
+
+  it("packs the package once per build and streams it into the container through docker exec stdin, not docker cp", async () => {
     const pkgDir = pkg();
     const cacheDir = dir("cache-");
     const n = fakeNpm();
-    const f = fake({ inspect: { code: 0, stdout: "true\n" } });
+    const f = fake({ inspect: { code: 0, stdout: "true\n" }, exec: { code: 0, stdout: "/tmp/claude-ui-side-0.2.0-1.tgz\n" } });
     const run = (key: string) => prepareDockerSide({ name: "dev", pkgDir, key, cacheDir, exec: f.exec, npm: n.npm });
     expect(await run("0.2.0-1")).toBe("/tmp/claude-ui-side-0.2.0-1.tgz");
     expect(n.calls).toEqual([["npm", "pack", pkgDir, "--ignore-scripts", "--pack-destination", join(cacheDir, "0.2.0-1.partial"), "--loglevel=error"]]);
-    expect(f.calls.filter((c) => c[1] === "cp")).toEqual([["docker", "cp", join(cacheDir, "0.2.0-1", "claude-code-ui-0.2.0.tgz"), "dev:/tmp/claude-ui-side-0.2.0-1.tgz"]]);
+    expect(f.calls.some((c) => c[1] === "cp")).toBe(false);
+    expect(execs(f)).toHaveLength(1);
+    expect(execs(f)[0]!.slice(0, 5)).toEqual(["docker", "exec", "-i", "dev", "sh"]);
+    expect(execs(f)[0]!.join(" ")).toContain("cat >");
+    expect(execs(f)[0]!.slice(-2)).toEqual(["/tmp", "claude-ui-side-0.2.0-1.tgz"]);
+    expect(f.stdin[f.calls.findIndex((c) => c[1] === "exec")]).toBe(tgzOf(cacheDir, "0.2.0-1"));
     await run("0.2.0-1");
     expect(n.calls).toHaveLength(1);
-    expect(f.calls.filter((c) => c[1] === "cp")).toHaveLength(2);
+    expect(execs(f)).toHaveLength(2);
     await run("0.2.0-2");
     expect(n.calls).toHaveLength(2);
     expect(readdirSync(cacheDir)).toEqual(["0.2.0-2"]);
+  });
+
+  it("a read-only root file system with a tmpfs /tmp: the tarball goes to /tmp", async () => {
+    const f = fake({ inspect: { code: 0, stdout: "true\n" }, exec: { code: 0, stdout: "/tmp/claude-ui-side-k.tgz\n" } });
+    expect(await prepareDockerSide({ name: "esaca", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec: f.exec, npm: fakeNpm().npm })).toBe("/tmp/claude-ui-side-k.tgz");
+  });
+
+  it("when /tmp is not writable it tries /dev/shm, then $HOME, and answers with the path that took the tarball", async () => {
+    const tried: string[] = [];
+    const calls: string[][] = [];
+    const exec: Exec = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === "inspect") return { code: 0, stdout: "true\n", stderr: "" };
+      const dirArg = args[args.length - 2]!;
+      tried.push(dirArg);
+      return dirArg === "HOME" ? { code: 0, stdout: "/home/esaca/claude-ui-side-k.tgz\n", stderr: "" } : { code: 1, stdout: "", stderr: `sh: 1: cannot create ${dirArg}/claude-ui-side-k.tgz: Read-only file system
+` };
+    };
+    expect(await prepareDockerSide({ name: "esaca", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec, npm: fakeNpm().npm })).toBe("/home/esaca/claude-ui-side-k.tgz");
+    expect(tried).toEqual(["/tmp", "/dev/shm", "HOME"]);
+  });
+
+  it("no writable path: the message names the tried paths; a fully read-only file system is said so", async () => {
+    const ro = fake({ inspect: { code: 0, stdout: "true\n" }, exec: { code: 1, stderr: "sh: 1: cannot create /tmp/x.tgz: Read-only file system\n" } });
+    const err = await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec: ro.exec, npm: fakeNpm().npm }).catch((e: Error) => e.message);
+    expect(err).toContain("Copying claude-ui into Docker: dev failed");
+    expect(err).toContain("/tmp, /dev/shm, $HOME");
+    expect(err).toMatch(/file system is read-only/);
+    const other = fake({ inspect: { code: 0, stdout: "true\n" }, exec: { code: 1, stderr: "cat: write error: No space left on device\n" } });
+    const err2 = await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec: other.exec, npm: fakeNpm().npm }).catch((e: Error) => e.message);
+    expect(err2).toContain("/tmp, /dev/shm, $HOME");
+    expect(err2).toContain("No space left on device");
+    expect(err2).not.toMatch(/file system is read-only/);
   });
 
   it("two sides starting at once pack once", async () => {
     const pkgDir = pkg();
     const cacheDir = dir("cache-");
     const n = fakeNpm();
-    const f = fake({ inspect: { code: 0, stdout: "true\n" } });
+    const f = fake({ inspect: { code: 0, stdout: "true\n" }, exec: { code: 0, stdout: "/tmp/x.tgz\n" } });
     const run = (name: string) => prepareDockerSide({ name, pkgDir, key: "0.2.0-1", cacheDir, exec: f.exec, npm: n.npm });
     await Promise.all([run("a"), run("b")]);
     expect(n.calls).toHaveLength(1);
   });
 
-  it("a failed pack or copy says why", async () => {
+  it("a failed pack names the missing file and the last lines of npm's output", async () => {
     const cacheDir = dir("cache-");
     const f = fake({ inspect: { code: 0, stdout: "true\n" } });
-    const bad = fakeNpm({ code: 1, output: "a\nb\nnpm error x\n" });
-    await expect(prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k1", cacheDir, exec: f.exec, npm: bad.npm })).rejects.toThrow("Packing claude-ui for Docker: dev failed: a b npm error x");
+    const bad = fakeNpm({ code: 1, output: "npm error code ENOENT\nnpm error syscall open\nnpm error path /repo/packages/claude-ui/dist/web/assets/a.js\nnpm error errno -2\nnpm error enoent ENOENT: no such file or directory, open '/repo/packages/claude-ui/dist/web/assets/a.js'\n\n" });
+    const err = await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k1", cacheDir, exec: f.exec, npm: bad.npm }).catch((e: Error) => e.message);
+    expect(err).toContain("Packing claude-ui for Docker: dev failed");
+    expect(err).toContain("/repo/packages/claude-ui/dist/web/assets/a.js");
+    expect(err).toContain("wait for the build to finish, then retry");
     expect(existsSync(join(cacheDir, "k1.partial"))).toBe(false);
-    await expect(prepareDockerSide({ name: "dev", pkgDir: dir("empty-"), key: "k2", cacheDir, exec: f.exec, npm: fakeNpm().npm })).rejects.toThrow(/no build \(dist\/cli\.js\)/);
-    const cp = fake({ inspect: { code: 0, stdout: "true\n" }, cp: { code: 1, stderr: "Error: no space\n" } });
-    await expect(prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k3", cacheDir, exec: cp.exec, npm: fakeNpm().npm })).rejects.toThrow("Copying claude-ui into Docker: dev failed: Error: no space.");
+    const plain = fakeNpm({ code: 1, output: "1\n2\n3\n4\n5\n6\n7\n8\n9\nnpm error x\n" });
+    const err2 = await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k4", cacheDir, exec: f.exec, npm: plain.npm }).catch((e: Error) => e.message);
+    expect(err2).toContain("3 4 5 6 7 8 9 npm error x");
+    expect(err2).not.toContain("2 3");
+    expect(err2).not.toContain("wait for the build");
+  });
+
+  it("no build or an unfinished build says to wait for it to finish", async () => {
+    const cacheDir = dir("cache-");
+    const f = fake({ inspect: { code: 0, stdout: "true\n" } });
+    await expect(prepareDockerSide({ name: "dev", pkgDir: dir("empty-"), key: "k2", cacheDir, exec: f.exec, npm: fakeNpm().npm })).rejects.toThrow(/wait for the build to finish, then retry/);
+    const half = dir("half-");
+    mkdirSync(join(half, "dist"));
+    writeFileSync(join(half, "dist", "cli.js"), "");
+    await expect(prepareDockerSide({ name: "dev", pkgDir: half, key: "k5", cacheDir, exec: f.exec, npm: fakeNpm().npm })).rejects.toThrow(/dist\/web.*wait for the build to finish/s);
   });
 });
