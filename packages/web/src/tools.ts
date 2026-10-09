@@ -1,4 +1,5 @@
 // Tool knowledge for tool cards (docs/spec.md "Session view UX").
+import type { TodoItem } from "@claude-ui/protocol";
 import { parseDiffFromFile } from "@pierre/diffs";
 import { isWinPath, relPath } from "./paths.ts";
 
@@ -16,6 +17,19 @@ export function toolSummary(input: unknown): string {
   const value = key ? fields[key] : Object.values(fields).find((v) => typeof v === "string");
   return typeof value === "string" ? (value.split("\n")[0] ?? "") : "";
 }
+
+/** The todos of a TodoWrite input; items with an unknown shape are dropped, none while the input is still streaming in. */
+export function todoItems(input: unknown): TodoItem[] {
+  const todos = (input as { todos?: unknown } | null)?.todos;
+  if (!Array.isArray(todos)) return [];
+  return todos.filter(
+    (t): t is TodoItem =>
+      typeof t?.content === "string" && (t.status === "pending" || t.status === "in_progress" || t.status === "completed"),
+  );
+}
+
+/** "3 of 10 todos completed", shared by the todo dock and the TodoWrite card. */
+export const todoSummary = (items: TodoItem[]) => `${items.filter((i) => i.status === "completed").length} of ${items.length} todos completed`;
 
 /** File name and directory for a card header; the directory relative to `cwd` when the file is inside it. */
 export function filePath(path: string, cwd: string) {
