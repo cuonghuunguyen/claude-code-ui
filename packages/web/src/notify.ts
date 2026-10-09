@@ -43,6 +43,7 @@ export function createTracker() {
       if (part.type === "user_text") t.text = t.error = undefined;
       else if (part.type === "assistant_text") t.text = part.text;
       else if (part.type === "raw" && (part.message as { error?: unknown } | null)?.error) t.error = String((part.message as { error: unknown }).error);
+      else if ((part.type === "permission_request" || part.type === "question") && part.settled) requests.delete(part.requestId);
       else if ((part.type === "permission_request" || part.type === "question") && !part.settled) {
         const escalated = !!part.escalated;
         const had = requests.get(part.requestId);
@@ -79,10 +80,15 @@ export function reconcile(
   cards: Card[],
   c: { views: Record<string, SessionView | undefined>; list: SessionListItem[]; shown: (sessionId: string) => boolean; focusPage: boolean; enabled: boolean },
 ): Card[] {
-  if (!c.enabled || c.focusPage) return cards.length ? [] : cards;
+  if (!c.enabled) return cards.length ? [] : cards;
   let changed = false;
   const out: Card[] = [];
   for (const card of cards) {
+    // The Focus page lists every waiting request: their cards go. Finished and error cards stay (Focus does not show them).
+    if (c.focusPage && (card.kind === "permission" || card.kind === "question")) {
+      changed = true;
+      continue;
+    }
     const s = c.list.find((x) => x.id === card.sessionId);
     if (!s || s.archived || c.shown(card.sessionId)) {
       changed = true;

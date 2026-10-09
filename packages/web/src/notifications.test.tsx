@@ -149,11 +149,14 @@ it("a finished card has only Open session and hides after 8 s; an error and a re
 it("the finished timer waits while the pointer is over the region or focus is inside it", async () => {
   const onDismiss = vi.fn();
   await show([item("e", "finished", { body: "ok" })], { onDismiss });
-  const region = q("section");
-  await act(async () => void region.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+  let hover = true;
+  const matches = Element.prototype.matches;
+  vi.spyOn(Element.prototype, "matches").mockImplementation(function (this: Element, s: string) {
+    return s === ":hover" ? hover : matches.call(this, s);
+  });
   await act(async () => void vi.advanceTimersByTime(30_000));
   expect(onDismiss).not.toHaveBeenCalled();
-  await act(async () => void region.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })));
+  hover = false;
   await act(async () => void vi.advanceTimersByTime(8500));
   expect(onDismiss).toHaveBeenCalledTimes(1);
   onDismiss.mockClear();
@@ -276,4 +279,48 @@ it("a card that leaves with the focused button inside it does not pause the next
   expect(q("section").contains(document.activeElement)).toBe(false);
   await act(async () => void vi.advanceTimersByTime(8500));
   expect(onDismiss).toHaveBeenCalledWith("e");
+});
+
+it("a card removed under the pointer does not keep the next finished card up: hover is read at the tick", async () => {
+  const onDismiss = vi.fn();
+  // jsdom has no :hover; the pointer is "over" the first card only while it exists.
+  let over = true;
+  const matches = Element.prototype.matches;
+  vi.spyOn(Element.prototype, "matches").mockImplementation(function (this: Element, s: string) {
+    return s === ":hover" ? over && !!this.querySelector("article") : matches.call(this, s);
+  });
+  await show([item("e", "finished", { body: "ok" })], { onDismiss });
+  await show([], { onDismiss });
+  over = false;
+  await show([item("f", "finished", { body: "ok" })], { onDismiss });
+  await act(async () => void vi.advanceTimersByTime(8500));
+  expect(onDismiss).toHaveBeenCalledWith("f");
+});
+
+it("a focused Allow once does not carry over to the session's next request: new buttons, focus on them", async () => {
+  const alpha = item("b", "permission", { requestId: "alpha", body: "alpha" });
+  const beta = item("b", "permission", { requestId: "beta", body: "beta" });
+  const h = await show([beta]);
+  const first = button("Allow once")!;
+  await act(async () => first.focus());
+  await show([alpha], { onRespond: h.onRespond });
+  const now = button("Allow once")!;
+  expect(now).not.toBe(first);
+  expect(now.getAttribute("aria-label")).toContain("alpha");
+  expect(document.activeElement).toBe(now);
+});
+
+it("Esc on the +N more pill is taken, not passed to the page", async () => {
+  const outer = vi.fn();
+  window.addEventListener("keydown", outer);
+  const h = await show([item("1"), item("2"), item("3"), item("4")]);
+  await key(q('[data-testid="notifications-more"]'), "Escape");
+  expect(outer).not.toHaveBeenCalled();
+  expect(h.restoreFocus).toHaveBeenCalled();
+  window.removeEventListener("keydown", outer);
+});
+
+it("finished and error cards that do not fit are dropped", async () => {
+  const h = await show([item("1"), item("2"), item("3"), item("4", "finished", { body: "ok" })]);
+  expect(h.onDismiss).toHaveBeenCalledWith("4");
 });

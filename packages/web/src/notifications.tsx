@@ -46,9 +46,10 @@ export function useNotifications(gate: Gate, onCard?: (card: Card) => void) {
   // The most recent card shown per session, to announce a card once and an in-place update of the same kind never.
   const kinds = useRef(new Map<string, string>());
 
-  const allowed = (sessionId: string) => {
+  // The Focus page lists the waiting requests (no card for them there), but not a finished turn: that still gets its card.
+  const allowed = (sessionId: string, request = true) => {
     const g = latest.current;
-    return g.enabled && g.focused && !g.focusPage && !g.shown(sessionId) && g.list.some((s) => s.id === sessionId && !s.archived);
+    return g.enabled && g.focused && !(request && g.focusPage) && !g.shown(sessionId) && g.list.some((s) => s.id === sessionId && !s.archived);
   };
   const add = (card: Card) => {
     setCards((c) => addCard(c, card));
@@ -92,7 +93,7 @@ export function useNotifications(gate: Gate, onCard?: (card: Card) => void) {
       const v = latest.current.views[s.sessionId];
       const done = v && (v.state === "error" ? s.kind === "error" : v.state === "idle" && !v.working && s.kind === "finished");
       const waits = v && [...v.parts.values()].some((p) => (p.type === "permission_request" || p.type === "question") && !p.settled);
-      if (done && !waits && allowed(s.sessionId)) add({ sessionId: s.sessionId, kind: s.kind, text: s.text, since: Date.now() });
+      if (done && !waits && allowed(s.sessionId, false)) add({ sessionId: s.sessionId, kind: s.kind, text: s.text, since: Date.now() });
     });
   };
 
@@ -156,12 +157,14 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
   const focusedSession = useRef<string>(undefined);
   const [sending, setSending] = useState<Record<string, boolean>>({});
   const [failed, setFailed] = useState<Record<string, string>>({});
-  const [over, setOver] = useState(false);
 
   // A finished card goes after 8 s, unless the pointer is over the region or focus is inside it (WCAG 2.2.1); the timer waits while the page is hidden.
   const left = useRef(new Map<string, number>());
   const dismissRef = useRef(onDismiss);
   dismissRef.current = onDismiss;
+  // Finished and error cards that do not fit are dropped, not kept for later (they would come back with an old age).
+  const dropped = items.filter((i) => !shown.includes(i.card) && (i.card.kind === "finished" || i.card.kind === "error")).map((i) => i.card.sessionId).join();
+  useEffect(() => void (dropped && dropped.split(",").forEach((id) => dismissRef.current(id))), [dropped]);
   const finishedKeys = visible.filter((i) => i.card.kind === "finished").map((i) => `${i.card.sessionId}:${i.card.since}`).join();
   useEffect(() => {
     const live = new Set(finishedKeys.split(",").filter(Boolean));
@@ -169,7 +172,8 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
     if (!live.size) return;
     const t = setInterval(() => {
       // Read at the tick, not tracked by events: a card that leaves with the focused button inside fires no blur.
-      if (over || region.current?.contains(document.activeElement) || document.visibilityState === "hidden") return;
+      // Read at the tick: a card removed under the pointer or the focus fires no leave or blur.
+      if (region.current?.matches(":hover") || region.current?.contains(document.activeElement) || document.visibilityState === "hidden") return;
       for (const k of live) {
         const rest = (left.current.get(k) ?? FINISHED_MS) - 250;
         left.current.set(k, rest);
@@ -181,7 +185,7 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
       }
     }, 250);
     return () => clearInterval(t);
-  }, [finishedKeys, over]);
+  }, [finishedKeys]);
 
   const actions = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>("[data-action]")].filter((b) => b.closest("article"));
   /** Focus after a card leaves: the neighbour card, else what had focus before, else the prompt box. */
@@ -203,8 +207,14 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
 
   // A card that had focus left without a key press (answered in Focus or by another tab): focus must not fall to the page.
   const keys = visible.map((i) => i.card.sessionId).join();
+  // A card that moved on to the session's next request has new buttons: focus on the old one must not carry over to answer another request.
+  const requests = visible.map((i) => `${i.card.sessionId}:${i.d.requestId ?? i.card.kind}`).join();
   useLayoutEffect(() => {
     const id = focusedSession.current;
+    if (id && keys.split(",").includes(id) && (!document.activeElement || document.activeElement === document.body)) {
+      region.current?.querySelector<HTMLElement>(`article[data-session="${id}"] [data-action]`)?.focus();
+      return;
+    }
     if (!id || keys.split(",").includes(id)) return;
     focusedSession.current = undefined;
     if (document.activeElement && document.activeElement !== document.body) return;
@@ -212,13 +222,17 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
     if (next) next.focus();
     else if (remembered.current?.isConnected) remembered.current.focus();
     else restoreFocus();
-  }, [keys]);
+  }, [keys, requests]);
 
   if (!visible.length) return null;
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
     const article = (e.target as Element).closest("article");
-    if (!article) return;
+    if (!article) {
+      // The "+N more" pill: Esc must not stop the page's running turn either.
+      if (e.key === "Escape") (e.preventDefault(), e.stopPropagation(), e.nativeEvent.stopPropagation(), restoreFocus());
+      return;
+    }
     if (e.key === "Escape") {
       // Esc in the page stops the running turn: a notice must take it, never pass it on.
       e.preventDefault();
@@ -253,10 +267,8 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
       ref={region}
       aria-label="Notifications"
       data-testid="notifications"
-      className="pointer-events-none flex flex-col gap-2 max-sm:fixed max-sm:inset-x-4 max-sm:top-16 max-sm:z-1000 sm:flex-col-reverse"
+      className="pointer-events-none flex flex-col gap-2 max-sm:fixed max-sm:inset-x-4 max-sm:top-20 max-sm:z-1000 sm:flex-col-reverse"
       onKeyDown={onKeyDown}
-      onMouseEnter={() => setOver(true)}
-      onMouseLeave={() => setOver(false)}
       onFocus={(e) => {
         focusedSession.current = (e.target as Element).closest("article")?.getAttribute("data-session") ?? undefined;
       }}
@@ -275,6 +287,7 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
             aria-describedby={`${id}-k ${id}-b`}
             data-session={card.sessionId}
             data-kind={d.kind}
+            data-request={d.requestId}
             data-testid="notification"
             className={`${TOAST_CARD} flex flex-col gap-1.5 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-2`}
           >
@@ -322,7 +335,7 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
                 Not sent: {failed[card.sessionId]}
               </p>
             )}
-            <div className="mt-0.5 flex flex-wrap items-center gap-2">
+            <div key={d.requestId ?? card.kind} className="mt-0.5 flex flex-wrap items-center gap-2">
               {answer && (
                 <>
                   <Button key="allow" type="button" size="sm" data-action aria-label={`Allow once: ${named} in ${title}`} aria-disabled={busy} className={ACT} onClick={(e) => void respond(card, "allow", e.currentTarget.closest("article")!)}>

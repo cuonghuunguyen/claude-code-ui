@@ -206,3 +206,9 @@ it("lastLine shows markdown as plain text: links keep their title, list and emph
   expect(lastLine("## Summary\n")).toBe("Summary");
   expect(lastLine("![alt](x.png)")).toBe("alt");
 });
+
+it("on the Focus page the request cards go but a finished or error card stays", () => {
+  const views = { b: view([perm("r1")]) };
+  const cards = [card(), card({ sessionId: "a", kind: "finished", requestId: undefined, text: "ok" })];
+  expect(reconcile(cards, ctx(views, { focusPage: true })).map((c) => c.sessionId + c.kind)).toEqual(["afinished"]);
+});
