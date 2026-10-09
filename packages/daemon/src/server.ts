@@ -28,6 +28,7 @@ import { createSessionSettings } from "./session-settings.ts";
 import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
+import { serveStatic } from "./static.ts";
 
 export { MAX_SETTINGS } from "./session-settings.ts";
 
@@ -62,20 +63,9 @@ const IDLE_CHECK_MS = 60_000;
 
 /** A new connection gets a fresh plan usage read when the last one is older (reset times pass without a turn). */
 const PLAN_STALE_MS = 5 * 60_000;
+const PING_MS = 15_000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const MIME: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".json": "application/json",
-  ".webmanifest": "application/manifest+json",
-  ".woff2": "font/woff2",
-};
 
 type History = {
   listSessions: typeof listSessions;
@@ -352,6 +342,8 @@ export function createDaemon(opts: {
   /** Test seam (GH-164): delays of auto-continue.ts. */
   autoContinue?: { graceMs?: number; gapMs?: number; retryMs?: number };
   listCache?: boolean;
+  /** Interval of the WebSocket ping that drops a half-open socket (default 15 s; tests use a few hundred ms). */
+  pingMs?: number;
   hostnames?: string[];
   /** Name shown for this computer in Settings (default: the OS host name); `desktopForcedOff`: started with --no-os-notify. */
   host?: string;
@@ -1058,13 +1050,7 @@ export function createDaemon(opts: {
     }
     // Pairing probe: a browser cannot read the 401 of a rejected WebSocket upgrade, so it asks here (client.ts).
     if (path === "/auth") return void res.writeHead(isToken(/^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1]) ? 204 : 401).end();
-    let file = resolve(join(root, path));
-    if (!file.startsWith(root + sep) && file !== root) return void res.writeHead(403).end();
-    // SPA fallback: unknown paths serve index.html.
-    if (!existsSync(file) || statSync(file).isDirectory()) file = join(root, "index.html");
-    if (!existsSync(file)) return void res.writeHead(404).end("web app not built: run npm run build");
-    res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
-    createReadStream(file).pipe(res);
+    serveStatic(req, res, root, path);
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, handleProtocols: (offered) => (offered.has(WS_PROTOCOL) ? WS_PROTOCOL : false) });
@@ -1084,8 +1070,29 @@ export function createDaemon(opts: {
   /** This daemon has the session: live, or a transcript inside the roots. */
   const isLocalSession = async (id: string) => sessions.has(id) || (UUID.test(id) && !!allowed((await history.getSessionInfo(id).catch(() => undefined))?.cwd));
 
+  // Ping each socket every interval; one that did not pong since the previous tick is half-open (phone asleep, wifi gone, no FIN):
+  // terminate it so its close handler runs (focused tab, subscriptions, watches), else its stale "focused" entry mutes push.
+  const answered = new WeakSet<WebSocket>();
+  const pinger = setInterval(() => {
+    for (const ws of connections) {
+      if (!answered.has(ws)) {
+        ws.terminate();
+        continue;
+      }
+      answered.delete(ws);
+      try {
+        ws.ping();
+      } catch {
+        ws.terminate();
+      }
+    }
+  }, opts.pingMs ?? PING_MS).unref();
+  http.on("close", () => clearInterval(pinger));
+
   wss.on("connection", (ws: WebSocket) => {
     connections.add(ws);
+    answered.add(ws);
+    ws.on("pong", () => answered.add(ws));
     const usage = plan.current();
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
     if (plan.age() > PLAN_STALE_MS) void plan.reread();
@@ -1126,6 +1133,7 @@ export function createDaemon(opts: {
       }
       if (typeof msg !== "object" || msg === null || Array.isArray(msg))
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
+      if (msg.type === "ping") return send(ws, { type: "reply", reqId: msg.reqId, result: {} });
       if (router) return router.handle(msg as ClientMessage & Record<string, unknown>);
       return local(msg, (m) => send(ws, m));
     };
