@@ -421,7 +421,7 @@ export type WorkerModeSetting = (typeof WORKER_MODES)[number];
 export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean } };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
-export type SettingsResult = { settings: Settings; daemon?: { host: string; desktopForcedOff?: true } };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true } };
 export type ConfigKind = "mcp" | "plugins" | "skills";
 /** `McpServerStatus.status` of the SDK. */
 export type McpStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";

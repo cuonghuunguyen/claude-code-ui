@@ -365,7 +365,7 @@ export function createDaemon(opts: {
   /** WSL distros and Docker containers this daemon routes to (sides.ts). */
   sides?: Sides;
   /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
-  buildInfo?: { stale(): string | undefined };
+  buildInfo?: { version?: string; stale(): string | undefined };
   /** How long worker_stop and worker_close wait for a stopped worker to leave running/needs_input (orchestration.ts); tests shorten it. */
   stopWaitMs?: number;
   /** Update checks and installs (update.ts); none: no update_available, update.* fail. Checks start with the daemon. */
@@ -591,7 +591,7 @@ export function createDaemon(opts: {
     }
   };
 
-  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }) });
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<WebSocket, string>();
   /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */

@@ -1689,6 +1689,10 @@ describe("daemon", () => {
     expect(got).toMatchObject({ result: { settings: { notifications: { desktop: true } }, daemon: { host: "box" } } });
     expect((got as { result: { daemon: object } }).result.daemon).not.toHaveProperty("desktopForcedOff");
     expect(set).toMatchObject({ result: { settings: { notifications: { desktop: false } }, daemon: { host: "box" } } });
+    expect(got).toMatchObject({ result: { daemon: {} } });
+    expect((got as { result: { daemon: object } }).result.daemon).not.toHaveProperty("version");
+    const [versioned] = await run({ host: "box", buildInfo: { version: "9.8.7", stale: () => undefined } });
+    expect(versioned).toMatchObject({ result: { daemon: { host: "box", version: "9.8.7" } } });
     const [forced] = await run({ host: "box", desktopForcedOff: true });
     expect(forced).toMatchObject({ result: { daemon: { host: "box", desktopForcedOff: true } } });
   });

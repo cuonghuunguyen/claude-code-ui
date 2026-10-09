@@ -17,7 +17,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ failGet = false, group, daemon = { host: "box" } as { host: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; group?: string; daemon?: { host: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
+async function render({ failGet = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
   const toggle = vi.fn();
   localStorage.removeItem("claude-ui.settingsGroup");
   if (group) localStorage.setItem("claude-ui.settingsGroup", group);
@@ -222,7 +222,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups: Timeline first, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Timeline", "Notifications", "Changes", "Sidebar", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits"]);
+  expect(ids).toEqual(["Timeline", "Notifications", "Changes", "Sidebar", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "About"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
 });
 
@@ -267,11 +267,11 @@ it("arrow keys move through the groups (roving tabindex), Home and End jump, and
   expect(q("settings-group-notifications")!.getAttribute("tabindex")).toBe("0");
   expect(q("settings-notifications")).not.toBeNull();
   await key("End");
-  expect(document.activeElement).toBe(q("settings-group-usageLimit"));
+  expect(document.activeElement).toBe(q("settings-group-about"));
   await key("ArrowDown");
   expect(document.activeElement).toBe(q("settings-group-timeline"));
   await key("ArrowUp");
-  expect(document.activeElement).toBe(q("settings-group-usageLimit"));
+  expect(document.activeElement).toBe(q("settings-group-about"));
   await key("Home");
   expect(document.activeElement).toBe(q("settings-group-timeline"));
 });
@@ -391,4 +391,23 @@ it("the In-app switch is on by default, writes the per-browser choice and tells 
   await act(async () => q("settings-in-app")!.click());
   expect(heard).toEqual([false, true]);
   window.removeEventListener("claude-ui:in-app", on);
+});
+
+it("About, the last group, shows the web version and the daemon's as selectable text, with no extra request", async () => {
+  const { q, pick, calls } = await render({ daemon: { host: "box", version: "1.2.3" } });
+  const before = calls.length;
+  await pick("about");
+  const about = q("settings-about")!;
+  expect(about.textContent).toContain("Web app");
+  expect(q("settings-about-web")!.textContent).toBe("dev");
+  expect(q("settings-about-daemon")!.textContent).toBe("1.2.3");
+  expect(getComputedStyle(q("settings-about-web")!).userSelect).not.toBe("none");
+  expect(calls.length).toBe(before);
+});
+
+it("About omits the daemon version when an older daemon does not send it", async () => {
+  const { q, pick } = await render();
+  await pick("about");
+  expect(q("settings-about-web")).not.toBeNull();
+  expect(q("settings-about-daemon")).toBeNull();
 });
