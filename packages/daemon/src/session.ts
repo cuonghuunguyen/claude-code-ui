@@ -177,6 +177,12 @@ export class Session {
   /** True from a task_notification to the next result: the CLI runs a turn of its own for it, while the session is idle. */
   private cliTurn = false;
   private cliTurnTimer?: NodeJS.Timeout;
+  /** Non-ambient task IDs of the CLI's last background_tasks_changed level (GH-239). */
+  private backgroundLevel = new Set<string>();
+  /** Fires STALE_TURN_MS after the last stream message of a running turn: checks whether the session missed the turn's end (GH-239). */
+  private staleTimer?: NodeJS.Timeout;
+  /** Stream messages received so far: a stale check that sees a newer one keeps the turn. */
+  private received = 0;
   /** A sync was asked while the session was busy: it runs at the end of the turn. */
   private syncDeferred = false;
   private syncing?: Promise<void>;
@@ -527,6 +533,8 @@ export class Session {
       this.settle(id, { decision: "deny" }, { behavior: "deny", message: REJECTED, interrupt: true });
     }
     await this.query.interrupt();
+    // Stop on a turn whose end the session missed (GH-239): an idle CLI sends no result for the interrupt.
+    setTimeout(() => void this.checkStale(), INTERRUPT_GRACE_MS).unref();
   }
 
   /**
@@ -949,6 +957,8 @@ export class Session {
 
   /** One SDK message of this session's live query. */
   private receive(m: SDKMessage, q: Query) {
+    this.received++;
+    this.armStale();
     if ((m.type === "user" || m.type === "assistant") && m.uuid) {
       this.known.add(m.uuid);
       this.own.add(m.uuid);
@@ -969,10 +979,13 @@ export class Session {
       this.setState("running");
     }
     // A run SendMessage resumed: its task messages name the SendMessage call; the adapter knows the task's Agent call.
-    if (m.type === "system" && m.subtype === "task_started") {
+    // An ambient task is no activity (SDK: hosts exclude it from activity indicators), e.g. the comment monitor an Artifact
+    // publish arms: it lives while the artifact is watched, so counting it kept the session working for good (GH-239).
+    if (m.type === "system" && m.subtype === "task_started" && !m.ambient) {
       const id = this.adapter.taskCall(m.task_id) ?? m.tool_use_id;
       if (id) this.tasks.set(id, m.task_id);
     }
+    if (m.type === "system" && m.subtype === "background_tasks_changed") this.levelChanged(m.tasks);
     if (m.type === "system" && m.subtype === "task_notification") {
       const id = this.adapter.taskCall(m.task_id) ?? m.tool_use_id;
       if (id) this.tasks.delete(id);
@@ -1089,8 +1102,61 @@ export class Session {
     }
   }
 
+  /**
+   * The CLI's level of live background tasks (REPLACE semantics; a foreground run is in none). A tracked task it flags ambient
+   * ends now; one it named before and names no more ends CLI_TURN_WAIT_MS later unless its task_notification ended it first
+   * (the level usually comes first; ending it at once would flash idle before the CLI's own turn). GH-239: a missed bookend
+   * must not keep the session working.
+   */
+  private levelChanged(list: { task_id: string; ambient?: boolean }[]) {
+    const ambient = new Set(list.filter((t) => t.ambient).map((t) => t.task_id));
+    const live = new Set(list.filter((t) => !t.ambient).map((t) => t.task_id));
+    const gone = [...this.tasks].filter(([, task]) => this.backgroundLevel.has(task) && !live.has(task) && !ambient.has(task));
+    this.backgroundLevel = live;
+    let dropped = false;
+    for (const [call, task] of this.tasks) if (ambient.has(task)) dropped = this.tasks.delete(call);
+    if (dropped && this.state === "idle") this.setState("idle");
+    if (!gone.length) return;
+    setTimeout(() => {
+      let late = false;
+      for (const [call, task] of gone) if (this.tasks.get(call) === task && !this.backgroundLevel.has(task)) late = this.tasks.delete(call);
+      if (late && this.state === "idle") this.setState("idle");
+    }, CLI_TURN_WAIT_MS).unref();
+  }
+
+  /** Arms (running, nothing pending) or clears the stale-turn check. */
+  private armStale() {
+    clearTimeout(this.staleTimer);
+    if (this.state === "running" && !this.pending.size) this.staleTimer = setTimeout(() => void this.checkStale(), STALE_TURN_MS).unref();
+  }
+
+  /**
+   * Safety net (GH-239): a turn that streamed nothing for STALE_TURN_MS, while the CLI reports no turn of the session and its
+   * transcript ends with a reply that ended the turn, has ended although no result came: the session is idle again.
+   */
+  private async checkStale() {
+    const { readTranscript, cliTurnRunning } = this.opts;
+    const at = this.received;
+    if (this.state !== "running" || this.pending.size || !readTranscript || !cliTurnRunning) return;
+    let ended = false;
+    if (!cliTurnRunning(this.id)) {
+      try {
+        const last = (await readTranscript(this.id, this.cwd)).main.filter((m) => !m.parent_tool_use_id).at(-1);
+        ended = last?.type === "assistant" && !turnOpen(last);
+      } catch (err) {
+        console.error(`session ${this.id}: reading the transcript failed:`, err);
+      }
+    }
+    if (this.state !== "running" || this.pending.size || at !== this.received) return;
+    if (!ended) return this.armStale();
+    console.warn(`session ${this.id}: the CLI ended the turn without a result the session saw; idle again`);
+    this.cliTurn = false;
+    this.setState("idle");
+  }
+
   private setState(state: SessionState) {
     this.state = state;
+    this.armStale();
     this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}) });
   }
 
@@ -1141,6 +1207,11 @@ export const CLI_TURN_WAIT_MS = 10_000;
  * a running CLI process reports the session busy or waiting (a long tool, a terminal permission prompt): then it is checked again.
  */
 export const EXTERNAL_TURN_QUIET_MS = 120_000;
+
+/** A running turn without a stream message for this long is checked for an end the session missed (GH-239). */
+export const STALE_TURN_MS = 120_000;
+/** After Stop, a turn without its result for this long gets the stale check at once (GH-239). */
+export const INTERRUPT_GRACE_MS = 5_000;
 
 // User text that ends a turn: a local command's output, an interrupt.
 const TURN_END = /^(<local-command-std(out|err)>|<bash-(input|stdout)>|\[Request interrupted by user)/;

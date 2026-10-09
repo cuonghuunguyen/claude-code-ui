@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Event } from "@claude-ui/protocol";
-import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, queuedQuery, Session, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
+import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, INTERRUPT_GRACE_MS, queuedQuery, Session, STALE_TURN_MS, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
 import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped } from "./fake-query.ts";
 
@@ -1845,10 +1845,10 @@ describe("Session background work", () => {
   const log = (events: Event[]) => events.filter((e) => e.part.type === "session_state").map((e) => { const p = e.part as { state: string; working?: true }; return p.working ? `${p.state}+working` : p.state; });
 
   /** A prompted session whose query yields what the test sends; `send` waits until `expected` states are logged. */
-  async function setup() {
+  async function setup(opts: ConstructorParameters<typeof Session>[1] = {}) {
     let next!: (m: unknown) => void;
-    const query = () => Object.assign((async function* () { for (;;) yield await new Promise((r) => (next = r)); })(), { supportedCommands: async () => [], stopTask: async () => {}, close() {} });
-    const s = started({ query: query as never });
+    const query = () => Object.assign((async function* () { for (;;) yield await new Promise((r) => (next = r)); })(), { supportedCommands: async () => [], stopTask: async () => {}, interrupt: async () => {}, close() {} });
+    const s = started({ ...opts, query: query as never });
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
     await until(events, () => !!next);
@@ -1947,6 +1947,116 @@ describe("Session background work", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // GH-239: an Artifact publish arms the CLI's comment monitor, a monitor_ws task flagged ambient that lives as long as the artifact
+  // is watched; it never gets a task_notification while the CLI is idle.
+  const level = (...tasks: { task_id: string; ambient?: boolean }[]) => ({ type: "system", subtype: "background_tasks_changed", uuid: randomUUID(), session_id: "x", tasks: tasks.map((t) => ({ task_type: "local_agent", description: "d", ...t })) });
+
+  it("an ambient task (the Artifact comment monitor) is no background work: the turn ends idle without working (GH-239)", async () => {
+    const { s, send } = await setup();
+    await send(call("art-1", "Artifact", { action: "publish" }), ["running"]);
+    await send(task("task_started", "m1", "art-1", { description: "Artifact comments", task_type: "monitor_ws", ambient: true }), ["running"]);
+    await send(result(), ["running", "idle"]);
+    expect(s.working()).toBe(false);
+  });
+
+  it("a background task the background_tasks_changed level drops ends its working after the wait without its notification (GH-239)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { events, send } = await setup();
+      await send(level({ task_id: "t1" }), ["running"]);
+      await bg(send);
+      await send(result(), ["running", "idle+working"]);
+      await send(level(), ["running", "idle+working"]);
+      vi.advanceTimersByTime(CLI_TURN_WAIT_MS);
+      expect(log(events)).toEqual(["running", "idle+working", "idle"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a level that drops a task before its notification does not flash idle: the CLI's own turn follows (GH-239)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { events, send } = await setup();
+      await send(level({ task_id: "t1" }), ["running"]);
+      await bg(send);
+      await send(result(), ["running", "idle+working"]);
+      await send(level(), ["running", "idle+working"]);
+      await send(done("t1", "agent-bg"), ["running", "idle+working", "idle+working"]);
+      await send(say(), ["running", "idle+working", "idle+working", "running"]);
+      vi.advanceTimersByTime(CLI_TURN_WAIT_MS);
+      await send(result(), ["running", "idle+working", "idle+working", "running", "idle"]);
+      expect(log(events)).toEqual(["running", "idle+working", "idle+working", "running", "idle"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a level that flags a tracked task ambient drops it; a foreground run the level never named stays (GH-239)", async () => {
+    const { s, send } = await setup();
+    await send(call("agent-fg", "Agent", { description: "Sweep" }), ["running"]);
+    await send(task("task_started", "t0", "agent-fg", { is_backgrounded: false }), ["running"]);
+    await bg(send);
+    await send(level({ task_id: "t1", ambient: true }), ["running"]);
+    expect(await s.stopSubagent("agent-bg")).toBe(false);
+    expect(await s.stopSubagent("agent-fg")).toBe(true);
+  });
+
+  describe("a turn whose end the session missed (GH-239 safety net)", () => {
+    const reply = (stop_reason: string) => ({ type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "assistant", stop_reason, content: [{ type: "text", text: "x" }] } });
+    const stuck = async (opts: { last: unknown; busy?: boolean; stop?: boolean }) => {
+      const { s, events, send } = await setup({ cliTurnRunning: () => !!opts.busy, readTranscript: async () => ({ main: [opts.last] as never, runs: [] }) });
+      await send(say(), ["running"]);
+      if (opts.stop) {
+        await s.interrupt();
+        await vi.advanceTimersByTimeAsync(INTERRUPT_GRACE_MS);
+      } else await vi.advanceTimersByTimeAsync(STALE_TURN_MS);
+      return events;
+    };
+
+    it("Stop resets it within seconds: the idle CLI sends no result for the interrupt", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const events = await stuck({ last: reply("end_turn"), stop: true });
+        await until(events, () => log(events).at(-1) === "idle");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("goes idle when the CLI went quiet, reports no turn and its transcript ends with end_turn", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const events = await stuck({ last: reply("end_turn") });
+        await until(events, () => log(events).at(-1) === "idle");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stays running while the transcript's turn is open (a long tool call)", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const events = await stuck({ last: reply("tool_use") });
+        await new Promise((r) => setImmediate(r));
+        expect(log(events).at(-1)).toBe("running");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stays running while the CLI reports the session busy", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const events = await stuck({ last: reply("end_turn"), busy: true });
+        await new Promise((r) => setImmediate(r));
+        expect(log(events).at(-1)).toBe("running");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
 
