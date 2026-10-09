@@ -67,21 +67,30 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
     ...(docker ? [`src='${src}'`] : []),
     // npm skips an optional dependency it could not fetch: without the SDK's Linux binary (any arch or libc) the side lists no
-    // models (no auto mode) and runs no query. Such an install is installed again.
-    'sdk() { for b in "$dir"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
-    'if [ ! -f "$cli" ] || ! sdk; then',
+    // models (no auto mode) and runs no query. Such an install is installed again: into an empty temp folder next to the old
+    // install (npm does not fetch a missing optional dependency into an existing node_modules), checked there (dist/cli.js and the
+    // binary), then swapped in. On any failure the old install stays (disk: both exist while npm runs).
+    'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
+    'if [ ! -f "$cli" ] || ! sdk "$dir"; then',
     docker
       ? `  [ -f "$src" ] || say install_failed "the claude-ui package was not copied in"`
       : `  src=$(wslpath -u '${src}') && [ -f "$src/dist/cli.js" ] || say install_failed "the Windows claude-ui package was not found"`,
     // node-pty has no Linux prebuilds: npm install compiles it.
     "  { command -v make && command -v python3 && { command -v g++ || command -v c++; }; } >/dev/null 2>&1 || say build_tools_missing",
-    // From scratch: npm does not fetch an optional dependency again into a node_modules that lacks it.
-    '  rm -rf "$dir"; mkdir -p "$dir" || say install_failed',
-    `  out=$(npm install --prefix "$dir" ${docker ? "" : "--install-links "}--omit=dev --no-save --no-fund --no-audit --loglevel=error "$src" 2>&1 >/dev/null) || { rm -rf "$dir"; say install_failed "$(printf '%s' "$out" | tail -n 3 | tr '\\n' ' ')"; }`,
-    '  [ -f "$cli" ] || { rm -rf "$dir"; say install_failed "the package has no dist/cli.js"; }',
-    '  sdk || { rm -rf "$dir"; say install_failed "npm did not install the Claude Agent SDK binary for Linux (an optional dependency)"; }',
-    // Earlier versions and builds.
-    '  for d in "$root"/*; do [ "$d" = "$dir" ] || rm -rf "$d"; done',
+    // Dot names: the sweep of earlier versions below ("$root"/*) never matches them.
+    '  new="$root/.new-$$"; old="$root/.old-$$"',
+    '  rm -rf "$new"; mkdir -p "$new" || say install_failed',
+    `  out=$(npm install --prefix "$new" ${docker ? "" : "--install-links "}--omit=dev --no-save --no-fund --no-audit --loglevel=error "$src" 2>&1 >/dev/null) || { rm -rf "$new"; say install_failed "$(printf '%s' "$out" | tail -n 3 | tr '\\n' ' ')"; }`,
+    '  [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] || { rm -rf "$new"; say install_failed "the package has no dist/cli.js"; }',
+    '  sdk "$new" || { rm -rf "$new"; say install_failed "npm did not install the Claude Agent SDK binary for Linux (an optional dependency)"; }',
+    // The new install must run (node exits non-zero on a missing or unloadable dependency) before it replaces the old one.
+    '  node "$new/node_modules/claude-code-ui/dist/cli.js" --version >/dev/null 2>&1 || { rm -rf "$new"; say install_failed "the new install does not start"; }',
+    // Swap: mv onto an existing folder would move into it, so the old one moves aside first (put back if the new one cannot move in).
+    '  if [ -e "$dir" ]; then mv "$dir" "$old" || { rm -rf "$new"; say install_failed "the old install could not be moved aside"; }; fi',
+    '  mv "$new" "$dir" || { rm -rf "$dir" "$new"; [ -e "$old" ] && mv "$old" "$dir"; say install_failed "the new install could not be moved in"; }',
+    '  rm -rf "$old"',
+    // Earlier versions and builds, leftovers of killed runs.
+    '  for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || rm -rf "$d"; done',
     "fi",
     ...(docker ? ['rm -f "$src" 2>/dev/null', '[ -n "$CLAUDE_UI_ROOTS" ] || case "$PWD" in /|"$HOME"|"$HOME"/*) export CLAUDE_UI_ROOTS="$HOME" ;; *) export CLAUDE_UI_ROOTS="$HOME:$PWD" ;; esac'] : []),
     'exec node "$cli" --side',
