@@ -805,8 +805,10 @@ export function App() {
   notifyRef.current = notify.observe;
   const noteText = (() => {
     if (!cardNote) return undefined;
-    const s = list.find((x) => x.id === cardNote.card.sessionId);
-    const d = describeCard(cardNote.card, views[cardNote.card.sessionId], s?.cwd ?? "");
+    // The card as it is now: one that moved on to its session's next request says that request, not the settled one.
+    const card = notify.cards.find((c) => c.sessionId === cardNote.card.sessionId && (c.kind === cardNote.card.kind || (!!c.requestId && !!cardNote.card.requestId))) ?? cardNote.card;
+    const s = list.find((x) => x.id === card.sessionId);
+    const d = describeCard(card, views[card.sessionId], s?.cwd ?? "");
     const keys = specOf("notifications.focus");
     return cardText({ kind: d.kind, title: s?.title || "Untitled", body: d.summary }) + (cardNote.hint && keys ? ` ${keyText(keys)} goes to notifications.` : "");
   })();

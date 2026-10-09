@@ -37,6 +37,9 @@ type Gate = {
  */
 export function useNotifications(gate: Gate, onCard?: (card: Card) => void) {
   const [cards, setCards] = useState<Card[]>([]);
+  const current = useRef(cards);
+  current.current = cards;
+  const max = usePhone() ? 1 : MAX_CARDS;
   const latest = useRef(gate);
   latest.current = gate;
   const announce = useRef(onCard);
@@ -52,7 +55,10 @@ export function useNotifications(gate: Gate, onCard?: (card: Card) => void) {
     return g.enabled && g.focused && !(request && g.focusPage) && !g.shown(sessionId) && g.list.some((s) => s.id === sessionId && !s.archived);
   };
   const add = (card: Card) => {
+    // A finished or error card that does not fit is dropped by the stack at once: it is never said either.
+    const fits = (card.kind !== "finished" && card.kind !== "error") || visibleCards(addCard(current.current, card), max).shown.some((c) => c.sessionId === card.sessionId);
     setCards((c) => addCard(c, card));
+    if (!fits) return;
     const key = `${card.kind}:${card.requestId ?? ""}`;
     if (kinds.current.get(card.sessionId) !== key) announce.current?.(card);
     kinds.current.set(card.sessionId, key);
@@ -212,7 +218,10 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
   useLayoutEffect(() => {
     const id = focusedSession.current;
     if (id && keys.split(",").includes(id) && (!document.activeElement || document.activeElement === document.body)) {
-      region.current?.querySelector<HTMLElement>(`article[data-session="${id}"] [data-action]`)?.focus();
+      // Never an answer button: the card now shows a request that was not read yet, and Enter must not answer it.
+      const open = region.current?.querySelector<HTMLElement>(`article[data-session="${id}"] [data-open-focus]`);
+      if (open) open.focus();
+      else restoreFocus();
       return;
     }
     if (!id || keys.split(",").includes(id)) return;
@@ -247,7 +256,9 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
     }
   };
 
-  const respond = async (card: Card, decision: "allow" | "deny", article: Element) => {
+  const respond = async (card: Card, requestId: string | undefined, decision: "allow" | "deny", article: Element) => {
+    // Only the request the card shows right now, the one the button was made for.
+    if (!requestId || card.requestId !== requestId || article.getAttribute("data-request") !== requestId) return;
     if (sending[card.sessionId]) return;
     setSending((s) => ({ ...s, [card.sessionId]: true }));
     setFailed(({ [card.sessionId]: _, ...rest }) => rest);
@@ -338,17 +349,17 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
             <div key={d.requestId ?? card.kind} className="mt-0.5 flex flex-wrap items-center gap-2">
               {answer && (
                 <>
-                  <Button key="allow" type="button" size="sm" data-action aria-label={`Allow once: ${named} in ${title}`} aria-disabled={busy} className={ACT} onClick={(e) => void respond(card, "allow", e.currentTarget.closest("article")!)}>
+                  <Button key="allow" type="button" size="sm" data-action aria-label={`Allow once: ${named} in ${title}`} aria-disabled={busy} className={ACT} onClick={(e) => void respond(card, d.requestId, "allow", e.currentTarget.closest("article")!)}>
                     Allow once
                   </Button>
-                  <Button key="deny" type="button" size="sm" variant="secondary" data-action aria-label={`Deny: ${named} in ${title}`} aria-disabled={busy} className={ACT} onClick={(e) => void respond(card, "deny", e.currentTarget.closest("article")!)}>
+                  <Button key="deny" type="button" size="sm" variant="secondary" data-action aria-label={`Deny: ${named} in ${title}`} aria-disabled={busy} className={ACT} onClick={(e) => void respond(card, d.requestId, "deny", e.currentTarget.closest("article")!)}>
                     Deny
                   </Button>
                   <span className="flex-1" />
                 </>
               )}
               {(d.kind === "permission" || d.kind === "question") && (
-                <Button key="focus" type="button" size="sm" variant={answer ? "ghost" : "default"} data-action aria-label={`Open in Focus: ${title}`} className={ACT} onClick={() => (onOpenFocus(card))}>
+                <Button key="focus" type="button" size="sm" variant={answer ? "ghost" : "default"} data-action data-open-focus aria-label={`Open in Focus: ${title}`} className={ACT} onClick={() => (onOpenFocus(card))}>
                   Open in Focus
                 </Button>
               )}

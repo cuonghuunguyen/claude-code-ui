@@ -228,3 +228,25 @@ it("switching in-app off in Settings tells the daemon at once: push.focus withou
   expect(m).toBeDefined();
   expect(m).not.toHaveProperty("covered");
 });
+
+it("a card that moves on to its session's next request puts focus on Open in Focus, not an answer button, and the status says the new request", async () => {
+  await mount(`#${A}`);
+  await live(B, perm("alpha", { tier: "low", input: { file_path: "/p/demo/src/alpha.ts" } }));
+  await live(B, perm("beta", { tier: "low", input: { file_path: "/p/demo/src/beta.ts" } }));
+  await settle();
+  expect(cards()).toHaveLength(1);
+  expect(cards()[0]!.getAttribute("data-request")).toBe("beta");
+  expect(status()).toContain("beta.ts");
+  await act(async () => [...cards()[0]!.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent === "Allow once")!.focus());
+  // Another tab denies beta: the card shows alpha now.
+  await live(B, perm("beta", { tier: "low", input: { file_path: "/p/demo/src/beta.ts" }, settled: true, decision: "deny" }));
+  await settle();
+  expect(cards()[0]!.getAttribute("data-request")).toBe("alpha");
+  expect(document.activeElement?.textContent).toBe("Open in Focus");
+  expect(cards()[0]!.contains(document.activeElement)).toBe(true);
+  expect(status()).toContain("alpha.ts");
+  expect(status()).not.toContain("beta.ts");
+  sent.length = 0;
+  await act(async () => (document.activeElement as HTMLElement).click());
+  expect(sent.some((m) => m.type === "permission.respond")).toBe(false);
+});

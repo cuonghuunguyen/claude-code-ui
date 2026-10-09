@@ -21,13 +21,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const item = (sessionId: string, kind: Card["kind"] = "permission", d: Partial<Described> = {}, c: Partial<Card> = {}): CardItem => ({
-  card: { sessionId, kind, requestId: kind === "permission" || kind === "question" ? `r-${sessionId}` : undefined, since: 0, ...c },
-  d: { kind, extra: 0, summary: "", body: "", ...(kind === "permission" && { tool: "Read", summary: "Read · src/a.ts", body: "src/a.ts", tier: "low" as const }), ...d },
-  title: `Session ${sessionId}`,
-  place: "proj",
-  cwd: "/p",
-});
+const item = (sessionId: string, kind: Card["kind"] = "permission", d: Partial<Described> = {}, c: Partial<Card> = {}): CardItem => {
+  // As describeCard makes it: a request card's description carries the card's request.
+  const requestId = kind === "permission" || kind === "question" ? (c.requestId ?? d.requestId ?? `r-${sessionId}`) : undefined;
+  return {
+    card: { sessionId, kind, requestId, since: 0, ...c },
+    d: { kind, extra: 0, summary: "", body: "", requestId, ...(kind === "permission" && { tool: "Read", summary: "Read · src/a.ts", body: "src/a.ts", tier: "low" as const }), ...d },
+    title: `Session ${sessionId}`,
+    place: "proj",
+    cwd: "/p",
+  };
+};
 const noop = () => {};
 type Handlers = Partial<Parameters<typeof NotificationStack>[0]>;
 async function show(items: CardItem[], h: Handlers = {}) {
@@ -290,6 +294,8 @@ it("a card removed under the pointer does not keep the next finished card up: ho
     return s === ":hover" ? over && !!this.querySelector("article") : matches.call(this, s);
   });
   await show([item("e", "finished", { body: "ok" })], { onDismiss });
+  // The real pointer: it enters the card (React's enter and leave come from mouseover and mouseout), then the card goes under it.
+  await act(async () => void q("article").dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body })));
   await show([], { onDismiss });
   over = false;
   await show([item("f", "finished", { body: "ok" })], { onDismiss });
@@ -297,7 +303,7 @@ it("a card removed under the pointer does not keep the next finished card up: ho
   expect(onDismiss).toHaveBeenCalledWith("f");
 });
 
-it("a focused Allow once does not carry over to the session's next request: new buttons, focus on them", async () => {
+it("a focused Allow once does not carry over to the session's next request: focus goes to Open in Focus, never an answer button", async () => {
   const alpha = item("b", "permission", { requestId: "alpha", body: "alpha" });
   const beta = item("b", "permission", { requestId: "beta", body: "beta" });
   const h = await show([beta]);
@@ -307,7 +313,21 @@ it("a focused Allow once does not carry over to the session's next request: new 
   const now = button("Allow once")!;
   expect(now).not.toBe(first);
   expect(now.getAttribute("aria-label")).toContain("alpha");
-  expect(document.activeElement).toBe(now);
+  expect(document.activeElement).toBe(button("Open in Focus"));
+  expect(document.activeElement?.textContent).not.toMatch(/Allow once|Deny/);
+  expect(h.onRespond).not.toHaveBeenCalled();
+});
+
+it("an answer button answers only the request the card shows right now", async () => {
+  const h = await show([item("b", "permission", { requestId: "beta" })]);
+  const allow = button("Allow once")!;
+  // The card's shown request is no longer the one this button was made for.
+  q("article").setAttribute("data-request", "alpha");
+  await act(async () => allow.click());
+  expect(h.onRespond).not.toHaveBeenCalled();
+  q("article").setAttribute("data-request", "beta");
+  await act(async () => allow.click());
+  expect(h.onRespond).toHaveBeenCalledWith(expect.objectContaining({ requestId: "beta" }), "allow");
 });
 
 it("Esc on the +N more pill is taken, not passed to the page", async () => {
@@ -323,4 +343,33 @@ it("Esc on the +N more pill is taken, not passed to the page", async () => {
 it("finished and error cards that do not fit are dropped", async () => {
   const h = await show([item("1"), item("2"), item("3"), item("4", "finished", { body: "ok" })]);
   expect(h.onDismiss).toHaveBeenCalledWith("4");
+});
+
+it("a finished card that does not fit is not announced either: only what shows is said", async () => {
+  const perm = (id: string) => ({ type: "permission_request", id, requestId: id, toolUseId: `t-${id}`, tool: "Read", input: { file_path: "a" }, suggestions: [], settled: false }) as never;
+  const said: string[] = [];
+  async function run(waiting: string[]) {
+    said.length = 0;
+    const ids = [...waiting, "4"];
+    const list = ids.map((id) => ({ id, cwd: "/p", state: "idle", title: id, lastActivity: 0, archived: false, transcript: true })) as never;
+    const views = Object.fromEntries(ids.map((id) => [id, waiting.includes(id) ? applyEvent(emptySession(), { type: "event", sessionId: id, seq: 1, part: perm(`r${id}`) }) : emptySession()]));
+    let api!: ReturnType<typeof useNotifications>;
+    function Host() {
+      api = useNotifications({ enabled: true, focused: true, focusPage: false, shown: () => false, list, views }, (c) => said.push(`${c.sessionId}:${c.kind}`));
+      return null;
+    }
+    await act(async () => root.render(<Host key={waiting.join()} />));
+    for (const id of waiting) await act(async () => api.observe({ type: "event", sessionId: id, seq: 1, part: perm(`r${id}`) }, true));
+    await act(async () => void vi.advanceTimersByTime(10));
+    const state = (s: string) => ({ type: "session_state", id: "st", state: s }) as never;
+    await act(async () => api.observe({ type: "event", sessionId: "4", seq: 2, part: state("running") }, true));
+    await act(async () => api.observe({ type: "event", sessionId: "4", seq: 3, part: state("idle") }, true));
+    await act(async () => void vi.advanceTimersByTime(1600));
+  }
+  // Three waiting cards fill the stack: the finished card is dropped, so it is not said.
+  await run(["1", "2", "3"]);
+  expect(said).toEqual(["1:permission", "2:permission", "3:permission"]);
+  // With room for it, it is said.
+  await run(["1", "2"]);
+  expect(said).toEqual(["1:permission", "2:permission", "4:finished"]);
 });
