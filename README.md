@@ -24,6 +24,7 @@ It prints a pairing URL and a QR code. Open the URL (or scan the QR) to use the 
 - **Shared with the terminal**: sessions started in the `claude` CLI or the VS Code extension show up, and the other way round.
 - **Workspace**: file tree, editor, changes tab, terminal panel.
 - **Config dialogs**: MCP servers, skills, plugins.
+- **Installable app**: Install app (Android and desktop Chrome) or Add to Home Screen (iOS); needs HTTPS (see [Other devices](#other-devices)).
 - **Push notifications** when Claude needs input or finishes (HTTPS needed; iOS 16.4+ with the app on the Home Screen); without HTTPS the daemon's machine shows a desktop notification (Linux `notify-send`, macOS, Windows toast).
 - **Windows + WSL, Docker**: one install also runs sessions in your WSL distros and in running Docker containers.
 - **Private**: no hosting, no cloud relay. The daemon listens on `127.0.0.1` only unless `--lan`; every connection needs the pairing token.
@@ -97,7 +98,7 @@ A registry mirror: `CLAUDE_UI_UPDATE_REGISTRY=https://npm.example.com` (https; p
 
 ## Other devices
 
-By default the daemon listens on `127.0.0.1` only. Options: an HTTPS proxy in front of it (its name goes to `--hostname`), or `--lan`. Push notifications on phones need HTTPS.
+By default the daemon listens on `127.0.0.1` only. Options: an HTTPS proxy in front of it (its name goes to `--hostname`), or `--lan`. Push notifications and installing the app on a phone need HTTPS.
 
 **Tailscale (recommended)**: works from anywhere, only your devices can reach it.
 
@@ -107,13 +108,15 @@ claude-ui --tailscale    # checks Tailscale, runs tailscale serve, prints https:
 
 Needs Tailscale installed and logged in, with MagicDNS and HTTPS certificates on (admin console, DNS page); claude-ui says what is missing and exits. On Linux without root, run `sudo tailscale set --operator=$USER` once. claude-ui runs `tailscale serve` as a child and stops it on exit; nothing stays configured. Tailscale Funnel (public internet) is refused. If `tailscale serve --bg 4280` is already configured, claude-ui reuses it. Manual alternative: `tailscale serve --bg 4280` and `claude-ui --hostname <machine>.<tailnet>.ts.net`. Windows with WSL: run `--tailscale` on Windows (Windows Tailscale), not inside WSL.
 
+**Install as an app**: open the https link on the phone (or desktop Chrome). Android Chrome: menu > **Install app**. iOS 16.4+ Safari: **Share** > **Add to Home Screen**. The Home Screen app on iOS has its own storage and does not share Safari's pairing: open it, paste the pairing link the terminal printed into the **Pairing link or token** field and tap **Pair** (again if iOS cleared the app's storage after weeks without use). `--lan` (plain HTTP) cannot install the app. The page reconnects by itself when the phone wakes or the network returns.
+
 **LAN**: `--lan` also listens on the local network over plain HTTP and prints a pairing URL per LAN address:
 
 ```sh
 claude-ui --lan    # Pair a browser: open http://192.168.1.20:4280/#token=...
 ```
 
-Plain HTTP has limits: anyone on the network can read the token, so use it only on a network you trust. Browser push notifications and Copy buttons need HTTPS; while no browser is subscribed, the daemon's machine shows a desktop notification (Linux needs `notify-send`, package `libnotify-bin`). Restart after the machine gets a new LAN address. WSL2 is not reachable from the LAN by default: run it on Windows, or turn on WSL mirrored networking.
+Plain HTTP has limits: anyone on the network can read the token, so use it only on a network you trust. Browser push notifications, Copy buttons and installing the app need HTTPS; while no browser is subscribed, the daemon's machine shows a desktop notification (Linux needs `notify-send`, package `libnotify-bin`). Restart after the machine gets a new LAN address. WSL2 is not reachable from the LAN by default: run it on Windows, or turn on WSL mirrored networking.
 
 For HTTPS on the LAN, put an HTTPS reverse proxy that keeps the `Host` header in front (e.g. [Caddy](https://caddyserver.com): `caddy reverse-proxy --from <machine>.local --to 127.0.0.1:4280`; trust Caddy's local CA on the phone) and start with `--hostname <machine>.local`.
 

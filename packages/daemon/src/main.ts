@@ -5,7 +5,7 @@ import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
-import { HELP, parseCli } from "./cli.ts";
+import { HELP, PHONE_HINT, parseCli } from "./cli.ts";
 import { createSettings } from "./settings.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
@@ -129,8 +129,10 @@ if (side) {
     // The pairing URLs are the one place the token is printed; keep it out of every other log line.
     console.log(
       `claude-ui daemon on ${lan ? `port ${port} of every network interface (--lan)` : `http://127.0.0.1:${port}`}, roots: ${roots.join(delimiter)}${distros.length ? `, WSL: ${distros.join(", ")}` : ""}` +
-        (lan ? "\nLAN mode: plain HTTP, anyone on this network can read the token while you pair or use it. Browser push notifications and Copy need HTTPS" + (osNotify === false ? "." : "; this machine shows desktop notifications instead (no browser subscribed).") : "") +
-        `\nPair a browser: open ${urls.join("\n  or ")}\n${await QRCode.toString(urls[0]!, { type: "terminal", small: true })}`,
+        (lan ? "\nLAN mode: plain HTTP, anyone on this network can read the token while you pair or use it. Browser push notifications, Copy and installing the app (Add to Home Screen) need HTTPS: use --tailscale" + (osNotify === false ? "." : "; this machine shows desktop notifications instead (no browser subscribed).") : "") +
+        `\nPair a browser: open ${urls.join("\n  or ")}` +
+        (hostname ? `\n${PHONE_HINT}` : "") +
+        `\n${await QRCode.toString(urls[0]!, { type: "terminal", small: true })}`,
     );
   });
 }
