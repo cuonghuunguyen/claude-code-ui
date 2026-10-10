@@ -293,7 +293,7 @@ export function TabsBar({
         {groups.map(([cwd, ids]) => (
           // `contents`: groups are no boxes, tabs shrink in the strip as before. The chip is a button inside the tablist (a11y trade-off, no group role).
           <div key={cwd} role="none" className="contents" data-testid="tab-group">
-            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} onCloseGroup={() => closeGroup(cwd)} move={{ left: groups.findIndex(([k]) => k === cwd) > 0, right: groups.findIndex(([k]) => k === cwd) < groups.length - 1, by: (by) => ((refocus.current = { group: cwd }), onMoveGroup(cwd, by)) }} menu={compact ? { activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) } : undefined} />}
+            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} onCloseGroup={() => closeGroup(cwd)} move={{ left: groups.findIndex(([k]) => k === cwd) > 0, right: groups.findIndex(([k]) => k === cwd) < groups.length - 1, by: (by) => ((refocus.current = { group: cwd }), onMoveGroup(cwd, by)) }} compact={!!compact} rows={{ activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) }} />}
             {ids
               .filter((id) => !hidden(id))
               .map((id) => {
@@ -612,8 +612,60 @@ function FocusTab({ active, count, focusable, onSelect }: { active: boolean; cou
   );
 }
 
+type TabRowsProps = { activeId?: string; onSelect: (id: string) => void; onClose: (id: string) => void };
+
+/** The tab rows of a group chip menu (compact dropdown and chip context menu): a select item and a close item per tab (GH-277). */
+function GroupTabRows({ ids, info, rows }: { ids: string[]; info: (id: string) => TabInfo; rows: TabRowsProps }) {
+  // The focused close item is about to unmount: focus goes to the next row's close item, else the previous one's, else Close group.
+  // After the row left the list (setTimeout), as in SwitcherRow: earlier leaves the list's highlight index off by one.
+  const close = (id: string, e: { currentTarget: HTMLElement }) => {
+    const popup = e.currentTarget.closest<HTMLElement>('[data-testid="tab-group-menu"]');
+    const all = [...(popup?.querySelectorAll<HTMLElement>("[data-menu-close]") ?? [])];
+    const at = all.indexOf(e.currentTarget);
+    const to = all[at + 1] ?? all[at - 1] ?? popup?.querySelector<HTMLElement>('[data-testid="tab-group-close"]');
+    rows.onClose(id);
+    setTimeout(() => to?.isConnected && to.focus(), 0);
+  };
+  return ids.map((id) => {
+    const t = info(id);
+    const s = status(id, t);
+    const label = stateNote(t) || STATUS_LABEL[s];
+    return (
+      <div key={id} role="none" className="flex items-center gap-0.5">
+        <Menu.Item
+          className={cn(ITEM, "min-w-0 flex-1 gap-2")}
+          aria-current={id === rows.activeId ? "true" : undefined}
+          data-menu-tab={id}
+          onClick={() => rows.onSelect(id)}
+          // Middle click closes the tab, like on the tab itself; the menu stays open.
+          onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+          onAuxClick={(e) => {
+            if (e.button !== 1) return;
+            e.preventDefault();
+            rows.onClose(id);
+          }}
+        >
+          <TabIcon s={s} cwd={t.cwd} />
+          {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className={cn("min-w-0 flex-1 truncate", id === rows.activeId && "font-medium")}>{t.title}</span>}
+          {label && <span className="text-muted-foreground text-xs leading-none">{label}</span>}
+        </Menu.Item>
+        <Menu.Item
+          aria-label={`Close ${t.title}`}
+          closeOnClick={false}
+          data-menu-close={id}
+          data-testid="tab-group-tab-close"
+          className={cn(ITEM, "w-8 shrink-0 justify-center px-0 text-faint data-highlighted:text-foreground pointer-coarse:h-11 pointer-coarse:w-11")}
+          onClick={(e) => close(id, e)}
+        >
+          <XIcon className="size-3.5" aria-hidden />
+        </Menu.Item>
+      </div>
+    );
+  });
+}
+
 /** Group header: project color, name, tab count; a collapsed group shows its most urgent tab state. */
-function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, onCloseGroup, move, menu }: { onCloseGroup: () => void; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void }; menu?: { activeId?: string; onSelect: (id: string) => void; onClose: (id: string) => void }; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
+function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, onCloseGroup, move, rows, compact }: { onCloseGroup: () => void; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void }; rows: TabRowsProps; compact: boolean; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
   const first = info(ids[0]!);
   const c = avatarColor(first.groupColor ?? cwd, use(AvatarColors));
   const states = hiddenIds.map((id) => status(id, info(id)));
@@ -621,7 +673,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   const name = first.groupLabel ?? projectName(cwd);
   const sub = first.groupSub;
   const pathId = useId();
-  const shown = collapsed || !!menu;
+  const shown = collapsed || compact;
   const [open, setOpen] = useState(false);
   const props = {
     "aria-describedby": pathId,
@@ -665,7 +717,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
       {shown && urgent === "unread" && <span data-dot="unread" className="size-1.5 shrink-0 rounded-full bg-info" aria-hidden />}
     </>
   );
-  if (menu)
+  if (compact)
     // Compact: a menu button (click, Enter, Space, ArrowDown; hover, at once). A path tooltip would fight the hover menu, so the menu header carries name and path.
     return (
       // Not modal: a modal menu opened by the press puts a backdrop over the other chips, and a chip drag could not drop. A drag start closes the menu.
@@ -681,31 +733,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
                 <span className="font-medium">{sub ?? name}</span>
                 <span className="truncate text-muted-foreground">{cwd}</span>
               </div>
-              {ids.map((id) => {
-                const t = info(id);
-                const s = status(id, t);
-                const label = stateNote(t) || STATUS_LABEL[s];
-                return (
-                  <Menu.Item
-                    key={id}
-                    className={cn(ITEM, "gap-2")}
-                    aria-current={id === menu.activeId ? "true" : undefined}
-                    data-menu-tab={id}
-                    onClick={() => menu.onSelect(id)}
-                    // Middle click closes the tab, like on the tab itself; the menu stays open.
-                    onMouseDown={(e) => e.button === 1 && e.preventDefault()}
-                    onAuxClick={(e) => {
-                      if (e.button !== 1) return;
-                      e.preventDefault();
-                      menu.onClose(id);
-                    }}
-                  >
-                    <TabIcon s={s} cwd={t.cwd} />
-                    {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className={cn("min-w-0 flex-1 truncate", id === menu.activeId && "font-medium")}>{t.title}</span>}
-                    {label && <span className="text-muted-foreground text-xs leading-none">{label}</span>}
-                  </Menu.Item>
-                );
-              })}
+              <GroupTabRows ids={ids} info={info} rows={rows} />
               <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
               <Menu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
                 Close group
@@ -732,7 +760,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
-          <ContextMenu.Popup className={POPUP} data-testid="tab-group-menu">
+          <ContextMenu.Popup className={cn(POPUP, "max-w-80")} data-testid="tab-group-menu">
             <ContextMenu.Item className={ITEM} onClick={onToggle}>
               {collapsed ? "Expand group" : "Collapse group"}
             </ContextMenu.Item>
@@ -742,6 +770,8 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
             <ContextMenu.Item className={ITEM} disabled={!move.right} onClick={() => move.by(1)}>
               Move group right
             </ContextMenu.Item>
+            <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+            <GroupTabRows ids={ids} info={info} rows={rows} />
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
             <ContextMenu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
               Close group
