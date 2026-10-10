@@ -1,7 +1,7 @@
 // File tree and CodeMirror editor tabs (docs/spec.md "Layout", "Editor"). Files are read and saved through the daemon.
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { basicSetup, EditorView } from "codemirror";
-import { Compartment, type EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { keymap, type KeyBinding } from "@codemirror/view";
 import { selectLine } from "@codemirror/commands";
 import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
@@ -458,13 +458,17 @@ export function loadLanguage(path: string) {
   return import("@codemirror/lang-markdown").then((m) => m.markdown({ base: m.markdownLanguage, codeLanguages: languages, extensions: table }));
 }
 
-function CodeEditor({
+/** `readOnly`, `tabbable` (content reachable by Tab) and `line` (first line shown) serve the popup viewer; the files tab sets none. */
+export function CodeEditor({
   path,
   doc,
   viewRef,
   onChange,
   onSave,
   onSend,
+  readOnly,
+  tabbable,
+  line,
 }: {
   path: string;
   doc: string;
@@ -472,6 +476,9 @@ function CodeEditor({
   onChange: (doc: string) => void;
   onSave: () => void;
   onSend: (state: EditorState) => void;
+  readOnly?: boolean;
+  tabbable?: boolean;
+  line?: number;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>(undefined);
@@ -494,6 +501,8 @@ function CodeEditor({
         language.of([]),
         chrome,
         darkTheme.of(EditorView.darkTheme.of(dark)),
+        readOnly ? EditorState.readOnly.of(true) : [],
+        tabbable ? EditorView.contentAttributes.of({ tabindex: "0", "aria-label": `${baseName(path)}, read-only` }) : [],
         EditorView.updateListener.of((u) => {
           if (!u.docChanged) return;
           reported.current = docText(u.state);
@@ -502,6 +511,10 @@ function CodeEditor({
       ],
     });
     view.current = viewRef.current = v;
+    if (line) {
+      const l = v.state.doc.line(Math.min(line, v.state.doc.lines));
+      v.dispatch({ selection: { anchor: l.from }, effects: EditorView.scrollIntoView(l.from, { y: "start" }) });
+    }
     let live = true;
     loadLanguage(path)?.then((l) => live && v.dispatch({ effects: language.reconfigure(l) }));
     return () => {

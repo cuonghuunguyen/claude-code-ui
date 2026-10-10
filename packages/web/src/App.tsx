@@ -12,6 +12,7 @@ import type {
   ListResult,
   McpListResult,
   RecentProject,
+  MediaResult,
   ModelInfo,
   ModelsResult,
   Part,
@@ -50,6 +51,7 @@ import { Message, MessageAction, MessageActions, MessageContent, MessageResponse
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
+import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
@@ -65,6 +67,7 @@ import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
+import { noteRefs } from "./git-refs.ts";
 import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
@@ -83,6 +86,8 @@ import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./un
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { ViewerContext, latestPlan, useOpenViewer, type ViewerState } from "./viewer.ts";
+import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
@@ -246,6 +251,8 @@ export function App() {
   const [focusSel, setFocusSel] = useState<string>();
   // When this browser first saw a request that came without the daemon's `at`.
   const firstSeen = useRef(new Map<string, number>());
+  /** Last live event per session (ms): the Focus page's quiet time. */
+  const liveAt = useRef(new Map<string, number>());
   // Signal only (GH-159, one setting for the browser since GH-205), set in Settings.
   const signalOnly = useSignalOnly();
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
@@ -356,6 +363,9 @@ export function App() {
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
   const [openFile, setOpenFile] = useState<string>();
+  // Popup viewer (GH-238): what shows, for which session; `opener` takes the focus back on close.
+  const [viewer, setViewer] = useState<ViewerState>();
+  useEffect(() => setViewer(undefined), [activeId]);
   const quickOpener = useRef<Element>(null);
   // Title editor: in the sidebar row or in the tab the Rename action came from.
   const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab" }>();
@@ -756,6 +766,7 @@ export function App() {
         // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
         // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
         const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+        if (live) liveAt.current.set(e.sessionId, Date.now());
         notifyRef.current?.(e, live);
         // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
         if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
@@ -1129,15 +1140,24 @@ export function App() {
   // The cwd whose git status has been answered: the tour waits for it so "Git graph" is not dropped by a status still on its way.
   const [gitChecked, setGitChecked] = useState<string>();
   const panelCwd = panelSession?.cwd;
+  // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
+  const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
   useEffect(() => {
-    if (!panelCwd || status !== "connected") return;
+    if (!panelCwd) return;
+    if (knownGit) return void (setIsGit(true), setGitChecked(panelCwd));
+    if (status !== "connected") return;
     let live = true;
     client.current!.request<GitStatusResult>({ type: "git.status", cwd: panelCwd }).then(
-      (r) => live && (setIsGit(!!r.status), setGitChecked(panelCwd)),
+      (r) => live && (noteRefs(panelCwd, r.status?.refs), setIsGit(!!r.status), setGitChecked(panelCwd)),
       () => live && (setIsGit(false), setGitChecked(panelCwd)),
     );
     return () => void (live = false);
-  }, [panelCwd, status]);
+  }, [panelCwd, status, knownGit]);
+  // The Graph panel stays mounted (hidden) after its first visit, so coming back shows the loaded list at once.
+  const [graphCwd, setGraphCwd] = useState<string>();
+  useEffect(() => {
+    if (pane === "graph" && panelSession) setGraphCwd(panelSession.cwd);
+  }, [pane, panelSession?.cwd]);
   const sidePane = pane === "graph" && !isGit ? "files" : pane;
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
@@ -1169,6 +1189,8 @@ export function App() {
     setPane("files");
     setPanel(true);
   };
+  const openViewer = useOpenViewer(shown, setViewer);
+  const latest = useMemo(() => (view ? latestPlan(view) : undefined), [view?.parts, view?.aux]);
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
     const seen = fileTree && (wide(1024) ? panel && sidePane !== "changes" && sidePane !== "graph" : sidePane === "files");
@@ -1307,6 +1329,8 @@ export function App() {
     },
     openShortcuts: () => setShortcutsOpen(true),
     isGit,
+    viewChanges: shown && !draftShown ? () => openViewer({ kind: "changes" }) : undefined,
+    viewPlan: shown && !draftShown && latest ? () => openViewer({ kind: "plan", plan: latest }) : undefined,
     focusPrompt: focusShownPrompt,
     setModel: (model) => (draftShown ? changeDraft({ ...draft, model }) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
     setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
@@ -1664,6 +1688,7 @@ export function App() {
               )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
               <div className={`${card} flex-1 ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}>
+                <ViewerContext value={openViewer}>
                 <QuoteContext value={setInsert}>
                 {tabs.map((id) => {
                   const s = id === NEW_TAB ? undefined : sessionOf(id);
@@ -1722,6 +1747,7 @@ export function App() {
                         onRewind={(userMessageId, mode) =>
                           client.current!.request({ type: "session.rewind", sessionId: s.id, userMessageId, mode })
                         }
+                        onMedia={(partId, index) => client.current!.request<MediaResult>({ type: "session.media", sessionId: s.id, partId, index }).then((r) => r.dataUrl)}
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
@@ -1730,7 +1756,7 @@ export function App() {
                         connected={status === "connected"}
                         onGitStatus={() =>
                           status === "connected"
-                            ? client.current!.request<GitStatusResult>({ type: "git.status", cwd: s.cwd }).then((r) => r.status)
+                            ? client.current!.request<GitStatusResult>({ type: "git.status", cwd: s.cwd }).then((r) => (noteRefs(s.cwd, r.status?.refs), r.status))
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
                       />
@@ -1738,6 +1764,7 @@ export function App() {
                   );
                 })}
                 </QuoteContext>
+                </ViewerContext>
               </div>
               {shown && (panel || terminalOpen) && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
               {panelSession && (
@@ -1775,11 +1802,12 @@ export function App() {
                       cwd={panelSession.cwd}
                       onOpen={(path) => (setOpenFile(path), setPane("files"))}
                       sessionId={panelSession.id}
+                      onPopOut={() => openViewer({ kind: "changes" })}
                     />
                   )}
-                  {sidePane === "graph" && (
+                  {isGit && (sidePane === "graph" || graphCwd === panelSession.cwd) && (
                     <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
-                      <GraphPanel key={panelSession.cwd} client={client.current!} cwd={panelSession.cwd} />
+                      <GraphPanel key={panelSession.cwd} hidden={sidePane !== "graph"} client={client.current!} cwd={panelSession.cwd} />
                     </Suspense>
                   )}
                 </section>
@@ -1848,6 +1876,9 @@ export function App() {
                   onRespond={respond}
                   onAnswer={answer}
                   onOpenSession={(id) => open(id)}
+                  unread={unread}
+                  activity={(id) => Math.max(liveAt.current.get(id) ?? 0, list.find((s) => s.id === id)?.lastActivity ?? 0)}
+                  onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
                 />
               )}
               {activeId !== NEW_TAB && activeId !== FOCUS_TAB && !shown && (
@@ -1968,6 +1999,18 @@ export function App() {
         />
       )}
       <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
+      {shown && client.current && (
+        <ViewerDialog
+          target={viewer?.target}
+          opener={viewer?.opener}
+          client={client.current}
+          cwd={viewer?.cwd ?? shown.cwd}
+          view={viewer ? views[viewer.sessionId] : undefined}
+          sessionId={viewer?.sessionId}
+          onClose={() => setViewer(undefined)}
+          onOpenInEditor={(p) => (setViewer(undefined), setOpenFile(p), setPane("files"), setPanel(true))}
+        />
+      )}
       <ShortcutsDialog open={shortcutsOpen} edit={shortcutsEdit} onClose={() => (setShortcutsOpen(false), setShortcutsEdit(undefined))} />
       {/* Always mounted so a screen reader announces the hint when it fills in. */}
       <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 left-1/2 z-50 w-max max-w-[calc(100vw-24px)] -translate-x-1/2" data-testid="prefix-hint">
@@ -2449,6 +2492,7 @@ export function SessionPane({
   onCancelContinue,
   onRewindPreview,
   onRewind,
+  onMedia,
   onRespond,
   onAnswer,
   connected,
@@ -2498,6 +2542,8 @@ export function SessionPane({
   /** Drops the scheduled continue after a usage limit. */
   onCancelContinue?: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
+  /** Loads a payload a snapshot or page left out (session.media). */
+  onMedia?: MediaLoader;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
   onAnswer: (requestId: string, answers: Record<string, string>) => void;
@@ -2580,6 +2626,7 @@ export function SessionPane({
   const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
 
   return (
+    <MediaContext value={onMedia}>
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
       {current ? (
@@ -2691,10 +2738,13 @@ export function SessionPane({
                     preview={() => onRewindPreview(item.part.id)}
                     rewind={async (mode) => {
                       const prompt = item.part as Extract<Part, { type: "user_text" }>;
+                      // Images a snapshot or page left out load before the rewind (it drops the prompt from the daemon). One that fails to load
+                      // stops the rewind with a notice in the panel: the image would be lost for good.
+                      const images = mode === "code" ? [] : await restoreImages(prompt.images, prompt.id, onMedia);
                       await onRewind(prompt.id, mode);
                       setRewinding(undefined);
                       // Conversation modes: the original prompt goes back into the prompt box.
-                      if (mode !== "code") setDraft({ text: prompt.text, images: prompt.images });
+                      if (mode !== "code") setDraft({ text: prompt.text, images });
                     }}
                     onCancel={() => setRewinding(undefined)}
                   />
@@ -2772,6 +2822,7 @@ export function SessionPane({
       </div>
     </OpenRunContext>
     </CwdContext>
+    </MediaContext>
   );
 }
 
@@ -3381,7 +3432,7 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
           {(text || part.images.length > 0) && (
             <Message from="user">
               <MessageContent className="[overflow-wrap:anywhere]">
-                <ImageStrip images={part.images} />
+                <ImageStrip images={part.images} partId={part.id} />
                 <UserMarkdown text={text} />
               </MessageContent>
             </Message>

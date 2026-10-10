@@ -46,6 +46,10 @@ export type CommandContext = {
   canReopen: boolean;
   /** Opens the Keyboard shortcuts dialog. */
   openShortcuts: () => void;
+  /** Opens the shown session's changes in the popup viewer; none without a session. */
+  viewChanges?: () => void;
+  /** Opens the newest plan of the shown session in the popup viewer; none while it has no plan. */
+  viewPlan?: () => void;
   /** Git graph needs a repository. */
   isGit?: boolean;
   /** `id`: the tab just selected; default the shown one. */
@@ -116,6 +120,8 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s && !s.draft && cmd("pane.files", "Show files", () => c.showPane("files")),
     s && !s.draft && cmd("pane.changes", "Show changes", () => c.showPane("changes")),
     s && !s.draft && c.isGit && cmd("pane.graph", "Show git graph", () => c.showPane("graph")),
+    s && !s.draft && c.viewChanges && cmd("viewer.changes", "View changes in popup", c.viewChanges),
+    s && !s.draft && c.viewPlan && cmd("viewer.plan", "View plan", c.viewPlan),
     s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
     cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
     s && !s.draft && cmd("terminal.new", "New terminal", c.newTerminal),

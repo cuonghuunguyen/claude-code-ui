@@ -1,9 +1,11 @@
 // Prompt images: read pasted/dropped files as data URLs, show them as thumbnails.
-import { imageBlock, isPromptImage } from "@claude-ui/protocol";
+import { imageBlock, isPromptImage, parseOmitted } from "@claude-ui/protocol";
 import { Dialog } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { trapTab } from "./focus-trap.ts";
+import { useMediaSrc } from "./media.ts";
+import { MediaPlaceholder } from "./media-notice.tsx";
 
 /** Data URLs of the files the API accepts as images (png, jpeg, gif, webp); other files are skipped. */
 export async function readImages(files: Iterable<File>): Promise<string[]> {
@@ -20,8 +22,12 @@ export const readDataUrl = (f: File) =>
   });
 
 /** One image in its own aspect ratio (never cropped), a real button that opens it whole in a modal; Esc, the backdrop or Close returns the focus to it. */
-function ImageThumb({ src, index, compact }: { src: string; index: number; compact: boolean }) {
+function ImageThumb({ src: given, index, compact, partId }: { src: string; index: number; compact: boolean; partId?: string }) {
   const n = index + 1;
+  // A large image a snapshot or page left out loads when shown (GH-274).
+  const omitted = !!parseOmitted(given);
+  const { src, failed, retry } = useMediaSrc(partId ?? "", index, omitted && !!partId, omitted ? undefined : given);
+  if (!src) return <MediaPlaceholder failed={failed} retry={retry} label={`Image ${n}`} className="h-24 w-40" />;
   return (
     <Dialog.Root>
       <Dialog.Trigger aria-label={`View image ${n}`} className="block cursor-zoom-in rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -49,13 +55,14 @@ function ImageThumb({ src, index, compact }: { src: string; index: number; compa
   );
 }
 
-export function ImageStrip({ images, onRemove }: { images: string[]; onRemove?: (index: number) => void }) {
+/** `partId`: the user_text part the images belong to, to load the ones a snapshot or page left out. */
+export function ImageStrip({ images, onRemove, partId }: { images: string[]; onRemove?: (index: number) => void; partId?: string }) {
   if (!images.length) return null;
   return (
     <div className="flex flex-wrap items-start gap-2" data-testid="image-strip">
       {images.map((src, i) => (
         <div key={i} className="relative max-w-full">
-          <ImageThumb src={src} index={i} compact={!!onRemove} />
+          <ImageThumb src={src} index={i} compact={!!onRemove} partId={partId} />
           {onRemove && (
             <button
               type="button"

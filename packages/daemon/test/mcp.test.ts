@@ -22,6 +22,7 @@ const statuses = [
   { name: "ctx", status: "connected", scope: "user", config: { type: "http", url: "https://u:SECRET@mcp.example/mcp?key=SECRET&team=SECRET#top", headers: { Authorization: "Bearer SECRET" } }, tools: [{ name: "search", description: "Search docs", annotations: { readOnly: true, openWorld: true } }, { name: "drop", annotations: { destructive: true } }] },
   { name: "broken", status: "failed", scope: "project", error: "Connection closed", config: { type: "stdio", command: "false", args: ["--token", "SECRET"], env: { API_KEY: "SECRET" } } },
   { name: "drive", status: "needs-auth", scope: "claudeai", config: { type: "claudeai-proxy", url: "https://claude.ai/x", id: "mcprs_1" } },
+  { name: "spaced", status: "failed", scope: "user", config: { type: "http", url: "https://user:SECRET@exa mple.com/x?token=SECRET" } },
   { name: "host", status: "connected", source: "sdk", config: { type: "sdk", name: "host" } },
   { name: "noconfig", status: "pending" },
 ];
@@ -102,6 +103,8 @@ describe("mcp.*", () => {
         { name: "ctx", status: "connected", scope: "user", config: { type: "http", url: "https://u:***@mcp.example/mcp?key=***&team=***#top" }, tools: [{ name: "search", readOnly: true }, { name: "drop", destructive: true }] },
         { name: "broken", status: "failed", scope: "project", error: "Connection closed", config: { type: "stdio", command: "false" } },
         { name: "drive", status: "needs-auth", scope: "claudeai", config: { type: "claudeai-proxy", url: "https://claude.ai/x" } },
+        // Unparsable URL: no userinfo, no query.
+        { name: "spaced", status: "failed", scope: "user", config: { type: "http", url: "https://exa mple.com/x" } },
       ],
     });
     expect(JSON.stringify(r)).not.toContain("SECRET");
@@ -189,7 +192,7 @@ describe("mcp.*", () => {
     const t = await c.request({ type: "mcp.toggle", cwd: project, name: "broken", enabled: false });
     expect(mcpCalls.at(-2)).toMatchObject({ call: "toggleMcpServer", args: ["broken", false] });
     expect(mcpCalls.at(-1)!.call).toBe("mcpServerStatus");
-    expect((t.result as unknown as { servers: unknown[] }).servers).toHaveLength(3);
+    expect((t.result as unknown as { servers: unknown[] }).servers).toHaveLength(4);
     await c.request({ type: "mcp.reconnect", cwd: project, name: "broken" });
     expect(mcpCalls.at(-2)).toMatchObject({ call: "reconnectMcpServer", args: ["broken"] });
     c.ws.close();

@@ -329,3 +329,18 @@ it("MCP servers, Slash commands and Manage plugins carry the user's binding", ()
     resetAll();
   }
 });
+
+it("viewer commands show only with their callbacks and a session", () => {
+  const viewChanges = vi.fn();
+  const viewPlan = vi.fn();
+  const c = ctx({ viewChanges, viewPlan });
+  expect(appCommands(c).find((x) => x.id === "viewer.changes")).toMatchObject({ title: "View changes in popup", keys: undefined });
+  expect(appCommands(c).find((x) => x.id === "viewer.plan")).toMatchObject({ title: "View plan", keys: undefined });
+  run(c, "viewer.changes");
+  run(c, "viewer.plan");
+  expect(viewChanges).toHaveBeenCalledOnce();
+  expect(viewPlan).toHaveBeenCalledOnce();
+  const ids = (x: CommandContext) => appCommands(x).map((i) => i.id);
+  expect(ids(ctx())).not.toContain("viewer.changes");
+  expect(ids(ctx({ viewChanges, viewPlan, session: { ...ctx().session!, draft: true } }))).not.toContain("viewer.plan");
+});

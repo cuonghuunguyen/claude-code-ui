@@ -45,8 +45,10 @@ export type PlanWindow = { kind: string; label: string; percent: number; resetsA
  * Claude subscription limits, account-wide. `plan`: subscription type (pro, max, team, enterprise).
  * `status`: last `rate_limit_event`; allowed_warning = near a limit, rejected = a limit is hit, until `statusResetsAt` (ms).
  * `statusLimit`: label of the window that status is about (e.g. "Current week (Opus)"), when the event names it.
+ * `auth`: "oauth_token" when the Daemon's Claude login is CLAUDE_CODE_OAUTH_TOKEN (claude setup-token, inference-only scope): the CLI
+ * cannot read plan usage, so `windows` are the session and week windows of the last rate_limit_event, empty before one.
  */
-export type PlanUsage = { plan: string | null; windows: PlanWindow[]; status: "allowed" | "allowed_warning" | "rejected"; statusResetsAt?: number; statusLimit?: string };
+export type PlanUsage = { plan: string | null; windows: PlanWindow[]; status: "allowed" | "allowed_warning" | "rejected"; statusResetsAt?: number; statusLimit?: string; auth?: "oauth_token" };
 
 /** A slash command or skill; invoked by sending `/name args` as prompt text. */
 export type SlashCommand = { name: string; description: string; argumentHint: string; aliases?: string[] };

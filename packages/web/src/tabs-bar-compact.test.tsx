@@ -33,7 +33,7 @@ const chip = (el: HTMLElement, key: string) => el.querySelector<HTMLElement>(`[d
 const tabIds = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>("[data-tab-id]")].map((t) => t.dataset.tabId);
 const order = (el: HTMLElement) =>
   [...el.querySelectorAll('[data-testid="tab-group-chip"], [role="tab"]')].map((n) => n.getAttribute("data-group-chip") ?? n.closest("[data-tab-id]")?.getAttribute("data-tab-id"));
-const items = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+const items = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]:not([data-menu-close])')];
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); });
 const key = (el: Element, k: string, init: KeyboardEventInit = {}) => act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, ...init })));
 
@@ -270,9 +270,9 @@ it("close group: not compact, the chip's context menu has Collapse, Move left (o
   const el = await mount(<TabsBar {...noop} onCloseGroup={onCloseGroup} onMoveGroup={onMoveGroup} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
   await act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   await settle();
-  expect(items().map((i) => i.textContent)).toEqual(["Collapse group", "Move group left", "Move group right", "Close group"]);
+  expect(items().map((i) => i.textContent)).toEqual(["Collapse group", "Move group left", "Move group right", "AFirst", "ASecond", "Close group"]);
   expect(items()[1]!.hasAttribute("data-disabled")).toBe(true);
-  await act(async () => items()[3]!.click());
+  await act(async () => items().at(-1)!.click());
   expect(onCloseGroup).toHaveBeenCalledWith(A, ["a1", "a2"]);
   await settle();
   expect(chip(el, A).getAttribute("aria-expanded")).toBe("true");
