@@ -28,10 +28,11 @@ document.body.append(el);
 const root = createRoot(el);
 afterEach(() => act(() => root.render(<></>)));
 
-type State = { list: SessionListItem[]; views: Record<string, SessionView> };
+type State = { list: SessionListItem[]; views: Record<string, SessionView>; unread?: string[]; activity?: Record<string, number> };
 const respond = vi.fn<(id: string, a: PermissionAnswer) => void>();
 const answer = vi.fn<(id: string, a: Record<string, string>) => void>();
 const open = vi.fn<(id: string) => void>();
+const cancelContinue = vi.fn<(id: string) => void>();
 
 /** A Focus page over `state`; `settle` replaces the views like the daemon's settled event does. */
 function Harness({ initial, onState }: { initial: State; onState?: (set: (s: State) => void) => void }) {
@@ -39,7 +40,7 @@ function Harness({ initial, onState }: { initial: State; onState?: (set: (s: Sta
   const [selected, setSelected] = useState<string>();
   onState?.(setState);
   const waiting = waitingRequests(state.list, state.views, new Map(), Date.now());
-  return <FocusPage list={state.list} views={state.views} worktrees={{}} waiting={waiting} selected={selected} onSelect={setSelected} onRespond={respond} onAnswer={answer} onOpenSession={open} />;
+  return <FocusPage list={state.list} views={state.views} worktrees={{}} waiting={waiting} selected={selected} onSelect={setSelected} onRespond={respond} onAnswer={answer} onOpenSession={open} unread={new Set(state.unread)} activity={(id) => state.activity?.[id] ?? state.list.find((x) => x.id === id)?.lastActivity ?? 0} onCancelContinue={cancelContinue} />;
 }
 
 const base = (): State => ({
@@ -54,16 +55,18 @@ const render = (initial = base(), onState?: (set: (s: State) => void) => void) =
 const rows = () => [...el.querySelectorAll<HTMLElement>('[data-testid="focus-row"]')];
 const button = (name: string) => [...el.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === name)!;
 
-it("lists the waiting requests oldest first with their wait time, then the running sessions", async () => {
+it("lists the waiting requests oldest first with their wait time, then the working sessions", async () => {
   await render();
-  expect(rows().map((r) => r.querySelector(".font-medium")!.textContent)).toEqual(["Session a", "Session b"]);
-  expect(rows()[0]!.textContent).toContain("Bash · npm run test -- auth");
-  expect(rows()[1]!.textContent).toContain("Question · Keep the old route?");
+  expect(rows().map((r) => r.dataset.kind)).toEqual(["permission", "question"]);
+  expect(rows()[0]!.textContent).toContain("Session a");
+  expect(rows()[1]!.textContent).toContain("Session b");
+  expect(rows()[0]!.textContent).toContain("Allow or deny Bash · npm run test -- auth");
+  expect(rows()[1]!.textContent).toContain("Answer: Keep the old route?");
   expect(el.querySelectorAll('[data-testid="focus-wait"]')).toHaveLength(2);
-  expect(el.querySelector('[data-testid="focus-subtitle"]')!.textContent).toBe("2 sessions need input across 2 projects");
-  expect(el.textContent).toContain("Running · 1");
+  expect(el.querySelector('[data-testid="focus-subtitle"]')!.textContent).toBe("2 need you · 1 working");
+  expect(el.textContent).toContain("Working · 1");
   expect(el.querySelector('[data-testid="focus-running-row"]')!.textContent).toContain("Session c");
-  expect(el.querySelector('[data-testid="focus-running-row"]')!.textContent).toContain("Edit");
+  expect(el.querySelector('[data-testid="focus-now"]')!.textContent).toBe("Edit");
 });
 
 it("every button is a 44px target on narrow screens and coarse pointers (case 12)", async () => {
@@ -114,7 +117,7 @@ it("Allow answers that request and moves to the next; the answered row shrinks t
   expect(el.querySelector('[data-testid="focus-answered"]')!.textContent).toBe("Allowed npm run test -- auth");
   expect(rows().map((r) => r.textContent)).toHaveLength(1);
   expect(el.querySelector('[data-testid="question-panel"]')).not.toBeNull();
-  expect(el.querySelector('[data-testid="focus-subtitle"]')!.textContent).toBe("1 session needs input across 1 project");
+  expect(el.querySelector('[data-testid="focus-subtitle"]')!.textContent).toBe("1 needs you · 1 working");
 });
 
 it("a question shows its options as choices and has no Dismiss", async () => {
@@ -145,7 +148,7 @@ it("nothing waiting: the empty state and the running list", async () => {
   await render(s);
   expect(el.querySelector('[data-testid="focus-empty"]')!.textContent).toContain("Nothing needs you");
   expect(el.querySelector('[data-testid="focus-next"]')).toBeNull();
-  expect(el.textContent).toContain("Running · 1");
+  expect(el.textContent).toContain("Working · 1");
   await render({ list: [], views: {} });
   expect(el.textContent).toContain("No session is running.");
 });
@@ -168,4 +171,76 @@ it("the sidebar row counts the waiting sessions and shows nothing at 0", async (
   expect(el.textContent).toBe("Focus3 waiting");
   await act(async () => root.render(<FocusRow count={0} active onOpen={() => {}} />));
   expect(el.textContent).toBe("Focus");
+});
+
+const done = [{ type: "user_text", id: "u", text: "go", images: [] }, { type: "session_state", id: "st", state: "running" }] as Part[];
+const finish = (text: string, extra: Part[] = []) => view([...done, ...extra, { type: "assistant_text", id: "r", text, streaming: false }, { type: "session_state", id: "st", state: "idle" }]);
+const todo = (...items: [string, "pending" | "in_progress" | "completed"][]): Part => ({ type: "todo_update", id: "t:todos", items: items.map(([content, status]) => ({ content, status })) });
+
+it("subtitle: need you, to review, working", async () => {
+  const s = base();
+  s.list.push(item("f", { state: "idle", lastActivity: NOW - 1000 }));
+  s.views.f = finish("All done");
+  s.unread = ["f"];
+  await render(s);
+  expect(el.querySelector('[data-testid="focus-subtitle"]')!.textContent).toBe("2 need you · 1 to review · 1 working");
+});
+
+it("a working row shows the now line and k of n, and the quiet time above 2 min", async () => {
+  const s = base();
+  s.views.c = view([...done, todo(["a", "completed"], ["b", "in_progress"], ["c", "pending"]), call("c1", "Edit", "running")]);
+  s.activity = { c: Date.now() - 3 * 60_000 - 5000 };
+  await render(s);
+  const row = el.querySelector('[data-testid="focus-running-row"]')!;
+  expect(row.querySelector('[data-testid="focus-now"]')!.textContent).toBe("b");
+  expect(row.querySelector('[data-testid="focus-progress"]')!.textContent).toBe("2 of 3");
+  expect(row.textContent).toContain("quiet 3m");
+});
+
+it("finished section: last line and task summary, 5 rows then +N more, expands", async () => {
+  const ids = ["f1", "f2", "f3", "f4", "f5", "f6", "f7"];
+  const s: State = { list: ids.map((id, n) => item(id, { state: "idle", lastActivity: NOW - n * 1000 })), views: Object.fromEntries(ids.map((id) => [id, finish("Wrote it\nAll tests pass", [todo(["Ship", "completed"])])])), unread: ids };
+  await render(s);
+  const section = () => el.querySelector('[aria-labelledby="focus-finished"]')!;
+  expect(section().textContent).toContain("Finished while you were away · 7");
+  expect(section().querySelectorAll('[data-testid="focus-row"]')).toHaveLength(5);
+  expect(section().textContent).toContain("Review: All tests pass");
+  expect(section().textContent).toContain("1 of 1 · Done: Ship");
+  expect(section().querySelector('[data-testid="focus-more"]')!.textContent).toBe("+2 more");
+  await act(async () => section().querySelector<HTMLElement>('[data-testid="focus-more"]')!.click());
+  expect(section().querySelectorAll('[data-testid="focus-row"]')).toHaveLength(7);
+  expect(section().querySelector('[data-testid="focus-more"]')!.textContent).toBe("Show less");
+});
+
+it("usage-limit row: selecting shows Cancel continue, which calls onCancelContinue", async () => {
+  const s: State = { list: [item("l", { state: "idle" })], views: { l: view([{ type: "auto_continue", id: "auto_continue", at: Date.now() + 60_000 }]) } };
+  await render(s);
+  expect(rows()[0]!.dataset.kind).toBe("limit");
+  expect(rows()[0]!.textContent).toContain("after the usage limit resets");
+  await act(async () => rows()[0]!.click());
+  expect(el.querySelector('[data-testid="focus-kind-line"]')!.textContent).toContain("Usage limit");
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="focus-cancel-continue"]')!.click());
+  expect(cancelContinue).toHaveBeenCalledWith("l");
+});
+
+it("the detail shows the task list (done, in progress, next) above the recent context", async () => {
+  const s = base();
+  s.views.a = view([{ type: "user_text", id: "u", text: "go", images: [] }, todo(["Plan", "completed"], ["Build", "in_progress"], ["Test", "pending"]), bash("ra", "ls", NOW)]);
+  await render(s);
+  const tasks = el.querySelector('[data-testid="focus-tasks"]')!;
+  expect(tasks.textContent).toContain("Tasks · 2 of 3");
+  expect(tasks.textContent).toMatch(/Done.*Plan.*In progress.*Build.*Next.*Test/);
+  expect(tasks.compareDocumentPosition(el.querySelector('[data-testid="focus-context"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it("an error row says what failed and Open session opens it", async () => {
+  const raw: Part = { type: "raw", id: "raw", message: { error: "authentication_failed" } };
+  const s: State = { list: [item("e", { state: "error", lastActivity: NOW })], views: { e: view([...done, raw, { type: "session_state", id: "st", state: "error" }]) }, unread: ["e"] };
+  await render(s);
+  expect(rows()[0]!.dataset.kind).toBe("error");
+  expect(rows()[0]!.textContent).toContain("Check the error: authentication_failed");
+  await act(async () => rows()[0]!.click());
+  expect(el.querySelector('[data-testid="focus-title"]')!.textContent).toBe("Session e");
+  await act(async () => button("Open session").click());
+  expect(open).toHaveBeenCalledWith("e");
 });
