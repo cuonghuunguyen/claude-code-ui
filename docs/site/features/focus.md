@@ -10,7 +10,7 @@ One page that shows, per session, what needs you, what is working and what finis
 4. Press **Next waiting** (or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>↓</kbd> from anywhere) to jump to the next request.
 5. **Working** shows what each running session does now and, with a task list, its progress ("2 of 5"). Click a row to open the session.
 6. **Finished while you were away** lists sessions that ended a turn since you last looked, with the last line of the answer and the task summary.
-7. On a **Usage limit** row, **Cancel continue** stops the scheduled continue.
+7. Error, quiet, finished and usage-limit rows have a button beside them: **Open session**, or **Cancel continue** on a usage-limit row to stop the scheduled continue.
 
 ## Good to know
 
