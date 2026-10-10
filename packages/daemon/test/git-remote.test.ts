@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { gitLog, gitRefs } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
-import { gitFetch, localRemotePath, remoteConfig, tidy } from "../src/git-remote.ts";
+import { gitFetch, localRemotePath, redactUrls, remoteConfig, tidy } from "../src/git-remote.ts";
 
 if (process.platform === "win32") vi.setConfig({ testTimeout: 120_000 });
 const posix = process.platform !== "win32";
@@ -176,5 +176,28 @@ describe("tidy", () => {
     expect(tidy("a\rb\rc\nx", 100)).toBe("c\nx");
     expect(tidy("https://u:p@h/x", 100)).toBe("https://h/x");
     expect(tidy("0123456789", 4)).toBe("6789");
+  });
+});
+
+describe("redactUrls", () => {
+  it("removes userinfo with and without a scheme, keeps scp-like users readable", () => {
+    expect(redactUrls("fatal: unable to look up bob:pw9x@127.0.0.1:9 (port 9)")).toBe("fatal: unable to look up 127.0.0.1:9 (port 9)");
+    expect(redactUrls("fatal: unable to look up git://bob:pw9x@127.0.0.1:9/x.git")).not.toMatch(/bob|pw9x/);
+    expect(redactUrls("http://user:pass@h/x")).toBe("http://h/x");
+    expect(redactUrls("ssh://user@h")).toBe("ssh://h");
+    expect(redactUrls("https://TOKEN@h/x")).toBe("https://h/x");
+    expect(redactUrls("From git@github.com:o/r.git")).toBe("From git@github.com:o/r.git");
+    expect(redactUrls("git@github.com: Permission denied (publickey).")).toBe("git@github.com: Permission denied (publickey).");
+    expect(redactUrls("bob:pw@host.example:o/r.git")).toBe("bob@host.example:o/r.git");
+    expect(redactUrls("unable to look up TOKEN@h:9")).toBe("unable to look up h:9");
+    expect(redactUrls("unable to look up TOKEN@h")).toBe("unable to look up h");
+  });
+  it("the thrown message of a failing fetch has no userinfo", async () => {
+    const { a, inside } = remoteRepo();
+    run(a, "remote", "remove", "origin");
+    run(a, "remote", "add", "bad", "git://bob:pw9x@127.0.0.1:9/x.git");
+    const e = await gitFetch(a, { allowed: inside }).then(() => undefined, (x: Error) => x);
+    expect(e).toBeDefined();
+    expect(e!.message).not.toMatch(/bob|pw9x/);
   });
 });

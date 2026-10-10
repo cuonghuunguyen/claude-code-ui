@@ -16,9 +16,21 @@ const MAX_ERROR = 4000;
 const AUTH_FAILURE = /terminal prompts disabled|could not read (Username|Password)|Permission denied \(publickey|Host key verification failed|Authentication failed|BatchMode/i;
 const AUTH_HINT = "The daemon cannot ask for credentials: set up a credential helper, ssh-agent or known_hosts in a terminal, then retry.";
 
-/** Output for the client: each line keeps the text after its last `\r` (progress), `scheme://user@` removed, last `max` chars. */
+const HOST = String.raw`[^\s@/:'"<>]+`;
+// git prints userinfo without its scheme too (`unable to look up bob:pw@host:9`): `user:pass@` goes, keeping `user@` for an scp-like `user:pass@host:path`.
+const PASSWORD_AT = new RegExp(String.raw`([^\s@/:'"<>]+):[^\s@/'"<>]*@(?=(${HOST})(:[^\d\s])?)`, "g");
+// `token@host` (host alone or with a port, no path after a colon): a token or user name. `git@github.com:o/r.git` is scp-like and stays.
+const USER_AT = new RegExp(String.raw`(^|[\s'"(])[^\s@/:'"<>()]+@(?=${HOST}(?::\d+)?(?:$|[\s/'")]|[.,;](?:\s|$)))`, "g");
+/** `redact()` (`scheme://userinfo@`) plus userinfo without a scheme. */
+export function redactUrls(text: string): string {
+  return redact(text)
+    .replace(PASSWORD_AT, (_m, user: string, _h: string, scpPath: string | undefined) => (scpPath ? `${user}@` : ""))
+    .replace(USER_AT, "$1");
+}
+
+/** Output for the client: each line keeps the text after its last `\r` (progress), userinfo of URLs removed, last `max` chars. */
 export function tidy(text: string, max: number): string {
-  const t = redact(text.split("\n").map((l) => l.slice(l.lastIndexOf("\r") + 1)).join("\n")).trim();
+  const t = redactUrls(text.split("\n").map((l) => l.slice(l.lastIndexOf("\r") + 1)).join("\n")).trim();
   return t.length > max ? t.slice(t.length - max) : t;
 }
 
