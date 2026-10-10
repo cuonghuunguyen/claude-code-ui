@@ -1420,6 +1420,13 @@ describe("key promoter (GH-234)", () => {
     expect(tipToast()?.textContent ?? "").not.toContain("New session:");
   });
 
+  it("the prefix key and a command key end the tips of that command (Alt+A, s: Toggle sidebar)", async () => {
+    const { loadKeyTips } = await import("./key-tips.ts");
+    await press({ key: "a", code: "KeyA", altKey: true });
+    await press({ key: "s", code: "KeyS" });
+    expect(loadKeyTips().learned).toContain("sidebar.toggle");
+  });
+
   it("Assign a shortcut… opens Keyboard shortcuts recording that command", async () => {
     const target = el.querySelector('[data-testid="focus-tab"] button') ? '[data-testid="focus-tab"] button' : '[data-testid="focus-row-sidebar"]';
     await mouseClick(target);

@@ -18,6 +18,19 @@ export function clickedCommand(e: MouseEvent, lastPointer: string | undefined): 
   return shortcutById(id) ? id : undefined;
 }
 
+/** A modal dialog (any `aria-modal`: MCP servers, plugins, worktree name, viewers, ...) is open: the tip would sit over it, out of reach of its focus trap. */
+function useModalOpen() {
+  const [open, setOpen] = useState(() => !!document.querySelector('[aria-modal="true"]'));
+  useEffect(() => {
+    const check = () => setOpen(!!document.querySelector('[aria-modal="true"]'));
+    check();
+    const mo = new MutationObserver(check);
+    mo.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-modal"] });
+    return () => mo.disconnect();
+  }, []);
+  return open;
+}
+
 export function KeyTips({ hidden, onAssign, onTurnedOff }: { hidden: boolean; onAssign: (id: string) => void; onTurnedOff: () => void }) {
   const on = useKeyTipsOn();
   const specOf = useKeymap();
@@ -35,14 +48,26 @@ export function KeyTips({ hidden, onAssign, onTurnedOff }: { hidden: boolean; on
     document.addEventListener("click", click, true);
     return () => (document.removeEventListener("pointerdown", down, true), document.removeEventListener("click", click, true));
   }, [on]);
-  if (!tip || hidden) return null;
-  const s = shortcutById(tip.id)!;
-  const spec = specOf(tip.id);
+  const modal = useModalOpen();
+  const shown = !!tip && !hidden && !modal;
+  const s = tip && shortcutById(tip.id);
+  const spec = tip && specOf(tip.id);
+  const text = !tip || !s ? "" : spec ? `${s.title}: ${keyText(spec)}` : `${s.title} has no shortcut.`;
+  // The polite live region is always mounted and gets its text after mount: screen readers announce a change, not a region created with its text.
+  const [said, setSaid] = useState("");
+  useEffect(() => setSaid(shown ? text : ""), [shown, text, tip?.n]);
+  const live = <div role="status" aria-live="polite" className="sr-only" data-testid="key-tip-status">{said}</div>;
+  if (!tip || !s || !shown) return live;
   const close = () => setTip(undefined);
-  return spec ? (
-    <Toast key={tip.n} message={`${s.title}: ${keyText(spec)}`} action={{ label: "Turn off tips", onClick: () => (setKeyTipsOn(false), onTurnedOff()) }} onClose={close} bigTargets />
-  ) : (
-    <Toast key={tip.n} message={`${s.title} has no shortcut.`} action={{ label: "Assign a shortcut…", onClick: () => onAssign(tip.id) }} onClose={close} bigTargets />
+  return (
+    <>
+      {live}
+      {spec ? (
+        <Toast key={tip.n} message={text} action={{ label: "Turn off tips", onClick: () => (setKeyTipsOn(false), onTurnedOff()) }} onClose={close} bigTargets silent />
+      ) : (
+        <Toast key={tip.n} message={text} action={{ label: "Assign a shortcut…", onClick: () => onAssign(tip.id) }} onClose={close} bigTargets silent />
+      )}
+    </>
   );
 }
 

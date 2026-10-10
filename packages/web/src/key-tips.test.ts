@@ -80,3 +80,22 @@ describe("key tips storage", () => {
     expect(loadKeyTips(stub)).toEqual(s);
   });
 });
+
+it("a failed write keeps the state in memory while reads still work (full storage)", () => {
+  const store = new Map<string, string>([["claude-ui.key-tips", JSON.stringify({ v: 1, counts: { a: 1 }, learned: [] })]]);
+  const full = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: () => {
+      throw new Error("quota");
+    },
+  } as unknown as Storage;
+  expect(loadKeyTips(full).counts).toEqual({ a: 1 });
+  const next = withOff(clicks(loadKeyTips(full), "a", 1).s, true);
+  saveKeyTips(next, full);
+  expect(loadKeyTips(full)).toEqual(next);
+  expect(loadKeyTips(full).off).toBe(true);
+  // A later successful write hands the state back to storage.
+  const ok = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) } as unknown as Storage;
+  saveKeyTips(EMPTY, ok);
+  expect(loadKeyTips(ok)).toEqual(EMPTY);
+});

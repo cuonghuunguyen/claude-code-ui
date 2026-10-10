@@ -15,7 +15,7 @@ export function ToastRegion({ children }: { children?: ReactNode }) {
   );
 }
 
-export function Toast({ message, action, onClose, bigTargets }: { message: string; /** A text button after the message (Undo); it runs, then the toast goes. */ action?: { label: string; onClick: () => void }; onClose: () => void; /** 44 px buttons below `md` also for a mouse (a toast a narrow desktop window can show, like the key tip), not only for a coarse pointer. */ bigTargets?: boolean }) {
+export function Toast({ message, action, onClose, bigTargets, silent }: { message: string; /** A text button after the message (Undo); it runs, then the toast goes. */ action?: { label: string; onClick: () => void }; onClose: () => void; /** 44 px buttons below `md` also for a mouse (a toast a narrow desktop window can show, like the key tip), not only for a coarse pointer. */ bigTargets?: boolean; /** No `role="status"`: the owner announces the message through its own live region that exists before the text (screen readers skip a live region created with its text). */ silent?: boolean }) {
   const [open, setOpen] = useState(false);
   const exit = useRef<ReturnType<typeof setTimeout>>(undefined);
   // A toast that is replaced while it leaves must not close its successor.
@@ -41,7 +41,7 @@ export function Toast({ message, action, onClose, bigTargets }: { message: strin
   }, [message, held]);
   return (
     <div
-      role="status"
+      role={silent ? undefined : "status"}
       data-testid="toast"
       data-state={open ? "open" : "closed"}
       onPointerEnter={() => setHover(true)}

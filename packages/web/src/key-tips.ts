@@ -41,12 +41,18 @@ export function withOff(s: KeyTipsState, off: boolean): KeyTipsState {
   return rest;
 }
 
-let memory: KeyTipsState = fresh(); // storage blocked: lasts for this page
+let memory: KeyTipsState = fresh(); // a failed write (blocked or full storage): the state lives here, for this page
+let memoryWins = false;
 const listeners = new Set<() => void>();
+// Parsing is by the stored text: the same text gives the same state without parsing again (App reads on each render).
+let parsed: { raw: string | null; state: KeyTipsState } | undefined;
 
 export function loadKeyTips(storage: Storage = localStorage): KeyTipsState {
+  if (memoryWins) return memory;
   try {
-    return parseKeyTips(storage.getItem(KEY_TIPS_KEY));
+    const raw = storage.getItem(KEY_TIPS_KEY);
+    if (parsed?.raw !== raw) parsed = { raw, state: parseKeyTips(raw) };
+    return parsed.state;
   } catch {
     return memory;
   }
@@ -56,8 +62,9 @@ export function saveKeyTips(s: KeyTipsState, storage: Storage = localStorage) {
   memory = s;
   try {
     storage.setItem(KEY_TIPS_KEY, JSON.stringify(s));
+    memoryWins = false;
   } catch {
-    // See `memory`.
+    memoryWins = true;
   }
   listeners.forEach((l) => l());
 }

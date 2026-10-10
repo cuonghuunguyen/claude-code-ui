@@ -60,12 +60,31 @@ it("the 2nd mouse click on Toggle sidebar shows 'Toggle sidebar: Ctrl+B'; the 1s
   expect(toast()?.textContent).toContain("Toggle sidebar: Ctrl+B");
 });
 
-it("the tip is a polite status and does not take focus", async () => {
+it("the tip is announced by a polite live region that exists before its text, and does not take focus", async () => {
+  const region = document.querySelector<HTMLElement>('[data-testid="key-tip-status"]')!;
+  expect(region).not.toBeNull();
+  expect(region.getAttribute("role")).toBe("status");
+  expect(region.getAttribute("aria-live")).toBe("polite");
+  expect(region.textContent).toBe("");
   const x = document.getElementById("x") as HTMLButtonElement;
   x.focus();
   await times(2, "#sb");
-  expect(toast()!.getAttribute("role")).toBe("status");
+  // The same element, now filled; the visible toast is not a second announcement.
+  expect(document.querySelector('[data-testid="key-tip-status"]')).toBe(region);
+  expect(region.textContent).toBe("Toggle sidebar: Ctrl+B");
+  expect(toast()!.getAttribute("role")).toBeNull();
   expect(document.activeElement).toBe(x);
+});
+
+it("an open modal dialog hides the tip until it closes", async () => {
+  const dlg = document.createElement("div");
+  dlg.setAttribute("aria-modal", "true");
+  await act(async () => void document.body.append(dlg));
+  await times(2, "#sb");
+  expect(toast()).toBeNull();
+  expect(document.querySelector('[data-testid="key-tip-status"]')!.textContent).toBe("");
+  await act(async () => void dlg.remove());
+  expect(toast()?.textContent).toContain("Toggle sidebar: Ctrl+B");
 });
 
 it("touch and pen clicks never count or tip", async () => {
