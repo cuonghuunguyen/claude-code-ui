@@ -1,6 +1,7 @@
 // Tool cards, context groups and thinking blocks (docs/spec.md "Message model", "Session view UX").
 import { isPromptImage, type Part, type ToolStatus } from "@claude-ui/protocol";
 import { useMediaSrc } from "./media.ts";
+import { MediaPlaceholder } from "./media-notice.tsx";
 import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { useDark } from "./theme.ts";
@@ -151,8 +152,11 @@ function FileSummary({ path, range }: { path: string; range: string }) {
 /** Card body by tool type; tools without a purpose-built body get the generic JSON view. */
 /** The image of a Read result: inline, or loaded with session.media when the snapshot left it out; PDFs and other types show only the caption. */
 function ReadImage({ partId, index, m, alt }: { partId: string; index: number; m: { media: string; src?: string; omitted: boolean }; alt: string }) {
-  const src = useMediaSrc(partId, index, m.omitted && isPromptImage(m.media), m.src);
-  return src ? <img src={src} alt={alt} className="max-h-80 max-w-full rounded-md border object-contain" /> : null;
+  const loads = m.omitted && isPromptImage(m.media);
+  const { src, failed, retry } = useMediaSrc(partId, index, loads, m.src);
+  if (src) return <img src={src} alt={alt} className="max-h-80 max-w-full rounded-md border object-contain" />;
+  // The size of the image is not known (only its bytes): a fixed box about as tall as a typical screenshot.
+  return loads ? <MediaPlaceholder failed={failed} retry={retry} label={alt} className="h-52 w-full max-w-sm" /> : null;
 }
 
 export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult }) {

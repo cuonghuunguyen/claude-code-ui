@@ -21,20 +21,28 @@ function load(loader: MediaLoader, partId: string, index: number): Promise<strin
   return p;
 }
 
-/** `inline` as is when the payload is inline; for an omitted one the loaded data URL (undefined while loading, on error or without a loader). */
-export function useMediaSrc(partId: string, index: number, omitted: boolean, inline?: string): string | undefined {
+export type MediaState = { src?: string; failed: boolean; retry: () => void };
+
+/**
+ * `src`: `inline` as is when the payload is inline; for an omitted one the loaded data URL (undefined while loading, on error or without a loader).
+ * `failed`: the load was rejected; `retry` requests it again.
+ */
+export function useMediaSrc(partId: string, index: number, omitted: boolean, inline?: string): MediaState {
   const loader = useContext(MediaContext);
   const [loaded, setLoaded] = useState<string>();
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!omitted || !loader) return;
     let live = true;
+    setFailed(false);
     load(loader, partId, index).then(
       (url) => live && setLoaded(url),
-      () => {},
+      () => live && setFailed(true),
     );
     return () => {
       live = false;
     };
-  }, [partId, index, omitted, loader]);
-  return omitted ? loaded : inline;
+  }, [partId, index, omitted, loader, attempt]);
+  return { src: omitted ? loaded : inline, failed: omitted && failed, retry: () => setAttempt((n) => n + 1) };
 }

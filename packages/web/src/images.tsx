@@ -5,6 +5,7 @@ import { XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { trapTab } from "./focus-trap.ts";
 import { useMediaSrc } from "./media.ts";
+import { MediaPlaceholder } from "./media-notice.tsx";
 
 /** Data URLs of the files the API accepts as images (png, jpeg, gif, webp); other files are skipped. */
 export async function readImages(files: Iterable<File>): Promise<string[]> {
@@ -25,8 +26,8 @@ function ImageThumb({ src: given, index, compact, partId }: { src: string; index
   const n = index + 1;
   // A large image a snapshot or page left out loads when shown (GH-274).
   const omitted = !!parseOmitted(given);
-  const src = useMediaSrc(partId ?? "", index, omitted && !!partId, omitted ? undefined : given);
-  if (!src) return <div aria-busy="true" aria-label={`Image ${n}`} className="h-24 w-32 rounded-md border bg-muted" />;
+  const { src, failed, retry } = useMediaSrc(partId ?? "", index, omitted && !!partId, omitted ? undefined : given);
+  if (!src) return <MediaPlaceholder failed={failed} retry={retry} label={`Image ${n}`} className="h-24 w-40" />;
   return (
     <Dialog.Root>
       <Dialog.Trigger aria-label={`View image ${n}`} className="block cursor-zoom-in rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring">
