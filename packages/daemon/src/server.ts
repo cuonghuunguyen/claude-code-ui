@@ -15,7 +15,7 @@ import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
-import { createPlanTracker } from "./plan-usage.ts";
+import { createPlanTracker, usesOauthToken } from "./plan-usage.ts";
 import { CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
@@ -363,6 +363,8 @@ export function createDaemon(opts: {
   listCache?: boolean;
   /** Interval of the WebSocket ping that drops a half-open socket (default 15 s; tests use a few hundred ms). */
   pingMs?: number;
+  /** The Claude login is CLAUDE_CODE_OAUTH_TOKEN (plan-usage.ts fallback); default: whether the env var is set. Never its value. */
+  oauthToken?: boolean;
   hostnames?: string[];
   /** Name shown for this computer in Settings (default: the OS host name); `desktopForcedOff`: started with --no-os-notify. */
   host?: string;
@@ -401,7 +403,7 @@ export function createDaemon(opts: {
     }
   };
   // Account-wide, so not a session event: every connection gets each change.
-  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query) });
+  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query), oauthToken: opts.oauthToken ?? usesOauthToken() });
   /** Options of every session: settings changes are saved under its ID. */
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,

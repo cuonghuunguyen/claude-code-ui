@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PlanUsage } from "@claude-ui/protocol";
-import { PlanMeter, planLevel, resetText } from "./plan-meter.tsx";
+import { OAUTH_UNAVAILABLE, PlanMeter, planLevel, resetText } from "./plan-meter.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -121,4 +121,38 @@ it("Usage ring shows a missing window: falls back to the highest", async () => {
   set("session");
   const el = await render({ ...usage, windows: usage.windows.slice(1) });
   expect(meter(el).textContent).toBe("44%");
+});
+
+it("env token without windows: muted ring and '–', titled 'Plan usage is not available with CLAUDE_CODE_OAUTH_TOKEN'; the popover says to run claude login", async () => {
+  const el = await render({ plan: null, status: "allowed", windows: [], auth: "oauth_token" });
+  expect(meter(el).textContent).toBe("–");
+  expect(meter(el).title).toBe(OAUTH_UNAVAILABLE);
+  expect(meter(el).getAttribute("aria-label")).toBe(`${OAUTH_UNAVAILABLE}, show details`);
+  expect(meter(el).dataset.unavailable).toBe("true");
+  expect(meter(el).dataset.level).toBe("ok");
+  expect(meter(el).querySelector('[data-testid="plan-warning-icon"]')).toBeNull();
+  await act(async () => meter(el).click());
+  expect(document.querySelector('[data-testid="plan-auth-note"]')!.textContent).toContain("claude login");
+  expect(document.querySelectorAll('[data-testid="plan-window"]')).toHaveLength(0);
+  expect(document.querySelector('[data-testid="plan-usage"]')!.textContent).not.toMatch(/[A-Z][a-z]+ plan(?! usage)/);
+});
+
+it("env token with event windows: ring shows the percent, the popover notes the limited windows", async () => {
+  const el = await render({ ...usage, plan: null, windows: usage.windows.slice(0, 2), auth: "oauth_token" });
+  expect(meter(el).textContent).toBe("55%");
+  expect(meter(el).dataset.unavailable).toBeUndefined();
+  await act(async () => meter(el).click());
+  expect(document.querySelector('[data-testid="plan-auth-note"]')!.textContent).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+  expect(document.querySelectorAll('[data-testid="plan-window"]')).toHaveLength(2);
+});
+
+it("env token, no windows, limit reached: the name says the limit, not unavailable", async () => {
+  const el = await render({ plan: null, status: "rejected", windows: [], auth: "oauth_token", statusLimit: "Current session" });
+  expect(meter(el).title).toMatch(/^Plan usage: limit reached: Current session/);
+  expect(meter(el).title).not.toBe(OAUTH_UNAVAILABLE);
+});
+
+it("env token, no windows: the grey ring keeps the 44px touch width below md", async () => {
+  const el = await render({ plan: null, status: "allowed", windows: [], auth: "oauth_token" });
+  expect(meter(el).className).toContain("max-md:min-w-11");
 });
