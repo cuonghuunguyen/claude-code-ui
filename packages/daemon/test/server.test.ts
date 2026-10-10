@@ -10,7 +10,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
-import { listWorktrees } from "../src/git.ts";
+import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { SideSocket } from "../src/sides.ts";
@@ -21,7 +21,7 @@ import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery
 // Counts `git worktree list` reads (the session list's cache); behaviour unchanged.
 vi.mock("../src/git.ts", async (importOriginal) => {
   const git = await importOriginal<typeof import("../src/git.ts")>();
-  return { ...git, listWorktrees: vi.fn(git.listWorktrees) };
+  return { ...git, listWorktrees: vi.fn(git.listWorktrees), gitBlobRead: vi.fn(git.gitBlobRead) };
 });
 
 const added = (...cwds: string[]) => {
@@ -3632,6 +3632,26 @@ describe("fs.media and /media", () => {
       expect(await at(c, { cwd: tmpdir() })).toMatchObject({ code: "cwd_not_allowed" });
       expect(await at(c, { hash: "abc" })).toMatchObject({ type: "error" });
       expect(await at(c, { path: "../x.png" })).toMatchObject({ type: "error" });
+      c.ws.close();
+    });
+
+    it("the size comes from git without reading the blob; two images at once read each blob once", async () => {
+      writeFileSync(join(repo, "img", "q.png"), bytesB);
+      git("add", "-A");
+      git("commit", "-q", "-m", "two");
+      const hash2 = git("rev-parse", "HEAD");
+      const c = await client();
+      const reads = vi.mocked(gitBlobRead);
+      reads.mockClear();
+      const a = (await at(c, {})).result;
+      const b = (await at(c, { hash: hash2, path: "img/q.png" })).result;
+      expect(a.size).toBe(300);
+      expect(b.size).toBe(300);
+      expect(reads).not.toHaveBeenCalled();
+      // Pieces of both images interleaved (a viewer asks for both): each blob is read from git once.
+      for (const u of [a.url, b.url, a.url, b.url]) expect((await get(u)).status).toBe(200);
+      expect((await get(a.url, { range: "bytes=10-19" })).body.equals(bytesA.subarray(10, 20))).toBe(true);
+      expect(reads).toHaveBeenCalledTimes(2);
       c.ws.close();
     });
 

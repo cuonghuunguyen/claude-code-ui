@@ -413,6 +413,116 @@ describe("sides", () => {
   });
 });
 
+describe.skipIf(process.platform === "win32")("side media failures", () => {
+  /** An own hub and side (the shared ones keep running): `tamper` edits the side's stdout text; `muteAfterPieces` stops the side reading after that many data pieces; `die` ends it as a crash would. */
+  async function isolated(tamper: (line: string) => string = (l) => l, timeoutMs?: number, muteAfterPieces?: number) {
+    let die = () => {};
+    const own = createSides({
+      targets: [wslSide("Ubuntu")],
+      posixLocal: true,
+      spawn: () => {
+        const p = inProcessSide();
+        const out = new PassThrough();
+        let rest = "";
+        let pieces = 0;
+        p.stdout.on("data", (d) => {
+          const lines = (rest + String(d)).split("\n");
+          rest = lines.pop()!;
+          for (const l of lines) {
+            out.write(tamper(l) + "\n");
+            // The side stops reading after this many data pieces: the next one is never answered.
+            if (/"data":"[A-Za-z0-9+/=]+"/.test(l) && ++pieces === muteAfterPieces) p.stdin.pause();
+          }
+        });
+        const exits: ((code: number | null) => void)[] = [];
+        die = () => (p.stdin.pause(), exits.forEach((l) => l(1)));
+        return { ...p, stdout: out, on: (e, l) => (exits.push(l), p.on(e, l)) };
+      },
+    });
+    const h = createDaemon({ webRoot, token, roots: [winRoot], query: fakeQuery as never, projects: createProjects(), history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never }, sides: own, sideCallTimeoutMs: timeoutMs });
+    await new Promise<void>((r) => h.listen(0, "127.0.0.1", r));
+    const p = (h.address() as AddressInfo).port;
+    const c = await client(p);
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    const getRaw = (url: string, headers: Record<string, string> = {}, onData?: () => void) =>
+      new Promise<{ status: number; body: Buffer; complete: boolean }>((resolve) => {
+        const chunks: Buffer[] = [];
+        let status = 0;
+        let complete = false;
+        const done = () => resolve({ status, body: Buffer.concat(chunks), complete });
+        const req = httpRequest({ host: "127.0.0.1", port: p, path: url, headers }, (res) => {
+          status = res.statusCode!;
+          res.on("data", (d) => (chunks.push(d), onData?.()));
+          // `complete` is true only when the whole body (content-length) arrived.
+          res.on("close", () => ((complete = res.complete), done()));
+          res.on("error", () => {});
+        });
+        req.on("error", done);
+        req.end();
+      });
+    const media = async (name: string, size: number) => {
+      const f = join(wslRoot, name);
+      const bytes = Buffer.from(Array.from({ length: size }, (_, i) => i % 249));
+      writeFileSync(f, bytes);
+      return { bytes, reply: await c.request({ type: "fs.media", path: f }) };
+    };
+    return { media, getRaw, die: () => die(), close: () => (c.ws.close(), h.close(), own.close()) };
+  }
+
+  it("a side that exits while a GET is streaming ends the response", async () => {
+    // The side reads one piece, then stops answering; the next piece request is pending when it exits.
+    const t = await isolated(undefined, undefined, 1);
+    const { bytes, reply } = await t.media("k.png", 4 << 20);
+    setTimeout(() => t.die(), 200);
+    const r = await t.getRaw(reply.result.url);
+    expect(r.complete).toBe(false);
+    expect(r.body.length).toBeLessThan(bytes.length);
+    t.close();
+  }, 10_000);
+
+  it("a side that stays up but never answers ends the response after the timeout", async () => {
+    const t = await isolated(undefined, 200, 1);
+    const { reply } = await t.media("h.png", 3 << 20);
+    const r = await t.getRaw(reply.result.url);
+    expect(r.complete).toBe(false);
+    t.close();
+  }, 10_000);
+
+  it("a piece shorter or longer than asked cuts the response", async () => {
+    for (const edit of [(d: string) => d.slice(0, -4), (d: string) => "AAAA" + d]) {
+      let tamper = false;
+      const t = await isolated((l) => (tamper ? l.replace(/"data":"([A-Za-z0-9+/=]+)"/, (_m, d) => `"data":"${edit(d)}"`) : l));
+      const { bytes, reply } = await t.media("p.png", 3 << 20);
+      tamper = true;
+      const r = await t.getRaw(reply.result.url);
+      expect(r.complete).toBe(false);
+      expect(r.body.length).toBeLessThan(bytes.length + 1);
+      t.close();
+    }
+  }, 10_000);
+
+  it("the hub takes the type from the extension, not from the side's reply", async () => {
+    const t = await isolated((l) => l.replace(/"mime":"image\/png"/g, '"mime":"text/html"'));
+    const { reply } = await t.media("m.png", 10);
+    expect(reply.result.mime).toBe("image/png");
+    expect((await t.getRaw(reply.result.url)).status).toBe(200);
+    t.close();
+  });
+
+  it("a side file with an unusable Range gets the whole file, an unsatisfiable one 416", async () => {
+    const t = await isolated();
+    const { bytes, reply } = await t.media("r.png", 1000);
+    for (const range of ["bytes=abc", "bytes=5-2", "bytes=0-1,5-6", "items=0-1"]) {
+      const r = await t.getRaw(reply.result.url, { range });
+      expect(r.status, range).toBe(200);
+      expect(r.body.equals(bytes), range).toBe(true);
+    }
+    for (const range of ["bytes=1000-", "bytes=99999999-", "bytes=-0"]) expect((await t.getRaw(reply.result.url, { range })).status, range).toBe(416);
+    t.close();
+  });
+});
+
 describe("docker state freshness", () => {
   it("a change of the Docker state alone (down, empty, ok) sends a change, so an open dialog updates its hint", async () => {
     let engine: "ok" | "down" | "empty" | undefined;

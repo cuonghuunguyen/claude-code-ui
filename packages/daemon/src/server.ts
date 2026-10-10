@@ -9,8 +9,8 @@ import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
-import { MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
-import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
+import { createWorktree, gitDiff, gitBlobRead, gitBlobRef, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -373,6 +373,8 @@ export function createDaemon(opts: {
   modelListWaitMs?: number;
   /** Idle close of unheld sessions (docs/spec.md "Idle close"); 0: off. Default IDLE_CLOSE_MS. */
   idleCloseMs?: number;
+  /** Longest wait for one media piece from a side before its GET is cut (default 30 s; tests shorten it). */
+  sideCallTimeoutMs?: number;
   /** WSL distros and Docker containers this daemon routes to (sides.ts). */
   sides?: Sides;
   /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
@@ -1200,8 +1202,23 @@ export function createDaemon(opts: {
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     // fs.media: key (canonical path, "blob\0cwd\0hash\0path", "<side>\0cwd\0hash\0path") -> nonce issued to this connection.
     const mediaNonces = new Map<string, string>();
-    /** The last file at a commit media.read / fs.media read (a commit's file never changes): one per connection. */
-    let lastBlob: { key: string; buf: Buffer } | undefined;
+    /** Files at a commit that media.read read (a commit's file never changes): least recently used first, at most MEDIA_BLOB_CACHE_MAX bytes per connection. */
+    const blobs = new Map<string, Buffer>();
+    const blobCached = (key: string) => {
+      const b = blobs.get(key);
+      if (b) (blobs.delete(key), blobs.set(key, b));
+      return b;
+    };
+    const blobKeep = (key: string, buf: Buffer) => {
+      blobs.set(key, buf);
+      let total = 0;
+      blobs.forEach((b) => (total += b.length));
+      for (const [k, b] of blobs) {
+        if (total <= MEDIA_BLOB_CACHE_MAX || k === key) break;
+        blobs.delete(k);
+        total -= b.length;
+      }
+    };
     const nonceFor = (key: string) => mediaNonces.get(key) ?? (mediaNonces.set(key, randomBytes(16).toString("hex")), mediaNonces.get(key)!);
     const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();
     // Attached terminals: ID → detach.
@@ -1217,7 +1234,7 @@ export function createDaemon(opts: {
       router?.close();
       connections.delete(ws);
       mediaNonces.forEach((n) => media.delete(n));
-      lastBlob = undefined;
+      blobs.clear();
       unsubscribes.forEach((u) => u());
       unwatchAll();
       attached.forEach((d) => d());
@@ -1250,8 +1267,13 @@ export function createDaemon(opts: {
         if (!mime) return { code: "unsupported_type", message: `not an image, video or audio file: ${m.path}` };
         const key = `${cwd}\0${String(m.hash)}\0${m.path}`;
         try {
-          const buf = lastBlob?.key === key ? lastBlob.buf : await gitFileAt(cwd, m.hash as string, m.path, (p) => inRoots(real(p) ?? p), MEDIA_BLOB_MAX);
-          lastBlob = { key, buf };
+          let buf = blobCached(key);
+          // Size only (the first read of every GET): git cat-file -s, no blob read.
+          if (!buf && m.length === 0) return { data: "", size: (await gitBlobRef(cwd, m.hash as string, m.path, (p) => inRoots(real(p) ?? p), MEDIA_BLOB_MAX)).size, mtime: 0, mime };
+          if (!buf) {
+            buf = await gitBlobRead(await gitBlobRef(cwd, m.hash as string, m.path, (p) => inRoots(real(p) ?? p), MEDIA_BLOB_MAX));
+            blobKeep(key, buf);
+          }
           return { data: buf.subarray(m.offset, m.offset + m.length).toString("base64"), size: buf.length, mtime: 0, mime };
         } catch (e) {
           return { code: e instanceof WorktreeError ? e.code : "git_failed", message: (e as Error).message, size: e instanceof WorktreeError ? e.size : undefined };
@@ -1281,21 +1303,23 @@ export function createDaemon(opts: {
     };
     const isPiece = (o: unknown, l: unknown) => Number.isSafeInteger(o) && (o as number) >= 0 && Number.isSafeInteger(l) && (l as number) >= 0 && (l as number) <= MEDIA_CHUNK;
     /** fs.media of a side's file or commit: the side checks it (media.read, length 0); the hub issues its own URL and reads the bytes from the side per GET. */
-    // ponytail: sideCall has no timeout; a hung side leaves a GET waiting until the browser drops it.
     const sideMedia = async (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>): Promise<ServerMessage> => {
       const args = { path: msg.path, ...(msg.hash !== undefined && { cwd: msg.cwd, hash: msg.hash }) };
       const ask = (offset: number, length: number) => call({ type: "media.read", reqId: "", ...args, offset, length } as ClientMessage);
       const head = await ask(0, 0);
       if (head.type !== "reply") return { ...head, reqId: msg.reqId } as ServerMessage;
       const r = head.result as MediaReadResult;
+      // The type comes from the extension here, never from the side's reply.
+      const mime = mediaType(msg.path);
+      if (!mime) return { type: "error", reqId: msg.reqId, code: "unsupported_type", message: `not an image, video or audio file: ${msg.path}` };
       const name = msg.path.split(/[\\/]/).pop() ?? "";
       const nonce = nonceFor(`${id}\0${msg.cwd ?? ""}\0${msg.hash ?? ""}\0${msg.path}`);
       const read: MediaRead = async (offset, length) => {
         const a = await ask(offset, length);
         return a.type === "reply" ? (a.result as MediaReadResult) : undefined;
       };
-      media.set(nonce, { src: { kind: "bytes", read, mime: r.mime, name }, ws, used: Date.now() });
-      return { type: "reply", reqId: msg.reqId, result: { url: `/media/${nonce}/${encodeURIComponent(name)}?v=${msg.hash ?? r.mtime}`, mime: r.mime, size: r.size, mtime: r.mtime } };
+      media.set(nonce, { src: { kind: "bytes", read, mime, name }, ws, used: Date.now() });
+      return { type: "reply", reqId: msg.reqId, result: { url: `/media/${nonce}/${encodeURIComponent(name)}?v=${msg.hash ?? r.mtime}`, mime, size: r.size, mtime: r.mtime } };
     };
     const local = async (msg: ClientMessage, out: (m: ServerMessage) => void) => {
       const reply = (result: unknown) => out({ type: "reply", reqId: msg.reqId, result });
@@ -1870,6 +1894,7 @@ export function createDaemon(opts: {
           ),
         isLocalSession,
         media: sideMedia,
+        mediaTimeoutMs: opts.sideCallTimeoutMs,
       });
     // A handler that throws fails its request: a rejected promise nobody awaits would end the process (Node's default).
     ws.on("message", (data) =>

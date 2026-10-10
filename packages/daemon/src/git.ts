@@ -489,7 +489,9 @@ export async function gitShow(cwd: string, hash: string, allowed: (p: string) =>
 }
 
 /** The bytes of `path` (relative to the repository top) at commit `hash`; WorktreeError not_found / too_large (with `size`). */
-export async function gitFileAt(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<Buffer> {
+/** A blob at a commit, checked (hash, path, repository inside `allowed`, exists, is a blob, at most `max`) but not read: its size comes from `git cat-file -s`. */
+export type BlobRef = { top: string; obj: string; size: number; max: number };
+export async function gitBlobRef(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<BlobRef> {
   if (!isHash(hash)) throw bad("Invalid commit hash");
   const p = repoPath(path);
   const top = await topIn(cwd, allowed);
@@ -499,11 +501,18 @@ export async function gitFileAt(cwd: string, hash: string, path: string, allowed
   if ((await g(top, ["cat-file", "-t", obj])) !== "blob") throw new WorktreeError("not_found", `Not a file: ${p}`);
   const size = Number(await g(top, ["cat-file", "-s", obj]));
   if (size > max) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`, size);
+  return { top, obj, size, max };
+}
+/** The bytes of a checked blob. */
+export async function gitBlobRead(ref: BlobRef): Promise<Buffer> {
   try {
-    return (await exec("git", [...SAFE, "cat-file", "blob", obj], { cwd: top, encoding: "buffer", timeout: 30_000, maxBuffer: max + 1, env: readEnv() })).stdout;
+    return (await exec("git", [...SAFE, "cat-file", "blob", ref.obj], { cwd: ref.top, encoding: "buffer", timeout: 30_000, maxBuffer: ref.max + 1, env: readEnv() })).stdout;
   } catch (e) {
     throw new WorktreeError("git_failed", (e as Error).message.split("\n")[0]!);
   }
+}
+export async function gitFileAt(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<Buffer> {
+  return gitBlobRead(await gitBlobRef(cwd, hash, path, allowed, max));
 }
 
 /** `refs/heads/x` / `refs/remotes/o/x` to `x` / `o/x`. */

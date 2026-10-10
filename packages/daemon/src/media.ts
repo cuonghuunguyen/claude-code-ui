@@ -56,3 +56,7 @@ export const MEDIA_TTL_MS = 10 * 60_000;
 export const MEDIA_CHUNK = 1 << 20;
 /** Largest file at a commit fs.media serves (read whole from git). */
 export const MEDIA_BLOB_MAX = 32 << 20;
+/** Total bytes of commit blobs one connection keeps for media.read pieces. */
+export const MEDIA_BLOB_CACHE_MAX = 64 << 20;
+/** Longest wait for one piece from a side before the GET is cut. */
+export const MEDIA_PIECE_TIMEOUT_MS = 30_000;
