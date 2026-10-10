@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import type { Exec } from "./docker-side.ts";
+import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 
 /** A started side process: `wsl.exe -d <distro> ...` or `docker exec -i <name> ...` (tests: an in-process side). */
 export type SideProcess = { stdin: Writable; stdout: Readable; stderr: Readable; kill(): void; on(event: "exit", l: (code: number | null) => void): unknown };
@@ -603,11 +604,17 @@ export function createRouter(opts: {
   local: (msg: ClientMessage) => Promise<void>;
   localCall: LocalCall;
   isLocalSession: (id: string) => Promise<boolean>;
+  /** fs.media of a side's path: the hub serves it (server.ts sideMedia); `call` asks that side. Absent: refused with side_unsupported. */
+  /** Longest wait for one media piece from a side (default MEDIA_PIECE_TIMEOUT_MS). */
+  mediaTimeoutMs?: number;
+  media?: (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>) => Promise<ServerMessage>;
 }) {
   const { sides, send } = opts;
   const conns = new Map<string, Conn>();
   /** Answers of side requests the router asked itself (merged lists, fan-outs), by internal reqId. */
   const own = new Map<string, (m: ServerMessage) => void>();
+  /** Calls waiting for a side's answer, by their hub reqId: detach settles them. */
+  const pending = new Map<string, { id: string; settle: (m: ServerMessage) => void }>();
   let nextReq = 1;
   const onSide = (m: ServerMessage) => {
     if ((m.type === "reply" || m.type === "error") && m.reqId && own.has(m.reqId)) {
@@ -631,17 +638,28 @@ export function createRouter(opts: {
     },
     detach(id) {
       if (!conns.delete(id)) return;
+      // A call the side can no longer answer ends with side_not_ready (a GET /media waiting for a piece ends).
+      for (const [reqId, pend] of pending) if (pend.id === id) pend.settle({ type: "error", reqId, code: "side_not_ready", message: `${id} stopped` });
       send({ type: "sessions.changed" });
     },
   };
 
   /** A side's answer to `msg`; an error answer when the side is gone. */
-  const sideCall = (id: string, msg: ClientMessage) =>
+  const sideCall = (id: string, msg: ClientMessage, timeoutMs?: number) =>
     new Promise<ServerMessage>((resolve) => {
       const c = conns.get(id);
       if (!c) return resolve({ type: "error", reqId: msg.reqId, code: "side_not_ready", message: `${id} is not running` });
       const reqId = `hub:${nextReq++}`;
-      own.set(reqId, (m) => resolve({ ...m, reqId: msg.reqId } as ServerMessage));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settle = (m: ServerMessage) => {
+        clearTimeout(timer);
+        own.delete(reqId);
+        pending.delete(reqId);
+        resolve({ ...m, reqId: msg.reqId } as ServerMessage);
+      };
+      own.set(reqId, settle);
+      pending.set(reqId, { id, settle });
+      if (timeoutMs) timer = setTimeout(() => settle({ type: "error", reqId, code: "side_timeout", message: `${id} did not answer in ${timeoutMs} ms` }), timeoutMs);
       c.send({ ...msg, reqId } as ClientMessage);
     });
   const call = (id: string, msg: ClientMessage) => (id === LOCAL_SIDE ? opts.localCall(msg) : sideCall(id, msg));
@@ -765,8 +783,10 @@ export function createRouter(opts: {
       }
       case "fs.media": {
         const id = await target(msg);
-        if (id !== LOCAL_SIDE) return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for files in ${id.startsWith("docker:") ? "Docker" : "WSL"}` });
-        return opts.local(msg);
+        if (id === LOCAL_SIDE) return opts.local(msg);
+        if (!opts.media) return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for files in ${id.startsWith("docker:") ? "Docker" : "WSL"}` });
+        const { side: _side, ...rest } = msg;
+        return send(await opts.media(id, rest as Extract<ClientMessage, { type: "fs.media" }>, (m) => sideCall(id, m, opts.mediaTimeoutMs ?? MEDIA_PIECE_TIMEOUT_MS)));
       }
       default: {
         const id = await target(msg);
@@ -781,6 +801,8 @@ export function createRouter(opts: {
     handle,
     close() {
       sides.removeRouter(router);
+      // Calls waiting for a side end now (not after their timeout).
+      for (const [reqId, pend] of pending) pend.settle({ type: "error", reqId, code: "side_not_ready", message: "connection closed" });
       conns.forEach((c) => c.close());
       conns.clear();
       own.clear();

@@ -317,14 +317,6 @@ it("fs.changed on a media tab re-requests fs.media and the img src takes the new
   act(() => p.root.render(null));
 });
 
-it("fs.media refused for a WSL path shows the notice", async () => {
-  const p = mediaPanel({ media: () => Object.assign(new Error("Preview is not available for files in WSL"), { code: "side_unsupported" }) });
-  await p.show("/p/a.png");
-  expect(p.q("file-notice")!.textContent).toContain("Preview is not available for files in WSL");
-  expect(p.q("media-image")).toBeNull();
-  act(() => p.root.render(null));
-});
-
 it("the editable editor is unchanged: not read-only, no tabindex", async () => {
   const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : m.type === "fs.read" ? { content: "one", mtime: 1 } : {}));
   const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;

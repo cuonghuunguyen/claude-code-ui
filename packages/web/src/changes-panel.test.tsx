@@ -63,9 +63,14 @@ afterEach(() => {
 });
 
 /** `git`: git.status (default: not a repository), git.diff (a reply or an error), git.fileAt by "hash:path". */
-type FakeGit = { status?: GitStatus | null; diff?: GitDiff | Error; at?: Record<string, string> };
+type FakeGit = { status?: GitStatus | null; diff?: GitDiff | Error; at?: Record<string, string>; media?: (m: { path: string; hash?: string; cwd?: string }) => unknown };
 function fakeClient(files: Record<string, string>, git: FakeGit = {}) {
-  const request = vi.fn(async (m: { type: string; path: string; hash?: string }) => {
+  const request = vi.fn(async (m: { type: string; path: string; hash?: string; cwd?: string }) => {
+    if (m.type === "fs.media") {
+      const r = git.media?.(m);
+      if (r instanceof Error) throw r;
+      return r ?? { url: `/media/${m.hash ? "old" : "new"}/${m.path}`, mime: "image/png", size: 2048, mtime: 1 };
+    }
     if (m.type === "git.status") return { status: git.status ?? null };
     if (m.type === "git.log") return { log: { commits: [], more: false, branches: ["refs/heads/main", "refs/heads/dev"] } };
     if (m.type === "git.diff") {
@@ -783,6 +788,97 @@ it("a change that is only the line endings stays visible (LF in git, CRLF on dis
   await act(async () => root.render(panel(fakeClient({ "/p/a.ts": "one\r\ntwo\r\n" }, git))));
   await flush();
   expect(files!.newFile.contents).toBe("one\r\ntwo\r\n");
+});
+
+// ---- Image changes (GH-125) ----
+const imgGit = (files: GitDiff["files"], extra: Partial<FakeGit> = {}) => ({ status: REPO, diff: D(files), ...extra });
+const mediaCalls = (c: { calls: ReturnType<typeof vi.fn> }) => gitCalls(c, "fs.media");
+const mountImages = async (files: GitDiff["files"], extra: Partial<FakeGit> = {}) => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({}, imgGit(files, extra));
+  await act(async () => root.render(panel(client)));
+  await flush();
+  return client;
+};
+const q = (id: string) => el.querySelector<HTMLElement>(`[data-testid=${id}]`);
+
+it("Uncommitted: a modified .png shows Before and After images side by side from fs.media (base commit and disk); no git.fileAt or fs.read; no Binary notice", async () => {
+  const client = await mountImages([{ status: "M", path: "img/a.png" }]);
+  expect(q("image-diff")!.className).toContain("grid-cols-2");
+  expect(q("image-before")!.querySelector("img")!.getAttribute("src")).toBe("/media/old/img/a.png");
+  expect(q("image-after")!.querySelector("img")!.getAttribute("src")).toBe("/media/new//p/img/a.png");
+  expect(mediaCalls(client)).toEqual([
+    { type: "fs.media", cwd: "/p", hash: BASE, path: "img/a.png" },
+    { type: "fs.media", path: "/p/img/a.png" },
+  ]);
+  expect(gitCalls(client, "git.fileAt")).toEqual([]);
+  expect(gitCalls(client, "fs.read")).toEqual([]);
+  expect(el.textContent).not.toContain("Binary file");
+  expect(rows()).toEqual(["Modified img/a.png"]);
+  expect(q("diff-loading")).toBeNull();
+});
+
+it("an added .png shows After only, a deleted one Before only, a renamed one asks the old path", async () => {
+  const client = await mountImages([{ status: "A", path: "a.png" }, { status: "D", path: "b.png" }, { status: "R", path: "n.png", oldPath: "o.png" }]);
+  const click = async (i: number) => act(async () => (el.querySelectorAll<HTMLButtonElement>("[data-testid=changed-file]")[i]!.click(), undefined));
+  expect(q("image-before")).toBeNull();
+  expect(q("image-after")).not.toBeNull();
+  await click(1);
+  await flush();
+  expect(q("image-before")).not.toBeNull();
+  expect(q("image-after")).toBeNull();
+  await click(2);
+  await flush();
+  const m = mediaCalls(client);
+  expect(m).toContainEqual({ type: "fs.media", cwd: "/p", hash: BASE, path: "o.png" });
+  expect(m).not.toContainEqual({ type: "fs.media", path: "/p/b.png" });
+  expect(m).not.toContainEqual({ type: "fs.media", cwd: "/p", hash: BASE, path: "a.png" });
+});
+
+it("unified style and the narrow accordion stack the images (one column)", async () => {
+  localStorage.setItem("claude-ui.diffStyle", "unified");
+  await mountImages([{ status: "M", path: "a.png" }]);
+  expect(q("image-diff")!.className).toContain("grid-cols-1");
+  act(() => root.render(null));
+  localStorage.setItem("claude-ui.diffStyle", "split");
+  narrow = true;
+  await mountImages([{ status: "M", path: "a.png" }]);
+  await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=changed-file]")!.click(), undefined));
+  await flush();
+  expect(q("image-diff")!.className).toContain("grid-cols-1");
+});
+
+it("pixel size and file size per pane after load", async () => {
+  await mountImages([{ status: "M", path: "a.png" }]);
+  const img = q("image-after")!.querySelector("img")!;
+  Object.defineProperty(img, "naturalWidth", { value: 640 });
+  Object.defineProperty(img, "naturalHeight", { value: 480 });
+  await act(async () => void img.dispatchEvent(new Event("load")));
+  expect(q("image-after")!.querySelector("[data-testid=image-info]")!.textContent).toBe("640×480 · 2 KB");
+});
+
+it("a before side over the limit shows its notice, the after image still shows", async () => {
+  await mountImages([{ status: "M", path: "a.png" }], { media: (m) => (m.hash ? Object.assign(new Error("larger than"), { code: "too_large", size: 40 << 20 }) : undefined) });
+  expect(q("image-before")!.textContent).toContain("File too large to show (40 MB)");
+  expect(q("image-before")!.querySelector("[role=status]")).not.toBeNull();
+  expect(q("image-after")!.querySelector("img")).not.toBeNull();
+});
+
+it("an image that fails to decode shows \"Unable to load image.\" in its pane", async () => {
+  await mountImages([{ status: "M", path: "a.png" }]);
+  await act(async () => void q("image-after")!.querySelector("img")!.dispatchEvent(new Event("error")));
+  expect(q("image-after")!.textContent).toContain("Unable to load image.");
+  expect(q("image-before")!.querySelector("img")).not.toBeNull();
+});
+
+it(".svg in a git mode keeps the text diff (git.fileAt + fs.read), no fs.media", async () => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({ "/p/a.svg": "<svg/>\n" }, { status: REPO, diff: D([{ status: "M", path: "a.svg", added: 1, removed: 1 }]), at: { [`${BASE}:a.svg`]: "<svg></svg>\n" } });
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(mediaCalls(client)).toEqual([]);
+  expect(gitCalls(client, "git.fileAt")).toHaveLength(1);
+  expect(q("image-diff")).toBeNull();
 });
 
 // ---- Popup viewer (GH-238) ----

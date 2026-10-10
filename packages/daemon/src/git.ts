@@ -673,6 +673,28 @@ export async function gitShow(cwd: string, hash: string, allowed: (p: string) =>
   });
 }
 
+/** A blob at a commit, checked (hash, path, repository inside `allowed`, exists, is a blob, at most `max`) but not read: its size comes from `git cat-file -s`. */
+export type BlobRef = { top: string; obj: string; size: number; max: number };
+export async function gitBlobRef(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<BlobRef> {
+  if (!isHash(hash)) throw bad("Invalid commit hash");
+  const p = repoPath(path);
+  const top = topIn(cwd, allowed);
+  if (!top) throw new WorktreeError("not_git", "Not in a git repository");
+  const obj = `${hash}:${p}`;
+  if (!(await gok(top, "cat-file", "-e", obj))) throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+  if ((await g(top, ["cat-file", "-t", obj])) !== "blob") throw new WorktreeError("not_found", `Not a file: ${p}`);
+  const size = Number(await g(top, ["cat-file", "-s", obj]));
+  if (size > max) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`, size);
+  return { top, obj, size, max };
+}
+/** The bytes of a checked blob. */
+export async function gitBlobRead(ref: BlobRef): Promise<Buffer> {
+  try {
+    return (await gitSlot(() => runGit({ cwd: ref.top, args: [...SAFE, "cat-file", "blob", ref.obj], maxBuffer: ref.max + 1, env: { ...readEnv(), ...ceilingEnv(ref.top) }, timeout: 30_000 }), true)).stdout;
+  } catch (e) {
+    throw new WorktreeError("git_failed", (e as Error).message.split("\n")[0]!);
+  }
+}
 /** The bytes of `path` (relative to the repository top) at commit `hash`; WorktreeError not_found / too_large (with `size`). */
 export async function gitFileAt(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<Buffer> {
   if (!isHash(hash)) throw bad("Invalid commit hash");

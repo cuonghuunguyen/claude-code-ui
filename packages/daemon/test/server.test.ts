@@ -10,7 +10,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
-import { listWorktrees } from "../src/git.ts";
+import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { scanThreadConfig } from "../src/session-scan.ts";
@@ -22,7 +22,7 @@ import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery
 // Counts `git worktree list` reads (the session list's cache); behaviour unchanged.
 vi.mock("../src/git.ts", async (importOriginal) => {
   const git = await importOriginal<typeof import("../src/git.ts")>();
-  return { ...git, listWorktrees: vi.fn(git.listWorktrees) };
+  return { ...git, listWorktrees: vi.fn(git.listWorktrees), gitBlobRead: vi.fn(git.gitBlobRead) };
 });
 
 const added = (...cwds: string[]) => {
@@ -3648,6 +3648,111 @@ describe("fs.media and /media", () => {
     expect((await get(url)).status).toBe(200);
     c.ws.close();
     await vi.waitFor(async () => expect((await get(url)).status).toBe(404));
+  });
+
+  const readPiece = async (c: Awaited<ReturnType<typeof client>>, m: Record<string, unknown>) => (await c.request({ type: "media.read", ...m })) as { type: string; code?: string; result: { data: string; size: number; mtime: number; mime: string } };
+
+  it("media.read returns base64 bytes at an offset with size, mtime and mime; length 0 gives only the facts", async () => {
+    const c = await client();
+    const f = join(dir, "a.png");
+    const a = await readPiece(c, { path: f, offset: 10, length: 20 });
+    expect(Buffer.from(a.result.data, "base64").equals(png.subarray(10, 30))).toBe(true);
+    expect(a.result).toMatchObject({ size: 300, mime: "image/png", mtime: statSync(f).mtimeMs });
+    expect(Buffer.from((await readPiece(c, { path: f, offset: 290, length: 20 })).result.data, "base64").length).toBe(10);
+    expect((await readPiece(c, { path: f, offset: 0, length: 0 })).result).toMatchObject({ data: "", size: 300 });
+    c.ws.close();
+  });
+
+  it("media.read refuses: bad offset or length (bad_request), outside the roots and .. paths (path_not_allowed), .txt (unsupported_type), a directory (not_a_file), missing (not_found)", async () => {
+    const c = await client();
+    const f = join(dir, "a.png");
+    for (const bad of [{ offset: 0, length: (1 << 20) + 1 }, { offset: -1, length: 1 }, { offset: 0.5, length: 1 }, { offset: 0, length: -1 }, { offset: "0", length: 1 }]) expect(await readPiece(c, { path: f, ...bad }), JSON.stringify(bad)).toMatchObject({ code: "bad_request" });
+    const outside = join(mkdtempSync(join(tmpdir(), "outside-")), "o.png");
+    writeFileSync(outside, png);
+    expect(await readPiece(c, { path: outside, offset: 0, length: 1 })).toMatchObject({ code: "path_not_allowed" });
+    expect(await readPiece(c, { path: join(dir, "..", "..", basename(dirname(outside)), "o.png"), offset: 0, length: 1 })).toMatchObject({ code: "path_not_allowed" });
+    expect(await readPiece(c, { path: join(dir, "..", "..", "..", "etc", "x.png"), offset: 0, length: 1 })).toMatchObject({ type: "error" });
+    expect(await readPiece(c, { path: join(dir, "n.txt"), offset: 0, length: 1 })).toMatchObject({ code: "unsupported_type" });
+    expect(await readPiece(c, { path: join(dir, "d.png"), offset: 0, length: 1 })).toMatchObject({ code: "not_a_file" });
+    expect(await readPiece(c, { path: join(dir, "missing.png"), offset: 0, length: 1 })).toMatchObject({ code: "not_found" });
+    expect(await readPiece(c, { path: outside, cwd: outside, hash: "a".repeat(40), offset: 0, length: 1 })).toMatchObject({ code: "cwd_not_allowed" });
+    c.ws.close();
+  });
+
+  describe("a file at a commit (cwd + hash)", () => {
+    const repo = join(dir, "repo");
+    mkdirSync(join(repo, "img"), { recursive: true });
+    const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd: repo, encoding: "utf8" }).trim();
+    git("init", "-q");
+    const bytesA = Buffer.from(Array.from({ length: 300 }, (_, i) => (i * 7) % 256));
+    const bytesB = Buffer.from(Array.from({ length: 300 }, (_, i) => (i * 3) % 256));
+    writeFileSync(join(repo, "img", "p.png"), bytesA);
+    writeFileSync(join(repo, "n.txt"), "x");
+    git("add", "-A");
+    git("commit", "-q", "-m", "one");
+    const hash = git("rev-parse", "HEAD");
+    writeFileSync(join(repo, "img", "p.png"), bytesB);
+    const at = async (c: Awaited<ReturnType<typeof client>>, m: Record<string, unknown>) => (await c.request({ type: "fs.media", cwd: repo, hash, path: "img/p.png", ...m })) as { type: string; code?: string; size?: number; result: { url: string; mime: string; size: number; mtime: number } };
+
+    it("fs.media with cwd and hash serves the file at that commit; the plain fs.media serves the disk", async () => {
+      const c = await client();
+      const { url, mtime, size } = (await at(c, {})).result;
+      expect(url).toMatch(new RegExp(`\\?v=${hash}$`));
+      expect(mtime).toBe(0);
+      expect(size).toBe(300);
+      const r = await get(url);
+      expect(r.status).toBe(200);
+      expect(r.body.equals(bytesA)).toBe(true);
+      expect(r.headers).toMatchObject({ "content-type": "image/png", "x-content-type-options": "nosniff" });
+      expect(String(r.headers["content-security-policy"])).toContain("sandbox");
+      const rg = await get(url, { range: "bytes=0-99" });
+      expect(rg.status).toBe(206);
+      expect(rg.body.length).toBe(100);
+      expect(rg.headers["content-range"]).toBe("bytes 0-99/300");
+      expect((await get(url, { range: "bytes=300-" })).status).toBe(416);
+      expect((await get(url, {}, "HEAD")).body.length).toBe(0);
+      const disk = (await media(c, join(repo, "img", "p.png"))).result;
+      expect((await get(disk.url)).body.equals(bytesB)).toBe(true);
+      c.ws.close();
+    });
+
+    it("with a hash: not_found for a path missing at the commit, unsupported_type for .txt, cwd_not_allowed outside the roots, bad_request for a short hash", async () => {
+      const c = await client();
+      expect(await at(c, { path: "img/none.png" })).toMatchObject({ code: "not_found" });
+      expect(await at(c, { path: "n.txt" })).toMatchObject({ code: "unsupported_type" });
+      expect(await at(c, { cwd: tmpdir() })).toMatchObject({ code: "cwd_not_allowed" });
+      expect(await at(c, { hash: "abc" })).toMatchObject({ type: "error" });
+      expect(await at(c, { path: "../x.png" })).toMatchObject({ type: "error" });
+      c.ws.close();
+    });
+
+    it("the size comes from git without reading the blob; two images at once read each blob once", async () => {
+      writeFileSync(join(repo, "img", "q.png"), bytesB);
+      git("add", "-A");
+      git("commit", "-q", "-m", "two");
+      const hash2 = git("rev-parse", "HEAD");
+      const c = await client();
+      const reads = vi.mocked(gitBlobRead);
+      reads.mockClear();
+      const a = (await at(c, {})).result;
+      const b = (await at(c, { hash: hash2, path: "img/q.png" })).result;
+      expect(a.size).toBe(300);
+      expect(b.size).toBe(300);
+      expect(reads).not.toHaveBeenCalled();
+      // Pieces of both images interleaved (a viewer asks for both): each blob is read from git once.
+      for (const u of [a.url, b.url, a.url, b.url]) expect((await get(u)).status).toBe(200);
+      expect((await get(a.url, { range: "bytes=10-19" })).body.equals(bytesA.subarray(10, 20))).toBe(true);
+      expect(reads).toHaveBeenCalledTimes(2);
+      c.ws.close();
+    });
+
+    it("a commit nonce is dead after its connection closes", async () => {
+      const c = await client();
+      const { url } = (await at(c, {})).result;
+      expect((await get(url)).status).toBe(200);
+      c.ws.close();
+      await vi.waitFor(async () => expect((await get(url)).status).toBe(404));
+    });
   });
 
   it("the nonce expires after 10 min idle; a GET extends it", async () => {
