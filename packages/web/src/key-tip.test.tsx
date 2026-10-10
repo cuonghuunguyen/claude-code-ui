@@ -141,3 +141,13 @@ it("hidden: the tip waits and shows when hidden turns false", async () => {
   await render(false);
   expect(toast()?.textContent).toContain("Toggle sidebar: Ctrl+B");
 });
+
+it("below md the tip's buttons are 44 px targets, also for a mouse", async () => {
+  await times(2, "#sb");
+  const action = [...document.querySelectorAll("button")].find((x) => x.textContent === "Turn off tips")!;
+  const dismissBtn = document.querySelector('[aria-label="Dismiss"]')!;
+  expect(action.className).toContain("max-md:min-h-11");
+  expect(action.className).toContain("max-md:min-w-11");
+  expect(dismissBtn.className).toContain("max-md:size-11");
+  expect(dismissBtn.className).toContain("max-md:-m-3");
+});

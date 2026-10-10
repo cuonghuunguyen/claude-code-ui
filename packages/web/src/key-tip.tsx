@@ -40,9 +40,9 @@ export function KeyTips({ hidden, onAssign, onTurnedOff }: { hidden: boolean; on
   const spec = specOf(tip.id);
   const close = () => setTip(undefined);
   return spec ? (
-    <Toast key={tip.n} message={`${s.title}: ${keyText(spec)}`} action={{ label: "Turn off tips", onClick: () => (setKeyTipsOn(false), onTurnedOff()) }} onClose={close} />
+    <Toast key={tip.n} message={`${s.title}: ${keyText(spec)}`} action={{ label: "Turn off tips", onClick: () => (setKeyTipsOn(false), onTurnedOff()) }} onClose={close} bigTargets />
   ) : (
-    <Toast key={tip.n} message={`${s.title} has no shortcut.`} action={{ label: "Assign a shortcut…", onClick: () => onAssign(tip.id) }} onClose={close} />
+    <Toast key={tip.n} message={`${s.title} has no shortcut.`} action={{ label: "Assign a shortcut…", onClick: () => onAssign(tip.id) }} onClose={close} bigTargets />
   );
 }
 
