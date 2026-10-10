@@ -7,6 +7,7 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 ### Fixed
 
 - A WSL or Docker side no longer stops with "exit code 1" about 15 seconds after you open it: the daemon's keep-alive ping crashed it. When a side does stop, the message now ends with the last lines it printed ([#263](https://github.com/cuonghuunguyen/claude-code-ui/issues/263)).
+- Windows: the daemon no longer crashes with `write EAGAIN` when a terminal is closed, or its shell ends, while it still has unread input; Windows terminal input is now capped at 1 MiB (`input_backlog`) like on macOS and Linux ([#266](https://github.com/cuonghuunguyen/claude-code-ui/issues/266)).
 
 ## 0.5.0 - 2026-10-10
 

@@ -1,4 +1,5 @@
 import { chmodSync, closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -294,5 +295,125 @@ describe("closing a worktree's terminals", () => {
     terms.create("/repo", 80, 24, {});
     await terms.closeIn(() => false, 60_000);
     expect(terms.count()).toBe(1);
+  });
+});
+
+// GH-266: on Windows node-pty writes input to ConPTY through a net.Socket (`_agent.inSocket`) with no 'error' listener.
+// A write that lands while ConPTY closes its pipe fails asynchronously (EAGAIN is libuv's name for ERROR_NO_DATA, "the
+// pipe is being closed"; EOF for a closed one), and an unhandled 'error' event ended the daemon.
+describe("Windows terminal input socket errors (GH-266)", () => {
+  /** A fake ConPTY IPty: `inSocket` is a plain EventEmitter, so emit("error") throws when nothing listens, as Node does. */
+  const conpty = () => {
+    const inSocket = Object.assign(new EventEmitter(), { writableLength: 0, destroyed: false, destroy: vi.fn() });
+    let onExit: (e: { exitCode: number }) => void = () => {};
+    const pty = {
+      fd: undefined,
+      _socket: { destroyed: false },
+      _agent: { inSocket },
+      onData() {},
+      onExit: (cb: typeof onExit) => void (onExit = cb),
+      write: vi.fn(),
+      kill: vi.fn(() => setTimeout(() => onExit({ exitCode: 1 }), 5)),
+    };
+    return { pty, inSocket, shellExits: () => onExit({ exitCode: 1 }) };
+  };
+  const errno = (code: string) => Object.assign(new Error(`write ${code}`), { code, syscall: "write" });
+  const setup = () => {
+    // Each spawn gets its own fake; `fake` is the first terminal's.
+    const fakes: ReturnType<typeof conpty>[] = [];
+    const terms = createTerminals(nodePtyRoot(), "win32", (() => fakes[fakes.push(conpty()) - 1]!.pty) as never);
+    const { id } = terms.create("C:\\repo", 80, 24, {});
+    const fake = fakes[0]!;
+    const t = terms.get(id)!;
+    const output = vi.fn();
+    const exit = vi.fn();
+    terms.attach(t, { output, exit });
+    return { ...fake, terms, t, id, output, exit };
+  };
+
+  for (const code of ["EAGAIN", "EOF"]) {
+    it(`a ${code} on the input socket ends only that terminal, tells its client, and does not throw`, async () => {
+      const { inSocket, pty, terms, id, output, exit } = setup();
+      const other = terms.create("C:\\repo", 80, 24, {});
+      expect(() => inSocket.emit("error", errno(code))).not.toThrow();
+      expect(terms.get(id)).toBeUndefined();
+      expect(terms.list("C:\\repo").map((t) => t.id)).not.toContain(id);
+      expect(terms.list("C:\\repo").map((t) => t.id)).toContain(other.id);
+      expect(output).toHaveBeenCalledWith(expect.stringContaining(`write ${code}`));
+      expect(pty.kill).toHaveBeenCalled();
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(exit).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it("an error after the terminal was closed (input still queued when ConPTY shut) is swallowed, with no second kill", () => {
+    const { inSocket, pty, terms, t, output } = setup();
+    terms.close(t);
+    expect(() => inSocket.emit("error", errno("EAGAIN"))).not.toThrow();
+    expect(() => inSocket.emit("error", errno("EOF"))).not.toThrow();
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+    expect(output).not.toHaveBeenCalled();
+  });
+
+  it("refuses input with input_backlog while MAX_PENDING_INPUT_BYTES wait in the input socket", () => {
+    const { inSocket, pty, terms, t } = setup();
+    expect(terms.write(t, "dir\r")).toBeUndefined();
+    expect(pty.write).toHaveBeenCalledWith(Buffer.from("dir\r"));
+    inSocket.writableLength = MAX_PENDING_INPUT_BYTES - 2;
+    expect(terms.write(t, "abc")).toBe("input_backlog");
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    inSocket.writableLength = 0;
+    expect(terms.write(t, "abc")).toBeUndefined();
+  });
+
+  it("counts the cap in bytes, not UTF-16 units: a Buffer is written", () => {
+    const { inSocket, pty, terms, t } = setup();
+    inSocket.writableLength = MAX_PENDING_INPUT_BYTES - 3;
+    expect(terms.write(t, "é")).toBeUndefined(); // 2 bytes
+    expect(terms.write(t, "éé")).toBe("input_backlog"); // 4 bytes, 2 chars
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    expect(pty.write.mock.calls[0]![0]).toBeInstanceOf(Buffer);
+  });
+
+  it("destroys the input socket when the shell exits (node-pty never does), and a later error does nothing", () => {
+    const { inSocket, terms, id, exit, output, pty, shellExits } = setup();
+    shellExits();
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(terms.get(id)).toBeUndefined();
+    expect(inSocket.destroy).toHaveBeenCalledTimes(1);
+    expect(() => inSocket.emit("error", errno("EAGAIN"))).not.toThrow();
+    expect(() => inSocket.emit("error", errno("EOF"))).not.toThrow();
+    expect(pty.kill).not.toHaveBeenCalled();
+    expect(output).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledTimes(1);
+  });
+
+  it("without node-pty's _agent.inSocket it still creates, writes and closes, and warns once per process", async () => {
+    vi.resetModules(); // a fresh module, so its once-per-process flag is unset
+    const mod = await import("../src/terminals.ts");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const plain = () => ({ fd: undefined, _socket: { destroyed: false }, onData() {}, onExit() {}, write: vi.fn(), kill: vi.fn() });
+      const ptys: ReturnType<typeof plain>[] = [];
+      const terms = mod.createTerminals(nodePtyRoot(), "win32", (() => ptys[ptys.push(plain()) - 1]) as never);
+      const a = terms.get(terms.create("C:\\repo", 80, 24, {}).id)!;
+      const b = terms.get(terms.create("C:\\repo", 80, 24, {}).id)!;
+      expect(terms.write(a, "dir\r")).toBeUndefined();
+      expect(ptys[0]!.write).toHaveBeenCalledTimes(1);
+      expect(() => terms.close(a)).not.toThrow();
+      expect(() => terms.close(b)).not.toThrow();
+      expect(warn.mock.calls.filter(([m]) => String(m).includes("node-pty internals changed"))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a synchronous write error is write_failed, not a throw", () => {
+    const { pty, terms, t } = setup();
+    pty.write.mockImplementation(() => {
+      throw errno("EPIPE");
+    });
+    expect(terms.write(t, "x")).toBe("write_failed");
   });
 });

@@ -1,5 +1,6 @@
 // Terminal panel PTYs (docs/spec.md "Side panel"). They belong to the daemon, not to a connection: a reconnect re-attaches.
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { chmodSync, lstatSync, statSync, writeSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, win32 } from "node:path";
@@ -49,6 +50,8 @@ type Terminal = TerminalInfo & {
   socket: { destroyed: boolean };
   pending: Buffer[];
   retry?: NodeJS.Timeout;
+  /** Windows: node-pty's ConPTY input pipe socket (a net.Socket): its 'error' event, its queued size, and destroy on exit. */
+  input?: EventEmitter & { writableLength?: number; destroy?: () => void };
   /** Resolves once the shell process is gone (node-pty's onExit). */
   exited: Promise<void>;
 };
@@ -149,6 +152,9 @@ export function fixSpawnHelper(root: string, platform = process.platform, arch =
 
 export const nodePtyRoot = () => dirname(createRequire(import.meta.url).resolve("node-pty/package.json"));
 
+/** GH-266: the "node-pty internals changed" warning is logged once per process. */
+let warnedNoInput = false;
+
 /** Parameters after `root`: test seams. */
 export function createTerminals(root = nodePtyRoot(), platform = process.platform, spawnPty = spawn, chmod = chmodSync) {
   const terminals = new Map<string, Terminal>();
@@ -206,9 +212,45 @@ export function createTerminals(root = nodePtyRoot(), platform = process.platfor
       terminals.delete(t.id);
       t.listeners.forEach((l) => l.exit(exitCode));
       exited();
+      // node-pty never closes the ConPTY input pipe, and the 'error' listener below would keep `t` (scrollback, pty,
+      // connections) reachable through the open handle for as long as the daemon runs. A late 'error' is still swallowed.
+      try {
+        t.input?.destroy?.();
+      } catch (err) {
+        console.warn(`terminal ${t.id}: closing the input pipe failed: ${String(err)}`);
+      }
     });
+    // GH-266: ConPTY input goes through a net.Socket on a named pipe, and node-pty 1.1.0 listens for 'error' only on the
+    // output socket. A write that lands while ConPTY closes the pipe (input still queued when the terminal is closed or
+    // the shell ends) fails later: EAGAIN (libuv's name for ERROR_NO_DATA, "the pipe is being closed") or EOF. Unhandled,
+    // that 'error' event ended the daemon. Node has destroyed the socket by then, so no retry: end this terminal only.
+    // node-pty internal (`_agent.inSocket`, no public API); recheck on an upgrade. Without it, input stays unguarded.
+    const input = platform === "win32" ? (pty as unknown as { _agent?: { inSocket?: unknown } })._agent?.inSocket : undefined;
+    if (typeof (input as EventEmitter | undefined)?.on === "function") {
+      t.input = input as Terminal["input"];
+      t.input!.on("error", (err: NodeJS.ErrnoException) => {
+        if (terminals.get(t.id) !== t) return; // already closed: the queued input was meant for a shell that is gone
+        console.warn(`terminal ${t.id}: input pipe failed (${err.message}); closing the terminal`);
+        t.listeners.forEach((l) => l.output(`\r\n[claude-ui: terminal input failed (${err.message}); the terminal is closed]\r\n`));
+        closeTerminal(t);
+      });
+    } else if (platform === "win32" && !warnedNoInput) {
+      warnedNoInput = true;
+      console.warn("node-pty internals changed (no _agent.inSocket); Windows terminal input is unguarded against pipe errors and uncapped");
+    }
     terminals.set(t.id, t);
     return { id: t.id, title: t.title };
+  }
+
+  /** Unlisted at once; attached connections get the exit when the shell is gone. */
+  function closeTerminal(t: Terminal) {
+    stop(t);
+    terminals.delete(t.id);
+    try {
+      t.pty.kill();
+    } catch (err) {
+      console.warn(`terminal ${t.id}: kill failed: ${String(err)}`);
+    }
   }
 
   return {
@@ -225,12 +267,7 @@ export function createTerminals(root = nodePtyRoot(), platform = process.platfor
       return t && open(t) ? t : undefined;
     },
     list: (cwd: string): TerminalInfo[] => [...terminals.values()].filter((t) => t.cwd === cwd && open(t)).map(({ id, title }) => ({ id, title })),
-    /** Unlisted at once; attached connections get the exit when the shell is gone. */
-    close(t: Terminal) {
-      stop(t);
-      terminals.delete(t.id);
-      t.pty.kill();
-    },
+    close: closeTerminal,
     /**
      * Closes every terminal started in a cwd `inside` accepts and waits (at most `timeoutMs`) for the shells to exit.
      * Removing a worktree needs it: on Windows a shell whose working directory is the worktree keeps the folder from being deleted.
@@ -247,10 +284,22 @@ export function createTerminals(root = nodePtyRoot(), platform = process.platfor
     /** The error code when `data` is not written now or queued; undefined when it is. */
     write(t: Terminal, data: string): "unknown_terminal" | "input_backlog" | "write_failed" | undefined {
       if (!open(t)) return "unknown_terminal";
-      // ConPTY: input goes through node-pty's pipe socket, which has no fd reuse to guard against.
-      // ponytail: no MAX_PENDING_INPUT_BYTES there; the socket buffers in memory until the shell reads.
-      if (process.platform === "win32") return void t.pty.write(data);
       const chunk = Buffer.from(data);
+      // ConPTY: input goes through node-pty's pipe socket, which has no fd reuse to guard against. Its queue is capped
+      // like the POSIX one (a flood buffered 600 MB, then failed with ENOBUFS). Its async errors: the listener in create().
+      // A Buffer, not the string: a net.Socket counts a string chunk in UTF-16 units, so the cap would not be bytes.
+      // Without `writableLength` (node-pty changed) the cap cannot apply. ponytail: input sent before the shell's first
+      // output waits in node-pty's own deferred list, uncounted.
+      if (platform === "win32") {
+        const queued = typeof t.input?.writableLength === "number" ? t.input.writableLength : 0;
+        if (queued + chunk.length > MAX_PENDING_INPUT_BYTES) return "input_backlog";
+        try {
+          t.pty.write(chunk);
+        } catch {
+          return "write_failed";
+        }
+        return;
+      }
       if (t.pending.reduce((sum, b) => sum + b.length, chunk.length) > MAX_PENDING_INPUT_BYTES) return "input_backlog";
       t.pending.push(chunk);
       if (t.pending.length === 1 && !flush(t)) return "write_failed";
