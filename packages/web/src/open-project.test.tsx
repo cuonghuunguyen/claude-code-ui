@@ -614,7 +614,7 @@ describe("side chooser", () => {
     });
 
     it("a side error the dialog did not cause (a stopped container) offers Retry that only starts what is installed, never Reinstall", async () => {
-      const stopped = sides("error", "WSL: Ubuntu stopped (exit code 1). Retry to start it again.");
+      const stopped = sides("error", "WSL: Ubuntu stopped (exit code 1): TypeError: ws.ping is not a function. Retry to start it again.");
       const { kind, click, byId, status, onStartSide } = await renderSides(stopped, undefined, false, vi.fn(async () => chk("installed")));
       await click(kind("WSL"));
       expect(status()).toContain("stopped (exit code 1)");

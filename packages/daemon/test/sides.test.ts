@@ -524,6 +524,38 @@ describe("docker side discovery", () => {
   });
 });
 
+describe("a ready side that exits (GH-263)", () => {
+  /** A ready side that writes `stderrText` and exits with `code` once `die()` is called. */
+  function dyingSide(stderrText: string, code: number) {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const exit = new EventEmitter();
+    stdout.write(JSON.stringify({ ready: true }) + "\n");
+    const proc: SideProcess = { stdin: new PassThrough(), stdout, stderr, kill: () => {}, on: (e, l) => exit.on(e, l) };
+    return { proc, die: () => (stderr.write(stderrText), setTimeout(() => exit.emit("exit", code), 10)) };
+  }
+
+  it("a non-zero exit names the last stderr lines, without shell noise", async () => {
+    const side = dyingSide(["bash: cannot set terminal process group (1): x", "no job control in this shell", "at a", "at b", "TypeError: ws.ping is not a function", ""].join("\n"), 1);
+    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    await s.start("wsl:Ubuntu");
+    side.die();
+    await expect.poll(() => s.list().find((x) => x.id === "wsl:Ubuntu")?.state).toBe("error");
+    expect(s.list().find((x) => x.id === "wsl:Ubuntu")?.message).toBe("WSL: Ubuntu stopped (exit code 1): at a at b TypeError: ws.ping is not a function. Retry to start it again.");
+    s.close();
+  });
+
+  it("a non-zero exit with no stderr keeps the short message", async () => {
+    const side = dyingSide("", 1);
+    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    await s.start("wsl:Ubuntu");
+    side.die();
+    await expect.poll(() => s.list().find((x) => x.id === "wsl:Ubuntu")?.state).toBe("error");
+    expect(s.list().find((x) => x.id === "wsl:Ubuntu")?.message).toBe("WSL: Ubuntu stopped (exit code 1). Retry to start it again.");
+    s.close();
+  });
+});
+
 /** A side that speaks the frame protocol by hand: `answer` returns the result of each request. */
 function scriptedSide(answer: (m: { type: string }) => unknown): SideProcess {
   const stdin = new PassThrough();

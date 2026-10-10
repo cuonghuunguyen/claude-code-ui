@@ -406,7 +406,11 @@ export function createSides(opts: {
       proc.on("exit", (code) => {
         const wasReady = s.state === "ready";
         const tail = stderr.trim().split("\n").filter((l) => !/cannot set terminal process group|no job control/.test(l)).slice(-3).join(" ");
-        const message = setupError ?? (wasReady ? `${s.label} stopped (exit code ${code}). Retry to start it again.` : `${s.label} could not start (exit code ${code})${tail ? `: ${tail}` : ""}.`);
+        const message =
+          setupError ??
+          (wasReady
+            ? `${s.label} stopped (exit code ${code})${code && tail ? `: ${tail}` : ""}. Retry to start it again.`
+            : `${s.label} could not start (exit code ${code})${tail ? `: ${tail}` : ""}.`);
         // Nothing installed and none asked for (setup `never`): the side is as it was before, not failed.
         const notInstalled = !wasReady && setupCode === "not_installed";
         delete s.phase;
@@ -779,6 +783,15 @@ export class SideSocket extends EventEmitter {
     if (this.readyState !== this.OPEN) return;
     this.readyState = 3;
     this.emit("close");
+  }
+  /** The daemon's keep-alive ping: the pipe to the hub is the liveness signal (the side ends when it goes away), so answer at once. */
+  ping() {
+    queueMicrotask(() => {
+      if (this.readyState === this.OPEN) this.emit("pong");
+    });
+  }
+  terminate() {
+    this.close();
   }
 }
 
