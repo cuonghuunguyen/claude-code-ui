@@ -8,8 +8,9 @@ import { listSessions } from "@anthropic-ai/claude-agent-sdk";
  * scans them as strings: with a thousand transcripts that is seconds of CPU on the main thread, which held the event loop for
  * hundreds of ms at a time on the first session.list (GH-276). In the thread it blocks only itself. Plain JS, eval'd: nothing
  * to bundle; the SDK stays an external dependency, so its resolved URL loads in both the source checkout and the package.
- * A thread that errors (cannot start, SDK import fails) is marked broken and the main-thread call takes over; a thread that
- * exits starts again on the next call.
+ * A thread that cannot start, errors, or cannot import the SDK is marked broken and the main-thread call takes over from then
+ * on; a thread that exits, or does not answer within `timeoutMs`, is dropped (terminated), its calls are answered on the main
+ * thread and the next call starts a new thread.
  */
 const SCAN_THREAD = `
 const { parentPort } = require("node:worker_threads");
@@ -17,6 +18,11 @@ let sdk;
 parentPort.on("message", async ({ id, url, options }) => {
   try {
     sdk ??= await import(url);
+  } catch (e) {
+    parentPort.postMessage({ id, fatal: String((e && e.message) || e) });
+    return;
+  }
+  try {
     parentPort.postMessage({ id, sessions: await sdk.listSessions(options) });
   } catch (e) {
     parentPort.postMessage({ id, error: String((e && e.message) || e) });
@@ -26,6 +32,8 @@ parentPort.on("message", async ({ id, url, options }) => {
 export const scanThreadConfig = {
   script: SCAN_THREAD,
   sdkUrl: import.meta.resolve("@anthropic-ai/claude-agent-sdk"),
+  /** A call the thread has not answered by then drops the thread (the scan has no natural bound, but 30 s is far beyond any real one). */
+  timeoutMs: 30_000,
   reset() {
     const w = thread;
     thread = undefined;
@@ -40,30 +48,42 @@ type Sessions = Awaited<ReturnType<typeof listSessions>>;
 let thread: Worker | undefined;
 let broken = false;
 let nextCall = 0;
-const calls = new Map<number, { ok: (s: Sessions) => void; fail: (e: Error) => void; w: Worker; options: Parameters<typeof listSessions>[0] }>();
+const calls = new Map<number, { ok: (s: Sessions) => void; fail: (e: Error) => void; w: Worker; timer: NodeJS.Timeout; options: Parameters<typeof listSessions>[0] }>();
 /** A thread that errored or exited: its pending calls are answered by the main-thread scan, not failed. */
 function failCalls(w: Worker) {
   for (const [id, c] of calls)
     if (c.w === w) {
       calls.delete(id);
+      clearTimeout(c.timer);
       listSessions(c.options).then(c.ok, c.fail);
     }
+}
+/** Drops `w`: its calls go to the main thread; `unusable` also routes every later call there. */
+function retire(w: Worker, unusable: boolean) {
+  if (thread === w) thread = undefined;
+  if (unusable) broken = true;
+  void w.terminate();
+  failCalls(w);
 }
 function scanThread(): Worker | undefined {
   if (thread || broken) return thread;
   try {
     const w = new Worker(scanThreadConfig.script, { eval: true });
-    w.on("message", ({ id, sessions, error }: { id: number; sessions?: Sessions; error?: string }) => {
+    w.on("message", ({ id, sessions, error, fatal }: { id: number; sessions?: Sessions; error?: string; fatal?: string }) => {
       const c = calls.get(id);
       if (!c) return;
+      if (fatal !== undefined) {
+        console.warn(`session-scan: scan thread cannot load the SDK, scanning on the main thread from now on: ${fatal}`);
+        return retire(w, true);
+      }
       calls.delete(id);
+      clearTimeout(c.timer);
       if (error === undefined) c.ok(sessions ?? []);
       else c.fail(new Error(error));
     });
     w.on("error", (e) => {
       console.warn(`session-scan: scan thread failed, scanning on the main thread from now on: ${String(e)}`);
-      if (thread === w) (thread = undefined, (broken = true));
-      failCalls(w);
+      retire(w, true);
     });
     w.on("exit", () => {
       if (thread === w) thread = undefined;
@@ -83,7 +103,12 @@ export const listSessionsOffThread: typeof listSessions = (options) => {
   if (!w) return listSessions(options);
   const id = ++nextCall;
   return new Promise<Sessions>((ok, fail) => {
-    calls.set(id, { ok, fail, w, options });
+    const timer = setTimeout(() => {
+      console.warn(`session-scan: scan thread did not answer in ${scanThreadConfig.timeoutMs} ms, dropping it`);
+      retire(w, false);
+    }, scanThreadConfig.timeoutMs);
+    timer.unref();
+    calls.set(id, { ok, fail, w, timer, options });
     w.postMessage({ id, url: scanThreadConfig.sdkUrl, options });
   });
 };

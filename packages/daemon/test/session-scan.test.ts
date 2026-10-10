@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,6 +74,45 @@ describe("session-scan", () => {
     expect(scanThreadConfig.broken).toBe(false);
   });
 
+  it("scans on the main thread from then on when the SDK cannot be imported in the thread", async () => {
+    config();
+    const realUrl = scanThreadConfig.sdkUrl;
+    scanThreadConfig.sdkUrl = "file:///no/such/sdk.mjs";
+    try {
+      expect(await listSessionsOffThread()).toEqual(await listSessions());
+      expect(scanThreadConfig.broken).toBe(true);
+      scanThreadConfig.sdkUrl = realUrl;
+      expect(await listSessionsOffThread()).toHaveLength(1);
+      expect(scanThreadConfig.broken).toBe(true);
+    } finally {
+      scanThreadConfig.sdkUrl = realUrl;
+    }
+  });
+
+  it("drops a thread that does not answer in time, answers on the main thread and starts a new thread next", async () => {
+    config();
+    const realTimeout = scanThreadConfig.timeoutMs;
+    scanThreadConfig.timeoutMs = 200;
+    scanThreadConfig.script = `require("node:worker_threads").parentPort.on("message", () => {});`;
+    try {
+      expect(await listSessionsOffThread()).toEqual(await listSessions());
+      expect(scanThreadConfig.broken).toBe(false);
+      scanThreadConfig.script = realScript;
+      scanThreadConfig.timeoutMs = realTimeout;
+      expect(await listSessionsOffThread()).toHaveLength(1);
+      expect(scanThreadConfig.broken).toBe(false);
+    } finally {
+      scanThreadConfig.timeoutMs = realTimeout;
+    }
+  });
+
+  it("server.ts reads the stamp and last-message times async (no sync tail read)", () => {
+    const src = readFileSync(join(import.meta.dirname, "../src/server.ts"), "utf8");
+    expect(src).toMatch(/import \{[^}]*\blastEntryTime\b[^}]*\btranscriptStamp\b[^}]*\} from "\.\/session-scan\.ts"/);
+    expect(src).not.toMatch(/\breadSync\b/);
+    expect(src).not.toMatch(/function transcriptStamp/);
+  });
+
   it("rejects with the SDK's error when listSessions() throws in the thread", async () => {
     scanThreadConfig.reset();
     scanThreadConfig.script = `require("node:worker_threads").parentPort.on("message", ({ id }) => require("node:worker_threads").parentPort.postMessage({ id, error: "bad dir" }));`;
@@ -81,14 +120,15 @@ describe("session-scan", () => {
   });
 
   it("keeps the main event loop free while it scans many transcripts", { timeout: 60_000 }, async () => {
-    config(400, 120);
+    config(600, 120);
     const h = monitorEventLoopDelay({ resolution: 10 });
     await listSessionsOffThread(); // starts the thread, loads the SDK
     h.enable();
     const sessions = await listSessionsOffThread();
     h.disable();
-    expect(sessions).toHaveLength(400);
-    expect(h.max / 1e6).toBeLessThan(150);
+    expect(sessions).toHaveLength(600);
+    // Reverted to a main-thread scan this measured 215 ms with 400 files; the fixture is heavier now.
+    expect(h.max / 1e6).toBeLessThan(100);
   });
 
   it("transcriptStamp changes when a transcript is added, grows or is touched; undefined without the folder", async () => {
