@@ -137,3 +137,134 @@ it("collapsed state follows the grouping mode", async () => {
   expect(expanded()).toEqual(["false", "true"]);
   expect(localStorage.getItem("claude-ui.tab-groups-collapsed.worktree")).toBeNull();
 });
+
+// GH-277: close one session from the group chip menu (compact dropdown and chip context menu).
+const TI = (title: string, cwd: string): TabInfo => ({ title, cwd, group: cwd, state: "idle", unread: false });
+const INFO2: Record<string, TabInfo> = { [NEW_TAB]: { title: "New session", unread: false }, a1: TI("First", "/p/alpha"), a2: TI("Second", "/p/alpha"), a3: TI("Third", "/p/alpha"), b1: TI("Other", "/p/beta") };
+const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+const closers = () => [...document.querySelectorAll<HTMLElement>("[data-menu-close]")];
+const menu = () => document.querySelector('[data-testid="tab-group-menu"]');
+const keydown = (el: Element, k: string) => act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
+const A = "/p/alpha";
+function CloseHost({ onClose = () => {}, onSelect = () => {}, onCloseGroup = () => {} }: { onClose?: (id: string) => void; onSelect?: (id: string) => void; onCloseGroup?: (k: string, ids: string[]) => void }) {
+  const [tabs, setTabs] = useState(["a1", "a2", "a3", "b1"]);
+  return <TabsBar {...noop} compact tabs={tabs} activeId="b1" info={(id) => INFO2[id]!} onSelect={onSelect} onCloseGroup={onCloseGroup} onClose={(id) => { onClose(id); setTabs((t) => t.filter((x) => x !== id)); }} />;
+}
+
+it("GH-277 compact: each group menu row has a visible close item labelled Close <title>", async () => {
+  const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} />);
+  await act(async () => chip(el, A).click());
+  await settle();
+  expect(closers().map((c) => c.getAttribute("aria-label"))).toEqual(["Close First", "Close Second"]);
+  for (const c of closers()) {
+    expect(c.getAttribute("role")).toBe("menuitem");
+    expect(c.querySelector("svg")).not.toBeNull();
+    expect(c.hasAttribute("hidden")).toBe(false);
+    expect(c.getAttribute("aria-hidden")).toBeNull();
+    expect(c.className).toContain("pointer-coarse:w-11");
+    expect(c.className).toContain("pointer-coarse:h-11");
+  }
+});
+
+it("GH-277 compact: clicking a row's close item calls onClose with that id only, not Close group, and keeps the menu open", async () => {
+  const onClose = vi.fn();
+  const onSelect = vi.fn();
+  const onCloseGroup = vi.fn();
+  const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} onClose={onClose} onSelect={onSelect} onCloseGroup={onCloseGroup} />);
+  await act(async () => chip(el, A).click());
+  await settle();
+  await act(async () => closers()[1]!.click());
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(onClose).toHaveBeenCalledWith("a2");
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(onCloseGroup).not.toHaveBeenCalled();
+  expect(menu()).not.toBeNull();
+});
+
+it("GH-277 compact: closing one row updates the menu and the chip count drops by one", async () => {
+  const el = await mount(<CloseHost />);
+  expect(chip(el, A).textContent).toMatch(/3$/);
+  await act(async () => chip(el, A).click());
+  await settle();
+  await act(async () => closers()[0]!.click());
+  await settle();
+  expect(menu()).not.toBeNull();
+  expect([...document.querySelectorAll<HTMLElement>("[data-menu-tab]")].map((n) => n.dataset.menuTab)).toEqual(["a2", "a3"]);
+  expect(chip(el, A).textContent).toMatch(/2$/);
+  expect(chip(el, A).getAttribute("aria-label")).toMatch(/, 2 tabs/);
+});
+
+it("GH-277 compact, keyboard: ArrowDown reaches the close item, Enter closes that tab, focus moves to the next row's close item", async () => {
+  const el = await mount(<CloseHost />);
+  await act(async () => chip(el, A).focus());
+  await keydown(chip(el, A), "ArrowDown");
+  await settle();
+  expect((document.activeElement as HTMLElement).dataset.menuTab).toBe("a1");
+  await keydown(document.activeElement!, "ArrowDown");
+  expect(document.activeElement).toBe(closers()[0]);
+  await keydown(document.activeElement!, "Enter");
+  await settle();
+  expect([...document.querySelectorAll<HTMLElement>("[data-menu-tab]")].map((n) => n.dataset.menuTab)).toEqual(["a2", "a3"]);
+  expect((document.activeElement as HTMLElement).dataset.menuClose).toBe("a2");
+  // Navigation continues from the refocused item.
+  await keydown(document.activeElement!, "ArrowDown");
+  expect((document.activeElement as HTMLElement).dataset.menuTab).toBe("a3");
+  await keydown(document.activeElement!, "ArrowUp");
+  expect((document.activeElement as HTMLElement).dataset.menuClose).toBe("a2");
+  // Space closes too.
+  await keydown(document.activeElement!, " ");
+  await settle();
+  expect([...document.querySelectorAll<HTMLElement>("[data-menu-tab]")].map((n) => n.dataset.menuTab)).toEqual(["a3"]);
+  expect(document.activeElement).not.toBe(document.body);
+});
+
+it("GH-277 compact: closing the last tab of a group with its close item leaves focus on a control", async () => {
+  function Host() {
+    const [tabs, setTabs] = useState(["a1", "b1"]);
+    return <TabsBar {...noop} compact tabs={tabs} activeId={tabs[tabs.length - 1]} onClose={(id) => setTabs((t) => t.filter((x) => x !== id))} info={(id) => INFO2[id]!} />;
+  }
+  const el = await mount(<Host />);
+  await act(async () => chip(el, A).click());
+  await settle();
+  await act(async () => closers()[0]!.click());
+  await settle();
+  expect(chip(el, A)).toBeNull();
+  expect(document.activeElement).not.toBe(document.body);
+});
+
+it("GH-277 Close group still closes the whole group", async () => {
+  const onClose = vi.fn();
+  const onCloseGroup = vi.fn();
+  const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} onClose={onClose} onCloseGroup={onCloseGroup} />);
+  await act(async () => chip(el, A).click());
+  await settle();
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-group-close"]')!.click());
+  expect(onCloseGroup).toHaveBeenCalledWith(A, ["a1", "a2"]);
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it("GH-277 not compact: the chip context menu lists the group's tabs with close items; closing one keeps the menu open", async () => {
+  const onClose = vi.fn();
+  const onSelect = vi.fn();
+  const el = await mount(<TabsBar {...noop} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} onClose={onClose} onSelect={onSelect} />);
+  const ctx = () => act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  await ctx();
+  await settle();
+  expect(closers().map((c) => c.getAttribute("aria-label"))).toEqual(["Close First", "Close Second"]);
+  await act(async () => document.querySelector<HTMLElement>('[data-menu-tab="a1"]')!.click());
+  expect(onSelect).toHaveBeenCalledWith("a1");
+  await ctx();
+  await settle();
+  await act(async () => closers()[0]!.click());
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(onClose).toHaveBeenCalledWith("a1");
+  expect(menu()).not.toBeNull();
+});
+
+it("GH-277 not compact: a collapsed group's context menu still lists its tabs", async () => {
+  const el = await mount(<TabsBar {...noop} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} />);
+  await act(async () => chip(el, A).click());
+  await act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  await settle();
+  expect(closers().length).toBe(2);
+});
