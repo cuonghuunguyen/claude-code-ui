@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PlanUsage } from "@claude-ui/protocol";
-import { createPlanTracker, planUsage } from "../src/plan-usage.ts";
+import { createPlanTracker, eventWindows, planUsage } from "../src/plan-usage.ts";
 import { fakePlanUsage } from "./fake-query.ts";
 
 const at = (iso: string) => new Date(iso).getTime();
+const s = (iso: string) => at(iso) / 1000;
+const envTokenUsage = { ...fakePlanUsage, subscription_type: null, rate_limits_available: false, rate_limits: null };
+const usageQ = (reply: unknown) => ({ usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => reply });
+const unified = { five_hour: { utilization: 0.54, resetsAt: s("2026-10-01T11:00:00Z") }, seven_day: { utilization: 0.43, resetsAt: s("2026-10-03T17:00:00Z") } };
+const eventInfo = { status: "allowed", rateLimitType: "five_hour", resetsAt: s("2026-10-01T11:00:00Z"), unifiedWindows: unified } as never;
 
 describe("plan usage", () => {
   it("maps the server's usage rows: label from kind and scope, percent, reset time in ms, severity", () => {
@@ -161,5 +166,83 @@ describe("plan usage", () => {
     await t.refresh({ usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => Promise.reject(new Error("boom")) } as never);
     expect(seen).toEqual([]);
     expect(t.current()).toBeUndefined();
+  });
+
+  it("env token (CLAUDE_CODE_OAUTH_TOKEN): no plan limits from get_usage gives the unavailable state, not null", async () => {
+    const seen: (PlanUsage | null)[] = [];
+    const t = createPlanTracker({ onChange: (u) => seen.push(u), oauthToken: true });
+    await t.refresh(usageQ(envTokenUsage) as never);
+    expect(seen).toEqual([{ plan: null, windows: [], status: "allowed", auth: "oauth_token" }]);
+  });
+
+  it("without the env token the same reply stays null (API key, Bedrock, Vertex)", async () => {
+    const seen: (PlanUsage | null)[] = [];
+    const t = createPlanTracker({ onChange: (u) => seen.push(u) });
+    await t.refresh(usageQ(envTokenUsage) as never);
+    expect(seen).toEqual([null]);
+  });
+
+  it("env token: a rate_limit_event's unifiedWindows fill the session and week windows, kept by the next get_usage read", async () => {
+    vi.useFakeTimers({ now: at("2026-10-01T10:00:00Z") });
+    try {
+      const t = createPlanTracker({ onChange: () => {}, oauthToken: true });
+      const q = usageQ(envTokenUsage) as never;
+      await t.refresh(q);
+      await t.rateLimit(eventInfo, q);
+      const expected = {
+        plan: null,
+        auth: "oauth_token",
+        status: "allowed",
+        windows: [
+          { kind: "session", label: "Current session", percent: 54, resetsAt: at("2026-10-01T11:00:00Z"), severity: "normal", active: true },
+          { kind: "weekly_all", label: "Current week (all models)", percent: 43, resetsAt: at("2026-10-03T17:00:00Z"), severity: "normal", active: false },
+        ],
+      };
+      expect(t.current()).toEqual(expected);
+      await t.refresh(q);
+      expect(t.current()).toEqual(expected);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("event windows past their reset read 0% after the reset-time reread", async () => {
+    vi.useFakeTimers({ now: at("2026-10-01T10:00:00Z") });
+    try {
+      const seen: (PlanUsage | null)[] = [];
+      const q = usageQ(envTokenUsage) as never;
+      const t = createPlanTracker({ onChange: (u) => seen.push(u), oauthToken: true, read: () => t.refresh(q) });
+      await t.refresh(q);
+      await t.rateLimit(eventInfo, q);
+      await vi.advanceTimersByTimeAsync(61 * 60_000);
+      expect(seen.at(-1)!.windows[0]).toMatchObject({ kind: "session", percent: 0, resetsAt: null });
+      expect(seen.at(-1)!.windows[1]!.percent).toBe(43);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a login session ignores unifiedWindows: get_usage rows win", async () => {
+    const t = createPlanTracker({ onChange: () => {} });
+    const q = usageQ(fakePlanUsage) as never;
+    await t.refresh(q);
+    await t.rateLimit({ status: "allowed", unifiedWindows: { five_hour: { utilization: 0.99, resetsAt: s("2026-10-01T11:00:00Z") } } } as never, q);
+    expect(t.current()!.windows[0]!.percent).toBe(55);
+    expect(t.current()!.auth).toBeUndefined();
+  });
+
+  it("env token with a scope override whose fetch fails (rate_limits null) shows the unavailable state before any value", async () => {
+    const seen: (PlanUsage | null)[] = [];
+    const t = createPlanTracker({ onChange: (u) => seen.push(u), oauthToken: true });
+    await t.refresh(usageQ({ ...fakePlanUsage, subscription_type: null, rate_limits: null }) as never);
+    expect(seen).toEqual([{ plan: null, windows: [], status: "allowed", auth: "oauth_token" }]);
+  });
+
+  it("eventWindows: percent from the 0-1 fraction (can pass 100), missing windows left out, none -> undefined", () => {
+    expect(eventWindows({ five_hour: { utilization: 1.05, resetsAt: s("2026-10-01T11:00:00Z") } }, at("2026-10-01T10:00:00Z"))).toEqual([
+      { kind: "session", label: "Current session", percent: 105, resetsAt: at("2026-10-01T11:00:00Z"), severity: "normal", active: true },
+    ]);
+    expect(eventWindows(undefined)).toBeUndefined();
+    expect(eventWindows({})).toBeUndefined();
   });
 });

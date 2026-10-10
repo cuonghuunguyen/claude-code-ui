@@ -13,6 +13,8 @@ Two small meters show how much you have left.
 2. Click it to see every window, like **Current session** and **Current week (all models)**, with when each resets.
 3. The ring turns into a warning icon when you get close to a limit, and shows **Limit reached** when you hit one.
 
+With `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) the ring shows the session and weekly windows after a turn, or a grey ring with **–** before one: that token cannot read plan usage. Run `claude login` to see every window.
+
 Choose which window the ring shows in [Settings › Usage limits](../reference/settings#usage-limits): Highest usage, Session (5 h) or Weekly.
 
 ## Continue after a limit
