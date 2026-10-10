@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionListItem, Worktree } from "@claude-ui/protocol";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, CircleAlertIcon, ClockIcon, CrosshairIcon, HourglassIcon, LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, nextWaiting, QUIET_SHOWN_MS, quietLabel, requestSummary, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
+import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, KIND_ORDER, nextWaiting, QUIET_SHOWN_MS, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionPanel } from "./question.tsx";
 import { foldLabel, signalItems } from "./signal.ts";
@@ -175,10 +175,11 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const workingShown = capRows(working, expanded.working);
   // Answered one-liners sit among the request rows by their time, before the other kinds.
   const lead = needs.shown.filter((r) => r.request);
+  // By kind first (an escalated row stays above an older permission row), then by time; answered lines lead.
   const lines = [
-    ...lead.map((r) => ({ id: r.id, since: r.since, row: r, answered: undefined as Answered | undefined })),
-    ...answered.map((a) => ({ id: a.id, since: a.since, row: undefined, answered: a })),
-  ].sort((a, b) => a.since - b.since);
+    ...lead.map((r) => ({ id: r.id, rank: KIND_ORDER.indexOf(r.kind), since: r.since, row: r, answered: undefined as Answered | undefined })),
+    ...answered.map((a) => ({ id: a.id, rank: -1, since: a.since, row: undefined, answered: a })),
+  ].sort((a, b) => a.rank - b.rank || a.since - b.since);
   const rest = needs.shown.filter((r) => !r.request);
   const needsEmpty = !lines.length && !rest.length;
   const more = (key: SectionKey, n: number) =>
@@ -190,7 +191,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const select = (id: string) => (setDetail(true), onSelect(id));
   const renderRow = (r: AttentionRow) => (
     <li key={r.id}>
-      <AttentionRowView row={r} title={titleOf(r.sessionId)} now={now} selected={r.id === current?.id} onSelect={() => select(r.id)} />
+      <AttentionRowView row={r} title={titleOf(r.sessionId)} now={now} selected={r.id === current?.id} onSelect={() => select(r.id)} onAct={() => (r.action === "cancel_continue" ? onCancelContinue(r.sessionId) : onOpenSession(r.sessionId))} />
     </li>
   );
   const next = nextWaiting(waiting, req?.part.id);
@@ -198,7 +199,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const keys = nextKey ? keyLabels(nextKey) : [];
   const session = current && list.find((s) => s.id === current.sessionId);
   const view = current && views[current.sessionId];
-  const tasks = view ? (view.todos.length ? view.todos : view.lastTodos) : [];
+  const tasks = view ? (rowTodos(view).length ? rowTodos(view) : view.lastTodos) : [];
   const n = waiting.length ? new Set(waiting.map((w) => w.sessionId)).size : 0;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-card shadow-raised" data-testid="focus-page">
@@ -333,15 +334,15 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   );
 }
 
-function AttentionRowView({ row, title, now, selected, onSelect }: { row: AttentionRow; title: string; now: number; selected: boolean; onSelect: () => void }) {
+function AttentionRowView({ row, title, now, selected, onSelect, onAct }: { row: AttentionRow; title: string; now: number; selected: boolean; onSelect: () => void; onAct: () => void }) {
   const { icon: Icon, tone } = KIND_ICON[row.kind];
   const kindTone = BLOCKING.has(row.kind) ? "text-warning" : row.kind === "error" ? "text-destructive" : "text-muted-foreground";
   const age = row.request ? waitLabel(now - row.since) : row.kind === "stuck" ? "" : timeAgo(row.since, now);
-  return (
+  const select = (
     <button
       type="button"
       aria-current={selected || undefined}
-      className={`flex w-full cursor-pointer items-start gap-2 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11 ${selected ? "bg-secondary ring-2 ring-foreground" : ""}`}
+      className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11"
       onClick={onSelect}
       data-testid="focus-row"
       data-kind={row.kind}
@@ -357,6 +358,15 @@ function AttentionRowView({ row, title, now, selected, onSelect }: { row: Attent
       </span>
       <span className="shrink-0 text-muted-foreground text-xs tabular-nums" data-testid="focus-wait">{age}</span>
     </button>
+  );
+  if (row.request) return <div className={`flex rounded-lg ${selected ? "bg-secondary ring-2 ring-foreground" : ""}`}>{select}</div>;
+  return (
+    <div className={`flex items-start gap-1 rounded-lg ${selected ? "bg-secondary ring-2 ring-foreground" : ""}`}>
+      {select}
+      <Button type="button" variant="outline" size="sm" className="mt-1.5 mr-1.5 shrink-0 max-md:h-11 pointer-coarse:h-11" onClick={onAct} data-testid="focus-row-action">
+        {row.action === "cancel_continue" ? "Cancel continue" : "Open session"}
+      </Button>
+    </div>
   );
 }
 

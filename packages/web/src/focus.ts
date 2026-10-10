@@ -144,10 +144,13 @@ function errorText(view: SessionView): string {
   const from = parts.map((p) => p.type === "user_text").lastIndexOf(true) + 1;
   for (const p of parts.slice(from).reverse()) {
     const error = p.type === "raw" ? (p.message as { error?: unknown } | null)?.error : undefined;
-    if (error) return String(error);
+    if (error) return String(error).replace(/^Error:\s*/i, "");
   }
   return "the turn ended with an error";
 }
+
+/** The todo list a row shows: the live list while the turn runs, the last one once idle (the store clears `todos` on idle, also with a background task still running). */
+export const rowTodos = (v: SessionView): TodoItem[] => (v.state === "idle" ? v.lastTodos : v.todos);
 
 /** "k of n": the task at work (completed ones plus the in-progress one) of all; undefined for an empty list. */
 export const taskProgress = (items: TodoItem[]) => (items.length ? `${items.filter((t) => t.status === "completed").length + (items.some((t) => t.status === "in_progress") ? 1 : 0)} of ${items.length}` : undefined);
@@ -166,7 +169,7 @@ export function quietLabel(ms: number): string {
 
 /** What a running session does now: the in-progress task, the running call, else Compacting, Thinking or Writing. */
 export function nowLine(view: SessionView, cwd = ""): string {
-  const task = view.todos.find((t) => t.status === "in_progress");
+  const task = rowTodos(view).find((t) => t.status === "in_progress");
   if (task) return task.activeForm ?? task.content;
   const parts = topLevel(view);
   const running = lastOf(parts, (p) => p.type === "tool_call" && p.status === "running");
@@ -197,8 +200,8 @@ export function attentionRows(i: FocusInput): AttentionRow[] {
     if (!view || s.archived || waits.has(s.id)) continue;
     const row = (kind: AttentionKind, since: number, reason: string, action: AttentionRow["action"], detail?: string): AttentionRow => ({ id: `${kind}:${s.id}`, kind, sessionId: s.id, since, reason, detail, action });
     if (view.state === "error" && i.unread.has(s.id)) rows.push(row("error", s.lastActivity, `Check the error: ${errorText(view)}`, "open"));
-    else if (view.continueAt !== undefined) rows.push(row("limit", s.lastActivity, `Continues at ${clock(view.continueAt)} after the usage limit resets`, "cancel_continue"));
-    else if (shownState(view) === "running" && !busy(view) && i.now - i.activity(s.id) >= STUCK_MS) {
+    else if (view.continueAt !== undefined) rows.push(row("limit", s.lastActivity, `Wait for the usage limit to reset: continues at ${clock(view.continueAt)}`, "cancel_continue"));
+    else if ((view.state === "running" || view.externalTurn) && !busy(view) && i.now - i.activity(s.id) >= STUCK_MS) {
       const at = i.activity(s.id);
       const lastCall = lastOf(topLevel(view), (p) => p.type === "tool_call");
       rows.push(row("stuck", at, `Check it: ${quietLabel(i.now - at)}${lastCall?.type === "tool_call" ? ` since ${callSummary(lastCall.tool, lastCall.input, s.cwd)}` : ""}`, "open"));
@@ -221,7 +224,7 @@ export function workingRows(i: FocusInput, rows: AttentionRow[]): WorkingRow[] {
     .sort((a, b) => i.activity(b.id) - i.activity(a.id))
     .map((session) => {
       const view = i.views[session.id]!;
-      return { session, now: nowLine(view, session.cwd), progress: taskProgress(view.todos), quietMs: i.now - i.activity(session.id) };
+      return { session, now: nowLine(view, session.cwd), progress: taskProgress(rowTodos(view)), quietMs: i.now - i.activity(session.id) };
     });
 }
 

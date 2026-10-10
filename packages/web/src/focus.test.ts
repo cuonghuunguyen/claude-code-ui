@@ -1,6 +1,6 @@
 import type { Part, SessionListItem } from "@claude-ui/protocol";
 import { expect, it } from "vitest";
-import { answeredLabel, attentionRows, blockingCount, capRows, doneSummary, focusSubtitle, KIND_ORDER, nextWaiting, nowLine, quietLabel, requestSummary, taskProgress, waitLabel, waitingCount, waitingRequests, waitingStatus, workingRows, type FocusInput } from "./focus.ts";
+import { answeredLabel, attentionRows, blockingCount, capRows, doneSummary, focusSubtitle, KIND_ORDER, nextWaiting, nowLine, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, waitingCount, waitingRequests, waitingStatus, workingRows, type FocusInput } from "./focus.ts";
 import { applyEvent, emptySession, type PermissionRequest, type QuestionRequest, type SessionView } from "./store.ts";
 
 const item = (id: string, over: Partial<SessionListItem> = {}) => ({ id, cwd: "/p", state: "idle", title: id, lastActivity: 0, archived: false, transcript: true, ...over }) as SessionListItem;
@@ -123,7 +123,7 @@ it("error: an unread error session shows the raw error text, else a plain senten
 
 it("usage limit: a scheduled continue gives a Cancel continue row", () => {
   const [r] = attentionRows(input([item("a")], { a: view([{ type: "auto_continue", id: "auto_continue", at: NOW + 5000 }]) }));
-  expect(r).toMatchObject({ kind: "limit", reason: "Continues at 14:05 after the usage limit resets", action: "cancel_continue" });
+  expect(r).toMatchObject({ kind: "limit", reason: "Wait for the usage limit to reset: continues at 14:05", action: "cancel_continue" });
 });
 
 it("stuck: running, nothing pending, no running call, quiet 5 min; quiet 4 min or a running call gives none", () => {
@@ -234,4 +234,28 @@ it("badge: blockingCount counts sessions with blocking rows only and equals wait
   expect(rows.map((r) => r.kind).sort()).toEqual(["error", "escalated", "limit", "permission", "permission", "stuck", "finished"].sort());
   expect(blockingCount(rows)).toBe(2);
   expect(blockingCount(rows)).toBe(waitingCount(i.waiting));
+});
+
+const bg = (extra: Part[] = []) => view([user, state("running"), ...extra, state("idle", true)]);
+
+it("idle with a background task: the working row keeps the task list's now line and k of n (rowTodos)", () => {
+  const v = bg([todos(["a", "completed"], ["b", "in_progress", "doing b"], ["c", "pending"])]);
+  expect(v.todos).toEqual([]);
+  expect(rowTodos(v)).toHaveLength(3);
+  const i = input([item("a", { state: "idle" })], { a: v }, { activity: { a: NOW - 1000 } });
+  expect(workingRows(i, attentionRows(i)).map((w) => [w.now, w.progress])).toEqual([["doing b", "2 of 3"]]);
+  expect(nowLine(v)).toBe("doing b");
+});
+
+it("stuck: an idle session with a background task is not quiet; a terminal CLI turn is", () => {
+  const list = [item("a", { state: "idle" })];
+  expect(attentionRows(input(list, { a: bg() }, { activity: { a: NOW - 10 * min } }))).toEqual([]);
+  const ext = view([user, { type: "external_turn", id: "external_turn", running: true }]);
+  expect(attentionRows(input(list, { a: ext }, { activity: { a: NOW - 10 * min } })).map((r) => r.kind)).toEqual(["stuck"]);
+});
+
+it("an error reason drops a leading Error: prefix", () => {
+  const raw: Part = { type: "raw", id: "raw", message: { error: "Error: boom" } };
+  const [r] = attentionRows(input([item("a")], { a: view([user, raw, state("running"), state("error")]) }, { unread: ["a"] }));
+  expect(r!.reason).toBe("Check the error: boom");
 });

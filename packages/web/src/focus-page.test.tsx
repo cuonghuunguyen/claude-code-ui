@@ -70,9 +70,14 @@ it("lists the waiting requests oldest first with their wait time, then the worki
 });
 
 it("every button is a 44px target on narrow screens and coarse pointers (case 12)", async () => {
-  await render();
+  const s = base();
+  s.list.push(item("e", { state: "error", lastActivity: NOW }));
+  s.views.e = view([{ type: "user_text", id: "u", text: "go", images: [] }, { type: "session_state", id: "st", state: "running" }, { type: "session_state", id: "st", state: "error" }]);
+  s.unread = ["e"];
+  await render(s);
+  expect(el.querySelectorAll('[data-testid="focus-row-action"]').length).toBeGreaterThan(0);
   const buttons = [
-    ...el.querySelectorAll<HTMLElement>('[data-testid="focus-next"], [data-testid="focus-back"], [data-testid="focus-open-session"]'),
+    ...el.querySelectorAll<HTMLElement>('[data-testid="focus-next"], [data-testid="focus-back"], [data-testid="focus-open-session"], [data-testid="focus-row-action"]'),
     ...[...el.querySelectorAll<HTMLElement>('[data-testid="permission-panel"] button')].filter((b) => /^(Deny|Allow always|Allow once|Edit content)$/.test(b.textContent!.trim())),
   ];
   expect(buttons.length).toBeGreaterThanOrEqual(5);
@@ -216,7 +221,7 @@ it("usage-limit row: selecting shows Cancel continue, which calls onCancelContin
   const s: State = { list: [item("l", { state: "idle" })], views: { l: view([{ type: "auto_continue", id: "auto_continue", at: Date.now() + 60_000 }]) } };
   await render(s);
   expect(rows()[0]!.dataset.kind).toBe("limit");
-  expect(rows()[0]!.textContent).toContain("after the usage limit resets");
+  expect(rows()[0]!.textContent).toContain("continues at");
   await act(async () => rows()[0]!.click());
   expect(el.querySelector('[data-testid="focus-kind-line"]')!.textContent).toContain("Usage limit");
   await act(async () => el.querySelector<HTMLElement>('[data-testid="focus-cancel-continue"]')!.click());
@@ -243,4 +248,42 @@ it("an error row says what failed and Open session opens it", async () => {
   expect(el.querySelector('[data-testid="focus-title"]')!.textContent).toBe("Session e");
   await act(async () => button("Open session").click());
   expect(open).toHaveBeenCalledWith("e");
+});
+
+it("an escalated row sits above an older permission row, also among answered lines", async () => {
+  const s: State = { list: [item("a"), item("b")], views: { a: view([bash("pa", "ls", NOW - 600_000)]), b: view([bash("pb", "ls", NOW - 60_000, { escalated: true, reason: "risky" })]) } };
+  await render(s);
+  expect(rows().map((r) => r.dataset.kind)).toEqual(["escalated", "permission"]);
+});
+
+it("error, quiet, finished and limit rows have one action button beside the row, not inside it", async () => {
+  const raw = { type: "session_state", id: "st", state: "error" } as Part;
+  const s: State = {
+    list: [item("e", { state: "error", lastActivity: NOW }), item("l", { state: "idle", lastActivity: NOW }), item("f", { state: "idle", lastActivity: NOW })],
+    views: { e: view([...done, raw]), l: view([{ type: "auto_continue", id: "auto_continue", at: Date.now() + 60_000 }]), f: finish("ok") },
+    unread: ["e", "f"],
+  };
+  await render(s);
+  const actions = [...el.querySelectorAll<HTMLButtonElement>('[data-testid="focus-row-action"]')];
+  expect(actions.map((b) => b.textContent)).toEqual(["Open session", "Cancel continue", "Open session"]);
+  for (const b of actions) {
+    expect(b.closest('[data-testid="focus-row"]')).toBeNull();
+    expect(b.className).toContain("max-md:h-11");
+  }
+  open.mockClear();
+  await act(async () => actions[0]!.click());
+  expect(open).toHaveBeenCalledWith("e");
+  await act(async () => actions[1]!.click());
+  expect(cancelContinue).toHaveBeenCalledWith("l");
+});
+
+it("request rows have no action button", async () => {
+  await render();
+  expect(el.querySelector('[data-testid="focus-row-action"]')).toBeNull();
+});
+
+it("the detail of an idle session with a background task shows its task list", async () => {
+  const s: State = { list: [item("a", { state: "idle", lastActivity: NOW })], views: { a: view([...done, todo(["Plan", "completed"], ["Build", "in_progress"]), { type: "session_state", id: "st", state: "idle", working: true } as Part]) } };
+  await render(s);
+  expect(el.querySelector('[data-testid="focus-running-row"] [data-testid="focus-progress"]')!.textContent).toBe("2 of 2");
 });
