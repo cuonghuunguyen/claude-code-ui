@@ -65,6 +65,7 @@ import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
+import { noteRefs } from "./git-refs.ts";
 import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
@@ -1126,15 +1127,24 @@ export function App() {
   // The cwd whose git status has been answered: the tour waits for it so "Git graph" is not dropped by a status still on its way.
   const [gitChecked, setGitChecked] = useState<string>();
   const panelCwd = panelSession?.cwd;
+  // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
+  const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
   useEffect(() => {
-    if (!panelCwd || status !== "connected") return;
+    if (!panelCwd) return;
+    if (knownGit) return void (setIsGit(true), setGitChecked(panelCwd));
+    if (status !== "connected") return;
     let live = true;
     client.current!.request<GitStatusResult>({ type: "git.status", cwd: panelCwd }).then(
-      (r) => live && (setIsGit(!!r.status), setGitChecked(panelCwd)),
+      (r) => live && (noteRefs(panelCwd, r.status?.refs), setIsGit(!!r.status), setGitChecked(panelCwd)),
       () => live && (setIsGit(false), setGitChecked(panelCwd)),
     );
     return () => void (live = false);
-  }, [panelCwd, status]);
+  }, [panelCwd, status, knownGit]);
+  // The Graph panel stays mounted (hidden) after its first visit, so coming back shows the loaded list at once.
+  const [graphCwd, setGraphCwd] = useState<string>();
+  useEffect(() => {
+    if (pane === "graph" && panelSession) setGraphCwd(panelSession.cwd);
+  }, [pane, panelSession?.cwd]);
   const sidePane = pane === "graph" && !isGit ? "files" : pane;
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
@@ -1724,7 +1734,7 @@ export function App() {
                         connected={status === "connected"}
                         onGitStatus={() =>
                           status === "connected"
-                            ? client.current!.request<GitStatusResult>({ type: "git.status", cwd: s.cwd }).then((r) => r.status)
+                            ? client.current!.request<GitStatusResult>({ type: "git.status", cwd: s.cwd }).then((r) => (noteRefs(s.cwd, r.status?.refs), r.status))
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
                       />
@@ -1771,9 +1781,9 @@ export function App() {
                       sessionId={panelSession.id}
                     />
                   )}
-                  {sidePane === "graph" && (
+                  {isGit && (sidePane === "graph" || graphCwd === panelSession.cwd) && (
                     <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
-                      <GraphPanel key={panelSession.cwd} client={client.current!} cwd={panelSession.cwd} />
+                      <GraphPanel key={panelSession.cwd} hidden={sidePane !== "graph"} client={client.current!} cwd={panelSession.cwd} />
                     </Suspense>
                   )}
                 </section>

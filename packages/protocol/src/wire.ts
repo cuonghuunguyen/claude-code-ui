@@ -153,8 +153,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "terminal.close"; terminalId: string }
   /** Status bar: branch and diff size of `cwd` (a session's cwd, inside the roots). */
   | { type: "git.status"; cwd: string }
-  /** Commit graph page (docs/spec.md "Layout"): `skip` commits already loaded; `ref` a full ref name (refs/heads/… or refs/remotes/…) or `HEAD`, else all refs; `author`/`text` case-insensitive substrings. Reply GitLogResult. */
-  | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string }
+  /** The refs stamp of `cwd`'s repository (as `GitStatus.refs`), from file stats only (no git process, never waits for a graph read). Reply GitRefsResult. */
+  | { type: "git.refs"; cwd: string }
+  /** Commit graph page (docs/spec.md "Layout"): `skip` commits already loaded; `ref` a full ref name (refs/heads/… or refs/remotes/…) or `HEAD`, else all refs; `author`/`text` case-insensitive substrings; `fresh`: skip the daemon's page and branch caches (the Refresh button). Reply GitLogResult. */
+  | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean }
   /** Reply GitCommitResult. */
   | { type: "git.commit"; cwd: string; hash: string }
   /** File text at a commit (`path` relative to the repository top). Same limits and error codes as fs.read (too_large, binary, not_utf8), not_found when absent. Reply `{ content }`. */
@@ -426,19 +428,27 @@ export type TerminalAttachResult = { buffer: string };
 
 /** Larger `terminal.input` data (UTF-8 bytes) is refused (`too_large`); the panel sends a big paste in parts. */
 export const MAX_TERMINAL_INPUT_BYTES = 64 * 1024;
-/** `branch`: short commit hash on a detached HEAD. `added`/`removed`: lines changed in tracked files against HEAD. */
-export type GitStatus = { branch: string; added: number; removed: number };
+/**
+ * `branch`: short commit hash on a detached HEAD. `added`/`removed`: lines changed in tracked files against HEAD.
+ * `refs`: opaque stamp of the repository's refs (file stats of HEAD, packed-refs, refs folders, worktree HEADs); changes when a branch, tag, HEAD or packed refs change. Compare for equality only.
+ */
+export type GitStatus = { branch: string; added: number; removed: number; refs?: string };
+/** `refs` null outside a git work tree. */
+export type GitRefsResult = { refs: string | null };
 /** `status` null outside a git work tree. */
 export type GitStatusResult = { status: GitStatus | null };
 /** `refs`: full ref names pointing here ("HEAD" first when HEAD points here). `time`: author time, unix seconds. */
 export type GitCommit = { hash: string; parents: string[]; author: string; email: string; time: number; subject: string; refs: string[] };
-/** `branches`: on the first page only (skip 0), full ref names of local and remote branches. */
-export type GitLog = { commits: GitCommit[]; more: boolean; branches?: string[] };
+/**
+ * First page only (skip 0): `branches`: full ref names of local and remote branches. `refs`: the refs stamp (as `GitStatus.refs`).
+ * `head`: the full ref HEAD points to (`refs/heads/main`); absent when detached or unknown.
+ */
+export type GitLog = { commits: GitCommit[]; more: boolean; branches?: string[]; refs?: string; head?: string };
 /** `log` null outside a git work tree. */
 export type GitLogResult = { log: GitLog | null };
 /** `added`/`removed` undefined for a binary file. `oldPath`: renamed from. `untracked`: not in the index (status A; git.diff only). */
 export type GitFileChange = { status: "A" | "D" | "M" | "R"; path: string; oldPath?: string; added?: number; removed?: number; untracked?: boolean };
-/** `message`: full message. `truncated`: more than 3000 files changed, list cut. */
+/** `message`: full message. `refs`: always `[]` from `git.commit` (no decoration: slow with thousands of refs); the client shows the refs of the commit from `git.log`. `truncated`: more than 3000 files changed, list cut. */
 export type GitCommitDetail = GitCommit & { message: string; committer: string; committerTime: number; files: GitFileChange[]; truncated?: boolean };
 export type GitCommitResult = { commit: GitCommitDetail };
 /**

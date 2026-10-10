@@ -10,7 +10,7 @@ import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_T
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
-import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, gitDiff, gitDirsOf, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -115,27 +115,6 @@ function real(path: string) {
 
 /** Bytes read from a transcript's end to find its last message; more than a few large tool results. */
 const TAIL_BYTES = 256 * 1024;
-/**
- * `cwd`'s own git dir and the one its worktrees share; undefined without a readable `cwd/.git`. In a linked worktree `.git`
- * is a file (`gitdir: <main>/.git/worktrees/<name>`) whose git dir names the shared one in `commondir`.
- */
-function gitDirsOf(cwd: string): { own: string; common: string } | undefined {
-  const dotGit = join(cwd, ".git");
-  try {
-    if (statSync(dotGit).isDirectory()) return { own: dotGit, common: dotGit };
-    const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
-    if (!gitdir) return undefined;
-    const own = resolve(cwd, gitdir.trim());
-    try {
-      return { own, common: resolve(own, readFileSync(join(own, "commondir"), "utf8").trim()) };
-    } catch {
-      return { own, common: own };
-    }
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * What `git worktree list` of `cwd` reads, from file stats only (no process): the shared HEAD, the worktrees folder and each
  * worktree's HEAD and checkout path. A worktree added, removed or moved (from a terminal too), or a checkout changes it;
@@ -1528,6 +1507,11 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           return reply({ status: await statusOf(cwd) });
         }
+        case "git.refs": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          return reply({ refs: gitRefs(cwd) });
+        }
         case "git.log":
         case "git.diff":
         case "git.commit":
@@ -1537,7 +1521,7 @@ export function createDaemon(opts: {
           const inside = (p: string) => inRoots(real(p) ?? p);
           // No filter text in the log (it may hold a secret).
           try {
-            if (msg.type === "git.log") return reply({ log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, allowed: inside }) });
+            if (msg.type === "git.log") return reply({ log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, fresh: msg.fresh === true, allowed: inside }) });
             if (msg.type === "git.diff") return reply({ diff: await gitDiff(cwd, { base: msg.base, ref: msg.ref, allowed: inside }) });
             if (msg.type === "git.commit") {
               const c = await gitShow(cwd, msg.hash, inside);
