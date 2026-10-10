@@ -50,6 +50,9 @@ export function ViewerDialog({
   // Keep the last target while the close transition runs, so the content does not vanish first.
   const last = useRef(target);
   if (target) last.current = target;
+  // Same for the opener: App clears it with the target, and Base UI asks finalFocus after that render.
+  const lastOpener = useRef(opener);
+  if (target) lastOpener.current = opener;
   const shown = target ?? last.current;
   return (
     <Dialog.Root
@@ -64,7 +67,7 @@ export function ViewerDialog({
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-overlay" />
         <Dialog.Popup
-          finalFocus={() => (opener?.isConnected ? opener : (shownPrompt() ?? true))}
+          finalFocus={() => (lastOpener.current?.isConnected ? lastOpener.current : (shownPrompt() ?? true))}
           onKeyDown={trapTab}
           // App shortcuts and Esc (stop turn) skip while an aria-modal dialog shows; Base UI does not set it.
           aria-modal="true"

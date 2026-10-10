@@ -131,6 +131,21 @@ it("Esc closes and focus returns to the opener", async () => {
   opener.remove();
 });
 
+it("closing as App does (target and opener both cleared) returns focus to the opener, not the visible prompt box", async () => {
+  const prompt = document.createElement("textarea");
+  prompt.setAttribute("aria-label", "Prompt");
+  // jsdom has no layout: the shown prompt box is the one with an offsetParent.
+  Object.defineProperty(prompt, "offsetParent", { get: () => document.body });
+  const opener = document.createElement("button");
+  document.body.append(prompt, opener);
+  opener.focus();
+  await open({ target: { kind: "plan", plan: "x" }, opener });
+  await open({ target: undefined, opener: undefined });
+  await vi.waitFor(() => expect(document.activeElement).toBe(opener));
+  prompt.remove();
+  opener.remove();
+});
+
 it("Esc inside an open CodeMirror search panel closes the panel, not the dialog", async () => {
   const onClose = vi.fn();
   await open({ target: { kind: "file", path: "/w/a.ts" }, onClose });
