@@ -526,17 +526,17 @@ describe("docker side discovery", () => {
 
 describe("a ready side that exits (GH-263)", () => {
   /** A ready side that writes `stderrText` and exits with `code` once `die()` is called. */
-  function dyingSide(stderrText: string, code: number) {
+  function dyingSide(stderrText: string | string[], code: number) {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const exit = new EventEmitter();
     stdout.write(JSON.stringify({ ready: true }) + "\n");
     const proc: SideProcess = { stdin: new PassThrough(), stdout, stderr, kill: () => {}, on: (e, l) => exit.on(e, l) };
-    return { proc, die: () => (stderr.write(stderrText), setTimeout(() => exit.emit("exit", code), 10)) };
+    return { proc, die: () => ([stderrText].flat().forEach((c) => stderr.write(c)), setTimeout(() => exit.emit("exit", code), 10)) };
   }
 
   /** Runs a ready side that dies with `stderrText`; resolves with the side's message. */
-  async function messageAfter(stderrText: string, code = 1) {
+  async function messageAfter(stderrText: string | string[], code = 1) {
     const side = dyingSide(stderrText, code);
     const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
     await s.start("wsl:Ubuntu");
@@ -564,6 +564,19 @@ describe("a ready side that exits (GH-263)", () => {
       "",
     ].join("\n");
     expect(await messageAfter(stderr)).toBe("WSL: Ubuntu stopped (exit code 1): TypeError: ws.ping is not a function. Retry to start it again.");
+  });
+
+  it("a crash line followed by more than 2000 characters of stack frames still names the error", async () => {
+    const frames = Array.from({ length: 60 }, (_, i) => `    at frame${i} (file:///home/u/cli.js:${i}:1)`).join("\n");
+    expect(frames.length).toBeGreaterThan(2000);
+    const stderr = ["claude-ui daemon: uncaughtException: TypeError: ws.ping is not a function", frames, "claude-ui daemon: exit, code 1", "", "Node.js v22.0.0", ""].join("\n");
+    expect(await messageAfter(stderr)).toBe("WSL: Ubuntu stopped (exit code 1): TypeError: ws.ping is not a function. Retry to start it again.");
+  });
+
+  it("a crash line split across stderr chunks is found, and the latest one wins", async () => {
+    const frames = "    at x (file:///home/u/cli.js:1:1)\n".repeat(80);
+    const message = await messageAfter(["claude-ui daemon: unhandledRejection: first\n", "claude-ui daemon: uncaughtExc", "eption: TypeError: split in two\n", frames]);
+    expect(message).toBe("WSL: Ubuntu stopped (exit code 1): TypeError: split in two. Retry to start it again.");
   });
 
   it("without a daemon crash line the last three non-blank lines are named, minus shell noise and the Node trailer", async () => {

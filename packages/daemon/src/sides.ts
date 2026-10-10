@@ -378,7 +378,17 @@ export function createSides(opts: {
       let setupError: string | undefined;
       let setupCode: string | undefined;
       let stderr = "";
-      proc.stderr.on("data", (d: Buffer) => (stderr = (stderr + d).slice(-2000)));
+      // The tail below keeps 2000 chars; a long stack would push the crash line out, so it is remembered as it arrives
+      // (`partial` carries an unfinished line over to the next chunk).
+      const CRASH = /claude-ui daemon: (?:uncaughtException|unhandledRejection): (.*)/;
+      let crashLine: string | undefined;
+      let partial = "";
+      proc.stderr.on("data", (d: Buffer) => {
+        stderr = (stderr + d).slice(-2000);
+        const rows = (partial + d).split("\n");
+        partial = rows.pop()!.slice(-2000);
+        for (const row of rows) crashLine = CRASH.exec(row)?.[1] ?? crashLine;
+      });
       proc.stdin.on("error", () => {});
       lines(proc.stdout, (line) => {
         const phase = /^CLAUDE_UI_PHASE (installing|starting)$/.exec(line.trim());
@@ -406,7 +416,7 @@ export function createSides(opts: {
       proc.on("exit", (code) => {
         const wasReady = s.state === "ready";
         // A crashed side logs `claude-ui daemon: uncaughtException: <error>` first; Node's own fatal print ends in frames and a `Node.js vX` trailer.
-        const crash = /claude-ui daemon: (?:uncaughtException|unhandledRejection): (.*)/.exec(stderr)?.[1];
+        const crash = CRASH.exec(partial)?.[1] ?? crashLine;
         const tail = (
           crash ??
           stderr

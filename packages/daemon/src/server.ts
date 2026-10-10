@@ -49,7 +49,7 @@ export interface Conn {
   on(event: "pong" | "close", listener: () => void): unknown;
 }
 // Compile-time check: a real ws socket satisfies Conn (wss.on/emit are loosely typed, so nothing else would notice a new Conn member it lacks).
-export const wsIsConn = (w: WebSocket): Conn => w;
+void ((w: WebSocket): Conn => w);
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
