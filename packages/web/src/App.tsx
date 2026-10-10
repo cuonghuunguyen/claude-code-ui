@@ -12,6 +12,7 @@ import type {
   ListResult,
   McpListResult,
   RecentProject,
+  MediaResult,
   ModelInfo,
   ModelsResult,
   Part,
@@ -50,6 +51,7 @@ import { Message, MessageAction, MessageActions, MessageContent, MessageResponse
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
+import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
@@ -65,6 +67,7 @@ import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
+import { noteRefs } from "./git-refs.ts";
 import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
@@ -243,6 +246,8 @@ export function App() {
   const [focusSel, setFocusSel] = useState<string>();
   // When this browser first saw a request that came without the daemon's `at`.
   const firstSeen = useRef(new Map<string, number>());
+  /** Last live event per session (ms): the Focus page's quiet time. */
+  const liveAt = useRef(new Map<string, number>());
   // Signal only (GH-159, one setting for the browser since GH-205), set in Settings.
   const signalOnly = useSignalOnly();
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
@@ -753,6 +758,7 @@ export function App() {
         // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
         // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
         const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+        if (live) liveAt.current.set(e.sessionId, Date.now());
         notifyRef.current?.(e, live);
         // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
         if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
@@ -1126,15 +1132,24 @@ export function App() {
   // The cwd whose git status has been answered: the tour waits for it so "Git graph" is not dropped by a status still on its way.
   const [gitChecked, setGitChecked] = useState<string>();
   const panelCwd = panelSession?.cwd;
+  // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
+  const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
   useEffect(() => {
-    if (!panelCwd || status !== "connected") return;
+    if (!panelCwd) return;
+    if (knownGit) return void (setIsGit(true), setGitChecked(panelCwd));
+    if (status !== "connected") return;
     let live = true;
     client.current!.request<GitStatusResult>({ type: "git.status", cwd: panelCwd }).then(
-      (r) => live && (setIsGit(!!r.status), setGitChecked(panelCwd)),
+      (r) => live && (noteRefs(panelCwd, r.status?.refs), setIsGit(!!r.status), setGitChecked(panelCwd)),
       () => live && (setIsGit(false), setGitChecked(panelCwd)),
     );
     return () => void (live = false);
-  }, [panelCwd, status]);
+  }, [panelCwd, status, knownGit]);
+  // The Graph panel stays mounted (hidden) after its first visit, so coming back shows the loaded list at once.
+  const [graphCwd, setGraphCwd] = useState<string>();
+  useEffect(() => {
+    if (pane === "graph" && panelSession) setGraphCwd(panelSession.cwd);
+  }, [pane, panelSession?.cwd]);
   const sidePane = pane === "graph" && !isGit ? "files" : pane;
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
@@ -1716,6 +1731,7 @@ export function App() {
                         onRewind={(userMessageId, mode) =>
                           client.current!.request({ type: "session.rewind", sessionId: s.id, userMessageId, mode })
                         }
+                        onMedia={(partId, index) => client.current!.request<MediaResult>({ type: "session.media", sessionId: s.id, partId, index }).then((r) => r.dataUrl)}
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
@@ -1724,7 +1740,7 @@ export function App() {
                         connected={status === "connected"}
                         onGitStatus={() =>
                           status === "connected"
-                            ? client.current!.request<GitStatusResult>({ type: "git.status", cwd: s.cwd }).then((r) => r.status)
+                            ? client.current!.request<GitStatusResult>({ type: "git.status", cwd: s.cwd }).then((r) => (noteRefs(s.cwd, r.status?.refs), r.status))
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
                       />
@@ -1771,9 +1787,9 @@ export function App() {
                       sessionId={panelSession.id}
                     />
                   )}
-                  {sidePane === "graph" && (
+                  {isGit && (sidePane === "graph" || graphCwd === panelSession.cwd) && (
                     <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
-                      <GraphPanel key={panelSession.cwd} client={client.current!} cwd={panelSession.cwd} />
+                      <GraphPanel key={panelSession.cwd} hidden={sidePane !== "graph"} client={client.current!} cwd={panelSession.cwd} />
                     </Suspense>
                   )}
                 </section>
@@ -1842,6 +1858,9 @@ export function App() {
                   onRespond={respond}
                   onAnswer={answer}
                   onOpenSession={(id) => open(id)}
+                  unread={unread}
+                  activity={(id) => Math.max(liveAt.current.get(id) ?? 0, list.find((s) => s.id === id)?.lastActivity ?? 0)}
+                  onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
                 />
               )}
               {activeId !== NEW_TAB && activeId !== FOCUS_TAB && !shown && (
@@ -2438,6 +2457,7 @@ export function SessionPane({
   onCancelContinue,
   onRewindPreview,
   onRewind,
+  onMedia,
   onRespond,
   onAnswer,
   connected,
@@ -2487,6 +2507,8 @@ export function SessionPane({
   /** Drops the scheduled continue after a usage limit. */
   onCancelContinue?: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
+  /** Loads a payload a snapshot or page left out (session.media). */
+  onMedia?: MediaLoader;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
   onAnswer: (requestId: string, answers: Record<string, string>) => void;
@@ -2569,6 +2591,7 @@ export function SessionPane({
   const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
 
   return (
+    <MediaContext value={onMedia}>
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
       {current ? (
@@ -2680,10 +2703,13 @@ export function SessionPane({
                     preview={() => onRewindPreview(item.part.id)}
                     rewind={async (mode) => {
                       const prompt = item.part as Extract<Part, { type: "user_text" }>;
+                      // Images a snapshot or page left out load before the rewind (it drops the prompt from the daemon). One that fails to load
+                      // stops the rewind with a notice in the panel: the image would be lost for good.
+                      const images = mode === "code" ? [] : await restoreImages(prompt.images, prompt.id, onMedia);
                       await onRewind(prompt.id, mode);
                       setRewinding(undefined);
                       // Conversation modes: the original prompt goes back into the prompt box.
-                      if (mode !== "code") setDraft({ text: prompt.text, images: prompt.images });
+                      if (mode !== "code") setDraft({ text: prompt.text, images });
                     }}
                     onCancel={() => setRewinding(undefined)}
                   />
@@ -2761,6 +2787,7 @@ export function SessionPane({
       </div>
     </OpenRunContext>
     </CwdContext>
+    </MediaContext>
   );
 }
 
@@ -3370,7 +3397,7 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
           {(text || part.images.length > 0) && (
             <Message from="user">
               <MessageContent className="[overflow-wrap:anywhere]">
-                <ImageStrip images={part.images} />
+                <ImageStrip images={part.images} partId={part.id} />
                 <UserMarkdown text={text} />
               </MessageContent>
             </Message>

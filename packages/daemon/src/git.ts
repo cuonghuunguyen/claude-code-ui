@@ -1,27 +1,26 @@
 // Git branch and diff size of a session cwd, for the status bar (`git.status`).
-import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
-import { promisify } from "node:util";
+import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { GIT_LOG_MAX_LIMIT, worktreeNameError, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
+import { runGit } from "./git-runner.ts";
 
-const exec = promisify(execFile);
 // Read-only calls on a repository's own config: no fsmonitor hook (a program from .git/config), no transport (a partial clone's lazy fetch runs core.sshCommand), on any git version.
 const READ_ONLY = ["-c", "core.fsmonitor=false", "-c", "protocol.allow=never"];
 const readEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_NO_LAZY_FETCH: "1" });
-/** Runs `fn`s with at most `n` running at a time, the rest in arrival order. */
+/** Runs `fn`s with at most `n` running at a time, the rest in arrival order; urgent (graph) calls start before queued normal ones. */
 export function limiter(n: number) {
   let active = 0;
+  const urgentWaiting: (() => void)[] = [];
   const waiting: (() => void)[] = [];
-  return async <T>(fn: () => Promise<T>): Promise<T> => {
+  return async <T>(fn: () => Promise<T>, urgent = false): Promise<T> => {
     if (active < n) active++;
-    else await new Promise<void>((r) => waiting.push(r));
+    else await new Promise<void>((r) => (urgent ? urgentWaiting : waiting).push(r));
     try {
       return await fn();
     } finally {
       // The slot passes to the next waiter as is.
-      const next = waiting.shift();
+      const next = urgentWaiting.shift() ?? waiting.shift();
       if (next) next();
       else active--;
     }
@@ -33,14 +32,140 @@ export function limiter(n: number) {
  * every other reply (a session's transcript, a prompt) for seconds. Spread over ticks, other replies go out between them.
  */
 const gitSlot = limiter(4);
-const git = async (cwd: string, ...args: string[]) => (await gitSlot(() => exec("git", [...READ_ONLY, ...args], { cwd, encoding: "utf8", maxBuffer: 64 << 20, env: readEnv() }))).stdout.trim();
+/**
+ * Git looks for a repository upward and skips an invalid `.git` (an empty folder): without a ceiling, a project whose `.git`
+ * is empty would show the repository above the allowed roots. The ceiling is the folder above the repository top that
+ * `gitTopOf` found (the one `topIn` checked against the roots), so git never leaves it.
+ */
+const ceilingEnv = (cwd: string): NodeJS.ProcessEnv => {
+  const top = gitTopOf(cwd);
+  const up = top ? dirname(top) : undefined;
+  if (!top || !up || up === top) return {};
+  return { GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES ? `${up}${delimiter}${process.env.GIT_CEILING_DIRECTORIES}` : up };
+};
+const git = async (cwd: string, ...args: string[]) => (await gitSlot(() => runGit({ cwd, args: [...READ_ONLY, ...args], env: { ...readEnv(), ...ceilingEnv(cwd) } }))).stdout.toString("utf8").trim();
+
+/**
+ * `cwd`'s own git dir and the one its worktrees share; undefined without a readable `cwd/.git`. In a linked worktree `.git`
+ * is a file (`gitdir: <main>/.git/worktrees/<name>`) whose git dir names the shared one in `commondir`. File system only.
+ */
+export function gitDirsOf(cwd: string): { own: string; common: string } | undefined {
+  const dotGit = join(cwd, ".git");
+  try {
+    if (statSync(dotGit).isDirectory()) return { own: dotGit, common: dotGit };
+    const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
+    if (!gitdir) return undefined;
+    const own = resolve(cwd, gitdir.trim());
+    try {
+      return { own, common: resolve(own, readFileSync(join(own, "commondir"), "utf8").trim()) };
+    } catch {
+      return { own, common: own };
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+const statOf = (p: string) => {
+  try {
+    const st = statSync(p);
+    return `${st.mtimeMs}:${st.size}:${st.ino}`;
+  } catch {
+    return "-";
+  }
+};
+const MAX_STAMP_DIRS = 5000;
+let uncached = 0;
+/**
+ * Opaque stamp of the repository's refs, from file stats only (no process): HEAD, packed-refs, reftable list, worktree HEADs
+ * and every folder under refs/. A loose ref update is a lock-file rename in its folder, so the folder mtime changes; a
+ * working-tree edit does not change it. "-" without a readable `.git`; "*<n>" (never equal) past 5000 folders.
+ */
+export function refsStamp(cwd: string): string {
+  const top = gitTopOf(cwd) ?? cwd;
+  const dirs = gitDirsOf(top);
+  if (!dirs) return "-";
+  const parts = [statOf(join(dirs.own, "HEAD")), statOf(join(dirs.common, "packed-refs")), statOf(join(dirs.common, "reftable", "tables.list"))];
+  try {
+    for (const n of readdirSync(join(dirs.common, "worktrees")).sort()) parts.push(`${n}:${statOf(join(dirs.common, "worktrees", n, "HEAD"))}`);
+  } catch {
+    // No linked worktree.
+  }
+  let count = 0;
+  const walk = (rel: string): boolean => {
+    let entries;
+    try {
+      entries = readdirSync(join(dirs.common, "refs", rel), { withFileTypes: true });
+    } catch {
+      return true;
+    }
+    if (++count > MAX_STAMP_DIRS) return false;
+    parts.push(`${rel}:${statOf(join(dirs.common, "refs", rel))}`);
+    for (const e of entries) if (e.isDirectory() && !walk(rel ? `${rel}/${e.name}` : e.name)) return false;
+    return true;
+  };
+  if (!walk("")) return `*${++uncached}`;
+  return parts.join("|");
+}
+/** `refsStamp` of the repository `cwd` belongs to, null outside a work tree; file stats only, no git process (`git.refs`). */
+export function gitRefs(cwd: string): string | null {
+  return gitTopOf(cwd) ? refsStamp(cwd) : null;
+}
+/** The full ref HEAD points to (`refs/heads/x`); undefined when detached or unreadable. */
+function headRef(top: string): string | undefined {
+  const dirs = gitDirsOf(top);
+  if (!dirs) return undefined;
+  try {
+    return /^ref: (refs\/heads\/\S+)\s*$/.exec(readFileSync(join(dirs.own, "HEAD"), "utf8"))?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+/** While a graph request runs, status polls are answered from the last status (no git process) so the graph gets the processes. */
+let graphActive = 0;
+let idle: (() => void)[] = [];
+async function graphTask<T>(fn: () => Promise<T>): Promise<T> {
+  graphActive++;
+  try {
+    return await fn();
+  } finally {
+    if (--graphActive === 0) for (const r of idle.splice(0)) r();
+  }
+}
+const graphIdle = () => (graphActive ? new Promise<void>((r) => idle.push(r)) : Promise.resolve());
+const lru = <V>(max: number) => {
+  const m = new Map<string, V>();
+  return {
+    get(k: string): V | undefined {
+      const v = m.get(k);
+      if (v !== undefined) {
+        m.delete(k);
+        m.set(k, v);
+      }
+      return v;
+    },
+    set(k: string, v: V) {
+      m.delete(k);
+      m.set(k, v);
+      if (m.size > max) m.delete(m.keys().next().value!);
+    },
+  };
+};
+const lastStatus = new Map<string, GitStatus>();
 
 /** null outside a git work tree. Lines added/removed: staged and unstaged changes of tracked files against HEAD (the empty tree before the first commit). */
 export async function gitStatus(cwd: string): Promise<GitStatus | null> {
+  if (graphActive) {
+    const last = lastStatus.get(cwd);
+    if (last) return { ...last, refs: refsStamp(cwd) };
+    await graphIdle();
+  }
   let branch: string;
   try {
     branch = (await git(cwd, "branch", "--show-current")) || (await git(cwd, "rev-parse", "--short", "HEAD"));
   } catch {
+    lastStatus.delete(cwd);
     return null;
   }
   const base = await git(cwd, "rev-parse", "--verify", "-q", "HEAD").catch(() => git(cwd, "hash-object", "-t", "tree", "/dev/null"));
@@ -52,7 +177,9 @@ export async function gitStatus(cwd: string): Promise<GitStatus | null> {
     added += Number(a) || 0;
     removed += Number(r) || 0;
   }
-  return { branch, added, removed };
+  const s = { branch, added, removed, refs: refsStamp(cwd) };
+  lastStatus.set(cwd, s);
+  return s;
 }
 
 /**
@@ -95,9 +222,9 @@ export class WorktreeError extends Error {
 }
 
 /** git with a timeout, no shell; failure becomes a WorktreeError git_failed with the first stderr line. */
-async function run(cwd: string, args: string[], timeout = 30_000, env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" }): Promise<string> {
+async function run(cwd: string, args: string[], timeout = 30_000, env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" }, urgent = false): Promise<string> {
   try {
-    return (await gitSlot(() => exec("git", args, { cwd, encoding: "utf8", timeout, maxBuffer: 64 << 20, env }))).stdout.trim();
+    return (await gitSlot(() => runGit({ cwd, args, timeout, env }), urgent)).stdout.toString("utf8").trim();
   } catch (e) {
     const err = e as { killed?: boolean; stderr?: string; message: string };
     throw new WorktreeError("git_failed", err.killed ? `git ${args[0]} timed out` : (err.stderr?.split("\n").find((l) => l.trim()) ?? err.message));
@@ -341,7 +468,7 @@ const MAX_COMMIT_FILES = 3000;
 const MAX_BRANCHES = 2000;
 const SAFE = [...READ_ONLY, "-c", "log.showSignature=false", "-c", "core.quotePath=false"];
 /** Every git call of the graph: SAFE config first, no lazy fetch. */
-const g = (cwd: string, args: string[]) => run(cwd, [...SAFE, ...args], 30_000, readEnv());
+const g = (cwd: string, args: string[]) => run(cwd, [...SAFE, ...args], 30_000, { ...readEnv(), ...ceilingEnv(cwd) }, true);
 const gok = (cwd: string, ...args: string[]) => g(cwd, args).then(() => true, () => false);
 const bad = (m: string) => new WorktreeError("bad_request", m);
 
@@ -362,17 +489,26 @@ const intIn = (v: unknown, min: number, max: number, def: number, what: string):
   return v;
 };
 
-/** The canonical repository top of `cwd`, null outside a work tree. */
-export async function gitTop(cwd: string): Promise<string | null> {
-  try {
-    return real(await g(cwd, ["rev-parse", "--show-toplevel"]));
-  } catch {
-    return null;
+/**
+ * The canonical repository top of `cwd` (the first folder up with a `.git` entry), null outside a work tree. File system only,
+ * like `gitDirsOf`: a `safe.directory` refusal shows as `git_failed` from the next git call instead of not-a-repo.
+ */
+export function gitTopOf(cwd: string): string | null {
+  let d = resolve(cwd);
+  for (;;) {
+    if (lstatSync(join(d, ".git"), { throwIfNoEntry: false })) return real(d);
+    const up = dirname(d);
+    if (up === d) return null;
+    d = up;
   }
 }
+/** The canonical repository top of `cwd`, null outside a work tree. */
+export async function gitTop(cwd: string): Promise<string | null> {
+  return gitTopOf(cwd);
+}
 /** A cwd inside the roots whose repository top is outside must not expose files outside the roots through git objects. */
-async function topIn(cwd: string, allowed: (p: string) => boolean): Promise<string | null> {
-  const top = await gitTop(cwd);
+function topIn(cwd: string, allowed: (p: string) => boolean): string | null {
+  const top = gitTopOf(cwd);
   if (top && !allowed(top)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
   return top;
 }
@@ -393,47 +529,73 @@ const commitOf = (f: string[]): GitCommit => ({
   refs: refList(f[5]!),
 });
 
-const branchList = async (top: string) => {
+const logCache = lru<{ stamp: string; out: string }>(16);
+const branchCache = lru<{ stamp: string; list: string[] }>(8);
+const commitCache = lru<GitCommitDetail>(64);
+const cacheable = (stamp: string) => stamp !== "-" && !stamp.startsWith("*");
+const branchList = async (top: string, stamp?: string) => {
+  const hit = stamp && cacheable(stamp) ? branchCache.get(top) : undefined;
+  if (hit && hit.stamp === stamp) return hit.list;
   const refs = await g(top, ["for-each-ref", "--format=%(refname)", `--count=${MAX_BRANCHES}`, "refs/heads", "refs/remotes"]);
-  return refs.split("\n").filter((r) => r && !/^refs\/remotes\/[^/]+\/HEAD$/.test(r));
+  const list = refs.split("\n").filter((r) => r && !/^refs\/remotes\/[^/]+\/HEAD$/.test(r));
+  if (stamp) branchCache.set(top, { stamp, list });
+  return list;
 };
-export type GitLogOptions = { skip?: number; limit?: number; ref?: string; author?: string; text?: string; allowed: (p: string) => boolean };
+export type GitLogOptions = { skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean; allowed: (p: string) => boolean };
+const NO_COMMITS = /does not have any commits|bad revision 'HEAD'|unknown revision or path not in the working tree/;
 /** One page of the history, newest first in topological order; null outside a git work tree. */
 export async function gitLog(cwd: string, o: GitLogOptions): Promise<GitLog | null> {
   const skip = intIn(o.skip, 0, 1_000_000, 0, "skip");
   const limit = intIn(o.limit, 1, GIT_LOG_MAX_LIMIT, LOG_DEFAULT, "limit");
   const author = filterText(o.author, "author");
   const text = filterText(o.text, "text");
-  const top = await topIn(cwd, o.allowed);
+  const top = topIn(cwd, o.allowed);
   if (!top) return null;
-  let ref: string | undefined;
-  if (o.ref !== undefined) ref = o.ref === "HEAD" ? o.ref : await checkBranchRef(top, o.ref);
-  if (ref === "HEAD" && !(await gok(top, "rev-parse", "--verify", "-q", "HEAD^{commit}"))) return { commits: [], more: false, ...(skip === 0 && { branches: await branchList(top) }) };
-  const format = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s";
-  let args: string[];
-  const one = text && /^[0-9a-f]{4,64}$/i.test(text) ? await g(top, ["rev-parse", "--verify", "-q", "--end-of-options", `${text}^{commit}`]).catch(() => "") : "";
-  if (one && isHash(one)) args = ["log", "--decorate=full", "-z", format, "-1", "--no-walk", "--end-of-options", one, "--"];
-  else {
-    args = ["log", "--topo-order", "--decorate=full", "-z", format, `--skip=${skip}`, `--max-count=${limit + 1}`];
+  return graphTask(async () => {
+    // Taken before any git call: a ref that moves meanwhile gives a stamp older than the data, never newer.
+    const stamp = refsStamp(top);
+    const first = (log: GitLog, branches: string[]): GitLog => (skip === 0 ? { ...log, branches, refs: stamp, ...optional("head", headRef(top)) } : log);
+    const branches = skip === 0 ? branchList(top, o.fresh ? undefined : stamp) : undefined;
+    // A rejection of the branch list would be unhandled while the ref is checked.
+    branches?.catch(() => {});
+    let ref: string | undefined;
+    if (o.ref !== undefined) ref = o.ref === "HEAD" ? o.ref : await checkBranchRef(top, o.ref, await branches);
+    const format = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s";
+    const parse = (out: string) => out.split("\0").filter(Boolean).map((r) => commitOf(r.split("\x1f")));
+    // A hash-like filter shows that one commit when it names one; else it filters by message text.
+    if (text && /^[0-9a-f]{4,64}$/i.test(text)) {
+      try {
+        const one = parse(await g(top, ["log", "--decorate=full", "-z", format, "-1", "--no-walk", "--end-of-options", `${text}^{commit}`, "--"]));
+        if (one.length === 1) return first({ commits: one, more: false }, branches ? await branches : []);
+      } catch {
+        // Not a commit: filter by text.
+      }
+    }
+    const args = ["log", "--topo-order", "--decorate=full", "-z", format, `--skip=${skip}`, `--max-count=${limit + 1}`];
     if (author || text) args.push("--fixed-strings", "--regexp-ignore-case");
     if (author) args.push(`--author=${author}`);
     if (text) args.push(`--grep=${text}`);
     args.push(...(ref ? ["--end-of-options", ref] : ["--all"]), "--");
-  }
-  let out: string;
-  try {
-    out = await g(top, args);
-  } catch (e) {
-    if (e instanceof WorktreeError && /does not have any commits/.test(e.message)) return { commits: [], more: false, branches: [] };
-    throw e;
-  }
-  const all = out.split("\0").filter(Boolean).map((r) => commitOf(r.split("\x1f")));
-  const log: GitLog = { commits: all.slice(0, limit), more: all.length > limit };
-  if (skip === 0) {
-    log.branches = await branchList(top);
-  }
-  return log;
+    const key = `${top}\0${args.join("\0")}`;
+    let out: string;
+    const hit = !o.fresh && cacheable(stamp) ? logCache.get(key) : undefined;
+    if (hit && hit.stamp === stamp) out = hit.out;
+    else {
+      try {
+        out = await g(top, args);
+      } catch (e) {
+        if (e instanceof WorktreeError && NO_COMMITS.test(e.message)) {
+          if (ref === "HEAD" || /does not have any commits/.test(e.message)) return first({ commits: [], more: false }, ref === "HEAD" ? await branches! : []);
+        }
+        throw e;
+      }
+      if (cacheable(stamp)) logCache.set(key, { stamp, out });
+    }
+    const all = parse(out);
+    return first({ commits: all.slice(0, limit), more: all.length > limit }, branches ? await branches : []);
+  });
 }
+const optional = <K extends string, V>(k: K, v: V | undefined) => (v === undefined ? {} : ({ [k]: v } as Record<K, V>));
 
 /** `diff -z --name-status` output; a copy counts as a rename. */
 function parseNameStatus(z: string): GitFileChange[] {
@@ -463,38 +625,60 @@ function parseNumstat(z: string): Map<string, { added?: number; removed?: number
   return stats;
 }
 
-/** Files of a commit against its first parent (a root commit: against nothing). */
+/** `diff-tree -z --raw --numstat` output: all raw records (`:modes ids status`, path, and an old path for R/C), then all numstat records. A copy counts as a rename. */
+function parseRawNumstat(z: string): { files: GitFileChange[]; stats: Map<string, { added?: number; removed?: number }> } {
+  const t = z.split("\0");
+  const files: GitFileChange[] = [];
+  let i = 0;
+  while (i < t.length && t[i]!.startsWith(":")) {
+    const st = t[i++]!.split(" ").at(-1)![0];
+    if (st === "R" || st === "C") {
+      files.push({ status: "R", oldPath: t[i++]!, path: t[i++]! });
+    } else files.push({ status: st === "A" || st === "D" ? st : "M", path: t[i++]! });
+  }
+  return { files, stats: parseNumstat(t.slice(i).join("\0")) };
+}
+
+/** Files of a commit against its first parent (a root commit: against nothing); one git process. */
 async function commitFiles(top: string, hash: string, base: string | undefined): Promise<{ files: GitFileChange[]; truncated?: boolean }> {
   const tail = base ? [base, hash] : ["--root", hash];
-  const pre = ["diff-tree", "-r", "-z", "-M", "--no-commit-id", "--no-ext-diff", "--no-textconv"];
-  const [names, nums] = await Promise.all([g(top, [...pre, "--name-status", ...tail]), g(top, [...pre, "--numstat", ...tail])]);
-  const files = parseNameStatus(names);
-  const stats = parseNumstat(nums);
+  const { files, stats } = parseRawNumstat(await g(top, ["diff-tree", "-r", "-z", "-M", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--raw", "--numstat", ...tail]));
   const cut = files.length > MAX_COMMIT_FILES;
   const list = files.slice(0, MAX_COMMIT_FILES).map((f) => ({ ...f, ...stats.get(f.path) }));
   return { files: list, ...(cut && { truncated: true }) };
 }
 
-/** Header, message and changed files of one commit; null outside a git work tree. */
+/** Header, message and changed files of one commit (no refs: decorating is slow with thousands of refs); null outside a git work tree. */
 export async function gitShow(cwd: string, hash: string, allowed: (p: string) => boolean): Promise<GitCommitDetail | null> {
   if (!isHash(hash)) throw bad("Invalid commit hash");
-  const top = await topIn(cwd, allowed);
+  const top = topIn(cwd, allowed);
   if (!top) return null;
-  if (!(await gok(top, "cat-file", "-e", `${hash}^{commit}`))) throw new WorktreeError("not_found", "No such commit");
-  const out = await g(top, ["show", "-s", "--decorate=full", "-z", "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%cn%x1f%ct%x1f%B", "--end-of-options", hash]);
-  const f = out.split("\0")[0]!.split("\x1f");
-  const message = f.slice(8).join("\x1f").trimEnd();
-  const c = commitOf([...f.slice(0, 6), message.split("\n")[0]!]);
-  return { ...c, message, committer: f[6]!, committerTime: Number(f[7]), ...(await commitFiles(top, hash, c.parents[0])) };
+  const key = `${top}\0${hash}`;
+  const hit = commitCache.get(key);
+  if (hit) return hit;
+  return graphTask(async () => {
+    let out: string;
+    try {
+      out = await g(top, ["show", "-s", "-z", "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%cn%x1f%ct%x1f%B", "--end-of-options", `${hash}^{commit}`]);
+    } catch (e) {
+      if (e instanceof WorktreeError && /bad object|bad revision|unknown revision|not a valid|does not exist|ambiguous|expected commit type/i.test(e.message)) throw new WorktreeError("not_found", "No such commit");
+      throw e;
+    }
+    const f = out.split("\0")[0]!.split("\x1f");
+    const message = f.slice(7).join("\x1f").trimEnd();
+    const c: GitCommit = { hash: f[0]!, parents: f[1]!.split(" ").filter(Boolean), author: f[2]!, email: f[3]!, time: Number(f[4]), subject: message.split("\n")[0]!.slice(0, MAX_SUBJECT), refs: [] };
+    const detail: GitCommitDetail = { ...c, message, committer: f[5]!, committerTime: Number(f[6]), ...(await commitFiles(top, hash, c.parents[0])) };
+    commitCache.set(key, detail);
+    return detail;
+  });
 }
 
-/** The bytes of `path` (relative to the repository top) at commit `hash`; WorktreeError not_found / too_large (with `size`). */
 /** A blob at a commit, checked (hash, path, repository inside `allowed`, exists, is a blob, at most `max`) but not read: its size comes from `git cat-file -s`. */
 export type BlobRef = { top: string; obj: string; size: number; max: number };
 export async function gitBlobRef(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<BlobRef> {
   if (!isHash(hash)) throw bad("Invalid commit hash");
   const p = repoPath(path);
-  const top = await topIn(cwd, allowed);
+  const top = topIn(cwd, allowed);
   if (!top) throw new WorktreeError("not_git", "Not in a git repository");
   const obj = `${hash}:${p}`;
   if (!(await gok(top, "cat-file", "-e", obj))) throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
@@ -506,20 +690,55 @@ export async function gitBlobRef(cwd: string, hash: string, path: string, allowe
 /** The bytes of a checked blob. */
 export async function gitBlobRead(ref: BlobRef): Promise<Buffer> {
   try {
-    return (await exec("git", [...SAFE, "cat-file", "blob", ref.obj], { cwd: ref.top, encoding: "buffer", timeout: 30_000, maxBuffer: ref.max + 1, env: readEnv() })).stdout;
+    return (await gitSlot(() => runGit({ cwd: ref.top, args: [...SAFE, "cat-file", "blob", ref.obj], maxBuffer: ref.max + 1, env: { ...readEnv(), ...ceilingEnv(ref.top) }, timeout: 30_000 }), true)).stdout;
   } catch (e) {
     throw new WorktreeError("git_failed", (e as Error).message.split("\n")[0]!);
   }
 }
+/** The bytes of `path` (relative to the repository top) at commit `hash`; WorktreeError not_found / too_large (with `size`). */
 export async function gitFileAt(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<Buffer> {
-  return gitBlobRead(await gitBlobRef(cwd, hash, path, allowed, max));
+  if (!isHash(hash)) throw bad("Invalid commit hash");
+  const p = repoPath(path);
+  const top = topIn(cwd, allowed);
+  if (!top) throw new WorktreeError("not_git", "Not in a git repository");
+  const obj = `${hash}:${p}`;
+  return graphTask(async () => {
+    // One process: `cat-file --batch` prints `<oid> <type> <size>` then the bytes, or `<obj> missing`. A line break in the name cannot go through its input.
+    const odd = /[\n\r]/.test(p);
+    const args = [...SAFE, "cat-file", ...(odd ? ["blob", obj] : ["--batch"])];
+    const first = (e: { stderr?: string; message: string }) => e.stderr?.split("\n").find((l) => l.trim()) ?? e.message.split("\n")[0]!;
+    let stdout: Buffer;
+    try {
+      stdout = (await gitSlot(() => runGit({ cwd: top, args, input: odd ? undefined : `${obj}\n`, maxBuffer: max + 512, env: { ...readEnv(), ...ceilingEnv(top) }, timeout: 30_000 }), true)).stdout;
+    } catch (e) {
+      const err = e as { code?: string | number; stdout?: Buffer; stderr?: string; killed?: boolean; message: string };
+      const overflow = err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+      if (odd && overflow) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`);
+      if (odd && /not a valid object|does not exist|bad object|ambiguous|bad file/i.test(err.stderr ?? "")) throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+      if (odd || !overflow || !err.stdout) throw new WorktreeError("git_failed", err.killed ? "git cat-file timed out" : first(err));
+      // Output past the limit: the header is enough to answer too_large.
+      stdout = err.stdout;
+    }
+    if (odd) return stdout;
+    const nl = stdout.indexOf(10);
+    const head = stdout.subarray(0, nl < 0 ? stdout.length : nl).toString("utf8").split(" ");
+    if (head.at(-1) === "missing" || head.at(-1) === "ambiguous") throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+    if (head[1] !== "blob") throw new WorktreeError("not_found", `Not a file: ${p}`);
+    const size = Number(head[2]);
+    if (size > max) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`, size);
+    return stdout.subarray(nl + 1, nl + 1 + size);
+  });
 }
 
 /** `refs/heads/x` / `refs/remotes/o/x` to `x` / `o/x`. */
 const shortRef = (r: string) => r.replace(/^refs\/(heads|remotes)\//, "");
 /** A full branch ref the caller named: refs/heads or refs/remotes, a valid name, existing. */
-async function checkBranchRef(top: string, ref: unknown): Promise<string> {
-  if (typeof ref !== "string" || ref.length > 255 || !/^refs\/(heads|remotes)\//.test(ref) || !(await gok(top, "check-ref-format", ref)) || !(await gok(top, "show-ref", "--verify", "-q", "--", ref))) throw bad("Unknown branch");
+async function checkBranchRef(top: string, ref: unknown, branches?: string[]): Promise<string> {
+  const shaped = typeof ref === "string" && ref.length <= 255 && /^refs\/(heads|remotes)\/[^\0-\x20\x7f~^:?*[\\]+$/.test(ref) && !ref.includes("..") && !ref.includes("@{") && !ref.endsWith("/") && !ref.endsWith(".lock") && !ref.endsWith(".");
+  if (!shaped) throw bad("Unknown branch");
+  // A ref of the branch list exists and is valid: no process. Others (past the list's cap, or no list) are asked of git.
+  if (branches?.includes(ref)) return ref;
+  if (!(await gok(top, "check-ref-format", ref)) || !(await gok(top, "show-ref", "--verify", "-q", "--", ref))) throw bad("Unknown branch");
   return ref;
 }
 /** origin/HEAD's target, else main, else master (local); no fetch. */
@@ -559,7 +778,7 @@ export type GitDiffOptions = { base: unknown; ref?: unknown; allowed: (p: string
 export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff | null> {
   if (o.base !== "head" && o.base !== "branch") throw bad("Invalid base");
   if (o.ref !== undefined && typeof o.ref !== "string") throw bad("Invalid ref");
-  const top = await topIn(cwd, o.allowed);
+  const top = topIn(cwd, o.allowed);
   if (!top) return null;
   const prefix = await g(cwd, ["rev-parse", "--show-prefix"]);
   const head = await g(top, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]).catch(() => "");

@@ -1,6 +1,6 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
-import { closeSync, constants, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { closeSync, constants, createReadStream, existsSync, fstatSync, openSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -10,25 +10,26 @@ import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_T
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
-import { createWorktree, gitDiff, gitBlobRead, gitBlobRef, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
-import { createPlanTracker } from "./plan-usage.ts";
+import { createPlanTracker, usesOauthToken } from "./plan-usage.ts";
 import { CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
 import { createPlugins, redact, type PluginsRequest } from "./plugins.ts";
 import { searchTranscripts } from "./content-search.ts";
-import { cliTurnRunning, interleaveRuns, JsonlTail, transcriptEnd } from "./transcript.ts";
+import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
 import { serveStatic } from "./static.ts";
+import { lastEntryTime, listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
 
 export { MAX_SETTINGS } from "./session-settings.ts";
 
@@ -116,27 +117,6 @@ function real(path: string) {
 /** Bytes read from a transcript's end to find its last message; more than a few large tool results. */
 const TAIL_BYTES = 256 * 1024;
 /**
- * `cwd`'s own git dir and the one its worktrees share; undefined without a readable `cwd/.git`. In a linked worktree `.git`
- * is a file (`gitdir: <main>/.git/worktrees/<name>`) whose git dir names the shared one in `commondir`.
- */
-function gitDirsOf(cwd: string): { own: string; common: string } | undefined {
-  const dotGit = join(cwd, ".git");
-  try {
-    if (statSync(dotGit).isDirectory()) return { own: dotGit, common: dotGit };
-    const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
-    if (!gitdir) return undefined;
-    const own = resolve(cwd, gitdir.trim());
-    try {
-      return { own, common: resolve(own, readFileSync(join(own, "commondir"), "utf8").trim()) };
-    } catch {
-      return { own, common: own };
-    }
-  } catch {
-    return undefined;
-  }
-}
-
-/**
  * What `git worktree list` of `cwd` reads, from file stats only (no process): the shared HEAD, the worktrees folder and each
  * worktree's HEAD and checkout path. A worktree added, removed or moved (from a terminal too), or a checkout changes it;
  * a commit on a branch does not (the list shows branch names). "-" without a readable `.git`.
@@ -181,27 +161,16 @@ const transcriptFile = (projectsDir: string, cwd: string, sessionId: string) => 
 
 /**
  * Permission mode of the last prompt and effort of the last reply in a session's raw transcript (getSessionMessages() drops
- * both fields): the restore fallback when sessions.json has no entry. Absent fields stay undefined.
+ * both fields): the restore fallback when sessions.json has no entry. Absent fields stay undefined. Reads the raw lines readTranscript
+ * parsed (GH-274: no second read of the file).
  */
-function transcriptSettings(projectsDir: string, cwd: string, sessionId: string): { permissionMode?: unknown; effort?: unknown } {
-  let lines: string[];
-  try {
-    lines = readFileSync(transcriptFile(projectsDir, cwd, sessionId), "utf8").split("\n");
-  } catch {
-    return {};
-  }
+function transcriptSettings(entries: readonly unknown[]): { permissionMode?: unknown; effort?: unknown } {
   const found: { permissionMode?: unknown; effort?: unknown } = {};
-  for (let i = lines.length - 1; i >= 0 && (found.permissionMode === undefined || found.effort === undefined); i--) {
-    const line = lines[i]!;
-    if (!line.includes('"permissionMode"') && !line.includes('"effort"')) continue;
-    try {
-      const e = JSON.parse(line) as { type?: string; isSidechain?: boolean; permissionMode?: unknown; effort?: unknown };
-      if (e.isSidechain) continue;
-      if (e.type === "user" && found.permissionMode === undefined) found.permissionMode = e.permissionMode;
-      if (e.type === "assistant" && found.effort === undefined) found.effort = e.effort;
-    } catch {
-      // A line cut by a concurrent write.
-    }
+  for (let i = entries.length - 1; i >= 0 && (found.permissionMode === undefined || found.effort === undefined); i--) {
+    const e = entries[i] as { type?: string; isSidechain?: boolean; permissionMode?: unknown; effort?: unknown } | null;
+    if (!e || typeof e !== "object" || e.isSidechain) continue;
+    if (e.type === "user" && found.permissionMode === undefined && "permissionMode" in e) found.permissionMode = e.permissionMode;
+    if (e.type === "assistant" && found.effort === undefined && "effort" in e) found.effort = e.effort;
   }
   return found;
 }
@@ -215,9 +184,9 @@ function transcriptSettings(projectsDir: string, cwd: string, sessionId: string)
  */
 async function withParallelCalls(file: string | undefined, messages: SessionMessage[]): Promise<SessionMessage[]> {
   if (!file) return messages;
-  let text: string;
+  let buf: Buffer;
   try {
-    text = await readFile(file, "utf8");
+    buf = await readFile(file);
   } catch {
     return messages;
   }
@@ -227,20 +196,15 @@ async function withParallelCalls(file: string | undefined, messages: SessionMess
   const parentOf = new Map<string, string>();
   const lost = new Map<string, Line>();
   const index = new Map<string, number>();
-  for (const line of text.split("\n")) {
-    if (!line) continue;
-    try {
-      const e = JSON.parse(line) as Line;
-      if (!e.uuid) continue;
-      index.set(e.uuid, index.size);
-      if (e.parentUuid) parentOf.set(e.uuid, e.parentUuid);
-      if (have.has(e.uuid)) continue;
-      const content = e.message?.content;
-      const result = e.type === "user" && Array.isArray(content) && content.some((b) => (b as { type?: unknown })?.type === "tool_result");
-      if (result || (e.type === "assistant" && apiIds.has(e.message?.id))) lost.set(e.uuid, e);
-    } catch {
-      // A line cut by a concurrent write.
-    }
+  for (const raw of await parseJsonl(buf)) {
+    const e = raw as Line;
+    if (!e?.uuid) continue;
+    index.set(e.uuid, index.size);
+    if (e.parentUuid) parentOf.set(e.uuid, e.parentUuid);
+    if (have.has(e.uuid)) continue;
+    const content = e.message?.content;
+    const result = e.type === "user" && Array.isArray(content) && content.some((b) => (b as { type?: unknown })?.type === "tool_result");
+    if (result || (e.type === "assistant" && apiIds.has(e.message?.id))) lost.set(e.uuid, e);
   }
   if (!lost.size) return messages;
   const children = new Map<string, Line[]>();
@@ -258,73 +222,20 @@ async function withParallelCalls(file: string | undefined, messages: SessionMess
   return out.sort((a, b) => (index.get(a.uuid) ?? 0) - (index.get(b.uuid) ?? 0));
 }
 
-/** Names, sizes and mtimes of every transcript under `projectsDir`; undefined when it cannot be read. */
-function transcriptStamp(projectsDir: string) {
-  try {
-    const parts: string[] = [];
-    for (const dir of readdirSync(projectsDir, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue;
-      const path = join(projectsDir, dir.name);
-      for (const f of readdirSync(path)) {
-        if (!f.endsWith(".jsonl")) continue;
-        try {
-          const st = statSync(join(path, f));
-          parts.push(`${dir.name}/${f}:${st.size}:${st.mtimeMs}`);
-        } catch {
-          // Deleted meanwhile.
-        }
-      }
-    }
-    return parts.join("\n");
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Time of the last user or assistant entry in a session's transcript, read from its end. Not the file mtime: on exit
  * the CLI appends metadata (`last-prompt`, `cost-state`), so every live session looks just used after a daemon restart.
  * Undefined when the file or such an entry is not found (e.g. the entry is further back than `TAIL_BYTES`).
  */
-function lastMessageAt(projectsDir: string, cwd: string, sessionId: string, scanned?: { lastModified: number; fileSize?: number }) {
-  // Not found (long cwd): the list falls back to the file mtime.
+async function lastMessageAt(projectsDir: string, cwd: string, sessionId: string, scanned?: { lastModified: number; fileSize?: number }) {
   const file = transcriptFile(projectsDir, cwd, sessionId);
-  // The scan's own stamp: no open per transcript per list, which blocks the event loop (slow on Windows with hundreds of transcripts).
   const listed = scanned?.fileSize !== undefined ? `${scanned.lastModified}:${scanned.fileSize}` : undefined;
   const hit = listed && lastMessageCache.get(file);
   if (hit && hit.listed === listed) return hit.at;
-  let fd: number | undefined;
-  try {
-    fd = openSync(file, "r");
-    const { size, mtimeMs } = fstatSync(fd);
-    const version = `${mtimeMs}:${size}`;
-    const cached = lastMessageCache.get(file);
-    if (cached?.version === version) return (lastMessageCache.set(file, { ...cached, listed }), cached.at);
-    let at: number | undefined;
-    const buf = Buffer.alloc(Math.min(size, TAIL_BYTES));
-    readSync(fd, buf, 0, buf.length, size - buf.length);
-    const lines = buf.toString("utf8").split("\n");
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (!lines[i].includes('"timestamp"')) continue;
-      try {
-        const e = JSON.parse(lines[i]) as { type?: string; timestamp?: string };
-        const t = (e.type === "user" || e.type === "assistant") && Date.parse(e.timestamp ?? "");
-        if (t) {
-          at = t;
-          break;
-        }
-      } catch {
-        // The first line of the tail is cut.
-      }
-    }
-    lastMessageCache.set(file, { version, listed, at });
-    return at;
-  } catch {
-    // No transcript at that path.
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-  return undefined;
+  const read = await lastEntryTime(file, TAIL_BYTES);
+  if (!read) return undefined;
+  lastMessageCache.set(file, { version: read.version, listed, at: read.at });
+  return read.at;
 }
 
 /**
@@ -363,10 +274,14 @@ export function createDaemon(opts: {
   listCache?: boolean;
   /** Interval of the WebSocket ping that drops a half-open socket (default 15 s; tests use a few hundred ms). */
   pingMs?: number;
+  /** The Claude login is CLAUDE_CODE_OAUTH_TOKEN (plan-usage.ts fallback); default: whether the env var is set. Never its value. */
+  oauthToken?: boolean;
   hostnames?: string[];
   /** Name shown for this computer in Settings (default: the OS host name); `desktopForcedOff`: started with --no-os-notify. */
   host?: string;
   desktopForcedOff?: boolean;
+  /** List once when the server starts listening (model list, transcript scan, last-message times), so the first browser connect does not pay for them (GH-276). */
+  warmUp?: boolean;
   cli?: CliRunner;
   configHoldMs?: number;
   configPollMs?: number;
@@ -403,7 +318,7 @@ export function createDaemon(opts: {
     }
   };
   // Account-wide, so not a session event: every connection gets each change.
-  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query) });
+  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query), oauthToken: opts.oauthToken ?? usesOauthToken() });
   /** Options of every session: settings changes are saved under its ID. */
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
@@ -433,7 +348,7 @@ export function createDaemon(opts: {
   const restoring = new Map<string, Promise<Session | undefined>>();
   // Sessions whose delete is in progress (session.delete).
   const deleting = new Set<string>();
-  const history = { listSessions, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, ...opts.history };
+  const history = { listSessions: listSessionsOffThread, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, ...opts.history };
   const claudeDir = opts.claudeDir ?? (process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
@@ -676,7 +591,7 @@ export function createDaemon(opts: {
           .catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []));
       }),
     );
-    return { main, runs };
+    return { main, runs, entries: stamp === undefined ? undefined : cache.tail.entries };
   }
 
   /**
@@ -821,12 +736,13 @@ export function createDaemon(opts: {
   function transcripts(): ReturnType<typeof listSessions> {
     if (!scan) {
       // Taken before the scan: a file written during it changes the next stamp.
-      const stamp = listCache ? transcriptStamp(projectsDir) : undefined;
-      if (stamp !== undefined && lastScan?.stamp === stamp) return Promise.resolve(lastScan.result);
-      return (scan = history
-        .listSessions()
-        .then((result) => ((lastScan = stamp === undefined ? undefined : { stamp, result }), result))
-        .finally(() => (scan = undefined)));
+      return (scan = (async () => {
+        const stamp = listCache ? await transcriptStamp(projectsDir) : undefined;
+        if (stamp !== undefined && lastScan?.stamp === stamp) return lastScan.result;
+        const result = await history.listSessions();
+        lastScan = stamp === undefined ? undefined : { stamp, result };
+        return result;
+      })().finally(() => (scan = undefined)));
     }
     return (nextScan ??= scan.catch(() => {}).then(() => ((nextScan = undefined), transcripts())));
   }
@@ -898,11 +814,12 @@ export function createDaemon(opts: {
     // transcripts share a few dozen cwds.
     const canonical = new Map<string, string | undefined>();
     const allowedCwd = (cwd: string) => (canonical.has(cwd) ? canonical.get(cwd) : (canonical.set(cwd, allowed(cwd)), canonical.get(cwd)));
+    const lastAt = new Map(await mapLimit(all, 8, async (t) => [t.sessionId, t.cwd && allowedCwd(t.cwd) ? await lastMessageAt(projectsDir, t.cwd, t.sessionId, t) : undefined] as const));
     for (const t of all) {
       if (!t.cwd || !allowedCwd(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
       const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId, t) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
@@ -963,14 +880,14 @@ export function createDaemon(opts: {
         transcriptCwds.set(id, info.cwd);
         // Before the read: a write during it changes the stamp, so the first subscriber syncs it.
         stamps.set(id, statStamp(transcriptFile(projectsDir, info.cwd, id)));
-        const { main: messages, runs } = await readTranscript(id, info.cwd);
+        const { main: messages, runs, entries } = await readTranscript(id, info.cwd);
         await modelList().catch(() => {});
         // Its worktree is being removed: no live session in a directory about to go.
         if (isRemoving(info.cwd)) return undefined;
         // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
         const used = transcriptModel(messages);
         // No entry (sessions.json lost, a session of the terminal CLI): mode and effort the transcript last recorded.
-        const saved = settings.get(id) ?? { model: undefined, ...transcriptSettings(projectsDir, info.cwd, id) };
+        const saved = settings.get(id) ?? { model: undefined, ...transcriptSettings(entries ?? []) };
         const model = isModel(saved?.model) ? saved.model : used && ((await modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
         // A mode the daemon does not enable now (bypass without CLAUDE_UI_ALLOW_BYPASS) falls back to the default.
         const modes = permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model ?? "default") });
@@ -1037,7 +954,7 @@ export function createDaemon(opts: {
   /** Piece of a media file: undefined when it can no longer be read (gone, outside the roots, side stopped). */
   type MediaRead = (offset: number, length: number) => Promise<MediaReadResult | undefined>;
   /** fs.media capabilities: nonce -> a hub file (canonical path, streamed from disk) or bytes read in pieces (a file at a commit, a side's file), issuing connection, last use. */
-  const media = new Map<string, { src: { kind: "file"; path: string } | { kind: "bytes"; read: MediaRead; mime: string; name: string }; ws: Conn; used: number }>();
+  const media = new Map<string, { src: { kind: "file"; path: string } | { kind: "bytes"; read: MediaRead; mime: string; name: string }; ws: Conn; used: number; live?: Set<ServerResponse> }>();
   const mediaHead = (type: string, name: string, size: number, start: number, end: number, ranged: boolean) => ({
     ...MEDIA_HEADERS,
     "content-type": type,
@@ -1087,7 +1004,13 @@ export function createDaemon(opts: {
     const entry = mediaEntry(nonce);
     if (!entry) return void res.writeHead(404).end();
     entry.used = Date.now();
-    if (entry.src.kind === "bytes") return void serveBytes(req, res, entry.src).catch(() => res.destroy());
+    if (entry.src.kind === "bytes") {
+      // The connection's close ends a piece read still waiting on a side.
+      const live = (entry.live ??= new Set());
+      live.add(res);
+      res.once("close", () => live.delete(res));
+      return void serveBytes(req, res, entry.src).catch(() => res.destroy());
+    }
     const path = entry.src.path;
     const type = mediaType(path);
     if (!type || allowed(path) !== path) return void res.writeHead(404).end();
@@ -1154,6 +1077,7 @@ export function createDaemon(opts: {
 
   // A side's start, failure or stop changes the side list every client shows.
   opts.sides?.onChange(() => broadcast({ type: "sessions.changed" }));
+  if (opts.warmUp) http.once("listening", () => void list().catch((e) => console.warn("warm-up list failed:", (e as Error).message)));
   /** This daemon has the session: live, or a transcript inside the roots. */
   const isLocalSession = async (id: string) => sessions.has(id) || (UUID.test(id) && !!allowed((await history.getSessionInfo(id).catch(() => undefined))?.cwd));
 
@@ -1233,7 +1157,7 @@ export function createDaemon(opts: {
     ws.on("close", () => {
       router?.close();
       connections.delete(ws);
-      mediaNonces.forEach((n) => media.delete(n));
+      mediaNonces.forEach((n) => (media.get(n)?.live?.forEach((r) => r.destroy()), media.delete(n)));
       blobs.clear();
       unsubscribes.forEach((u) => u());
       unwatchAll();
@@ -1283,22 +1207,22 @@ export function createDaemon(opts: {
       if (!file) return missingInRoots(m.path) ? { code: "not_found", message: `no such file: ${m.path}` } : { code: "path_not_allowed", message: `outside the allowlisted roots: ${m.path}` };
       const fileMime = mediaType(file);
       if (!fileMime) return { code: "unsupported_type", message: `not an image, video or audio file: ${m.path}` };
-      let fd: number;
+      let fh;
       try {
         // Same open as GET /media (no-follow, non-blocking: see the ponytail there).
-        fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+        fh = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
       } catch (err) {
         return { code: "fs_error", message: String(err) };
       }
       try {
-        const st = fstatSync(fd);
+        const st = await fh.stat();
         if (!st.isFile()) return { code: "not_a_file", message: `not a file: ${m.path}` };
         const n = Math.max(0, Math.min(m.length, st.size - m.offset));
         const buf = Buffer.alloc(n);
-        const got = n ? readSync(fd, buf, 0, n, m.offset) : 0;
+        const got = n ? (await fh.read(buf, 0, n, m.offset)).bytesRead : 0;
         return { data: buf.subarray(0, got).toString("base64"), size: st.size, mtime: st.mtimeMs, mime: fileMime };
       } finally {
-        closeSync(fd);
+        await fh.close();
       }
     };
     const isPiece = (o: unknown, l: unknown) => Number.isSafeInteger(o) && (o as number) >= 0 && Number.isSafeInteger(l) && (l as number) >= 0 && (l as number) <= MEDIA_CHUNK;
@@ -1395,6 +1319,13 @@ export function createDaemon(opts: {
           if (msg.until !== undefined && (typeof msg.until !== "string" || msg.until.length > 200)) return fail("bad_request", "until must be a string of at most 200 characters");
           const page = s.page(msg.before, msg.until);
           return page ? reply({ page }) : fail("unknown_cursor", `no part ${msg.before}`);
+        }
+        case "session.media": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (typeof msg.partId !== "string" || msg.partId.length > 200 || !Number.isInteger(msg.index) || msg.index < 0) return fail("bad_request", "partId must be a part id and index a non-negative integer");
+          const dataUrl = s.media(msg.partId, msg.index);
+          return dataUrl ? reply({ dataUrl }) : fail("unknown_media", `no media ${msg.index} in part ${msg.partId}`);
         }
         case "session.unsubscribe": {
           // No find(): this must not restore a session.
@@ -1641,6 +1572,11 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           return reply({ status: await statusOf(cwd) });
         }
+        case "git.refs": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          return reply({ refs: gitRefs(cwd) });
+        }
         case "git.log":
         case "git.diff":
         case "git.commit":
@@ -1650,7 +1586,7 @@ export function createDaemon(opts: {
           const inside = (p: string) => inRoots(real(p) ?? p);
           // No filter text in the log (it may hold a secret).
           try {
-            if (msg.type === "git.log") return reply({ log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, allowed: inside }) });
+            if (msg.type === "git.log") return reply({ log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, fresh: msg.fresh === true, allowed: inside }) });
             if (msg.type === "git.diff") return reply({ diff: await gitDiff(cwd, { base: msg.base, ref: msg.ref, allowed: inside }) });
             if (msg.type === "git.commit") {
               const c = await gitShow(cwd, msg.hash, inside);

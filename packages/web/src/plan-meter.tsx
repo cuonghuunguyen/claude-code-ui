@@ -9,6 +9,11 @@ import { ringWindow, useUsageRing } from "./usage-ring.ts";
 /** A window at or past this percent shows the warning state, also when the server still grades it normal. */
 const WARN_PERCENT = 80;
 
+/** Daemon login CLAUDE_CODE_OAUTH_TOKEN (claude setup-token): plan usage is not readable (GH-261). */
+export const OAUTH_UNAVAILABLE = "Plan usage is not available with CLAUDE_CODE_OAUTH_TOKEN";
+const OAUTH_NOTE = "Its token (claude setup-token) cannot read plan usage. Run claude login on the daemon's computer to see it here.";
+const OAUTH_PARTIAL = "Only the session and weekly windows are known with CLAUDE_CODE_OAUTH_TOKEN, updated after each turn. Run claude login for every window.";
+
 export type PlanLevel = "ok" | "warning" | "limit";
 const RANK: PlanLevel[] = ["ok", "warning", "limit"];
 
@@ -89,13 +94,18 @@ export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bo
           <Popover.Title className="font-medium">Plan usage</Popover.Title>
           {usage.plan && <span className="text-muted-foreground text-xs">{`${usage.plan[0]!.toUpperCase()}${usage.plan.slice(1)} plan`}</span>}
         </div>
+        {usage.auth === "oauth_token" && (
+          <p data-testid="plan-auth-note" className="mt-2 text-muted-foreground text-xs">
+            {usage.windows.length ? OAUTH_PARTIAL : `${OAUTH_UNAVAILABLE}. ${OAUTH_NOTE}`}
+          </p>
+        )}
         {limited && (
           <p data-testid="plan-limit" className="mt-2 flex items-start gap-1.5 text-destructive text-xs">
             <TriangleAlertIcon className="mt-px size-3.5 shrink-0" aria-hidden />
             {`${limitText(usage)}.${usage.statusResetsAt ? ` ${resetText(usage.statusResetsAt, now)}` : ""}`}
           </p>
         )}
-        <ul className="mt-3 flex flex-col gap-3">
+        {usage.windows.length > 0 && <ul className="mt-3 flex flex-col gap-3">
           {usage.windows.map((w) => {
             const l = windowLevel(w);
             return (
@@ -113,7 +123,7 @@ export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bo
               </li>
             );
           })}
-        </ul>
+        </ul>}
       </Popover.Popup>
     </Popover.Positioner>
   </Popover.Portal>
@@ -125,9 +135,12 @@ export function PlanMeter({ usage }: { usage: PlanUsage }) {
   // Settings > Usage limits > Usage ring shows: the number and ring follow the chosen window; level, color and icon stay with the worst one.
   const head = ringWindow(usage.windows, useUsageRing()) ?? headline(usage.windows, level);
   const limited = usage.status === "rejected";
+  const unavailable = usage.windows.length === 0 && usage.auth === "oauth_token";
   const summary = limited
     ? `Plan usage: ${lower(limitText(usage))}${usage.statusResetsAt ? `, ${lower(resetText(usage.statusResetsAt))}` : ""}`
-    : `${NAME[level]}: ${head ? `${head.label} ${head.percent}%${head.resetsAt ? `, ${lower(resetText(head.resetsAt))}` : ""}` : "no windows"}`;
+    : unavailable
+      ? OAUTH_UNAVAILABLE
+      : `${NAME[level]}: ${head ? `${head.label} ${head.percent}%${head.resetsAt ? `, ${lower(resetText(head.resetsAt))}` : ""}` : "no windows"}`;
   return (
     <Popover.Root>
       <Popover.Trigger
@@ -135,7 +148,8 @@ export function PlanMeter({ usage }: { usage: PlanUsage }) {
         title={summary}
         data-testid="plan-meter"
         data-level={level}
-        className={`flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs tabular-nums outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-accent max-md:h-11 pointer-coarse:h-11 ${level === "ok" ? "text-muted-foreground hover:text-foreground data-popup-open:text-foreground" : TEXT[level]}`}
+        data-unavailable={unavailable || undefined}
+        className={`flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs tabular-nums outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-accent max-md:h-11 pointer-coarse:h-11 ${unavailable ? "max-md:min-w-11 max-md:justify-center pointer-coarse:min-w-11 pointer-coarse:justify-center " : ""}${level === "ok" ? "text-muted-foreground hover:text-foreground data-popup-open:text-foreground" : TEXT[level]}`}
       >
         {/* Color is not the only signal: the warning and limit states add an icon. */}
         {level === "ok" ? (

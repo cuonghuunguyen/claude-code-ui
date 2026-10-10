@@ -431,11 +431,11 @@ describe.skipIf(process.platform === "win32")("side media failures", () => {
           for (const l of lines) {
             out.write(tamper(l) + "\n");
             // The side stops reading after this many data pieces: the next one is never answered.
-            if (/"data":"[A-Za-z0-9+/=]+"/.test(l) && ++pieces === muteAfterPieces) p.stdin.pause();
+            if (/"data":"[A-Za-z0-9+/=]+"/.test(l) && ++pieces === muteAfterPieces) (p.stdin as unknown as { pause(): void }).pause();
           }
         });
         const exits: ((code: number | null) => void)[] = [];
-        die = () => (p.stdin.pause(), exits.forEach((l) => l(1)));
+        die = () => ((p.stdin as unknown as { pause(): void }).pause(), exits.forEach((l) => l(1)));
         return { ...p, stdout: out, on: (e, l) => (exits.push(l), p.on(e, l)) };
       },
     });

@@ -13,6 +13,7 @@ import { MAX_TERMINAL_INPUT_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCO
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
+import { scanThreadConfig } from "../src/session-scan.ts";
 import { SideSocket } from "../src/sides.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, yielded } from "./fake-query.ts";
@@ -196,6 +197,39 @@ describe("daemon", () => {
 
     await b.request({ type: "session.prompt", sessionId, text: "again" });
     await b.waitFor((m) => m.type === "event" && m.part.type === "turn_result" && m.seq > seen);
+  });
+
+  it("session.media replies the payload a paged snapshot left out; errors unknown_media and bad_request (GH-274)", async () => {
+    const sessionId = "6c3d4e5f-7081-4b92-8ca3-b4c5d6e7f809";
+    const png = `data:image/png;base64,${"iVBOR".repeat(4000)}`;
+    const turn = [
+      { type: "user", uuid: "u1", session_id: sessionId, parent_tool_use_id: null, message: { role: "user", content: [{ type: "text", text: "look" }, { type: "image", source: { type: "base64", media_type: "image/png", data: png.split(",")[1] } }] } },
+      { type: "assistant", uuid: "a1", session_id: sessionId, parent_tool_use_id: null, message: { id: "m1", role: "assistant", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" } },
+    ];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (sid: string) => (sid === sessionId ? { sessionId, cwd: webRoot, summary: "Img" } : undefined)) as never,
+        getSessionMessages: (async () => turn) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const b = await client((d.address() as AddressInfo).port);
+      const sub = (await b.request({ type: "session.subscribe", sessionId, sinceSeq: 0, paged: true })) as { result: { snapshot: Snapshot } };
+      expect(JSON.stringify(sub).length).toBeLessThan(5000);
+      const user = sub.result.snapshot.page.parts.find((p) => p.type === "user_text")!;
+      expect(user.type === "user_text" && user.images[0]!.startsWith("omitted:image/png;")).toBe(true);
+      expect(await b.request({ type: "session.media", sessionId, partId: user.id, index: 0 })).toMatchObject({ result: { dataUrl: png } });
+      expect(await b.request({ type: "session.media", sessionId, partId: user.id, index: 3 })).toMatchObject({ type: "error", code: "unknown_media" });
+      expect(await b.request({ type: "session.media", sessionId, partId: user.id, index: -1 })).toMatchObject({ type: "error", code: "bad_request" });
+    } finally {
+      d.close();
+    }
   });
 
   it("paged subscribe replies with the last page and replays no event; session.page, session.edits and their errors; from snapshots a new epoch at that turn", async () => {
@@ -1535,6 +1569,63 @@ describe("daemon", () => {
       expect(scans).toBe(3);
     } finally {
       d.close();
+    }
+  });
+
+  it("warmUp lists once when the server starts: the first session.list reuses that scan", async () => {
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    mkdirSync(join(projectsDir, "-p"));
+    writeFileSync(join(projectsDir, "-p", "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b.jsonl"), "{}\n");
+    let scans = 0;
+    const make = (warmUp?: boolean) =>
+      createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        query: fakeQuery as never,
+        projectsDir,
+        listCache: true,
+        warmUp,
+        history: { listSessions: (async () => (scans++, [])) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+      });
+    const cold = make();
+    await new Promise<void>((r) => cold.listen(0, "127.0.0.1", r));
+    await new Promise((r) => setTimeout(r, 100));
+    cold.close();
+    expect(scans).toBe(0);
+    const d = make(true);
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      await vi.waitFor(() => expect(scans).toBe(1));
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.list" });
+      expect(scans).toBe(1);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("the default history scans transcripts in the worker thread, not on the main thread", async () => {
+    const root = mkdtempSync(join(tmpdir(), "claude-cfg-"));
+    mkdirSync(join(root, "projects"));
+    const mark = join(root, "thread-ran");
+    const realEnv = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = root;
+    scanThreadConfig.reset();
+    const realScript = scanThreadConfig.script;
+    scanThreadConfig.script = `const { parentPort } = require("node:worker_threads"); parentPort.on("message", ({ id }) => { require("node:fs").writeFileSync(${JSON.stringify(mark)}, "x"); parentPort.postMessage({ id, sessions: [] }); });`;
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, claudeDir: root });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.list" });
+      expect(existsSync(mark)).toBe(true);
+    } finally {
+      d.close();
+      scanThreadConfig.script = realScript;
+      scanThreadConfig.reset();
+      if (realEnv === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = realEnv;
     }
   });
 
