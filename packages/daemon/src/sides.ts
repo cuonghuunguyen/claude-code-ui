@@ -405,7 +405,19 @@ export function createSides(opts: {
       });
       proc.on("exit", (code) => {
         const wasReady = s.state === "ready";
-        const tail = stderr.trim().split("\n").filter((l) => !/cannot set terminal process group|no job control/.test(l)).slice(-3).join(" ");
+        // A crashed side logs `claude-ui daemon: uncaughtException: <error>` first; Node's own fatal print ends in frames and a `Node.js vX` trailer.
+        const crash = /claude-ui daemon: (?:uncaughtException|unhandledRejection): (.*)/.exec(stderr)?.[1];
+        const tail = (
+          crash ??
+          stderr
+            .trim()
+            .split("\n")
+            .filter((l) => l.trim() && !/cannot set terminal process group|no job control|^Node\.js v\d/.test(l))
+            .slice(-3)
+            .join(" ")
+        )
+          .trim()
+          .slice(0, 300);
         const message =
           setupError ??
           (wasReady

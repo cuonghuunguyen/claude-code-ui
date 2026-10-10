@@ -535,14 +535,45 @@ describe("a ready side that exits (GH-263)", () => {
     return { proc, die: () => (stderr.write(stderrText), setTimeout(() => exit.emit("exit", code), 10)) };
   }
 
-  it("a non-zero exit names the last stderr lines, without shell noise", async () => {
-    const side = dyingSide(["bash: cannot set terminal process group (1): x", "no job control in this shell", "at a", "at b", "TypeError: ws.ping is not a function", ""].join("\n"), 1);
+  /** Runs a ready side that dies with `stderrText`; resolves with the side's message. */
+  async function messageAfter(stderrText: string, code = 1) {
+    const side = dyingSide(stderrText, code);
     const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
     await s.start("wsl:Ubuntu");
     side.die();
     await expect.poll(() => s.list().find((x) => x.id === "wsl:Ubuntu")?.state).toBe("error");
-    expect(s.list().find((x) => x.id === "wsl:Ubuntu")?.message).toBe("WSL: Ubuntu stopped (exit code 1): at a at b TypeError: ws.ping is not a function. Retry to start it again.");
+    const message = s.list().find((x) => x.id === "wsl:Ubuntu")?.message;
     s.close();
+    return message;
+  }
+
+  it("a crash names the error, not the stack frames or Node's trailer (real Node output order)", async () => {
+    const stderr = [
+      "bash: cannot set terminal process group (1): x",
+      "no job control in this shell",
+      "claude-ui daemon: uncaughtException: TypeError: ws.ping is not a function",
+      "    at Timeout._onTimeout (file:///home/u/cli.js:6726:12)",
+      "    at listOnTimeout (node:internal/timers:585:17)",
+      "claude-ui daemon: exit, code 1",
+      "file:///home/u/cli.js:6726",
+      "TypeError: ws.ping is not a function",
+      "    at Timeout._onTimeout (file:///home/u/cli.js:6726:12)",
+      "    at process.processTimers (node:internal/timers:521:7)",
+      "",
+      "Node.js v22.0.0",
+      "",
+    ].join("\n");
+    expect(await messageAfter(stderr)).toBe("WSL: Ubuntu stopped (exit code 1): TypeError: ws.ping is not a function. Retry to start it again.");
+  });
+
+  it("without a daemon crash line the last three non-blank lines are named, minus shell noise and the Node trailer", async () => {
+    const message = await messageAfter(["bash: cannot set terminal process group (1): x", "no job control in this shell", "a", "b", "", "c", "d", "", "Node.js v22.0.0", ""].join("\n"));
+    expect(message).toBe("WSL: Ubuntu stopped (exit code 1): b c d. Retry to start it again.");
+  });
+
+  it("the tail is capped at 300 characters", async () => {
+    const message = (await messageAfter("x".repeat(1000)))!;
+    expect(message).toBe(`WSL: Ubuntu stopped (exit code 1): ${"x".repeat(300)}. Retry to start it again.`);
   });
 
   it("a non-zero exit with no stderr keeps the short message", async () => {

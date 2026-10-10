@@ -3780,9 +3780,11 @@ describe("keep-alive ping on a side's virtual connection (GH-263)", () => {
     const d = pingDaemon();
     const out: ServerMessage[] = [];
     const ws = new SideSocket((data) => out.push(JSON.parse(data)), () => 0);
+    const ping = vi.spyOn(ws, "ping");
     try {
       d.accept(ws);
       await nap(300); // ~10 ticks
+      expect(ping.mock.calls.length).toBeGreaterThanOrEqual(3);
       expect(ws.readyState).toBe(1);
       ws.emit("message", JSON.stringify({ type: "ping", reqId: "r1" }));
       await vi.waitFor(() => expect(out).toContainEqual({ type: "reply", reqId: "r1", result: {} }));
@@ -3790,6 +3792,23 @@ describe("keep-alive ping on a side's virtual connection (GH-263)", () => {
       ws.close();
       d.close();
     }
+  });
+
+  it("SideSocket.ping() answers pong after a microtask; terminate() closes it", async () => {
+    const ws = new SideSocket(() => {}, () => 0);
+    const events: string[] = [];
+    ws.on("pong", () => events.push("pong"));
+    ws.on("close", () => events.push("close"));
+    ws.ping();
+    expect(events).toEqual([]);
+    await Promise.resolve();
+    expect(events).toEqual(["pong"]);
+    ws.terminate();
+    expect(events).toEqual(["pong", "close"]);
+    expect(ws.readyState).toBe(3);
+    ws.ping();
+    await Promise.resolve();
+    expect(events).toEqual(["pong", "close"]);
   });
 
   it("a socket whose ping and terminate throw does not crash the pinger and is dropped once", async () => {

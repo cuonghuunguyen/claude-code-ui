@@ -5,7 +5,7 @@ import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { WebSocketServer, type RawData } from "ws";
+import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
@@ -48,6 +48,8 @@ export interface Conn {
   on(event: "error", listener: (err: Error) => void): unknown;
   on(event: "pong" | "close", listener: () => void): unknown;
 }
+// Compile-time check: a real ws socket satisfies Conn (wss.on/emit are loosely typed, so nothing else would notice a new Conn member it lacks).
+export const wsIsConn = (w: WebSocket): Conn => w;
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
@@ -1131,7 +1133,8 @@ export function createDaemon(opts: {
   const drop = (ws: Conn) => {
     try {
       ws.terminate();
-    } catch {
+    } catch (err) {
+      console.warn("ws: drop:", (err as Error).message);
       connections.delete(ws);
       try {
         ws.close();
