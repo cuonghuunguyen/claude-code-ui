@@ -784,3 +784,37 @@ it("a change that is only the line endings stays visible (LF in git, CRLF on dis
   await flush();
   expect(files!.newFile.contents).toBe("one\r\ntwo\r\n");
 });
+
+// ---- Popup viewer (GH-238) ----
+it("←/→ do nothing while a modal dialog that does not hold the panel shows", async () => {
+  const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
+  const parts = [edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")];
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  const modal = document.createElement("div");
+  modal.setAttribute("aria-modal", "true");
+  document.body.append(modal);
+  const press = () => act(async () => void document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })));
+  await press();
+  expect(el.querySelector("[data-testid=file-position]")!.textContent).toBe("1/2");
+  modal.remove();
+  await press();
+  expect(el.querySelector("[data-testid=file-position]")!.textContent).toBe("2/2");
+});
+
+it("initialChoice sets the starting mode without a sessionId", async () => {
+  const client = fakeClient({}, { status: REPO, diff: D([]) });
+  await act(async () => root.render(panel(client, { initialChoice: { mode: "uncommitted" } })));
+  await flush();
+  expect(mode().textContent).toContain("Uncommitted");
+  expect(gitCalls(client, "git.diff")[0]).toMatchObject({ base: "head" });
+});
+
+it("the popup button shows only with onPopOut and calls it", async () => {
+  await act(async () => root.render(panel(fakeClient({}))));
+  expect(el.querySelector("[data-testid=changes-popout]")).toBeNull();
+  const onPopOut = vi.fn();
+  await act(async () => root.render(panel(fakeClient({}), { onPopOut })));
+  await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=changes-popout]")!.click(), undefined));
+  expect(onPopOut).toHaveBeenCalledOnce();
+});
