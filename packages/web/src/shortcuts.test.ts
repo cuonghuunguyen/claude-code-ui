@@ -1,4 +1,7 @@
 import { expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { KEYS, SHORTCUTS, canon, defaultSpec, keyLabels, matchesKey, withKey } from "./shortcuts.ts";
 import { bindingError } from "./keymap.ts";
 
@@ -139,3 +142,23 @@ it("unbound registry commands have no default and no KEYS entry", () => {
     expect(id in KEYS).toBe(false);
   }
 });
+
+it("keyLabels of an unbound command is empty, not a crash", () => {
+  expect(keyLabels(undefined)).toEqual([]);
+  expect(keyLabels("mod+b", false)).toEqual(["Ctrl", "B"]);
+});
+
+it("the docs page generator lists bound shortcuts and skips unbound commands", () => {
+  const out = fileURLToPath(new URL("../../../docs/site/reference/shortcuts.md", import.meta.url));
+  const before = existsSync(out) ? readFileSync(out, "utf8") : undefined;
+  try {
+    execFileSync("npx", ["tsx", fileURLToPath(new URL("../../../docs/site/scripts/gen-shortcuts.ts", import.meta.url))], { stdio: "pipe" });
+    const page = readFileSync(out, "utf8");
+    expect(page).toContain("| Toggle sidebar |");
+    expect(page).not.toContain("undefined");
+    for (const t of ["Open Focus", "Show guide", "MCP servers", "Slash commands", "Manage plugins"]) expect(page).not.toContain(`| ${t} |`);
+  } finally {
+    if (before !== undefined) writeFileSync(out, before);
+    else rmSync(out, { force: true });
+  }
+}, 30000);
