@@ -470,18 +470,32 @@ it("Fetch shows a spinner, disables itself, then reloads the graph with fresh an
   fetchReply = () => new Promise((r) => (done = r));
   const btn = () => el.querySelector<HTMLButtonElement>("[data-testid=graph-fetch]")!;
   await act(async () => btn().click());
-  expect(btn().disabled).toBe(true);
+  expect(btn().getAttribute("aria-disabled")).toBe("true");
+  expect(btn().disabled).toBe(false);
   expect(btn().getAttribute("aria-busy")).toBe("true");
   expect(btn().querySelector(".animate-spin")).not.toBeNull();
   c.sent.length = 0;
   await act(async () => done({ remote: { output: "x -> origin/x", refs: "s2" } }));
   await flush();
-  expect(btn().disabled).toBe(false);
+  expect(btn().getAttribute("aria-disabled")).not.toBe("true");
   expect(c.sent.map((m) => m.type)).toEqual(["git.log"]);
   expect(c.sent[0]).toMatchObject({ type: "git.log", skip: 0, fresh: true });
   expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Fetched all remotes");
   expect(el.querySelector("[data-testid=graph-remote-result] pre")!.textContent).toBe("x -> origin/x");
   expect(btn().className).toContain("max-md:size-11");
+});
+
+it("Fetch keeps focus while it runs and a second click sends nothing", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  fetchReply = () => new Promise(() => {});
+  const btn = el.querySelector<HTMLButtonElement>("[data-testid=graph-fetch]")!;
+  btn.focus();
+  await act(async () => btn.click());
+  expect(document.activeElement).toBe(btn);
+  await act(async () => btn.click());
+  expect(c.sent.filter((m) => m.type === "git.fetch")).toHaveLength(1);
+  fetchReply = async () => ({ remote: { output: "", refs: null } });
 });
 
 it("a failed fetch shows git's message, still reloads, and Dismiss removes it", async () => {

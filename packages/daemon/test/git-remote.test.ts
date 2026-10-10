@@ -2,10 +2,11 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { gitLog, gitRefs } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
-import { gitFetch, localRemotePath, redactUrls, remoteConfig, tidy } from "../src/git-remote.ts";
+import { FETCH_ARGS, gitFetch, localRemotePath, redactUrls, remoteConfig, tidy } from "../src/git-remote.ts";
 
 if (process.platform === "win32") vi.setConfig({ testTimeout: 120_000 });
 const posix = process.platform !== "win32";
@@ -75,7 +76,7 @@ describe("gitFetch", () => {
   it("refuses a remote that is a folder outside the roots before git runs", async () => {
     const { root, a } = remoteRepo();
     const calls: string[] = [];
-    setGitRunner((o) => (calls.push(o.args[0]!), threadRunner(o)));
+    setGitRunner((o) => (calls.push(o.args.includes("fetch") ? "fetch" : o.args[0]!), threadRunner(o)));
     await expect(gitFetch(a, { allowed: (p) => p.startsWith(join(root, "a")) })).rejects.toMatchObject({ code: "remote_not_allowed" });
     expect(calls).not.toContain("fetch");
   });
@@ -91,7 +92,7 @@ describe("gitFetch", () => {
     vi.stubEnv("GIT_SSH", undefined as unknown as string);
     const { a, inside } = remoteRepo();
     const envs: NodeJS.ProcessEnv[] = [];
-    setGitRunner((o) => (o.args[0] === "fetch" && envs.push(o.env), threadRunner(o)));
+    setGitRunner((o) => (o.args.includes("fetch") && envs.push(o.env), threadRunner(o)));
     await gitFetch(a, { allowed: inside });
     expect(envs[0]).toMatchObject({ GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", GIT_SSH_COMMAND: "ssh -o BatchMode=yes" });
     run(a, "config", "core.sshCommand", "ssh -i k");
@@ -133,7 +134,7 @@ describe("gitFetch", () => {
   it("answers a second remote operation on the same repository (or a linked worktree) with busy", async () => {
     const { a, root, inside } = remoteRepo();
     run(a, "worktree", "add", "-q", join(root, "wt"), "-b", "wtb");
-    setGitRunner((o) => (o.args[0] === "fetch" ? new Promise((r) => setTimeout(r, 400)).then(() => threadRunner(o)) : threadRunner(o)));
+    setGitRunner((o) => (o.args.includes("fetch") ? new Promise((r) => setTimeout(r, 400)).then(() => threadRunner(o)) : threadRunner(o)));
     const first = gitFetch(a, { allowed: inside });
     await new Promise((r) => setTimeout(r, 100));
     await expect(gitFetch(a, { allowed: inside })).rejects.toMatchObject({ code: "busy" });
@@ -151,6 +152,70 @@ describe("gitFetch", () => {
     await gitFetch(a, { allowed: inside });
     expect(existsSync(join(root, "hook.ran"))).toBe(true);
     rmSync(hook);
+  });
+});
+
+/** Running: a killed process that init has not reaped yet (zombie) does not count. */
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    return false;
+  }
+};
+const until = async (f: () => boolean, ms = 3000) => {
+  for (let t = 0; t < ms && !f(); t += 25) await new Promise((r) => setTimeout(r, 25));
+};
+
+describe("gitFetch process control", () => {
+  it("fetch runs without fsmonitor and ext transport and leaves submodules alone", async () => {
+    const { a, inside } = remoteRepo();
+    const argv: string[][] = [];
+    setGitRunner((o) => (o.args.includes("fetch") && argv.push(o.args), threadRunner(o)));
+    await gitFetch(a, { allowed: inside });
+    expect(argv[0]).toEqual(["-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never", "fetch", "--all", "--no-recurse-submodules"]);
+    expect(FETCH_ARGS).toEqual(argv[0]);
+  });
+
+  it.skipIf(!posix)("a timeout kills the ssh child too and the lock is kept until it is gone", async () => {
+    vi.stubEnv("GIT_SSH_COMMAND", undefined as unknown as string);
+    vi.stubEnv("GIT_SSH", undefined as unknown as string);
+    const { root, a, inside } = remoteRepo();
+    const script = join(root, "slowssh");
+    writeFileSync(script, `#!/bin/sh\necho $$ >> ${join(root, "pids")}\nexec sleep 30\n`);
+    chmodSync(script, 0o755);
+    run(a, "config", "core.sshCommand", script);
+    run(a, "remote", "remove", "origin");
+    run(a, "remote", "add", "s1", "ssh://example.invalid/r.git");
+    run(a, "remote", "add", "s2", "ssh://example.invalid/r2.git");
+    remoteConfig.timeout = 1500;
+    const first = gitFetch(a, { allowed: inside }).then(() => undefined, (e: Error) => e);
+    await until(() => existsSync(join(root, "pids")));
+    expect(existsSync(join(root, "pids"))).toBe(true);
+    await expect(gitFetch(a, { allowed: inside })).rejects.toMatchObject({ code: "busy" });
+    const e = await first;
+    expect(e?.message).toMatch(/timed out after/);
+    const pids = readFileSync(join(root, "pids"), "utf8").split("\n").filter(Boolean).map(Number);
+    expect(pids.length).toBeGreaterThan(0);
+    // The call settled only after the group ended: no ssh survives, and the lock is free again.
+    expect(pids.some(alive)).toBe(false);
+    remoteConfig.timeout = 120_000;
+    run(a, "remote", "remove", "s1");
+    run(a, "remote", "remove", "s2");
+    run(a, "config", "--unset", "core.sshCommand");
+    run(a, "remote", "add", "origin", join(root, "r.git"));
+    await expect(gitFetch(a, { allowed: inside })).resolves.toBeTruthy();
+  });
+
+  it("the lock is free after a failed fetch and after a runner that rejects", async () => {
+    const { a, inside } = remoteRepo();
+    setGitRunner((o) => (o.args.includes("fetch") ? Promise.reject(Object.assign(new Error("boom"), { stderr: "fatal: nope" })) : threadRunner(o)));
+    await expect(gitFetch(a, { allowed: inside })).rejects.toMatchObject({ code: "git_failed" });
+    setGitRunner((o) => (o.args.includes("fetch") ? Promise.reject(new Error("weird")) : threadRunner(o)));
+    await expect(gitFetch(a, { allowed: inside })).rejects.toThrow();
+    setGitRunner(undefined);
+    await expect(gitFetch(a, { allowed: inside })).resolves.toBeTruthy();
   });
 });
 
@@ -191,6 +256,14 @@ describe("redactUrls", () => {
     expect(redactUrls("bob:pw@host.example:o/r.git")).toBe("bob@host.example:o/r.git");
     expect(redactUrls("unable to look up TOKEN@h:9")).toBe("unable to look up h:9");
     expect(redactUrls("unable to look up TOKEN@h")).toBe("unable to look up h");
+  });
+  it("covers passwords with quotes, slashes and angle brackets", () => {
+    expect(redactUrls("look up bob:p'w@host.example:9")).toBe("look up host.example:9");
+    expect(redactUrls("look up bob:p/w@host.example:9")).toBe("look up host.example:9");
+    expect(redactUrls("look up bob:p<w@host.example:9")).toBe("look up host.example:9");
+    expect(redactUrls("fatal: 'bob:p'w@host.example:9' failed")).not.toMatch(/bob|p'w/);
+    expect(redactUrls("bob:p/w@host.example:o/r.git")).toBe("bob@host.example:o/r.git");
+    expect(redactUrls("From git@host.example:o/r.git")).toBe("From git@host.example:o/r.git");
   });
   it("the thrown message of a failing fetch has no userinfo", async () => {
     const { a, inside } = remoteRepo();

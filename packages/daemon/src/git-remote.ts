@@ -11,6 +11,8 @@ export const REMOTE_TIMEOUT = 120_000;
 /** Test seam: the timeout of a remote operation. */
 export const remoteConfig = { timeout: REMOTE_TIMEOUT };
 const MAX_REMOTES = 20;
+/** Fetch needs no fsmonitor program and no `ext::` transport; submodules stay as they are. */
+export const FETCH_ARGS = ["-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never", "fetch", "--all", "--no-recurse-submodules"];
 const MAX_OUTPUT = 8000;
 const MAX_ERROR = 4000;
 const AUTH_FAILURE = /terminal prompts disabled|could not read (Username|Password)|Permission denied \(publickey|Host key verification failed|Authentication failed|BatchMode/i;
@@ -18,7 +20,7 @@ const AUTH_HINT = "The daemon cannot ask for credentials: set up a credential he
 
 const HOST = String.raw`[^\s@/:'"<>]+`;
 // git prints userinfo without its scheme too (`unable to look up bob:pw@host:9`): `user:pass@` goes, keeping `user@` for an scp-like `user:pass@host:path`.
-const PASSWORD_AT = new RegExp(String.raw`([^\s@/:'"<>]+):[^\s@/'"<>]*@(?=(${HOST})(:[^\d\s])?)`, "g");
+const PASSWORD_AT = new RegExp(String.raw`([^\s@/:'"<>]+):[^\s@]*@(?=(${HOST})(:[^\d\s])?)`, "g");
 // `token@host` (host alone or with a port, no path after a colon): a token or user name. `git@github.com:o/r.git` is scp-like and stays.
 const USER_AT = new RegExp(String.raw`(^|[\s'"(])[^\s@/:'"<>()]+@(?=${HOST}(?::\d+)?(?:$|[\s/'")]|[.,;](?:\s|$)))`, "g");
 /** `redact()` (`scheme://userinfo@`) plus userinfo without a scheme. */
@@ -103,7 +105,7 @@ async function checkRemotes(top: string, names: string[], push: boolean, env: No
 /** Runs git with the remote timeout. Failure: git's text (redacted) plus a hint when it asked for credentials; success: its output. */
 async function remoteOp(top: string, verb: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {
   try {
-    const r = await runGit({ cwd: top, args, env, timeout: remoteConfig.timeout });
+    const r = await runGit({ cwd: top, args, env, timeout: remoteConfig.timeout, killTree: true });
     return tidy(`${r.stdout.toString("utf8")}\n${r.stderr}`, MAX_OUTPUT);
   } catch (e) {
     const err = e as Failure;
@@ -134,7 +136,7 @@ export async function gitFetch(cwd: string, o: { allowed: (p: string) => boolean
     if (names.size > MAX_REMOTES) throw new WorktreeError("bad_request", `Too many remotes (${names.size}): fetch in a terminal`);
     const env = remoteEnv(top, sshCommand);
     await checkRemotes(top, [...names], false, env, o.allowed);
-    const output = await remoteOp(top, "fetch", ["fetch", "--all"], env);
+    const output = await remoteOp(top, "fetch", FETCH_ARGS, env);
     return { output, refs: gitRefs(top) };
   });
 }

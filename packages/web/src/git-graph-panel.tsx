@@ -168,7 +168,7 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
   const runRemote = (msg: { type: "git.fetch"; cwd: string }, done: string) => {
-    if (op) return;
+    if (op || notGit) return;
     const at = msg.cwd;
     setOp(msg.type);
     setResult(undefined);
@@ -309,7 +309,7 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
           </SelectContent>
         </Select>
         <input type="search" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Author" aria-label="Author" className={cn(INPUT, "w-32 flex-none")} data-testid="graph-filter-author" />
-        <Button size="icon-sm" variant="ghost" className="max-md:size-11" disabled={!!op || notGit} onClick={() => runRemote({ type: "git.fetch", cwd }, "Fetched all remotes")} title="Fetch all remotes" aria-label="Fetch" aria-busy={!!op} data-testid="graph-fetch">
+        <Button size="icon-sm" variant="ghost" className="max-md:size-11 aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={!!op || notGit} onClick={() => runRemote({ type: "git.fetch", cwd }, "Fetched all remotes")} title="Fetch all remotes" aria-label="Fetch" aria-busy={!!op} data-testid="graph-fetch">
           {op ? <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" /> : <CloudDownloadIcon />}
         </Button>
         <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => ((freshNext.current = true), setReload((n) => n + 1))} title="Refresh" aria-label="Refresh">
