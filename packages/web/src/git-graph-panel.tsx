@@ -1,9 +1,9 @@
-// Graph tab (docs/spec.md "Layout"): the commit history of the session's repository, read-only: lanes, filters, details, per-file diff.
+// Graph tab (docs/spec.md "Layout"): the commit history of the session's repository: lanes, filters, Fetch, details, per-file diff.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, FsReadResult } from "@claude-ui/protocol";
+import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, GitRemoteResult, FsReadResult } from "@claude-ui/protocol";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { MultiFileDiff } from "@pierre/diffs/react";
-import { ArrowLeftIcon, GitCommitHorizontalIcon, RotateCwIcon, SearchIcon, TagIcon } from "lucide-react";
+import { ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon, LoaderCircleIcon, RotateCwIcon, SearchIcon, TagIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -162,6 +162,32 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
   // Set by the Refresh button: that read skips the daemon's caches.
   const freshNext = useRef(false);
   const gen = useRef(0);
+  // A remote operation (Fetch) of this panel: one at a time; its result line shows under the filter row until the next one or Dismiss.
+  const [op, setOp] = useState<string>();
+  const [result, setResult] = useState<{ ok: boolean; text: string; output?: string }>();
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
+  const runRemote = (msg: { type: "git.fetch"; cwd: string }, done: string) => {
+    if (op) return;
+    const at = msg.cwd;
+    setOp(msg.type);
+    setResult(undefined);
+    // Success or failure, the list reloads: a failed `fetch --all` may still have updated some remotes.
+    client
+      .request<GitRemoteResult>(msg)
+      .then(
+        (r) => {
+          noteRefs(at, r.remote?.refs ?? undefined);
+          if (cwdRef.current === at) setResult({ ok: true, text: done, output: r.remote?.output || undefined });
+        },
+        (e: RequestError) => cwdRef.current === at && setResult({ ok: false, text: e.message || "git failed" }),
+      )
+      .finally(() => {
+        setOp(undefined);
+        freshNext.current = true;
+        setReload((n) => n + 1);
+      });
+  };
   const filter = (skip: number) => ({ type: "git.log" as const, cwd, skip, limit: PAGE, ...(ref !== ALL && { ref }), ...(q.author && { author: q.author }), ...(q.text && { text: q.text }) });
 
   useEffect(() => {
@@ -283,10 +309,37 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
           </SelectContent>
         </Select>
         <input type="search" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Author" aria-label="Author" className={cn(INPUT, "w-32 flex-none")} data-testid="graph-filter-author" />
+        <Button size="icon-sm" variant="ghost" className="max-md:size-11" disabled={!!op || notGit} onClick={() => runRemote({ type: "git.fetch", cwd }, "Fetched all remotes")} title="Fetch all remotes" aria-label="Fetch" aria-busy={!!op} data-testid="graph-fetch">
+          {op ? <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" /> : <CloudDownloadIcon />}
+        </Button>
         <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => ((freshNext.current = true), setReload((n) => n + 1))} title="Refresh" aria-label="Refresh">
           <RotateCwIcon />
         </Button>
       </div>
+      {result && (
+        <div className="flex shrink-0 items-start gap-2 border-b px-3 py-1.5 text-sm" data-testid="graph-remote-result">
+          {result.ok ? (
+            <div role="status" className="min-w-0 flex-1 text-muted-foreground">
+              {result.text}
+              {result.output && (
+                <details>
+                  <summary className="cursor-pointer">Output</summary>
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{result.output}</pre>
+                </details>
+              )}
+            </div>
+          ) : (
+            <div role="alert" className="min-w-0 flex-1 text-destructive">
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs" data-testid="graph-remote-error">
+                {result.text}
+              </pre>
+            </div>
+          )}
+          <Button size="icon-sm" variant="ghost" className="max-md:size-11" aria-label="Dismiss" onClick={() => setResult(undefined)}>
+            <XIcon />
+          </Button>
+        </div>
+      )}
       {notGit ? (
         <p className="m-auto p-4 text-muted-foreground">Not a git repository</p>
       ) : (

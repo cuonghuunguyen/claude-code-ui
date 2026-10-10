@@ -8,6 +8,8 @@ export type GitRunOutput = { stdout: Buffer; stderr: string };
 /** Rejection: Error & { stderr: string; stdout: Buffer; killed: boolean; code?: string | number; signal?: string } */
 export type GitRunner = (o: GitRunOptions) => Promise<GitRunOutput>;
 
+/** ssh without any prompt; set as GIT_SSH_COMMAND by remote operations when the user has no ssh command (`git-remote.ts`, `wsl-git.ts`). */
+export const BATCH_SSH = "ssh -o BatchMode=yes";
 const DEFAULT_TIMEOUT = 30_000;
 const DEFAULT_MAX_BUFFER = 64 << 20;
 

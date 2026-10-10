@@ -11,6 +11,7 @@ import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages,
 import { searchFiles } from "./search.ts";
 import { MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createWorktree, gitDiff, gitDirsOf, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { gitFetch } from "./git-remote.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -1530,6 +1531,17 @@ export function createDaemon(opts: {
             return "code" in t ? fail(t.code, `${t.code === "binary" ? "binary file" : "not UTF-8 text"}: ${msg.path}`, buf.length) : reply({ content: t.content });
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message, e instanceof WorktreeError ? e.size : undefined);
+          }
+        }
+        case "git.fetch": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          const inside = (p: string) => inRoots(real(p) ?? p);
+          // Output and URLs are never logged.
+          try {
+            return reply({ remote: await gitFetch(cwd, { allowed: inside }) });
+          } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }
         case "worktree.create":

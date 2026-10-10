@@ -910,6 +910,12 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.status", cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
   });
 
+  it("answers git.fetch for a cwd inside the roots only", async () => {
+    const c = await client();
+    expect(await c.request({ type: "git.fetch", cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+    expect(await c.request({ type: "git.fetch", cwd: webRoot })).toMatchObject({ result: { remote: null } });
+  });
+
   it("answers git.log, git.commit and git.fileAt for a cwd inside the roots only", async () => {
     const c = await client();
     expect(await c.request({ type: "git.log", cwd: webRoot })).toMatchObject({ result: { log: null } });

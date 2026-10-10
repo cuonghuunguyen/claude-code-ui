@@ -61,6 +61,7 @@ afterEach(() => {
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 
 type Req = { type: string; skip?: number; hash?: string; path?: string; text?: string; ref?: string };
+let fetchReply: () => Promise<unknown> = async () => ({ remote: { output: "", refs: null } });
 function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200, nogit = false) {
   const sent: Req[] = [];
   const request = vi.fn(async (m: Req) => {
@@ -70,6 +71,7 @@ function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200
       const slice = all.slice(skip, skip + page);
       return { log: nogit ? null : { commits: slice, more: skip + page < all.length, ...(skip === 0 && { branches: branchRefs(), ...(!noStamp && { refs: stampValue }), ...(branchRefs().includes(`refs/heads/${statusBranch}`) ? { head: `refs/heads/${statusBranch}` } : {}) }) } };
     }
+    if (m.type === "git.fetch") return fetchReply();
     if (m.type === "git.refs") return { refs: noStamp ? null : stampValue };
     if (m.type === "git.status") return { status: { branch: statusBranch, added: 0, removed: 0 } };
     if (m.type === "git.commit") return { commit: detail(all.find((c) => c.hash === m.hash)!, files) };
@@ -459,4 +461,39 @@ it("details show the ref chips of the loaded commit", async () => {
   await select(0);
   const d = el.querySelector("[data-testid=commit-details]")!;
   expect([...d.querySelectorAll("[data-testid=commit-ref]")].map((x) => x.textContent)).toContain("main");
+});
+
+it("Fetch shows a spinner, disables itself, then reloads the graph with fresh and says so", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  let done!: (v: unknown) => void;
+  fetchReply = () => new Promise((r) => (done = r));
+  const btn = () => el.querySelector<HTMLButtonElement>("[data-testid=graph-fetch]")!;
+  await act(async () => btn().click());
+  expect(btn().disabled).toBe(true);
+  expect(btn().getAttribute("aria-busy")).toBe("true");
+  expect(btn().querySelector(".animate-spin")).not.toBeNull();
+  c.sent.length = 0;
+  await act(async () => done({ remote: { output: "x -> origin/x", refs: "s2" } }));
+  await flush();
+  expect(btn().disabled).toBe(false);
+  expect(c.sent.map((m) => m.type)).toEqual(["git.log"]);
+  expect(c.sent[0]).toMatchObject({ type: "git.log", skip: 0, fresh: true });
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Fetched all remotes");
+  expect(el.querySelector("[data-testid=graph-remote-result] pre")!.textContent).toBe("x -> origin/x");
+  expect(btn().className).toContain("max-md:size-11");
+});
+
+it("a failed fetch shows git's message, still reloads, and Dismiss removes it", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  fetchReply = () => Promise.reject(Object.assign(new Error("fatal: unable to access 'https://h/': Could not resolve host"), { code: "git_failed" }));
+  c.sent.length = 0;
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=graph-fetch]")!.click());
+  await flush();
+  expect(el.querySelector("[role=alert]")!.textContent).toContain("Could not resolve host");
+  expect(c.sent.at(-1)).toMatchObject({ type: "git.log", skip: 0, fresh: true });
+  await act(async () => el.querySelector<HTMLButtonElement>("button[aria-label=Dismiss]")!.click());
+  expect(el.querySelector("[data-testid=graph-remote-result]")).toBeNull();
+  fetchReply = async () => ({ remote: { output: "", refs: null } });
 });

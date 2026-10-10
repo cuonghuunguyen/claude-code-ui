@@ -163,6 +163,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.fileAt"; cwd: string; hash: string; path: string }
   /** Changes tab git modes (docs/spec.md "Layout"): the working tree (staged, unstaged, untracked) against HEAD (`base: "head"`) or against the merge base of HEAD and `ref` (`base: "branch"`; full ref under refs/heads or refs/remotes; omitted: the default branch). Reply GitDiffResult. */
   | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string }
+  /** Graph tab Fetch: `git fetch --all` in `cwd`'s repository (docs/spec.md "Layout", Graph tab). Reply GitRemoteResult; `remote` null outside a git work tree. */
+  | { type: "git.fetch"; cwd: string }
   /** Creates `<repo>/.claude/worktrees/<name>` on branch `worktree-<name>` (docs/spec.md "Worktrees"); no `name`: a generated one. Reply WorktreeCreateResult. Broadcasts `sessions.changed`. */
   | { type: "worktree.create"; cwd: string; name?: string }
   /** What removing `path` loses; reply WorktreeStatusResult. */
@@ -459,6 +461,10 @@ export type GitCommitResult = { commit: GitCommitDetail };
 export type GitDiff = { prefix: string; base?: string; ref?: string; files: GitFileChange[]; branches?: string[]; truncated?: boolean };
 /** `diff` null outside a git work tree. */
 export type GitDiffResult = { diff: GitDiff | null };
+/** A remote operation's git output (redacted, at most 8000 chars) and the refs stamp after it. */
+export type GitRemote = { output: string; refs: string | null };
+/** `remote` null outside a git work tree. */
+export type GitRemoteResult = { remote: GitRemote | null };
 export const GIT_LOG_MAX_LIMIT = 500;
 
 /** Where an MCP server (or plugin setting) is saved; Claude Code's term. local: this project, private; user: all projects; project: `.mcp.json`. */
