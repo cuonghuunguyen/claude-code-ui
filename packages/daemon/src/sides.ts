@@ -3,12 +3,16 @@
 // browser request to the side that owns its session, terminal or path; one URL, one pairing, one page for every side.
 // Frames are JSON lines. hub -> side: {c, o} opens virtual connection c, {c, m} a client message, {c, x} closes it.
 // side -> hub: {ready} once listening, {c, m} a server message, {push} a Web Push payload. Other stdout lines are ignored.
+// Git of a WSL project the hub opened by its Windows path: hub -> side {g, git: {cwd, args, env, input?, timeout?, maxBuffer?}} runs git in
+// the side; side -> hub {g, out: <base64 stdout>, err, error?: {message, code?, killed, signal?}} answers it (`wsl-git.ts`).
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import type { Exec } from "./docker-side.ts";
+import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
+import { SideGone } from "./wsl-git.ts";
 
 /** A started side process: `wsl.exe -d <distro> ...` or `docker exec -i <name> ...` (tests: an in-process side). */
 export type SideProcess = { stdin: Writable; stdout: Readable; stderr: Readable; kill(): void; on(event: "exit", l: (code: number | null) => void): unknown };
@@ -290,7 +294,10 @@ function lines(stream: Readable, onLine: (line: string) => void) {
   });
 }
 
-type Side = SideInfo & { proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void> };
+type GitCall = { ok: (o: GitRunOutput) => void; fail: (e: Error) => void; timer: NodeJS.Timeout };
+type Side = SideInfo & { proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void>; gits: Map<number, GitCall> };
+type GitError = { message: string; code?: string | number; killed?: boolean; signal?: string };
+let nextGit = 0;
 
 /**
  * The WSL and Docker sides of a daemon. `spawn` starts a side process for a side ID; `saved`/`save`: the sides started before
@@ -319,7 +326,7 @@ export function createSides(opts: {
   /** Local paths can be POSIX too (Linux, macOS): an unknown POSIX path then stays local. */
   posixLocal?: boolean;
 }) {
-  const sides = new Map<string, Side>(opts.targets.map((t) => [t.id, { ...t, state: "off", conns: new Map() }]));
+  const sides = new Map<string, Side>(opts.targets.map((t) => [t.id, { ...t, state: "off", conns: new Map(), gits: new Map() }]));
   const routers = new Set<Router>();
   const changeListeners = new Set<() => void>();
   const changed = () => changeListeners.forEach((l) => l());
@@ -395,11 +402,22 @@ export function createSides(opts: {
         if (phase) return setPhase(s, phase[1] as SidePhase);
         const setup = /^CLAUDE_UI_SETUP (\S+) ?(.*)$/.exec(line.trim());
         if (setup) return void ((setupCode = setup[1]), (setupError = setupMessage(setup[1]!, setup[2]!, s.label, isDocker(s.id))));
-        let f: { ready?: boolean; c?: number; m?: ServerMessage; push?: PushPayload };
+        let f: { ready?: boolean; c?: number; m?: ServerMessage; push?: PushPayload; g?: number; out?: string; err?: string; error?: GitError };
         try {
           f = JSON.parse(line);
         } catch {
           // Shell start-up output (motd, .bashrc).
+          return;
+        }
+        if (typeof f.g === "number") {
+          const call = s.gits.get(f.g);
+          if (!call) return;
+          s.gits.delete(f.g);
+          clearTimeout(call.timer);
+          const stdout = Buffer.from(f.out ?? "", "base64");
+          const stderr = f.err ?? "";
+          if (!f.error) call.ok({ stdout, stderr });
+          else call.fail(Object.assign(new Error(f.error.message), { stderr, stdout, killed: !!f.error.killed, code: f.error.code, signal: f.error.signal }));
           return;
         }
         if (f.ready) {
@@ -438,6 +456,11 @@ export function createSides(opts: {
         delete s.phase;
         Object.assign(s, notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
+        for (const [gid, c] of s.gits) {
+          clearTimeout(c.timer);
+          c.fail(new SideGone(`${s.label} stopped`));
+          s.gits.delete(gid);
+        }
         if (!wasReady) reject(new Error(message));
         routers.forEach((r) => r.detach(s.id));
         changed();
@@ -541,7 +564,7 @@ export function createSides(opts: {
           const ids = new Set(found.map((t) => t.id));
           for (const t of found)
             if (!sides.has(t.id)) {
-              sides.set(t.id, { ...t, state: "off", conns: new Map() });
+              sides.set(t.id, { ...t, state: "off", conns: new Map(), gits: new Map() });
               dynamic.add(t.id);
               diff = true;
             }
@@ -566,6 +589,23 @@ export function createSides(opts: {
     has: (id: string) => sides.has(id),
     check,
     ready: () => [...sides.values()].filter((s) => s.state === "ready").map((s) => s.id),
+    /** The ready `wsl:<x>` side whose distro `<x>` equals `distro` (case-insensitive). */
+    wslReady: (distro: string) => [...sides.values()].find((s) => s.state === "ready" && s.id.toLowerCase() === `wsl:${distro}`.toLowerCase())?.id,
+    /** Runs git in a ready side; rejects `SideGone` when it is not ready or ends meanwhile. */
+    git(id: string, o: GitRunOptions): Promise<GitRunOutput> {
+      const s = sides.get(id);
+      if (s?.state !== "ready" || !s.proc) return Promise.reject(new SideGone(`${id} is not running`));
+      const gid = ++nextGit;
+      return new Promise((ok, fail) => {
+        const timer = setTimeout(() => {
+          s.gits.delete(gid);
+          fail(Object.assign(new Error("git timed out"), { killed: true, stderr: "", stdout: Buffer.alloc(0) }));
+        }, (o.timeout ?? 30_000) + 10_000);
+        timer.unref();
+        s.gits.set(gid, { ok, fail, timer });
+        write(s, { g: gid, git: { cwd: o.cwd, args: o.args, env: o.env, input: o.input, timeout: o.timeout, maxBuffer: o.maxBuffer } });
+      });
+    },
     start,
     refresh,
     posixLocal: !!opts.posixLocal,
@@ -821,14 +861,24 @@ export class SideSocket extends EventEmitter {
  * Side mode (`claude-ui --side`, run by the hub inside a distro): serves virtual connections from `input` through `accept`
  * (the daemon's connection handler) and writes their messages to `output`. Ends the process when the hub goes away.
  */
-export function runSide(opts: { input: Readable; output: Writable; accept: (ws: SideSocket) => void; onEnd?: () => void }) {
+export function runSide(opts: { input: Readable; output: Writable; accept: (ws: SideSocket) => void; onEnd?: () => void; git?: GitRunner }) {
   const sockets = new Map<number, SideSocket>();
   const write = (s: string) => opts.output.write(s + "\n");
   lines(opts.input, (line) => {
-    let f: { c?: number; o?: unknown; m?: unknown; x?: unknown };
+    let f: { c?: number; o?: unknown; m?: unknown; x?: unknown; g?: number; git?: GitRunOptions };
     try {
       f = JSON.parse(line);
     } catch {
+      return;
+    }
+    if (typeof f.g === "number" && f.git) {
+      const g = f.g;
+      const answer = (a: object) => write(JSON.stringify({ g, ...a }));
+      if (!opts.git) return answer({ out: "", err: "", error: { message: "no git" } });
+      opts.git({ ...f.git, env: { ...process.env, ...f.git.env } }).then(
+        (r) => answer({ out: r.stdout.toString("base64"), err: r.stderr }),
+        (e: Error & { stdout?: Buffer; stderr?: string; code?: string | number; killed?: boolean; signal?: string }) => answer({ out: (e.stdout ?? Buffer.alloc(0)).toString("base64"), err: e.stderr ?? "", error: { message: e.message, code: e.code, killed: !!e.killed, signal: e.signal } }),
+      );
       return;
     }
     if (typeof f.c !== "number") return;

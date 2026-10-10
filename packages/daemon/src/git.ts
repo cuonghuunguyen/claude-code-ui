@@ -2,7 +2,7 @@
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
-import { GIT_LOG_MAX_LIMIT, worktreeNameError, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
+import { GIT_LOG_MAX_LIMIT, worktreeNameError, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
 import { runGit } from "./git-runner.ts";
 
 // Read-only calls on a repository's own config: no fsmonitor hook (a program from .git/config), no transport (a partial clone's lazy fetch runs core.sshCommand), on any git version.
@@ -187,6 +187,8 @@ export async function gitStatus(cwd: string): Promise<GitStatus | null> {
  * From a linked worktree too. Left out: a bare main repo and prunable entries (directory deleted). Detached: `branch` is the short hash.
  */
 export async function listWorktrees(cwd: string): Promise<Worktree[] | null> {
+  // A WSL project opened by its UNC path: git runs in the distro and prints POSIX paths; they map back to the UNC form.
+  const wsl = wslPathOf(cwd);
   // -z (git 2.36+): fields end with NUL, entries with an empty field, so a path may hold a newline. Older git: newline-separated.
   let out: string;
   let sep = "\0";
@@ -205,7 +207,7 @@ export async function listWorktrees(cwd: string): Promise<Worktree[] | null> {
     const field = (k: string) => lines.find((l) => l === k || l.startsWith(`${k} `))?.slice(k.length + 1);
     // git prints forward slashes on Windows; every other path here is native.
     const raw = field("worktree");
-    const path = raw && process.platform === "win32" ? normalize(raw) : raw;
+    const path = raw && (wsl ? wslHostPath(wsl.root, raw) : process.platform === "win32" ? normalize(raw) : raw);
     if (!path || field("bare") !== undefined || field("prunable") !== undefined) return [];
     const branch = field("branch")?.replace(/^refs\/heads\//, "") ?? field("HEAD")?.slice(0, 7);
     return [{ path, ...(branch && { branch }), main: i === 0 }];
@@ -392,7 +394,9 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
     }
     // Keep the main checkout's `git add -A` from adding the worktrees as embedded repositories (local only, never committed).
     try {
-      const common = real(join(main, await run(main, ["rev-parse", "--git-common-dir"])));
+      const dir = await run(main, ["rev-parse", "--git-common-dir"]);
+      const w = wslPathOf(main);
+      const common = real(w && dir.startsWith("/") ? wslHostPath(w.root, dir) : resolve(main, dir));
       const file = join(common, "info", "exclude");
       const text = existsSync(file) ? readFileSync(file, "utf8") : "";
       if (!text.split(/\r?\n/).includes("/.claude/worktrees/")) {

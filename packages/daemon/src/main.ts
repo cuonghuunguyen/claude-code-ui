@@ -11,6 +11,8 @@ import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
+import { runGit, setGitRunner, threadRunner } from "./git-runner.ts";
+import { wslGitRunner } from "./wsl-git.ts";
 import { checkWslSide, createSides, dockerExecArgs, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
 import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
@@ -69,7 +71,7 @@ if (side) {
   let push: (p: Parameters<Push["send"]>[0]) => void = () => {};
   const sidePush = { publicKey: "", subscribe: () => false, send: async (p) => push(p) } satisfies Push;
   const daemon = createDaemon({ webRoot, token: "", roots, push: sidePush, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state });
-  push = runSide({ input: process.stdin, output: process.stdout, accept: daemon.accept, onEnd: () => process.exit(0) }).push;
+  push = runSide({ input: process.stdin, output: process.stdout, accept: daemon.accept, git: runGit, onEnd: () => process.exit(0) }).push;
 } else {
   const token = loadToken();
   const sidesFile = join(configDir(), "sides.json");
@@ -109,6 +111,8 @@ if (side) {
         })
       : undefined;
   void sides?.refresh();
+  // A project opened by its \\wsl$ path: git runs in the distro (its ready side, else wsl.exe), never Windows git over the UNC path.
+  if (process.platform === "win32") setGitRunner(wslGitRunner({ local: threadRunner, ...(sides && { side: sides.wslReady, sideRun: sides.git }) }));
   const tsEnv = { ...process.env, TAILSCALE_BE_CLI: "1" };
   const exec = promisify(execFile);
   const ts = tailscale ? await tailscalePreflight({ port, platform: process.platform, env: process.env, exec: (f, a) => exec(f, a, { timeout: 10_000, windowsHide: true, env: tsEnv }) }) : undefined;
