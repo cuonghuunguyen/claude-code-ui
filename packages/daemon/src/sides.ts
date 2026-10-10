@@ -7,6 +7,7 @@ import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { perf, type PerfSpanHandle } from "./perf.ts";
 import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import type { Exec } from "./docker-side.ts";
 
@@ -346,8 +347,23 @@ export function createSides(opts: {
     }
   };
 
+  // Performance monitor spans (GH-272) of a start in progress; the whole start, its install phase and the wait for the first frame.
+  const spans = new WeakMap<Side, { top: PerfSpanHandle; install?: PerfSpanHandle; frame?: PerfSpanHandle }>();
+  const endSpans = (s: Side, all = true) => {
+    const o = spans.get(s);
+    if (!o) return;
+    o.install?.end();
+    o.frame?.end();
+    o.install = o.frame = undefined;
+    if (all) (o.top.end(), spans.delete(s));
+  };
   const setPhase = (s: Side, phase: SidePhase | undefined) => {
     if (s.phase === phase || (phase && s.state !== "starting")) return;
+    const o = spans.get(s);
+    if (o) {
+      o.install?.end();
+      o.install = phase === "installing" ? perf.span("side.install", o.top) : undefined;
+    }
     if (phase) s.phase = phase;
     else delete s.phase;
     changed();
@@ -361,11 +377,17 @@ export function createSides(opts: {
     delete s.phase;
     Object.assign(s, { state: "starting", message: undefined });
     changed();
+    spans.set(s, { top: perf.span("side.start") });
     s.starting = (async () => {
       let proc: SideProcess;
+      const spawning = perf.span("side.spawn", spans.get(s)?.top);
       try {
         proc = await opts.spawn(s.id, { setup, phase: (p) => setPhase(s, p) });
+        spawning.end();
+        const o = spans.get(s);
+        if (o) o.frame = perf.span("side.firstFrame", o.top);
       } catch (e) {
+        spawning.end();
         const raw = (e as Error).message;
         const message = raw.startsWith(s.label) ? raw : `${s.label}: ${raw}`;
         delete s.phase;
@@ -403,6 +425,7 @@ export function createSides(opts: {
           return;
         }
         if (f.ready) {
+          endSpans(s, false);
           delete s.phase;
           Object.assign(s, { state: "ready", message: undefined });
           started.add(s.id);
@@ -443,7 +466,7 @@ export function createSides(opts: {
         changed();
       });
       });
-    })().finally(() => (s.starting = undefined));
+    })().finally(() => (endSpans(s), (s.starting = undefined)));
     return s.starting;
   }
 

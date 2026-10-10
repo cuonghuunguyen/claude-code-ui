@@ -10,6 +10,7 @@ import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_T
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
+import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createWorktree, gitDiff, gitDirsOf, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
@@ -356,6 +357,8 @@ export function createDaemon(opts: {
   sides?: Sides;
   /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
   buildInfo?: { version?: string; stale(): string | undefined };
+  /** Test seam (GH-272): the performance monitor (default: a real one, on unless the `performance.monitor` setting is off). */
+  perf?: PerfMonitor;
   /** How long worker_stop and worker_close wait for a stopped worker to leave running/needs_input (orchestration.ts); tests shorten it. */
   stopWaitMs?: number;
   /** Update checks and installs (update.ts); none: no update_available, update.* fail. Checks start with the daemon. */
@@ -415,6 +418,10 @@ export function createDaemon(opts: {
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
+  // The monitor follows the `performance.monitor` setting: on start, on settings.set, and on its 10 s tick (another daemon's change to off).
+  const perfMon = opts.perf ?? createPerf({ version: opts.buildInfo?.version, poll: () => appSettings.get().performance.monitor });
+  setPerf(perfMon);
+  perfMon.setEnabled(appSettings.get().performance.monitor);
   const autoContinue = createAutoContinue({
     ...opts.autoContinue,
     enabled: () => appSettings.get().usageLimit.autoContinue,
@@ -533,7 +540,8 @@ export function createDaemon(opts: {
     const stamp = worktreeStamp(cwd);
     const hit = worktreeLists.get(cwd);
     if (hit?.stamp === stamp) return hit.list;
-    const entry = { stamp, list: listWorktrees(cwd) };
+    const sp = perfMon.span("worktree.list");
+    const entry = { stamp, list: listWorktrees(cwd).finally(() => sp.end()) };
     worktreeLists.set(cwd, entry);
     // A failed read of a git folder (spawn error, killed process) is not kept: the next list reads again.
     void entry.list.then((l) => l === null && stamp !== "-" && worktreeLists.get(cwd) === entry && worktreeLists.delete(cwd));
@@ -1182,7 +1190,12 @@ export function createDaemon(opts: {
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
       if (msg.type === "ping") return send(ws, { type: "reply", reqId: msg.reqId, result: {} });
       if (router) return router.handle(msg as ClientMessage & Record<string, unknown>);
-      return local(msg, (m) => send(ws, m));
+      const end = perfMon.request(String(msg.type), typeof (msg as { cwd?: unknown }).cwd === "string" ? (msg as { cwd: string }).cwd : undefined);
+      try {
+        return await local(msg, (m) => send(ws, m));
+      } finally {
+        end();
+      }
     };
     /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
     const local = async (msg: ClientMessage, out: (m: ServerMessage) => void) => {
@@ -1221,30 +1234,35 @@ export function createDaemon(opts: {
           }
         }
         case "session.subscribe": {
-          const s = await find(msg.sessionId);
-          const title = s && (await titleOf(s));
-          if (!s || ws.readyState !== ws.OPEN) return;
-          // Only an explicit open (link, notification) adds the project; a reconnect resubscribe must not bring back a removed one.
-          if (msg.addProject === true) addProject(s.cwd);
-          unsubscribes.get(s.id)?.();
-          // A plain subscribe holds the session's CLI (idle close) until it is released; `background` only follows.
-          const hold = msg.background !== true;
-          const keep = (stop: () => void, release: () => void) => {
-            if (hold) holds.set(s.id, (holds.get(s.id) ?? 0) + 1);
-            unsubscribes.set(s.id, () => (stop(), release(), hold && unhold(s.id)));
-          };
-          // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
-          const since = msg.logEpoch === logEpoch ? msg.sinceSeq : 0;
-          // Paged, first subscribe or new epoch: a snapshot (last page) instead of the replay; reply, snapshot and subscribe in one synchronous step.
-          if (msg.paged === true && since === 0) {
-            const { seq, snapshot } = s.snapshot(typeof msg.from === "string" ? msg.from : undefined);
-            reply({ logEpoch, seq, session: s.info(), title: title!, snapshot });
-            const stop = s.subscribe(seq, (e) => send(ws, e));
+          const span = perfMon.span("session.open");
+          try {
+            const s = await find(msg.sessionId);
+            const title = s && (await titleOf(s));
+            if (!s || ws.readyState !== ws.OPEN) return;
+            // Only an explicit open (link, notification) adds the project; a reconnect resubscribe must not bring back a removed one.
+            if (msg.addProject === true) addProject(s.cwd);
+            unsubscribes.get(s.id)?.();
+            // A plain subscribe holds the session's CLI (idle close) until it is released; `background` only follows.
+            const hold = msg.background !== true;
+            const keep = (stop: () => void, release: () => void) => {
+              if (hold) holds.set(s.id, (holds.get(s.id) ?? 0) + 1);
+              unsubscribes.set(s.id, () => (stop(), release(), hold && unhold(s.id)));
+            };
+            // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
+            const since = msg.logEpoch === logEpoch ? msg.sinceSeq : 0;
+            // Paged, first subscribe or new epoch: a snapshot (last page) instead of the replay; reply, snapshot and subscribe in one synchronous step.
+            if (msg.paged === true && since === 0) {
+              const { seq, snapshot } = s.snapshot(typeof msg.from === "string" ? msg.from : undefined);
+              reply({ logEpoch, seq, session: s.info(), title: title!, snapshot });
+              const stop = s.subscribe(seq, (e) => send(ws, e));
+              return keep(stop, mirror(s));
+            }
+            reply({ logEpoch, seq: s.seq(), session: s.info(), title: title! });
+            const stop = s.subscribe(since, (e) => send(ws, e));
             return keep(stop, mirror(s));
+          } finally {
+            span.end();
           }
-          reply({ logEpoch, seq: s.seq(), session: s.info(), title: title! });
-          const stop = s.subscribe(since, (e) => send(ws, e));
-          return keep(stop, mirror(s));
         }
         case "session.page":
         case "session.edits": {
@@ -1409,12 +1427,18 @@ export function createDaemon(opts: {
           }
           broadcast({ type: "sessions.changed" });
           return reply({});
+        case "perf.report":
+          return reply({ daemon: perfMon.report() });
+        case "perf.clear":
+          perfMon.clear();
+          return reply({});
         case "settings.get":
           return reply({ settings: appSettings.get(), daemon: daemonInfo() });
         case "settings.set": {
           try {
             const settings = appSettings.set(msg.patch);
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
+            perfMon.setEnabled(settings.performance.monitor);
             broadcast({ type: "settings_changed", settings });
             return reply({ settings, daemon: daemonInfo() });
           } catch (err) {
@@ -1780,7 +1804,7 @@ export function createDaemon(opts: {
               console.log(`session ${s.id}: idle ${Math.round(idleCloseMs / 60_000)} min without a tab, CLI closed`);
         }, Math.min(IDLE_CHECK_MS, idleCloseMs)).unref()
       : undefined;
-  http.on("close", () => (orchestration.shutdown(), clearInterval(reaper)));
+  http.on("close", () => (orchestration.shutdown(), clearInterval(reaper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, { accept, transcriptCaches: () => [...caches.keys()], orchestration });
 }

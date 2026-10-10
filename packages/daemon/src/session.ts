@@ -38,6 +38,7 @@ import {
 import type { PlanTracker } from "./plan-usage.ts";
 import { runBash, type BashRun } from "./bash.ts";
 import { PartIndex } from "./part-index.ts";
+import { perf, type PerfSpanHandle } from "./perf.ts";
 import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
 import { tierAsync, type Tier, type TierContext } from "./risk-tier.ts";
 
@@ -162,6 +163,8 @@ export class Session {
   private tasks = new Map<string, string>();
   /** Bumped per refreshUsage(): an older answer that arrives later is dropped. */
   private usageRequest = 0;
+  /** Open from start() until the CLI sends its first message (performance monitor, GH-272). */
+  private startSpan?: PerfSpanHandle;
   /** False until the first start(): the first query creates the transcript (sessionId), every later one resumes it. */
   private started: boolean;
   /** The current query's CLI keeps every Bash command in the cwd (CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR). */
@@ -247,6 +250,8 @@ export class Session {
   }
 
   private start() {
+    this.startSpan?.end();
+    this.startSpan = perf.span("session.start");
     const owner = (this.owner = { session: this as Session });
     // The level is per CLI process (SDK): a new one starts empty.
     this.backgroundLevel = new Set();
@@ -965,6 +970,8 @@ export class Session {
           generation = s.generation;
           reset = undefined;
         }
+        this.startSpan?.end();
+        this.startSpan = undefined;
         s.receive(m, q);
       }
       if (generation === s.generation) s.setState("closed");
@@ -974,6 +981,8 @@ export class Session {
       s.emit({ type: "raw", id: randomUUID(), message: { error: String(err) } });
       s.setState("error");
     } finally {
+      this.startSpan?.end();
+      this.startSpan = undefined;
       // Nothing waits for these answers any more, and no call of this query runs.
       for (const id of [...s.pending.keys()]) s.cancel(id, "Session ended");
       // A newer generation (conversation rewind) already ended them, and its query may run tasks of its own.
