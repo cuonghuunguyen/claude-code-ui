@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ToolCall } from "./store.ts";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard } from "./tool-card.tsx";
+import { ViewerContext } from "./viewer.ts";
 
 const call = (status: ToolCall["status"], tool = "Bash"): ToolCall => ({
   type: "tool_call",
@@ -389,5 +390,28 @@ Live subscription: arming in the background.`));
     const html = open(done("Artifact", publish), result(`Published /tmp/p.html at ${URL} (Version 1)\n\nNewer version published elsewhere.`));
     expect(html).toContain("Newer version published elsewhere.");
     expect(html).toContain('href="' + URL);
+  });
+});
+
+describe("popup viewer button", () => {
+  const make = (tool: string, input: unknown): ToolCall => ({ type: "tool_call", id: "t1", toolUseId: "t1", tool, input, status: "done" });
+  const html = (c: ToolCall, withViewer = true) => {
+    const card = (
+      <CwdContext value="/w">
+        <ToolCard call={c} />
+      </CwdContext>
+    );
+    return renderToStaticMarkup(withViewer ? <ViewerContext value={() => {}}>{card}</ViewerContext> : card);
+  };
+
+  it("no open button without a viewer", () => {
+    expect(html(make("Read", { file_path: "/w/src/a.ts" }), false)).not.toContain('data-testid="viewer-open"');
+  });
+
+  it("a Read, Edit and ExitPlanMode card get an open button named after its content", () => {
+    expect(html(make("Read", { file_path: "/w/src/a.ts" }))).toContain('aria-label="Open a.ts in popup"');
+    expect(html(make("Edit", { file_path: "/w/src/a.ts", old_string: "a", new_string: "b" }))).toContain('aria-label="Open diff of a.ts (+1 -1) in popup"');
+    expect(html(make("ExitPlanMode", { plan: "# P" }))).toContain('aria-label="Open plan in popup"');
+    expect(html(make("Bash", { command: "ls" }))).not.toContain('data-testid="viewer-open"');
   });
 });

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitStatusResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
-import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, Maximize2Icon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -21,7 +21,7 @@ import { ImageDiff, type ImagePane } from "./image-diff.tsx";
 import { filePath } from "./tools.ts";
 
 type Client = ReturnType<typeof connect>;
-type DiffStyle = "unified" | "split";
+export type DiffStyle = "unified" | "split";
 /** Disk content of a changed file: "" once deleted. */
 type Disk = { content?: string; deleted?: boolean; error?: string; notice?: boolean };
 /** `kind`: OpenCode's file badge, A(dded) / D(eleted) / M(odified). */
@@ -36,14 +36,14 @@ const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info", R
 
 // Diff style like OpenCode's review panel: split by default, the choice kept per browser; below md always unified.
 const STYLE_KEY = "claude-ui.diffStyle";
-function loadStyle(): DiffStyle {
+export function loadStyle(): DiffStyle {
   try {
     return localStorage.getItem(STYLE_KEY) === "unified" ? "unified" : "split";
   } catch {
     return "split";
   }
 }
-function saveStyle(s: DiffStyle) {
+export function saveStyle(s: DiffStyle) {
   try {
     localStorage.setItem(STYLE_KEY, s);
   } catch {
@@ -126,6 +126,8 @@ export function ChangesPanel({
   hidden,
   onCount,
   sessionId,
+  initialChoice,
+  onPopOut,
 }: {
   client: Client;
   view: SessionView;
@@ -135,6 +137,10 @@ export function ChangesPanel({
   onCount?: (n: number) => void;
   /** Keys the panel's own diff mode choice (kept in memory while the page lives). */
   sessionId?: string;
+  /** The starting mode choice when the session has none (the popup copies the side panel's without writing it back). */
+  initialChoice?: { mode: DiffMode; ref?: string };
+  /** Shows the "Open in popup" button. */
+  onPopOut?: () => void;
 }) {
   const fresh = useMemo(() => sessionChanges(view), [view.parts, view.aux]);
   // Same calls and results per path: the previous list, so streamed text does not re-parse every diff.
@@ -168,7 +174,7 @@ export function ChangesPanel({
 
   // The mode: the Settings default until this session's panel picked one.
   const def = useDefaultDiffMode();
-  const [choice, setChoice] = useState(() => (sessionId ? sessionDiffChoice.get(sessionId) : undefined));
+  const [choice, setChoice] = useState(() => (sessionId ? sessionDiffChoice.get(sessionId) : undefined) ?? initialChoice);
   const mode: DiffMode = choice?.mode ?? def;
   const pick = (m: DiffMode, ref?: string) => {
     const c = { mode: m, ...((ref ?? choice?.ref) && { ref: ref ?? choice?.ref }) };
@@ -310,6 +316,9 @@ export function ChangesPanel({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!keysRef.current || listRef.current?.checkVisibility?.() === false || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+      // The side panel's keys stop while the popup viewer (a modal dialog without this panel) shows.
+      const modal = document.querySelector('[aria-modal="true"]');
+      if (modal && !modal.contains(listRef.current)) return;
       const t = e.target;
       // Text fields keep their caret keys; widgets with their own arrow keys (tabs, the panel resizer, menus) keep theirs.
       if (t instanceof HTMLElement && (t.isContentEditable || t.closest("input, textarea, select, [role=tab], [role=separator], [role=menu], [role=listbox], [role=radiogroup]"))) return;
@@ -477,6 +486,11 @@ export function ChangesPanel({
                   {allExpanded ? <ChevronsDownUpIcon /> : <ChevronsUpDownIcon />} {allExpanded ? "Collapse all" : "Expand all"}
                 </Button>
               )}
+              {onPopOut && (
+                <Button size="icon-sm" variant="ghost" className="size-11" onClick={onPopOut} title="Open in popup" aria-label="Open changes in popup" data-testid="changes-popout">
+                  <Maximize2Icon />
+                </Button>
+              )}
               <Button size="icon-sm" variant="ghost" className="size-11" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
                 <RotateCwIcon />
               </Button>
@@ -508,6 +522,11 @@ export function ChangesPanel({
             <Button size="icon-sm" variant="ghost" disabled={!shown.length} onClick={() => cycle(1)} title="Next file (→)" aria-label="Next file">
               <ArrowRightIcon />
             </Button>
+            {onPopOut && (
+              <Button size="icon-sm" variant="ghost" onClick={onPopOut} title="Open in popup" aria-label="Open changes in popup" data-testid="changes-popout">
+                <Maximize2Icon />
+              </Button>
+            )}
             <Button size="icon-sm" variant="ghost" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
               <RotateCwIcon />
             </Button>

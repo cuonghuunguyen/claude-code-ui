@@ -1005,7 +1005,7 @@ export function createDaemon(opts: {
     if (!entry) return void res.writeHead(404).end();
     entry.used = Date.now();
     if (entry.src.kind === "bytes") {
-      // The connection's close ends a piece read still waiting on a side.
+      // The connection's close ends a response still waiting on a side's piece.
       const live = (entry.live ??= new Set());
       live.add(res);
       res.once("close", () => live.delete(res));

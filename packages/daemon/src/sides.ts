@@ -801,6 +801,8 @@ export function createRouter(opts: {
     handle,
     close() {
       sides.removeRouter(router);
+      // Calls waiting for a side end now (not after their timeout).
+      for (const [reqId, pend] of pending) pend.settle({ type: "error", reqId, code: "side_not_ready", message: "connection closed" });
       conns.forEach((c) => c.close());
       conns.clear();
       own.clear();

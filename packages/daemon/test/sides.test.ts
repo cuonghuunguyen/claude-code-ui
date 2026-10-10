@@ -847,6 +847,35 @@ describe("local cwds on a POSIX hub", () => {
     s.close();
   });
 
+  it("closing the router settles a pending side call at once (not after the piece timeout)", async () => {
+    const s = createSides({ targets: [], localLabel: "Linux", posixLocal: true, discoverMs: 0, discover: async () => [dockerSide("dev")], spawn: () => {
+      // A side that is ready and never answers.
+      const stdout = new PassThrough();
+      stdout.write(JSON.stringify({ ready: true }) + "\n");
+      return { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => {}, on: () => {} } as unknown as SideProcess;
+    } });
+    await s.refresh();
+    await s.start("docker:dev");
+    const sent: ServerMessage[] = [];
+    let answered: ServerMessage | undefined;
+    const router = createRouter({
+      sides: s,
+      send: (m) => sent.push(m),
+      local: async () => {},
+      localCall: async (msg) => ({ type: "reply", reqId: msg.reqId, result: {} }),
+      isLocalSession: async () => false,
+      media: async (_id, _msg, call) => (answered = await call({ type: "media.read", reqId: "", path: "/x/a.png", offset: 0, length: 0 } as never)),
+    });
+    await router.handle({ type: "side.start", reqId: "s1", side: "docker:dev" } as never);
+    const done = router.handle({ type: "fs.media", reqId: "m1", path: "/x/a.png", side: "docker:dev" } as never);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(answered).toBeUndefined();
+    router.close();
+    await Promise.race([done, new Promise((_, rej) => setTimeout(() => rej(new Error("call still pending")), 2000))]);
+    expect(answered).toMatchObject({ type: "error", code: "side_not_ready" });
+    s.close();
+  });
+
   it("a spawn failure names the side", async () => {
     const s = createSides({ targets: [dockerSide("gone")], localLabel: "Linux", posixLocal: true, spawn: () => Promise.reject(new Error("docker exited")) });
     await expect(s.start("docker:gone")).rejects.toThrow("Docker: gone: docker exited");
