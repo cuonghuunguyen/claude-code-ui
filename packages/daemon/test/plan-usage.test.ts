@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PlanUsage } from "@claude-ui/protocol";
-import { createPlanTracker, eventWindows, planUsage } from "../src/plan-usage.ts";
+import { createPlanTracker, eventWindows, planUsage, usesOauthToken } from "../src/plan-usage.ts";
 import { fakePlanUsage } from "./fake-query.ts";
 
 const at = (iso: string) => new Date(iso).getTime();
@@ -244,5 +244,21 @@ describe("plan usage", () => {
     ]);
     expect(eventWindows(undefined)).toBeUndefined();
     expect(eventWindows({})).toBeUndefined();
+  });
+
+  it("usesOauthToken: env token alone only; Bedrock, Vertex or Foundry on keeps the usage hidden (null)", () => {
+    expect(usesOauthToken({ CLAUDE_CODE_OAUTH_TOKEN: "x" })).toBe(true);
+    expect(usesOauthToken({})).toBe(false);
+    for (const k of ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"]) {
+      expect(usesOauthToken({ CLAUDE_CODE_OAUTH_TOKEN: "x", [k]: "1" })).toBe(false);
+      expect(usesOauthToken({ CLAUDE_CODE_OAUTH_TOKEN: "x", [k]: "0" })).toBe(true);
+    }
+  });
+
+  it("eventWindows rejects NaN and Infinity", () => {
+    const ok = { utilization: 0.5, resetsAt: s("2026-10-01T11:00:00Z") };
+    expect(eventWindows({ five_hour: { ...ok, utilization: NaN } }, 0)).toBeUndefined();
+    expect(eventWindows({ five_hour: { ...ok, resetsAt: Infinity } }, 0)).toBeUndefined();
+    expect(eventWindows({ five_hour: { ...ok, utilization: Infinity }, seven_day: ok }, 0)!.map((w) => w.kind)).toEqual(["weekly_all"]);
   });
 });

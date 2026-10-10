@@ -145,3 +145,14 @@ it("env token with event windows: ring shows the percent, the popover notes the 
   expect(document.querySelector('[data-testid="plan-auth-note"]')!.textContent).toContain("CLAUDE_CODE_OAUTH_TOKEN");
   expect(document.querySelectorAll('[data-testid="plan-window"]')).toHaveLength(2);
 });
+
+it("env token, no windows, limit reached: the name says the limit, not unavailable", async () => {
+  const el = await render({ plan: null, status: "rejected", windows: [], auth: "oauth_token", statusLimit: "Current session" });
+  expect(meter(el).title).toMatch(/^Plan usage: limit reached: Current session/);
+  expect(meter(el).title).not.toBe(OAUTH_UNAVAILABLE);
+});
+
+it("env token, no windows: the grey ring keeps the 44px touch width below md", async () => {
+  const el = await render({ plan: null, status: "allowed", windows: [], auth: "oauth_token" });
+  expect(meter(el).className).toContain("max-md:min-w-11");
+});

@@ -58,13 +58,19 @@ export function planUsage(r: SDKControlGetUsageResponse): PlanUsage | null | und
   return { plan: r.subscription_type, windows, status: "allowed" };
 }
 
+/** The login is CLAUDE_CODE_OAUTH_TOKEN: the env var is set (presence only, never its value) and no Bedrock, Vertex or Foundry provider is on (the CLI uses those instead, plan limits do not apply). */
+export function usesOauthToken(env: NodeJS.ProcessEnv = process.env): boolean {
+  const on = (v: string | undefined) => !!v && !/^(0|false)$/i.test(v);
+  return !!env.CLAUDE_CODE_OAUTH_TOKEN && !["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"].some((k) => on(env[k]));
+}
+
 /** Session and week windows of a rate_limit_event; a window past its reset reads 0% without reset time. Undefined when none. */
 export function eventWindows(w: UnifiedWindows | undefined, now = Date.now()): PlanWindow[] | undefined {
   const rows = ([["session", w?.five_hour], ["weekly_all", w?.seven_day]] as const).flatMap(([kind, x]) => {
-    if (typeof x?.utilization !== "number" || typeof x.resetsAt !== "number") return [];
-    const at = x.resetsAt * 1000;
+    if (!Number.isFinite(x?.utilization) || !Number.isFinite(x?.resetsAt)) return [];
+    const at = x!.resetsAt * 1000;
     const passed = at <= now;
-    return [{ kind, label: LABELS[kind]!, percent: passed ? 0 : Math.round(x.utilization * 100), resetsAt: passed ? null : at, severity: "normal", active: kind === "session" }];
+    return [{ kind, label: LABELS[kind]!, percent: passed ? 0 : Math.round(x!.utilization * 100), resetsAt: passed ? null : at, severity: "normal", active: kind === "session" }];
   });
   return rows.length ? rows : undefined;
 }

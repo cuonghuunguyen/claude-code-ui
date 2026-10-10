@@ -136,11 +136,11 @@ export function PlanMeter({ usage }: { usage: PlanUsage }) {
   const head = ringWindow(usage.windows, useUsageRing()) ?? headline(usage.windows, level);
   const limited = usage.status === "rejected";
   const unavailable = usage.windows.length === 0 && usage.auth === "oauth_token";
-  const summary = unavailable
-    ? OAUTH_UNAVAILABLE
-    : limited
+  const summary = limited
     ? `Plan usage: ${lower(limitText(usage))}${usage.statusResetsAt ? `, ${lower(resetText(usage.statusResetsAt))}` : ""}`
-    : `${NAME[level]}: ${head ? `${head.label} ${head.percent}%${head.resetsAt ? `, ${lower(resetText(head.resetsAt))}` : ""}` : "no windows"}`;
+    : unavailable
+      ? OAUTH_UNAVAILABLE
+      : `${NAME[level]}: ${head ? `${head.label} ${head.percent}%${head.resetsAt ? `, ${lower(resetText(head.resetsAt))}` : ""}` : "no windows"}`;
   return (
     <Popover.Root>
       <Popover.Trigger
@@ -149,7 +149,7 @@ export function PlanMeter({ usage }: { usage: PlanUsage }) {
         data-testid="plan-meter"
         data-level={level}
         data-unavailable={unavailable || undefined}
-        className={`flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs tabular-nums outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-accent max-md:h-11 pointer-coarse:h-11 ${level === "ok" ? "text-muted-foreground hover:text-foreground data-popup-open:text-foreground" : TEXT[level]}`}
+        className={`flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs tabular-nums outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-accent max-md:h-11 pointer-coarse:h-11 ${unavailable ? "max-md:min-w-11 max-md:justify-center pointer-coarse:min-w-11 pointer-coarse:justify-center " : ""}${level === "ok" ? "text-muted-foreground hover:text-foreground data-popup-open:text-foreground" : TEXT[level]}`}
       >
         {/* Color is not the only signal: the warning and limit states add an icon. */}
         {level === "ok" ? (
