@@ -13,6 +13,7 @@ import { MAX_TERMINAL_INPUT_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCO
 import { listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
+import { scanThreadConfig } from "../src/session-scan.ts";
 import { SideSocket } from "../src/sides.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, yielded } from "./fake-query.ts";
@@ -1535,6 +1536,63 @@ describe("daemon", () => {
       expect(scans).toBe(3);
     } finally {
       d.close();
+    }
+  });
+
+  it("warmUp lists once when the server starts: the first session.list reuses that scan", async () => {
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    mkdirSync(join(projectsDir, "-p"));
+    writeFileSync(join(projectsDir, "-p", "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b.jsonl"), "{}\n");
+    let scans = 0;
+    const make = (warmUp?: boolean) =>
+      createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        query: fakeQuery as never,
+        projectsDir,
+        listCache: true,
+        warmUp,
+        history: { listSessions: (async () => (scans++, [])) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+      });
+    const cold = make();
+    await new Promise<void>((r) => cold.listen(0, "127.0.0.1", r));
+    await new Promise((r) => setTimeout(r, 100));
+    cold.close();
+    expect(scans).toBe(0);
+    const d = make(true);
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      await vi.waitFor(() => expect(scans).toBe(1));
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.list" });
+      expect(scans).toBe(1);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("the default history scans transcripts in the worker thread, not on the main thread", async () => {
+    const root = mkdtempSync(join(tmpdir(), "claude-cfg-"));
+    mkdirSync(join(root, "projects"));
+    const mark = join(root, "thread-ran");
+    const realEnv = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = root;
+    scanThreadConfig.reset();
+    const realScript = scanThreadConfig.script;
+    scanThreadConfig.script = `const { parentPort } = require("node:worker_threads"); parentPort.on("message", ({ id }) => { require("node:fs").writeFileSync(${JSON.stringify(mark)}, "x"); parentPort.postMessage({ id, sessions: [] }); });`;
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, claudeDir: root });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.list" });
+      expect(existsSync(mark)).toBe(true);
+    } finally {
+      d.close();
+      scanThreadConfig.script = realScript;
+      scanThreadConfig.reset();
+      if (realEnv === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = realEnv;
     }
   });
 
