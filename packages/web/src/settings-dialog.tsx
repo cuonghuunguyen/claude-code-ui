@@ -19,6 +19,7 @@ import { saveSignalOnly, useSignalOnly } from "./signal.ts";
 import { IN_APP_EVENT, loadInApp, saveInApp } from "./notify.ts";
 import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
+import { KeyTipsRow } from "./key-tip.tsx";
 import { ChevronLeftIcon } from "lucide-react";
 
 const GROUP_KEY = "claude-ui.settingsGroup";
@@ -431,6 +432,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
               Customize…
             </button>
           </div>
+          <KeyTipsRow />
         </section>
             ),
           },

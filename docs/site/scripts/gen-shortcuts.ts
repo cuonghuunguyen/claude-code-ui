@@ -13,11 +13,11 @@ const kbd = (spec: string, mac: boolean) =>
     .map((k) => `<kbd>${k === "`" ? "\\`" : k === "\\" ? "\\\\" : k === "|" ? "\\|" : k}</kbd>`)
     .join(mac ? " " : "+");
 
-const row = (s: Shortcut) => `| ${s.title} | ${kbd(s.key, false)} | ${kbd(s.mac ?? s.key, true)} |`;
+const row = (s: Shortcut & { key: string }) => `| ${s.title} | ${kbd(s.key, false)} | ${kbd(s.mac ?? s.key, true)} |`;
 
-// Tabs 1..8 collapse into one row.
+// Tabs 1..8 collapse into one row. Commands without a default key (a user may bind them in the app) are not shortcuts to list.
 const rows = (group: ShortcutGroup) => {
-  const list = SHORTCUTS.filter((s) => s.group === group);
+  const list = SHORTCUTS.filter((s): s is Shortcut & { key: string } => s.group === group && !!s.key);
   const lines: string[] = [];
   for (const s of list) {
     if (/^tab\.goto[2-8]$/.test(s.id)) continue;
