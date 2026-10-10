@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, limiter, listWorktrees, removeWorktree, worktreeStatus } from "../src/git.ts";
+import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus } from "../src/git.ts";
+import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
 
@@ -22,17 +23,17 @@ describe("gitStatus", () => {
     writeFileSync(join(dir, "a.txt"), "1\n2\n3\n");
     run(dir, "add", ".");
     run(dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
-    expect(await gitStatus(dir)).toEqual({ branch: "main", added: 0, removed: 0 });
+    expect(await gitStatus(dir)).toEqual({ branch: "main", added: 0, removed: 0, refs: expect.any(String) });
     writeFileSync(join(dir, "a.txt"), "1\nx\ny\n");
     writeFileSync(join(dir, "b.txt"), "new\n");
     run(dir, "add", "b.txt");
-    expect(await gitStatus(dir)).toEqual({ branch: "main", added: 3, removed: 2 });
+    expect(await gitStatus(dir)).toEqual({ branch: "main", added: 3, removed: 2, refs: expect.any(String) });
   });
 
   it("works before the first commit and on a detached HEAD", async () => {
     const dir = mkdtempSync(join(tmpdir(), "git-"));
     run(dir, "init", "-q", "-b", "dev");
-    expect(await gitStatus(dir)).toEqual({ branch: "dev", added: 0, removed: 0 });
+    expect(await gitStatus(dir)).toEqual({ branch: "dev", added: 0, removed: 0, refs: expect.any(String) });
     writeFileSync(join(dir, "a.txt"), "1\n");
     run(dir, "add", ".");
     run(dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
@@ -519,8 +520,8 @@ describe("gitLog / gitShow / gitFileAt", () => {
   it("an empty repository has no commits, also with the HEAD filter", async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "gg-")));
     run(dir, "init", "-q");
-    expect(await gitLog(dir, { allowed: all })).toEqual({ commits: [], more: false, branches: [] });
-    expect(await gitLog(dir, { ref: "HEAD", allowed: all })).toEqual({ commits: [], more: false, branches: [] });
+    expect(await gitLog(dir, { allowed: all })).toMatchObject({ commits: [], more: false, branches: [] });
+    expect(await gitLog(dir, { ref: "HEAD", allowed: all })).toMatchObject({ commits: [], more: false, branches: [] });
   });
 
   it("an unborn HEAD (orphan branch) with the HEAD filter has no commits but keeps the branch list", async () => {
@@ -578,7 +579,7 @@ describe("gitLog / gitShow / gitFileAt", () => {
     } finally {
       process.env.PATH = path;
     }
-    return readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => l.split("\x1f").slice(0, -1));
+    return (existsSync(log) ? readFileSync(log, "utf8") : "").split("\n").filter(Boolean).map((l) => l.split("\x1f").slice(0, -1));
   }
 
   // A `git` shell-script wrapper first on PATH: node cannot spawn an extensionless script on Windows (no shell, no .cmd lookup).
@@ -607,12 +608,15 @@ describe("gitLog / gitShow / gitFileAt", () => {
     expect(filtered.slice(-3)).toEqual(["--end-of-options", "refs/heads/f", "--"]);
     expect(filtered).toContain("--fixed-strings");
     expect(logs.find((a) => a.includes("--topo-order") && a.at(-2) === "HEAD")!.slice(-3)).toEqual(["--end-of-options", "HEAD", "--"]);
-    // The hash lookup resolves the text behind a terminator and logs only the full hash behind one.
-    expect(calls.find((a) => a.includes("rev-parse") && a.includes(`${r.c3.slice(0, 7)}^{commit}`))).toContain("--end-of-options");
+    // The hash lookup resolves the text behind a terminator, as one commit-peeled value.
     const one = logs.find((a) => a.includes("--no-walk"))!;
-    expect(one.slice(-3)).toEqual(["--end-of-options", r.c3, "--"]);
-    expect(calls.some((a) => a.includes("check-ref-format") && a.includes("refs/heads/f"))).toBe(true);
-    for (const a of calls.filter((a) => a.includes("show") && a.includes("-s"))) expect(a.slice(-2)).toEqual(["--end-of-options", r.c3]);
+    expect(one.slice(-3)).toEqual(["--end-of-options", `${r.c3.slice(0, 7)}^{commit}`, "--"]);
+    // Every log names its start point behind the terminator (a ref known from the branch list needs no further check).
+    for (const a of logs) expect(a).toContain("--end-of-options");
+    for (const a of calls.filter((a) => a.includes("show") && a.includes("-s"))) {
+      expect(a.slice(-2)).toEqual(["--end-of-options", `${r.c3}^{commit}`]);
+      expect(a).not.toContain("--decorate=full");
+    }
     for (const a of calls.filter((a) => a.includes("diff-tree") || a.includes("diff"))) expect(a).toEqual(expect.arrayContaining(["--no-ext-diff", "--no-textconv"]));
   });
 
@@ -706,6 +710,140 @@ describe("gitLog / gitShow / gitFileAt", () => {
     await expect(gitShow(sub, r.c1, inSub)).rejects.toMatchObject({ code: "cwd_not_allowed" });
     await expect(gitFileAt(sub, r.c1, "a.txt", inSub, 1000)).rejects.toMatchObject({ code: "cwd_not_allowed" });
   });
+  it.skipIf(process.platform === "win32")("git.log page 0, git.commit and a file diff each run at most 2 git processes", async () => {
+    const r = graphRepo();
+    expect((await recorded(() => gitLog(r.dir, { allowed: all }))).length).toBeLessThanOrEqual(2);
+    const r2 = graphRepo();
+    expect((await recorded(() => gitLog(r2.dir, { ref: "HEAD", allowed: all }))).length).toBeLessThanOrEqual(2);
+    const r3 = graphRepo();
+    expect((await recorded(() => gitLog(r3.dir, { ref: "refs/heads/f", allowed: all }))).length).toBeLessThanOrEqual(2);
+    const r4 = graphRepo();
+    expect((await recorded(() => gitShow(r4.dir, r4.c3, all))).length).toBeLessThanOrEqual(2);
+    const r5 = graphRepo();
+    expect((await recorded(() => Promise.all([gitFileAt(r5.dir, r5.c1, "a.txt", all, 1000), gitFileAt(r5.dir, r5.c3, "a.txt", all, 1000)]))).length).toBeLessThanOrEqual(2);
+  });
+
+  it.skipIf(process.platform === "win32")("a repeated git.log with unchanged refs runs no git process; a commit, branch or tag reads again", async () => {
+    const r = graphRepo();
+    const first = await gitLog(r.dir, { allowed: all });
+    const again = await recorded(() => gitLog(r.dir, { allowed: all }));
+    expect(again).toHaveLength(0);
+    expect(await gitLog(r.dir, { allowed: all })).toEqual(first);
+    // Time moves on between steps: a stamp is file stats, a same-tick update could share one.
+    const tick = () => new Promise((res) => setTimeout(res, 30));
+    await tick();
+    sh(r.dir, { GIT_AUTHOR_NAME: "a", GIT_AUTHOR_EMAIL: "a@x.test", GIT_COMMITTER_NAME: "a", GIT_COMMITTER_EMAIL: "a@x.test" }, "commit", "-q", "--allow-empty", "-m", "newest");
+    expect((await recorded(() => gitLog(r.dir, { allowed: all }))).length).toBeGreaterThanOrEqual(1);
+    expect((await gitLog(r.dir, { allowed: all }))!.commits[0]!.subject).toBe("newest");
+    await tick();
+    run(r.dir, "branch", "x");
+    expect((await recorded(() => gitLog(r.dir, { allowed: all }))).length).toBeGreaterThanOrEqual(1);
+    expect((await gitLog(r.dir, { allowed: all }))!.branches).toContain("refs/heads/x");
+    await tick();
+    run(r.dir, "tag", "t9");
+    expect((await recorded(() => gitLog(r.dir, { allowed: all }))).length).toBeGreaterThanOrEqual(1);
+    expect((await gitLog(r.dir, { allowed: all }))!.commits[0]!.refs).toContain("refs/tags/t9");
+  });
+
+  it.skipIf(process.platform === "win32")("fresh skips the page cache", async () => {
+    const r = graphRepo();
+    await gitLog(r.dir, { allowed: all });
+    expect((await recorded(() => gitLog(r.dir, { allowed: all, fresh: true }))).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("refsStamp changes on commit, branch create and delete, checkout, tag and pack-refs; not on a working-tree edit", async () => {
+    const r = graphRepo();
+    const tick = () => new Promise((res) => setTimeout(res, 30));
+    let last = refsStamp(r.dir);
+    const changed = async (what: string, act: () => void) => {
+      await tick();
+      act();
+      const now = refsStamp(r.dir);
+      expect(now, what).not.toBe(last);
+      last = now;
+    };
+    expect(refsStamp(r.dir)).toBe(last);
+    await tick();
+    writeFileSync(join(r.dir, "b.txt"), "edited\n");
+    expect(refsStamp(r.dir)).toBe(last);
+    await changed("commit", () => sh(r.dir, { GIT_AUTHOR_NAME: "a", GIT_AUTHOR_EMAIL: "a@x.test", GIT_COMMITTER_NAME: "a", GIT_COMMITTER_EMAIL: "a@x.test" }, "commit", "-q", "--allow-empty", "-m", "x"));
+    await changed("branch create", () => run(r.dir, "branch", "deep/er/b"));
+    await changed("branch delete", () => run(r.dir, "branch", "-D", "deep/er/b"));
+    await changed("checkout", () => run(r.dir, "checkout", "-q", "-f", "f"));
+    await changed("tag", () => run(r.dir, "tag", "t1"));
+    await changed("pack-refs", () => run(r.dir, "pack-refs", "--all"));
+    expect(refsStamp(mkdtempSync(join(tmpdir(), "nogit-")))).toBe("-");
+  });
+
+  it("page 0 carries head and refs: head is refs/heads/main attached, absent detached", async () => {
+    const r = graphRepo();
+    const a = (await gitLog(r.dir, { allowed: all }))!;
+    expect(a.head).toBe("refs/heads/main");
+    expect(a.refs).toBe(refsStamp(r.dir));
+    const more = (await gitLog(r.dir, { skip: 1, limit: 1, allowed: all }))!;
+    expect(more.head).toBeUndefined();
+    expect(more.refs).toBeUndefined();
+    sh(r.dir, {}, "checkout", "-q", "--detach", "v1");
+    const d = (await gitLog(r.dir, { allowed: all }))!;
+    expect(d.head).toBeUndefined();
+    expect(d.refs).toBeTypeOf("string");
+  });
+
+  it.skipIf(process.platform === "win32")("gitShow has no refs and is cached by hash; an unknown or non-commit hash is not_found", async () => {
+    const r = graphRepo();
+    const c = (await gitShow(r.dir, r.c3, all))!;
+    expect(c.refs).toEqual([]);
+    expect(c.subject).toBe("fix two");
+    expect((await recorded(() => gitShow(r.dir, r.c3, all))).length).toBe(0);
+    await expect(gitShow(r.dir, "0123456789abcdef0123456789abcdef01234567", all)).rejects.toMatchObject({ code: "not_found" });
+    const tree = sh(r.dir, {}, "rev-parse", "HEAD^{tree}");
+    await expect(gitShow(r.dir, tree, all)).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("gitFileAt reads a file name with a line break", async () => {
+    const r = graphRepo();
+    const name = "we\nird.txt";
+    writeFileSync(join(r.dir, name), "odd\n");
+    run(r.dir, "add", ".");
+    sh(r.dir, { GIT_AUTHOR_NAME: "a", GIT_AUTHOR_EMAIL: "a@x.test", GIT_COMMITTER_NAME: "a", GIT_COMMITTER_EMAIL: "a@x.test" }, "commit", "-q", "-m", "odd");
+    const h = sh(r.dir, {}, "rev-parse", "HEAD");
+    expect((await gitFileAt(r.dir, h, name, all, 1000)).toString()).toBe("odd\n");
+    await expect(gitFileAt(r.dir, h, "we\nnone.txt", all, 1000)).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("gitStatus during a graph read returns the last status without git, or waits when it has none", async () => {
+    const a = graphRepo();
+    const b = graphRepo();
+    const primed = (await gitStatus(a.dir))!;
+    let open!: () => void;
+    const gate = new Promise<void>((res) => (open = res));
+    const seen: string[][] = [];
+    setGitRunner(async (o: GitRunOptions) => {
+      seen.push(o.args);
+      if (o.args.includes("log")) await gate;
+      return threadRunner(o);
+    });
+    try {
+      const log = gitLog(a.dir, { allowed: all });
+      await new Promise((res) => setTimeout(res, 20));
+      seen.length = 0;
+      const during = await gitStatus(a.dir);
+      expect(during).toEqual({ ...primed, refs: refsStamp(a.dir) });
+      expect(seen.some((x) => x.includes("diff"))).toBe(false);
+      // A folder with no earlier status waits for the graph to finish.
+      let done = false;
+      const first = gitStatus(b.dir).then((s) => ((done = true), s));
+      await new Promise((res) => setTimeout(res, 50));
+      expect(done).toBe(false);
+      open();
+      await log;
+      expect((await first)!.branch).toBe("main");
+    } finally {
+      open();
+      setGitRunner(undefined);
+    }
+  });
+
 });
 
 describe("gitDiff", { timeout: 90_000 }, () => {
@@ -857,6 +995,18 @@ describe("gitDiff truncation", { timeout: 120_000 }, () => {
 });
 
 describe("limiter", () => {
+  it("an urgent task starts before queued normal ones", async () => {
+    const run = limiter(1);
+    const order: string[] = [];
+    let open!: () => void;
+    const hold = run(() => new Promise<void>((r) => (open = r)));
+    const t = (n: string, urgent = false) => run(async () => void order.push(n), urgent);
+    const rest = Promise.all([t("n1"), t("n2"), t("u1", true), t("u2", true)]);
+    open();
+    await Promise.all([hold, rest]);
+    expect(order).toEqual(["u1", "u2", "n1", "n2"]);
+  });
+
   it("runs at most n tasks at a time, in order; a failed task frees its slot", async () => {
     const run = limiter(2);
     let active = 0;

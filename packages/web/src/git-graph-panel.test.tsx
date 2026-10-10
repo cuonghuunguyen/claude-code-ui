@@ -5,6 +5,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
 import { GraphPanel } from "./git-graph-panel.tsx";
+import { noteRefs } from "./git-refs.ts";
+import * as graph from "./git-graph.ts";
 
 vi.mock("@pierre/diffs/react", () => ({ MultiFileDiff: () => <div data-testid="pierre-diff" /> }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -28,8 +30,13 @@ Element.prototype.getBoundingClientRect = function (this: Element) {
 const isList = (e: Element) => e.getAttribute("role") === "listbox";
 Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get() { return isList(this) ? Number.parseFloat((this.firstElementChild as HTMLElement).style.height) : 0; } });
 Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get() { return isList(this) ? 500 : 0; } });
-/** What the fake's git.status reports as the current branch (a short hash: detached). */
+/** The branch the fake's first page reports as HEAD (a short hash: detached, no `head`). */
 let statusBranch = "main";
+/** The refs stamp the fake's first page reports. */
+let stampValue = "s1";
+/** Number of branches the fake lists. */
+let branchCount = 2;
+const branchRefs = () => (branchCount === 2 ? ["refs/heads/main", "refs/remotes/origin/main"] : ["refs/heads/main", ...Array.from({ length: branchCount - 1 }, (_, i) => `refs/heads/b${i}`)]);
 const hash = (i: number) => i.toString(16).padStart(40, "0");
 /** A linear history of n commits, newest first (hash(n) is the tip). */
 const history = (n: number): GitCommit[] =>
@@ -44,6 +51,8 @@ document.body.append(el);
 const root = createRoot(el);
 afterEach(() => {
   statusBranch = "main";
+  stampValue = "s1";
+  branchCount = 2;
   return act(() => root.render(null));
 });
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
@@ -56,7 +65,7 @@ function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200
     if (m.type === "git.log") {
       const skip = m.skip ?? 0;
       const slice = all.slice(skip, skip + page);
-      return { log: nogit ? null : { commits: slice, more: skip + page < all.length, ...(skip === 0 && { branches: ["refs/heads/main", "refs/remotes/origin/main"] }) } };
+      return { log: nogit ? null : { commits: slice, more: skip + page < all.length, ...(skip === 0 && { branches: branchRefs(), refs: stampValue, ...(branchRefs().includes(`refs/heads/${statusBranch}`) ? { head: `refs/heads/${statusBranch}` } : {}) }) } };
     }
     if (m.type === "git.status") return { status: { branch: statusBranch, added: 0, removed: 0 } };
     if (m.type === "git.commit") return { commit: detail(all.find((c) => c.hash === m.hash)!, files) };
@@ -64,8 +73,8 @@ function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200
   });
   return Object.assign({ request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>, { sent });
 }
-const mount = async (c: ReturnType<typeof fake>) => {
-  await act(async () => root.render(<GraphPanel client={c} cwd="/p" />));
+const mount = async (c: ReturnType<typeof fake>, hidden = false) => {
+  await act(async () => root.render(<GraphPanel client={c} cwd="/p" hidden={hidden} />));
   await flush();
 };
 const rowEls = () => el.querySelectorAll("[data-testid=commit-row]");
@@ -316,7 +325,7 @@ it("detached HEAD at a branch commit: the branch chip is green, HEAD is its own 
   expect(chips.find((c) => c.textContent === "HEAD")!.className).toContain("text-ref-head");
 });
 
-it("the HEAD label comes from git.status: it follows a checkout on Refresh and needs no HEAD commit in the page", async () => {
+it("the HEAD label comes from the first page's head: it follows a checkout on Refresh and needs no HEAD commit in the page; the panel sends no git.status", async () => {
   const c = fake(history(3).map((x) => ({ ...x, refs: [] })));
   await mount(c);
   expect((await optionTexts())[1]).toBe("HEAD (main)");
@@ -325,14 +334,15 @@ it("the HEAD label comes from git.status: it follows a checkout on Refresh and n
   statusBranch = "1a2b3c4";
   await act(async () => el.querySelector<HTMLElement>("button[aria-label=Refresh]")!.click());
   await flush();
-  expect(c.sent.some((m) => m.type === "git.status")).toBe(true);
+  expect(c.sent.some((m) => m.type === "git.status")).toBe(false);
+  expect(c.sent.filter((m) => m.type === "git.log")).toEqual([expect.objectContaining({ skip: 0, fresh: true })]);
   expect((await optionTexts())[1]).toBe("HEAD");
 });
 
 it("the HEAD label keeps its branch when a filter matches nothing", async () => {
   const c = fake(history(3));
   await mount(c);
-  vi.mocked(c.request).mockImplementation(async (m: Req) => ({ log: { commits: m.text ? [] : history(3), more: false, branches: ["refs/heads/main"] } }));
+  vi.mocked(c.request).mockImplementation(async (m: Req) => ({ log: { commits: m.text ? [] : history(3), more: false, branches: ["refs/heads/main"], head: "refs/heads/main" } }));
   const input = el.querySelector<HTMLInputElement>("[data-testid=graph-filter-text]")!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "zzz");
@@ -340,4 +350,89 @@ it("the HEAD label keeps its branch when a filter matches nothing", async () => 
   });
   await act(async () => void (await new Promise((r) => setTimeout(r, 350))));
   expect((await optionTexts())[1]).toBe("HEAD (main)");
+});
+
+const typeInto = async (testid: string, value: string) => {
+  const input = el.querySelector<HTMLInputElement>(`[data-testid=${testid}]`)!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => void (await new Promise((r) => setTimeout(r, 400))));
+};
+const logs = (c: ReturnType<typeof fake>) => c.sent.filter((m) => m.type === "git.log");
+
+it("one git.log per open and per filter change", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  await act(async () => void (await new Promise((r) => setTimeout(r, 400))));
+  expect(logs(c)).toHaveLength(1);
+  await typeInto("graph-filter-text", "five");
+  expect(logs(c)).toHaveLength(2);
+  await typeInto("graph-filter-author", "ann");
+  expect(logs(c)).toHaveLength(3);
+  // Typing the same text again (spaces only) is no change.
+  await typeInto("graph-filter-author", "ann ");
+  expect(logs(c)).toHaveLength(3);
+});
+
+it("a hidden panel keeps its list; shown again it sends no request while refs are unchanged and one git.log after the stamp changed", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  expect(logs(c)).toHaveLength(1);
+  await mount(c, true);
+  expect(el.querySelector<HTMLElement>("[data-testid=graph-panel]")!.className).toContain("hidden");
+  await mount(c, false);
+  expect(rowEls().length).toBeGreaterThan(0);
+  expect(logs(c)).toHaveLength(1);
+  await mount(c, true);
+  await act(async () => noteRefs("/p", "s2"));
+  stampValue = "s2";
+  await mount(c, false);
+  expect(logs(c)).toHaveLength(2);
+  expect(logs(c)[1]).not.toHaveProperty("fresh");
+  expect(rowEls().length).toBeGreaterThan(0);
+});
+
+it("branch items render only while the menu is open", async () => {
+  branchCount = 1000;
+  await mount(fake(history(3)));
+  const options = () => [...document.querySelectorAll<HTMLElement>("[role=option]")].filter((o) => !o.closest("[data-testid=commit-list]"));
+  expect(options()).toHaveLength(0);
+  await act(async () => {
+    list().scrollTop = 100;
+    list().dispatchEvent(new Event("scroll"));
+  });
+  expect(options()).toHaveLength(0);
+  await act(async () => el.querySelector<HTMLElement>("[data-testid=graph-filter-branch]")!.click());
+  await flush();
+  expect(options().length).toBeGreaterThan(900);
+  await act(async () => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await new Promise((r) => setTimeout(r, 300));
+  await flush();
+  expect(options()).toHaveLength(0);
+});
+
+it("load more lays out only the new page", async () => {
+  const spy = vi.spyOn(graph, "layoutPage");
+  const c = fake(history(500), [], 200);
+  await mount(c);
+  spy.mockClear();
+  await act(async () => {
+    list().scrollTop = 200 * 28;
+    list().dispatchEvent(new Event("scroll"));
+  });
+  await flush();
+  expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
+  const [commits, state] = spy.mock.calls[0]!;
+  expect(commits).toHaveLength(200);
+  expect(state.lanes.length).toBeGreaterThan(0);
+  spy.mockRestore();
+});
+
+it("details show the ref chips of the loaded commit", async () => {
+  await mount(fake(history(3)));
+  await select(0);
+  const d = el.querySelector("[data-testid=commit-details]")!;
+  expect([...d.querySelectorAll("[data-testid=commit-ref]")].map((x) => x.textContent)).toContain("main");
 });

@@ -86,4 +86,19 @@ describe("layoutPage", () => {
     const rows = layoutPage(tips, emptyGraph()).rows;
     expect(rows.map((r) => r.color)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 0]);
   });
+
+  it("through[i] is the output index of input lane i, -1 when the lane ends at the node", () => {
+    const fixtures = [
+      [c("m", "x", "f"), c("f", "r"), c("x", "r"), c("r")],
+      [c("o", "a", "b", "d"), c("a"), c("b"), c("d")],
+      [c("a", "p"), c("b", "p"), c("p")],
+    ];
+    for (const commits of fixtures) {
+      const { rows } = layoutPage(commits, emptyGraph());
+      rows.forEach((row, n) => {
+        expect(row.through).toHaveLength(row.input.length);
+        row.input.forEach((l, i) => expect(row.through[i]).toBe(l.hash === commits[n]!.hash ? -1 : row.output.indexOf(l)));
+      });
+    }
+  });
 });

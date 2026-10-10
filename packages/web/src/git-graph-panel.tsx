@@ -1,6 +1,6 @@
 // Graph tab (docs/spec.md "Layout"): the commit history of the session's repository, read-only: lanes, filters, details, per-file diff.
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLog, GitLogResult, GitStatusResult, FsReadResult } from "@claude-ui/protocol";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, FsReadResult } from "@claude-ui/protocol";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { ArrowLeftIcon, GitCommitHorizontalIcon, RotateCwIcon, SearchIcon, TagIcon } from "lucide-react";
@@ -11,7 +11,8 @@ import type { connect, RequestError } from "./client.ts";
 import { KindBadge, StatsText, useNarrow } from "./changes-panel.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { readFailure } from "./files.ts";
-import { emptyGraph, layoutPage, type GraphRow } from "./git-graph.ts";
+import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
+import { noteRefs, useRefsStamp } from "./git-refs.ts";
 import { timeAgo } from "./sessions.ts";
 import { useDark } from "./theme.ts";
 import { DIFF_OPTIONS } from "./tool-card.tsx";
@@ -59,30 +60,60 @@ const Chip = ({ children, className }: { children: React.ReactNode; className?: 
   </span>
 );
 
-/** The lanes of one row, drawn with SVG: input lines from the top, parent lines to the bottom, the node. */
-function GraphCell({ row, hash, head, h }: { row: GraphRow; hash: string; head: boolean; h: number }) {
+/** The lanes of one row, drawn with SVG: input lines from the top, parent lines to the bottom, the node. One path per lane color. */
+const GraphCell = memo(function GraphCell({ row, head, h }: { row: GraphRow; head: boolean; h: number }) {
   const x = (i: number) => LANE_W / 2 + i * LANE_W;
   const col = (n: number) => `var(--graph-${n + 1})`;
   const mid = h / 2;
-  const curve = (i: number, j: number) => `M ${x(i)} 0 C ${x(i)} ${mid}, ${x(j)} ${mid}, ${x(j)} ${h}`;
+  const curve = (i: number, j: number) => `M ${x(i)} 0 C ${x(i)} ${mid}, ${x(j)} ${mid}, ${x(j)} ${h} `;
   const width = Math.max(row.input.length, row.output.length, row.col + 1) * LANE_W;
+  const byColor: Record<number, string> = {};
+  const add = (color: number, d: string) => void (byColor[color] = (byColor[color] ?? "") + d);
+  // A lane waiting for this commit ends at its node; any other lane goes on, to its index in `output`.
+  row.input.forEach((l, i) => add(l.color, row.through[i]! < 0 ? `M ${x(i)} 0 L ${x(row.col)} ${mid} ` : curve(i, row.through[i]!)));
+  for (const j of row.edges) add(row.output[j]!.color, `M ${x(row.col)} ${mid} L ${x(j)} ${h} `);
   return (
     <svg width={width} height={h} className="shrink-0" aria-hidden fill="none" strokeWidth={1.5} data-testid="commit-graph">
-      {row.input.map((l, i) => {
-        // A lane waiting for this commit ends at its node; any other lane goes on, to the same object in `output`.
-        const j = row.output.indexOf(l);
-        return <path key={`i${i}`} d={l.hash === hash || j < 0 ? `M ${x(i)} 0 L ${x(row.col)} ${mid}` : curve(i, j)} stroke={col(l.color)} />;
-      })}
-      {row.edges.map((j, k) => (
-        <path key={`p${k}`} d={`M ${x(row.col)} ${mid} L ${x(j)} ${h}`} stroke={col(row.output[j]!.color)} />
+      {Object.entries(byColor).map(([c, d]) => (
+        <path key={c} d={d} stroke={col(Number(c))} />
       ))}
       <circle cx={x(row.col)} cy={mid} r={head ? 4.5 : 3.5} fill={head ? "var(--card)" : col(row.color)} stroke={col(row.color)} />
       {head && <circle cx={x(row.col)} cy={mid} r={2} fill={col(row.color)} stroke="none" />}
     </svg>
   );
-}
+});
 
-export function GraphPanel({ client, cwd }: { client: Client; cwd: string }) {
+type RowProps = { c: GitCommit; row: GraphRow; start: number; on: boolean; filtered: boolean; h: number; setsize: number; posinset: number; onPick: (hash: string) => void };
+const CommitRow = memo(function CommitRow({ c, row, start, on, filtered, h, setsize, posinset, onPick }: RowProps) {
+  return (
+    <div
+      id={`commit-${c.hash}`}
+      role="option"
+      aria-selected={on}
+      aria-setsize={setsize}
+      aria-posinset={posinset}
+      onClick={() => onPick(c.hash)}
+      className={cn("absolute top-0 left-0 flex w-full cursor-pointer items-center gap-2 px-2 text-sm hover:bg-accent", on && "bg-secondary")}
+      style={{ height: h, transform: `translateY(${start}px)` }}
+      data-testid="commit-row"
+    >
+      {!filtered && <GraphCell row={row} head={c.refs.includes("HEAD")} h={h} />}
+      <RefChips refs={c.refs} />
+      <span className="min-w-0 flex-1 truncate">{c.subject}</span>
+      <span className="hidden max-w-32 shrink-0 truncate text-muted-foreground @md:inline">{c.author}</span>
+      <span className="shrink-0 text-muted-foreground text-xs" title={new Date(c.time * 1000).toLocaleString()}>
+        {when(c)}
+      </span>
+      <span className="shrink-0 font-mono text-muted-foreground text-xs">{c.hash.slice(0, 7)}</span>
+    </div>
+  );
+});
+
+type Page = { commits: GitCommit[]; rows: GraphRow[]; state: GraphState };
+const NO_PAGE: Page = { commits: [], rows: [], state: emptyGraph() };
+
+/** `hidden`: the tab is not showing; the panel stays mounted and keeps its list (docs/spec.md "Layout", Graph tab). */
+export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cwd: string; hidden?: boolean }) {
   const narrow = useNarrow();
   const dark = useDark();
   const ROW = narrow ? 44 : 28;
@@ -91,26 +122,34 @@ export function GraphPanel({ client, cwd }: { client: Client; cwd: string }) {
   const [ref, setRef] = useState(HEAD);
   const [q, setQ] = useState({ text: "", author: "" });
   useEffect(() => {
-    const t = setTimeout(() => setQ({ text: text.trim(), author: author.trim() }), 300);
+    const t = setTimeout(() => {
+      const tx = text.trim();
+      const au = author.trim();
+      // The same filter keeps the same object: the fetch effect does not run again (one git.log per open).
+      setQ((p) => (p.text === tx && p.author === au ? p : { text: tx, author: au }));
+    }, 300);
     return () => clearTimeout(t);
   }, [text, author]);
-  const [commits, setCommits] = useState<GitCommit[]>([]);
+  const [page, setPage] = useState<Page>(NO_PAGE);
+  const { commits, rows } = page;
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [notGit, setNotGit] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [reload, setReload] = useState(0);
-  // The branch HEAD points to, from git.status (a short hash when detached, which is no branch in the list).
-  const [headBranch, setHeadBranch] = useState<string>();
+  // The branch HEAD points to, from the first page (absent when detached: no branch in the list).
+  const [head, setHead] = useState<string>();
+  // The refs stamp of the loaded first page; the Graph tab reloads on return only when the latest stamp (git.status) differs.
+  const [loadedRefs, setLoadedRefs] = useState<string>();
+  const latestRefs = useRefsStamp(cwd);
+  const wasHidden = useRef(hidden);
   useEffect(() => {
-    let live = true;
-    client.request<GitStatusResult>({ type: "git.status", cwd }).then(
-      (r) => live && setHeadBranch(r.status?.branch),
-      () => live && setHeadBranch(undefined),
-    );
-    return () => void (live = false);
-  }, [cwd, reload]);
+    if (wasHidden.current && !hidden && latestRefs && loadedRefs && latestRefs !== loadedRefs) setReload((n) => n + 1);
+    wasHidden.current = hidden;
+  }, [hidden]);
+  // Set by the Refresh button: that read skips the daemon's caches.
+  const freshNext = useRef(false);
   const gen = useRef(0);
   const filter = (skip: number) => ({ type: "git.log" as const, cwd, skip, limit: PAGE, ...(ref !== ALL && { ref }), ...(q.author && { author: q.author }), ...(q.text && { text: q.text }) });
 
@@ -118,40 +157,52 @@ export function GraphPanel({ client, cwd }: { client: Client; cwd: string }) {
     const id = ++gen.current;
     setLoading(true);
     setError(undefined);
-    client.request<GitLogResult>(filter(0)).then(
+    const fresh = freshNext.current;
+    freshNext.current = false;
+    client.request<GitLogResult>({ ...filter(0), ...(fresh && { fresh: true }) }).then(
       (r) => {
         if (id !== gen.current) return;
         setLoading(false);
         setNotGit(r.log === null);
-        setCommits(r.log?.commits ?? []);
+        const cs = r.log?.commits ?? [];
+        const l = layoutPage(cs, emptyGraph());
+        setPage({ commits: cs, rows: l.rows, state: l.state });
         setMore(r.log?.more ?? false);
-        if (r.log?.branches) setBranches(r.log.branches);
+        if (r.log?.branches) {
+          setBranches(r.log.branches);
+          setHead(r.log.head);
+          setLoadedRefs(r.log.refs);
+          noteRefs(cwd, r.log.refs);
+        }
       },
-      (e: RequestError) => id === gen.current && (setLoading(false), setError(e.message), setCommits([]), setMore(false)),
+      (e: RequestError) => id === gen.current && (setLoading(false), setError(e.message), setPage(NO_PAGE), setMore(false)),
     );
   }, [cwd, ref, q, reload]);
   const loadMore = () => {
     const id = gen.current;
     setLoading(true);
     client.request<GitLogResult>(filter(commits.length)).then(
-      (r: { log: GitLog | null }) => {
+      (r) => {
         if (id !== gen.current) return;
         setLoading(false);
-        const have = new Set(commits.map((c) => c.hash));
-        setCommits((c) => [...c, ...(r.log?.commits ?? []).filter((x) => !have.has(x.hash))]);
+        // Only the new commits are laid out, continuing the lanes of the loaded ones.
+        setPage((p) => {
+          const have = new Set(p.commits.map((c) => c.hash));
+          const add = (r.log?.commits ?? []).filter((x) => !have.has(x.hash));
+          const l = layoutPage(add, p.state);
+          return { commits: [...p.commits, ...add], rows: [...p.rows, ...l.rows], state: l.state };
+        });
         setMore(r.log?.more ?? false);
       },
       (e: RequestError) => id === gen.current && (setLoading(false), setError(e.message), setMore(false)),
     );
   };
 
-  // ponytail: the whole list is laid out again for each page (linear, cheap); keep a GraphState between pages if 100k rows matter.
-  const rows = useMemo(() => layoutPage(commits, emptyGraph()).rows, [commits]);
   const filtered = !!(q.text || q.author);
   const [selected, setSelected] = useState<string>();
   const index = commits.findIndex((c) => c.hash === selected);
   const scroller = useRef<HTMLDivElement>(null);
-  const v = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => ROW, overscan: 10, initialRect: { width: 0, height: window.innerHeight },
+  const v = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => ROW, overscan: 10, useFlushSync: false, initialRect: { width: 0, height: window.innerHeight },
     // Zero size (jsdom, a hidden tab) keeps the last size.
     observeElementRect: (inst, cb) => observeElementRect(inst, (r) => void (r.height && cb(r))),
   });
@@ -161,6 +212,7 @@ export function GraphPanel({ client, cwd }: { client: Client; cwd: string }) {
   useEffect(() => {
     if (more && !loading && last >= rows.length - 20) loadMore();
   }, [last, more, loading, rows.length]);
+  const pick = useCallback((hash: string) => setSelected(hash), []);
   const select = (i: number) => {
     const c = commits[Math.max(0, Math.min(i, commits.length - 1))];
     if (!c) return;
@@ -192,30 +244,35 @@ export function GraphPanel({ client, cwd }: { client: Client; cwd: string }) {
   }, [selected, cwd]);
 
   const row = ROW;
-  const headLabel = headBranch && branches.includes(`refs/heads/${headBranch}`) ? `HEAD (${short(headBranch)})` : "HEAD";
+  const headLabel = head && branches.includes(head) ? `HEAD (${short(head)})` : "HEAD";
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
-    <div className="@container flex min-h-0 flex-1 flex-col" data-testid="graph-panel">
+    <div className={cn("@container min-h-0 flex-1 flex-col", hidden ? "hidden" : "flex")} data-testid="graph-panel">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5 max-md:py-2">
         <label className="relative flex min-w-32 flex-1 items-center">
           <SearchIcon className="pointer-events-none absolute left-2 size-4 text-faint" aria-hidden />
           <input type="search" value={text} onChange={(e) => setText(e.target.value)} placeholder="Text or hash" aria-label="Text or hash" className={cn(INPUT, "pl-8")} data-testid="graph-filter-text" />
         </label>
-        <Select value={ref} onValueChange={(v) => v && setRef(v)}>
+        <Select value={ref} open={menuOpen} onOpenChange={setMenuOpen} onValueChange={(v) => v && setRef(v)}>
           <SelectTrigger aria-label="Branch" className="h-8 max-w-44 max-md:h-11!" data-testid="graph-filter-branch">
             <span className="truncate">{ref === ALL ? "All branches" : ref === HEAD ? headLabel : short(ref)}</span>
           </SelectTrigger>
           <SelectContent alignItemWithTrigger={false} align="start" className="w-auto min-w-44 max-w-[calc(100vw-2rem)]">
-            <SelectItem value={ALL}>All branches</SelectItem>
-            <SelectItem value={HEAD}>{headLabel}</SelectItem>
-            {branches.map((b) => (
-              <SelectItem key={b} value={b}>
-                {short(b)}
-              </SelectItem>
-            ))}
+            {menuOpen && (
+              <>
+                <SelectItem value={ALL}>All branches</SelectItem>
+                <SelectItem value={HEAD}>{headLabel}</SelectItem>
+                {branches.map((b) => (
+                  <SelectItem key={b} value={b}>
+                    {short(b)}
+                  </SelectItem>
+                ))}
+              </>
+            )}
           </SelectContent>
         </Select>
         <input type="search" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Author" aria-label="Author" className={cn(INPUT, "w-32 flex-none")} data-testid="graph-filter-author" />
-        <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => setReload((n) => n + 1)} title="Refresh" aria-label="Refresh">
+        <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => ((freshNext.current = true), setReload((n) => n + 1))} title="Refresh" aria-label="Refresh">
           <RotateCwIcon />
         </Button>
       </div>
@@ -243,30 +300,7 @@ export function GraphPanel({ client, cwd }: { client: Client; cwd: string }) {
               <div className="relative w-full" style={{ height: v.getTotalSize() }}>
                 {items.map((it) => {
                   const c = commits[it.index]!;
-                  const on = c.hash === selected;
-                  return (
-                    <div
-                      key={c.hash}
-                      id={`commit-${c.hash}`}
-                      role="option"
-                      aria-selected={on}
-                      aria-setsize={more ? -1 : commits.length}
-                      aria-posinset={it.index + 1}
-                      onClick={() => setSelected(c.hash)}
-                      className={cn("absolute top-0 left-0 flex w-full cursor-pointer items-center gap-2 px-2 text-sm hover:bg-accent", on && "bg-secondary")}
-                      style={{ height: row, transform: `translateY(${it.start}px)` }}
-                      data-testid="commit-row"
-                    >
-                      {!filtered && <GraphCell row={rows[it.index]!} hash={c.hash} head={c.refs.includes("HEAD")} h={row} />}
-                      <RefChips refs={c.refs} />
-                      <span className="min-w-0 flex-1 truncate">{c.subject}</span>
-                      <span className="hidden max-w-32 shrink-0 truncate text-muted-foreground @md:inline">{c.author}</span>
-                      <span className="shrink-0 text-muted-foreground text-xs" title={new Date(c.time * 1000).toLocaleString()}>
-                        {when(c)}
-                      </span>
-                      <span className="shrink-0 font-mono text-muted-foreground text-xs">{c.hash.slice(0, 7)}</span>
-                    </div>
-                  );
+                  return <CommitRow key={c.hash} c={c} row={rows[it.index]!} start={it.start} on={c.hash === selected} filtered={filtered} h={row} setsize={more ? -1 : commits.length} posinset={it.index + 1} onPick={pick} />;
                 })}
               </div>
             </div>
@@ -276,7 +310,7 @@ export function GraphPanel({ client, cwd }: { client: Client; cwd: string }) {
             <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l", file ? "@max-2xl:max-h-3/4 @2xl:w-3/5" : "@max-2xl:max-h-1/2 @2xl:w-80", "shrink-0")} data-testid="commit-details">
               {detailError && <p className="p-3 text-destructive">{detailError}</p>}
               {!detail && !detailError && <p className="p-3 text-muted-foreground">Loading…</p>}
-              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details detail={detail} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
+              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
             </div>
           )}
         </div>
@@ -288,7 +322,7 @@ export function GraphPanel({ client, cwd }: { client: Client; cwd: string }) {
 const INPUT =
   "h-8 w-full rounded-md bg-secondary/60 pr-2 pl-2 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11";
 
-function Details({ detail: d, loaded, onSelect, onFile }: { detail: GitCommitDetail; loaded: GitCommit[]; onSelect: (h: string) => void; onFile: (f: GitFileChange) => void }) {
+function Details({ detail: d, refs, loaded, onSelect, onFile }: { detail: GitCommitDetail; refs: string[]; loaded: GitCommit[]; onSelect: (h: string) => void; onFile: (f: GitFileChange) => void }) {
   const body = d.message.split("\n").slice(1).join("\n").trim();
   return (
     <div className="flex flex-col gap-2 p-3 text-sm">
@@ -309,9 +343,9 @@ function Details({ detail: d, loaded, onSelect, onFile }: { detail: GitCommitDet
           ))}
         </p>
       )}
-      {d.refs.length > 0 && (
+      {refs.length > 0 && (
         <div className="flex flex-wrap gap-1">
-          <RefChips refs={d.refs} />
+          <RefChips refs={refs} />
         </div>
       )}
       <p className="font-medium">
