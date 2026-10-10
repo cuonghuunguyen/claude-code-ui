@@ -8,6 +8,7 @@ export default defineConfig({
   base: "/claude-code-ui/",
   lang: "en-US",
   cleanUrls: true,
+  sitemap: { hostname: "https://cuonghuunguyen.github.io/claude-code-ui/" },
   // Dead links fail the build (VitePress default); keep it that way.
   head: [["link", { rel: "icon", type: "image/svg+xml", href: "/claude-code-ui/icon.svg" }]],
   themeConfig: {
