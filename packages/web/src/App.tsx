@@ -83,7 +83,7 @@ import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./un
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
-import { ViewerContext, latestPlan, type ViewerTarget } from "./viewer.ts";
+import { ViewerContext, latestPlan, useOpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
@@ -356,7 +356,7 @@ export function App() {
   const [quickOpen, setQuickOpen] = useState(false);
   const [openFile, setOpenFile] = useState<string>();
   // Popup viewer (GH-238): what shows, for which session; `opener` takes the focus back on close.
-  const [viewer, setViewer] = useState<{ target: ViewerTarget; sessionId: string; cwd: string; opener: HTMLElement | null }>();
+  const [viewer, setViewer] = useState<ViewerState>();
   useEffect(() => setViewer(undefined), [activeId]);
   const quickOpener = useRef<Element>(null);
   // Title editor: in the sidebar row or in the tab the Rename action came from.
@@ -1171,8 +1171,8 @@ export function App() {
     setPane("files");
     setPanel(true);
   };
-  const openViewer = (target: ViewerTarget) => shown && setViewer({ target, sessionId: shown.id, cwd: shown.cwd, opener: document.activeElement instanceof HTMLElement ? document.activeElement : null });
-  const latest = view ? latestPlan(view) : undefined;
+  const openViewer = useOpenViewer(shown, setViewer);
+  const latest = useMemo(() => (view ? latestPlan(view) : undefined), [view?.parts, view?.aux]);
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
     const seen = fileTree && (wide(1024) ? panel && sidePane !== "changes" && sidePane !== "graph" : sidePane === "files");

@@ -16,7 +16,7 @@ import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
 import { relPath } from "./paths.ts";
 import { fileSize } from "./files.ts";
-import { ViewerContext, cardTarget, type ViewerTarget } from "./viewer.ts";
+import { ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ARTIFACT_TOOLS, artifactSummary, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
@@ -139,15 +139,15 @@ const openLabel = (t: ViewerTarget, stats: { added: number; removed: number } | 
 };
 
 /** Open-in-popup button right of a card header: hover, keyboard focus, open card, always on touch (like the chevron). */
-function OpenButton({ target, onOpen, label }: { target: ViewerTarget; onOpen: (t: ViewerTarget) => void; label: string }) {
+function OpenButton({ target, onOpen, label }: { target: ViewerTarget; onOpen: OpenViewer; label: string }) {
   return (
     <button
       type="button"
       aria-label={label}
       title="Open in popup"
       data-testid="viewer-open"
-      onClick={() => onOpen(target)}
-      className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info group-hover/head:opacity-100 in-data-panel-open:opacity-100 pointer-coarse:size-11 pointer-coarse:opacity-100"
+      onClick={(e) => onOpen(target, e.currentTarget)}
+      className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info group-hover/head:opacity-100 group-has-[[data-panel-open]]/head:opacity-100 max-md:size-11 pointer-coarse:size-11 pointer-coarse:opacity-100"
     >
       <Maximize2Icon aria-hidden className="size-4" />
     </button>

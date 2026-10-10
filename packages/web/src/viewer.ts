@@ -1,5 +1,5 @@
 // Popup viewer targets (docs/spec.md "Session view UX"): what a card or a palette command opens.
-import { createContext } from "react";
+import { createContext, useCallback, useRef } from "react";
 import type { SessionView, ToolCall } from "./store.ts";
 import { wholeParts } from "./store.ts";
 import { editFiles } from "./tools.ts";
@@ -33,4 +33,21 @@ export function latestPlan(view: SessionView): string | undefined {
 export const callPath = (call: ToolCall) => ((call.input as { file_path?: unknown } | null)?.file_path as string | undefined) ?? "";
 
 /** Opens the popup viewer; undefined (default) = no open buttons (Focus page, tests without a provider). */
-export const ViewerContext = createContext<((t: ViewerTarget) => void) | undefined>(undefined);
+export type OpenViewer = (t: ViewerTarget, opener?: HTMLElement | null) => void;
+export const ViewerContext = createContext<OpenViewer | undefined>(undefined);
+
+export type ViewerState = { target: ViewerTarget; sessionId: string; cwd: string; opener: HTMLElement | null };
+
+/**
+ * A callback of stable identity (it is the ViewerContext value: a new one per App render would re-render every tool card)
+ * that opens the viewer for the latest shown session. `opener`: the clicked element (Safari and Firefox on macOS do not
+ * focus a button on click); without it the focused element.
+ */
+export function useOpenViewer(shown: { id: string; cwd: string } | undefined, set: (v: ViewerState) => void): OpenViewer {
+  const latest = useRef({ shown, set });
+  latest.current = { shown, set };
+  return useCallback((target, opener) => {
+    const { shown, set } = latest.current;
+    if (shown) set({ target, sessionId: shown.id, cwd: shown.cwd, opener: opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) });
+  }, []);
+}
