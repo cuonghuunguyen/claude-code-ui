@@ -1,7 +1,7 @@
 // Terminal panel PTYs (docs/spec.md "Side panel"). They belong to the daemon, not to a connection: a reconnect re-attaches.
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, lstatSync, statSync, writeSync } from "node:fs";
+import { chmodSync, lstatSync, readFileSync, statSync, writeSync } from "node:fs";
 import { fork, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join, win32 } from "node:path";
@@ -167,6 +167,14 @@ export const nodePtyRoot = () => dirname(createRequire(import.meta.url).resolve(
 
 /** GH-266: the "node-pty internals changed" warning is logged once per process. */
 let warnedInternals = false;
+let warnedVersion = false;
+
+/** The node-pty version in `root`'s package.json, or undefined. */
+function ptyVersion(root: string) {
+  try {
+    return (JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version?: string }).version;
+  } catch {}
+}
 
 type Closable = { dispose: () => void };
 type PtyAgent = { kill: () => void; _innerPid: number; _getConsoleProcessList: () => Promise<number[]> };
@@ -322,7 +330,13 @@ export function createTerminals(root = nodePtyRoot(), platform = process.platfor
       if (!/EIO|errno 5/.test(String(err.code))) fail(t, "output", err);
     });
     w.worker?.on("error", (err) => fail(t, "output", err));
-    const agent = w.consoleList;
+    // The copy below is of node-pty 1.1.x only: 1.2.x reshaped kill() and starts _innerPid at 0. Elsewhere node-pty's own stays.
+    const version = ptyVersion(root);
+    const agent = version?.startsWith("1.1.") ? w.consoleList : undefined;
+    if (w.consoleList && !agent && !warnedVersion) {
+      warnedVersion = true;
+      console.warn(`node-pty ${version ?? "(unknown version)"}: its console-list helper is not guarded against a failed fork; the daemon's guard covers node-pty 1.1.x only`);
+    }
     if (agent) {
       // node-pty 1.1.0 WindowsPtyAgent._getConsoleProcessList (MIT, Microsoft; see THIRD_PARTY_NOTICES.md) forks this
       // helper with no 'error' listener: a failed fork (EAGAIN, EMFILE) ended the daemon. Same behaviour, plus the
@@ -330,6 +344,8 @@ export function createTerminals(root = nodePtyRoot(), platform = process.platfor
       agent._getConsoleProcessList = () =>
         new Promise<number[]>((resolve) => {
           const pid = agent._innerPid;
+          // As upstream: no inner PID yet (0): listing would make kill() signal PID 0, the daemon's own process group.
+          if (!(pid > 0)) return resolve([]);
           let timer: NodeJS.Timeout | undefined;
           const done = (list: number[]) => {
             clearTimeout(timer);
