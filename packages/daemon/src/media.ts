@@ -51,3 +51,8 @@ export const MEDIA_HEADERS = {
 };
 
 export const MEDIA_TTL_MS = 10 * 60_000;
+
+/** Largest media.read piece; the hub reads a side's file in pieces of this size. */
+export const MEDIA_CHUNK = 1 << 20;
+/** Largest file at a commit fs.media serves (read whole from git). */
+export const MEDIA_BLOB_MAX = 32 << 20;

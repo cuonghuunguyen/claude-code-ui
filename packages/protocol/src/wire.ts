@@ -134,7 +134,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Text files only; `mtime` (ms) identifies the disk version. */
   | { type: "fs.read"; path: string }
   /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). */
-  | { type: "fs.media"; path: string }
+  /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). With `hash` (and `cwd`): the file at that commit, `path` relative to the repository top as in git.fileAt, at most 32 MiB. A side's file or commit is served by the hub (bytes read with media.read). */
+  | { type: "fs.media"; path: string; cwd?: string; hash?: string }
+  /** Bytes of a media file, or of the file at a commit (`cwd` + `hash`, as fs.media): `length` at most 1 MiB, 0 for only size, mtime and type. The hub reads a side's media with it for GET /media. Reply MediaReadResult. */
+  | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number }
   /** Overwrites an existing file. Fails with `conflict` when `baseMtime` is given and the disk version differs. */
   | { type: "fs.write"; path: string; content: string; baseMtime?: number }
   /** Replaces this connection's watched files; each change on disk sends `fs.changed`. */
@@ -416,6 +419,8 @@ export type FsSearchResult = { paths: string[] };
 export type FsReadResult = { content: string; mtime: number };
 /** `url`: same-origin path, valid while this connection is open and used within 10 min. */
 export type FsMediaResult = { url: string; mime: string; size: number; mtime: number };
+/** `data`: base64 of the bytes at the offset (shorter at the end of the file); `size` of the whole file; `mtime` 0 for a file at a commit. */
+export type MediaReadResult = { data: string; size: number; mtime: number; mime: string };
 export type FsWriteResult = { mtime: number };
 /** `title`: "Terminal N", the smallest N free in its cwd. */
 export type TerminalInfo = { id: string; title: string };

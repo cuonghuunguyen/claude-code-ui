@@ -603,6 +603,8 @@ export function createRouter(opts: {
   local: (msg: ClientMessage) => Promise<void>;
   localCall: LocalCall;
   isLocalSession: (id: string) => Promise<boolean>;
+  /** fs.media of a side's path: the hub serves it (server.ts sideMedia); `call` asks that side. Absent: refused with side_unsupported. */
+  media?: (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>) => Promise<ServerMessage>;
 }) {
   const { sides, send } = opts;
   const conns = new Map<string, Conn>();
@@ -765,8 +767,10 @@ export function createRouter(opts: {
       }
       case "fs.media": {
         const id = await target(msg);
-        if (id !== LOCAL_SIDE) return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for files in ${id.startsWith("docker:") ? "Docker" : "WSL"}` });
-        return opts.local(msg);
+        if (id === LOCAL_SIDE) return opts.local(msg);
+        if (!opts.media) return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for files in ${id.startsWith("docker:") ? "Docker" : "WSL"}` });
+        const { side: _side, ...rest } = msg;
+        return send(await opts.media(id, rest as Extract<ClientMessage, { type: "fs.media" }>, (m) => sideCall(id, m)));
       }
       default: {
         const id = await target(msg);

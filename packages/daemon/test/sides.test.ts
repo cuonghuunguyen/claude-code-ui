@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -73,6 +74,17 @@ const hub = createDaemon({ webRoot, token, roots: [winRoot], query: fakeQuery as
 await new Promise<void>((r) => hub.listen(0, "127.0.0.1", r));
 const { port } = hub.address() as AddressInfo;
 afterAll(() => void (hub.close(), sides.close()));
+
+const get = (url: string, headers: Record<string, string> = {}, method = "GET") =>
+  new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }>((resolve, reject) => {
+    const req = httpRequest({ host: "127.0.0.1", port, path: url, method, headers }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (d) => chunks.push(d));
+      res.on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body: Buffer.concat(chunks) }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
 
 async function client(p = port) {
   const ws = new WebSocket(`ws://127.0.0.1:${p}/ws`, [WS_PROTOCOL, TOKEN_PROTOCOL_PREFIX + token], { origin: `http://127.0.0.1:${p}` });
@@ -326,16 +338,78 @@ describe("sides", () => {
 
   // Routes by the path's form: a real WSL path is POSIX, while this test stands in for it with a native temp dir, which on a Windows host is a Windows path and so (correctly) local.
   // The in-process side needs that same path on the real filesystem, so these cannot run on Windows; they run on Linux and macOS.
-  it.skipIf(process.platform === "win32")("fs.media of a side path fails side_unsupported; a local path is served", async () => {
-    writeFileSync(join(wslRoot, "s.png"), "png");
+  const win32 = process.platform === "win32";
+  it.skipIf(win32)("fs.media of a side path: the hub serves the side's bytes at its own /media URL; a local path is served", async () => {
+    const big = Buffer.from(Array.from({ length: (1 << 20) + 10 }, (_, i) => i % 251));
+    writeFileSync(join(wslRoot, "s.png"), big);
     writeFileSync(join(winRoot, "l.png"), "png");
     const c = await client();
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });
     await c.request({ type: "session.list" });
-    expect(await c.request({ type: "fs.media", path: join(wslRoot, "s.png") })).toMatchObject({ type: "error", code: "side_unsupported", message: "Preview is not available for files in WSL" });
+    const r = await c.request({ type: "fs.media", path: join(wslRoot, "s.png") });
+    expect(r).toMatchObject({ type: "reply", result: { mime: "image/png", size: 1048586 } });
+    expect(r.result.url).toMatch(/^\/media\/[0-9a-f]{32}\/s\.png\?v=/);
+    const all = await get(r.result.url);
+    expect(all.status).toBe(200);
+    expect(all.body.equals(big)).toBe(true);
+    expect(all.headers).toMatchObject({ "content-type": "image/png", "x-content-type-options": "nosniff" });
+    const rg = await get(r.result.url, { range: "bytes=1048570-1048585" });
+    expect(rg.status).toBe(206);
+    expect(rg.body.equals(big.subarray(1048570, 1048586))).toBe(true);
+    const h = await get(r.result.url, {}, "HEAD");
+    expect(h.status).toBe(200);
+    expect(h.body.length).toBe(0);
+    expect(sideFrames.join("")).toContain('"media.read"');
     const ok = await c.request({ type: "fs.media", path: join(winRoot, "l.png") });
     expect(ok).toMatchObject({ type: "reply", result: { mime: "image/png", size: 3 } });
     c.ws.close();
+  });
+
+  it.skipIf(win32)("fs.media of a side path keeps the side's rules: a symlink out of its roots path_not_allowed, .txt unsupported_type, missing not_found", async () => {
+    const outside = join(dir("outside-"), "o.png");
+    writeFileSync(outside, "png");
+    symlinkSync(outside, join(wslRoot, "out.png"));
+    writeFileSync(join(wslRoot, "n.txt"), "x");
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    expect(await c.request({ type: "fs.media", path: join(wslRoot, "out.png") })).toMatchObject({ type: "error", code: "path_not_allowed" });
+    expect(await c.request({ type: "fs.media", path: join(wslRoot, "sub", "..", "..", "x.png") })).toMatchObject({ type: "error" });
+    expect(await c.request({ type: "fs.media", path: join(wslRoot, "n.txt") })).toMatchObject({ type: "error", code: "unsupported_type" });
+    expect(await c.request({ type: "fs.media", path: join(wslRoot, "none.png") })).toMatchObject({ type: "error", code: "not_found" });
+    c.ws.close();
+  });
+
+  it.skipIf(win32)("fs.media with cwd and hash of a side project is read in the side", async () => {
+    const repo = join(wslRoot, "gitimg");
+    mkdirSync(repo, { recursive: true });
+    const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd: repo, encoding: "utf8" }).trim();
+    git("init", "-q");
+    const committed = Buffer.from(Array.from({ length: 200 }, (_, i) => (i * 5) % 256));
+    writeFileSync(join(repo, "p.png"), committed);
+    git("add", "-A");
+    git("commit", "-q", "-m", "one");
+    const hash = git("rev-parse", "HEAD");
+    writeFileSync(join(repo, "p.png"), "changed");
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    const r = await c.request({ type: "fs.media", cwd: repo, hash, path: "p.png" });
+    expect(r).toMatchObject({ type: "reply", result: { size: 200, mtime: 0 } });
+    expect((await get(r.result.url)).body.equals(committed)).toBe(true);
+    expect(await c.request({ type: "fs.media", cwd: repo, hash, path: "missing.png" })).toMatchObject({ type: "error", code: "not_found" });
+    c.ws.close();
+  });
+
+  it.skipIf(win32)("a side nonce dies with the browser connection", async () => {
+    writeFileSync(join(wslRoot, "d.png"), "png");
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    const { url } = (await c.request({ type: "fs.media", path: join(wslRoot, "d.png") })).result;
+    expect((await get(url)).status).toBe(200);
+    c.ws.close();
+    await vi.waitFor(async () => expect((await get(url)).status).toBe(404));
   });
 });
 

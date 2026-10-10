@@ -6,10 +6,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
-import { MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
+import { MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
@@ -1032,8 +1032,41 @@ export function createDaemon(opts: {
       .map((p) => p.trim())
       .some((p) => p.startsWith(TOKEN_PROTOCOL_PREFIX) && isToken(p.slice(TOKEN_PROTOCOL_PREFIX.length)));
 
-  /** fs.media capabilities: nonce -> canonical path, issuing connection, last use. */
-  const media = new Map<string, { path: string; ws: Conn; used: number }>();
+  /** Piece of a media file: undefined when it can no longer be read (gone, outside the roots, side stopped). */
+  type MediaRead = (offset: number, length: number) => Promise<MediaReadResult | undefined>;
+  /** fs.media capabilities: nonce -> a hub file (canonical path, streamed from disk) or bytes read in pieces (a file at a commit, a side's file), issuing connection, last use. */
+  const media = new Map<string, { src: { kind: "file"; path: string } | { kind: "bytes"; read: MediaRead; mime: string; name: string }; ws: Conn; used: number }>();
+  const mediaHead = (type: string, name: string, size: number, start: number, end: number, ranged: boolean) => ({
+    ...MEDIA_HEADERS,
+    "content-type": type,
+    "content-length": size === 0 ? 0 : end - start + 1,
+    ...(ranged && { "content-range": `bytes ${start}-${end}/${size}` }),
+    "content-disposition": `${type === "image/svg+xml" ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+  });
+  /** A bytes entry: size from a first empty read, then the range in MEDIA_CHUNK pieces, one at a time, waiting for drain. A piece that fails, is short, or sees another size or mtime (the file changed) cuts the response. */
+  const serveBytes = async (req: IncomingMessage, res: ServerResponse, src: { read: MediaRead; mime: string; name: string }) => {
+    const head = await src.read(0, 0);
+    if (!head) return void res.writeHead(404).end();
+    const { size, mtime } = head;
+    const r = parseRange(req.headers.range, size);
+    if (r === "unsatisfiable") return void res.writeHead(416, { ...MEDIA_HEADERS, "content-range": `bytes */${size}` }).end();
+    const start = r?.start ?? 0;
+    const end = r?.end ?? size - 1;
+    res.writeHead(r ? 206 : 200, mediaHead(src.mime, src.name, size, start, end, !!r));
+    if (req.method === "HEAD" || size === 0) return void res.end();
+    let closed = false;
+    res.on("close", () => (closed = true));
+    for (let at = start; at <= end; ) {
+      const want = Math.min(MEDIA_CHUNK, end + 1 - at);
+      const p = await src.read(at, want);
+      if (closed) return;
+      const data = p && p.size === size && p.mtime === mtime ? Buffer.from(p.data, "base64") : undefined;
+      if (!data || data.length !== want) return void res.destroy();
+      at += want;
+      if (!res.write(data)) await new Promise<void>((ok) => (res.once("drain", ok), res.once("close", ok)));
+    }
+    res.end();
+  };
   const mediaEntry = (nonce: string) => {
     const e = media.get(nonce);
     if (e && Date.now() - e.used < MEDIA_TTL_MS) return e; // closing the connection deletes its nonces
@@ -1052,13 +1085,15 @@ export function createDaemon(opts: {
     const entry = mediaEntry(nonce);
     if (!entry) return void res.writeHead(404).end();
     entry.used = Date.now();
-    const type = mediaType(entry.path);
-    if (!type || allowed(entry.path) !== entry.path) return void res.writeHead(404).end();
+    if (entry.src.kind === "bytes") return void serveBytes(req, res, entry.src).catch(() => res.destroy());
+    const path = entry.src.path;
+    const type = mediaType(path);
+    if (!type || allowed(path) !== path) return void res.writeHead(404).end();
     let fd: number;
     let size: number;
     try {
       // ponytail: realpath check then open races with an intermediate directory swapped for a symlink; O_NOFOLLOW covers the last component; O_NONBLOCK keeps a swapped-in FIFO from blocking the open (fstat isFile then refuses it). Full fix: openat2 RESOLVE_BENEATH, not in Node.
-      fd = openSync(entry.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
       const st = fstatSync(fd);
       if (!st.isFile()) {
         closeSync(fd);
@@ -1075,13 +1110,7 @@ export function createDaemon(opts: {
     }
     const start = r?.start ?? 0;
     const end = r?.end ?? size - 1;
-    res.writeHead(r ? 206 : 200, {
-      ...MEDIA_HEADERS,
-      "content-type": type,
-      "content-length": size === 0 ? 0 : end - start + 1,
-      ...(r && { "content-range": `bytes ${start}-${end}/${size}` }),
-      "content-disposition": `${type === "image/svg+xml" ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(basename(entry.path)).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
-    });
+    res.writeHead(r ? 206 : 200, mediaHead(type, basename(path), size, start, end, !!r));
     if (req.method === "HEAD" || size === 0) {
       closeSync(fd);
       return void res.end();
@@ -1169,8 +1198,11 @@ export function createDaemon(opts: {
     if (stale) send(ws, { type: "daemon_stale", note: stale });
     const unsubscribes = new Map<string, () => void>();
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
-    // fs.media: canonical path -> nonce issued to this connection.
+    // fs.media: key (canonical path, "blob\0cwd\0hash\0path", "<side>\0cwd\0hash\0path") -> nonce issued to this connection.
     const mediaNonces = new Map<string, string>();
+    /** The last file at a commit media.read / fs.media read (a commit's file never changes): one per connection. */
+    let lastBlob: { key: string; buf: Buffer } | undefined;
+    const nonceFor = (key: string) => mediaNonces.get(key) ?? (mediaNonces.set(key, randomBytes(16).toString("hex")), mediaNonces.get(key)!);
     const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();
     // Attached terminals: ID → detach.
     const attached = new Map<string, () => void>();
@@ -1185,6 +1217,7 @@ export function createDaemon(opts: {
       router?.close();
       connections.delete(ws);
       mediaNonces.forEach((n) => media.delete(n));
+      lastBlob = undefined;
       unsubscribes.forEach((u) => u());
       unwatchAll();
       attached.forEach((d) => d());
@@ -1206,6 +1239,64 @@ export function createDaemon(opts: {
       return local(msg, (m) => send(ws, m));
     };
     /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
+    type MediaFail = { code: string; message: string; size?: number };
+    /** media.read and fs.media {hash}: a piece of a media file or of a file at a commit, with the roots and extension checks. */
+    const readMedia = async (m: { path: unknown; cwd?: unknown; hash?: unknown; offset: number; length: number }): Promise<MediaReadResult | MediaFail> => {
+      if (typeof m.path !== "string") return { code: "bad_request", message: "path must be a string" };
+      const mime = mediaType(m.path);
+      if (m.hash !== undefined) {
+        const cwd = allowed(m.cwd);
+        if (!cwd) return { code: "cwd_not_allowed", message: `outside the allowlisted roots: ${String(m.cwd)}` };
+        if (!mime) return { code: "unsupported_type", message: `not an image, video or audio file: ${m.path}` };
+        const key = `${cwd}\0${String(m.hash)}\0${m.path}`;
+        try {
+          const buf = lastBlob?.key === key ? lastBlob.buf : await gitFileAt(cwd, m.hash as string, m.path, (p) => inRoots(real(p) ?? p), MEDIA_BLOB_MAX);
+          lastBlob = { key, buf };
+          return { data: buf.subarray(m.offset, m.offset + m.length).toString("base64"), size: buf.length, mtime: 0, mime };
+        } catch (e) {
+          return { code: e instanceof WorktreeError ? e.code : "git_failed", message: (e as Error).message, size: e instanceof WorktreeError ? e.size : undefined };
+        }
+      }
+      const file = allowed(m.path);
+      if (!file) return missingInRoots(m.path) ? { code: "not_found", message: `no such file: ${m.path}` } : { code: "path_not_allowed", message: `outside the allowlisted roots: ${m.path}` };
+      const fileMime = mediaType(file);
+      if (!fileMime) return { code: "unsupported_type", message: `not an image, video or audio file: ${m.path}` };
+      let fd: number;
+      try {
+        // Same open as GET /media (no-follow, non-blocking: see the ponytail there).
+        fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      } catch (err) {
+        return { code: "fs_error", message: String(err) };
+      }
+      try {
+        const st = fstatSync(fd);
+        if (!st.isFile()) return { code: "not_a_file", message: `not a file: ${m.path}` };
+        const n = Math.max(0, Math.min(m.length, st.size - m.offset));
+        const buf = Buffer.alloc(n);
+        const got = n ? readSync(fd, buf, 0, n, m.offset) : 0;
+        return { data: buf.subarray(0, got).toString("base64"), size: st.size, mtime: st.mtimeMs, mime: fileMime };
+      } finally {
+        closeSync(fd);
+      }
+    };
+    const isPiece = (o: unknown, l: unknown) => Number.isSafeInteger(o) && (o as number) >= 0 && Number.isSafeInteger(l) && (l as number) >= 0 && (l as number) <= MEDIA_CHUNK;
+    /** fs.media of a side's file or commit: the side checks it (media.read, length 0); the hub issues its own URL and reads the bytes from the side per GET. */
+    // ponytail: sideCall has no timeout; a hung side leaves a GET waiting until the browser drops it.
+    const sideMedia = async (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>): Promise<ServerMessage> => {
+      const args = { path: msg.path, ...(msg.hash !== undefined && { cwd: msg.cwd, hash: msg.hash }) };
+      const ask = (offset: number, length: number) => call({ type: "media.read", reqId: "", ...args, offset, length } as ClientMessage);
+      const head = await ask(0, 0);
+      if (head.type !== "reply") return { ...head, reqId: msg.reqId } as ServerMessage;
+      const r = head.result as MediaReadResult;
+      const name = msg.path.split(/[\\/]/).pop() ?? "";
+      const nonce = nonceFor(`${id}\0${msg.cwd ?? ""}\0${msg.hash ?? ""}\0${msg.path}`);
+      const read: MediaRead = async (offset, length) => {
+        const a = await ask(offset, length);
+        return a.type === "reply" ? (a.result as MediaReadResult) : undefined;
+      };
+      media.set(nonce, { src: { kind: "bytes", read, mime: r.mime, name }, ws, used: Date.now() });
+      return { type: "reply", reqId: msg.reqId, result: { url: `/media/${nonce}/${encodeURIComponent(name)}?v=${msg.hash ?? r.mtime}`, mime: r.mime, size: r.size, mtime: r.mtime } };
+    };
     const local = async (msg: ClientMessage, out: (m: ServerMessage) => void) => {
       const reply = (result: unknown) => out({ type: "reply", reqId: msg.reqId, result });
       const fail = (code: string, message: string, size?: number) => out({ type: "error", reqId: msg.reqId, code, message, size });
@@ -1597,7 +1688,22 @@ export function createDaemon(opts: {
             return fail("fs_error", String(err));
           }
         }
+        case "media.read": {
+          if (!isPiece(msg.offset, msg.length)) return fail("bad_request", `offset and length must be integers, length at most ${MEDIA_CHUNK}`);
+          const r = await readMedia(msg);
+          return "code" in r ? fail(r.code, r.message, r.size) : reply(r);
+        }
         case "fs.media": {
+          if (msg.hash !== undefined) {
+            const r = await readMedia({ ...msg, offset: 0, length: 0 });
+            if ("code" in r) return fail(r.code, r.message, r.size);
+            const nonce = nonceFor(`blob\0${allowed(msg.cwd)}\0${msg.hash}\0${msg.path}`);
+            const args = { path: msg.path, cwd: msg.cwd, hash: msg.hash };
+            const read: MediaRead = (offset, length) => readMedia({ ...args, offset, length }).then((x) => ("code" in x ? undefined : x));
+            const name = msg.path.split(/[\\/]/).pop() ?? "";
+            media.set(nonce, { src: { kind: "bytes", read, mime: r.mime, name }, ws, used: Date.now() });
+            return reply({ url: `/media/${nonce}/${encodeURIComponent(name)}?v=${msg.hash}`, mime: r.mime, size: r.size, mtime: 0 });
+          }
           const file = allowed(msg.path);
           if (!file && missingInRoots(msg.path)) return fail("not_found", `no such file: ${msg.path}`);
           if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
@@ -1606,12 +1712,8 @@ export function createDaemon(opts: {
             if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
             const mime = mediaType(file);
             if (!mime) return fail("unsupported_type", `not an image, video or audio file: ${msg.path}`);
-            let nonce = mediaNonces.get(file);
-            if (!nonce) {
-              nonce = randomBytes(16).toString("hex");
-              mediaNonces.set(file, nonce);
-            }
-            media.set(nonce, { path: file, ws, used: Date.now() });
+            const nonce = nonceFor(file);
+            media.set(nonce, { src: { kind: "file", path: file }, ws, used: Date.now() });
             return reply({ url: `/media/${nonce}/${encodeURIComponent(basename(file))}?v=${st.mtimeMs}`, mime, size: st.size, mtime: st.mtimeMs });
           } catch (err) {
             return fail("fs_error", String(err));
@@ -1767,6 +1869,7 @@ export function createDaemon(opts: {
             local(msg, resolve).catch((err) => (console.error("request handler failed:", err), resolve({ type: "error", reqId: msg.reqId, code: "internal_error", message: "request failed" }))),
           ),
         isLocalSession,
+        media: sideMedia,
       });
     // A handler that throws fails its request: a rejected promise nobody awaits would end the process (Node's default).
     ws.on("message", (data) =>

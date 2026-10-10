@@ -1,7 +1,7 @@
 // Changes tab (docs/spec.md "Layout"): files changed in the session, or in the working tree against HEAD or a branch, each with its diff, like OpenCode's review panel.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
-import type { FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitStatusResult } from "@claude-ui/protocol";
+import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitStatusResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,8 @@ import { FileIcon } from "./file-icon.tsx";
 import { inDir, isWinPath, joinPath, relPath } from "./paths.ts";
 import { DIFF_MODES, loadDiffScope, repoRoot, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
 import { gitEol, gitRows } from "./git-changes.ts";
-import { readFailure, textFailure } from "./files.ts";
+import { mediaKind, readFailure, textFailure } from "./files.ts";
+import { ImageDiff, type ImagePane } from "./image-diff.tsx";
 import { filePath } from "./tools.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -25,7 +26,10 @@ type DiffStyle = "unified" | "split";
 type Disk = { content?: string; deleted?: boolean; error?: string; notice?: boolean };
 /** `kind`: OpenCode's file badge, A(dded) / D(eleted) / M(odified). */
 /** `change`: the session's calls on the file (session mode only). `oldPath` (relative to the repository top) and `oldShown` (as the list names it): a renamed file's before side (git modes). */
-type Row = { path: string; kind: Kind; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; change?: FileChange; oldPath?: string; oldShown?: string };
+type Row = { path: string; kind: Kind; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; change?: FileChange; oldPath?: string; oldShown?: string;
+  /** A changed image (git modes): shown as images, not a text diff. */
+  image?: { before?: ImagePane; after?: ImagePane };
+};
 export type Kind = "A" | "D" | "M" | "R";
 const KIND_TITLE = { A: "Added", D: "Deleted", M: "Modified", R: "Renamed" } as const;
 const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info", R: "text-warning" } as const;
@@ -218,7 +222,7 @@ export function ChangesPanel({
   const gitList = useMemo(() => (gitDiff ? gitRows(gitDiff, cwd) : []), [gitDiff, cwd]);
 
   // Sides of the git modes, read for the files on screen only: the before side from the base commit, the after side from the disk.
-  type Side = { base?: string; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats };
+  type Side = { base?: string; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; image?: { before?: ImagePane; after?: ImagePane } };
   const [sides, setSides] = useState<Record<string, Side>>({});
   const asked = useRef(new Set<string>());
   const [scope, setScope] = useState<DiffScope>(loadDiffScope);
@@ -234,7 +238,7 @@ export function ChangesPanel({
         kind: r.kind,
         ...(r.oldPath !== undefined && { oldPath: r.oldPath, oldShown: relPath(joinPath(root, r.oldPath), cwd) }),
         stats: r.stats ?? (ok ? s.stats : undefined),
-        ...(ok && { before: s.before, after: s.after, error: s.error, notice: s.notice }),
+        ...(ok && { before: s.before, after: s.after, error: s.error, notice: s.notice, image: s.image }),
       };
     });
   }, [gitList, sides, gitDiff, cwd]);
@@ -262,6 +266,18 @@ export function ChangesPanel({
       const id = `${gen}\n${d.base}\n${r.path}`;
       if (!wantedKey.split("\n").includes(r.path) || asked.current.has(id)) continue;
       asked.current.add(id);
+      if (mediaKind(r.path) === "image") {
+        const pane = (p: Promise<FsMediaResult>) =>
+          p.then(
+            (media): ImagePane => ({ media }),
+            (e: RequestError): ImagePane => ({ error: readFailure(e).text, notice: readFailure(e).notice }),
+          );
+        Promise.all([
+          r.kind === "A" || !d.base ? undefined : pane(client.request<FsMediaResult>({ type: "fs.media", cwd, hash: d.base, path: r.oldPath ?? r.rel })),
+          r.kind === "D" ? undefined : pane(client.request<FsMediaResult>({ type: "fs.media", path: r.path })),
+        ]).then(([before, after]) => setSides((x) => ({ ...x, [r.path]: { base: d.base, image: { before, after } } })));
+        continue;
+      }
       const fileAt = (hash: string, path: string) => client.request<FsReadResult>({ type: "git.fileAt", cwd, hash, path }).then((x) => x.content);
       Promise.all([
         r.kind === "A" || !d.base ? "" : fileAt(d.base, r.oldPath ?? r.rel),
@@ -652,12 +668,14 @@ function FileDiff({ row, cwd, style, onOpen, inline, git }: { row: Row; cwd: str
       )}
       <div className={cn("text-xs", !inline && "min-h-0 flex-1 overflow-auto p-2")}>
         {row.error && <p role={row.notice ? "status" : undefined} className={cn("p-2", row.notice ? "text-muted-foreground" : "text-destructive")}>{row.error}</p>}
-        {!row.error && (row.after === undefined || (files && !same && !drawn)) && (
+        {!row.error && !row.image && (row.after === undefined || (files && !same && !drawn)) && (
           <p className="p-2 text-muted-foreground" data-testid="diff-loading">
             Loading diff…
           </p>
         )}
-        {same ? (
+        {row.image ? (
+          <ImageDiff path={path} before={row.image.before} after={row.image.after} split={style === "split"} />
+        ) : same ? (
           <p className="p-2 text-muted-foreground">{git ? (row.kind === "R" ? "Renamed without changes" : "No content changes") : "No changes against the file before this session."}</p>
         ) : files ? (
           <MultiFileDiff oldFile={files.old} newFile={files.new} options={options} />
