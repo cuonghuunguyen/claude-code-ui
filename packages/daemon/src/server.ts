@@ -1,5 +1,5 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
-import { closeSync, constants, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { closeSync, constants, createReadStream, existsSync, fstatSync, openSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -29,6 +29,7 @@ import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
 import { serveStatic } from "./static.ts";
+import { lastEntryTime, listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
 
 export { MAX_SETTINGS } from "./session-settings.ts";
 
@@ -258,73 +259,20 @@ async function withParallelCalls(file: string | undefined, messages: SessionMess
   return out.sort((a, b) => (index.get(a.uuid) ?? 0) - (index.get(b.uuid) ?? 0));
 }
 
-/** Names, sizes and mtimes of every transcript under `projectsDir`; undefined when it cannot be read. */
-function transcriptStamp(projectsDir: string) {
-  try {
-    const parts: string[] = [];
-    for (const dir of readdirSync(projectsDir, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue;
-      const path = join(projectsDir, dir.name);
-      for (const f of readdirSync(path)) {
-        if (!f.endsWith(".jsonl")) continue;
-        try {
-          const st = statSync(join(path, f));
-          parts.push(`${dir.name}/${f}:${st.size}:${st.mtimeMs}`);
-        } catch {
-          // Deleted meanwhile.
-        }
-      }
-    }
-    return parts.join("\n");
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Time of the last user or assistant entry in a session's transcript, read from its end. Not the file mtime: on exit
  * the CLI appends metadata (`last-prompt`, `cost-state`), so every live session looks just used after a daemon restart.
  * Undefined when the file or such an entry is not found (e.g. the entry is further back than `TAIL_BYTES`).
  */
-function lastMessageAt(projectsDir: string, cwd: string, sessionId: string, scanned?: { lastModified: number; fileSize?: number }) {
-  // Not found (long cwd): the list falls back to the file mtime.
+async function lastMessageAt(projectsDir: string, cwd: string, sessionId: string, scanned?: { lastModified: number; fileSize?: number }) {
   const file = transcriptFile(projectsDir, cwd, sessionId);
-  // The scan's own stamp: no open per transcript per list, which blocks the event loop (slow on Windows with hundreds of transcripts).
   const listed = scanned?.fileSize !== undefined ? `${scanned.lastModified}:${scanned.fileSize}` : undefined;
   const hit = listed && lastMessageCache.get(file);
   if (hit && hit.listed === listed) return hit.at;
-  let fd: number | undefined;
-  try {
-    fd = openSync(file, "r");
-    const { size, mtimeMs } = fstatSync(fd);
-    const version = `${mtimeMs}:${size}`;
-    const cached = lastMessageCache.get(file);
-    if (cached?.version === version) return (lastMessageCache.set(file, { ...cached, listed }), cached.at);
-    let at: number | undefined;
-    const buf = Buffer.alloc(Math.min(size, TAIL_BYTES));
-    readSync(fd, buf, 0, buf.length, size - buf.length);
-    const lines = buf.toString("utf8").split("\n");
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (!lines[i].includes('"timestamp"')) continue;
-      try {
-        const e = JSON.parse(lines[i]) as { type?: string; timestamp?: string };
-        const t = (e.type === "user" || e.type === "assistant") && Date.parse(e.timestamp ?? "");
-        if (t) {
-          at = t;
-          break;
-        }
-      } catch {
-        // The first line of the tail is cut.
-      }
-    }
-    lastMessageCache.set(file, { version, listed, at });
-    return at;
-  } catch {
-    // No transcript at that path.
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-  return undefined;
+  const read = await lastEntryTime(file, TAIL_BYTES);
+  if (!read) return undefined;
+  lastMessageCache.set(file, { version: read.version, listed, at: read.at });
+  return read.at;
 }
 
 /**
@@ -367,6 +315,8 @@ export function createDaemon(opts: {
   /** Name shown for this computer in Settings (default: the OS host name); `desktopForcedOff`: started with --no-os-notify. */
   host?: string;
   desktopForcedOff?: boolean;
+  /** List once when the server starts listening (model list, transcript scan, last-message times), so the first browser connect does not pay for them (GH-276). */
+  warmUp?: boolean;
   cli?: CliRunner;
   configHoldMs?: number;
   configPollMs?: number;
@@ -431,7 +381,7 @@ export function createDaemon(opts: {
   const restoring = new Map<string, Promise<Session | undefined>>();
   // Sessions whose delete is in progress (session.delete).
   const deleting = new Set<string>();
-  const history = { listSessions, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, ...opts.history };
+  const history = { listSessions: listSessionsOffThread, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, ...opts.history };
   const claudeDir = opts.claudeDir ?? (process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
@@ -819,12 +769,13 @@ export function createDaemon(opts: {
   function transcripts(): ReturnType<typeof listSessions> {
     if (!scan) {
       // Taken before the scan: a file written during it changes the next stamp.
-      const stamp = listCache ? transcriptStamp(projectsDir) : undefined;
-      if (stamp !== undefined && lastScan?.stamp === stamp) return Promise.resolve(lastScan.result);
-      return (scan = history
-        .listSessions()
-        .then((result) => ((lastScan = stamp === undefined ? undefined : { stamp, result }), result))
-        .finally(() => (scan = undefined)));
+      return (scan = (async () => {
+        const stamp = listCache ? await transcriptStamp(projectsDir) : undefined;
+        if (stamp !== undefined && lastScan?.stamp === stamp) return lastScan.result;
+        const result = await history.listSessions();
+        lastScan = stamp === undefined ? undefined : { stamp, result };
+        return result;
+      })().finally(() => (scan = undefined)));
     }
     return (nextScan ??= scan.catch(() => {}).then(() => ((nextScan = undefined), transcripts())));
   }
@@ -896,11 +847,12 @@ export function createDaemon(opts: {
     // transcripts share a few dozen cwds.
     const canonical = new Map<string, string | undefined>();
     const allowedCwd = (cwd: string) => (canonical.has(cwd) ? canonical.get(cwd) : (canonical.set(cwd, allowed(cwd)), canonical.get(cwd)));
+    const lastAt = new Map(await mapLimit(all, 8, async (t) => [t.sessionId, t.cwd && allowedCwd(t.cwd) ? await lastMessageAt(projectsDir, t.cwd, t.sessionId, t) : undefined] as const));
     for (const t of all) {
       if (!t.cwd || !allowedCwd(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
       const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId, t) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
@@ -1123,6 +1075,7 @@ export function createDaemon(opts: {
 
   // A side's start, failure or stop changes the side list every client shows.
   opts.sides?.onChange(() => broadcast({ type: "sessions.changed" }));
+  if (opts.warmUp) http.once("listening", () => void list().catch((e) => console.warn("warm-up list failed:", (e as Error).message)));
   /** This daemon has the session: live, or a transcript inside the roots. */
   const isLocalSession = async (id: string) => sessions.has(id) || (UUID.test(id) && !!allowed((await history.getSessionInfo(id).catch(() => undefined))?.cwd));
 

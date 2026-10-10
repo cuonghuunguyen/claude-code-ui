@@ -1538,6 +1538,39 @@ describe("daemon", () => {
     }
   });
 
+  it("warmUp lists once when the server starts: the first session.list reuses that scan", async () => {
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    mkdirSync(join(projectsDir, "-p"));
+    writeFileSync(join(projectsDir, "-p", "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b.jsonl"), "{}\n");
+    let scans = 0;
+    const make = (warmUp?: boolean) =>
+      createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        query: fakeQuery as never,
+        projectsDir,
+        listCache: true,
+        warmUp,
+        history: { listSessions: (async () => (scans++, [])) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+      });
+    const cold = make();
+    await new Promise<void>((r) => cold.listen(0, "127.0.0.1", r));
+    await new Promise((r) => setTimeout(r, 100));
+    cold.close();
+    expect(scans).toBe(0);
+    const d = make(true);
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      await vi.waitFor(() => expect(scans).toBe(1));
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.list" });
+      expect(scans).toBe(1);
+    } finally {
+      d.close();
+    }
+  });
+
   it("lists by the last message time in the transcript, not the file mtime that metadata appended on CLI exit bumps", async () => {
     const [older, newer, noFile] = ["4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", "5b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", "6b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b"];
     const cwd = join(webRoot, "my proj");
