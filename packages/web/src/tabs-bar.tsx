@@ -593,6 +593,7 @@ function FocusTab({ active, count, focusable, onSelect }: { active: boolean; cou
     >
       <button
         role="tab"
+        data-command="focus.open"
         aria-selected={active}
         tabIndex={focusable ? 0 : -1}
         aria-label={count ? `Focus, ${count} ${count === 1 ? "session needs" : "sessions need"} input` : "Focus"}

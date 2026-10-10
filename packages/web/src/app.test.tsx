@@ -1396,3 +1396,52 @@ it("unpairing clears the prompt drafts of this browser", async () => {
   await act(async () => setStatus("unauthorized"));
   expect(localStorage.getItem("claude-ui.draft." + ID)).toBeNull();
 });
+
+describe("key promoter (GH-234)", () => {
+  const mouseClick = (sel: string) =>
+    act(async () => {
+      const b = el.querySelector(sel)!;
+      b.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }));
+      b.dispatchEvent(new PointerEvent("click", { bubbles: true, pointerType: "mouse", detail: 1 }));
+    });
+  const tipToast = () => document.querySelector<HTMLElement>('[data-testid="toast"]');
+  const gone = () => act(async () => void (await new Promise((r) => setTimeout(r, 320))));
+
+  it("a 2nd mouse click on New session shows its key; after Ctrl+Shift+S the tips for it end", async () => {
+    const { loadKeyTips } = await import("./key-tips.ts");
+    await mouseClick('[data-testid="tab-new"]');
+    await mouseClick('[data-testid="tab-new"]');
+    expect(tipToast()?.textContent).toContain("New session: Ctrl+Shift+S");
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="toast"] [aria-label="Dismiss"]')!.click());
+    await gone();
+    await press({ key: "S", code: "KeyS", ctrlKey: true, shiftKey: true });
+    expect(loadKeyTips().learned).toContain("session.new");
+    for (let i = 0; i < 3; i++) await mouseClick('[data-testid="tab-new"]');
+    expect(tipToast()?.textContent ?? "").not.toContain("New session:");
+  });
+
+  it("Assign a shortcut… opens Keyboard shortcuts recording that command", async () => {
+    const target = el.querySelector('[data-testid="focus-tab"] button') ? '[data-testid="focus-tab"] button' : '[data-testid="focus-row-sidebar"]';
+    await mouseClick(target);
+    await mouseClick(target);
+    expect(tipToast()?.textContent).toContain("Open Focus has no shortcut.");
+    const assign = [...document.querySelectorAll<HTMLElement>('[data-testid="toast"] button')].find((b) => b.textContent === "Assign a shortcut…")!;
+    await act(async () => assign.click());
+    expect(document.querySelector('[data-testid="shortcuts-dialog"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="shortcut-row-focus.open"] [data-testid="shortcut-recording"]')).not.toBeNull();
+  });
+
+  it("Reset shortcut tips from the palette clears the counts", async () => {
+    const { loadKeyTips } = await import("./key-tips.ts");
+    localStorage.setItem("claude-ui.key-tips", JSON.stringify({ v: 1, off: true, counts: { "session.new": 3 }, learned: ["sidebar.toggle"] }));
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    const input = document.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Reset shortcut tips");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => document.querySelector<HTMLElement>('[data-id="tips.reset"]')!.click());
+    expect(loadKeyTips()).toEqual({ v: 1, counts: {}, learned: [] });
+    expect(tipToast()?.textContent).toContain("Shortcut tips reset.");
+  });
+});

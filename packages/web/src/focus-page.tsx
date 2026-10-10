@@ -258,6 +258,7 @@ export function FocusRow({ count, active, onOpen }: { count: number; active: boo
       className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 ${active ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
       onClick={onOpen}
       data-testid="focus-row-sidebar"
+      data-command="focus.open"
     >
       <CrosshairIcon className="size-4 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1 truncate font-medium">Focus</span>

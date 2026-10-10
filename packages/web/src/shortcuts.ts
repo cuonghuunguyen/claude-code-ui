@@ -3,13 +3,13 @@
 export const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
 export type ShortcutGroup = "General" | "Tabs" | "Panels" | "Session" | "Prefix";
-export type Shortcut = { id: string; title: string; group: ShortcutGroup; key: string; mac?: string };
+export type Shortcut = { id: string; title: string; group: ShortcutGroup; /** Default spec; none: an unbound command the user may bind (key promoter, GH-234). */ key?: string; mac?: string };
 
 const gotoTab = (n: number): Shortcut => ({ id: `tab.goto${n}`, title: `Go to tab ${n}`, group: "Tabs", key: `alt+${n}`, mac: `ctrl+${n}` });
 
 /**
  * Every app shortcut with its default (`mod` = Cmd on macOS, Ctrl elsewhere; `mac`: the macOS default when it differs). Ids are the palette command ids.
- * Each default has Ctrl, Cmd or Alt (shortcuts.test.ts), so it fires in the prompt box and never takes typed text. A user may rebind them (keymap.ts).
+ * Each default (when it has one) has Ctrl, Cmd or Alt (shortcuts.test.ts), so it fires in the prompt box and never takes typed text. A user may rebind them (keymap.ts).
  */
 export const SHORTCUTS: Shortcut[] = [
   { id: "palette.open", title: "Command palette", group: "General", key: "mod+k" },
@@ -18,6 +18,12 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "settings.open", title: "Open settings", group: "General", key: "mod+," },
   { id: "shortcuts.open", title: "Keyboard shortcuts", group: "General", key: "mod+/" },
   { id: "notifications.focus", title: "Go to notifications", group: "General", key: "mod+alt+n" },
+  // No default key: listed in Keyboard shortcuts as "Not set" so the user can bind them (the key promoter offers it).
+  { id: "focus.open", title: "Open Focus", group: "General" },
+  { id: "guide.start", title: "Show guide", group: "General" },
+  { id: "mcp.open", title: "MCP servers", group: "General" },
+  { id: "skills.open", title: "Slash commands", group: "General" },
+  { id: "plugins.open", title: "Manage plugins", group: "General" },
   { id: "session.new", title: "New session", group: "Tabs", key: "mod+shift+s" },
   // The browser keeps Ctrl+Tab and Ctrl+W (OpenCode's other tab keys) for its own tabs.
   { id: "tab.prev", title: "Previous tab", group: "Tabs", key: "mod+alt+arrowleft" },
@@ -47,8 +53,8 @@ export const SHORTCUTS: Shortcut[] = [
 export const shortcutById = (id: string) => SHORTCUTS.find((s) => s.id === id);
 export const defaultSpec = (s: Shortcut, mac = IS_MAC) => (mac && s.mac) || s.key;
 
-/** Default specs by id on this platform (labels and tests); the user's own bindings are in keymap.ts. */
-export const KEYS = Object.fromEntries(SHORTCUTS.map((s) => [s.id, defaultSpec(s)])) as Record<string, string>;
+/** Bound default specs by id on this platform (labels and tests); the user's own bindings are in keymap.ts. */
+export const KEYS = Object.fromEntries(SHORTCUTS.flatMap((s) => { const k = defaultSpec(s); return k ? [[s.id, k]] : []; })) as Record<string, string>;
 
 /** A spec's key and modifiers: the key follows the last "+", and a trailing "+" is the + key ("mod++" is Ctrl and +). */
 export const parseSpec = (spec: string) => {

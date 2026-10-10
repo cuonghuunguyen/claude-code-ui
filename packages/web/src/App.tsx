@@ -106,6 +106,8 @@ import { GuideTour } from "./guide-tour.tsx";
 import { keyText, matchesKey, withKey } from "./shortcuts.ts";
 import { specOf, useKeymap } from "./keymap.ts";
 import { LEADER_MS, PREFIX_KEYS, leaderStep } from "./leader.ts";
+import { KeyTips } from "./key-tip.tsx";
+import { markKeyUsed, resetAllKeyTips } from "./key-tips.ts";
 import { loadClosed, popClosed, pushClosed, restoreClosed, saveClosed } from "./closed-tabs.ts";
 import { ShortcutsDialog } from "./shortcuts-dialog.tsx";
 import { isImeKey } from "./ime.ts";
@@ -206,6 +208,7 @@ export function App() {
   // Settings dialog; `settingsChanged`: another client changed the settings (the open dialog reloads).
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [shortcutsEdit, setShortcutsEdit] = useState<string>();
   // Shortcut labels and the shortcuts themselves follow the user's bindings.
   useKeymap();
   // Closed session tabs (Reopen closed tab), per browser.
@@ -1316,6 +1319,7 @@ export function App() {
     toggleSignalOnly: () => saveSignalOnly(!loadSignalOnly()),
     openSettings: () => setSettingsOpen(true),
     startGuide: () => startGuide("palette"),
+    resetKeyTips: () => (resetAllKeyTips(), setToast("Shortcut tips reset.")),
     openMcp: project ? () => openMcp() : undefined,
     openSkills: project ? openSkills : undefined,
     openPlugins: project ? openPlugins : undefined,
@@ -1395,6 +1399,7 @@ export function App() {
       const c = isPalette ? undefined : shortcutFor(latestCommands.current, e);
       if (!isPalette && !c) return;
       e.preventDefault();
+      if (c) markKeyUsed(c.id);
       if (c && "run" in c) return c.run();
       // Focus goes back there when the palette closes, like quick open.
       paletteOpener.current = document.activeElement;
@@ -1426,6 +1431,7 @@ export function App() {
         paletteOpener.current = document.activeElement;
         return setPalette({});
       }
+      markKeyUsed(r.run);
       const c = latestCommands.current.find((i) => i.id === r.run);
       if (c && "run" in c) c.run();
     };
@@ -1962,7 +1968,7 @@ export function App() {
         />
       )}
       <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
-      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <ShortcutsDialog open={shortcutsOpen} edit={shortcutsEdit} onClose={() => (setShortcutsOpen(false), setShortcutsEdit(undefined))} />
       {/* Always mounted so a screen reader announces the hint when it fills in. */}
       <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 left-1/2 z-50 w-max max-w-[calc(100vw-24px)] -translate-x-1/2" data-testid="prefix-hint">
         {prefixOn && (
@@ -1991,6 +1997,11 @@ export function App() {
           />
         )}
         {toast && <Toast key={toast.key} message={toast.message} action={toast.action} onClose={closeToast} />}
+        <KeyTips
+          hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || openingProject || !!guideRun}
+          onAssign={(id) => (setShortcutsEdit(id), setShortcutsOpen(true))}
+          onTurnedOff={() => setToast("Shortcut tips off. Turn them on in Settings › Keyboard.")}
+        />
         <NotificationStack
           items={cardItems}
           now={cardsNow}

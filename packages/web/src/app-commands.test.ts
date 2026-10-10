@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { appCommands, shortcutFor, type CommandContext } from "./app-commands.ts";
 import { KEYS } from "./shortcuts.ts";
+import { bind, resetAll } from "./keymap.ts";
 
 const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   tabs: ["a", "b", "new"],
@@ -36,6 +37,7 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   stop: vi.fn(),
   openSettings: vi.fn(),
   startGuide: vi.fn(),
+  resetKeyTips: vi.fn(),
   ...over,
 });
 
@@ -61,6 +63,7 @@ it("lists the issue's commands with shortcuts, then the sessions", () => {
     ["shortcuts.open", "mod+/"],
     ["settings.open", "mod+,"],
     ["guide.start", undefined],
+    ["tips.reset", undefined],
     ["sidebar.toggle", "mod+b"],
     ["panel.toggle", "mod+shift+r"],
     ["filetree.toggle", "mod+\\"],
@@ -138,7 +141,7 @@ it("rewind lists prompts newest first; hidden while a turn runs, when Stop shows
 
 it("without a shown session only the app-level commands remain", () => {
   const items = appCommands(ctx({ session: undefined, canQuickOpen: false, tabs: ["new"], activeId: "new", sessions: [] }));
-  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "guide.start", "sidebar.toggle", "signal.toggle"]);
+  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "guide.start", "tips.reset", "sidebar.toggle", "signal.toggle"]);
 });
 
 it("a shortcut finds its command; Esc, Shift+Tab and plain keys run nothing from here", () => {
@@ -304,4 +307,25 @@ it("tab.closeGroup is listed only when the active tab is in a named group, with 
   expect([i.title, i.keys]).toEqual(["Close tab group", "mod+alt+shift+w"]);
   run(ctx({ closeGroup }), "tab.closeGroup");
   expect(closeGroup).toHaveBeenCalled();
+});
+
+it("Reset shortcut tips runs resetKeyTips", () => {
+  const c = ctx();
+  const row = run(c, "tips.reset");
+  expect(row.title).toBe("Reset shortcut tips");
+  expect(row.keys).toBeUndefined();
+  expect(c.resetKeyTips).toHaveBeenCalledOnce();
+});
+
+it("MCP servers, Slash commands and Manage plugins carry the user's binding", () => {
+  try {
+    bind("mcp.open", "mod+alt+m");
+    const items = appCommands(ctx({ openMcp: vi.fn(), openSkills: vi.fn(), openPlugins: vi.fn() }));
+    expect(items.find((i) => i.id === "mcp.open")?.keys).toBe("mod+alt+m");
+    expect(items.find((i) => i.id === "skills.open")?.keys).toBeUndefined();
+    const e = new KeyboardEvent("keydown", { key: "m", ctrlKey: true, altKey: true });
+    expect(shortcutFor(items, e)?.id).toBe("mcp.open");
+  } finally {
+    resetAll();
+  }
 });
