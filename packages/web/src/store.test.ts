@@ -7,6 +7,21 @@ const ev = (seq: number, part: Part): Event => ({ type: "event", sessionId: "s",
 const text = (id: string, t: string, streaming = true): Part => ({ type: "assistant_text", id, text: t, streaming });
 
 describe("applyEvent", () => {
+  it("lastTodos keeps the last todo list past idle and error; the next todo_update replaces it; a rewind clears it", () => {
+    const todo = (id: string, content: string): Part => ({ type: "todo_update", id: "t:todos", items: [{ content, status: "completed" }] });
+    let s = applyEvent(emptySession(), ev(1, { type: "session_state", id: "st", state: "running" }));
+    s = applyEvent(s, ev(2, todo("t", "one")));
+    s = applyEvent(s, ev(3, { type: "session_state", id: "st", state: "idle" }));
+    expect(s.todos).toEqual([]);
+    expect(s.lastTodos.map((t) => t.content)).toEqual(["one"]);
+    s = applyEvent(s, ev(4, { type: "session_state", id: "st", state: "error" }));
+    expect(s.lastTodos).toHaveLength(1);
+    s = applyEvent(s, ev(5, todo("t", "two")));
+    expect(s.lastTodos.map((t) => t.content)).toEqual(["two"]);
+    s = applyEvent(s, ev(6, { type: "rewind", id: "r", userMessageId: "nope" }));
+    expect(s.lastTodos).toEqual([]);
+  });
+
   it("a rewind part drops the rewound user message and every part after it, and is not rendered", () => {
     let s = emptySession();
     s = applyEvent(s, ev(1, { type: "user_text", id: "u1", text: "one", images: [] }));
@@ -232,6 +247,7 @@ describe("paging", () => {
     const s = loaded({ heads, attentionSeq: 77 });
     expect(s).toMatchObject({ logEpoch: "e1", lastSeq: 100, settingsSeq: 100, state: "running", attentionSeq: 77, model: "sonnet", order: ["u9", "a9"], older: { before: "u9", pos: 90 } });
     expect(s.todos).toHaveLength(1);
+    expect(s.lastTodos).toHaveLength(1);
     expect(s.commands).toHaveLength(1);
     expect(s.contextUsage?.percentage).toBe(50);
     // Always a full replace, also for the same epoch.

@@ -1314,6 +1314,42 @@ it("the graph tab shows only when the session cwd is a git repository", async ()
   }
 });
 
+const gitList = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [{ path: "/p/demo", branch: "main", main: true }] } };
+
+it("the graph tab shows at once for a project with a session.list worktrees entry, before git.status replies", async () => {
+  const restore = await remount({ "session.list": gitList, "git.status": () => new Promise(() => {}) });
+  try {
+    expect(el.querySelector('[data-testid="side-panel"] [data-testid="pane-graph"]')).not.toBeNull();
+  } finally {
+    restore();
+    delete replies["git.status"];
+  }
+});
+
+it("leaving and coming back to the graph tab keeps the panel mounted", async () => {
+  const restore = await remount({ "session.list": gitList, "git.status": { status: { branch: "main", added: 0, removed: 0, refs: "s1" } }, "git.refs": { refs: "s1" }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } });
+  try {
+    const gitLogs = () => sent.filter((m) => m.type === "git.log").length;
+    const before = gitLogs();
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-graph"]')!.click());
+    await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    expect(sideTab()).toBe("graph");
+    expect(gitLogs() - before).toBe(1);
+    await pickSide(/changes/i);
+    const panel = el.querySelector('[data-testid="graph-panel"]');
+    expect(panel).not.toBeNull();
+    expect(panel!.className).toContain("hidden");
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-graph"]')!.click());
+    expect(el.querySelector('[data-testid="graph-panel"]')!.className).not.toContain("hidden");
+    expect(gitLogs() - before).toBe(1);
+  } finally {
+    restore();
+    delete replies["git.status"];
+    delete replies["git.log"];
+    delete replies["git.refs"];
+  }
+});
+
 describe("idle close: holds and background follows", () => {
   const subscribes = () => sent.filter((m) => m.type === "session.subscribe") as { type: string; sessionId: string; background?: boolean }[];
   const other = { ...session, id: "99999999-2222-3333-4444-555555555555", cwd: "/p/other", title: "Other" };

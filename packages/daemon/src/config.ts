@@ -7,6 +7,7 @@ import { join, relative, isAbsolute } from "node:path";
 import { createRequire } from "node:module";
 import { query as sdkQuery, type McpServerStatus, type Query } from "@anthropic-ai/claude-agent-sdk";
 import type { ClientMessage, ConfigKind, ConfigScope, McpAddConfig, McpServerInfo, SkillHandles, SkillRow, SkillsResult, SkillsSetStateResult } from "@claude-ui/protocol";
+import { redact } from "./plugins.ts";
 import { openQuery, THROWAWAY_TIMEOUT_MS, withoutApiKeys } from "./session.ts";
 
 /** One-shot CLI call in `cwd` (`stdin`: written to it, for `edit-skill-overrides`); resolves with its exit code and output (never rejects on a non-zero exit). */
@@ -165,7 +166,7 @@ function toInfo(s: McpServerStatus): McpServerInfo {
   };
 }
 
-/** Query-string values and a password in a server URL may be tokens: `***` in their place; an unparsable URL loses its query. */
+/** Query-string values and a password in a server URL may be tokens: `***` in their place; an unparsable URL loses its query and userinfo. */
 function redactUrl(url: string) {
   try {
     const u = new URL(url);
@@ -174,7 +175,7 @@ function redactUrl(url: string) {
     u.search = u.search.replace(/=[^&]*/g, "=***");
     return u.href;
   } catch {
-    return url.replace(/\?.*/s, "");
+    return redact(url.replace(/\?.*/s, ""));
   }
 }
 

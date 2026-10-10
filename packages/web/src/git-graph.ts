@@ -4,8 +4,11 @@ export const LANE_COLORS = 8;
 export type Lane = { hash: string; color: number };
 /** `next`: the next color index. */
 export type GraphState = { lanes: Lane[]; next: number };
-/** `input`: lanes entering the row from above; `output`: lanes leaving it below; `edges[k]`: the output index the edge to `parents[k]` ends in. */
-export type GraphRow = { col: number; color: number; input: Lane[]; output: Lane[]; parents: string[]; edges: number[] };
+/**
+ * `input`: lanes entering the row from above; `output`: lanes leaving it below; `edges[k]`: the output index the edge to `parents[k]` ends in;
+ * `through[i]`: the output index input lane `i` continues in, -1 when it ends at the node (a lane waiting for this commit).
+ */
+export type GraphRow = { col: number; color: number; input: Lane[]; output: Lane[]; parents: string[]; edges: number[]; through: number[] };
 export const emptyGraph = (): GraphState => ({ lanes: [], next: 0 });
 
 /** Rows for one page, continuing `state`; returns the state for the next page. Pure: inputs are not mutated. */
@@ -24,12 +27,13 @@ export function layoutPage(commits: { hash: string; parents: string[] }[], state
     } else color = input[col]!.color;
     const output: Lane[] = [];
     const edges: number[] = [];
+    const through: number[] = [];
     // The first parent always gets its own lane (another lane may already wait for it: a fork; both end at that parent's row).
     let first = -1;
     input.forEach((l, i) => {
       // Lanes waiting for this commit end at its node; the first one continues to the first parent.
-      if (l.hash !== c.hash) output.push(l);
-      else if (i === col && c.parents[0]) first = output.push({ hash: c.parents[0], color }) - 1;
+      through.push(l.hash !== c.hash ? output.push(l) - 1 : -1);
+      if (l.hash === c.hash && i === col && c.parents[0]) first = output.push({ hash: c.parents[0], color }) - 1;
     });
     if (tip && c.parents[0]) first = output.push({ hash: c.parents[0], color }) - 1;
     c.parents.forEach((p, k) => {
@@ -38,7 +42,7 @@ export function layoutPage(commits: { hash: string; parents: string[] }[], state
       if (at < 0) at = output.push({ hash: p, color: next++ % LANE_COLORS }) - 1;
       edges.push(at);
     });
-    rows.push({ col, color, input, output, parents: c.parents, edges });
+    rows.push({ col, color, input, output, parents: c.parents, edges, through });
     lanes = output;
   }
   return { rows, state: { lanes, next } };
