@@ -250,10 +250,58 @@ it("an error row says what failed and Open session opens it", async () => {
   expect(open).toHaveBeenCalledWith("e");
 });
 
-it("an escalated row sits above an older permission row, also among answered lines", async () => {
-  const s: State = { list: [item("a"), item("b")], views: { a: view([bash("pa", "ls", NOW - 600_000)]), b: view([bash("pb", "ls", NOW - 60_000, { escalated: true, reason: "risky" })]) } };
-  await render(s);
-  expect(rows().map((r) => r.dataset.kind)).toEqual(["escalated", "permission"]);
+const three = (): State => ({
+  list: [item("a"), item("b"), item("c")],
+  views: { a: view([bash("pa", "ls pa", NOW - 600_000)]), b: view([bash("pb", "ls pb", NOW - 300_000, { escalated: true, reason: "risky" })]), c: view([bash("pc", "ls pc", NOW - 60_000)]) },
+});
+const selectedText = () => rows().find((r) => r.getAttribute("aria-current"))?.textContent ?? "";
+
+it("an escalated row sits above an older permission row; an answered line leads", async () => {
+  let set!: (s: State) => void;
+  await render(three(), (s) => (set = s));
+  expect(rows().map((r) => r.dataset.kind)).toEqual(["escalated", "permission", "permission"]);
+  await act(async () => button("Allow once").click());
+  const next = three();
+  next.views.b = view([bash("pb", "ls pb", NOW - 300_000), bash("pb", "ls pb", NOW - 300_000, { settled: true, decision: "allow" })]);
+  await act(async () => set(next));
+  const queue = [...el.querySelectorAll<HTMLElement>('[data-testid="focus-answered"], [data-testid="focus-row"]')].map((x) => x.dataset.testid);
+  expect(queue).toEqual(["focus-answered", "focus-row", "focus-row"]);
+});
+
+it("Next waiting and the selection after an answer follow the displayed order", async () => {
+  await render(three());
+  expect(rows().map((r) => r.textContent!.match(/ls p./)![0])).toEqual(["ls pb", "ls pa", "ls pc"]);
+  expect(selectedText()).toContain("ls pb");
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="focus-next"]')!.click());
+  expect(selectedText()).toContain("ls pa");
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="focus-next"]')!.click());
+  expect(selectedText()).toContain("ls pc");
+});
+
+it("after Cancel continue removes its row the focus moves to the next row's button, else the previous, else the heading", async () => {
+  let set!: (s: State) => void;
+  const err = view([...done, { type: "session_state", id: "st", state: "error" } as Part]);
+  const limit = (at?: number) => view([{ type: "auto_continue", id: "auto_continue", at: at ?? null } as unknown as Part]);
+  const mk = (withLimit: boolean): State => ({
+    list: [item("l", { state: "idle", lastActivity: NOW }), item("e", { state: "error", lastActivity: NOW - 5000 })],
+    views: { l: withLimit ? limit(Date.now() + 60_000) : limit(), e: err },
+    unread: ["e"],
+  });
+  await render(mk(true), (s) => (set = s));
+  const cancel = [...el.querySelectorAll<HTMLButtonElement>('[data-testid="focus-row-action"]')].find((b) => b.textContent === "Cancel continue")!;
+  cancel.focus();
+  await act(async () => cancel.click());
+  await act(async () => set(mk(false)));
+  expect(rows().map((r) => r.dataset.kind)).toEqual(["error"]);
+  expect(document.activeElement).toBe(rows()[0]);
+  // The last row: nothing left, the heading takes the focus.
+  const only: State = { list: [item("l", { state: "idle", lastActivity: NOW })], views: { l: limit(Date.now() + 60_000) } };
+  await render(only, (s) => (set = s));
+  const b = el.querySelector<HTMLButtonElement>('[data-testid="focus-row-action"]')!;
+  b.focus();
+  await act(async () => b.click());
+  await act(async () => set({ list: only.list, views: { l: limit() } }));
+  expect(document.activeElement).toBe(el.querySelector("h1"));
 });
 
 it("error, quiet, finished and limit rows have one action button beside the row, not inside it", async () => {
@@ -282,8 +330,20 @@ it("request rows have no action button", async () => {
   expect(el.querySelector('[data-testid="focus-row-action"]')).toBeNull();
 });
 
-it("the detail of an idle session with a background task shows its task list", async () => {
+it("a working row of an idle session with a background task shows k of n", async () => {
   const s: State = { list: [item("a", { state: "idle", lastActivity: NOW })], views: { a: view([...done, todo(["Plan", "completed"], ["Build", "in_progress"]), { type: "session_state", id: "st", state: "idle", working: true } as Part]) } };
   await render(s);
   expect(el.querySelector('[data-testid="focus-running-row"] [data-testid="focus-progress"]')!.textContent).toBe("2 of 2");
+});
+
+it("the detail pane shows the last todo list of a finished (idle) session and the live one of a quiet running session", async () => {
+  const fin = finish("ok", [todo(["Plan", "completed"], ["Ship", "completed"])]);
+  await render({ list: [item("f", { state: "idle", lastActivity: NOW })], views: { f: fin }, unread: ["f"] });
+  await act(async () => rows()[0]!.click());
+  expect(el.querySelector('[data-testid="focus-tasks"]')!.textContent).toContain("Tasks · 2 of 2");
+  const quiet = view([...done, todo(["Plan", "completed"], ["Build", "in_progress"], ["Test", "pending"])]);
+  await render({ list: [item("q", { state: "running", lastActivity: 1 })], views: { q: quiet }, activity: { q: NOW - 10 * 60_000 } });
+  await act(async () => rows()[0]!.click());
+  expect(rows()[0]!.dataset.kind).toBe("stuck");
+  expect(el.querySelector('[data-testid="focus-tasks"]')!.textContent).toContain("Tasks · 2 of 3");
 });

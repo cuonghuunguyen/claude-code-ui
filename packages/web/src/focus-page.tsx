@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionListItem, Worktree } from "@claude-ui/protocol";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, CircleAlertIcon, ClockIcon, CrosshairIcon, HourglassIcon, LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, KIND_ORDER, nextWaiting, QUIET_SHOWN_MS, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
+import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, nextWaiting, QUIET_SHOWN_MS, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionPanel } from "./question.tsx";
 import { foldLabel, signalItems } from "./signal.ts";
@@ -175,11 +175,11 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const workingShown = capRows(working, expanded.working);
   // Answered one-liners sit among the request rows by their time, before the other kinds.
   const lead = needs.shown.filter((r) => r.request);
-  // By kind first (an escalated row stays above an older permission row), then by time; answered lines lead.
+  // The requests are in the displayed order already (kind, then time); the answered lines lead.
   const lines = [
-    ...lead.map((r) => ({ id: r.id, rank: KIND_ORDER.indexOf(r.kind), since: r.since, row: r, answered: undefined as Answered | undefined })),
-    ...answered.map((a) => ({ id: a.id, rank: -1, since: a.since, row: undefined, answered: a })),
-  ].sort((a, b) => a.rank - b.rank || a.since - b.since);
+    ...lead.map((r) => ({ id: r.id, rank: 0, row: r, answered: undefined as Answered | undefined })),
+    ...answered.map((a) => ({ id: a.id, rank: -1, row: undefined, answered: a })),
+  ].sort((a, b) => a.rank - b.rank);
   const rest = needs.shown.filter((r) => !r.request);
   const needsEmpty = !lines.length && !rest.length;
   const more = (key: SectionKey, n: number) =>
@@ -189,9 +189,23 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
       </button>
     ) : null;
   const select = (id: string) => (setDetail(true), onSelect(id));
+  // A row's Cancel continue removes the row (when the daemon confirms): the focus goes to the next row's button, else the previous one, else the heading.
+  const shownIds = [...lines.flatMap((l) => (l.row ? [l.row.id] : [])), ...rest.map((r) => r.id), ...finished.shown.map((r) => r.id)];
+  const heading = useRef<HTMLHeadingElement>(null);
+  const page = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef<{ id: string; before: string[] } | undefined>(undefined);
+  useEffect(() => {
+    const p = pendingFocus.current;
+    if (!p || shownIds.includes(p.id)) return;
+    pendingFocus.current = undefined;
+    const at = p.before.indexOf(p.id);
+    const target = [...p.before.slice(at + 1), ...p.before.slice(0, at).reverse()].find((id) => shownIds.includes(id));
+    const button = target && [...page.current!.querySelectorAll<HTMLElement>("[data-row-id]")].find((b) => b.dataset.rowId === target);
+    (button || heading.current)?.focus();
+  });
   const renderRow = (r: AttentionRow) => (
     <li key={r.id}>
-      <AttentionRowView row={r} title={titleOf(r.sessionId)} now={now} selected={r.id === current?.id} onSelect={() => select(r.id)} onAct={() => (r.action === "cancel_continue" ? onCancelContinue(r.sessionId) : onOpenSession(r.sessionId))} />
+      <AttentionRowView row={r} title={titleOf(r.sessionId)} now={now} selected={r.id === current?.id} onSelect={() => select(r.id)} onAct={() => (r.action === "cancel_continue" ? ((pendingFocus.current = { id: r.id, before: shownIds }), onCancelContinue(r.sessionId)) : onOpenSession(r.sessionId))} />
     </li>
   );
   const next = nextWaiting(waiting, req?.part.id);
@@ -202,10 +216,10 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const tasks = view ? (rowTodos(view).length ? rowTodos(view) : view.lastTodos) : [];
   const n = waiting.length ? new Set(waiting.map((w) => w.sessionId)).size : 0;
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-card shadow-raised" data-testid="focus-page">
+    <div ref={page} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-card shadow-raised" data-testid="focus-page">
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-3">
         <div className="min-w-0 flex-1">
-          <h1 className="font-medium text-base">Focus</h1>
+          <h1 ref={heading} tabIndex={-1} className="font-medium text-base outline-none">Focus</h1>
           <p className="truncate text-muted-foreground text-sm" data-testid="focus-subtitle">
             {focusSubtitle(attention, working.length)}
           </p>
@@ -345,6 +359,7 @@ function AttentionRowView({ row, title, now, selected, onSelect, onAct }: { row:
       className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11"
       onClick={onSelect}
       data-testid="focus-row"
+      data-row-id={row.id}
       data-kind={row.kind}
     >
       <Icon className={`mt-0.5 size-4 shrink-0 ${tone}`} aria-hidden />

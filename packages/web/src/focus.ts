@@ -15,8 +15,12 @@ export type Waiting = {
 
 /**
  * One entry per unsettled request of every listed, not archived session whose view this browser holds (a session may have
- * several, e.g. parallel subagents), oldest first, then in list order. `firstSeen`: request id -> ms, for a request without `at`.
+ * several, e.g. parallel subagents), in the displayed order (kind: escalated, permission, question; then oldest first, then list order). Next waiting,
+ * the selection after an answer and the Focus page's rows all follow it. `firstSeen`: request id -> ms, for a request without `at`.
  */
+/** Position of a request's kind in KIND_ORDER: the one ordering of requests (escalated, permission, question). */
+const requestRank = (part: PermissionRequest | QuestionRequest) => KIND_ORDER.indexOf(part.escalated ? "escalated" : part.type === "question" ? "question" : "permission");
+
 export function waitingRequests(list: SessionListItem[], views: Record<string, SessionView | undefined>, firstSeen: ReadonlyMap<string, number>, now: number): Waiting[] {
   const out: (Waiting & { order: number })[] = [];
   list.forEach((s, order) => {
@@ -26,7 +30,7 @@ export function waitingRequests(list: SessionListItem[], views: Record<string, S
       if ((part.type === "permission_request" || part.type === "question") && !part.settled) out.push({ sessionId: s.id, part, since: part.at ?? firstSeen.get(part.id) ?? now, order });
     }
   });
-  return out.sort((a, b) => a.since - b.since || a.order - b.order).map(({ order: _, ...w }) => w);
+  return out.sort((a, b) => requestRank(a.part) - requestRank(b.part) || a.since - b.since || a.order - b.order).map(({ order: _, ...w }) => w);
 }
 
 /** What the sidebar chip, the Focus tab badge, the browser tab title and the status text all show: sessions that wait, not requests. */

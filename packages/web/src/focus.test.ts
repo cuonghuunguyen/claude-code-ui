@@ -9,10 +9,10 @@ const ask = (id: string, over: Partial<QuestionRequest> = {}): QuestionRequest =
 const view = (parts: Part[]): SessionView => parts.reduce((s, part, i) => applyEvent(s, { type: "event", sessionId: "s", seq: i + 1, part }), emptySession());
 const none = new Map<string, number>();
 
-it("lists every unsettled request of every session, oldest first by the daemon time", () => {
+it("lists every unsettled request of every session in the displayed order: escalated, permission, question, then oldest first by the daemon time", () => {
   const list = [item("a"), item("b"), item("c")];
   const w = waitingRequests(list, { a: view([perm("a1", { at: 300 })]), b: view([ask("b1", { at: 100 })]), c: view([perm("c1", { at: 200 })]) }, none, 1000);
-  expect(w.map((x) => [x.sessionId, x.part.id, x.since])).toEqual([["b", "b1", 100], ["c", "c1", 200], ["a", "a1", 300]]);
+  expect(w.map((x) => [x.sessionId, x.part.id, x.since])).toEqual([["c", "c1", 200], ["a", "a1", 300], ["b", "b1", 100]]);
 });
 
 it("a request without `at` uses when this browser first saw it, else now", () => {
@@ -258,4 +258,13 @@ it("an error reason drops a leading Error: prefix", () => {
   const raw: Part = { type: "raw", id: "raw", message: { error: "Error: boom" } };
   const [r] = attentionRows(input([item("a")], { a: view([user, raw, state("running"), state("error")]) }, { unread: ["a"] }));
   expect(r!.reason).toBe("Check the error: boom");
+});
+
+it("waitingRequests and attentionRows give the requests in the same order", () => {
+  const list = [item("a"), item("b"), item("c"), item("d")];
+  const views = { a: view([perm("pa", { at: 1 })]), b: view([perm("pb", { at: 2, escalated: true })]), c: view([ask("qc", { at: 0 })]), d: view([perm("pd", { at: 3 })]) };
+  const i = input(list, views);
+  expect(i.waiting.map((w) => w.part.id)).toEqual(["pb", "pa", "pd", "qc"]);
+  expect(attentionRows(i).map((r) => r.id)).toEqual(i.waiting.map((w) => w.part.id));
+  expect(nextWaiting(i.waiting, "pb")?.part.id).toBe("pa");
 });
