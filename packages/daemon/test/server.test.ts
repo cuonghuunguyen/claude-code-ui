@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
@@ -12,6 +13,7 @@ import { MAX_TERMINAL_INPUT_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCO
 import { listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
+import { SideSocket } from "../src/sides.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, yielded } from "./fake-query.ts";
 
@@ -3767,5 +3769,68 @@ describe("idle close", () => {
     expect(c.inbox.slice(seen).filter((m) => m.type === "event")).toEqual([]);
     expect(await c.request({ type: "session.unsubscribe", sessionId: randomUUID() })).toMatchObject({ type: "reply" });
     expect(c.inbox.slice(seen).filter((m) => m.type === "error")).toEqual([]);
+  });
+});
+
+describe("keep-alive ping on a side's virtual connection (GH-263)", () => {
+  const nap = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const pingDaemon = () => createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, pingMs: 30, history: { ...history, getSessionInfo: async () => undefined } as never });
+
+  it("a SideSocket survives several ping ticks and still answers", async () => {
+    const d = pingDaemon();
+    const out: ServerMessage[] = [];
+    const ws = new SideSocket((data) => out.push(JSON.parse(data)), () => 0);
+    const ping = vi.spyOn(ws, "ping");
+    try {
+      d.accept(ws);
+      await nap(300); // ~10 ticks
+      expect(ping.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(ws.readyState).toBe(1);
+      ws.emit("message", JSON.stringify({ type: "ping", reqId: "r1" }));
+      await vi.waitFor(() => expect(out).toContainEqual({ type: "reply", reqId: "r1", result: {} }));
+    } finally {
+      ws.close();
+      d.close();
+    }
+  });
+
+  it("SideSocket.ping() answers pong after a microtask; terminate() closes it", async () => {
+    const ws = new SideSocket(() => {}, () => 0);
+    const events: string[] = [];
+    ws.on("pong", () => events.push("pong"));
+    ws.on("close", () => events.push("close"));
+    ws.ping();
+    expect(events).toEqual([]);
+    await Promise.resolve();
+    expect(events).toEqual(["pong"]);
+    ws.terminate();
+    expect(events).toEqual(["pong", "close"]);
+    expect(ws.readyState).toBe(3);
+    ws.ping();
+    await Promise.resolve();
+    expect(events).toEqual(["pong", "close"]);
+  });
+
+  it("a socket whose ping and terminate throw does not crash the pinger and is dropped once", async () => {
+    const d = pingDaemon();
+    const ping = vi.fn(() => {
+      throw new Error("ping unsupported");
+    });
+    const terminate = vi.fn(() => {
+      throw new Error("terminate unsupported");
+    });
+    const ws = Object.assign(new EventEmitter(), { OPEN: 1, readyState: 1, bufferedAmount: 0, send: vi.fn(), close: vi.fn(), ping, terminate });
+    const uncaught = vi.fn();
+    process.on("uncaughtException", uncaught);
+    try {
+      d.accept(ws);
+      await nap(300);
+      expect(ping).toHaveBeenCalledTimes(1);
+      expect(terminate).toHaveBeenCalledTimes(1);
+      expect(uncaught).not.toHaveBeenCalled();
+    } finally {
+      process.off("uncaughtException", uncaught);
+      d.close();
+    }
   });
 });

@@ -23,7 +23,7 @@ import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpReque
 import { createPlugins, redact, type PluginsRequest } from "./plugins.ts";
 import { searchTranscripts } from "./content-search.ts";
 import { cliTurnRunning, interleaveRuns, JsonlTail, transcriptEnd } from "./transcript.ts";
-import { createRouter, type SideSocket, type Sides } from "./sides.ts";
+import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration } from "./orchestration.ts";
@@ -31,6 +31,25 @@ import type { AddressInfo } from "node:net";
 import { serveStatic } from "./static.ts";
 
 export { MAX_SETTINGS } from "./session-settings.ts";
+
+/**
+ * What the connection handler and the keep-alive pinger use of a socket. Both a `ws` WebSocket and a side's SideSocket (sides.ts)
+ * satisfy it; typing the handler against `ws.WebSocket` and casting a SideSocket to it hid a missing ping()/terminate() (GH-263).
+ */
+export interface Conn {
+  readonly OPEN: number;
+  readonly readyState: number;
+  readonly bufferedAmount: number;
+  send(data: string): void;
+  close(): void;
+  ping(): void;
+  terminate(): void;
+  on(event: "message", listener: (data: RawData) => void): unknown;
+  on(event: "error", listener: (err: Error) => void): unknown;
+  on(event: "pong" | "close", listener: () => void): unknown;
+}
+// Compile-time check: a real ws socket satisfies Conn (wss.on/emit are loosely typed, so nothing else would notice a new Conn member it lacks).
+void ((w: WebSocket): Conn => w);
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
@@ -429,7 +448,7 @@ export function createDaemon(opts: {
       return !err;
     },
   });
-  const connections = new Set<WebSocket>();
+  const connections = new Set<Conn>();
   const terminals = createTerminals();
   const broadcast = (m: ServerMessage) => connections.forEach((ws) => send(ws, m));
   // ponytail: side sessions are not counted; a restart ends their running turns too.
@@ -587,9 +606,9 @@ export function createDaemon(opts: {
 
   const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }) });
   /** Session a connection shows while its tab is focused and visible. */
-  const focused = new Map<WebSocket, string>();
+  const focused = new Map<Conn, string>();
   /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */
-  const covered = new Map<WebSocket, Set<string>>();
+  const covered = new Map<Conn, Set<string>>();
   const pushTitleOf = async (sessionId: string) => {
     const info = await history.getSessionInfo(sessionId).catch(() => undefined);
     return info?.summary || basename(sessions.get(sessionId)?.cwd ?? "") || "Claude";
@@ -1014,7 +1033,7 @@ export function createDaemon(opts: {
       .some((p) => p.startsWith(TOKEN_PROTOCOL_PREFIX) && isToken(p.slice(TOKEN_PROTOCOL_PREFIX.length)));
 
   /** fs.media capabilities: nonce -> canonical path, issuing connection, last use. */
-  const media = new Map<string, { path: string; ws: WebSocket; used: number }>();
+  const media = new Map<string, { path: string; ws: Conn; used: number }>();
   const mediaEntry = (nonce: string) => {
     const e = media.get(nonce);
     if (e && Date.now() - e.used < MEDIA_TTL_MS) return e; // closing the connection deletes its nonces
@@ -1109,24 +1128,36 @@ export function createDaemon(opts: {
 
   // Ping each socket every interval; one that did not pong since the previous tick is half-open (phone asleep, wifi gone, no FIN):
   // terminate it so its close handler runs (focused tab, subscriptions, watches), else its stale "focused" entry mutes push.
-  const answered = new WeakSet<WebSocket>();
+  const answered = new WeakSet<Conn>();
+  // A socket that cannot be pinged or terminated must not take the process down (an uncaught exception in this timer): drop it instead.
+  const drop = (ws: Conn) => {
+    try {
+      ws.terminate();
+    } catch (err) {
+      console.warn("ws: drop:", (err as Error).message);
+      connections.delete(ws);
+      try {
+        ws.close();
+      } catch {}
+    }
+  };
   const pinger = setInterval(() => {
-    for (const ws of connections) {
+    for (const ws of [...connections]) {
       if (!answered.has(ws)) {
-        ws.terminate();
+        drop(ws);
         continue;
       }
       answered.delete(ws);
       try {
         ws.ping();
       } catch {
-        ws.terminate();
+        drop(ws);
       }
     }
   }, opts.pingMs ?? PING_MS).unref();
   http.on("close", () => clearInterval(pinger));
 
-  wss.on("connection", (ws: WebSocket) => {
+  wss.on("connection", (ws: Conn) => {
     connections.add(ws);
     answered.add(ws);
     ws.on("pong", () => answered.add(ws));
@@ -1751,8 +1782,8 @@ export function createDaemon(opts: {
   });
 
   /** Serves a connection that is not a WebSocket of this server: a side's virtual connection (sides.ts runSide). */
-  // The handler uses only on(), send(), readyState, OPEN and bufferedAmount of its socket.
-  const accept = (ws: SideSocket) => void wss.emit("connection", ws as unknown as WebSocket, undefined);
+  // Typed as Conn, so a SideSocket without what the handler uses (ping, terminate, ...) fails to compile.
+  const accept = (ws: Conn) => void wss.emit("connection", ws, undefined);
   // A blocked worker_wait ends with a tool error instead of hanging until the CLI is gone.
   const idleCloseMs = opts.idleCloseMs ?? IDLE_CLOSE_MS;
   // ponytail: one scan per minute over all sessions; fine for tens of sessions.
@@ -1790,6 +1821,6 @@ function isOwnOrigin(req: IncomingMessage, hostnames: Set<string>) {
   }
 }
 
-function send(ws: WebSocket, m: ServerMessage) {
+function send(ws: Conn, m: ServerMessage) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m));
 }

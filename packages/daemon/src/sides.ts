@@ -378,7 +378,17 @@ export function createSides(opts: {
       let setupError: string | undefined;
       let setupCode: string | undefined;
       let stderr = "";
-      proc.stderr.on("data", (d: Buffer) => (stderr = (stderr + d).slice(-2000)));
+      // The tail below keeps 2000 chars; a long stack would push the crash line out, so it is remembered as it arrives
+      // (`partial` carries an unfinished line over to the next chunk).
+      const CRASH = /claude-ui daemon: (?:uncaughtException|unhandledRejection): (.*)/;
+      let crashLine: string | undefined;
+      let partial = "";
+      proc.stderr.on("data", (d: Buffer) => {
+        stderr = (stderr + d).slice(-2000);
+        const rows = (partial + d).split("\n");
+        partial = rows.pop()!.slice(-2000);
+        for (const row of rows) crashLine = CRASH.exec(row)?.[1] ?? crashLine;
+      });
       proc.stdin.on("error", () => {});
       lines(proc.stdout, (line) => {
         const phase = /^CLAUDE_UI_PHASE (installing|starting)$/.exec(line.trim());
@@ -405,8 +415,24 @@ export function createSides(opts: {
       });
       proc.on("exit", (code) => {
         const wasReady = s.state === "ready";
-        const tail = stderr.trim().split("\n").filter((l) => !/cannot set terminal process group|no job control/.test(l)).slice(-3).join(" ");
-        const message = setupError ?? (wasReady ? `${s.label} stopped (exit code ${code}). Retry to start it again.` : `${s.label} could not start (exit code ${code})${tail ? `: ${tail}` : ""}.`);
+        // A crashed side logs `claude-ui daemon: uncaughtException: <error>` first; Node's own fatal print ends in frames and a `Node.js vX` trailer.
+        const crash = CRASH.exec(partial)?.[1] ?? crashLine;
+        const tail = (
+          crash ??
+          stderr
+            .trim()
+            .split("\n")
+            .filter((l) => l.trim() && !/cannot set terminal process group|no job control|^Node\.js v\d/.test(l))
+            .slice(-3)
+            .join(" ")
+        )
+          .trim()
+          .slice(0, 300);
+        const message =
+          setupError ??
+          (wasReady
+            ? `${s.label} stopped (exit code ${code})${code && tail ? `: ${tail}` : ""}. Retry to start it again.`
+            : `${s.label} could not start (exit code ${code})${tail ? `: ${tail}` : ""}.`);
         // Nothing installed and none asked for (setup `never`): the side is as it was before, not failed.
         const notInstalled = !wasReady && setupCode === "not_installed";
         delete s.phase;
@@ -779,6 +805,15 @@ export class SideSocket extends EventEmitter {
     if (this.readyState !== this.OPEN) return;
     this.readyState = 3;
     this.emit("close");
+  }
+  /** The daemon's keep-alive ping: the pipe to the hub is the liveness signal (the side ends when it goes away), so answer at once. */
+  ping() {
+    queueMicrotask(() => {
+      if (this.readyState === this.OPEN) this.emit("pong");
+    });
+  }
+  terminate() {
+    this.close();
   }
 }
 
