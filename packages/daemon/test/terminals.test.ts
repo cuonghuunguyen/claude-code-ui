@@ -1,4 +1,5 @@
 import { chmodSync, closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -294,5 +295,81 @@ describe("closing a worktree's terminals", () => {
     terms.create("/repo", 80, 24, {});
     await terms.closeIn(() => false, 60_000);
     expect(terms.count()).toBe(1);
+  });
+});
+
+// GH-266: on Windows node-pty writes input to ConPTY through a net.Socket (`_agent.inSocket`) with no 'error' listener.
+// A write that lands while ConPTY closes its pipe fails asynchronously (EAGAIN is libuv's name for ERROR_NO_DATA, "the
+// pipe is being closed"; EOF for a closed one), and an unhandled 'error' event ended the daemon.
+describe("Windows terminal input socket errors (GH-266)", () => {
+  /** A fake ConPTY IPty: `inSocket` is a plain EventEmitter, so emit("error") throws when nothing listens, as Node does. */
+  const conpty = () => {
+    const inSocket = Object.assign(new EventEmitter(), { writableLength: 0, destroyed: false });
+    let onExit: (e: { exitCode: number }) => void = () => {};
+    const pty = {
+      fd: undefined,
+      _socket: { destroyed: false },
+      _agent: { inSocket },
+      onData() {},
+      onExit: (cb: typeof onExit) => void (onExit = cb),
+      write: vi.fn(),
+      kill: vi.fn(() => setTimeout(() => onExit({ exitCode: 1 }), 5)),
+    };
+    return { pty, inSocket, exit: () => onExit({ exitCode: 1 }) };
+  };
+  const errno = (code: string) => Object.assign(new Error(`write ${code}`), { code, syscall: "write" });
+  const setup = () => {
+    // Each spawn gets its own fake; `fake` is the first terminal's.
+    const fakes: ReturnType<typeof conpty>[] = [];
+    const terms = createTerminals(nodePtyRoot(), "win32", (() => fakes[fakes.push(conpty()) - 1]!.pty) as never);
+    const { id } = terms.create("C:\repo", 80, 24, {});
+    const fake = fakes[0]!;
+    const t = terms.get(id)!;
+    const output = vi.fn();
+    const exit = vi.fn();
+    terms.attach(t, { output, exit });
+    return { ...fake, terms, t, id, output, exit };
+  };
+
+  for (const code of ["EAGAIN", "EOF"]) {
+    it(`a ${code} on the input socket ends only that terminal, tells its client, and does not throw`, async () => {
+      const { inSocket, pty, terms, id, output, exit } = setup();
+      const other = terms.create("C:\repo", 80, 24, {});
+      expect(() => inSocket.emit("error", errno(code))).not.toThrow();
+      expect(terms.get(id)).toBeUndefined();
+      expect(terms.list("C:\repo").map((t) => t.id)).not.toContain(id);
+      expect(terms.list("C:\repo").map((t) => t.id)).toContain(other.id);
+      expect(output).toHaveBeenCalledWith(expect.stringContaining(`write ${code}`));
+      expect(pty.kill).toHaveBeenCalled();
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+    });
+  }
+
+  it("an error after the terminal was closed (input still queued when ConPTY shut) is swallowed, with no second kill", () => {
+    const { inSocket, pty, terms, t, output } = setup();
+    terms.close(t);
+    expect(() => inSocket.emit("error", errno("EAGAIN"))).not.toThrow();
+    expect(() => inSocket.emit("error", errno("EOF"))).not.toThrow();
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+    expect(output).not.toHaveBeenCalled();
+  });
+
+  it("refuses input with input_backlog while MAX_PENDING_INPUT_BYTES wait in the input socket", () => {
+    const { inSocket, pty, terms, t } = setup();
+    expect(terms.write(t, "dir\r")).toBeUndefined();
+    expect(pty.write).toHaveBeenCalledWith("dir\r");
+    inSocket.writableLength = MAX_PENDING_INPUT_BYTES - 2;
+    expect(terms.write(t, "abc")).toBe("input_backlog");
+    expect(pty.write).toHaveBeenCalledTimes(1);
+    inSocket.writableLength = 0;
+    expect(terms.write(t, "abc")).toBeUndefined();
+  });
+
+  it("a synchronous write error is write_failed, not a throw", () => {
+    const { pty, terms, t } = setup();
+    pty.write.mockImplementation(() => {
+      throw errno("EPIPE");
+    });
+    expect(terms.write(t, "x")).toBe("write_failed");
   });
 });
