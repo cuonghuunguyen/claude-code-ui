@@ -1,24 +1,62 @@
 // Base64 payloads a snapshot or page left out (GH-274): loaded with session.media when shown, cached per session part.
+import { parseOmitted } from "@claude-ui/protocol";
 import { createContext, useContext, useEffect, useState } from "react";
 
 /** Loads the data URL of payload `index` of a part (session.media). */
 export type MediaLoader = (partId: string, index: number) => Promise<string>;
 export const MediaContext = createContext<MediaLoader | undefined>(undefined);
 
-const CACHE_MAX = 64;
-/** Loads in flight or done, keyed by part and index; the oldest goes first. A failed load is removed so the next mount retries. */
-const cache = new Map<string, Promise<string>>();
+/** The cache holds at most this many characters of data URLs (about as many bytes); the least recently used go first. */
+export const MEDIA_CACHE_CHARS = 32 * 1024 * 1024;
+type Entry = { p: Promise<string>; chars: number };
+/** Loads in flight or done, keyed by part and index. A failed load is removed so the next mount retries. */
+const cache = new Map<string, Entry>();
 
-function load(loader: MediaLoader, partId: string, index: number): Promise<string> {
-  const key = `${partId}#${index}`;
-  let p = cache.get(key);
-  if (!p) {
-    p = loader(partId, index);
-    cache.set(key, p);
-    if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
-    p.catch(() => cache.get(key) === p && cache.delete(key));
+function evict() {
+  let total = 0;
+  for (const e of cache.values()) total += e.chars;
+  // Map order = least recently used first; the newest entry stays even when it alone is over the limit.
+  for (const [key, e] of cache) {
+    if (total <= MEDIA_CACHE_CHARS || cache.size <= 1) break;
+    cache.delete(key);
+    total -= e.chars;
   }
-  return p;
+}
+
+/** The payload through the cache: loaded once per part and index while it stays cached. */
+export function loadMedia(loader: MediaLoader, partId: string, index: number): Promise<string> {
+  const key = `${partId}#${index}`;
+  const hit = cache.get(key);
+  if (hit) {
+    cache.delete(key);
+    cache.set(key, hit);
+    return hit.p;
+  }
+  const entry: Entry = { p: loader(partId, index), chars: 0 };
+  cache.set(key, entry);
+  entry.p.then(
+    (url) => {
+      entry.chars = url.length;
+      evict();
+    },
+    () => cache.get(key) === entry && cache.delete(key),
+  );
+  return entry.p;
+}
+
+/**
+ * The prompt's images as data URLs for the prompt box: left-out ones come through the cache. Rejects naming the first image
+ * that could not be loaded (the caller does not go on without it).
+ */
+export async function restoreImages(images: string[], partId: string, loader: MediaLoader | undefined): Promise<string[]> {
+  return Promise.all(
+    images.map((src, i) => {
+      if (!parseOmitted(src)) return src;
+      return (loader ? loadMedia(loader, partId, i) : Promise.reject(new Error("no loader"))).catch(() => {
+        throw new Error(`Image ${i + 1} could not be loaded, so the prompt cannot be restored. Nothing was rewound.`);
+      });
+    }),
+  );
 }
 
 export type MediaState = { src?: string; failed: boolean; retry: () => void };
@@ -36,7 +74,7 @@ export function useMediaSrc(partId: string, index: number, omitted: boolean, inl
     if (!omitted || !loader) return;
     let live = true;
     setFailed(false);
-    load(loader, partId, index).then(
+    loadMedia(loader, partId, index).then(
       (url) => live && setLoaded(url),
       () => live && setFailed(true),
     );

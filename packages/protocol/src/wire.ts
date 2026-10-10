@@ -255,8 +255,7 @@ export const MAX_FROM_PARTS = 3000;
 /** Where a page ends: `before` = id of the oldest loaded turn start (a top-level user_text), `pos` = its first seq in this daemon run. */
 export type Cursor = { before: string; pos: number };
 export type PosPart = { part: Part; pos: number };
-/** Whole turns, oldest part first; `older` absent = the start of the session. */
-/** Parts as `omitMedia` leaves them in a snapshot or page. */
+/** Whole turns, oldest part first (parts as `omitMedia` leaves them); `older` absent = the start of the session. */
 export type TimelinePage = { parts: Part[]; older?: Cursor };
 /**
  * Paged subscribe reply: `heads` = the latest session_state, commands, context_usage, external_turn, auto_continue, todo_update events; `aux` = parts of the

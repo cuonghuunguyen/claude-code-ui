@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ImageStrip } from "./images.tsx";
-import { MediaContext, useMediaSrc } from "./media.ts";
+import { loadMedia, MEDIA_CACHE_CHARS, MediaContext, restoreImages, useMediaSrc } from "./media.ts";
 import { ToolBody } from "./tool-card.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -74,6 +74,8 @@ describe("failed and loading states", () => {
     expect(el.textContent).toContain("Image could not be loaded");
     const retry = [...el.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
     expect(retry.className).toContain("min-h-11");
+    expect(retry.getAttribute("aria-label")).toBe("Retry loading /w/b.png");
+    expect(box.getAttribute("role")).toBe("group");
     fail = false;
     await act(async () => retry.click());
     await flush();
@@ -114,5 +116,32 @@ describe("useMediaSrc", () => {
     await act(async () => root.render(<MediaContext value={bad}><Probe id="flaky" /></MediaContext>));
     await flush();
     expect(bad).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("media cache by size, restoreImages", () => {
+  it("evicts the least recently used payloads once the cache holds more than MEDIA_CACHE_CHARS", async () => {
+    const big = "A".repeat(Math.floor(MEDIA_CACHE_CHARS * 0.4));
+    const loader = vi.fn(async () => big);
+    await loadMedia(loader, "ev", 0);
+    await loadMedia(loader, "ev", 1);
+    await loadMedia(loader, "ev", 0); // 0 is now the most recent
+    await loadMedia(loader, "ev", 2); // over the limit: 1 goes
+    await new Promise((r) => setTimeout(r, 0));
+    expect(loader).toHaveBeenCalledTimes(3);
+    await loadMedia(loader, "ev", 0);
+    expect(loader).toHaveBeenCalledTimes(3);
+    await loadMedia(loader, "ev", 1);
+    expect(loader).toHaveBeenCalledTimes(4);
+  });
+
+  it("restoreImages reads a loaded image from the cache, and rejects naming the image that failed", async () => {
+    const loader = vi.fn(async () => png);
+    await loadMedia(loader, "rw", 1);
+    const images = [png, omittedImage("image/png", 5)];
+    expect(await restoreImages(images, "rw", loader)).toEqual([png, png]);
+    expect(loader).toHaveBeenCalledTimes(1);
+    await expect(restoreImages([omittedImage("image/png", 5)], "rw-bad", vi.fn(async () => { throw new Error("x"); }))).rejects.toThrow(/Image 1 could not be loaded/);
+    await expect(restoreImages([omittedImage("image/png", 5)], "rw-none", undefined)).rejects.toThrow(/Image 1/);
   });
 });

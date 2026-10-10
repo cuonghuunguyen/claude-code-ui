@@ -38,7 +38,7 @@ import type {
   WorktreeCreateResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
-import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, parseOmitted, PERMISSION_MODES, permissionModesFor, type SearchHit, worktreeNameError } from "@claude-ui/protocol";
+import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type SearchHit, worktreeNameError } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -51,7 +51,7 @@ import { Message, MessageAction, MessageActions, MessageContent, MessageResponse
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
-import { MediaContext, type MediaLoader } from "./media.ts";
+import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
@@ -2687,12 +2687,13 @@ export function SessionPane({
                     preview={() => onRewindPreview(item.part.id)}
                     rewind={async (mode) => {
                       const prompt = item.part as Extract<Part, { type: "user_text" }>;
-                      // Images a snapshot or page left out load before the rewind (it drops the prompt from the daemon); one that fails to load stays out of the draft.
-                      const images = mode === "code" ? [] : await Promise.all(prompt.images.map((src, i) => (parseOmitted(src) ? onMedia?.(prompt.id, i).catch(() => src) ?? src : src)));
+                      // Images a snapshot or page left out load before the rewind (it drops the prompt from the daemon). One that fails to load
+                      // stops the rewind with a notice in the panel: the image would be lost for good.
+                      const images = mode === "code" ? [] : await restoreImages(prompt.images, prompt.id, onMedia);
                       await onRewind(prompt.id, mode);
                       setRewinding(undefined);
                       // Conversation modes: the original prompt goes back into the prompt box.
-                      if (mode !== "code") setDraft({ text: prompt.text, images: images.filter((src) => !parseOmitted(src)) });
+                      if (mode !== "code") setDraft({ text: prompt.text, images });
                     }}
                     onCancel={() => setRewinding(undefined)}
                   />
