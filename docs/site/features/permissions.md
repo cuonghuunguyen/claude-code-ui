@@ -17,7 +17,7 @@ A card appears above the prompt box. It shows the tool and what it wants to do (
 
 ## Questions
 
-Sometimes Claude asks you a multiple-choice question. Pick an option (or type your own answer) and click **Submit**. Several questions show one page at a time with **Back** and **Next**. **Dismiss** skips the question and stops the turn, like <kbd>Esc</kbd> in Claude Code.
+Claude may ask a multiple-choice question: pick an option (or type your own) and click **Submit**; several questions page with **Back** and **Next**. **Dismiss** skips it and stops the turn, like <kbd>Esc</kbd> in Claude Code.
 
 ## Permission modes
 
@@ -44,4 +44,3 @@ When Claude finishes a plan, the card shows it with three buttons:
 
 - Rules you save with **Allow always** are Claude Code's own rules. The `claude` CLI uses them too.
 - The models and modes on offer depend on your Claude account.
-- Changing the mode while a card is open does not answer the card.

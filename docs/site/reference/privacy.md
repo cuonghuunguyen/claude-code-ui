@@ -35,11 +35,4 @@
 
 claude-code-ui uses your Claude subscription login (`claude login`), not an API key. It is a personal tool: one user, on their own machine, with their own subscription.
 
-## The decisions behind this
-
-These come from the project's design decisions (ADRs) in the repository:
-
-- [0001](https://github.com/cuonghuunguyen/claude-code-ui/blob/main/docs/adr/0001-sdk-transcript-is-the-only-store.md): the Claude transcript is the only store.
-- [0002](https://github.com/cuonghuunguyen/claude-code-ui/blob/main/docs/adr/0002-subscription-login-only.md): subscription login only.
-- [0003](https://github.com/cuonghuunguyen/claude-code-ui/blob/main/docs/adr/0003-no-external-hosting.md): no external hosting.
-- [0004](https://github.com/cuonghuunguyen/claude-code-ui/blob/main/docs/adr/0004-tailscale-remote-access.md): remote access through Tailscale serve.
+Design decisions: [docs/adr](https://github.com/cuonghuunguyen/claude-code-ui/tree/main/docs/adr).

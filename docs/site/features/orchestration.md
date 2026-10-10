@@ -1,6 +1,6 @@
 # Orchestration (workers)
 
-One session (the **coordinator**) can start and steer other sessions (the **workers**). Use it to split a big job: the coordinator plans, workers build in their own folders or git worktrees. Off by default.
+One session (the **coordinator**) can start and steer other sessions (the **workers**). Off by default.
 
 ## How to use
 
@@ -21,7 +21,8 @@ One session (the **coordinator**) can start and steer other sessions (the **work
 
 ## The worker tools
 
-The coordinator gets these tools (an MCP server inside the daemon):
+<details>
+<summary>The 11 tools the coordinator gets (an MCP server inside the daemon)</summary>
 
 | Tool | Does |
 | --- | --- |
@@ -36,6 +37,8 @@ The coordinator gets these tools (an MCP server inside the daemon):
 | `worker_stop` | Interrupt a worker's running turn |
 | `worker_close` | Close a worker's Claude process (the session stays) |
 | `worker_remove` | Delete a finished worker's session for good |
+
+</details>
 
 ## Good to know
 

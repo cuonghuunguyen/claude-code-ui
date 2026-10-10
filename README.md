@@ -36,7 +36,7 @@ It prints a pairing link and a QR code. Open the link to use the app. To use it 
 
 Read more:
 [Install & first run](https://cuonghuunguyen.github.io/claude-code-ui/guide/install) ·
-[Features](https://cuonghuunguyen.github.io/claude-code-ui/guide/tour) ·
+[Quick tour](https://cuonghuunguyen.github.io/claude-code-ui/guide/tour) ·
 [Keyboard shortcuts](https://cuonghuunguyen.github.io/claude-code-ui/reference/shortcuts) ·
 [CLI flags](https://cuonghuunguyen.github.io/claude-code-ui/reference/cli) ·
 [Troubleshooting](https://cuonghuunguyen.github.io/claude-code-ui/reference/troubleshooting) ·

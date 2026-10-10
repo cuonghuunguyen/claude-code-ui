@@ -37,17 +37,10 @@ The box at the bottom of a session. You type prompts here, and pick the model, m
 
 ## Pickers under the box
 
-| Picker | Options |
-| --- | --- |
-| Permission mode | Ask before edits, Edit automatically, Plan mode, Auto mode, Don't ask, Bypass permissions (only with `--allow-bypass`) |
-| Model | The models your Claude account offers |
-| Thinking effort | Default, Low, Medium, High, Extra high, Max (what the model supports) |
-
-On a phone the three pickers fold into one settings chip.
+Permission mode (see [Permissions & modes](permissions)), model, and thinking effort. On a phone they fold into one settings chip.
 
 ## Good to know
 
-- The formatting row has Bold (<kbd>Ctrl</kbd>+<kbd>B</kbd>), Italic (<kbd>Ctrl</kbd>+<kbd>I</kbd>), Inline code (<kbd>Ctrl</kbd>+<kbd>E</kbd>), Code block, Link and Bullet list. It writes plain Markdown.
+- The formatting row above the box writes plain Markdown. Its keys are on the [shortcuts page](../reference/shortcuts#in-the-prompt-box).
 - What you type is saved as a draft in this browser. It survives a reload. Images are not saved in drafts.
-- The box grows with your text, then scrolls.
 - The ring next to the send button is the context meter. See [Usage & context](usage).

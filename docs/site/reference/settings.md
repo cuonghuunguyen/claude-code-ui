@@ -52,14 +52,7 @@ Opens the [Keyboard shortcuts](shortcuts) dialog, where you can rebind every sho
 
 ## Orchestration
 
-| Setting | Does |
-| --- | --- |
-| Enable orchestration | Sessions may start and steer worker sessions. Off by default. |
-| Maximum workers | Workers running at once (1 to 20). |
-| Worker mode | Permission mode of a new worker when the coordinator does not pick one. |
-| Coordinator may answer permission requests | The coordinator may allow or deny, once, a worker's low-risk requests. |
-
-See [Orchestration](../features/orchestration).
+Lets a session start and steer worker sessions. Off by default. Every setting is described on the [Orchestration](../features/orchestration#settings) page.
 
 ## Usage limits
 

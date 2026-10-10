@@ -42,13 +42,9 @@ claude-code-ui falls back to the previous version and says so. See [Updates](../
 
 ### `--tailscale` exits right away
 
-It prints what is missing: Tailscale not installed or not logged in, MagicDNS or HTTPS certificates off, the machine not approved, or Funnel on. On Linux without root, run `sudo tailscale set --operator=$USER` once.
+It prints what is missing: Tailscale not installed or not logged in, MagicDNS or HTTPS certificates off, the machine not approved, or Funnel on. On Linux without root, run `sudo tailscale set --operator=$USER` once. On Windows with WSL, run `--tailscale` on Windows, not inside WSL.
 
 ## FAQ
-
-### Do I need an API key?
-
-No. It uses your Claude subscription through `claude login`.
 
 ### Do sessions stop when I close the browser?
 
@@ -58,10 +54,6 @@ No. They run in the daemon. Open the page again to catch up.
 
 The running turn stops. The session and its history stay, and you can continue it after the next start.
 
-### Can I use it on my phone?
-
-Yes. See [Phone & remote access](../features/remote-access).
-
 ### Does it work with sessions from the `claude` CLI?
 
 Yes. Both read and write the same history in `~/.claude`. A session started in one shows up in the other.
@@ -69,7 +61,3 @@ Yes. Both read and write the same history in `~/.claude`. A session started in o
 ### How do I unpair all browsers?
 
 Delete the `token` file in the [config folder](cli#files) and restart. Every browser must pair again.
-
-### Is it official?
-
-No. It is a community project, not made by or affiliated with Anthropic.

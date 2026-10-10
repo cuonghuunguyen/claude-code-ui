@@ -33,11 +33,12 @@ Each open session is a tab at the top. Tabs are grouped by project, like Chrome 
 
 | To | Do |
 | --- | --- |
-| Switch tab | Click it, or <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd> (<kbd>⌃</kbd> <kbd>1</kbd>…<kbd>9</kbd> on Mac) |
+| Switch tab | Click it, or <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>8</kbd> (<kbd>⌃</kbd> <kbd>1</kbd>…<kbd>8</kbd> on Mac). <kbd>Alt</kbd>+<kbd>9</kbd> goes to the last tab. |
 | Close a tab | Its **×**, or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>W</kbd> |
-| Close a whole group | Middle-click the group chip, or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> |
-| Reopen a closed tab | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> (<kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>T</kbd> on Mac) |
+| Close a whole group | Middle-click the group chip |
 | Reorder | Drag a tab or a group chip |
+
+More tab keys (reopen a closed tab, close a group): [Keyboard shortcuts](../reference/shortcuts).
 
 On a phone, tap the tab switcher to see all tabs. Swipe a row left to close it. Swipe up or down on the switcher to go to the previous or next tab.
 
@@ -45,7 +46,5 @@ On a phone, tap the tab switcher to see all tabs. Swipe a row left to close it. 
 
 - `/clear` (or `/reset`, `/new`) starts a fresh session in the same tab and keeps what you typed.
 - **Idle close:** a session that no tab shows closes its Claude process after 10 minutes idle. It stays in the list. The next prompt resumes it. Change the time with [`CLAUDE_UI_IDLE_CLOSE_MINUTES`](../reference/cli#environment-variables).
-- Sessions from the `claude` CLI and the VS Code extension show up here, and the other way round. They share the same history files.
 - Change how tabs group (by project, by worktree, or none) and turn on **Compact tabs** in [Settings › Tabs](../reference/settings#tabs).
 - Sidebar layouts **Default** and **Classic**, and "Show only active sessions", are in [Settings › Sidebar](../reference/settings#sidebar).
-- Drag the sidebar edge to make it wider.

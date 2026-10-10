@@ -44,6 +44,9 @@ Anyone on the network can read the token. Use `--lan` only on a network you trus
 
 ## Your own HTTPS proxy
 
+<details>
+<summary>Show the steps</summary>
+
 Put a reverse proxy that keeps the `Host` header in front of `127.0.0.1:4280`, then start with its name:
 
 ```sh
@@ -52,12 +55,12 @@ claude-ui --hostname my-machine.local
 
 For example with [Caddy](https://caddyserver.com): `caddy reverse-proxy --from my-machine.local --to 127.0.0.1:4280` (trust Caddy's local certificate on the phone).
 
+</details>
+
 ## Good to know
 
 - Tailscale's public **Funnel** is never used. claude-ui refuses to start if Funnel is on for that port.
 - `tailscale serve` runs only while claude-ui runs. Nothing stays configured after it exits. If you already set up `tailscale serve --bg 4280`, claude-ui reuses it.
-- On Linux without root, run `sudo tailscale set --operator=$USER` once.
-- On Windows with WSL, run `--tailscale` on Windows, not inside WSL.
 - WSL2 is not reachable from the LAN by default. Run claude-ui on Windows, or turn on WSL mirrored networking.
 - The page reconnects by itself when the phone wakes up or the network comes back.
 - Treat the pairing link like a password: it gives full access. See [Privacy](../reference/privacy).

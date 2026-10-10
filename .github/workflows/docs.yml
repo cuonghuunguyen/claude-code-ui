@@ -10,16 +10,22 @@ on:
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/site/**"
+      - "packages/web/src/shortcuts.ts"
+      - "packages/web/src/leader.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # One deploy at a time; a newer push replaces a queued one, but never cancels a running deploy.
 concurrency:
-  group: pages
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
   cancel-in-progress: false
 
 jobs:
@@ -32,15 +38,22 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Pull requests only check that the site builds (dead links fail it).
       - run: npm run docs:build
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: docs/site/.vitepress/dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
