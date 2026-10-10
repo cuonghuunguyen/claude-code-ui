@@ -1,6 +1,6 @@
 {
   "name": "claude-code-ui",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Browser UI for Claude Agent SDK sessions, run by a local daemon",
   "type": "module",
   "bin": { "claude-ui": "dist/launcher.js" },
