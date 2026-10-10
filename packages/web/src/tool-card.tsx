@@ -5,7 +5,7 @@ import { MultiFileDiff } from "@pierre/diffs/react";
 import { useDark } from "./theme.ts";
 import type { ToolUIPart } from "ai";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { SquareArrowOutUpRightIcon } from "lucide-react";
+import { Maximize2Icon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolChevron, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark, toolRowClass } from "@/components/ai-elements/tool";
@@ -16,6 +16,7 @@ import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
 import { relPath } from "./paths.ts";
 import { fileSize } from "./files.ts";
+import { ViewerContext, cardTarget, type ViewerTarget } from "./viewer.ts";
 import { ARTIFACT_TOOLS, artifactSummary, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
@@ -83,27 +84,41 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
   // An Artifact publish names the long scratchpad file_path: the row shows the title instead.
   const todos = call.tool === "TodoWrite" ? todoItems(call.input) : [];
   const path = artifact ? "" : field(call.input, "file_path") || field(call.input, "notebook_path");
+  const openViewer = use(ViewerContext);
+  const cwd = use(CwdContext);
+  const target = openViewer && cardTarget(call);
   const decided = call.coordinator && (call.coordinator.decision === "allow" ? "Approved by coordinator" : "Denied by coordinator");
+  const header = (
+    <ToolHeader
+      className={target ? "min-w-0 flex-1" : undefined}
+      type="dynamic-tool"
+      toolName={call.tool}
+      state={awaiting ? "approval-requested" : STATE[call.status]}
+      statusLabel={awaiting ? undefined : LABEL[call.status]}
+      // Next to the tool name, which is never truncated like the summary.
+      title={call.editedByUser ? `${call.tool} · edited by you` : decided ? `${call.tool} · ${decided}` : undefined}
+      summary={path ? <FileSummary path={path} range={range} /> : todos.length ? todoSummary(todos) : artifact ? artifactSummary(call.tool, call.input) : toolSummary(call.input)}
+      tooltip={path || undefined}
+      meta={
+        stats && (
+          <span data-testid="diff-stats" className="font-mono text-xs">
+            <span className="text-success">+{stats.added}</span>
+            <span className="ml-1 text-destructive">-{stats.removed}</span>
+          </span>
+        )
+      }
+    />
+  );
   return (
     <Tool data-testid="tool-card" data-status={call.status} {...useExpanded(call.id, awaiting && !stats)}>
-      <ToolHeader
-        type="dynamic-tool"
-        toolName={call.tool}
-        state={awaiting ? "approval-requested" : STATE[call.status]}
-        statusLabel={awaiting ? undefined : LABEL[call.status]}
-        // Next to the tool name, which is never truncated like the summary.
-        title={call.editedByUser ? `${call.tool} · edited by you` : decided ? `${call.tool} · ${decided}` : undefined}
-        summary={path ? <FileSummary path={path} range={range} /> : todos.length ? todoSummary(todos) : artifact ? artifactSummary(call.tool, call.input) : toolSummary(call.input)}
-        tooltip={path || undefined}
-        meta={
-          stats && (
-            <span data-testid="diff-stats" className="font-mono text-xs">
-              <span className="text-success">+{stats.added}</span>
-              <span className="ml-1 text-destructive">-{stats.removed}</span>
-            </span>
-          )
-        }
-      />
+      {target ? (
+        <div className="group/head flex items-center gap-1">
+          {header}
+          <OpenButton target={target} onOpen={openViewer!} label={openLabel(target, stats, cwd)} />
+        </div>
+      ) : (
+        header
+      )}
       <ToolContent>
         {decided && (
           // Orchestration: the coordinator's reason, as plain text (worker-influenced, never markdown).
@@ -114,6 +129,28 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
         <ToolBody call={call} result={result} />
       </ToolContent>
     </Tool>
+  );
+}
+
+const openLabel = (t: ViewerTarget, stats: { added: number; removed: number } | undefined, cwd: string) => {
+  if (t.kind === "plan") return "Open plan in popup";
+  const name = t.kind === "file" ? filePath(t.path, cwd).name : t.kind === "diff" ? filePath(field(t.call.input, "file_path"), cwd).name : "";
+  return t.kind === "diff" && stats ? `Open diff of ${name} (+${stats.added} -${stats.removed}) in popup` : `Open ${name} in popup`;
+};
+
+/** Open-in-popup button right of a card header: hover, keyboard focus, open card, always on touch (like the chevron). */
+function OpenButton({ target, onOpen, label }: { target: ViewerTarget; onOpen: (t: ViewerTarget) => void; label: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title="Open in popup"
+      data-testid="viewer-open"
+      onClick={() => onOpen(target)}
+      className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info group-hover/head:opacity-100 in-data-panel-open:opacity-100 pointer-coarse:size-11 pointer-coarse:opacity-100"
+    >
+      <Maximize2Icon aria-hidden className="size-4" />
+    </button>
   );
 }
 

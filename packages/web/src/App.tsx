@@ -83,6 +83,8 @@ import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./un
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { ViewerContext, latestPlan, type ViewerTarget } from "./viewer.ts";
+import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
@@ -353,6 +355,9 @@ export function App() {
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
   const [openFile, setOpenFile] = useState<string>();
+  // Popup viewer (GH-238): what shows, for which session; `opener` takes the focus back on close.
+  const [viewer, setViewer] = useState<{ target: ViewerTarget; sessionId: string; cwd: string; opener: HTMLElement | null }>();
+  useEffect(() => setViewer(undefined), [activeId]);
   const quickOpener = useRef<Element>(null);
   // Title editor: in the sidebar row or in the tab the Rename action came from.
   const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab" }>();
@@ -1166,6 +1171,8 @@ export function App() {
     setPane("files");
     setPanel(true);
   };
+  const openViewer = (target: ViewerTarget) => shown && setViewer({ target, sessionId: shown.id, cwd: shown.cwd, opener: document.activeElement instanceof HTMLElement ? document.activeElement : null });
+  const latest = view ? latestPlan(view) : undefined;
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
     const seen = fileTree && (wide(1024) ? panel && sidePane !== "changes" && sidePane !== "graph" : sidePane === "files");
@@ -1304,6 +1311,8 @@ export function App() {
     },
     openShortcuts: () => setShortcutsOpen(true),
     isGit,
+    viewChanges: shown && !draftShown ? () => openViewer({ kind: "changes" }) : undefined,
+    viewPlan: shown && !draftShown && latest ? () => openViewer({ kind: "plan", plan: latest }) : undefined,
     focusPrompt: focusShownPrompt,
     setModel: (model) => (draftShown ? changeDraft({ ...draft, model }) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
     setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
@@ -1658,6 +1667,7 @@ export function App() {
               )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
               <div className={`${card} flex-1 ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}>
+                <ViewerContext value={openViewer}>
                 <QuoteContext value={setInsert}>
                 {tabs.map((id) => {
                   const s = id === NEW_TAB ? undefined : sessionOf(id);
@@ -1732,6 +1742,7 @@ export function App() {
                   );
                 })}
                 </QuoteContext>
+                </ViewerContext>
               </div>
               {shown && (panel || terminalOpen) && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
               {panelSession && (
@@ -1769,6 +1780,7 @@ export function App() {
                       cwd={panelSession.cwd}
                       onOpen={(path) => (setOpenFile(path), setPane("files"))}
                       sessionId={panelSession.id}
+                      onPopOut={() => openViewer({ kind: "changes" })}
                     />
                   )}
                   {sidePane === "graph" && (
@@ -1962,6 +1974,18 @@ export function App() {
         />
       )}
       <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
+      {shown && client.current && (
+        <ViewerDialog
+          target={viewer?.target}
+          opener={viewer?.opener}
+          client={client.current}
+          cwd={viewer?.cwd ?? shown.cwd}
+          view={viewer ? views[viewer.sessionId] : undefined}
+          sessionId={viewer?.sessionId}
+          onClose={() => setViewer(undefined)}
+          onOpenInEditor={(p) => (setViewer(undefined), setOpenFile(p), setPane("files"), setPanel(true))}
+        />
+      )}
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       {/* Always mounted so a screen reader announces the hint when it fills in. */}
       <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 left-1/2 z-50 w-max max-w-[calc(100vw-24px)] -translate-x-1/2" data-testid="prefix-hint">
