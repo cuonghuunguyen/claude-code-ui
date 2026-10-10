@@ -1,5 +1,6 @@
 // Tool cards, context groups and thinking blocks (docs/spec.md "Message model", "Session view UX").
 import { isPromptImage, type Part, type ToolStatus } from "@claude-ui/protocol";
+import { useMediaSrc } from "./media.ts";
 import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { useDark } from "./theme.ts";
@@ -33,10 +34,13 @@ const LABEL: Partial<Record<ToolStatus, string>> = { stopped: "Stopped" };
 
 /** Base64 content block of a tool result (Read of an image or PDF): the data is not text, so cards show it as an image or one line. */
 const mediaBlock = (b: unknown) => {
-  const { type, source } = (b ?? {}) as { type?: unknown; source?: { data?: unknown; media_type?: unknown } };
-  if ((type !== "image" && type !== "document") || typeof source?.data !== "string") return;
-  const media = typeof source.media_type === "string" ? source.media_type : type;
-  return { media, size: fileSize(Math.floor((source.data.length * 3) / 4)), src: type === "image" && isPromptImage(media) ? `data:${media};base64,${source.data}` : undefined };
+  const { type, source } = (b ?? {}) as { type?: unknown; source?: { type?: unknown; data?: unknown; media_type?: unknown; bytes?: unknown } };
+  if (type !== "image" && type !== "document") return;
+  const media = typeof source?.media_type === "string" ? source.media_type : type;
+  // `omitted`: a snapshot or page left the data out (GH-274); it loads on demand.
+  if (source?.type === "omitted" && typeof source.bytes === "number") return { media, size: fileSize(source.bytes), src: undefined, omitted: true };
+  if (typeof source?.data !== "string") return;
+  return { media, size: fileSize(Math.floor((source.data.length * 3) / 4)), src: type === "image" && isPromptImage(media) ? `data:${media};base64,${source.data}` : undefined, omitted: false };
 };
 const note = (b: unknown) => {
   const m = mediaBlock(b);
@@ -145,6 +149,12 @@ function FileSummary({ path, range }: { path: string; range: string }) {
 }
 
 /** Card body by tool type; tools without a purpose-built body get the generic JSON view. */
+/** The image of a Read result: inline, or loaded with session.media when the snapshot left it out; PDFs and other types show only the caption. */
+function ReadImage({ partId, index, m, alt }: { partId: string; index: number; m: { media: string; src?: string; omitted: boolean }; alt: string }) {
+  const src = useMediaSrc(partId, index, m.omitted && isPromptImage(m.media), m.src);
+  return src ? <img src={src} alt={alt} className="max-h-80 max-w-full rounded-md border object-contain" /> : null;
+}
+
 export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult }) {
   const output = result && <Lines id={call.id} text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} />;
   switch (call.tool) {
@@ -160,7 +170,8 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
         </div>
       );
     case "Read": {
-      const media = Array.isArray(result?.output) ? result.output.map(mediaBlock).filter((m) => m !== undefined) : [];
+      // The index is the block's position in the output: session.media names the payload by it.
+      const media = Array.isArray(result?.output) ? result.output.flatMap((b, index) => { const m = mediaBlock(b); return m ? [{ ...m, index }] : []; }) : [];
       return (
         <div className="space-y-2">
           <div data-testid="read-path" className="font-mono text-xs">
@@ -170,7 +181,7 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
           {media.length && !result?.isError ? (
             media.map((m, i) => (
               <figure key={i} className="space-y-1" data-testid="read-media">
-                {m.src && <img src={m.src} alt={field(call.input, "file_path")} className="max-h-80 max-w-full rounded-md border object-contain" />}
+                <ReadImage partId={result!.id} index={m.index} m={m} alt={field(call.input, "file_path")} />
                 <figcaption className="text-muted-foreground text-xs">{`${m.media}, ${m.size}`}</figcaption>
               </figure>
             ))

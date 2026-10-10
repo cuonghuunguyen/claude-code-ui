@@ -3,11 +3,38 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getSessionMessages } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
-import { cliTurnRunning, JsonlTail, transcriptEnd } from "../src/transcript.ts";
+import { cliTurnRunning, JsonlTail, parseJsonl, transcriptEnd } from "../src/transcript.ts";
 
 const line = (o: object) => JSON.stringify(o) + "\n";
 
+describe("parseJsonl", () => {
+  it("parses each line, skips blank and unparsable lines, and a last line without newline", async () => {
+    expect(await parseJsonl(Buffer.from('{"a":1}\n\nnot json\n{"b":2}'))).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it("stops at end, and yields to the event loop between slices", async () => {
+    const buf = Buffer.from(Array.from({ length: 2000 }, (_, i) => JSON.stringify({ i })).join("\n") + "\n");
+    const order: string[] = [];
+    setImmediate(() => order.push("immediate"));
+    const parsed = await parseJsonl(buf, buf.length, 0);
+    order.push("done");
+    expect(parsed).toHaveLength(2000);
+    expect(order).toEqual(["immediate", "done"]);
+    expect(await parseJsonl(Buffer.from('{"a":1}\n{"b":2}\n'), 8)).toEqual([{ a: 1 }]);
+  });
+});
+
 describe("JsonlTail", () => {
+  it("overlapping reads run one after another: no entry twice", async () => {
+    const file = join(mkdtempSync(join(tmpdir(), "tail-")), "t.jsonl");
+    writeFileSync(file, line({ uuid: "a" }) + line({ uuid: "b" }) + line({ uuid: "c" }));
+    const tail = new JsonlTail();
+    await Promise.all([tail.read(file), tail.read(file)]);
+    appendFileSync(file, line({ uuid: "d" }));
+    await Promise.all([tail.read(file), tail.read(file)]);
+    expect(tail.entries.map((e) => e.uuid)).toEqual(["a", "b", "c", "d"]);
+  });
+
   it("reads only the bytes added since the last read, leaves a cut last line for the next read, starts over on a shorter file", async () => {
     const file = join(mkdtempSync(join(tmpdir(), "tail-")), "t.jsonl");
     writeFileSync(file, line({ uuid: "a" }) + line({ uuid: "b" }));

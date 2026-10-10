@@ -126,6 +126,14 @@ describe("PartIndex", () => {
     expect(index.pageBefore("nope")).toBeUndefined();
   });
 
+  it("get returns the latest version of a part and undefined after a rewind or retract", () => {
+    const { index } = build([...turns(3), { type: "rewind", id: "rw", userMessageId: "u3" } as Part]);
+    expect(index.get("a1")).toMatchObject({ text: "hello" });
+    expect(index.get("u2")).toBeDefined();
+    expect(index.get("u3")).toBeUndefined();
+    expect(index.get("nope")).toBeUndefined();
+  });
+
   it("until extends the page back to the turn holding the part id or the message id prefix", () => {
     const { index } = build(turns(30));
     const cursor = index.lastPage().older!;

@@ -12,6 +12,7 @@ import type {
   ListResult,
   McpListResult,
   RecentProject,
+  MediaResult,
   ModelInfo,
   ModelsResult,
   Part,
@@ -37,7 +38,7 @@ import type {
   WorktreeCreateResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
-import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type SearchHit, worktreeNameError } from "@claude-ui/protocol";
+import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, parseOmitted, PERMISSION_MODES, permissionModesFor, type SearchHit, worktreeNameError } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -50,6 +51,7 @@ import { Message, MessageAction, MessageActions, MessageContent, MessageResponse
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
+import { MediaContext, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
@@ -1716,6 +1718,7 @@ export function App() {
                         onRewind={(userMessageId, mode) =>
                           client.current!.request({ type: "session.rewind", sessionId: s.id, userMessageId, mode })
                         }
+                        onMedia={(partId, index) => client.current!.request<MediaResult>({ type: "session.media", sessionId: s.id, partId, index }).then((r) => r.dataUrl)}
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
@@ -2438,6 +2441,7 @@ export function SessionPane({
   onCancelContinue,
   onRewindPreview,
   onRewind,
+  onMedia,
   onRespond,
   onAnswer,
   connected,
@@ -2487,6 +2491,8 @@ export function SessionPane({
   /** Drops the scheduled continue after a usage limit. */
   onCancelContinue?: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
+  /** Loads a payload a snapshot or page left out (session.media). */
+  onMedia?: MediaLoader;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
   onAnswer: (requestId: string, answers: Record<string, string>) => void;
@@ -2569,6 +2575,7 @@ export function SessionPane({
   const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
 
   return (
+    <MediaContext value={onMedia}>
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
       {current ? (
@@ -2680,10 +2687,12 @@ export function SessionPane({
                     preview={() => onRewindPreview(item.part.id)}
                     rewind={async (mode) => {
                       const prompt = item.part as Extract<Part, { type: "user_text" }>;
+                      // Images a snapshot or page left out load before the rewind (it drops the prompt from the daemon); one that fails to load stays out of the draft.
+                      const images = mode === "code" ? [] : await Promise.all(prompt.images.map((src, i) => (parseOmitted(src) ? onMedia?.(prompt.id, i).catch(() => src) ?? src : src)));
                       await onRewind(prompt.id, mode);
                       setRewinding(undefined);
                       // Conversation modes: the original prompt goes back into the prompt box.
-                      if (mode !== "code") setDraft({ text: prompt.text, images: prompt.images });
+                      if (mode !== "code") setDraft({ text: prompt.text, images: images.filter((src) => !parseOmitted(src)) });
                     }}
                     onCancel={() => setRewinding(undefined)}
                   />
@@ -2761,6 +2770,7 @@ export function SessionPane({
       </div>
     </OpenRunContext>
     </CwdContext>
+    </MediaContext>
   );
 }
 
@@ -3370,7 +3380,7 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
           {(text || part.images.length > 0) && (
             <Message from="user">
               <MessageContent className="[overflow-wrap:anywhere]">
-                <ImageStrip images={part.images} />
+                <ImageStrip images={part.images} partId={part.id} />
                 <UserMarkdown text={text} />
               </MessageContent>
             </Message>

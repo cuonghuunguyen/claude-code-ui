@@ -22,7 +22,7 @@ import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
 import { createPlugins, redact, type PluginsRequest } from "./plugins.ts";
 import { searchTranscripts } from "./content-search.ts";
-import { cliTurnRunning, interleaveRuns, JsonlTail, transcriptEnd } from "./transcript.ts";
+import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUpdater, type Updater } from "./update.ts";
@@ -181,27 +181,16 @@ const transcriptFile = (projectsDir: string, cwd: string, sessionId: string) => 
 
 /**
  * Permission mode of the last prompt and effort of the last reply in a session's raw transcript (getSessionMessages() drops
- * both fields): the restore fallback when sessions.json has no entry. Absent fields stay undefined.
+ * both fields): the restore fallback when sessions.json has no entry. Absent fields stay undefined. Reads the raw lines readTranscript
+ * parsed (GH-274: no second read of the file).
  */
-function transcriptSettings(projectsDir: string, cwd: string, sessionId: string): { permissionMode?: unknown; effort?: unknown } {
-  let lines: string[];
-  try {
-    lines = readFileSync(transcriptFile(projectsDir, cwd, sessionId), "utf8").split("\n");
-  } catch {
-    return {};
-  }
+function transcriptSettings(entries: readonly unknown[]): { permissionMode?: unknown; effort?: unknown } {
   const found: { permissionMode?: unknown; effort?: unknown } = {};
-  for (let i = lines.length - 1; i >= 0 && (found.permissionMode === undefined || found.effort === undefined); i--) {
-    const line = lines[i]!;
-    if (!line.includes('"permissionMode"') && !line.includes('"effort"')) continue;
-    try {
-      const e = JSON.parse(line) as { type?: string; isSidechain?: boolean; permissionMode?: unknown; effort?: unknown };
-      if (e.isSidechain) continue;
-      if (e.type === "user" && found.permissionMode === undefined) found.permissionMode = e.permissionMode;
-      if (e.type === "assistant" && found.effort === undefined) found.effort = e.effort;
-    } catch {
-      // A line cut by a concurrent write.
-    }
+  for (let i = entries.length - 1; i >= 0 && (found.permissionMode === undefined || found.effort === undefined); i--) {
+    const e = entries[i] as { type?: string; isSidechain?: boolean; permissionMode?: unknown; effort?: unknown } | null;
+    if (!e || typeof e !== "object" || e.isSidechain) continue;
+    if (e.type === "user" && found.permissionMode === undefined && "permissionMode" in e) found.permissionMode = e.permissionMode;
+    if (e.type === "assistant" && found.effort === undefined && "effort" in e) found.effort = e.effort;
   }
   return found;
 }
@@ -215,9 +204,9 @@ function transcriptSettings(projectsDir: string, cwd: string, sessionId: string)
  */
 async function withParallelCalls(file: string | undefined, messages: SessionMessage[]): Promise<SessionMessage[]> {
   if (!file) return messages;
-  let text: string;
+  let buf: Buffer;
   try {
-    text = await readFile(file, "utf8");
+    buf = await readFile(file);
   } catch {
     return messages;
   }
@@ -227,20 +216,15 @@ async function withParallelCalls(file: string | undefined, messages: SessionMess
   const parentOf = new Map<string, string>();
   const lost = new Map<string, Line>();
   const index = new Map<string, number>();
-  for (const line of text.split("\n")) {
-    if (!line) continue;
-    try {
-      const e = JSON.parse(line) as Line;
-      if (!e.uuid) continue;
-      index.set(e.uuid, index.size);
-      if (e.parentUuid) parentOf.set(e.uuid, e.parentUuid);
-      if (have.has(e.uuid)) continue;
-      const content = e.message?.content;
-      const result = e.type === "user" && Array.isArray(content) && content.some((b) => (b as { type?: unknown })?.type === "tool_result");
-      if (result || (e.type === "assistant" && apiIds.has(e.message?.id))) lost.set(e.uuid, e);
-    } catch {
-      // A line cut by a concurrent write.
-    }
+  for (const raw of await parseJsonl(buf)) {
+    const e = raw as Line;
+    if (!e?.uuid) continue;
+    index.set(e.uuid, index.size);
+    if (e.parentUuid) parentOf.set(e.uuid, e.parentUuid);
+    if (have.has(e.uuid)) continue;
+    const content = e.message?.content;
+    const result = e.type === "user" && Array.isArray(content) && content.some((b) => (b as { type?: unknown })?.type === "tool_result");
+    if (result || (e.type === "assistant" && apiIds.has(e.message?.id))) lost.set(e.uuid, e);
   }
   if (!lost.size) return messages;
   const children = new Map<string, Line[]>();
@@ -674,7 +658,7 @@ export function createDaemon(opts: {
           .catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []));
       }),
     );
-    return { main, runs };
+    return { main, runs, entries: stamp === undefined ? undefined : cache.tail.entries };
   }
 
   /**
@@ -961,14 +945,14 @@ export function createDaemon(opts: {
         transcriptCwds.set(id, info.cwd);
         // Before the read: a write during it changes the stamp, so the first subscriber syncs it.
         stamps.set(id, statStamp(transcriptFile(projectsDir, info.cwd, id)));
-        const { main: messages, runs } = await readTranscript(id, info.cwd);
+        const { main: messages, runs, entries } = await readTranscript(id, info.cwd);
         await modelList().catch(() => {});
         // Its worktree is being removed: no live session in a directory about to go.
         if (isRemoving(info.cwd)) return undefined;
         // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
         const used = transcriptModel(messages);
         // No entry (sessions.json lost, a session of the terminal CLI): mode and effort the transcript last recorded.
-        const saved = settings.get(id) ?? { model: undefined, ...transcriptSettings(projectsDir, info.cwd, id) };
+        const saved = settings.get(id) ?? { model: undefined, ...transcriptSettings(entries ?? []) };
         const model = isModel(saved?.model) ? saved.model : used && ((await modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
         // A mode the daemon does not enable now (bypass without CLAUDE_UI_ALLOW_BYPASS) falls back to the default.
         const modes = permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model ?? "default") });
@@ -1280,6 +1264,13 @@ export function createDaemon(opts: {
           if (msg.until !== undefined && (typeof msg.until !== "string" || msg.until.length > 200)) return fail("bad_request", "until must be a string of at most 200 characters");
           const page = s.page(msg.before, msg.until);
           return page ? reply({ page }) : fail("unknown_cursor", `no part ${msg.before}`);
+        }
+        case "session.media": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (typeof msg.partId !== "string" || msg.partId.length > 200 || !Number.isInteger(msg.index) || msg.index < 0) return fail("bad_request", "partId must be a part id and index a non-negative integer");
+          const dataUrl = s.media(msg.partId, msg.index);
+          return dataUrl ? reply({ dataUrl }) : fail("unknown_media", `no media ${msg.index} in part ${msg.partId}`);
         }
         case "session.unsubscribe": {
           // No find(): this must not restore a session.

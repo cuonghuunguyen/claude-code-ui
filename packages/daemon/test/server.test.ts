@@ -198,6 +198,39 @@ describe("daemon", () => {
     await b.waitFor((m) => m.type === "event" && m.part.type === "turn_result" && m.seq > seen);
   });
 
+  it("session.media replies the payload a paged snapshot left out; errors unknown_media and bad_request (GH-274)", async () => {
+    const sessionId = "6c3d4e5f-7081-4b92-8ca3-b4c5d6e7f809";
+    const png = `data:image/png;base64,${"iVBOR".repeat(4000)}`;
+    const turn = [
+      { type: "user", uuid: "u1", session_id: sessionId, parent_tool_use_id: null, message: { role: "user", content: [{ type: "text", text: "look" }, { type: "image", source: { type: "base64", media_type: "image/png", data: png.split(",")[1] } }] } },
+      { type: "assistant", uuid: "a1", session_id: sessionId, parent_tool_use_id: null, message: { id: "m1", role: "assistant", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" } },
+    ];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (sid: string) => (sid === sessionId ? { sessionId, cwd: webRoot, summary: "Img" } : undefined)) as never,
+        getSessionMessages: (async () => turn) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const b = await client((d.address() as AddressInfo).port);
+      const sub = (await b.request({ type: "session.subscribe", sessionId, sinceSeq: 0, paged: true })) as { result: { snapshot: Snapshot } };
+      expect(JSON.stringify(sub).length).toBeLessThan(5000);
+      const user = sub.result.snapshot.page.parts.find((p) => p.type === "user_text")!;
+      expect(user.type === "user_text" && user.images[0]!.startsWith("omitted:image/png;")).toBe(true);
+      expect(await b.request({ type: "session.media", sessionId, partId: user.id, index: 0 })).toMatchObject({ result: { dataUrl: png } });
+      expect(await b.request({ type: "session.media", sessionId, partId: user.id, index: 3 })).toMatchObject({ type: "error", code: "unknown_media" });
+      expect(await b.request({ type: "session.media", sessionId, partId: user.id, index: -1 })).toMatchObject({ type: "error", code: "bad_request" });
+    } finally {
+      d.close();
+    }
+  });
+
   it("paged subscribe replies with the last page and replays no event; session.page, session.edits and their errors; from snapshots a new epoch at that turn", async () => {
     const sessionId = "5b2c3d4e-6f70-4a81-9b92-a3b4c5d6e7f8";
     // 16 turns (the fixture has two), each prompt with its own uuid.
