@@ -246,6 +246,8 @@ export function App() {
   const [focusSel, setFocusSel] = useState<string>();
   // When this browser first saw a request that came without the daemon's `at`.
   const firstSeen = useRef(new Map<string, number>());
+  /** Last live event per session (ms): the Focus page's quiet time. */
+  const liveAt = useRef(new Map<string, number>());
   // Signal only (GH-159, one setting for the browser since GH-205), set in Settings.
   const signalOnly = useSignalOnly();
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
@@ -756,6 +758,7 @@ export function App() {
         // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
         // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
         const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+        if (live) liveAt.current.set(e.sessionId, Date.now());
         notifyRef.current?.(e, live);
         // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
         if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
@@ -1855,6 +1858,9 @@ export function App() {
                   onRespond={respond}
                   onAnswer={answer}
                   onOpenSession={(id) => open(id)}
+                  unread={unread}
+                  activity={(id) => Math.max(liveAt.current.get(id) ?? 0, list.find((s) => s.id === id)?.lastActivity ?? 0)}
+                  onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
                 />
               )}
               {activeId !== NEW_TAB && activeId !== FOCUS_TAB && !shown && (
