@@ -74,38 +74,70 @@ function editsOf(run: SessionMessage[]): SessionMessage[] {
   });
 }
 
+/** Time slice of a JSONL parse before it yields to the event loop (GH-274: a 5 MB transcript parsed in one go blocked 30-120 ms). */
+export const PARSE_SLICE_MS = 8;
+
+/** Parsed lines of `buf` up to `end` (exclusive), unparsable and blank lines skipped; yields (setImmediate) after each `sliceMs` of work. */
+export async function parseJsonl(buf: Buffer, end = buf.length, sliceMs = PARSE_SLICE_MS): Promise<unknown[]> {
+  const out: unknown[] = [];
+  let start = 0;
+  let t = performance.now();
+  while (start < end) {
+    let nl = buf.indexOf(10, start);
+    if (nl < 0 || nl > end) nl = end;
+    const text = buf.toString("utf8", start, nl);
+    start = nl + 1;
+    if (text.trim()) {
+      try {
+        out.push(JSON.parse(text));
+      } catch {
+        // Not JSON, or a line cut by a concurrent write.
+      }
+    }
+    if (performance.now() - t > sliceMs) {
+      await new Promise<void>((r) => setImmediate(r));
+      t = performance.now();
+    }
+  }
+  return out;
+}
+
 /**
  * Parsed lines of one JSONL file, read on from the last read's offset. A cut last line (a write in progress) waits for the
  * next read; a shorter or replaced file is read again from the start. Unparsable lines are skipped, as the SDK does.
+ * Parsed in time slices (parseJsonl); overlapping reads run one after another.
  * ponytail: holds every entry in memory while the session is mirrored (a 43 MB transcript: ~100 MB heap).
  */
 export class JsonlTail {
   entries: SessionStoreEntry[] = [];
   private offset = 0;
   private ino?: number;
+  private chain: Promise<void> = Promise.resolve();
 
-  async read(file: string) {
+  read(file: string): Promise<void> {
+    const run = this.chain.then(() => this.readNow(file));
+    this.chain = run.catch(() => {});
+    return run;
+  }
+
+  private async readNow(file: string) {
     const fh = await open(file, "r");
+    let buf: Buffer;
+    let end: number;
     try {
       const { size, ino } = await fh.stat();
       if (size < this.offset || ino !== this.ino) Object.assign(this, { entries: [], offset: 0, ino });
       if (size === this.offset) return;
-      const buf = Buffer.alloc(size - this.offset);
+      buf = Buffer.alloc(size - this.offset);
       const { bytesRead } = await fh.read(buf, 0, buf.length, this.offset);
-      const end = buf.lastIndexOf(10, bytesRead - 1);
+      end = buf.lastIndexOf(10, bytesRead - 1);
       if (end < 0) return;
-      for (const l of buf.toString("utf8", 0, end).split("\n")) {
-        if (!l.trim()) continue;
-        try {
-          this.entries.push(JSON.parse(l));
-        } catch {
-          // Not JSON.
-        }
-      }
-      this.offset += end + 1;
     } finally {
       await fh.close();
     }
+    const parsed = await parseJsonl(buf, end + 1);
+    for (const e of parsed) this.entries.push(e as SessionStoreEntry);
+    this.offset += end + 1;
   }
 
   /** A read-only SDK session store over the entries: getSessionMessages() builds the chain without reading the file again. */

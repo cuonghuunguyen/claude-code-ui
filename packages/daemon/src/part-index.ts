@@ -15,6 +15,11 @@ export class PartIndex {
   /** Seq of the last "needs input" or "finished" (same rule as the client store). */
   attentionSeq = 0;
 
+  /** The latest version of a timeline part; undefined when unknown (never seen, rewound or retracted). */
+  get(id: string): Part | undefined {
+    return this.byId.get(id)?.part;
+  }
+
   /** Folds one event (seq set); returns the existing pos for an update of a timeline part, else undefined. */
   apply(e: Event): number | undefined {
     const { part } = e;
