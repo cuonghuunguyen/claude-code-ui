@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus } from "../src/git.ts";
+import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
@@ -809,6 +809,26 @@ describe("gitLog / gitShow / gitFileAt", () => {
     const h = sh(r.dir, {}, "rev-parse", "HEAD");
     expect((await gitFileAt(r.dir, h, name, all, 1000)).toString()).toBe("odd\n");
     await expect(gitFileAt(r.dir, h, "we\nnone.txt", all, 1000)).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("an empty .git folder in a project does not show the repository above the roots", async () => {
+    const outer = graphRepo();
+    const roots = join(outer.dir, "roots");
+    const proj = join(roots, "proj");
+    mkdirSync(join(proj, ".git"), { recursive: true });
+    const inRoots = (p: string) => p === roots || p.startsWith(`${roots}/`);
+    // Without a ceiling, git skips the invalid .git and walks up to `outer`.
+    await expect(gitLog(proj, { allowed: inRoots })).rejects.toBeDefined();
+    await expect(gitShow(proj, outer.c3, inRoots)).rejects.toBeDefined();
+    await expect(gitFileAt(proj, outer.c3, "a.txt", inRoots, 1000)).rejects.toBeDefined();
+    await expect(gitDiff(proj, { base: "head", allowed: inRoots })).rejects.toBeDefined();
+    expect(await gitStatus(proj)).toBeNull();
+  });
+
+  it("gitRefs is the refs stamp without a git process, null outside a repository", async () => {
+    const r = graphRepo();
+    expect(gitRefs(r.dir)).toBe(refsStamp(r.dir));
+    expect(gitRefs(mkdtempSync(join(tmpdir(), "nogit-")))).toBeNull();
   });
 
   it("gitStatus during a graph read returns the last status without git, or waits when it has none", async () => {

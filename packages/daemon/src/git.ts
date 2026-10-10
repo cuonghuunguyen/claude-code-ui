@@ -1,7 +1,7 @@
 // Git branch and diff size of a session cwd, for the status bar (`git.status`).
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { GIT_LOG_MAX_LIMIT, worktreeNameError, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
 import { runGit } from "./git-runner.ts";
 
@@ -32,7 +32,18 @@ export function limiter(n: number) {
  * every other reply (a session's transcript, a prompt) for seconds. Spread over ticks, other replies go out between them.
  */
 const gitSlot = limiter(4);
-const git = async (cwd: string, ...args: string[]) => (await gitSlot(() => runGit({ cwd, args: [...READ_ONLY, ...args], env: readEnv() }))).stdout.toString("utf8").trim();
+/**
+ * Git looks for a repository upward and skips an invalid `.git` (an empty folder): without a ceiling, a project whose `.git`
+ * is empty would show the repository above the allowed roots. The ceiling is the folder above the repository top that
+ * `gitTopOf` found (the one `topIn` checked against the roots), so git never leaves it.
+ */
+const ceilingEnv = (cwd: string): NodeJS.ProcessEnv => {
+  const top = gitTopOf(cwd);
+  const up = top ? dirname(top) : undefined;
+  if (!top || !up || up === top) return {};
+  return { GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES ? `${up}${delimiter}${process.env.GIT_CEILING_DIRECTORIES}` : up };
+};
+const git = async (cwd: string, ...args: string[]) => (await gitSlot(() => runGit({ cwd, args: [...READ_ONLY, ...args], env: { ...readEnv(), ...ceilingEnv(cwd) } }))).stdout.toString("utf8").trim();
 
 /**
  * `cwd`'s own git dir and the one its worktrees share; undefined without a readable `cwd/.git`. In a linked worktree `.git`
@@ -95,6 +106,10 @@ export function refsStamp(cwd: string): string {
   };
   if (!walk("")) return `*${++uncached}`;
   return parts.join("|");
+}
+/** `refsStamp` of the repository `cwd` belongs to, null outside a work tree; file stats only, no git process (`git.refs`). */
+export function gitRefs(cwd: string): string | null {
+  return gitTopOf(cwd) ? refsStamp(cwd) : null;
 }
 /** The full ref HEAD points to (`refs/heads/x`); undefined when detached or unreadable. */
 function headRef(top: string): string | undefined {
@@ -453,7 +468,7 @@ const MAX_COMMIT_FILES = 3000;
 const MAX_BRANCHES = 2000;
 const SAFE = [...READ_ONLY, "-c", "log.showSignature=false", "-c", "core.quotePath=false"];
 /** Every git call of the graph: SAFE config first, no lazy fetch. */
-const g = (cwd: string, args: string[]) => run(cwd, [...SAFE, ...args], 30_000, readEnv(), true);
+const g = (cwd: string, args: string[]) => run(cwd, [...SAFE, ...args], 30_000, { ...readEnv(), ...ceilingEnv(cwd) }, true);
 const gok = (cwd: string, ...args: string[]) => g(cwd, args).then(() => true, () => false);
 const bad = (m: string) => new WorktreeError("bad_request", m);
 
@@ -672,7 +687,7 @@ export async function gitFileAt(cwd: string, hash: string, path: string, allowed
     const first = (e: { stderr?: string; message: string }) => e.stderr?.split("\n").find((l) => l.trim()) ?? e.message.split("\n")[0]!;
     let stdout: Buffer;
     try {
-      stdout = (await gitSlot(() => runGit({ cwd: top, args, input: odd ? undefined : `${obj}\n`, maxBuffer: max + 512, env: readEnv(), timeout: 30_000 }), true)).stdout;
+      stdout = (await gitSlot(() => runGit({ cwd: top, args, input: odd ? undefined : `${obj}\n`, maxBuffer: max + 512, env: { ...readEnv(), ...ceilingEnv(top) }, timeout: 30_000 }), true)).stdout;
     } catch (e) {
       const err = e as { code?: string | number; stdout?: Buffer; stderr?: string; killed?: boolean; message: string };
       const overflow = err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";

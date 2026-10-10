@@ -15,6 +15,7 @@ const GIT_RUN_THREAD = `
 const { parentPort } = require("node:worker_threads");
 const { execFile } = require("node:child_process");
 parentPort.on("message", ({ id, cwd, args, env, timeout, maxBuffer, input }) => {
+  try {
   const child = execFile("git", args, { cwd, env, timeout, maxBuffer, encoding: "buffer", windowsHide: true }, (err, stdout, stderr) => {
     const out = Buffer.from(stdout ?? []);
     const ab = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
@@ -22,6 +23,9 @@ parentPort.on("message", ({ id, cwd, args, env, timeout, maxBuffer, input }) => 
   });
   child.stdin.on("error", () => {});
   child.stdin.end(input ?? "");
+  } catch (e) {
+    parentPort.postMessage({ id, stdout: new ArrayBuffer(0), stderr: "", error: { message: String((e && e.message) || e), killed: false } });
+  }
 });`;
 
 let thread: Worker | undefined;

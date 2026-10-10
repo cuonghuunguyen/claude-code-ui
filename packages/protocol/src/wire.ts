@@ -153,6 +153,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "terminal.close"; terminalId: string }
   /** Status bar: branch and diff size of `cwd` (a session's cwd, inside the roots). */
   | { type: "git.status"; cwd: string }
+  /** The refs stamp of `cwd`'s repository (as `GitStatus.refs`), from file stats only (no git process, never waits for a graph read). Reply GitRefsResult. */
+  | { type: "git.refs"; cwd: string }
   /** Commit graph page (docs/spec.md "Layout"): `skip` commits already loaded; `ref` a full ref name (refs/heads/… or refs/remotes/…) or `HEAD`, else all refs; `author`/`text` case-insensitive substrings; `fresh`: skip the daemon's page and branch caches (the Refresh button). Reply GitLogResult. */
   | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean }
   /** Reply GitCommitResult. */
@@ -431,6 +433,8 @@ export const MAX_TERMINAL_INPUT_BYTES = 64 * 1024;
  * `refs`: opaque stamp of the repository's refs (file stats of HEAD, packed-refs, refs folders, worktree HEADs); changes when a branch, tag, HEAD or packed refs change. Compare for equality only.
  */
 export type GitStatus = { branch: string; added: number; removed: number; refs?: string };
+/** `refs` null outside a git work tree. */
+export type GitRefsResult = { refs: string | null };
 /** `status` null outside a git work tree. */
 export type GitStatusResult = { status: GitStatus | null };
 /** `refs`: full ref names pointing here ("HEAD" first when HEAD points here). `time`: author time, unix seconds. */

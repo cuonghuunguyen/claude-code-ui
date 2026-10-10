@@ -1327,7 +1327,7 @@ it("the graph tab shows at once for a project with a session.list worktrees entr
 });
 
 it("leaving and coming back to the graph tab keeps the panel mounted", async () => {
-  const restore = await remount({ "session.list": gitList, "git.status": { status: { branch: "main", added: 0, removed: 0, refs: "s1" } }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } });
+  const restore = await remount({ "session.list": gitList, "git.status": { status: { branch: "main", added: 0, removed: 0, refs: "s1" } }, "git.refs": { refs: "s1" }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } });
   try {
     const gitLogs = () => sent.filter((m) => m.type === "git.log").length;
     const before = gitLogs();
@@ -1346,6 +1346,7 @@ it("leaving and coming back to the graph tab keeps the panel mounted", async () 
     restore();
     delete replies["git.status"];
     delete replies["git.log"];
+    delete replies["git.refs"];
   }
 });
 

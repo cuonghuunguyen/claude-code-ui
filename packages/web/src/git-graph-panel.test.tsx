@@ -34,6 +34,8 @@ Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: tru
 let statusBranch = "main";
 /** The refs stamp the fake's first page reports. */
 let stampValue = "s1";
+/** The fake daemon has no stamp (an older daemon): git.refs fails, the first page has no `refs`. */
+let noStamp = false;
 /** Number of branches the fake lists. */
 let branchCount = 2;
 const branchRefs = () => (branchCount === 2 ? ["refs/heads/main", "refs/remotes/origin/main"] : ["refs/heads/main", ...Array.from({ length: branchCount - 1 }, (_, i) => `refs/heads/b${i}`)]);
@@ -52,6 +54,7 @@ const root = createRoot(el);
 afterEach(() => {
   statusBranch = "main";
   stampValue = "s1";
+  noStamp = false;
   branchCount = 2;
   return act(() => root.render(null));
 });
@@ -65,8 +68,9 @@ function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200
     if (m.type === "git.log") {
       const skip = m.skip ?? 0;
       const slice = all.slice(skip, skip + page);
-      return { log: nogit ? null : { commits: slice, more: skip + page < all.length, ...(skip === 0 && { branches: branchRefs(), refs: stampValue, ...(branchRefs().includes(`refs/heads/${statusBranch}`) ? { head: `refs/heads/${statusBranch}` } : {}) }) } };
+      return { log: nogit ? null : { commits: slice, more: skip + page < all.length, ...(skip === 0 && { branches: branchRefs(), ...(!noStamp && { refs: stampValue }), ...(branchRefs().includes(`refs/heads/${statusBranch}`) ? { head: `refs/heads/${statusBranch}` } : {}) }) } };
     }
+    if (m.type === "git.refs") return { refs: noStamp ? null : stampValue };
     if (m.type === "git.status") return { status: { branch: statusBranch, added: 0, removed: 0 } };
     if (m.type === "git.commit") return { commit: detail(all.find((c) => c.hash === m.hash)!, files) };
     return { content: `${m.hash}:${m.path}` };
@@ -376,7 +380,9 @@ it("one git.log per open and per filter change", async () => {
   expect(logs(c)).toHaveLength(3);
 });
 
-it("a hidden panel keeps its list; shown again it sends no request while refs are unchanged and one git.log after the stamp changed", async () => {
+const refsReqs = (c: ReturnType<typeof fake>) => c.sent.filter((m) => m.type === "git.refs");
+
+it("a hidden panel keeps its list; shown again it asks git.refs, sends no git.log while refs are unchanged and one after they changed", async () => {
   const c = fake(history(3));
   await mount(c);
   expect(logs(c)).toHaveLength(1);
@@ -384,14 +390,32 @@ it("a hidden panel keeps its list; shown again it sends no request while refs ar
   expect(el.querySelector<HTMLElement>("[data-testid=graph-panel]")!.className).toContain("hidden");
   await mount(c, false);
   expect(rowEls().length).toBeGreaterThan(0);
+  expect(refsReqs(c)).toHaveLength(1);
   expect(logs(c)).toHaveLength(1);
   await mount(c, true);
-  await act(async () => noteRefs("/p", "s2"));
+  // A commit made after the last status poll: only the fresh stamp of git.refs shows it.
   stampValue = "s2";
   await mount(c, false);
+  expect(refsReqs(c)).toHaveLength(2);
   expect(logs(c)).toHaveLength(2);
   expect(logs(c)[1]).not.toHaveProperty("fresh");
   expect(rowEls().length).toBeGreaterThan(0);
+});
+
+it("a daemon without a refs stamp: the list reloads on every return", async () => {
+  noStamp = true;
+  const c = fake(history(3));
+  await mount(c);
+  await mount(c, true);
+  await mount(c, false);
+  expect(logs(c)).toHaveLength(2);
+  // A failing git.refs (an older daemon does not know it) reloads too.
+  stampValue = "s1";
+  noStamp = false;
+  await mount(c, true);
+  vi.mocked(c.request).mockImplementationOnce(async (m: Req) => (c.sent.push(m), Promise.reject(new Error("unknown type"))));
+  await mount(c, false);
+  expect(logs(c)).toHaveLength(3);
 });
 
 it("branch items render only while the menu is open", async () => {

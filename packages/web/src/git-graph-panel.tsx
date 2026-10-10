@@ -1,6 +1,6 @@
 // Graph tab (docs/spec.md "Layout"): the commit history of the session's repository, read-only: lanes, filters, details, per-file diff.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, FsReadResult } from "@claude-ui/protocol";
+import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, FsReadResult } from "@claude-ui/protocol";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { ArrowLeftIcon, GitCommitHorizontalIcon, RotateCwIcon, SearchIcon, TagIcon } from "lucide-react";
@@ -12,7 +12,7 @@ import { KindBadge, StatsText, useNarrow } from "./changes-panel.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { readFailure } from "./files.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
-import { noteRefs, useRefsStamp } from "./git-refs.ts";
+import { noteRefs } from "./git-refs.ts";
 import { timeAgo } from "./sessions.ts";
 import { useDark } from "./theme.ts";
 import { DIFF_OPTIONS } from "./tool-card.tsx";
@@ -140,13 +140,24 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
   const [reload, setReload] = useState(0);
   // The branch HEAD points to, from the first page (absent when detached: no branch in the list).
   const [head, setHead] = useState<string>();
-  // The refs stamp of the loaded first page; the Graph tab reloads on return only when the latest stamp (git.status) differs.
+  // The refs stamp of the loaded first page. On return to the tab, a fresh stamp (git.refs: file stats, no git process) is
+  // compared with it: the list reloads when they differ, or when either is unknown (an older daemon, a failed request).
   const [loadedRefs, setLoadedRefs] = useState<string>();
-  const latestRefs = useRefsStamp(cwd);
   const wasHidden = useRef(hidden);
   useEffect(() => {
-    if (wasHidden.current && !hidden && latestRefs && loadedRefs && latestRefs !== loadedRefs) setReload((n) => n + 1);
+    const returned = wasHidden.current && !hidden;
     wasHidden.current = hidden;
+    if (!returned) return;
+    let live = true;
+    client.request<GitRefsResult>({ type: "git.refs", cwd }).then(
+      (r) => {
+        if (!live) return;
+        noteRefs(cwd, r.refs ?? undefined);
+        if (!r.refs || !loadedRefs || r.refs !== loadedRefs) setReload((n) => n + 1);
+      },
+      () => live && setReload((n) => n + 1),
+    );
+    return () => void (live = false);
   }, [hidden]);
   // Set by the Refresh button: that read skips the daemon's caches.
   const freshNext = useRef(false);
