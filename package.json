@@ -11,12 +11,17 @@
     "start": "tsx packages/daemon/src/main.ts",
     "dev": "npm run dev -w @claude-ui/daemon & npm run dev -w @claude-ui/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "vitest run"
+    "test": "vitest run",
+    "docs:shortcuts": "tsx docs/site/scripts/gen-shortcuts.ts",
+    "docs:dev": "npm run docs:shortcuts && vitepress dev docs/site",
+    "docs:build": "npm run docs:shortcuts && vitepress build docs/site",
+    "docs:preview": "vitepress preview docs/site"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
+    "vitepress": "^1.6.4",
     "vitest": "^5.0.3"
   }
 }

@@ -1,0 +1,17 @@
+/* Show the light screenshot in light mode and the dark one in dark mode. */
+.dark .only-light,
+html:not(.dark) .only-dark {
+  display: none;
+}
+
+/* Screenshots: a thin border so white UI does not melt into the page. */
+.vp-doc img {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+}
+
+/* The home page has no .vp-doc wrapper around markdown in some layouts; keep images inside the column. */
+.VPHome img {
+  max-width: 100%;
+  height: auto;
+}

@@ -38,6 +38,20 @@ npm test
 
 Adapter fixtures are recorded from a real SDK session: `npm run record-fixture -w @claude-ui/daemon -- <out.jsonl>`, then replace home paths before committing.
 
+## Docs
+
+The docs site (VitePress) lives in `docs/site/` and is published to GitHub Pages by `.github/workflows/docs.yml` on every push to `main` that touches it.
+
+```sh
+npm run docs:dev        # live preview on http://localhost:5173/claude-code-ui/
+npm run docs:build      # production build into docs/site/.vitepress/dist; fails on dead links
+npm run docs:preview    # serve that build
+```
+
+- One Markdown page per feature in `docs/site/features/`. Keep it short: one-sentence intro, **How to use** steps, a few **Good to know** bullets.
+- `docs/site/reference/shortcuts.md` is generated from `packages/web/src/shortcuts.ts` and `leader.ts` (`npm run docs:shortcuts`, run by `docs:dev` and `docs:build`). Edit the registry, not the page.
+- Screenshots go in `docs/site/public/screenshots/`. Take them against a neutral demo project: no real project names, paths, branches, usernames or session text.
+
 ## Release (owner step)
 
 1. Bump `version` in `packages/claude-ui/package.json`.
