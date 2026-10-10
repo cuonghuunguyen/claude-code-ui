@@ -316,6 +316,9 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
           <RotateCwIcon />
         </Button>
       </div>
+      <span role="status" className="sr-only">
+        {op ? "Fetching all remotes…" : ""}
+      </span>
       {result && (
         <div className="flex shrink-0 items-start gap-2 border-b px-3 py-1.5 text-sm" data-testid="graph-remote-result">
           {result.ok ? (

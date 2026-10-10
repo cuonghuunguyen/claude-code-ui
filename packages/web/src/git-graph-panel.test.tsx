@@ -493,6 +493,7 @@ it("Fetch keeps focus while it runs and a second click sends nothing", async () 
   btn.focus();
   await act(async () => btn.click());
   expect(document.activeElement).toBe(btn);
+  expect(el.querySelector(".sr-only[role=status]")!.textContent).toBe("Fetching all remotes…");
   await act(async () => btn.click());
   expect(c.sent.filter((m) => m.type === "git.fetch")).toHaveLength(1);
   fetchReply = async () => ({ remote: { output: "", refs: null } });

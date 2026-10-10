@@ -82,6 +82,8 @@ function failCalls(w: Worker, why: string) {
     if (c.w === w) {
       calls.delete(id);
       clearTimeout(c.timer);
+      // The lock of a remote operation is released with this failure: nothing may still run.
+      if (c.pid !== undefined) (trees.delete(c.pid), killProcessTree(c.pid));
       c.fail(new Error(why));
     }
 }
@@ -95,8 +97,10 @@ function runThread(): Worker | undefined {
       if (!c) return;
       if (pid !== undefined) {
         c.pid = pid;
+        noteTree(pid);
         return;
       }
+      if (c.pid !== undefined) trees.delete(c.pid);
       calls.delete(id);
       clearTimeout(c.timer);
       const out = Buffer.from(stdout);
@@ -135,18 +139,26 @@ export function killProcessTree(pid: number): void {
     // Already gone.
   }
 }
-/** Process groups of running `killTree` calls: ended with the daemon (a detached group does not die with its parent). */
+/** Process groups of running `killTree` calls (both runners): a detached group does not die with the daemon, so they end with it. */
 const trees = new Set<number>();
 let exitHook = false;
+/** Kills every running `killTree` group (daemon exit and signals; tests). */
+export function endProcessTrees(): void {
+  for (const p of trees) killProcessTree(p);
+  trees.clear();
+}
 function noteTree(pid: number | undefined): void {
   if (pid === undefined) return;
   trees.add(pid);
   if (exitHook) return;
   exitHook = true;
-  process.on("exit", () => {
-    for (const p of trees) killProcessTree(p);
-    for (const c of calls.values()) if (c.pid !== undefined) killProcessTree(c.pid);
-  });
+  process.on("exit", endProcessTrees);
+  // Default signal handling would skip "exit": end the groups, then die of the same signal.
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const)
+    process.once(sig, () => {
+      endProcessTrees();
+      process.kill(process.pid, sig);
+    });
 }
 
 const direct: GitRunner = (o) =>

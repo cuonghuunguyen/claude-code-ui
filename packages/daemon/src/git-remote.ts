@@ -119,6 +119,8 @@ export type RemoteResult = { output: string; refs: string | null };
 
 /** `git fetch --all` in the repository of `cwd`; null outside a work tree. */
 export async function gitFetch(cwd: string, o: { allowed: (p: string) => boolean }): Promise<RemoteResult | null> {
+  // The WSL runners (side, wsl.exe) cannot end a timed-out fetch's ssh child, so its lock could not be trusted.
+  if (wslPathOf(cwd)) throw new WorktreeError("bad_request", "Fetch is not supported for WSL projects yet");
   const top = topIn(cwd, o.allowed);
   if (!top) return null;
   return exclusive(top, async () => {

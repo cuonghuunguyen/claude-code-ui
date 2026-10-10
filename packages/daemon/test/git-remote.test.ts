@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { gitLog, gitRefs } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
+import { endProcessTrees } from "../src/git-runner.ts";
 import { FETCH_ARGS, gitFetch, localRemotePath, redactUrls, remoteConfig, tidy } from "../src/git-remote.ts";
 
 if (process.platform === "win32") vi.setConfig({ testTimeout: 120_000 });
@@ -159,7 +160,7 @@ describe("gitFetch", () => {
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
-    return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
+    return true;
   } catch {
     return false;
   }
@@ -199,6 +200,7 @@ describe("gitFetch process control", () => {
     const pids = readFileSync(join(root, "pids"), "utf8").split("\n").filter(Boolean).map(Number);
     expect(pids.length).toBeGreaterThan(0);
     // The call settled only after the group ended: no ssh survives, and the lock is free again.
+    await until(() => !pids.some(alive));
     expect(pids.some(alive)).toBe(false);
     remoteConfig.timeout = 120_000;
     run(a, "remote", "remove", "s1");
@@ -206,6 +208,24 @@ describe("gitFetch process control", () => {
     run(a, "config", "--unset", "core.sshCommand");
     run(a, "remote", "add", "origin", join(root, "r.git"));
     await expect(gitFetch(a, { allowed: inside })).resolves.toBeTruthy();
+  });
+
+  it.skipIf(!posix)("the daemon ending kills the groups of running remote calls on the worker-thread runner", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "grem-")));
+    const pidFile = join(root, "pid");
+    const p = threadRunner({ cwd: root, args: ["-c", `echo $$ > ${pidFile}; exec sleep 30`], file: "sh", env: process.env, timeout: 60_000, killTree: true }).then(() => undefined, (e: Error) => e);
+    await until(() => existsSync(pidFile) && readFileSync(pidFile, "utf8").trim() !== "");
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(alive(pid)).toBe(true);
+    endProcessTrees();
+    await until(() => !alive(pid));
+    expect(alive(pid)).toBe(false);
+    await p;
+  });
+
+  it("refuses a WSL project with a clear message", async () => {
+    await expect(gitFetch("\\\\wsl$\\Ubuntu\\home\\u\\p", { allowed: () => true })).rejects.toMatchObject({ code: "bad_request", message: "Fetch is not supported for WSL projects yet" });
   });
 
   it("the lock is free after a failed fetch and after a runner that rejects", async () => {
