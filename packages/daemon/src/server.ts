@@ -1184,9 +1184,10 @@ export function createDaemon(opts: {
       if (typeof msg !== "object" || msg === null || Array.isArray(msg))
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
       if (msg.type === "ping") return send(ws, { type: "reply", reqId: msg.reqId, result: {} });
-      if (router) return router.handle(msg as ClientMessage & Record<string, unknown>);
+      // Timed here, before the router, so a request a side serves or the router answers itself is attributed too.
       const end = perfMon.request(String(msg.type), typeof (msg as { cwd?: unknown }).cwd === "string" ? (msg as { cwd: string }).cwd : undefined);
       try {
+        if (router) return await router.handle(msg as ClientMessage & Record<string, unknown>);
         return await local(msg, (m) => send(ws, m));
       } finally {
         end();

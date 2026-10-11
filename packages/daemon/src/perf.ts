@@ -10,10 +10,10 @@ import { newHistogram, percentile, record, summarize, type Histogram, type PerfD
 export const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "event", "fs.list", "fs.media", "fs.read", "fs.search", "fs.upload", "fs.watch", "fs.write", "git.commit", "git.diff", "git.fileAt", "git.log", "git.refs", "git.status",
   "marketplace.add", "marketplace.list", "marketplace.remove", "marketplace.update", "mcp.add", "mcp.authenticate", "mcp.clearAuth", "mcp.list", "mcp.oauthCallback",
-  "mcp.reconnect", "mcp.remove", "mcp.toggle", "models.list", "perf.clear", "perf.report", "permission.respond", "ping", "plugins.install", "plugins.list", "plugins.reload",
+  "mcp.reconnect", "mcp.remove", "mcp.toggle", "media.read", "models.list", "perf.clear", "perf.report", "permission.respond", "ping", "plugins.install", "plugins.list", "plugins.reload",
   "plugins.restart", "plugins.setEnabled", "plugins.uninstall", "plugins.update", "project.open", "project.remove", "push.focus", "push.key", "push.subscribe",
   "question.respond", "session.archive", "session.bash", "session.cancelContinue", "session.commands", "session.create", "session.defaultMode", "session.delete",
-  "session.edits", "session.interrupt", "session.list", "session.page", "session.prompt", "session.rename", "session.rewind", "session.rewindPreview", "session.setEffort",
+  "session.edits", "session.interrupt", "session.list", "session.media", "session.page", "session.prompt", "session.rename", "session.rewind", "session.rewindPreview", "session.setEffort",
   "session.setModel", "session.setPermissionMode", "session.stopSubagent", "session.subscribe", "session.unsubscribe", "sessions.search", "settings.get", "settings.set",
   "side.check", "side.start", "skills.list", "skills.setState", "terminal.attach", "terminal.close", "terminal.create", "terminal.detach", "terminal.input", "terminal.list",
   "terminal.resize", "update.install", "update.restart", "worktree.create", "worktree.remove", "worktree.status",
