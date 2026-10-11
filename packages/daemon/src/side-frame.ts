@@ -8,7 +8,7 @@ import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
  * images), a side echoes that prompt back as one `user_text` event, and git output of a side may reach 86 MiB of base64 (GH-275):
  * 128 MiB covers the largest of them. Only a line above it is hostile or broken.
  */
-export const MAX_SIDE_LINE_BYTES = 128 * 1024 * 1024;
+export const MAX_SIDE_LINE_CHARS = 128 * 1024 * 1024;
 
 const message = z.record(z.string(), z.unknown());
 const push = z.object({ sessionId: z.string(), title: z.string(), body: z.string(), tag: z.string().optional(), silent: z.boolean().optional(), replace: z.boolean().optional() });

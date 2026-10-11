@@ -12,8 +12,8 @@ import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, t
 import type { Exec } from "./docker-side.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
-import { logPrefix, MAX_SIDE_LINE_BYTES, parseSideFrame } from "./side-frame.ts";
-export { MAX_SIDE_LINE_BYTES };
+import { logPrefix, MAX_SIDE_LINE_CHARS, parseSideFrame } from "./side-frame.ts";
+export { MAX_SIDE_LINE_CHARS };
 
 /** A started side process: `wsl.exe -d <distro> ...` or `docker exec -i <name> ...` (tests: an in-process side). */
 export type SideProcess = { stdin: Writable; stdout: Readable; stderr: Readable; kill(): void; on(event: "exit", l: (code: number | null) => void): unknown };
@@ -339,7 +339,7 @@ export function createSides(opts: {
   save?: (ids: string[]) => void;
   /** Local paths can be POSIX too (Linux, macOS): an unknown POSIX path then stays local. */
   posixLocal?: boolean;
-  /** Longest line a side may write (default MAX_SIDE_LINE_BYTES; tests lower it). */
+  /** Longest line a side may write (default MAX_SIDE_LINE_CHARS; tests lower it). */
   maxLineChars?: number;
 }) {
   const sides = new Map<string, Side>(opts.targets.map((t) => [t.id, { ...t, state: "off", conns: new Map() }]));
@@ -458,7 +458,7 @@ export function createSides(opts: {
           changed();
         } else if (f.kind === "push") opts.onPush?.(f.push);
         else s.conns.get(f.c)?.(f.m);
-      }, opts.maxLineChars ?? MAX_SIDE_LINE_BYTES, () => console.error(`side ${s.id}: dropped a line (too long, more than ${opts.maxLineChars ?? MAX_SIDE_LINE_BYTES} chars)`));
+      }, opts.maxLineChars ?? MAX_SIDE_LINE_CHARS, () => console.error(`side ${s.id}: dropped a line (too long, more than ${opts.maxLineChars ?? MAX_SIDE_LINE_CHARS} chars)`));
       proc.on("exit", (code) => {
         const wasReady = s.state === "ready";
         // A crashed side logs `claude-ui daemon: uncaughtException: <error>` first; Node's own fatal print ends in frames and a `Node.js vX` trailer.

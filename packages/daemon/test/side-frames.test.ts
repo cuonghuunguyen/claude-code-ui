@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
 import { createPush } from "../src/push.ts";
-import { createSides, forwardSidePush, MAX_SIDE_LINE_BYTES, runSide, wslSide } from "../src/sides.ts";
+import { createSides, forwardSidePush, MAX_SIDE_LINE_CHARS, runSide, wslSide } from "../src/sides.ts";
 
 const valid = { sessionId: "s1", title: "Done", body: "finished" };
 
@@ -53,7 +53,7 @@ describe("side frames (GH-278)", () => {
     err.mockRestore();
     rejections.length = 0;
   });
-  const logged = () => err.mock.calls.map((a) => a.join(" ")).join("\n");
+  const logged = () => err.mock.calls.map((a: unknown[]) => a.join(" ")).join("\n");
 
   it.each([
     ["null", "null"],
@@ -110,7 +110,7 @@ describe("side frames (GH-278)", () => {
   });
 
   it("covers the largest legitimate frame: the cap is at least 128 MiB", () => {
-    expect(MAX_SIDE_LINE_BYTES).toBeGreaterThanOrEqual(128 * 1024 * 1024);
+    expect(MAX_SIDE_LINE_CHARS).toBeGreaterThanOrEqual(128 * 1024 * 1024);
   });
 
   it("accepts a 66 MiB frame (a prompt with images echoed as one event)", async () => {
@@ -150,6 +150,21 @@ describe("side frames (GH-278)", () => {
     await t.feed("z".repeat(2000));
     await t.feed(JSON.stringify({ push: valid }) + "\n" + JSON.stringify({ push: { ...valid, title: "second" } }) + "\n");
     expect(t.shown).toEqual([{ ...valid, title: "second" }]);
+  });
+
+  it("logs a dropped line with at most 32 characters of it", async () => {
+    const t = await setup();
+    await t.feed("A".repeat(10) + "B".repeat(100) + "\n");
+    expect(logged()).toContain("A".repeat(10) + "B".repeat(22) + '"…');
+    expect(logged()).not.toContain("B".repeat(23));
+  });
+
+  it("logs an over-long line once, not again when its newline arrives", async () => {
+    const t = await setup({ maxLineChars: 1000 });
+    await t.feed("q".repeat(1500));
+    await t.feed("q".repeat(500) + "\n");
+    expect(logged().match(/dropped a line/g)).toHaveLength(1);
+    await t.proves();
   });
 
   it("does not log shell start-up output before ready", async () => {
