@@ -363,14 +363,26 @@ export function createSides(opts: {
   const cwdSide = new Map<string, string>();
   /** Permission and question request ID -> the side that raised it; shared by every connection, so a reconnect still answers it. Bounded; a side's entries go when it exits. */
   const requestSide = new Map<string, string>();
-  const MAX_REQUESTS = 5000;
+  /** Each side's request IDs, oldest first: the cap is per side, so a side cannot push another side's request out. */
+  const requestsOf = new Map<string, Set<string>>();
+  const MAX_REQUESTS_PER_SIDE = 1000;
+  /** Forgets a request; with `side`, only when that side owns it. */
+  function forgetRequest(requestId: string, side?: string) {
+    const owner = requestSide.get(requestId);
+    if (!owner || (side && owner !== side)) return;
+    requestSide.delete(requestId);
+    requestsOf.get(owner)?.delete(requestId);
+  }
   function noteRequest(id: string, p: { type?: unknown; requestId?: unknown; settled?: unknown } | undefined) {
     if (!p || (p.type !== "permission_request" && p.type !== "question") || typeof p.requestId !== "string") return;
-    if (p.settled) return void requestSide.delete(p.requestId);
+    if (p.settled) return forgetRequest(p.requestId, id);
     // Another side's request ID stays with its first owner.
     if (requestSide.has(p.requestId)) return;
     requestSide.set(p.requestId, id);
-    if (requestSide.size > MAX_REQUESTS) requestSide.delete(requestSide.keys().next().value!);
+    const mine = requestsOf.get(id) ?? requestsOf.set(id, new Set()).get(id)!;
+    mine.add(p.requestId);
+    // At the cap this side's oldest goes, never another side's.
+    if (mine.size > MAX_REQUESTS_PER_SIDE) forgetRequest(mine.values().next().value!);
   }
   /** Sides that already showed the clash notice in this run. */
   const clashed = new Set<string>();
@@ -513,7 +525,7 @@ export function createSides(opts: {
         delete s.phase;
         Object.assign(s, notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
-        for (const [reqId, side] of requestSide) if (side === s.id) requestSide.delete(reqId);
+        for (const reqId of [...(requestsOf.get(s.id) ?? [])]) forgetRequest(reqId);
         if (!wasReady) reject(new Error(message));
         routers.forEach((r) => r.detach(s.id));
         changed();
@@ -647,6 +659,7 @@ export function createSides(opts: {
     learn,
     requestSide,
     noteRequest,
+    forgetRequest,
     clash,
     sessionSide,
     terminalSide,
@@ -695,7 +708,7 @@ export function createRouter(opts: {
   let nextReq = 1;
   /** Requests forwarded to each side, by the browser's reqId: only a reply or error to one of these is accepted from that side (GH-279). */
   const forwarded = new Map<string, Set<string>>();
-  const { noteRequest, requestSide } = sides;
+  const { noteRequest, requestSide, forgetRequest } = sides;
   /**
    * A side owns a session ID only when it was told so by a reply to a request it was sent (or by its own /clear heir): never an
    * ID the local daemon has or another side owns. Returns whether `id` now belongs to `side`.
@@ -907,7 +920,7 @@ export function createRouter(opts: {
         // Only the side that raised the request gets the answer; a request no side raised is the local daemon's.
         const owner = typeof msg.requestId === "string" ? requestSide.get(msg.requestId) : undefined;
         const answer = await call(owner && conns.has(owner) ? owner : LOCAL_SIDE, msg);
-        if (answer.type === "reply" && typeof msg.requestId === "string") requestSide.delete(msg.requestId);
+        if (answer.type === "reply" && typeof msg.requestId === "string") forgetRequest(msg.requestId);
         return send(answer);
       }
       case "push.focus":

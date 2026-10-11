@@ -271,6 +271,38 @@ describe("side session ownership (GH-279)", () => {
     expect(pushed.map((p) => p.title)).toEqual(["own", "unknown"]);
   });
 
+  it("a side flooding permission requests drops its own oldest at the cap, never another side's", async () => {
+    const perm = (id: string, settled = false) => ({ type: "permission_request", id, requestId: id, toolUseId: "t", tool: "Bash", input: {}, suggestions: [], settled });
+    const a = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: A1, cwd: "/a", lastActivity: 1 }], projects: [], recentProjects: [] } : m.type === "permission.respond" ? { settled: true } : null));
+    const b = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: B1, cwd: "/b", lastActivity: 1 }], projects: [], recentProjects: [] } : null));
+    const t = await setup(a, b);
+    await t.req({ type: "session.list" });
+    a.out(event(A1, perm("legit")));
+    for (let i = 0; i < 1001; i++) b.out(event(B1, perm("spam" + i)));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(t.sides.requestSide.get("legit")).toBe("docker:a");
+    expect(t.sides.requestSide.has("spam0")).toBe(false);
+    expect(t.sides.requestSide.get("spam1000")).toBe("docker:b");
+    await t.req({ type: "permission.respond", requestId: "legit", decision: "allow" });
+    expect(frames(a, "permission.respond")).toHaveLength(1);
+  });
+
+  it("a settled part from a side that does not own the request does not forget it", async () => {
+    const perm = (settled: boolean) => ({ type: "permission_request", id: "q9", requestId: "q9", toolUseId: "t", tool: "Bash", input: {}, suggestions: [], settled });
+    const a = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: A1, cwd: "/a", lastActivity: 1 }], projects: [], recentProjects: [] } : null));
+    const b = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: B1, cwd: "/b", lastActivity: 1 }], projects: [], recentProjects: [] } : null));
+    const t = await setup(a, b);
+    await t.req({ type: "session.list" });
+    a.out(event(A1, perm(false)));
+    await t.settle();
+    b.out(event(B1, perm(true)));
+    await t.settle();
+    expect(t.sides.requestSide.get("q9")).toBe("docker:a");
+    a.out(event(A1, perm(true)));
+    await t.settle();
+    expect(t.sides.requestSide.has("q9")).toBe(false);
+  });
+
   describe("legitimate flows", () => {
     it("create on a side: the reply records ownership, then events and requests follow", async () => {
       const a = fakeSide((m) => (m.type === "session.create" ? { session: { id: A1, cwd: "/ct" } } : null));

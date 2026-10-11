@@ -277,7 +277,7 @@ function SidePicker({
       ) : (
         <>
           {current?.message && (
-            <p role="status" className="px-4 py-2 text-xs text-muted-foreground" data-testid="side-notice">
+            <p role="status" className="px-4 py-2 text-xs text-muted-foreground [overflow-wrap:anywhere]" data-testid="side-notice">
               {current.message}
             </p>
           )}
