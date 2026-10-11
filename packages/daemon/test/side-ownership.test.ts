@@ -39,9 +39,10 @@ function fakeSide(reply: (m: any) => unknown = (m) => (m.type === "session.list"
   return { proc, out, got, push };
 }
 
-async function setup(sideA: ReturnType<typeof fakeSide>, sideB?: ReturnType<typeof fakeSide>, onPush?: (p: any) => void) {
+type SetupOpts = { sides?: Partial<Parameters<typeof createSides>[0]>; router?: Partial<Parameters<typeof createRouter>[0]> };
+async function setup(sideA: ReturnType<typeof fakeSide>, sideB?: ReturnType<typeof fakeSide>, onPush?: (p: any) => void, o: SetupOpts = {}) {
   const procs = [sideA, ...(sideB ? [sideB] : [])].map((s) => s.proc);
-  const sides = createSides({ targets: [], localLabel: "Linux", posixLocal: true, ...(onPush && { onPush }), discoverMs: 0, discover: async () => [dockerSide("a"), ...(sideB ? [dockerSide("b")] : [])], spawn: (id) => procs[id === "docker:a" ? 0 : 1]! });
+  const sides = createSides({ targets: [], localLabel: "Linux", posixLocal: true, ...(onPush && { onPush }), discoverMs: 0, discover: async () => [dockerSide("a"), ...(sideB ? [dockerSide("b")] : [])], spawn: (id) => procs[id === "docker:a" ? 0 : 1]!, ...o.sides });
   await sides.refresh();
   const sent: ServerMessage[] = [];
   const localSeen: ClientMessage[] = [];
@@ -49,8 +50,9 @@ async function setup(sideA: ReturnType<typeof fakeSide>, sideB?: ReturnType<type
     sides,
     send: (m) => sent.push(m),
     local: async (m) => void localSeen.push(m),
-    localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: m.type === "session.list" ? { sessions: [{ id: LOCAL, cwd: "/host", lastActivity: 1 }], projects: ["/host"], recentProjects: [] } : {} }),
+    localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: m.type === "session.list" ? { sessions: [{ id: LOCAL, cwd: "/host", lastActivity: 1 }], projects: ["/host"], recentProjects: [] } : m.type === "project.open" ? { cwd: (m as any).cwd } : {} }),
     isLocalSession: async (id) => id === LOCAL,
+    ...o.router,
   });
   await router.handle({ type: "side.start", side: "docker:a", reqId: "sa" } as never);
   if (sideB) await router.handle({ type: "side.start", side: "docker:b", reqId: "sb" } as never);
@@ -364,5 +366,94 @@ describe("side session ownership (GH-279)", () => {
       await t.req({ type: "session.open", side: "docker:a", cwd: "/ct" });
       expect(t.sides.sessionSide.get(HEIR)).toBe("docker:a");
     });
+  });
+});
+
+describe("cwd claims (GH-320)", () => {
+  const own = { sides: { localDirs: ["/home/hub"] } };
+  const list = (r: object) => (m: any) => (m.type === "session.list" ? { sessions: [], projects: [], recentProjects: [], ...r } : null);
+  const listOf = (sent: any[]) => sent.find((m) => m.result?.cwdSides)?.result;
+
+  it("a side reply naming / does not route a new session in an unlisted local folder to the side", async () => {
+    const a = fakeSide((m) => (m.type === "project.open" ? { cwd: "/" } : m.type === "session.list" ? EMPTY : null));
+    const t = await setup(a, undefined, undefined, own);
+    await t.req({ type: "project.open", cwd: "/ct", side: "docker:a" });
+    await t.req({ type: "session.list" });
+    expect(t.sides.cwdSide.get("/")).toBeUndefined();
+    await t.req({ type: "session.create", cwd: "/home/hub/newproj" });
+    expect(frames(a, "session.create")).toHaveLength(0);
+    expect(t.localSeen.filter((m) => m.type === "session.create")).toHaveLength(1);
+  });
+
+  it("a side list cannot claim the home folder, a root, a parent of either, or a local project's parent or sub-folder", async () => {
+    const a = fakeSide(list({ projects: ["/host/sub", "/home/hub", "/home", "/", "/ct"], recentProjects: [{ cwd: "/host/sub/deeper", lastActivity: 1 }], worktrees: { "/ct": [{ path: "/ct-wt" }] } }));
+    const t = await setup(a, undefined, undefined, own);
+    const [r] = (await t.req({ type: "session.list" })) as any[];
+    expect(r.result.cwdSides).toEqual({ "/ct": "docker:a", "/ct-wt": "docker:a" });
+    expect(t.sides.pathSide("/host/sub/x")).toBe("local");
+    await t.req({ type: "fs.write", path: "/host/sub/f", content: "x" });
+    expect(t.localSeen.filter((m) => m.type === "fs.write")).toHaveLength(1);
+    expect(frames(a, "fs.write")).toHaveLength(0);
+  });
+
+  it("a cwd in a reply counts only for project.open sent to that side or the side's own session", async () => {
+    const a = fakeSide((m) => (m.type === "fs.list" ? { cwd: "/ct2" } : m.type === "session.open" ? { session: { cwd: "/ct3" } } : m.type === "project.open" ? { cwd: "/ct4" } : null));
+    const t = await setup(a, undefined, undefined, own);
+    await t.req({ type: "fs.list", path: "/ct", side: "docker:a" });
+    await t.req({ type: "session.open", cwd: "/ct", side: "docker:a" });
+    await t.req({ type: "project.open", cwd: "/ct4", side: "docker:a" });
+    expect(t.sides.cwdSide.get("/ct2")).toBeUndefined();
+    expect(t.sides.cwdSide.get("/ct3")).toBeUndefined();
+    expect(t.sides.cwdSide.get("/ct4")).toBe("docker:a");
+  });
+
+  it("a path that is not normalized is not claimed", async () => {
+    const a = fakeSide(list({ projects: ["/home/hub/", "//home/hub", "/srv/../home/hub", "rel"] }));
+    const t = await setup(a, undefined, undefined, own);
+    await t.req({ type: "session.list" });
+    expect([...t.sides.cwdSide.entries()].filter(([, s]) => s === "docker:a")).toEqual([]);
+    expect(t.sides.pathSide("/home/hub/x")).not.toBe("docker:a");
+  });
+
+  it("a folder a side claimed before it became local goes back to local", async () => {
+    const a = fakeSide(list({ projects: ["/srv", "/home/hub/guess"] }));
+    const t = await setup(a, undefined, undefined, own);
+    await t.req({ type: "session.list" });
+    expect(t.sides.pathSide("/srv/q")).toBe("docker:a");
+    await t.req({ type: "project.open", cwd: "/srv/p", side: "local" });
+    await t.req({ type: "session.create", cwd: "/srv/p" });
+    expect(t.sides.pathSide("/srv/q")).not.toBe("docker:a");
+    expect(t.sides.cwdSide.get("/srv")).toBeUndefined();
+    expect(frames(a, "session.create")).toHaveLength(0);
+    await t.req({ type: "project.open", cwd: "/home/hub/guess", side: "local" });
+    expect(t.sides.pathSide("/home/hub/guess")).toBe("local");
+  });
+
+  it("a Windows hub keeps every Windows path local whatever a side claims", async () => {
+    const a = fakeSide(list({ projects: ["/"] }));
+    const t = await setup(a, undefined, undefined, { sides: { posixLocal: false } });
+    await t.req({ type: "session.list" });
+    await t.req({ type: "session.create", cwd: "C:\\work\\p" });
+    expect(t.localSeen.filter((m) => m.type === "session.create")).toHaveLength(1);
+    expect(frames(a, "session.create")).toHaveLength(0);
+    expect(t.sides.pathSide("C:\\work\\p")).toBeUndefined();
+  });
+
+  it("a Docker side's own list paths, opened projects and created sessions still route to it", async () => {
+    const a = fakeSide((m) =>
+      m.type === "session.list" ? { sessions: [{ id: A1, cwd: "/workspace/app", lastActivity: 1 }], projects: ["/workspace/app"], recentProjects: [{ cwd: "/root/old", lastActivity: 1 }] }
+      : m.type === "project.open" ? { cwd: "/root/new" }
+      : m.type === "session.create" && m.cwd === "/workspace/app" ? { session: { id: HEIR, cwd: "/workspace/app" } }
+      : null);
+    const t = await setup(a, undefined, undefined, own);
+    const [l] = (await t.req({ type: "session.list" })) as any[];
+    expect(l.result.cwdSides).toMatchObject({ "/workspace/app": "docker:a", "/root/old": "docker:a" });
+    await t.req({ type: "project.open", cwd: "/root/new", side: "docker:a" });
+    await t.req({ type: "session.create", cwd: "/workspace/app", side: "docker:a" });
+    expect(t.sides.sessionSide.get(HEIR)).toBe("docker:a");
+    await t.req({ type: "session.create", cwd: "/root/new" });
+    await t.req({ type: "fs.read", path: "/workspace/app/x" });
+    expect(frames(a, "session.create")).toHaveLength(2);
+    expect(frames(a, "fs.read")).toHaveLength(1);
   });
 });
