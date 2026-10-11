@@ -1081,6 +1081,20 @@ describe("daemon", () => {
       });
     }
 
+    it("git.status is null for a project without .git below a repository outside the roots (GH-282)", async () => {
+      const { out } = outer();
+      const root = join(out, "sub");
+      mkdirSync(join(root, "proj"), { recursive: true });
+      const d = createDaemon({ webRoot, token, roots: [root], query: fakeQuery as never });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        expect(await c.request({ type: "git.status", cwd: join(root, "proj") })).toMatchObject({ result: { status: null } });
+      } finally {
+        d.close();
+      }
+    });
+
     it("a .git file without a gitdir line: git.status is null, git.log refused (GH-282)", async () => {
       const proj = join(webRoot, "gh282-nogitdir");
       mkdirSync(proj, { recursive: true });
