@@ -11,7 +11,7 @@ import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages,
 import { searchFiles } from "./search.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
-import { createWorktree, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -418,6 +418,8 @@ export function createDaemon(opts: {
       const rel = relative(r, path);
       return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
     });
+  /** A repository (top, git dirs: GH-290) that is not entirely inside the roots: no git request may read it. */
+  const gitOutside = (cwd: string) => gitEscapes(cwd, (p) => inRoots(real(p) ?? p));
   /** The canonical path when it is an existing path inside a root. */
   const allowed = (path: unknown) => {
     const p = typeof path === "string" && isAbsolute(path) ? real(path) : undefined;
@@ -479,7 +481,7 @@ export function createDaemon(opts: {
     const hit = worktreeLists.get(cwd);
     if (hit?.stamp === stamp) return hit.list;
     const sp = perfMon.span("worktree.list");
-    const entry = { stamp, list: listWorktrees(cwd).finally(() => sp.end()) };
+    const entry = { stamp, list: (gitOutside(cwd) ? Promise.resolve(null) : listWorktrees(cwd)).finally(() => sp.end()) };
     worktreeLists.set(cwd, entry);
     // A failed read of a git folder (spawn error, killed process) is not kept: the next list reads again.
     void entry.list.then((l) => l === null && stamp !== "-" && worktreeLists.get(cwd) === entry && worktreeLists.delete(cwd));
@@ -493,7 +495,7 @@ export function createDaemon(opts: {
   const statusReads = new Map<string, ReturnType<typeof gitStatus>>();
   const statusOf = (cwd: string) => {
     let read = statusReads.get(cwd);
-    if (!read) statusReads.set(cwd, (read = gitStatus(cwd).finally(() => statusReads.delete(cwd))));
+    if (!read) statusReads.set(cwd, (read = (gitOutside(cwd) ? Promise.resolve(null) : gitStatus(cwd)).finally(() => statusReads.delete(cwd))));
     return read;
   };
 
@@ -1600,7 +1602,7 @@ export function createDaemon(opts: {
         case "git.refs": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          return reply({ refs: gitRefs(cwd) });
+          return reply({ refs: gitRefs(cwd, (p) => inRoots(real(p) ?? p)) });
         }
         case "git.log":
         case "git.diff":
@@ -1630,6 +1632,7 @@ export function createDaemon(opts: {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (msg.type === "worktree.create" && msg.name !== undefined && typeof msg.name !== "string") return fail("bad_name", "name must be a string");
+          if (gitOutside(cwd)) return fail("cwd_not_allowed", "The repository is outside the allowed roots");
           const path = msg.type === "worktree.create" ? undefined : allowed(msg.path);
           if (msg.type !== "worktree.create" && !path) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           try {

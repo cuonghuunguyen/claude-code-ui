@@ -965,6 +965,92 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "nope" })).toMatchObject({ code: "not_found" });
   });
 
+  describe.skipIf(process.platform === "win32")("a .git that leaves the roots (GH-290)", () => {
+    /** An outer repository outside the roots with one commit; a project in the roots whose .git is a symlink to it or a gitdir file. */
+    const outer = () => {
+      const out = realpathSync(mkdtempSync(join(tmpdir(), "gh290-out-")));
+      const git = (cwd: string, ...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd, encoding: "utf8" }).trim();
+      git(out, "init", "-q", "-b", "main");
+      writeFileSync(join(out, "secret.txt"), "secret\n");
+      git(out, "add", ".");
+      git(out, "commit", "-q", "-m", "outer");
+      return { out, hash: git(out, "rev-parse", "HEAD") };
+    };
+    for (const kind of ["symlink", "gitdir file"]) {
+      it(`refuses every git request of a project whose .git is a ${kind} to a repository outside the roots`, async () => {
+        const { out, hash } = outer();
+        const proj = join(webRoot, `gh290-${kind.replace(" ", "-")}`);
+        mkdirSync(proj, { recursive: true });
+        if (kind === "symlink") symlinkSync(join(out, ".git"), join(proj, ".git"));
+        else writeFileSync(join(proj, ".git"), `gitdir: ${join(out, ".git")}\n`);
+        const c = await client();
+        expect(await c.request({ type: "git.status", cwd: proj })).toMatchObject({ result: { status: null } });
+        expect(await c.request({ type: "git.refs", cwd: proj })).toMatchObject({ result: { refs: null } });
+        for (const type of ["git.log", "git.commit", "git.fileAt"]) expect(await c.request({ type, cwd: proj, hash, path: "secret.txt" })).toMatchObject({ code: "cwd_not_allowed" });
+        expect(await c.request({ type: "git.diff", cwd: proj, base: "head" })).toMatchObject({ code: "cwd_not_allowed" });
+        expect(await c.request({ type: "worktree.create", cwd: proj, name: "x" })).toMatchObject({ code: "cwd_not_allowed" });
+        expect(await c.request({ type: "worktree.status", cwd: proj, path: proj })).toMatchObject({ code: "cwd_not_allowed" });
+        expect(await c.request({ type: "worktree.remove", cwd: proj, path: proj })).toMatchObject({ code: "cwd_not_allowed" });
+      });
+    }
+
+    it("git.refs is null for a project without .git below a repository outside the roots", async () => {
+      const { out } = outer();
+      // The root itself lies inside the outer repository; the project has no .git of its own.
+      const root = join(out, "sub");
+      mkdirSync(join(root, "proj"), { recursive: true });
+      const d = createDaemon({ webRoot, token, roots: [root], query: fakeQuery as never });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        expect(await c.request({ type: "git.refs", cwd: join(root, "proj") })).toMatchObject({ result: { refs: null } });
+      } finally {
+        d.close();
+      }
+    });
+
+    it("session.list lists no worktrees for a project whose main repository is outside the roots", async () => {
+      const { out } = outer();
+      const git = (cwd: string, ...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd, encoding: "utf8" }).trim();
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "gh290-list-")));
+      const linked = join(root, "linked");
+      git(out, "worktree", "add", "-q", "-b", "l", linked);
+      const d = createDaemon({
+        webRoot,
+        token,
+        roots: [root],
+        query: fakeQuery as never,
+        projects: added(linked),
+        history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+      });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        const r = ((await c.request({ type: "session.list" })) as { result: { worktrees: Record<string, unknown[]> } }).result;
+        expect(r.worktrees[linked] ?? []).toEqual([]);
+      } finally {
+        d.close();
+      }
+    });
+
+    it("a linked worktree of a repository inside the roots still works; one whose main repository is outside is refused", async () => {
+      const { out } = outer();
+      const git = (cwd: string, ...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd, encoding: "utf8" }).trim();
+      const main = join(webRoot, "gh290-main");
+      mkdirSync(main, { recursive: true });
+      git(main, "init", "-q", "-b", "main");
+      git(main, "commit", "-q", "--allow-empty", "-m", "in");
+      git(main, "worktree", "add", "-q", "-b", "w", join(main, ".claude", "worktrees", "w"));
+      const c = await client();
+      expect(await c.request({ type: "git.status", cwd: join(main, ".claude", "worktrees", "w") })).toMatchObject({ result: { status: { branch: "w" } } });
+      expect(await c.request({ type: "git.log", cwd: join(main, ".claude", "worktrees", "w") })).toMatchObject({ result: { log: { commits: [{ subject: "in" }] } } });
+      // Main repository outside the roots, linked worktree inside.
+      git(out, "worktree", "add", "-q", "-b", "o", join(webRoot, "zz290x"));
+      expect(await c.request({ type: "git.status", cwd: join(webRoot, "zz290x") })).toMatchObject({ result: { status: null } });
+      expect(await c.request({ type: "git.log", cwd: join(webRoot, "zz290x") })).toMatchObject({ code: "cwd_not_allowed" });
+    });
+  });
+
   it("answers git.diff for a cwd inside the roots only", async () => {
     const c = await client();
     expect(await c.request({ type: "git.diff", cwd: webRoot, base: "head" })).toMatchObject({ result: { diff: null } });
@@ -1312,17 +1398,16 @@ describe("daemon", () => {
 
   it("a git worktree list that failed is read again on the next session.list, not reused", async () => {
     const { repo, d, list } = await repoDaemon("wtfail-");
-    const before = process.env.GIT_DIR;
+    const before = process.env.PATH;
+    const restore = () => void (process.env.PATH = before);
     try {
-      // git fails without any change to the repository's files (as a killed process or a spawn error would).
-      process.env.GIT_DIR = join(repo, "no-such-git-dir");
+      // git fails without any change to the repository's files (a spawn error): no git on the PATH.
+      process.env.PATH = join(repo, "no-such-bin");
       expect((await list()).worktrees).toEqual([]);
-      if (before === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = before;
+      restore();
       expect((await list()).worktrees).toEqual([`${repo}@main`]);
     } finally {
-      if (before === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = before;
+      restore();
       d.close();
     }
   });
