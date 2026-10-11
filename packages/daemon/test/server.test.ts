@@ -6,6 +6,7 @@ import { request as httpRequest } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
@@ -1238,6 +1239,31 @@ describe("daemon", () => {
       expect(reply, type).toMatchObject({ code: "path_not_allowed" });
       expect(JSON.stringify(reply), type).not.toContain("outside secret");
       expect(readFileSync(outside, "utf8"), type).toBe("outside secret");
+    }
+  });
+
+  it("fs.read refuses a UNC path on Windows with no file system call (GH-282)", async () => {
+    const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
+    // The CommonJS fs object: spying there and syncing makes the daemon's named imports call the spy.
+    const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
+    const native = vi.spyOn(fs.realpathSync, "native");
+    const exists = vi.spyOn(fs, "existsSync");
+    syncBuiltinESMExports();
+    const c = await client();
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      for (const path of ["\\\\evil\\s\\x", "//evil/s/x", "\\\\.host\\s\\x"]) {
+        native.mockClear();
+        exists.mockClear();
+        expect(await c.request({ type: "fs.read", path }), path).toMatchObject({ code: "path_not_allowed" });
+        expect(native, path).not.toHaveBeenCalled();
+        expect(exists, path).not.toHaveBeenCalled();
+      }
+    } finally {
+      Object.defineProperty(process, "platform", orig);
+      native.mockRestore();
+      exists.mockRestore();
+      syncBuiltinESMExports();
     }
   });
 
