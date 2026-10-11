@@ -7,11 +7,11 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
 import { createPush } from "../src/push.ts";
-import { createSides, MAX_SIDE_LINE_BYTES, wslSide } from "../src/sides.ts";
+import { createSides, forwardSidePush, MAX_SIDE_LINE_BYTES, runSide, wslSide } from "../src/sides.ts";
 
 const valid = { sessionId: "s1", title: "Done", body: "finished" };
 
-async function setup() {
+async function setup(o: { before?: string; maxLineChars?: number } = {}) {
   const stdout = new PassThrough();
   const proc = { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => {}, on: (e: "exit", l: (c: number | null) => void) => new EventEmitter().on(e, l) };
   const shown: PushPayload[] = [];
@@ -20,8 +20,10 @@ async function setup() {
   const sides = createSides({
     targets: [wslSide("Ubuntu")],
     spawn: async () => proc,
-    onPush: (p) => void push.send(p).catch((e) => console.error("push failed:", (e as Error).message)),
+    onPush: forwardSidePush(push),
+    ...(o.maxLineChars && { maxLineChars: o.maxLineChars }),
   });
+  if (o.before) stdout.write(o.before);
   stdout.write('{"ready":true}\n');
   await sides.start("wsl:Ubuntu");
   const got: ServerMessage[] = [];
@@ -107,20 +109,86 @@ describe("side frames (GH-278)", () => {
     expect(t.shown).toEqual([{ ...valid, tag: "t", silent: true, replace: false }]);
   });
 
-  it("drops a 10 MB single line and recovers on the next line", async () => {
+  it("covers the largest legitimate frame: the cap is at least 128 MiB", () => {
+    expect(MAX_SIDE_LINE_BYTES).toBeGreaterThanOrEqual(128 * 1024 * 1024);
+  });
+
+  it("accepts a 66 MiB frame (a prompt with images echoed as one event)", async () => {
     const t = await setup();
-    await t.feed(JSON.stringify({ c: 1, m: { type: "reply", reqId: "big", result: "x".repeat(10 * 1024 * 1024) } }) + "\n");
+    await t.feed(JSON.stringify({ c: 1, m: { type: "event", part: { type: "user_text", images: ["x".repeat(66 * 1024 * 1024)] } } }) + "\n");
+    expect(t.got).toHaveLength(1);
+    expect(logged()).toBe("");
+  });
+
+  it("drops a line over the cap, logs it once, recovers on the next line", async () => {
+    const t = await setup({ maxLineChars: 1000 });
+    await t.feed(JSON.stringify({ c: 1, m: { type: "reply", reqId: "big", result: "x".repeat(5000) } }) + "\n");
     expect(t.got).toEqual([]);
     expect(logged()).toMatch(/too long/);
     await t.proves();
   });
 
-  it("drops an over-long line without a newline in chunks, once, without buffering it", async () => {
-    const t = await setup();
-    for (let i = 0; i < 12; i++) await t.feed("y".repeat(MAX_SIDE_LINE_BYTES / 4));
+  it("stops buffering at the cap while a line is still arriving, logs once", async () => {
+    const t = await setup({ maxLineChars: 1000 });
+    for (let i = 0; i < 12; i++) await t.feed("y".repeat(400));
     expect(logged().match(/too long/g)).toHaveLength(1);
     await t.feed("tail\n");
     await t.proves();
+  });
+
+  it("does not parse the tail of a dropped long line as a frame", async () => {
+    const t = await setup({ maxLineChars: 1000 });
+    await t.feed("z".repeat(2000)); // over the cap, no newline yet
+    await t.feed(JSON.stringify({ push: valid }) + "\n"); // the end of the same line
+    expect(t.shown).toEqual([]);
+    await t.feed(JSON.stringify({ push: valid }) + "\n");
+    expect(t.shown).toEqual([valid]);
+  });
+
+  it("does not parse the tail of a dropped long line sent in one chunk with the next line", async () => {
+    const t = await setup({ maxLineChars: 1000 });
+    await t.feed("z".repeat(2000));
+    await t.feed(JSON.stringify({ push: valid }) + "\n" + JSON.stringify({ push: { ...valid, title: "second" } }) + "\n");
+    expect(t.shown).toEqual([{ ...valid, title: "second" }]);
+  });
+
+  it("does not log shell start-up output before ready", async () => {
+    const t = await setup({ before: "Welcome to Ubuntu\nlast login: today\n" });
+    expect(logged()).toBe("");
+    await t.feed("still not a frame\n");
+    expect(logged()).toMatch(/not JSON/);
+  });
+
+  it("logs at most 20 dropped lines per run", async () => {
+    const t = await setup();
+    for (let i = 0; i < 30; i++) t.stdout.write("garbage " + i + "\n");
+    await t.feed("");
+    expect(logged().match(/dropped a line/g)).toHaveLength(20);
+  });
+
+  it("logs control characters escaped, never raw", async () => {
+    const t = await setup();
+    await t.feed("\x1b[31mred\x07\r\u0000 text\n");
+    expect(logged()).toContain("dropped a line");
+    expect(logged()).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f]/);
+  });
+
+  it("a push that fails is logged, never an unhandled rejection (hub wiring)", async () => {
+    const forward = forwardSidePush({ send: async () => Promise.reject(new Error("boom")) });
+    forward(valid);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(rejections).toEqual([]);
+    expect(logged()).toMatch(/push from a side failed: boom/);
+  });
+
+  it("runSide (side process) ignores a null, number or array line from the hub", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const accepted: unknown[] = [];
+    runSide({ input, output, accept: (ws) => accepted.push(ws) });
+    expect(() => input.write('null\n42\n[1]\n"s"\n{"c":1,"o":1}\n')).not.toThrow();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(accepted).toHaveLength(1);
   });
 
   it("joins a valid frame split across chunks", async () => {

@@ -3,8 +3,12 @@
 import { z } from "zod";
 import type { PushPayload, ServerMessage } from "@claude-ui/protocol";
 
-/** Longest side -> hub line (bytes of text). The largest legitimate frames are a transcript snapshot and one 1 MiB media piece (base64). */
-export const MAX_SIDE_LINE_BYTES = 8 * 1024 * 1024;
+/**
+ * Longest side -> hub line (characters). The hub accepts WebSocket frames up to 64 MiB (server.ts MAX_FRAME_BYTES: a prompt with
+ * images), a side echoes that prompt back as one `user_text` event, and git output of a side may reach 86 MiB of base64 (GH-275):
+ * 128 MiB covers the largest of them. Only a line above it is hostile or broken.
+ */
+export const MAX_SIDE_LINE_BYTES = 128 * 1024 * 1024;
 
 const message = z.record(z.string(), z.unknown());
 const push = z.object({ sessionId: z.string(), title: z.string(), body: z.string(), tag: z.string().optional(), silent: z.boolean().optional(), replace: z.boolean().optional() });
@@ -17,8 +21,8 @@ const FRAME = z.union([z.object({ ready: z.literal(true) }).transform(() => ({ k
 
 export type SideFrame = z.infer<typeof FRAME>;
 
-/** Control characters out, cut at `n`: a frame may hold prompts, so a log line never carries more than a short prefix. */
-export const logPrefix = (s: string, n = 32) => JSON.stringify(s.slice(0, n).replace(/[\u0000-\u001f\u007f]/g, " ")) + (s.length > n ? "…" : "");
+/** Cut at `n` and JSON-quoted (control characters escaped, no terminal escape reaches the log): a frame may hold prompts, so a log line never carries more than a short prefix. */
+export const logPrefix = (s: string, n = 32) => JSON.stringify(s.slice(0, n)) + (s.length > n ? "…" : "");
 
 /** Parses one stdout line: the frame, or why it is none. */
 export function parseSideFrame(line: string): { frame: SideFrame } | { error: "not JSON" | "unknown frame" } {

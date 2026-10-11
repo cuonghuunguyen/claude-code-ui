@@ -11,6 +11,7 @@ import { perf, type PerfSpanHandle } from "./perf.ts";
 import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import type { Exec } from "./docker-side.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
+import type { Push } from "./push.ts";
 import { logPrefix, MAX_SIDE_LINE_BYTES, parseSideFrame } from "./side-frame.ts";
 export { MAX_SIDE_LINE_BYTES };
 
@@ -283,6 +284,9 @@ export const wslArgs = (distro: string, script: string) => ["-d", distro, "--exe
 /** Arguments for docker.exe: the script is one argv item for `sh -c` (no shell on the host; the image's environment, not a login shell). */
 export const dockerExecArgs = (name: string, script: string) => ["exec", "-i", name, "sh", "-c", script];
 
+/** `onPush` of the hub: a side's push goes to the user's browsers or desktop; a failure is logged, never an unhandled rejection. */
+export const forwardSidePush = (push: Pick<Push, "send">) => (p: PushPayload) => void push.send(p).catch((e) => console.error("push from a side failed:", (e as Error).message));
+
 /**
  * Calls `onLine` for each complete line of `stream`. A line longer than `max` characters is dropped (`onTooLong` once, with its
  * length so far when the cap was hit): it is never buffered beyond `max`, the next line is read normally.
@@ -335,6 +339,8 @@ export function createSides(opts: {
   save?: (ids: string[]) => void;
   /** Local paths can be POSIX too (Linux, macOS): an unknown POSIX path then stays local. */
   posixLocal?: boolean;
+  /** Longest line a side may write (default MAX_SIDE_LINE_BYTES; tests lower it). */
+  maxLineChars?: number;
 }) {
   const sides = new Map<string, Side>(opts.targets.map((t) => [t.id, { ...t, state: "off", conns: new Map() }]));
   const routers = new Set<Router>();
@@ -452,7 +458,7 @@ export function createSides(opts: {
           changed();
         } else if (f.kind === "push") opts.onPush?.(f.push);
         else s.conns.get(f.c)?.(f.m);
-      }, MAX_SIDE_LINE_BYTES, () => console.error(`side ${s.id}: dropped a line (too long, more than ${MAX_SIDE_LINE_BYTES} chars)`));
+      }, opts.maxLineChars ?? MAX_SIDE_LINE_BYTES, () => console.error(`side ${s.id}: dropped a line (too long, more than ${opts.maxLineChars ?? MAX_SIDE_LINE_BYTES} chars)`));
       proc.on("exit", (code) => {
         const wasReady = s.state === "ready";
         // A crashed side logs `claude-ui daemon: uncaughtException: <error>` first; Node's own fatal print ends in frames and a `Node.js vX` trailer.
