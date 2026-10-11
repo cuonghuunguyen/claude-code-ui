@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { createWorktree, gitDiff, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus } from "../src/git.ts";
+import { createWorktree, gitDiff, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
@@ -827,8 +827,56 @@ describe("gitLog / gitShow / gitFileAt", () => {
 
   it("gitRefs is the refs stamp without a git process, null outside a repository", async () => {
     const r = graphRepo();
-    expect(gitRefs(r.dir)).toBe(refsStamp(r.dir));
-    expect(gitRefs(mkdtempSync(join(tmpdir(), "nogit-")))).toBeNull();
+    expect(gitRefs(r.dir, () => true)).toBe(refsStamp(r.dir));
+    expect(gitRefs(mkdtempSync(join(tmpdir(), "nogit-")), () => true)).toBeNull();
+    expect(gitRefs(r.dir, () => false)).toBeNull();
+  });
+
+  describe.skipIf(process.platform === "win32")("gitEscapes (GH-290)", () => {
+    const mk = () => {
+      const base = realpathSync(mkdtempSync(join(tmpdir(), "esc-")));
+      const roots = join(base, "roots");
+      const outer = join(base, "outer");
+      mkdirSync(roots);
+      run(base, "init", "-q", "-b", "main", "outer");
+      return { roots, outer, inRoots: (p: string) => p === roots || p.startsWith(roots + "/") };
+    };
+    it("a symlinked .git, a gitdir file (absolute and relative) and a commondir that leave the roots escape", () => {
+      const { roots, outer, inRoots } = mk();
+      mkdirSync(join(roots, "a"));
+      symlinkSync(join(outer, ".git"), join(roots, "a", ".git"));
+      mkdirSync(join(roots, "b"));
+      writeFileSync(join(roots, "b", ".git"), `gitdir: ${join(outer, ".git")}\n`);
+      mkdirSync(join(roots, "c"));
+      writeFileSync(join(roots, "c", ".git"), `gitdir: ../../outer/.git\n`);
+      mkdirSync(join(roots, "d", "own"), { recursive: true });
+      writeFileSync(join(roots, "d", ".git"), "gitdir: own\n");
+      writeFileSync(join(roots, "d", "own", "commondir"), `${join(outer, ".git")}\n`);
+      for (const p of ["a", "b", "c", "d"]) expect(gitEscapes(join(roots, p), inRoots), p).toBe(true);
+    });
+    it("a normal repository, a subfolder, a linked worktree and a submodule-style gitdir inside the roots do not escape; a worktree of an outer repository does", () => {
+      const { roots, outer, inRoots } = mk();
+      const main = join(roots, "main");
+      run(roots, "init", "-q", "-b", "main", "main");
+      run(main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i");
+      run(main, "worktree", "add", "-q", "-b", "w", join(main, ".claude", "worktrees", "w"));
+      mkdirSync(join(main, "sub"));
+      mkdirSync(join(main, ".git", "modules", "m"), { recursive: true });
+      mkdirSync(join(main, "mod"));
+      writeFileSync(join(main, "mod", ".git"), "gitdir: ../.git/modules/m\n");
+      for (const p of [main, join(main, "sub"), join(main, ".claude", "worktrees", "w"), join(main, "mod")]) expect(gitEscapes(p, inRoots), p).toBe(false);
+      run(outer, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i");
+      run(outer, "worktree", "add", "-q", "-b", "o", join(roots, "linked"));
+      expect(gitEscapes(join(roots, "linked"), inRoots)).toBe(true);
+    });
+    it("a folder without .git below a repository outside the roots escapes; outside any repository it does not", () => {
+      const { roots, outer, inRoots } = mk();
+      const sub = join(outer, "sub");
+      mkdirSync(sub);
+      expect(gitEscapes(sub, inRoots)).toBe(true);
+      expect(gitEscapes(mkdtempSync(join(tmpdir(), "nogit-")), inRoots)).toBe(false);
+      void roots;
+    });
   });
 
   it("gitStatus during a graph read returns the last status without git, or waits when it has none", async () => {

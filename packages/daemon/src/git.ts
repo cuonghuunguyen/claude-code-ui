@@ -108,8 +108,8 @@ export function refsStamp(cwd: string): string {
   return parts.join("|");
 }
 /** `refsStamp` of the repository `cwd` belongs to, null outside a work tree; file stats only, no git process (`git.refs`). */
-export function gitRefs(cwd: string): string | null {
-  return gitTopOf(cwd) ? refsStamp(cwd) : null;
+export function gitRefs(cwd: string, allowed: (p: string) => boolean): string | null {
+  return gitTopOf(cwd) && !gitEscapes(cwd, allowed) ? refsStamp(cwd) : null;
 }
 /** The full ref HEAD points to (`refs/heads/x`); undefined when detached or unreadable. */
 function headRef(top: string): string | undefined {
@@ -506,10 +506,27 @@ export function gitTopOf(cwd: string): string | null {
 export async function gitTop(cwd: string): Promise<string | null> {
   return gitTopOf(cwd);
 }
-/** A cwd inside the roots whose repository top is outside must not expose files outside the roots through git objects. */
+/**
+ * True when the repository of `cwd` is not entirely inside the roots (`allowed` gets canonical paths): its top, its own git
+ * dir or the one its worktrees share (`gitDirsOf`, resolved through links). A project inside the roots whose `.git` is a
+ * symlink or a `gitdir:` file to elsewhere, or a linked worktree whose main repository is outside, would show that repository.
+ * File system only; false outside a work tree.
+ */
+export function gitEscapes(cwd: string, allowed: (p: string) => boolean): boolean {
+  const top = gitTopOf(cwd);
+  if (!top) return false;
+  if (!allowed(top)) return true;
+  const dirs = gitDirsOf(top);
+  if (!dirs) return false;
+  return [dirs.own, dirs.common].some((d) => {
+    const r = real(d);
+    return !r || !allowed(r);
+  });
+}
+/** A cwd inside the roots whose repository (top or git dirs) is outside must not expose files outside the roots through git objects. */
 function topIn(cwd: string, allowed: (p: string) => boolean): string | null {
   const top = gitTopOf(cwd);
-  if (top && !allowed(top)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  if (top && gitEscapes(cwd, allowed)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
   return top;
 }
 
