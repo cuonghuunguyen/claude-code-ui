@@ -103,7 +103,7 @@ if (side) {
           // side.check: read-only (docker inspect + one docker exec, or one wsl.exe run of the check script).
           key: sideKey,
           check: (id) => (id.startsWith("docker:") ? checkDockerSide({ name: id.slice("docker:".length), pkgDir: sidePackage, key: sideKey() }) : checkWslSide({ distro: id.slice("wsl:".length), pkgDir: sidePackage, key: sideKey(), exec: execRun })),
-          onPush: (p) => void push.send(p),
+          onPush: (p) => void push.send(p).catch((e) => console.error("push from a side failed:", (e as Error).message)),
           saved: readSaved(sidesFile),
           save: (ids) => writeFileSync(sidesFile, JSON.stringify(ids)),
         })
