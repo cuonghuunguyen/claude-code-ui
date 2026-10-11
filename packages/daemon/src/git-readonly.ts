@@ -536,6 +536,8 @@ function segmentOk(seg: string, cwd: string, facts: () => RepoSafety): boolean {
   const hasContent = opts.some(contentOpt);
   const content = sub === "log" ? hasContent : hasContent || !opts.some(noContentOpt);
   if (!content) return true;
+  // `git diff <blob-id> -- a.ts` prints that blob (the id of a deleted `.env` is in `git log --raw`): a bare object id in a patch is never low.
+  if (sub === "diff" && bare.some((t) => /^[0-9a-f]{4,64}$/i.test(t))) return false;
   // A patch can print a denied file's content (a tracked `.env`, a key): only for named, existing, regular, readable files, or (diff) the index and HEAD with no denied path in them.
   const objectPaths = bare.filter((t) => t.includes(":"));
   const plain = bare.filter((t) => !t.includes(":"));

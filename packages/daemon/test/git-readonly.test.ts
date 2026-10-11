@@ -208,6 +208,11 @@ describe("tracked deny-listed files (GH-282)", () => {
     `git diff ${blobA} ${blobB}`,
     "git diff HEAD~1 -- src",
     "git show HEAD -- src",
+    // A blob id from `git log --raw` of a deleted .env: diff of the blob against a file prints the blob.
+    `git diff ${blobEnv} -- src/a.ts`,
+    `git diff -p ${blobEnv} -- src/a.ts`,
+    `git diff ${blobEnv} src/a.ts`,
+    `git diff ${blobEnv} HEAD -- src/a.ts`,
   ];
   const lowRows = [
     "git diff --stat",
@@ -221,6 +226,8 @@ describe("tracked deny-listed files (GH-282)", () => {
     "git show HEAD:src/a.ts",
     `git show ${commit}~0 --stat`,
     "git status",
+    "git log --raw",
+    "git log -p -- src/a.ts",
   ];
   it.each(highRows)("high: %s", (command) => expect(gitReadOnly({ command }, d)).toBe(false));
   it.each(lowRows)("low: %s", (command) => expect(gitReadOnly({ command }, d)).toBe(true));
