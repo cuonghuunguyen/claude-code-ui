@@ -397,8 +397,8 @@ export function createSides(opts: {
     // At the cap this side's oldest goes, never another side's.
     if (mine.size > MAX_REQUESTS_PER_SIDE) forgetRequest(mine.values().next().value!);
   }
-  /** Sides that already showed the clash notice in this run. */
-  const clashed = new Set<string>();
+  /** Per side, the clash causes it already showed a notice for in this run (GH-328: each cause shows once). */
+  const clashed = new Map<string, Set<"local" | "other">>();
   /** Session IDs two or more sides named while no side owned them (GH-321): no side gets them for this hub run (GH-328: a contender exiting does not hand them to the others). */
   const contested = new Set<string>();
   const MAX_CONTESTED = 1000;
@@ -408,14 +408,19 @@ export function createSides(opts: {
     if (contested.size > MAX_CONTESTED) contested.delete(contested.values().next().value!);
     for (const id of ids) clash(id, sessionId, true);
   }
-  /** A side named a session ID the local daemon has: left out; says so once (log) and in the side's message. */
+  /** A side named a session ID the local daemon has or another side names: left out; says so once per cause (log) and in the side's message. */
   function clash(id: string, sessionId: string, other = false) {
     const s = sides.get(id);
-    if (!s || clashed.has(id)) return;
-    clashed.add(id);
+    const cause = other ? "other" : "local";
+    const seen = clashed.get(id) ?? new Set<"local" | "other">();
+    if (!s || seen.has(cause)) return;
+    clashed.set(id, seen.add(cause));
     console.error(`side ${id}: session ${sessionId} ${other ? "is named by another side too" : "exists on this computer too"}: left out (a shared ~/.claude?); other such sessions are left out silently`);
     if (s.state === "ready") {
-      s.message = `Some sessions of ${s.label} are left out: ${other ? "another side lists the same IDs" : "their IDs also exist on this computer"} (is ~/.claude shared${other ? "" : " with it"}?).`;
+      s.message =
+        seen.size > 1
+          ? `Some sessions of ${s.label} are left out: their IDs also exist on this computer or on another side (is ~/.claude shared?).`
+          : `Some sessions of ${s.label} are left out: ${other ? "another side lists the same IDs" : "their IDs also exist on this computer"} (is ~/.claude shared${other ? "" : " with it"}?).`;
       changed();
     }
   }

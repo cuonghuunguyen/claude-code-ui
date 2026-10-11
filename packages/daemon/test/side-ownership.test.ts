@@ -571,6 +571,24 @@ describe("session lookup (GH-321, GH-328)", () => {
     }
   });
 
+  it("a side with a local-id clash also shows the other-side notice", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const a = fakeSide(lists(LOCAL, B1));
+      const b = fakeSide(lists(B1));
+      const t = await setup(a, b);
+      await t.req({ type: "session.list" });
+      const ofA = err.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("docker:a"));
+      expect(ofA.some((l) => l.includes("exists on this computer"))).toBe(true);
+      expect(ofA.some((l) => l.includes("another side"))).toBe(true);
+      const msg = t.sides.list().find((x) => x.id === "docker:a")?.message;
+      expect(msg).toMatch(/this computer/);
+      expect(msg).toMatch(/another side/);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
   it("a contest stays when one contender exits; the remaining side never gets the id", async () => {
     const a = fakeSide(lists(B1));
     const b = fakeSide(lists(B1));
