@@ -58,7 +58,7 @@ type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number;
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
 /** `allowBypass`: daemon config enables bypassPermissions (docs/spec.md "Security"). */
-/** `uploadDir`: the fs.upload folder, readable by Claude without a permission request. */
+/** `uploadDir`: the folder of this session's fs.uploads by its id (created on call), readable by Claude without a permission request. */
 export type SessionSettings = Pick<SessionInfo, "model" | "permissionMode" | "effort">;
 /**
  * `onSettings`: called after model, permission mode or effort changed (the daemon persists them for a restore). `fields`: the
@@ -69,7 +69,7 @@ type SessionOpts = Partial<SessionSettings> & {
   allowBypass?: boolean;
   /** Whether a model value (`ModelInfo.value`) supports auto mode (`supportsAutoMode`); none = no model does. */
   supportsAuto?: (model: string) => boolean;
-  uploadDir?: string;
+  uploadDir?: (id: string) => string | undefined;
   query?: typeof sdkQuery;
   onSettings?: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => void;
   onCleared?: (heir: Session) => void;
@@ -217,22 +217,29 @@ export class Session {
   private continueAt: number | null = null;
   /** The throwaway commands query was asked (once; a failure asks again at the next subscribe). */
   private commandsAsked = false;
+  /**
+   * Whose upload folder the running CLI was started with (`uploadDir(uploadOwner)`). A /clear heir keeps its parent's until
+   * its CLI closes (`dropQuery`: idle close, restart, rewind) and a query of its own starts: the CLI cannot get another directory, so uploads go where it already reads.
+   */
+  uploadOwner: string;
   /** After a failed load no new throwaway starts before this time (ms). */
   private commandsRetryAt = 0;
 
   constructor(
     readonly cwd: string,
     private readonly opts: SessionOpts = {},
-    restored?: { id: string; history: SessionMessage[]; read?: Iterable<string> },
+    /** Without `history`: a new session with a given id (a claimed draft, see uploads.ts). */
+    restored?: { id: string; history?: SessionMessage[]; read?: Iterable<string> },
   ) {
     this.id = restored?.id ?? randomUUID();
+    this.uploadOwner = this.id;
     this.model = opts.model ?? "default";
     this.permissionMode = opts.permissionMode ?? "default";
     this.effort = opts.effort ?? "default";
-    this.adapter = createAdapter({ resumed: !!restored });
-    this.started = !!restored;
+    this.adapter = createAdapter({ resumed: !!restored?.history });
+    this.started = !!restored?.history;
     // The CLI starts on the first prompt; until then a throwaway query lists the commands for the / menu.
-    if (!restored) {
+    if (!restored?.history) {
       void this.loadCommands();
       return;
     }
@@ -263,7 +270,8 @@ export class Session {
     // The level is per CLI process (SDK): a new one starts empty.
     this.backgroundLevel = new Set();
     this.ambientTasks.clear();
-    const dirs = [...(this.opts.uploadDir ? [this.opts.uploadDir] : []), ...sessionDirs(this.grants)];
+    const up = this.opts.uploadDir?.(this.id);
+    const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
     const rules = sessionRules(this.grants);
     // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
     this.bashPinned = !!this.opts.worker?.(this.id);
@@ -647,6 +655,8 @@ export class Session {
     this.generation++;
     this.query?.close();
     this.query = undefined;
+    // The next query is granted this session's own folder (a /clear heir read its parent's until now).
+    this.uploadOwner = this.id;
     // The old drive loop's finally skips this (newer generation): a background run of the closed query stops with it.
     this.tasks.clear();
     for (const part of this.adapter.endCalls()) this.emit(part);
@@ -1099,6 +1109,7 @@ export class Session {
   private handOver(id: string, clearId: string | undefined): Session {
     const heir = Session.restore(id, this.cwd, [], { ...this.opts, model: this.model, permissionMode: this.permissionMode, effort: this.effort });
     heir.cleared = true;
+    heir.uploadOwner = this.uploadOwner;
     // Background calls (shells, subagent runs) still run in the CLI: the heir owns them (shells list, Stop agent, their
     // notification); here they end as a restore of this transcript shows them.
     for (const part of this.adapter.endCalls(true)) this.emit(part);

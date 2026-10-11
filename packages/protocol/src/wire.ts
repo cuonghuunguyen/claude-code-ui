@@ -42,7 +42,8 @@ export type FsEntry = { name: string; path: string; isDir: boolean };
  */
 export type ClientMessage = { reqId: string; side?: string } & (
   /** `coordinator`: the session gets the orchestration tools (docs/spec.md "Orchestration"); refused while orchestration is off. */
-  | { type: "session.create"; cwd: string; model?: string }
+  /** `draft`: the new-session tab's upload token (fs.upload `draft`); the session gets the id, and with it the folder, of those uploads; one claim per token. */
+  | { type: "session.create"; cwd: string; model?: string; draft?: string }
   /** The mode a new session in `cwd` starts in: Claude settings `permissions.defaultMode` (local > project > user), when offered; else "default". */
   | { type: "session.defaultMode"; cwd: string }
   /** Commands and skills of a project, for the new-session tab's `/` menu (no session yet); the daemon caches the list per cwd for a minute. */
@@ -68,10 +69,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Applies from the next turn on (`applyFlagSettings({effortLevel})`); the `effort` start option before the query runs. */
   | { type: "session.setEffort"; sessionId: string; effort: Effort }
   /**
-   * Attach button, non-image file: the daemon stores it in a temp folder (a browser cannot tell a file's path)
+   * Attach button, non-image file: the daemon stores it in a folder of its own (a browser cannot tell a file's path)
    * and replies its absolute path, which the prompt gets as an `@path` mention. `data`: base64 content.
+   * Stored in the folder of `sessionId`, or of the draft `draft` (64 hex chars, made by the client, secret) before the
+   * session exists; one of them is required.
    */
-  | { type: "fs.upload"; name: string; data: string; cwd?: string }
+  | { type: "fs.upload"; name: string; data: string; cwd?: string; sessionId?: string; draft?: string }
   /** Stops the running turn; a no-op while idle. */
   | { type: "session.interrupt"; sessionId: string }
   /** Drops the session's scheduled continue (auto_continue); reply `{}`, also when none was scheduled. */
@@ -335,6 +338,8 @@ export type DefaultModeResult = { mode: PermissionMode };
 /** session.commands. */
 export type CommandsResult = { commands: SlashCommand[] };
 export type UploadResult = { path: string };
+/** fs.upload / session.create `draft`: a secret token, 32 random bytes as lowercase hex. */
+export const DRAFT_TOKEN = /^[0-9a-f]{64}$/;
 /** fs.upload size cap; the client checks it before reading the file. */
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 /** permission.respond and question.respond. `settled`: false when the request was already settled (or unknown) and this answer was ignored. */
