@@ -217,6 +217,11 @@ export class Session {
   private continueAt: number | null = null;
   /** The throwaway commands query was asked (once; a failure asks again at the next subscribe). */
   private commandsAsked = false;
+  /**
+   * Whose upload folder the running CLI was started with (`uploadDir(uploadOwner)`). A /clear heir keeps its parent's until
+   * its own query starts: the CLI cannot get another directory, so uploads go where it already reads.
+   */
+  uploadOwner: string;
   /** After a failed load no new throwaway starts before this time (ms). */
   private commandsRetryAt = 0;
 
@@ -227,6 +232,7 @@ export class Session {
     restored?: { id: string; history?: SessionMessage[]; read?: Iterable<string> },
   ) {
     this.id = restored?.id ?? randomUUID();
+    this.uploadOwner = this.id;
     this.model = opts.model ?? "default";
     this.permissionMode = opts.permissionMode ?? "default";
     this.effort = opts.effort ?? "default";
@@ -264,6 +270,7 @@ export class Session {
     // The level is per CLI process (SDK): a new one starts empty.
     this.backgroundLevel = new Set();
     this.ambientTasks.clear();
+    this.uploadOwner = this.id;
     const up = this.opts.uploadDir?.(this.id);
     const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
     const rules = sessionRules(this.grants);
@@ -1101,6 +1108,7 @@ export class Session {
   private handOver(id: string, clearId: string | undefined): Session {
     const heir = Session.restore(id, this.cwd, [], { ...this.opts, model: this.model, permissionMode: this.permissionMode, effort: this.effort });
     heir.cleared = true;
+    heir.uploadOwner = this.uploadOwner;
     // Background calls (shells, subagent runs) still run in the CLI: the heir owns them (shells list, Stop agent, their
     // notification); here they end as a restore of this transcript shows them.
     for (const part of this.adapter.endCalls(true)) this.emit(part);

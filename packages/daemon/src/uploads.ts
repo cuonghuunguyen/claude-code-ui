@@ -79,6 +79,8 @@ export function createUploads(o: { dir?: string; now?: () => number; uid?: numbe
       if (typeof token !== "string" || !DRAFT_TOKEN.test(token)) return undefined;
       const t = now();
       const d = drafts.get(token);
+      // A claimed token is spent: the session has an id of its own to upload with (a copy of the token must not reach its folder).
+      if (d?.claimed && !expired(d)) return undefined;
       if (d && !expired(d)) {
         d.at = t;
         return d.id;
@@ -101,6 +103,10 @@ export function createUploads(o: { dir?: string; now?: () => number; uid?: numbe
       d.claimed = true;
       d.at = now();
       return d.id;
+    },
+    draftClaimed(token: string): boolean {
+      const d = drafts.get(token);
+      return !!d?.claimed && !expired(d);
     },
     hasDraftId(id: string): boolean {
       for (const d of drafts.values()) if (d.id === id) return true;

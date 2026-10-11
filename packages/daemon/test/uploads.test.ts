@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,8 +23,35 @@ describe("uploads", () => {
     expect(lstatSync(file).mode & 0o777).toBe(0o600);
   });
 
-  it("rejects a session id that is not a lowercase UUID", () => {
+  it.skipIf(!posix)("uses a parent of another user only as a fallback", () => {
     const dir = tmp();
+    const up = createUploads({ dir, uid: process.getuid!() + 1 });
+    expect(up.parent).not.toBe(dir);
+    expect(createUploads({ dir, uid: process.getuid!() }).parent).toBe(dir);
+  });
+
+  it.skipIf(!posix)("tightens an existing parent and session folder to 0700", () => {
+    const dir = join(tmp(), "p");
+    mkdirSync(dir, { mode: 0o755 });
+    chmodSync(dir, 0o755);
+    const up = createUploads({ dir });
+    expect(lstatSync(dir).mode & 0o777).toBe(0o700);
+    mkdirSync(join(dir, ID_A), { mode: 0o755 });
+    chmodSync(join(dir, ID_A), 0o755);
+    up.dirFor(ID_A);
+    expect(lstatSync(join(dir, ID_A)).mode & 0o777).toBe(0o700);
+  });
+
+  it("a claimed draft token is refused for uploads", () => {
+    const up = createUploads({ dir: tmp() });
+    up.ownerOfDraft(T);
+    up.claim(T);
+    expect(up.ownerOfDraft(T)).toBeUndefined();
+    expect(up.draftClaimed(T)).toBe(true);
+  });
+
+  it("rejects a session id that is not a lowercase UUID", () => {
+    const dir = join(tmp(), "p");
     const up = createUploads({ dir });
     for (const id of ["../x", ID_A.toUpperCase(), "", "..", `${ID_A}/..`]) expect(() => up.dirFor(id)).toThrow();
     expect(() => up.store("../x", "a", Buffer.alloc(0))).toThrow();
@@ -51,7 +78,7 @@ describe("uploads", () => {
     expect(up.hasDraftId(id!)).toBe(true);
     expect(up.claim(T)).toBe(id);
     expect(up.claim(T)).toBeUndefined();
-    expect(up.ownerOfDraft(T)).toBe(id);
+    expect(up.ownerOfDraft(T)).toBeUndefined();
     for (const bad of ["x", "a".repeat(63), "A".repeat(64)]) {
       expect(up.ownerOfDraft(bad)).toBeUndefined();
       expect(up.claim(bad)).toBeUndefined();

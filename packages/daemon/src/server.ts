@@ -268,6 +268,8 @@ export function createDaemon(opts: {
   uploadDir?: string;
   /** Orphan sweep of the upload parent: first run after 60 s, then every `uploadSweepMs` (default 6 h); 0 = off (tests). */
   uploadSweepMs?: number;
+  /** Delay of the first sweep (default 60 s); tests shorten it. */
+  uploadSweepFirstMs?: number;
   projectsDir?: string;
   settingsFile?: string;
   /** The Claude user config folder (`settings.json` holds `permissions.defaultMode`); default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. */
@@ -931,6 +933,9 @@ export function createDaemon(opts: {
     return cwd ? { cwd, live, transcript: !!info } : undefined;
   }
 
+  /** A live session whose CLI reads the folder of `id` (itself or, after /clear, its parent's folder). */
+  const folderInUse = (id: string) => [...sessions.values()].some((s) => s.uploadOwner === id);
+
   /** session.delete, also the web app's Remove and worker_remove: the error to report, or undefined once the session is gone. */
   async function deleteSessionById(id: string): Promise<{ code: string; message: string } | undefined> {
     // A restore already in flight would put the session back after the delete; let it finish, then close it below.
@@ -953,7 +958,8 @@ export function createDaemon(opts: {
       deleting.delete(id);
     }
     caches.delete(id);
-    await uploads.remove(id).catch((e) => console.error(`session ${id}: removing its uploads failed:`, e));
+    // The folder of a session whose CLI a /clear heir still uses stays with the heir.
+    if (!folderInUse(id)) await uploads.remove(id).catch((e) => console.error(`session ${id}: removing its uploads failed:`, e));
     if (settings.get(id)) saveSettings(() => settings.delete([id]));
     broadcast({ type: "sessions.changed", deleted: id });
     return undefined;
@@ -1424,10 +1430,11 @@ export function createDaemon(opts: {
           if (msg.sessionId !== undefined) {
             if (typeof msg.sessionId !== "string" || !SESSION_DIR.test(msg.sessionId) || deleting.has(msg.sessionId) || !(await locate(msg.sessionId)))
               return fail("unknown_session", "no such session");
-            owner = msg.sessionId;
+            // After /clear the heir's CLI still reads its parent's folder: the file goes where the CLI can read it.
+            owner = sessions.get(msg.sessionId)?.uploadOwner ?? msg.sessionId;
           } else if (msg.draft !== undefined) {
             owner = uploads.ownerOfDraft(msg.draft);
-            if (!owner) return fail("bad_upload", "draft must be 64 hex characters");
+            if (!owner) return fail("bad_upload", typeof msg.draft === "string" && uploads.draftClaimed(msg.draft) ? "draft already used; upload with the sessionId" : "draft must be 64 hex characters");
           } else return fail("bad_upload", "sessionId or draft required; reload the page");
           const buf = Buffer.from(msg.data, "base64");
           if (buf.length > MAX_UPLOAD_BYTES) return fail("too_large", `larger than ${MAX_UPLOAD_BYTES} bytes: ${msg.name}`);
@@ -1903,10 +1910,10 @@ export function createDaemon(opts: {
   const sweepMs = opts.uploadSweepMs ?? UPLOAD_SWEEP_MS;
   const sweepUploads = () =>
     uploads
-      .sweep(async (id) => sessions.has(id) || restoring.has(id) || uploads.hasDraftId(id) || (await history.getSessionInfo(id).catch(() => undefined)) !== undefined)
+      .sweep(async (id) => sessions.has(id) || restoring.has(id) || uploads.hasDraftId(id) || folderInUse(id) || (await history.getSessionInfo(id).catch(() => true)) !== undefined)
       .then((gone) => gone.length && console.log(`uploads: removed ${gone.length} orphaned folder(s)`))
       .catch((e) => console.error("uploads: sweep failed:", e));
-  const firstSweep = sweepMs > 0 ? setTimeout(() => (void sweepUploads(), void 0), 60_000).unref() : undefined;
+  const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
   http.on("close", () => (orchestration.shutdown(), clearInterval(reaper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).

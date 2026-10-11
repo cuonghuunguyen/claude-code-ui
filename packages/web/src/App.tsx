@@ -940,6 +940,8 @@ export function App() {
       // The new-session tab (and its draft) stays until the first prompt is taken.
       const session = await startSession(client.current!.request, unprompted, cwd, { ...opts, draft: draftUpload.current }, first, (s) => {
         setInfos((i) => ({ ...i, [s.id]: s }));
+        // The token is spent by session.create: later attachments (a retry after a failed first prompt) go by session id.
+        draftUpload.current = rotateDraftToken();
         setOptimistic((o) => (o[NEW_TAB] ? { ...o, [NEW_TAB]: o[NEW_TAB].map((p) => ({ ...p, sessionId: s.id })) } : o));
         // Listed (and so subscribed) before the prompt goes out: its echo can be in the view before the tab switches.
         if (!listed) (listed = true), void refreshList();
@@ -947,7 +949,6 @@ export function App() {
       setOptimistic((o) => movePending(o, session.id));
       setTabs((t) => replaceTab(t, NEW_TAB, session.id));
       open(session.id);
-      draftUpload.current = rotateDraftToken();
     } catch (e) {
       setOptimistic((o) => dropPending(o, NEW_TAB, key));
       // The new-session card shows again after this render; its prompt box got the text back.
@@ -1850,7 +1851,7 @@ export function App() {
                   onDraft={changeDraft}
                   modes={draftModes}
                   onOpenProject={() => setOpeningProject(true)}
-                  onUpload={upload({ draft: draftUpload.current }, draftProject)}
+                  onUpload={(file: File) => upload(unprompted.current?.cwd === draftProject ? { sessionId: unprompted.current.id } : { draft: draftUpload.current }, draftProject)(file)}
                   onSearch={search}
                   commandsRev={Object.values(configChanged).reduce((a, b) => a + b, 0)}
                   onCommands={(cwd) => client.current!.request<CommandsResult>({ type: "session.commands", cwd }).then((r) => r.commands)}

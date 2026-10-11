@@ -752,7 +752,11 @@ describe("daemon", () => {
     expect(calls.find((o) => o.sessionId === X)!.additionalDirectories![0]).toBe(join(uploadParent, X));
     const second = (await c.request({ type: "session.create", cwd: webRoot, draft: T })) as { result: { session: { id: string } } };
     expect(second.result.session.id).not.toBe(X);
-    const again = (await c.request({ type: "fs.upload", name: "f3.txt", data, draft: T })) as { result: { path: string } };
+    // A claimed token is spent: a copy of it (duplicated tab) cannot place files in that session's folder.
+    expect(await c.request({ type: "fs.upload", name: "f3.txt", data, draft: T })).toMatchObject({ code: "bad_upload" });
+    expect(readdirSync(join(uploadParent, X)).length).toBe(2);
+    // The retry path uses the session id.
+    const again = (await c.request({ type: "fs.upload", name: "f3.txt", data, sessionId: X })) as { result: { path: string } };
     expect(relative(uploadParent, again.result.path).split(sep)[0]).toBe(X);
     const bad = (await c.request({ type: "session.create", cwd: webRoot, draft: "zz" })) as { type: string; result: { session: { id: string } } };
     expect(bad.type).toBe("reply");
@@ -2150,6 +2154,8 @@ describe("daemon", () => {
       const deleted = a.request({ type: "session.delete", sessionId: id });
       await new Promise((r) => setTimeout(r, 20));
       expect(await b.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
+      // The transcript still exists while the delete runs: only the deleting guard refuses an upload now.
+      expect(await b.request({ type: "fs.upload", name: "late.txt", data: "aGk=", sessionId: id })).toMatchObject({ code: "unknown_session" });
       release();
       expect(await deleted).toMatchObject({ type: "reply" });
       const list = (await b.request({ type: "session.list" })) as { result: { sessions: unknown[] } };
@@ -4118,6 +4124,93 @@ describe("keep-alive ping on a side's virtual connection (GH-263)", () => {
       expect(uncaught).not.toHaveBeenCalled();
     } finally {
       process.off("uncaughtException", uncaught);
+      d.close();
+    }
+  });
+});
+
+describe("uploads after the session id changes under a running CLI", () => {
+  it("after /clear an upload with the heir's id lands in the folder the running CLI was granted, and is deleted with the right session", async () => {
+    const P = join(mkdtempSync(join(tmpdir(), "up-")), "uploads");
+    let oldId = "";
+    const d = createDaemon({ webRoot, roots: [webRoot], projects: added(webRoot), query: clearQuery as never, token, uploadDir: P, settingsFile: join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json"), history: { listSessions: (async () => []) as never, getSessionInfo: (async (id: string) => (id === oldId ? { sessionId: id, summary: "s", cwd: webRoot } : undefined)) as never, getSessionMessages: (async () => []) as never, deleteSession: (async () => {}) as never } });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const old = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      oldId = old;
+      await c.request({ type: "session.subscribe", sessionId: old, sinceSeq: 0 });
+      calls.length = 0;
+      await c.request({ type: "session.prompt", sessionId: old, text: "hi" });
+      await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+      await c.request({ type: "session.prompt", sessionId: old, text: "/clear" });
+      const cleared = (await c.waitFor((m) => m.type === "event" && m.part.type === "session_cleared")) as Extract<ServerMessage, { type: "event" }>;
+      const heir = (cleared.part as { sessionId: string }).sessionId;
+      const granted = calls.at(-1)!.additionalDirectories!;
+      const queries = calls.length;
+      const up = (await c.request({ type: "fs.upload", name: "after-clear.txt", data: "aGk=", sessionId: heir })) as { result: { path: string } };
+      expect(calls.length).toBe(queries); // the CLI was not restarted
+      expect(granted).toEqual([join(P, old)]);
+      expect(granted.some((g) => up.result.path.startsWith(`${g}${sep}`))).toBe(true);
+      // Deleting the parent session keeps the folder while the heir's CLI is still granted it.
+      expect(await c.request({ type: "session.delete", sessionId: old })).toMatchObject({ type: "reply" });
+      expect(existsSync(up.result.path)).toBe(true);
+    } finally {
+      d.close();
+    }
+  });
+});
+
+describe("upload sweep wiring", () => {
+  const aged = (P: string, id: string) => {
+    const dir = join(P, id, "u-aaaaaa");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "f.txt"), "x");
+    const t = new Date(Date.now() - 48 * 3600_000);
+    for (const x of [join(dir, "f.txt"), dir, join(P, id)]) utimesSync(x, t, t);
+    return join(P, id);
+  };
+  it("sweeps orphans on a timer and spares live sessions, transcript-only sessions and sessions whose transcript read fails", async () => {
+    const P = join(mkdtempSync(join(tmpdir(), "up-")), "uploads");
+    const [known, broken, orphan, later] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    const d = createDaemon({
+      webRoot,
+      roots: [webRoot],
+      projects: added(webRoot),
+      query: fakeQuery as never,
+      token,
+      uploadDir: P,
+      uploadSweepFirstMs: 30,
+      uploadSweepMs: 100,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (id: string) => {
+          if (id === broken) throw new Error("EBUSY");
+          return id === known ? { sessionId: id, summary: "s", cwd: webRoot } : undefined;
+        }) as never,
+        getSessionMessages: (async () => []) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const live = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      await c.request({ type: "fs.upload", name: "f.txt", data: "aGk=", sessionId: live });
+      const t = new Date(Date.now() - 48 * 3600_000);
+      for (const x of [join(P, live), ...readdirSync(join(P, live)).map((n) => join(P, live, n))]) utimesSync(x, t, t);
+      const dirs = [known, broken, orphan].map((id) => aged(P, id));
+      const until = async (f: () => boolean) => {
+        for (let i = 0; i < 100 && !f(); i++) await new Promise((r) => setTimeout(r, 20));
+        expect(f()).toBe(true);
+      };
+      await until(() => !existsSync(dirs[2]!));
+      expect(existsSync(join(P, live))).toBe(true);
+      expect(existsSync(dirs[0]!)).toBe(true);
+      expect(existsSync(dirs[1]!)).toBe(true);
+      // The interval keeps running.
+      const l = aged(P, later);
+      await until(() => !existsSync(l));
+    } finally {
       d.close();
     }
   });
