@@ -1186,6 +1186,18 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "linked" })).toMatchObject({ result: { paths: ["linkedin"] } });
   });
 
+  it("two consecutive saves with the returned mtime both succeed (GH-282)", async () => {
+    const file = join(webRoot, "proj", "twice.txt");
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    writeFileSync(file, "one");
+    const c = await client();
+    const read = (await c.request({ type: "fs.read", path: file })) as { result: { mtime: number } };
+    const w1 = (await c.request({ type: "fs.write", path: file, content: "two", baseMtime: read.result.mtime })) as { result: { mtime: number } };
+    expect(w1.result.mtime).toBe(statSync(file).mtimeMs);
+    expect(await c.request({ type: "fs.write", path: file, content: "three", baseMtime: w1.result.mtime })).toMatchObject({ result: {} });
+    expect(readFileSync(file, "utf8")).toBe("three");
+  });
+
   it("fs.write keeps the inode, leaves no tail bytes, and refuses a directory (GH-282)", async () => {
     const file = join(webRoot, "proj", "w.txt");
     mkdirSync(join(webRoot, "proj"), { recursive: true });

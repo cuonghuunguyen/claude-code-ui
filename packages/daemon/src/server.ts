@@ -1752,7 +1752,10 @@ export function createDaemon(opts: {
             const data = Buffer.from(msg.content);
             ftruncateSync(fd, 0);
             writeAll(fd, data);
-            return reply({ mtime: fstatSync(fd).mtimeMs });
+            // Closed first: NTFS may set the write time when the handle closes, and the editor keeps this value as its next baseMtime.
+            closeSync(fd);
+            fd = undefined;
+            return reply({ mtime: statSync(file).mtimeMs });
           } catch (err) {
             return fsFail(err, msg.path);
           } finally {
