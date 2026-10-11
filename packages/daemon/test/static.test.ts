@@ -183,19 +183,30 @@ describe("static files: CSP and anti-framing (GH-280)", () => {
     expect(r405.headers["x-frame-options"]).toBe("DENY");
     expect(String(r405.headers["content-security-policy"])).toContain("frame-ancestors 'none'");
   });
-  it("policy has every required directive", () => {
+  it("policy is exactly this, per directive (any loosening fails)", () => {
     const d = Object.fromEntries(APP_CSP.split(";").map((x) => x.trim().split(/\s+/)).map(([k, ...v]) => [k, v]));
-    expect(d["frame-ancestors"]).toEqual(["'none'"]);
-    expect(d["default-src"]).toEqual(["'self'"]);
-    expect(d["script-src"]).toEqual(["'self'", "'wasm-unsafe-eval'"]);
-    expect(d["style-src"]).toContain("'unsafe-inline'");
-    expect(d["img-src"]).not.toContain("https:");
-    expect(d["img-src"]).not.toContain("*");
-    expect(d["connect-src"]).toContain("'self'");
-    expect(d["object-src"]).toEqual(["'none'"]);
-    expect(d["base-uri"]).toEqual(["'none'"]);
-    expect(d["form-action"]).toEqual(["'none'"]);
-    expect(d["script-src"]).not.toContain("'unsafe-inline'");
-    expect(d["script-src"]).not.toContain("'unsafe-eval'");
+    expect(d).toEqual({
+      "default-src": ["'self'"],
+      "script-src": ["'self'", "'wasm-unsafe-eval'"],
+      "style-src": ["'self'", "'unsafe-inline'"],
+      "img-src": ["'self'", "data:", "blob:"],
+      "media-src": ["'self'"],
+      "font-src": ["'self'"],
+      "connect-src": ["'self'"],
+      "worker-src": ["'self'"],
+      "manifest-src": ["'self'"],
+      "frame-src": ["'none'"],
+      "object-src": ["'none'"],
+      "base-uri": ["'none'"],
+      "form-action": ["'none'"],
+      "frame-ancestors": ["'none'"],
+    });
+  });
+  it("a path outside the root (403) carries them too", async () => {
+    const r = await get("/..%2Fx");
+    expect(r.status).toBe(403);
+    expect(r.headers["x-frame-options"]).toBe("DENY");
+    expect(r.headers["content-security-policy"]).toBe(APP_CSP);
+    expect(r.headers["x-content-type-options"]).toBe("nosniff");
   });
 });
