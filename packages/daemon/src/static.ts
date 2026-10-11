@@ -6,6 +6,34 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, join, sep } from "node:path";
 import { gzip } from "node:zlib";
 
+/**
+ * Content-Security-Policy of the web app (GH-280). One directive per line, each with its reason: relax here only.
+ * Not applied to /media (own sandbox CSP, media.ts). Remote images are blocked on purpose (image-exfil hardening).
+ */
+export const APP_CSP = [
+  "default-src 'self'", // everything not listed below: own origin only
+  "script-src 'self' 'wasm-unsafe-eval'", // bundle only, no inline script, no eval; wasm-unsafe-eval = Shiki oniguruma wasm
+  "style-src 'self' 'unsafe-inline'", // Tailwind/Base UI/CodeMirror/Shiki/KaTeX/Mermaid set style attributes and <style>
+  "img-src 'self' data: blob:", // own /media, pasted/attached images (data:), previews (blob:); no http(s): remote images
+  "media-src 'self'", // audio/video from /media (the app plays no blob: media)
+  "font-src 'self'", // bundled woff2 files (KaTeX, terminal font); the build inlines no data: font
+  "connect-src 'self'", // fetch + WebSocket to the own origin (ws/wss on the same host are covered by 'self')
+  "worker-src 'self'", // service worker (/sw.js); the app starts no Worker
+  "manifest-src 'self'", // /manifest.webmanifest
+  "frame-src 'none'", // the app embeds no frames
+  "object-src 'none'", // no plugins
+  "base-uri 'none'", // no <base> rewriting
+  "form-action 'none'", // no form posts
+  "frame-ancestors 'none'", // nobody may frame the app (clickjacking); only effective as a header
+].join("; ");
+
+/** Added to every response of serveStatic, error responses included. */
+const SECURITY_HEADERS = {
+  "content-security-policy": APP_CSP,
+  "x-frame-options": "DENY", // anti-framing for browsers without CSP frame-ancestors
+  "x-content-type-options": "nosniff",
+} as const;
+
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript",
@@ -65,13 +93,13 @@ const gzipOf = (file: string, etag: string): Promise<Buffer> => {
 
 const etagOf = (st: Stats) => `W/"${st.size.toString(36)}-${Math.floor(st.mtimeMs).toString(36)}"`;
 
-const notFound = (res: ServerResponse, text: string) => void res.writeHead(404, { "content-type": "text/plain", "cache-control": "no-store" }).end(text);
+const notFound = (res: ServerResponse, text: string) => void res.writeHead(404, { ...SECURITY_HEADERS, "content-type": "text/plain", "cache-control": "no-store" }).end(text);
 
 /** `path` is the decoded request pathname. */
 export function serveStatic(req: IncomingMessage, res: ServerResponse, root: string, path: string): void {
-  if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
+  if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { ...SECURITY_HEADERS, allow: "GET, HEAD" }).end();
   let file = join(root, path);
-  if (!file.startsWith(root + sep) && file !== root) return void res.writeHead(403).end();
+  if (!file.startsWith(root + sep) && file !== root) return void res.writeHead(403, SECURITY_HEADERS).end();
   // A variant file is only served through negotiation, never by its own name.
   if (/\.(br|gz)$/.test(path)) return notFound(res, "not found");
   let st = fileStat(file);
@@ -86,6 +114,7 @@ export function serveStatic(req: IncomingMessage, res: ServerResponse, root: str
   }
   const ext = extname(file);
   const headers: Record<string, string | number> = {
+    ...SECURITY_HEADERS,
     "content-type": MIME[ext] ?? "application/octet-stream",
     "cache-control": logical.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache",
   };
