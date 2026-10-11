@@ -300,8 +300,10 @@ describe("sides", () => {
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });
     sides.sessionSide.delete(sideSession);
     expect(await c.request({ type: "session.subscribe", sessionId: sideSession, sinceSeq: 0 })).toMatchObject({ result: { session: { id: sideSession, cwd: wslRoot } } });
-    // The router's probe of the sides is a background subscription: it must not hold the side session's CLI forever.
-    expect(sideFrames.join("")).toMatch(/"sinceSeq":9007199254740991,"background":true/);
+    // The hub finds the session by listing the side: no side frame names the ID before the list (GH-328).
+    const at = (re: RegExp) => sideFrames.findIndex((f) => re.test(f));
+    expect(at(/"type":"session\.list"/)).toBeGreaterThanOrEqual(0);
+    expect(at(new RegExp(sideSession))).toBeGreaterThan(at(/"type":"session\.list"/));
     sidePush({ sessionId: sideSession, title: "side work", body: "Finished" });
     await expect.poll(() => pushes).toEqual([{ sessionId: sideSession, title: "side work", body: "Finished" }]);
     c.ws.close();

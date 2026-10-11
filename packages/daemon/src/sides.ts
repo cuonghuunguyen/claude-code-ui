@@ -315,8 +315,8 @@ function lines(stream: Readable, onLine: (line: string) => void, max = Infinity,
 type Side = SideInfo & { proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void> };
 
 
-/** Longest wait for one side's answer to the lookup of an unlisted session ID (GH-321). */
-export const PROBE_TIMEOUT_MS = 5_000;
+/** Longest wait for one side's list when the hub looks up an unlisted session ID (GH-328). */
+export const LOOKUP_TIMEOUT_MS = 5_000;
 
 /** A path a side may claim as a cwd: absolute, normalized, no trailing slash (GH-320: other spellings slip past prefix checks). */
 const canonical = (p: string) => p.startsWith("/") && !p.includes("\0") && posix.normalize(p) === p && (p === "/" || !p.endsWith("/"));
@@ -738,8 +738,8 @@ export function createRouter(opts: {
   /** fs.media of a side's path: the hub serves it (server.ts sideMedia); `call` asks that side. Absent: refused with side_unsupported. */
   /** Longest wait for one media piece from a side (default MEDIA_PIECE_TIMEOUT_MS). */
   mediaTimeoutMs?: number;
-  /** Longest wait for a side's answer to the session lookup of an unlisted ID (default PROBE_TIMEOUT_MS); no answer: not that side's. */
-  probeTimeoutMs?: number;
+  /** Longest wait for a side's list in the lookup of an unlisted session ID (default LOOKUP_TIMEOUT_MS); no answer: the side lists nothing. */
+  lookupTimeoutMs?: number;
   media?: (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>) => Promise<ServerMessage>;
 }) {
   const { sides, send } = opts;
@@ -747,7 +747,7 @@ export function createRouter(opts: {
   /** Answers of side requests the router asked itself (merged lists, fan-outs), by internal reqId. */
   const own = new Map<string, (m: ServerMessage) => void>();
   /** Calls waiting for a side's answer, by their hub reqId: detach settles them. */
-  const pending = new Map<string, { id: string; settle: (m: ServerMessage) => void; type: string; probe: boolean }>();
+  const pending = new Map<string, { id: string; settle: (m: ServerMessage) => void; type: string }>();
   let nextReq = 1;
   /** Requests forwarded to each side, by the browser's reqId: only a reply or error to one of these is accepted from that side (GH-279). */
   const forwarded = new Map<string, Map<string, string>>();
@@ -787,7 +787,7 @@ export function createRouter(opts: {
       if (reqId && own.has(reqId)) {
         // A hub request: only the side it was sent to answers it.
         if (pending.get(reqId)?.id !== id) return;
-        if (m.type === "reply" && !pending.get(reqId)!.probe && !(await noteReply(id, m, pending.get(reqId)!.type))) return own.get(reqId)!(conflict(m)), own.delete(reqId);
+        if (m.type === "reply" && !(await noteReply(id, m, pending.get(reqId)!.type))) return own.get(reqId)!(conflict(m)), own.delete(reqId);
         own.get(reqId)?.(m);
         own.delete(reqId);
         return;
@@ -840,7 +840,7 @@ export function createRouter(opts: {
   };
 
   /** A side's answer to `msg`; an error answer when the side is gone. */
-  const sideCall = (id: string, msg: ClientMessage, timeoutMs?: number, probe = false) =>
+  const sideCall = (id: string, msg: ClientMessage, timeoutMs?: number) =>
     new Promise<ServerMessage>((resolve) => {
       const c = conns.get(id);
       if (!c) return resolve({ type: "error", reqId: msg.reqId, code: "side_not_ready", message: `${id} is not running` });
@@ -853,7 +853,7 @@ export function createRouter(opts: {
         resolve({ ...m, reqId: msg.reqId } as ServerMessage);
       };
       own.set(reqId, settle);
-      pending.set(reqId, { id, settle, type: msg.type, probe });
+      pending.set(reqId, { id, settle, type: msg.type });
       if (timeoutMs) timer = setTimeout(() => settle({ type: "error", reqId, code: "side_timeout", message: `${id} did not answer in ${timeoutMs} ms` }), timeoutMs);
       c.send({ ...msg, reqId } as ClientMessage);
     });
@@ -878,6 +878,32 @@ export function createRouter(opts: {
     await sideCall(id, { type: "settings.set", patch: settings, reqId: "" } as ClientMessage);
   }
 
+  /**
+   * Session rows of each side's list that the side may own (GH-279, GH-321): an unowned ID two or more sides list in one round is
+   * contested; local and foreign IDs are left out. A side that fails its list leaves it out; its state shows in `sides`.
+   */
+  async function claimListed(answers: (readonly [string, ServerMessage])[], localIds: Set<string>): Promise<Map<string, ListLike>> {
+    const valid = answers.filter((x): x is readonly [string, Extract<ServerMessage, { type: "reply" }>] => x[1].type === "reply" && Array.isArray((x[1].result as ListLike | null)?.sessions));
+    const listedBy = new Map<string, string[]>();
+    for (const [id, a] of valid) for (const sid of new Set((a.result as ListLike).sessions.map((s) => s.id))) if (!localIds.has(sid) && !sides.sessionSide.has(sid)) listedBy.set(sid, [...(listedBy.get(sid) ?? []), id]);
+    for (const [sid, ids] of listedBy) if (ids.length > 1) sides.contest(sid, ids);
+    const out = new Map<string, ListLike>();
+    for (const [id, a] of valid) {
+      const r = a.result as ListLike;
+      // A side lists its own sessions only: not an ID the local daemon lists or has, nor one of another side.
+      const owned = await Promise.all(r.sessions.map(async (s) => (localIds.has(s.id) ? (sides.clash(id, s.id), false) : await claimSession(id, s.id))));
+      r.sessions = r.sessions.filter((_, i) => owned[i]);
+      out.set(id, r);
+    }
+    return out;
+  }
+  let lookingUp: Promise<unknown> | undefined;
+  /** Each side's list, claimed by the list rules: the hub finds an unlisted ID without sending it to any side (GH-328). One round at a time. */
+  const lookUp = () =>
+    (lookingUp ??= Promise.all([...conns.keys()].map(async (id) => [id, await sideCall(id, { type: "session.list", reqId: "" } as ClientMessage, opts.lookupTimeoutMs ?? LOOKUP_TIMEOUT_MS)] as const))
+      .then((answers) => claimListed(answers, new Set()))
+      .finally(() => (lookingUp = undefined)));
+
   /** The side a message goes to. */
   async function target(msg: ClientMessage & Record<string, unknown>): Promise<string | null> {
     if (typeof msg.side === "string" && (msg.side === LOCAL_SIDE || sides.has(msg.side))) return msg.side;
@@ -886,17 +912,11 @@ export function createRouter(opts: {
       if (known) return known;
       if (sides.contested.has(msg.sessionId)) return null;
       if (conns.size && !(await opts.isLocalSession(msg.sessionId))) {
-        // A link or notification to a side session this connection has not listed yet: ask every side at once (GH-321). Exactly one side naming the ID gets it; two or more: none.
-        const ids = [...conns.keys()];
-        const probe = { type: "session.subscribe", sessionId: msg.sessionId, sinceSeq: Number.MAX_SAFE_INTEGER, background: true, reqId: "" } as ClientMessage;
-        const answers = await Promise.all(ids.map((id) => sideCall(id, probe, opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS, true)));
-        const named = (a: ServerMessage) => a.type === "reply" && (a.result as { session?: { id?: unknown } } | null)?.session?.id === msg.sessionId;
-        const hits = ids.filter((_, i) => named(answers[i]!));
-        if (hits.length > 1) return sides.contest(msg.sessionId, hits), null;
-        if (hits.length === 1) {
-          const hit = hits[0]!;
-          if ((await noteReply(hit, answers[ids.indexOf(hit)] as Extract<ServerMessage, { type: "reply" }>, "session.subscribe")) && sides.sessionSide.get(msg.sessionId) === hit) return hit;
-        }
+        // A link or notification to a side session this connection has not listed yet: list every side, never send the ID to one (GH-328).
+        await lookUp();
+        const owner = sides.sessionSide.get(msg.sessionId);
+        if (owner) return owner;
+        if (sides.contested.has(msg.sessionId)) return null;
       }
       return LOCAL_SIDE;
     }
@@ -917,21 +937,8 @@ export function createRouter(opts: {
       const l = local.result as ListLike;
       for (const p of [...l.sessions.map((s) => s.cwd), ...l.projects, ...l.recentProjects.map((x) => x.cwd), ...Object.values(l.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) sides.markLocal(p);
     }
-    // An unowned ID two or more sides list in one round is contested: neither gets it (GH-321).
-    const localIds = new Set((local.result as ListLike).sessions.map((s) => s.id));
-    const listedBy = new Map<string, string[]>();
-    for (const [id, a] of answers.slice(1)) {
-      if (a.type !== "reply" || !Array.isArray((a.result as ListLike | null)?.sessions)) continue;
-      for (const sid of new Set((a.result as ListLike).sessions.map((s) => s.id))) if (!localIds.has(sid) && !sides.sessionSide.has(sid)) listedBy.set(sid, [...(listedBy.get(sid) ?? []), id]);
-    }
-    for (const [sid, ids] of listedBy) if (ids.length > 1) sides.contest(sid, ids);
-    for (const [id, a] of answers.slice(1)) {
-      // A side that fails its list leaves it out; its state shows in `sides`.
-      if (a.type !== "reply" || !Array.isArray((a.result as ListLike | null)?.sessions)) continue;
-      const r = a.result as ListLike;
-      // A side lists its own sessions only: not an ID the local daemon lists or has, nor one of another side.
-      const owned = await Promise.all(r.sessions.map(async (s) => (localIds.has(s.id) ? (sides.clash(id, s.id), false) : await claimSession(id, s.id))));
-      r.sessions = r.sessions.filter((_, i) => owned[i]);
+    const lists = await claimListed(answers.slice(1), new Set((local.result as ListLike).sessions.map((s) => s.id)));
+    for (const [id, r] of lists) {
       for (const p of [...r.sessions.map((s) => s.cwd), ...r.projects, ...r.recentProjects.map((x) => x.cwd), ...Object.values(r.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) if (sides.claimCwd(id, p)) cwdSides[p] = id;
       merged.worktrees = { ...merged.worktrees, ...r.worktrees };
       merged.sessions = [...merged.sessions, ...r.sessions];
