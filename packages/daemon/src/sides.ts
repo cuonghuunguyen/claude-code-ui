@@ -399,12 +399,13 @@ export function createSides(opts: {
   }
   /** Sides that already showed the clash notice in this run. */
   const clashed = new Set<string>();
-  /** Session IDs two or more sides named while no side owned them (GH-321): no side gets them, until one of those sides exits. */
-  const contested = new Map<string, Set<string>>();
+  /** Session IDs two or more sides named while no side owned them (GH-321): no side gets them for this hub run (GH-328: a contender exiting does not hand them to the others). */
+  const contested = new Set<string>();
   const MAX_CONTESTED = 1000;
   function contest(sessionId: string, ids: string[]) {
-    contested.set(sessionId, new Set(ids));
-    if (contested.size > MAX_CONTESTED) contested.delete(contested.keys().next().value!);
+    contested.delete(sessionId);
+    contested.add(sessionId);
+    if (contested.size > MAX_CONTESTED) contested.delete(contested.values().next().value!);
     for (const id of ids) clash(id, sessionId, true);
   }
   /** A side named a session ID the local daemon has: left out; says so once (log) and in the side's message. */
@@ -546,7 +547,6 @@ export function createSides(opts: {
         delete s.phase;
         Object.assign(s, notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
-        for (const [k, v] of contested) if (v.has(s.id)) contested.delete(k);
         for (const reqId of [...(requestsOf.get(s.id) ?? [])]) forgetRequest(reqId);
         if (!wasReady) reject(new Error(message));
         routers.forEach((r) => r.detach(s.id));

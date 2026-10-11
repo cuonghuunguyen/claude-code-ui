@@ -571,11 +571,29 @@ describe("session lookup (GH-321, GH-328)", () => {
     }
   });
 
-  it("a contested id is free again when one of its sides exits", async () => {
-    const { a, t } = await contested();
-    a.proc.kill();
+  it("a contest stays when one contender exits; the remaining side never gets the id", async () => {
+    const a = fakeSide(lists(B1));
+    const b = fakeSide(lists(B1));
+    const t = await setup(a, b);
+    await t.req({ type: "session.list" });
+    b.proc.kill();
     await t.settle();
+    const [l] = (await t.req({ type: "session.list" })) as any[];
+    expect(l.result.sessions.map((s: any) => s.id)).not.toContain(B1);
+    const r = await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(r).toMatchObject([{ type: "error", code: "side_conflict" }]);
+    expect(t.sides.sessionSide.get(B1)).toBeUndefined();
+    expect(frames(a, "session.subscribe")).toEqual([]);
+  });
+
+  it("the owner side exits after the lookup: the other side still never gets the id", async () => {
+    const a = hostile();
+    const b = fakeSide((m) => (m.type === "session.subscribe" ? { session: { id: B1, cwd: "/b" } } : lists(B1)(m)));
+    const t = await setup(a, b);
     await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
-    expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
+    b.proc.kill();
+    await t.settle();
+    await t.req({ type: "session.list" });
+    expect(t.sides.sessionSide.get(B1)).not.toBe("docker:a");
   });
 });
