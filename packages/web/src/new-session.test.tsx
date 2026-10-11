@@ -97,6 +97,18 @@ it("a first prompt that fails after session.create rejects (the draft stays); th
   expect(created.current).toBeUndefined();
 });
 
+it("startSession sends the draft token with session.create; without one no draft key", async () => {
+  const T = "d".repeat(64);
+  const requests: Record<string, unknown>[] = [];
+  const request = vi.fn(async (msg: Record<string, unknown>) => (requests.push(msg), { session: { id: "s1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" } }));
+  const opts = { model: "default", mode: "default", effort: "default" } as const;
+  await startSession(request as never, {}, "/p/a", { ...opts, draft: T }, { text: "hi", images: [] });
+  expect(requests[0]).toEqual({ type: "session.create", cwd: "/p/a", model: "default", draft: T });
+  requests.length = 0;
+  await startSession(request as never, {}, "/p/a", opts, { text: "hi", images: [] });
+  expect(requests[0]).not.toHaveProperty("draft");
+});
+
 it('"!" in the first prompt box is bash mode: Enter starts the session with the command and the chosen mode; no project, no bash mode', async () => {
   const onStart = vi.fn(async () => {});
   const { el, box, rerender } = await render({ onStart });

@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { PassThrough } from "node:stream";
 import type { AddressInfo } from "node:net";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -621,6 +621,22 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
     await c.waitFor((m) => m.type === "event" && m.sessionId === id && m.part.type === "turn_result");
     const list = await c.request({ type: "session.list" });
     expect(list.result.cwdSides[dockRoot]).toBe("docker:dev");
+    c.ws.close();
+  });
+
+  it("a draft upload and its session.create route by cwd to the same side; a session upload routes by session", async () => {
+    const c = await client(await dport());
+    await c.request({ type: "side.start", side: "docker:dev" });
+    await c.request({ type: "project.open", cwd: dockRoot, side: "docker:dev" });
+    await c.request({ type: "session.list" });
+    const draft = "c".repeat(64);
+    const up = await c.request({ type: "fs.upload", name: "a.txt", data: "aGk=", cwd: dockRoot, draft });
+    expect(up.type).toBe("reply");
+    const created = await c.request({ type: "session.create", cwd: dockRoot, draft });
+    const id = created.result.session.id;
+    expect(up.result.path).toContain(`${sep}${id}${sep}u-`);
+    const own = await c.request({ type: "fs.upload", name: "b.txt", data: "aGk=", sessionId: id });
+    expect(own.result.path).toContain(`${sep}${id}${sep}u-`);
     c.ws.close();
   });
 

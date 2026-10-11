@@ -289,7 +289,7 @@ describe("Session", () => {
   });
 
   it("session-scoped grants are re-applied when the query resumes; saved rules are not", async () => {
-    const s = new Session("/tmp", { query: permissionQuery as never, uploadDir: "/tmp/up" });
+    const s = new Session("/tmp", { query: permissionQuery as never, uploadDir: () => "/tmp/up" });
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
     const suggestions = [
@@ -305,6 +305,23 @@ describe("Session", () => {
     expect(s.releaseQuery()).toBe(true);
     s.prompt("again");
     expect(calls.at(-1)).toMatchObject({ allowedTools: ["Bash(ls \\(a\\):*)", "Read"], additionalDirectories: ["/tmp/up", "/tmp/x"] });
+  });
+
+  it("a new session with a given id starts the query with that sessionId, not resume", () => {
+    const X = "3f2a1b4c-0000-4000-8000-0000000000aa";
+    const s = new Session("/tmp", { query: permissionQuery as never }, { id: X });
+    expect(s.id).toBe(X);
+    s.prompt("hi");
+    expect(calls.at(-1)).toMatchObject({ sessionId: X });
+    expect(calls.at(-1)).not.toHaveProperty("resume");
+  });
+
+  it("uploadDir is asked with the session id", () => {
+    const asked: string[] = [];
+    const s = new Session("/tmp", { query: permissionQuery as never, uploadDir: (id) => (asked.push(id), `/up/${id}`) });
+    s.prompt("hi");
+    expect(asked).toEqual([s.id]);
+    expect(calls.at(-1)).toMatchObject({ additionalDirectories: [`/up/${s.id}`] });
   });
 
   it("a query without session grants starts without allowedTools", () => {

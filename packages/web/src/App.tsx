@@ -125,6 +125,7 @@ import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGr
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
+import { draftToken, rotateDraftToken } from "./upload-owner.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -925,6 +926,8 @@ export function App() {
    */
   // A session whose first prompt failed: the retry from the new-session tab sends to it instead of creating another.
   const unprompted = useRef<SessionInfo>(undefined);
+  // GH-281: the new-session tab's uploads belong to this token until session.create claims them; the next draft gets a new one.
+  const draftUpload = useRef(draftToken());
   async function createSession(cwd: string, opts: StartOptions, first: FirstMessage) {
     setError(undefined);
     if (status !== "connected") throw new Error(`the daemon is ${status}`);
@@ -935,7 +938,7 @@ export function App() {
     let listed = false;
     try {
       // The new-session tab (and its draft) stays until the first prompt is taken.
-      const session = await startSession(client.current!.request, unprompted, cwd, opts, first, (s) => {
+      const session = await startSession(client.current!.request, unprompted, cwd, { ...opts, draft: draftUpload.current }, first, (s) => {
         setInfos((i) => ({ ...i, [s.id]: s }));
         setOptimistic((o) => (o[NEW_TAB] ? { ...o, [NEW_TAB]: o[NEW_TAB].map((p) => ({ ...p, sessionId: s.id })) } : o));
         // Listed (and so subscribed) before the prompt goes out: its echo can be in the view before the tab switches.
@@ -944,6 +947,7 @@ export function App() {
       setOptimistic((o) => movePending(o, session.id));
       setTabs((t) => replaceTab(t, NEW_TAB, session.id));
       open(session.id);
+      draftUpload.current = rotateDraftToken();
     } catch (e) {
       setOptimistic((o) => dropPending(o, NEW_TAB, key));
       // The new-session card shows again after this render; its prompt box got the text back.
@@ -1161,10 +1165,10 @@ export function App() {
   const sidePane = pane === "graph" && !isGit ? "files" : pane;
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
-  const upload = (uploadCwd?: string) => async (file: File) => {
+  const upload = (owner: { sessionId: string } | { draft: string }, uploadCwd?: string) => async (file: File) => {
     const data = (await readDataUrl(file)).replace(/^data:[^,]*,/, "");
     // The session's side keeps the file: its Claude reads it there.
-    return (await client.current!.request<UploadResult>({ type: "fs.upload", name: file.name, data, ...(uploadCwd && { cwd: uploadCwd }) })).path;
+    return (await client.current!.request<UploadResult>({ type: "fs.upload", name: file.name, data, ...owner, ...(uploadCwd && { cwd: uploadCwd }) })).path;
   };
   // Offline, a request would wait for the reconnect with no feedback; a reply that never comes times out.
   const search = (cwd: string) => (query: string) =>
@@ -1720,7 +1724,7 @@ export function App() {
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
-                        onUpload={upload(s.cwd)}
+                        onUpload={upload({ sessionId: s.id }, s.cwd)}
                         onPrompt={(text, images) => {
                           // While the /clear runs the message waits: its bubble shows now, it is sent once the tab follows (or the /clear ends without).
                           if (!v.externalTurn && clearing(v, pend)) {
@@ -1846,7 +1850,7 @@ export function App() {
                   onDraft={changeDraft}
                   modes={draftModes}
                   onOpenProject={() => setOpeningProject(true)}
-                  onUpload={upload(draftProject)}
+                  onUpload={upload({ draft: draftUpload.current }, draftProject)}
                   onSearch={search}
                   commandsRev={Object.values(configChanged).reduce((a, b) => a + b, 0)}
                   onCommands={(cwd) => client.current!.request<CommandsResult>({ type: "session.commands", cwd }).then((r) => r.commands)}
@@ -2183,12 +2187,12 @@ export async function startSession(
   request: Client["request"],
   created: { current?: SessionInfo },
   cwd: string,
-  { model, mode, effort }: StartOptions,
+  { model, mode, effort, draft }: StartOptions,
   first: FirstMessage,
   onInfo: (s: SessionInfo) => void = () => {},
 ): Promise<SessionInfo> {
   const reused = created.current?.cwd === cwd;
-  let session = reused ? created.current! : (await request<CreateResult>({ type: "session.create", cwd, model })).session;
+  let session = reused ? created.current! : (await request<CreateResult>({ type: "session.create", cwd, model, ...(draft && { draft }) })).session;
   created.current = session;
   onInfo(session);
   // Before the first prompt, mode and effort become the query's start options; on failure the prompt is not sent.
@@ -2443,7 +2447,8 @@ const modesOf = (offered: PermissionMode[], model: string, models: ModelInfo[]) 
 
 const autoUnavailable = (models: ModelInfo[], model: string) => `Auto mode not available for ${models.find((m) => m.value === model)?.displayName ?? model}; switched to Ask`;
 
-export type StartOptions = { model: string; mode: PermissionMode; effort: Effort };
+/** `draft`: the new-session tab's upload token (upload-owner.ts), claimed by session.create. */
+export type StartOptions = { model: string; mode: PermissionMode; effort: Effort; draft?: string };
 /** What starts a session: a first prompt, or a bash mode command (`!` in the first prompt box). */
 export type FirstMessage = { text: string; images: string[] } | { command: string };
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");

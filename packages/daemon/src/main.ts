@@ -17,6 +17,7 @@ import { exitOnSignal, logExit } from "./exit-log.ts";
 import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
 import { startServe, tailscalePreflight } from "./tailscale.ts";
 import { configDir, loadToken, pairingUrl } from "./token.ts";
+import { defaultUploadsDir } from "./uploads.ts";
 import { installVersion, latestNewer, parseRegistry, pruneVersions, versionsDir } from "./update.ts";
 import { createBuildInfo } from "./build-info.ts";
 
@@ -59,7 +60,7 @@ const lanIps = lan ? Object.values(networkInterfaces()).flat().filter((a) => a &
 // The installed package ships the web build as dist/web beside this file; a source checkout builds packages/web/dist.
 const bundledWeb = new URL("./web", import.meta.url);
 const webRoot = fileURLToPath(existsSync(bundledWeb) ? bundledWeb : new URL("../../web/dist", import.meta.url));
-const state = { settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }) };
+const state = { uploadDir: defaultUploadsDir(), settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }) };
 
 if (side) {
   // A fresh container has no ~/.config: the hub's loadToken creates the config dir, a side has none.

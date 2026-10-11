@@ -1,5 +1,5 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
-import { closeSync, constants, createReadStream, existsSync, fstatSync, openSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { closeSync, constants, createReadStream, existsSync, fstatSync, openSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -26,6 +26,7 @@ import { searchTranscripts } from "./content-search.ts";
 import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
+import { createUploads, SESSION_DIR } from "./uploads.ts";
 import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
@@ -80,6 +81,8 @@ function decodeText(buf: Buffer): { content: string } | { code: "binary" | "not_
 const WATCH_INTERVAL_MS = 1000;
 /** Idle close of unheld sessions (docs/spec.md "Idle close"): the one place of the timeout and the scan interval. */
 export const IDLE_CLOSE_MS = 10 * 60_000;
+/** Orphaned upload folders are looked for this often (uploads.ts sweep). */
+const UPLOAD_SWEEP_MS = 6 * 3600_000;
 const IDLE_CHECK_MS = 60_000;
 
 /** A new connection gets a fresh plan usage read when the last one is older (reset times pass without a turn). */
@@ -242,7 +245,7 @@ async function lastMessageAt(projectsDir: string, cwd: string, sessionId: string
 /**
  * `roots`: allowlisted directories for session cwds, the session list and the directory picker (docs/spec.md "Security").
  * `push`: Web Push sender; without it push.* requests fail. `allowBypass`: sessions may switch to bypassPermissions.
- * `uploadDir`: parent of the fs.upload folders (default: the OS temp dir).
+ * `uploadDir`: parent of the per-session upload folders (default: a fresh mkdtemp folder, tests); main.ts passes defaultUploadsDir().
  * `projectsDir`: the SDK's transcript folder (default: `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`).
  * `settingsFile`: JSON file keeping each session's model, permission mode and effort for a restore after a restart
  * (the SDK transcript has mode and effort only per prompt); none = not kept.
@@ -263,6 +266,8 @@ export function createDaemon(opts: {
   push?: Push;
   allowBypass?: boolean;
   uploadDir?: string;
+  /** Orphan sweep of the upload parent: first run after 60 s, then every `uploadSweepMs` (default 6 h); 0 = off (tests). */
+  uploadSweepMs?: number;
   projectsDir?: string;
   settingsFile?: string;
   /** The Claude user config folder (`settings.json` holds `permissions.defaultMode`); default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. */
@@ -304,12 +309,8 @@ export function createDaemon(opts: {
 }) {
   const hostnames = new Set([...LOCAL_HOSTNAMES, ...(opts.hostnames ?? [])]);
   const logEpoch = randomUUID();
-  /**
-   * fs.upload parent: one private (0700, mkdtemp) folder per daemon. Made up front: every session gets it as an
-   * additional directory, so Claude reads an attachment without asking.
-   */
-  const uploadParent = opts.uploadDir ?? mkdtempSync(join(tmpdir(), "claude-ui-"));
-  mkdirSync(uploadParent, { recursive: true, mode: 0o700 });
+  /** fs.upload storage: one private folder per session; a session gets only its own as an additional directory, so Claude reads an attachment without asking (uploads.ts). */
+  const uploads = createUploads({ dir: opts.uploadDir });
   const sessions = new Map<string, Session>();
   const settings = createSessionSettings({ file: opts.settingsFile });
   /** A failed save keeps the change in memory for the run (session-settings.ts). */
@@ -330,7 +331,14 @@ export function createDaemon(opts: {
     onLimitStop: (id: string, resetsAt: number | undefined) => autoContinue.schedule(id, resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined)),
     allowBypass: opts.allowBypass,
     supportsAuto,
-    uploadDir: uploadParent,
+    uploadDir: (id: string) => {
+      try {
+        return uploads.dirFor(id);
+      } catch (e) {
+        console.error(`session ${id}: upload folder failed:`, e);
+        return undefined;
+      }
+    },
     query: opts.query,
     readTranscript,
     // The stale-turn check reads only the transcript's tail, not the chain and its subagent runs (GH-239).
@@ -945,6 +953,7 @@ export function createDaemon(opts: {
       deleting.delete(id);
     }
     caches.delete(id);
+    await uploads.remove(id).catch((e) => console.error(`session ${id}: removing its uploads failed:`, e));
     if (settings.get(id)) saveSettings(() => settings.delete([id]));
     broadcast({ type: "sessions.changed", deleted: id });
     return undefined;
@@ -1275,7 +1284,10 @@ export function createDaemon(opts: {
           await modelList().catch(() => {});
           // A removal may have started during the await: no live session in a deleted directory.
           if (isRemoving(cwd) || !existsSync(cwd)) return fail("worktree_removing", "This worktree is being removed");
-          const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode: defaultModeFor(cwd, msg.model) })));
+          // The draft token of the new-session tab's uploads: the session gets their id, and with it their folder (one claim per token).
+          const claimed = typeof msg.draft === "string" ? uploads.claim(msg.draft) : undefined;
+          if (msg.draft !== undefined && !claimed) console.log("session.create: draft uploads not claimed");
+          const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode: defaultModeFor(cwd, msg.model) }), claimed ? { id: claimed } : undefined));
           addProject(cwd);
           return reply({ session: s.info() });
         }
@@ -1408,16 +1420,19 @@ export function createDaemon(opts: {
         }
         case "fs.upload": {
           if (typeof msg.data !== "string" || typeof msg.name !== "string") return fail("bad_upload", "name and data (base64) required");
-          // basename: the name must not climb out of the upload folder.
-          const name = basename(msg.name).replace(/^\.+/, "") || "file";
+          let owner: string | undefined;
+          if (msg.sessionId !== undefined) {
+            if (typeof msg.sessionId !== "string" || !SESSION_DIR.test(msg.sessionId) || deleting.has(msg.sessionId) || !(await locate(msg.sessionId)))
+              return fail("unknown_session", "no such session");
+            owner = msg.sessionId;
+          } else if (msg.draft !== undefined) {
+            owner = uploads.ownerOfDraft(msg.draft);
+            if (!owner) return fail("bad_upload", "draft must be 64 hex characters");
+          } else return fail("bad_upload", "sessionId or draft required; reload the page");
           const buf = Buffer.from(msg.data, "base64");
-          if (buf.length > MAX_UPLOAD_BYTES) return fail("too_large", `larger than ${MAX_UPLOAD_BYTES} bytes: ${name}`);
+          if (buf.length > MAX_UPLOAD_BYTES) return fail("too_large", `larger than ${MAX_UPLOAD_BYTES} bytes: ${msg.name}`);
           try {
-            // One folder per upload keeps the original name, so Claude sees it.
-            // ponytail: uploads are never removed (spec: temp folder, OS temp cleanup); delete on session end if disk use matters.
-            const file = join(mkdtempSync(join(uploadParent, "u-")), name);
-            writeFileSync(file, buf, { mode: 0o600 });
-            return reply({ path: file });
+            return reply({ path: uploads.store(owner, msg.name, buf) });
           } catch (err) {
             return fail("fs_error", String(err));
           }
@@ -1885,7 +1900,15 @@ export function createDaemon(opts: {
               console.log(`session ${s.id}: idle ${Math.round(idleCloseMs / 60_000)} min without a tab, CLI closed`);
         }, Math.min(IDLE_CHECK_MS, idleCloseMs)).unref()
       : undefined;
-  http.on("close", () => (orchestration.shutdown(), clearInterval(reaper), perfMon.close()));
+  const sweepMs = opts.uploadSweepMs ?? UPLOAD_SWEEP_MS;
+  const sweepUploads = () =>
+    uploads
+      .sweep(async (id) => sessions.has(id) || restoring.has(id) || uploads.hasDraftId(id) || (await history.getSessionInfo(id).catch(() => undefined)) !== undefined)
+      .then((gone) => gone.length && console.log(`uploads: removed ${gone.length} orphaned folder(s)`))
+      .catch((e) => console.error("uploads: sweep failed:", e));
+  const firstSweep = sweepMs > 0 ? setTimeout(() => (void sweepUploads(), void 0), 60_000).unref() : undefined;
+  const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
+  http.on("close", () => (orchestration.shutdown(), clearInterval(reaper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, { accept, transcriptCaches: () => [...caches.keys()], orchestration });
 }

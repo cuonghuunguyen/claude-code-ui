@@ -1,15 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
-import { MAX_TERMINAL_INPUT_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
@@ -38,7 +38,8 @@ if (!posix) vi.setConfig({ testTimeout: 120_000 });
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
-const http = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, uploadDir: join(mkdtempSync(join(tmpdir(), "up-")), "claude-ui-uploads") });
+const uploadParent = join(mkdtempSync(join(tmpdir(), "up-")), "claude-ui-uploads");
+const http = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, uploadDir: uploadParent });
 await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
 const { address, port } = http.address() as AddressInfo;
 afterAll(() => void http.close());
@@ -698,23 +699,105 @@ describe("daemon", () => {
     expect(await restored("haiku", "auto")).toBe("default");
   });
 
-  it("stores an uploaded file under its own name in a fresh folder and replies the path", async () => {
-    const c = await client();
-    const r = (await c.request({ type: "fs.upload", name: "../notes.txt", data: Buffer.from("hi").toString("base64") })) as { result: { path: string } };
-    expect(r.result.path).toMatch(/claude-ui-uploads[\\/]u-[^\\/]+[\\/]notes\.txt$/);
-    expect(readFileSync(r.result.path, "utf8")).toBe("hi");
-    expect(await c.request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
-  });
-
-  it("sessions get the upload folder as an additional directory, so Claude reads an attachment without a permission request", async () => {
-    // A prompt with an image is a block array; the CLI does not expand @path there and Claude calls Read on the upload.
+  it("stores an upload in its session's folder and replies the path", async () => {
     const c = await client();
     const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
-    const up = (await c.request({ type: "fs.upload", name: "notes.txt", data: Buffer.from("hi").toString("base64") })) as { result: { path: string } };
-    await c.request({ type: "session.prompt", sessionId: created.result.session.id, text: "read it" });
-    const dirs = calls.find((o) => o.sessionId === created.result.session.id)!.additionalDirectories!;
-    expect(dirs).toHaveLength(1);
-    expect(up.result.path.startsWith(`${dirs[0]}${sep}`)).toBe(true);
+    const id = created.result.session.id;
+    const data = Buffer.from("hi").toString("base64");
+    const r = (await c.request({ type: "fs.upload", name: "../notes.txt", data, sessionId: id })) as { result: { path: string } };
+    expect(r.result.path).toMatch(new RegExp(`claude-ui-uploads[\\\\/]${id}[\\\\/]u-[^\\\\/]+[\\\\/]notes\\.txt$`));
+    expect(readFileSync(r.result.path, "utf8")).toBe("hi");
+    expect(await c.request({ type: "fs.upload", name: "x", data: 5, sessionId: id })).toMatchObject({ code: "bad_upload" });
+    expect(await c.request({ type: "fs.upload", name: "x", data })).toMatchObject({ code: "bad_upload" });
+    expect(await c.request({ type: "fs.upload", name: "x", data, sessionId: randomUUID() })).toMatchObject({ code: "unknown_session" });
+    expect(await c.request({ type: "fs.upload", name: "x", data, sessionId: "../x" })).toMatchObject({ code: "unknown_session" });
+    expect(await c.request({ type: "fs.upload", name: "x", data, draft: "short" })).toMatchObject({ code: "bad_upload" });
+    expect(existsSync(join(uploadParent, "..", "x"))).toBe(false);
+  });
+
+  it("refuses an upload above the size limit", async () => {
+    const c = await client();
+    const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+    const big = Buffer.alloc(MAX_UPLOAD_BYTES + 1).toString("base64");
+    expect(await c.request({ type: "fs.upload", name: "big", data: big, sessionId: created.result.session.id })).toMatchObject({ code: "too_large" });
+  });
+
+  it("a session gets only its own upload folder as an additional directory, so Claude reads an attachment without a permission request and not another session's", async () => {
+    // A prompt with an image is a block array; the CLI does not expand @path there and Claude calls Read on the upload.
+    const c = await client();
+    const make = async () => ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+    const [a, b] = [await make(), await make()];
+    const up = (await c.request({ type: "fs.upload", name: "notes.txt", data: Buffer.from("hi").toString("base64"), sessionId: a })) as { result: { path: string } };
+    await c.request({ type: "session.prompt", sessionId: a, text: "read it" });
+    await c.request({ type: "session.prompt", sessionId: b, text: "read it" });
+    const dirs = (id: string) => calls.find((o) => o.sessionId === id)!.additionalDirectories!;
+    expect(dirs(a)).toEqual([join(uploadParent, a)]);
+    expect(dirs(b)).toEqual([join(uploadParent, b)]);
+    expect(up.result.path.startsWith(`${dirs(a)[0]}${sep}`)).toBe(true);
+    expect(up.result.path.startsWith(`${dirs(b)[0]}${sep}`)).toBe(false);
+    expect([...dirs(a), ...dirs(b)]).not.toContain(uploadParent);
+  });
+
+  it("draft uploads go to the session created with the draft token; a second create cannot claim them", async () => {
+    const c = await client();
+    const T = randomBytes(32).toString("hex");
+    const data = Buffer.from("hi").toString("base64");
+    const [u1, u2] = (await Promise.all([1, 2].map((n) => c.request({ type: "fs.upload", name: `f${n}.txt`, data, draft: T })))) as { result: { path: string } }[];
+    const X = relative(uploadParent, u1!.result.path).split(sep)[0]!;
+    expect(X).toMatch(/^[0-9a-f-]{36}$/);
+    expect(relative(uploadParent, u2!.result.path).split(sep)[0]).toBe(X);
+    const created = (await c.request({ type: "session.create", cwd: webRoot, draft: T })) as { result: { session: { id: string } } };
+    expect(created.result.session.id).toBe(X);
+    await c.request({ type: "session.prompt", sessionId: X, text: "read it" });
+    expect(calls.find((o) => o.sessionId === X)!.additionalDirectories![0]).toBe(join(uploadParent, X));
+    const second = (await c.request({ type: "session.create", cwd: webRoot, draft: T })) as { result: { session: { id: string } } };
+    expect(second.result.session.id).not.toBe(X);
+    const again = (await c.request({ type: "fs.upload", name: "f3.txt", data, draft: T })) as { result: { path: string } };
+    expect(relative(uploadParent, again.result.path).split(sep)[0]).toBe(X);
+    const bad = (await c.request({ type: "session.create", cwd: webRoot, draft: "zz" })) as { type: string; result: { session: { id: string } } };
+    expect(bad.type).toBe("reply");
+    expect(bad.result.session.id).not.toBe(X);
+  });
+
+  it("a restored session keeps its upload folder", async () => {
+    const id = "6d3d4e5f-6071-4829-9bac-1d2e3f4a5b6c";
+    const cwd = join(webRoot, "restore-proj");
+    mkdirSync(cwd, { recursive: true });
+    const P = join(mkdtempSync(join(tmpdir(), "up-")), "uploads");
+    const daemon = () =>
+      createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        query: permissionQuery as never,
+        projects: added(cwd),
+        uploadDir: P,
+        history: {
+          listSessions: (async () => [{ sessionId: id, summary: "s", lastModified: 1000, cwd }]) as never,
+          getSessionInfo: (async (sid: string) => (sid === id ? { sessionId: id, summary: "s", lastModified: 1000, cwd } : undefined)) as never,
+          getSessionMessages: (async () => history) as never,
+        },
+      });
+    const run = async (d: ReturnType<typeof daemon>, f: (c: Awaited<ReturnType<typeof client>>) => Promise<void>) => {
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        await f(await client((d.address() as AddressInfo).port));
+      } finally {
+        d.close();
+      }
+    };
+    let path = "";
+    await run(daemon(), async (c) => {
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      path = ((await c.request({ type: "fs.upload", name: "a.txt", data: Buffer.from("hi").toString("base64"), sessionId: id })) as { result: { path: string } }).result.path;
+    });
+    calls.length = 0;
+    await run(daemon(), async (c) => {
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await c.request({ type: "session.prompt", sessionId: id, text: "again" });
+      expect(calls.filter((o) => o.resume === id).at(-1)!.additionalDirectories![0]).toBe(join(P, id));
+      expect(readFileSync(path, "utf8")).toBe("hi");
+    });
   });
 
   it("survives a frame above ws maxPayload: that socket closes with 1009, the daemon keeps answering", async () => {
@@ -1961,12 +2044,14 @@ describe("daemon", () => {
       { sessionId: id, summary: "fix the bug", lastModified: 1000, cwd },
     ];
     const mutations: unknown[][] = [];
+    const uploads = join(mkdtempSync(join(tmpdir(), "up-")), "uploads");
     const d = createDaemon({
       webRoot,
       token,
       roots: [webRoot],
       query: permissionQuery as never,
       projects: added(cwd),
+      uploadDir: uploads,
       history: {
         listSessions: (async () => transcripts) as never,
         getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,
@@ -2015,12 +2100,19 @@ describe("daemon", () => {
       await a.request({ type: "session.subscribe", sessionId: live, sinceSeq: 0 });
       await a.request({ type: "session.prompt", sessionId: live, text: "run tests" });
       await a.waitFor((m) => m.type === "event" && m.part.type === "permission_request");
+      const up = (sid: string) => a.request({ type: "fs.upload", name: "f.txt", data: "aGk=", sessionId: sid });
+      await up(live);
+      await up(id);
+      expect(existsSync(join(uploads, id))).toBe(true);
       expect(await a.request({ type: "session.delete", sessionId: live })).toMatchObject({ code: "session_running" });
+      expect(existsSync(join(uploads, live))).toBe(true);
       // Never prompted into a transcript (fake history): it has nothing to rename.
       expect(await a.request({ type: "session.rename", sessionId: live, title: "x" })).toMatchObject({ code: "rename_failed" });
 
       expect(await a.request({ type: "session.delete", sessionId: id })).toMatchObject({ type: "reply" });
       expect(mutations.at(-1)).toEqual(["delete", id, { dir: cwd }]);
+      expect(existsSync(join(uploads, id))).toBe(false);
+      expect(existsSync(join(uploads, live))).toBe(true);
       await b.waitFor((m) => m.type === "sessions.changed" && m.deleted === id);
       expect((await listed()).map((s) => s.id)).toEqual([live]);
       expect(await a.request({ type: "session.delete", sessionId: id })).toMatchObject({ code: "unknown_session" });
