@@ -8,7 +8,8 @@ export type WinPathKind = "device" | "unc" | "other";
 
 export function winPathKind(p: string): WinPathKind {
   if (/^[\\/]{2}[?.](?:[\\/]|$)/.test(p) || /^[\\/]\?\?[\\/]/.test(p)) return "device";
-  if (/^[\\/]{2}[^\\/?.]/.test(p)) return "unc";
+  // Every other leading pair of separators is UNC to Windows (`\\\\.host\\share`, `\\\\..\\s`): only `\\\\?\\` and `\\\\.\\` are device prefixes.
+  if (/^[\\/]{2}/.test(p)) return "unc";
   return "other";
 }
 
