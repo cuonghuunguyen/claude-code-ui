@@ -20,6 +20,7 @@ import {
   createAdapter,
   imageBlock,
   MAX_FROM_PARTS,
+  omitMedia,
   permissionModesFor,
   type Effort,
   type Event,
@@ -99,7 +100,12 @@ type SessionOpts = Partial<SessionSettings> & {
   permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => { input: Record<string, unknown>; title?: string; onAllow?: () => void } | undefined;
 };
 
-export type Transcript = { main: SessionMessage[]; runs: SessionMessage[][] };
+export type Transcript = {
+  main: SessionMessage[];
+  runs: SessionMessage[][];
+  /** Raw main-transcript lines, when read through JsonlTail (restore: mode and effort fallback). */
+  entries?: readonly unknown[];
+};
 
 // ExitPlanMode comes without suggestions; Claude Code's "Yes, and auto-accept edits" (verified: the CLI then runs in acceptEdits).
 const ACCEPT_EDITS: PermissionUpdate = { type: "setMode", mode: "acceptEdits", destination: "session" };
@@ -331,12 +337,27 @@ export class Session {
   snapshot(from?: string): { seq: number; snapshot: Snapshot } {
     const page = (from !== undefined && this.index.pageFrom(from, MAX_FROM_PARTS)) || this.index.lastPage();
     const aux = page.older ? this.index.aux(page.older.pos) : [];
-    return { seq: this.seq(), snapshot: { heads: this.index.heads(), attentionSeq: this.index.attentionSeq, page, aux } };
+    return { seq: this.seq(), snapshot: { heads: this.index.heads(), attentionSeq: this.index.attentionSeq, page: { ...page, parts: page.parts.map(omitMedia) }, aux } };
   }
 
   /** The page before the part `before`; undefined = unknown cursor. */
   page(before: string, until?: string): TimelinePage | undefined {
-    return this.index.pageBefore(before, until);
+    const page = this.index.pageBefore(before, until);
+    return page && { ...page, parts: page.parts.map(omitMedia) };
+  }
+
+  /** Data URL of a base64 payload a snapshot or page left out (`session.media`); undefined when the part or payload is unknown. */
+  media(partId: string, index: number): string | undefined {
+    const part = this.index.get(partId);
+    if (part?.type === "user_text") {
+      const image = part.images[index];
+      return image?.startsWith("data:") ? image : undefined;
+    }
+    if (part?.type === "tool_result" && Array.isArray(part.output)) {
+      const src = (part.output[index] as { source?: { type?: unknown; media_type?: unknown; data?: unknown } } | undefined)?.source;
+      return src?.type === "base64" && typeof src.data === "string" ? `data:${String(src.media_type)};base64,${src.data}` : undefined;
+    }
+    return undefined;
   }
 
   /** Edit/Write parts older than the part `before`; undefined = unknown cursor. */

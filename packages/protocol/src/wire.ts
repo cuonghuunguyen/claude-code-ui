@@ -56,6 +56,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.page"; sessionId: string; logEpoch: string; before: string; until?: string }
   /** Edit/Write calls (and their results) older than the cursor `before`, for the changes tab. Reply `EditsResult`. */
   | { type: "session.edits"; sessionId: string; logEpoch: string; before: string }
+  /** A base64 payload a snapshot or page left out (images.ts omitMedia): `index` into the tool_result output or the user_text images. Reply `MediaResult`; error `unknown_media`. */
+  | { type: "session.media"; sessionId: string; partId: string; index: number }
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   /** Bash mode: runs `command` with the user's shell in the session cwd (idle only); output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. */
@@ -139,7 +141,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Text files only; `mtime` (ms) identifies the disk version. */
   | { type: "fs.read"; path: string }
   /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). */
-  | { type: "fs.media"; path: string }
+  /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). With `hash` (and `cwd`): the file at that commit, `path` relative to the repository top as in git.fileAt, at most 32 MiB. A side's file or commit is served by the hub (bytes read with media.read). */
+  | { type: "fs.media"; path: string; cwd?: string; hash?: string }
+  /** Bytes of a media file, or of the file at a commit (`cwd` + `hash`, as fs.media): `length` at most 1 MiB, 0 for only size, mtime and type. The hub reads a side's media with it for GET /media. Reply MediaReadResult. */
+  | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number }
   /** Overwrites an existing file. Fails with `conflict` when `baseMtime` is given and the disk version differs. */
   | { type: "fs.write"; path: string; content: string; baseMtime?: number }
   /** Replaces this connection's watched files; each change on disk sends `fs.changed`. */
@@ -260,7 +265,7 @@ export const MAX_FROM_PARTS = 3000;
 /** Where a page ends: `before` = id of the oldest loaded turn start (a top-level user_text), `pos` = its first seq in this daemon run. */
 export type Cursor = { before: string; pos: number };
 export type PosPart = { part: Part; pos: number };
-/** Whole turns, oldest part first; `older` absent = the start of the session. */
+/** Whole turns, oldest part first (parts as `omitMedia` leaves them); `older` absent = the start of the session. */
 export type TimelinePage = { parts: Part[]; older?: Cursor };
 /**
  * Paged subscribe reply: `heads` = the latest session_state, commands, context_usage, external_turn, auto_continue, todo_update events; `aux` = parts of the
@@ -268,6 +273,7 @@ export type TimelinePage = { parts: Part[]; older?: Cursor };
  */
 export type Snapshot = { heads: Event[]; attentionSeq: number; page: TimelinePage; aux: PosPart[] };
 export type PageResult = { page: TimelinePage };
+export type MediaResult = { dataUrl: string };
 export type EditsResult = { parts: PosPart[] };
 
 export type ServerMessage =
@@ -423,6 +429,8 @@ export type FsSearchResult = { paths: string[] };
 export type FsReadResult = { content: string; mtime: number };
 /** `url`: same-origin path, valid while this connection is open and used within 10 min. */
 export type FsMediaResult = { url: string; mime: string; size: number; mtime: number };
+/** `data`: base64 of the bytes at the offset (shorter at the end of the file); `size` of the whole file; `mtime` 0 for a file at a commit. */
+export type MediaReadResult = { data: string; size: number; mtime: number; mime: string };
 export type FsWriteResult = { mtime: number };
 /** `title`: "Terminal N", the smallest N free in its cwd. */
 export type TerminalInfo = { id: string; title: string };

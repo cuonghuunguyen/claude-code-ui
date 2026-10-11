@@ -260,6 +260,17 @@ it("the Keyboard section's Customize button opens the shortcuts dialog", async (
   expect(onShortcuts).toHaveBeenCalledOnce();
 });
 
+it("Keyboard has a Show shortcut tips switch, on by default, kept in this browser", async () => {
+  localStorage.removeItem("claude-ui.key-tips");
+  const { q, pick } = await render();
+  await pick("keyboard");
+  expect(q("settings-key-tips")!.getAttribute("aria-checked")).toBe("true");
+  await act(async () => q("settings-key-tips")!.click());
+  expect(q("settings-key-tips")!.getAttribute("aria-checked")).toBe("false");
+  expect(JSON.parse(localStorage.getItem("claude-ui.key-tips")!).off).toBe(true);
+  localStorage.removeItem("claude-ui.key-tips");
+});
+
 it("shows one group at a time: the first by default, picking another swaps the panel and the choice is remembered per browser", async () => {
   const { q, pick } = await render();
   expect(document.querySelector('[role=tab][aria-selected=true]')?.textContent).toBe("Timeline");

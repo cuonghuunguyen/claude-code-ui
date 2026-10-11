@@ -1,11 +1,13 @@
 // Tool cards, context groups and thinking blocks (docs/spec.md "Message model", "Session view UX").
 import { isPromptImage, type Part, type ToolStatus } from "@claude-ui/protocol";
+import { useMediaSrc } from "./media.ts";
+import { MediaPlaceholder } from "./media-notice.tsx";
 import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { useDark } from "./theme.ts";
 import type { ToolUIPart } from "ai";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { SquareArrowOutUpRightIcon } from "lucide-react";
+import { Maximize2Icon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolChevron, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark, toolRowClass } from "@/components/ai-elements/tool";
@@ -16,6 +18,7 @@ import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
 import { relPath } from "./paths.ts";
 import { fileSize } from "./files.ts";
+import { ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ARTIFACT_TOOLS, artifactSummary, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
@@ -33,10 +36,13 @@ const LABEL: Partial<Record<ToolStatus, string>> = { stopped: "Stopped" };
 
 /** Base64 content block of a tool result (Read of an image or PDF): the data is not text, so cards show it as an image or one line. */
 const mediaBlock = (b: unknown) => {
-  const { type, source } = (b ?? {}) as { type?: unknown; source?: { data?: unknown; media_type?: unknown } };
-  if ((type !== "image" && type !== "document") || typeof source?.data !== "string") return;
-  const media = typeof source.media_type === "string" ? source.media_type : type;
-  return { media, size: fileSize(Math.floor((source.data.length * 3) / 4)), src: type === "image" && isPromptImage(media) ? `data:${media};base64,${source.data}` : undefined };
+  const { type, source } = (b ?? {}) as { type?: unknown; source?: { type?: unknown; data?: unknown; media_type?: unknown; bytes?: unknown } };
+  if (type !== "image" && type !== "document") return;
+  const media = typeof source?.media_type === "string" ? source.media_type : type;
+  // `omitted`: a snapshot or page left the data out (GH-274); it loads on demand.
+  if (source?.type === "omitted" && typeof source.bytes === "number") return { media, size: fileSize(source.bytes), src: undefined, omitted: true };
+  if (typeof source?.data !== "string") return;
+  return { media, size: fileSize(Math.floor((source.data.length * 3) / 4)), src: type === "image" && isPromptImage(media) ? `data:${media};base64,${source.data}` : undefined, omitted: false };
 };
 const note = (b: unknown) => {
   const m = mediaBlock(b);
@@ -83,27 +89,41 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
   // An Artifact publish names the long scratchpad file_path: the row shows the title instead.
   const todos = call.tool === "TodoWrite" ? todoItems(call.input) : [];
   const path = artifact ? "" : field(call.input, "file_path") || field(call.input, "notebook_path");
+  const openViewer = use(ViewerContext);
+  const cwd = use(CwdContext);
+  const target = openViewer && cardTarget(call);
   const decided = call.coordinator && (call.coordinator.decision === "allow" ? "Approved by coordinator" : "Denied by coordinator");
+  const header = (
+    <ToolHeader
+      className={target ? "min-w-0 flex-1" : undefined}
+      type="dynamic-tool"
+      toolName={call.tool}
+      state={awaiting ? "approval-requested" : STATE[call.status]}
+      statusLabel={awaiting ? undefined : LABEL[call.status]}
+      // Next to the tool name, which is never truncated like the summary.
+      title={call.editedByUser ? `${call.tool} · edited by you` : decided ? `${call.tool} · ${decided}` : undefined}
+      summary={path ? <FileSummary path={path} range={range} /> : todos.length ? todoSummary(todos) : artifact ? artifactSummary(call.tool, call.input) : toolSummary(call.input)}
+      tooltip={path || undefined}
+      meta={
+        stats && (
+          <span data-testid="diff-stats" className="font-mono text-xs">
+            <span className="text-success">+{stats.added}</span>
+            <span className="ml-1 text-destructive">-{stats.removed}</span>
+          </span>
+        )
+      }
+    />
+  );
   return (
     <Tool data-testid="tool-card" data-status={call.status} {...useExpanded(call.id, awaiting && !stats)}>
-      <ToolHeader
-        type="dynamic-tool"
-        toolName={call.tool}
-        state={awaiting ? "approval-requested" : STATE[call.status]}
-        statusLabel={awaiting ? undefined : LABEL[call.status]}
-        // Next to the tool name, which is never truncated like the summary.
-        title={call.editedByUser ? `${call.tool} · edited by you` : decided ? `${call.tool} · ${decided}` : undefined}
-        summary={path ? <FileSummary path={path} range={range} /> : todos.length ? todoSummary(todos) : artifact ? artifactSummary(call.tool, call.input) : toolSummary(call.input)}
-        tooltip={path || undefined}
-        meta={
-          stats && (
-            <span data-testid="diff-stats" className="font-mono text-xs">
-              <span className="text-success">+{stats.added}</span>
-              <span className="ml-1 text-destructive">-{stats.removed}</span>
-            </span>
-          )
-        }
-      />
+      {target ? (
+        <div className="group/head flex items-center gap-1">
+          {header}
+          <OpenButton target={target} onOpen={openViewer!} label={openLabel(target, stats, cwd)} />
+        </div>
+      ) : (
+        header
+      )}
       <ToolContent>
         {decided && (
           // Orchestration: the coordinator's reason, as plain text (worker-influenced, never markdown).
@@ -114,6 +134,28 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
         <ToolBody call={call} result={result} />
       </ToolContent>
     </Tool>
+  );
+}
+
+const openLabel = (t: ViewerTarget, stats: { added: number; removed: number } | undefined, cwd: string) => {
+  if (t.kind === "plan") return "Open plan in popup";
+  const name = t.kind === "file" ? filePath(t.path, cwd).name : t.kind === "diff" ? filePath(field(t.call.input, "file_path"), cwd).name : "";
+  return t.kind === "diff" && stats ? `Open diff of ${name} (+${stats.added} -${stats.removed}) in popup` : `Open ${name} in popup`;
+};
+
+/** Open-in-popup button right of a card header: hover, keyboard focus, open card, always on touch (like the chevron). */
+function OpenButton({ target, onOpen, label }: { target: ViewerTarget; onOpen: OpenViewer; label: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title="Open in popup"
+      data-testid="viewer-open"
+      onClick={(e) => onOpen(target, e.currentTarget)}
+      className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info group-hover/head:opacity-100 group-has-[[data-panel-open]]/head:opacity-100 max-md:size-11 pointer-coarse:size-11 pointer-coarse:opacity-100"
+    >
+      <Maximize2Icon aria-hidden className="size-4" />
+    </button>
   );
 }
 
@@ -145,6 +187,15 @@ function FileSummary({ path, range }: { path: string; range: string }) {
 }
 
 /** Card body by tool type; tools without a purpose-built body get the generic JSON view. */
+/** The image of a Read result: inline, or loaded with session.media when the snapshot left it out; PDFs and other types show only the caption. */
+function ReadImage({ partId, index, m, alt }: { partId: string; index: number; m: { media: string; src?: string; omitted: boolean }; alt: string }) {
+  const loads = m.omitted && isPromptImage(m.media);
+  const { src, failed, retry } = useMediaSrc(partId, index, loads, m.src);
+  if (src) return <img src={src} alt={alt} className="max-h-80 max-w-full rounded-md border object-contain" />;
+  // The size of the image is not known (only its bytes): a fixed box about as tall as a typical screenshot.
+  return loads ? <MediaPlaceholder failed={failed} retry={retry} label={alt} className="h-52 w-full max-w-sm" /> : null;
+}
+
 export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult }) {
   const output = result && <Lines id={call.id} text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} />;
   switch (call.tool) {
@@ -160,7 +211,8 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
         </div>
       );
     case "Read": {
-      const media = Array.isArray(result?.output) ? result.output.map(mediaBlock).filter((m) => m !== undefined) : [];
+      // The index is the block's position in the output: session.media names the payload by it.
+      const media = Array.isArray(result?.output) ? result.output.flatMap((b, index) => { const m = mediaBlock(b); return m ? [{ ...m, index }] : []; }) : [];
       return (
         <div className="space-y-2">
           <div data-testid="read-path" className="font-mono text-xs">
@@ -170,7 +222,7 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
           {media.length && !result?.isError ? (
             media.map((m, i) => (
               <figure key={i} className="space-y-1" data-testid="read-media">
-                {m.src && <img src={m.src} alt={field(call.input, "file_path")} className="max-h-80 max-w-full rounded-md border object-contain" />}
+                <ReadImage partId={result!.id} index={m.index} m={m} alt={field(call.input, "file_path")} />
                 <figcaption className="text-muted-foreground text-xs">{`${m.media}, ${m.size}`}</figcaption>
               </figure>
             ))

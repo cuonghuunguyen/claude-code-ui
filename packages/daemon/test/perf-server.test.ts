@@ -3,12 +3,14 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type PerfReport, type ServerMessage } from "@claude-ui/protocol";
 import { createPerf } from "../src/perf.ts";
 import { createDaemon } from "../src/server.ts";
 import { createSettings } from "../src/settings.ts";
+import { createSides, dockerSide } from "../src/sides.ts";
 import { fakeQuery } from "./fake-query.ts";
 
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
@@ -97,5 +99,46 @@ describe("performance monitor in the daemon", () => {
     await c.request({ type: "settings.set", patch: { performance: { monitor: true } } });
     expect((await report(c)).monitor).toBe(true);
     c.ws.close();
+  });
+});
+
+describe("with a Docker side configured (the router answers first)", () => {
+  it("requests are timed and git processes attributed to them", async () => {
+    const sides = createSides({
+      targets: [],
+      localLabel: "Linux",
+      posixLocal: true,
+      discoverMs: 0,
+      discover: async () => [dockerSide("dev")],
+      spawn: () => {
+        const stdin = new PassThrough();
+        const stdout = new PassThrough();
+        stdin.on("data", () => {});
+        stdout.write(JSON.stringify({ ready: true }) + "\n");
+        return { stdin, stdout, stderr: new PassThrough(), kill: () => {}, on: () => {} } as never;
+      },
+    });
+    await sides.refresh();
+    await sides.start("docker:dev");
+    const p2 = createPerf({ worstMs: 0 });
+    const d = createDaemon({ webRoot: root, roots: [root], query: fakeQuery as never, token, appSettings: createSettings(), perf: p2, sides });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${(d.address() as AddressInfo).port}/ws`, [WS_PROTOCOL, `${TOKEN_PROTOCOL_PREFIX}${token}`], { origin: `http://127.0.0.1:${(d.address() as AddressInfo).port}` });
+      const inbox: ServerMessage[] = [];
+      ws.on("message", (m) => inbox.push(JSON.parse(String(m))));
+      await new Promise((ok) => ws.once("open", ok));
+      const repo = join(root, "repo");
+      ws.send(JSON.stringify({ type: "git.status", cwd: repo, reqId: "a" }));
+      await new Promise<void>((ok) => { const t = setInterval(() => inbox.some((m) => m.type === "reply" || m.type === "error") && (clearInterval(t), ok()), 5); });
+      const r = p2.report();
+      expect(r.handlers["git.status"]?.n).toBe(1);
+      const kids = r.worst.filter((w) => w.kind === "child" && w.cmd === "git");
+      expect(kids.length).toBeGreaterThan(0);
+      expect(kids.every((w) => w.kind === "child" && w.request === "git.status")).toBe(true);
+      ws.close();
+    } finally {
+      d.close();
+    }
   });
 });

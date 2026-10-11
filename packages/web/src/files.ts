@@ -128,8 +128,6 @@ export function readFailure(e: RequestError): { text: string; notice: boolean } 
       return { text: `File too large to show${size}`, notice: true };
     case "not_utf8":
       return { text: `File is not UTF-8 text, not shown${size}`, notice: true };
-    case "side_unsupported":
-      return { text: e.message, notice: true };
     case "not_a_file":
       return { text: "Not a file", notice: true };
     default:
