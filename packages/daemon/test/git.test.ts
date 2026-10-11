@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { createWorktree, gitDiff, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus } from "../src/git.ts";
+import { createWorktree, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
@@ -950,6 +950,30 @@ describe("gitLog / gitShow / gitFileAt", () => {
       expect(gitEscapes(sub, inRoots)).toBe(true);
       expect(gitEscapes(mkdtempSync(join(tmpdir(), "nogit-")), inRoots)).toBe(false);
       void roots;
+    });
+  });
+
+  describe("a .git that cannot be resolved (GH-282)", () => {
+    const proj = () => {
+      const d = realpathSync(mkdtempSync(join(tmpdir(), "gh282-")));
+      return d;
+    };
+    it("a .git file without a gitdir line counts as outside the roots (fail closed)", () => {
+      const d = proj();
+      writeFileSync(join(d, ".git"), "nonsense\n");
+      expect(gitEscapes(d, () => true)).toBe(true);
+    });
+    it("a gitdir to another UNC share is not resolved on Windows, and the repository counts as outside", () => {
+      const d = proj();
+      writeFileSync(join(d, ".git"), "gitdir: \\\\evil-gh282\\share\\x\n");
+      const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { value: "win32" });
+      try {
+        expect(gitDirsOf(d)).toBeUndefined();
+        expect(gitEscapes(d, () => true)).toBe(true);
+      } finally {
+        Object.defineProperty(process, "platform", orig);
+      }
     });
   });
 

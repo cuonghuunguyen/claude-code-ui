@@ -1081,6 +1081,15 @@ describe("daemon", () => {
       });
     }
 
+    it("a .git file without a gitdir line: git.status is null, git.log refused (GH-282)", async () => {
+      const proj = join(webRoot, "gh282-nogitdir");
+      mkdirSync(proj, { recursive: true });
+      writeFileSync(join(proj, ".git"), "nonsense\n");
+      const c = await client();
+      expect(await c.request({ type: "git.status", cwd: proj })).toMatchObject({ result: { status: null } });
+      expect(await c.request({ type: "git.log", cwd: proj })).toMatchObject({ code: "cwd_not_allowed" });
+    });
+
     it("git.refs is null for a project without .git below a repository outside the roots", async () => {
       const { out } = outer();
       // The root itself lies inside the outer repository; the project has no .git of its own.

@@ -4,6 +4,7 @@ import { lstat, open } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { GIT_LOG_MAX_LIMIT, worktreeNameError, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
 import { runGit } from "./git-runner.ts";
+import { foreignPointer } from "./remote-path.ts";
 
 // Read-only calls on a repository's own config: no fsmonitor hook (a program from .git/config), no transport (a partial clone's lazy fetch runs core.sshCommand), on any git version.
 const READ_ONLY = ["-c", "core.fsmonitor=false", "-c", "protocol.allow=never"];
@@ -48,8 +49,11 @@ function repoOf0(cwd: string): Repo | null {
   try {
     const objects = join(common, "objects");
     for (const l of readFileSync(join(objects, "info", "alternates"), "utf8").split("\n")) {
-      const t = l.trim();
-      if (t && !t.startsWith("#")) alternates.push(real(resolve(objects, t.replace(/^"(.*)"$/, "$1"))));
+      const t = l.trim().replace(/^"(.*)"$/, "$1");
+      if (!t || t.startsWith("#")) continue;
+      // A UNC alternate to another share, or a device path: no file call (NTLM), the repository counts as unresolved.
+      if (foreignPointer(t, objects)) return null;
+      alternates.push(real(resolve(objects, t)));
     }
   } catch {
     // No alternates.
@@ -93,9 +97,13 @@ export function gitDirsOf(cwd: string): { own: string; common: string } | undefi
     if (statSync(dotGit).isDirectory()) return { own: dotGit, common: dotGit };
     const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
     if (!gitdir) return undefined;
+    // A pointer to another UNC share or a device path is never followed (an SMB lookup sends the NTLM hash).
+    if (foreignPointer(gitdir.trim(), cwd)) return undefined;
     const own = resolve(cwd, gitdir.trim());
     try {
-      return { own, common: resolve(own, readFileSync(join(own, "commondir"), "utf8").trim()) };
+      const common = readFileSync(join(own, "commondir"), "utf8").trim();
+      if (foreignPointer(common, own)) return undefined;
+      return { own, common: resolve(own, common) };
     } catch {
       return { own, common: own };
     }
@@ -555,7 +563,8 @@ export function gitEscapes(cwd: string, allowed: (p: string) => boolean): boolea
   if (!top) return false;
   if (!allowed(top)) return true;
   const r = repoOf0(top);
-  return r ? escapesRoots(r, allowed) : false;
+  // A `.git` entry exists but cannot be resolved (no gitdir line, unreadable, foreign pointer): outside, fail closed.
+  return r ? escapesRoots(r, allowed) : true;
 }
 /**
  * A cwd inside the roots whose repository (top, git dirs, alternates) is outside must not expose files outside the roots
@@ -566,10 +575,7 @@ function topIn(cwd: string, allowed: (p: string) => boolean): string | null {
   if (!top) return null;
   if (!allowed(top)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
   const r = repoOf0(top);
-  if (!r) {
-    pins.delete(top);
-    return top;
-  }
+  if (!r) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
   if (escapesRoots(r, allowed)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
   pins.delete(top);
   pins.set(top, pinFor(r));

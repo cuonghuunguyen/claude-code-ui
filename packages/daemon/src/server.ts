@@ -9,6 +9,7 @@ import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
+import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
@@ -132,6 +133,7 @@ function worktreeStamp(cwd: string) {
   const checkout = (gitdirFile: string) => {
     try {
       const path = readFileSync(gitdirFile, "utf8").trim();
+      if (foreignPointer(path, gitdirFile)) return "-";
       return `${path}@${stamp(resolve(dirname(gitdirFile), path))}`;
     } catch {
       return "-";
@@ -414,6 +416,9 @@ export function createDaemon(opts: {
     });
   const supportsAuto = (model: string) => known.some((m) => m.value === model && m.supportsAutoMode);
   const roots = opts.roots.map(real).filter((r) => r !== undefined);
+  /** UNC roots (configured and canonical form): the only UNC paths that may reach the file system (GH-282: an SMB lookup sends the NTLM hash). */
+  const uncRoots = [...opts.roots, ...roots].filter((r) => winPathKind(r) === "unc");
+  const refused = (p: string) => refusedPath(p, uncRoots);
   const inRoots = (path: string) =>
     roots.some((r) => {
       const rel = relative(r, path);
@@ -423,7 +428,7 @@ export function createDaemon(opts: {
   const gitOutside = (cwd: string) => gitEscapes(cwd, (p) => inRoots(real(p) ?? p));
   /** The canonical path when it is an existing path inside a root. */
   const allowed = (path: unknown) => {
-    const p = typeof path === "string" && isAbsolute(path) ? real(path) : undefined;
+    const p = typeof path === "string" && isAbsolute(path) && !refused(path) ? real(path) : undefined;
     return p && inRoots(p) ? p : undefined;
   };
 
@@ -438,7 +443,7 @@ export function createDaemon(opts: {
 
   /** A missing absolute path whose nearest existing ancestor is allowed: deleted inside the roots (outside them, existence stays hidden). */
   const missingInRoots = (path: unknown) => {
-    if (typeof path !== "string" || !isAbsolute(path) || existsSync(path)) return false;
+    if (typeof path !== "string" || !isAbsolute(path) || refused(path) || existsSync(path)) return false;
     let dir = dirname(resolve(path));
     while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
     return !!allowed(dir);
@@ -1282,6 +1287,7 @@ export function createDaemon(opts: {
 
       switch (msg.type) {
         case "session.create": {
+          if (typeof msg.cwd === "string" && refused(msg.cwd)) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (typeof msg.cwd !== "string" || !existsSync(msg.cwd) || !statSync(msg.cwd).isDirectory())
             return fail("bad_cwd", `not a directory: ${msg.cwd}`);
           if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
