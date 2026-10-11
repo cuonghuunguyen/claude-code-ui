@@ -361,6 +361,30 @@ export function createSides(opts: {
   const sessionSide = new Map<string, string>();
   const terminalSide = new Map<string, string>();
   const cwdSide = new Map<string, string>();
+  /** Permission and question request ID -> the side that raised it; shared by every connection, so a reconnect still answers it. Bounded; a side's entries go when it exits. */
+  const requestSide = new Map<string, string>();
+  const MAX_REQUESTS = 5000;
+  function noteRequest(id: string, p: { type?: unknown; requestId?: unknown; settled?: unknown } | undefined) {
+    if (!p || (p.type !== "permission_request" && p.type !== "question") || typeof p.requestId !== "string") return;
+    if (p.settled) return void requestSide.delete(p.requestId);
+    // Another side's request ID stays with its first owner.
+    if (requestSide.has(p.requestId)) return;
+    requestSide.set(p.requestId, id);
+    if (requestSide.size > MAX_REQUESTS) requestSide.delete(requestSide.keys().next().value!);
+  }
+  /** Sides that already showed the clash notice in this run. */
+  const clashed = new Set<string>();
+  /** A side named a session ID the local daemon has: left out; says so once (log) and in the side's message. */
+  function clash(id: string, sessionId: string) {
+    const s = sides.get(id);
+    if (!s || clashed.has(id)) return;
+    clashed.add(id);
+    console.error(`side ${id}: session ${sessionId} exists on this computer too: left out (a shared ~/.claude?); other such sessions are left out silently`);
+    if (s.state === "ready") {
+      s.message = `Some sessions of ${s.label} are left out: their IDs also exist on this computer (is ~/.claude shared with it?).`;
+      changed();
+    }
+  }
   const write = (s: Side, frame: object) => {
     try {
       s.proc?.stdin.write(JSON.stringify(frame) + "\n");
@@ -450,6 +474,7 @@ export function createSides(opts: {
         if (f.kind === "ready") {
           endSpans(s, false);
           delete s.phase;
+          clashed.delete(s.id);
           Object.assign(s, { state: "ready", message: undefined });
           started.add(s.id);
           opts.save?.([...started]);
@@ -488,6 +513,7 @@ export function createSides(opts: {
         delete s.phase;
         Object.assign(s, notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
+        for (const [reqId, side] of requestSide) if (side === s.id) requestSide.delete(reqId);
         if (!wasReady) reject(new Error(message));
         routers.forEach((r) => r.detach(s.id));
         changed();
@@ -619,6 +645,9 @@ export function createSides(opts: {
     posixLocal: !!opts.posixLocal,
     open,
     learn,
+    requestSide,
+    noteRequest,
+    clash,
     sessionSide,
     terminalSide,
     cwdSide,
@@ -666,18 +695,7 @@ export function createRouter(opts: {
   let nextReq = 1;
   /** Requests forwarded to each side, by the browser's reqId: only a reply or error to one of these is accepted from that side (GH-279). */
   const forwarded = new Map<string, Set<string>>();
-  /** Permission and question requests by the side that raised them: only that side gets the answer. */
-  const requestSide = new Map<string, string>();
-  const MAX_REQUESTS = 5000;
-  const noteRequest = (id: string, p: { type?: unknown; requestId?: unknown; settled?: unknown } | undefined) => {
-    if (!p || (p.type !== "permission_request" && p.type !== "question") || typeof p.requestId !== "string") return;
-    if (p.settled) return void requestSide.delete(p.requestId);
-    if (requestSide.get(p.requestId) === id) return;
-    // Another side's request ID stays with its first owner.
-    if (requestSide.has(p.requestId)) return;
-    requestSide.set(p.requestId, id);
-    if (requestSide.size > MAX_REQUESTS) requestSide.delete(requestSide.keys().next().value!);
-  };
+  const { noteRequest, requestSide } = sides;
   /**
    * A side owns a session ID only when it was told so by a reply to a request it was sent (or by its own /clear heir): never an
    * ID the local daemon has or another side owns. Returns whether `id` now belongs to `side`.
@@ -685,7 +703,7 @@ export function createRouter(opts: {
   async function claimSession(side: string, sessionId: string): Promise<boolean> {
     const owner = sides.sessionSide.get(sessionId);
     if (owner) return owner === side;
-    if (await opts.isLocalSession(sessionId)) return false;
+    if (await opts.isLocalSession(sessionId)) return sides.clash(side, sessionId), false;
     // Another claim may have won while the local check ran.
     const now = sides.sessionSide.get(sessionId);
     if (now) return now === side;
@@ -754,7 +772,6 @@ export function createRouter(opts: {
     detach(id) {
       if (!conns.delete(id)) return;
       forwarded.delete(id);
-      for (const [reqId, side] of requestSide) if (side === id) requestSide.delete(reqId);
       // A call the side can no longer answer ends with side_not_ready (a GET /media waiting for a piece ends).
       for (const [reqId, pend] of pending) if (pend.id === id) pend.settle({ type: "error", reqId, code: "side_not_ready", message: `${id} stopped` });
       send({ type: "sessions.changed" });
@@ -834,7 +851,7 @@ export function createRouter(opts: {
       const r = a.result as ListLike;
       // A side lists its own sessions only: not an ID the local daemon lists or has, nor one of another side.
       const localIds = new Set((local.result as ListLike).sessions.map((s) => s.id));
-      const owned = await Promise.all(r.sessions.map(async (s) => !localIds.has(s.id) && (await claimSession(id, s.id))));
+      const owned = await Promise.all(r.sessions.map(async (s) => (localIds.has(s.id) ? (sides.clash(id, s.id), false) : await claimSession(id, s.id))));
       r.sessions = r.sessions.filter((_, i) => owned[i]);
       for (const s of r.sessions) cwdSides[s.cwd] = id;
       for (const p of [...r.projects, ...r.recentProjects.map((x) => x.cwd), ...Object.values(r.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) cwdSides[p] = id;

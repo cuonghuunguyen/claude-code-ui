@@ -1,7 +1,7 @@
 // GH-279: a side owns a session only when the hub put it there; its own claims never move local or foreign sessions.
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ClientMessage, ServerMessage } from "@claude-ui/protocol";
 import { createRouter, createSides, dockerSide, type SideProcess } from "../src/sides.ts";
 
@@ -33,13 +33,15 @@ function fakeSide(reply: (m: any) => unknown = (m) => (m.type === "session.list"
     }
   });
   stdout.write('{"ready":true}\n');
-  const proc: SideProcess = { stdin, stdout, stderr: new PassThrough(), kill: () => {}, on: (e, l) => new EventEmitter().on(e, l) };
-  return { proc, out, got };
+  const ee = new EventEmitter();
+  const proc: SideProcess = { stdin, stdout, stderr: new PassThrough(), kill: () => ee.emit("exit", 1), on: (e, l) => ee.on(e, l) };
+  const push = (p: object) => stdout.write(JSON.stringify({ push: p }) + "\n");
+  return { proc, out, got, push };
 }
 
-async function setup(sideA: ReturnType<typeof fakeSide>, sideB?: ReturnType<typeof fakeSide>) {
+async function setup(sideA: ReturnType<typeof fakeSide>, sideB?: ReturnType<typeof fakeSide>, onPush?: (p: any) => void) {
   const procs = [sideA, ...(sideB ? [sideB] : [])].map((s) => s.proc);
-  const sides = createSides({ targets: [], localLabel: "Linux", posixLocal: true, discoverMs: 0, discover: async () => [dockerSide("a"), ...(sideB ? [dockerSide("b")] : [])], spawn: (id) => procs[id === "docker:a" ? 0 : 1]! });
+  const sides = createSides({ targets: [], localLabel: "Linux", posixLocal: true, ...(onPush && { onPush }), discoverMs: 0, discover: async () => [dockerSide("a"), ...(sideB ? [dockerSide("b")] : [])], spawn: (id) => procs[id === "docker:a" ? 0 : 1]! });
   await sides.refresh();
   const sent: ServerMessage[] = [];
   const localSeen: ClientMessage[] = [];
@@ -60,7 +62,13 @@ async function setup(sideA: ReturnType<typeof fakeSide>, sideB?: ReturnType<type
     await settle();
     return sent.slice(before);
   };
-  return { sides, router, sent, localSeen, req, settle };
+  const reconnect = () => {
+    const sent2: ServerMessage[] = [];
+    const local2: ClientMessage[] = [];
+    const r2 = createRouter({ sides, send: (m) => sent2.push(m), local: async (m) => void local2.push(m), localCall: async (m) => (local2.push(m), { type: "reply", reqId: m.reqId, result: m.type === "session.list" ? { sessions: [{ id: LOCAL, cwd: "/host", lastActivity: 1 }], projects: ["/host"], recentProjects: [] } : { settled: false } }), isLocalSession: async (id) => id === LOCAL });
+    return { router: r2, sent: sent2, local: local2 };
+  };
+  return { sides, router, sent, localSeen, req, settle, reconnect };
 }
 const event = (sessionId: string, part: object = { type: "assistant_text", id: "p", text: "x" }) => ({ type: "event", sessionId, seq: 1, part });
 const frames = (s: ReturnType<typeof fakeSide>, type: string) => s.got.filter((m) => m.type === type);
@@ -184,6 +192,83 @@ describe("side session ownership (GH-279)", () => {
     a.out({ type: "sessions.changed", deleted: LOCAL });
     await t.settle();
     expect(t.sent.filter((m) => m.type === "sessions.changed" && (m as any).deleted)).toEqual([]);
+  });
+
+  it("after a reconnect (a second router on the same sides) a pending side permission card still reaches its side", async () => {
+    const perm = { type: "permission_request", id: "q1", requestId: "q1", toolUseId: "t", tool: "Bash", input: {}, suggestions: [], settled: false };
+    const a = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: A1, cwd: "/a", lastActivity: 1 }], projects: [], recentProjects: [] } : m.type === "permission.respond" ? { settled: true } : null));
+    const t = await setup(a);
+    await t.req({ type: "session.list" });
+    a.out(event(A1, perm));
+    await t.settle();
+    t.router.close();
+    const r2 = t.reconnect();
+    await r2.router.handle({ type: "permission.respond", requestId: "q1", decision: "allow", reqId: "pr" } as never);
+    await t.settle();
+    expect(frames(a, "permission.respond")).toHaveLength(1);
+    expect(r2.local.filter((m) => m.type === "permission.respond")).toEqual([]);
+    expect(r2.sent.find((m) => (m as any).reqId === "pr")).toMatchObject({ type: "reply", result: { settled: true } });
+  });
+
+  it("a side's pending requests are forgotten when it exits", async () => {
+    const perm = { type: "permission_request", id: "q2", requestId: "q2", toolUseId: "t", tool: "Bash", input: {}, suggestions: [], settled: false };
+    const a = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: A1, cwd: "/a", lastActivity: 1 }], projects: [], recentProjects: [] } : null));
+    const t = await setup(a);
+    await t.req({ type: "session.list" });
+    a.out(event(A1, perm));
+    await t.settle();
+    expect(t.sides.requestSide.get("q2")).toBe("docker:a");
+    a.proc.kill();
+    await t.settle();
+    expect(t.sides.requestSide.has("q2")).toBe(false);
+  });
+
+  it("a session id that exists locally too is left out with one log line and a notice in the side's message", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const a = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: LOCAL, cwd: "/ct", lastActivity: 1 }, { id: A1, cwd: "/ct", lastActivity: 1 }], projects: [], recentProjects: [] } : null));
+      const t = await setup(a);
+      await t.req({ type: "session.list" });
+      await t.req({ type: "session.list" });
+      const logged = err.mock.calls.filter((c) => String(c[0]).includes("exists on this computer"));
+      expect(logged).toHaveLength(1);
+      expect(logged[0]![0]).toContain("docker:a");
+      expect(t.sides.list().find((x) => x.id === "docker:a")).toMatchObject({ state: "ready", message: expect.stringContaining("left out") });
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("a hub request is answered by the side it was sent to only", async () => {
+    // Side a never answers its list; side b answers with a's hub reqId.
+    const a = fakeSide((m) => (m.type === "session.list" ? undefined : null));
+    const b = fakeSide((m) => (m.type === "session.list" ? undefined : null));
+    const t = await setup(a, b);
+    const done = t.router.handle({ type: "session.list", reqId: "L" } as never);
+    await t.settle();
+    const hubA = frames(a, "session.list")[0].reqId;
+    const hubB = frames(b, "session.list")[0].reqId;
+    b.out({ type: "reply", reqId: hubA, result: { sessions: [{ id: B1, cwd: "/b", lastActivity: 1 }], projects: ["/b"], recentProjects: [] } });
+    await t.settle();
+    a.out({ type: "reply", reqId: hubA, result: EMPTY });
+    b.out({ type: "reply", reqId: hubB, result: EMPTY });
+    await done;
+    const r = t.sent.find((m) => (m as any).reqId === "L") as any;
+    expect(r.result.sessions.map((s: any) => s.id)).toEqual([LOCAL]);
+    expect(t.sides.sessionSide.has(B1)).toBe(false);
+  });
+
+  it("a push for a session another side owns is dropped; its own and unknown ones pass", async () => {
+    const pushed: any[] = [];
+    const a = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: A1, cwd: "/a", lastActivity: 1 }], projects: [], recentProjects: [] } : null));
+    const b = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: B1, cwd: "/b", lastActivity: 1 }], projects: [], recentProjects: [] } : null));
+    const t = await setup(a, b, (p) => pushed.push(p));
+    await t.req({ type: "session.list" });
+    b.push({ sessionId: A1, title: "forged", body: "x" });
+    b.push({ sessionId: B1, title: "own", body: "x" });
+    b.push({ sessionId: HEIR, title: "unknown", body: "x" });
+    await t.settle();
+    expect(pushed.map((p) => p.title)).toEqual(["own", "unknown"]);
   });
 
   describe("legitimate flows", () => {
