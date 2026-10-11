@@ -456,7 +456,11 @@ export function createSides(opts: {
           resolve();
           routers.forEach((r) => r.attach(s.id));
           changed();
-        } else if (f.kind === "push") opts.onPush?.(f.push);
+        } else if (f.kind === "push") {
+          // A side notifies for its own sessions only (GH-279): not for one another side owns.
+          const owner = sessionSide.get(f.push.sessionId);
+          if (!owner || owner === s.id) opts.onPush?.(f.push);
+        }
         else s.conns.get(f.c)?.(f.m);
       }, opts.maxLineChars ?? MAX_SIDE_LINE_CHARS, () => console.error(`side ${s.id}: dropped a line (too long, more than ${opts.maxLineChars ?? MAX_SIDE_LINE_CHARS} chars)`));
       proc.on("exit", (code) => {
@@ -497,10 +501,7 @@ export function createSides(opts: {
     const s = sides.get(id);
     if (s?.state !== "ready") return undefined;
     const c = nextConn++;
-    s.conns.set(c, (m) => {
-      learn(id, m);
-      onMessage(m);
-    });
+    s.conns.set(c, onMessage);
     write(s, { c, o: 1 });
     return {
       send: (m) => write(s, { c, m }),
@@ -511,12 +512,13 @@ export function createSides(opts: {
     };
   }
 
-  /** Owner of each session and terminal a side's messages name. */
+  /**
+   * Owner of each terminal and cwd a side's reply names. Only for a reply to a request the router forwarded to that side
+   * (createRouter drops the rest). Sessions are not learned here: the router claims them (GH-279).
+   */
   function learn(id: string, m: ServerMessage) {
-    if (m.type === "event") sessionSide.set(m.sessionId, id);
     if (m.type !== "reply" || !m.result || typeof m.result !== "object") return;
     const r = m.result as { cwd?: unknown; session?: { id?: unknown; cwd?: unknown }; terminal?: { id?: unknown }; terminals?: { id?: unknown }[] };
-    if (typeof r.session?.id === "string") sessionSide.set(r.session.id, id);
     // A local cwd (POSIX hub) keeps its routing: a container cannot take over a host path.
     const claim = (cwd: string) => cwdSide.get(cwd) !== LOCAL_SIDE && cwdSide.set(cwd, id);
     if (typeof r.session?.cwd === "string") claim(r.session.cwd);
@@ -616,6 +618,7 @@ export function createSides(opts: {
     refresh,
     posixLocal: !!opts.posixLocal,
     open,
+    learn,
     sessionSide,
     terminalSide,
     cwdSide,
@@ -661,21 +664,88 @@ export function createRouter(opts: {
   /** Calls waiting for a side's answer, by their hub reqId: detach settles them. */
   const pending = new Map<string, { id: string; settle: (m: ServerMessage) => void }>();
   let nextReq = 1;
-  const onSide = (m: ServerMessage) => {
-    if ((m.type === "reply" || m.type === "error") && m.reqId && own.has(m.reqId)) {
-      own.get(m.reqId)!(m);
-      own.delete(m.reqId);
-      return;
+  /** Requests forwarded to each side, by the browser's reqId: only a reply or error to one of these is accepted from that side (GH-279). */
+  const forwarded = new Map<string, Set<string>>();
+  /** Permission and question requests by the side that raised them: only that side gets the answer. */
+  const requestSide = new Map<string, string>();
+  const MAX_REQUESTS = 5000;
+  const noteRequest = (id: string, p: { type?: unknown; requestId?: unknown; settled?: unknown } | undefined) => {
+    if (!p || (p.type !== "permission_request" && p.type !== "question") || typeof p.requestId !== "string") return;
+    if (p.settled) return void requestSide.delete(p.requestId);
+    if (requestSide.get(p.requestId) === id) return;
+    // Another side's request ID stays with its first owner.
+    if (requestSide.has(p.requestId)) return;
+    requestSide.set(p.requestId, id);
+    if (requestSide.size > MAX_REQUESTS) requestSide.delete(requestSide.keys().next().value!);
+  };
+  /**
+   * A side owns a session ID only when it was told so by a reply to a request it was sent (or by its own /clear heir): never an
+   * ID the local daemon has or another side owns. Returns whether `id` now belongs to `side`.
+   */
+  async function claimSession(side: string, sessionId: string): Promise<boolean> {
+    const owner = sides.sessionSide.get(sessionId);
+    if (owner) return owner === side;
+    if (await opts.isLocalSession(sessionId)) return false;
+    // Another claim may have won while the local check ran.
+    const now = sides.sessionSide.get(sessionId);
+    if (now) return now === side;
+    sides.sessionSide.set(sessionId, side);
+    return true;
+  }
+  const noteReply = async (id: string, m: Extract<ServerMessage, { type: "reply" }>): Promise<boolean> => {
+    const r = m.result as { session?: { id?: unknown }; snapshot?: { heads?: { part?: unknown }[]; page?: { parts?: unknown[] }; aux?: { part?: unknown }[] }; page?: { parts?: unknown[] } } | null;
+    if (!r || typeof r !== "object") return true;
+    if (typeof r.session?.id === "string" && !(await claimSession(id, r.session.id))) return false;
+    sides.learn(id, m);
+    const parts = [...(r.snapshot?.heads?.map((h) => h.part) ?? []), ...(r.snapshot?.page?.parts ?? []), ...(r.snapshot?.aux?.map((a) => a.part) ?? []), ...(r.page?.parts ?? [])];
+    for (const p of parts) noteRequest(id, p as never);
+    return true;
+  };
+  const conflict = (m: ServerMessage & { reqId?: string }): ServerMessage => ({ type: "error", reqId: m.reqId, code: "side_conflict", message: "the side named a session it does not own" });
+  /** One message of side `id`, after the ones before it (a claim may wait for the local check). */
+  const onSide = async (id: string, m: ServerMessage) => {
+    if (m.type === "reply" || m.type === "error" || m.type === "sessions.search.result") {
+      const reqId = m.reqId;
+      if (reqId && own.has(reqId)) {
+        // A hub request: only the side it was sent to answers it.
+        if (pending.get(reqId)?.id !== id) return;
+        if (m.type === "reply" && !(await noteReply(id, m))) return own.get(reqId)!(conflict(m)), own.delete(reqId);
+        own.get(reqId)?.(m);
+        own.delete(reqId);
+        return;
+      }
+      // An error may carry no reqId (a message the side could not parse); everything else answers a forwarded request.
+      if (!(m.type === "error" && !reqId)) {
+        const f = forwarded.get(id);
+        if (!reqId || !f?.has(reqId)) return;
+        // A search streams results before its reply.
+        if (m.type !== "sessions.search.result") f.delete(reqId);
+      }
+      if (m.type === "reply" && !(await noteReply(id, m))) return send(conflict(m));
+      return send(m);
+    }
+    if (m.type === "event") {
+      const owner = sides.sessionSide.get(m.sessionId);
+      if (owner !== id) return;
+      // /clear: the owner hands the live query to a new session, announced on the old one.
+      if (m.part.type === "session_cleared" && !(await claimSession(id, m.part.sessionId))) return;
+      noteRequest(id, m.part as never);
+      return send(m);
     }
     // Plan usage is the local account's; a side's would overwrite it.
     if (m.type === "plan_usage") return;
+    // A side deletes its own sessions from the list only.
+    if (m.type === "sessions.changed" && m.deleted !== undefined && sides.sessionSide.get(m.deleted) !== id) return send({ type: "sessions.changed" });
     send(m);
   };
   const router: Router = {
     attach(id) {
       if (conns.has(id)) return;
-      const c = sides.open(id, onSide);
+      // Messages of one side are handled in order.
+      let tail: Promise<unknown> = Promise.resolve();
+      const c = sides.open(id, (m) => void (tail = tail.then(() => onSide(id, m)).catch((e) => console.error(`side ${id}: ${(e as Error).message}`))));
       if (!c) return;
+      forwarded.set(id, new Set());
       conns.set(id, c);
       void syncSettings(id);
       // Its projects and sessions join the list.
@@ -683,6 +753,8 @@ export function createRouter(opts: {
     },
     detach(id) {
       if (!conns.delete(id)) return;
+      forwarded.delete(id);
+      for (const [reqId, side] of requestSide) if (side === id) requestSide.delete(reqId);
       // A call the side can no longer answer ends with side_not_ready (a GET /media waiting for a piece ends).
       for (const [reqId, pend] of pending) if (pend.id === id) pend.settle({ type: "error", reqId, code: "side_not_ready", message: `${id} stopped` });
       send({ type: "sessions.changed" });
@@ -711,6 +783,7 @@ export function createRouter(opts: {
   const forward = (id: string, msg: ClientMessage) => {
     const c = conns.get(id);
     if (!c) return send({ type: "error", reqId: msg.reqId, code: "side_not_ready", message: `${sides.list().find((s) => s.id === id)?.label ?? id} is not running. Open it in the project picker to start it.` });
+    forwarded.get(id)?.add(msg.reqId);
     c.send(msg);
   };
   const all = () => [LOCAL_SIDE, ...conns.keys()];
@@ -737,7 +810,8 @@ export function createRouter(opts: {
         // A link or notification to a side session this connection has not listed yet: ask each side.
         for (const id of conns.keys()) {
           const r = await sideCall(id, { type: "session.subscribe", sessionId: msg.sessionId, sinceSeq: Number.MAX_SAFE_INTEGER, background: true, reqId: "" } as ClientMessage);
-          if (r.type === "reply") return sides.sessionSide.set(msg.sessionId, id), id;
+          // The reply claimed the session for that side (not when it is local or another side's).
+          if (r.type === "reply" && sides.sessionSide.get(msg.sessionId) === id) return id;
         }
       }
       return LOCAL_SIDE;
@@ -756,9 +830,13 @@ export function createRouter(opts: {
     const docker = sides.docker();
     for (const [id, a] of answers.slice(1)) {
       // A side that fails its list leaves it out; its state shows in `sides`.
-      if (a.type !== "reply") continue;
+      if (a.type !== "reply" || !Array.isArray((a.result as ListLike | null)?.sessions)) continue;
       const r = a.result as ListLike;
-      for (const s of r.sessions) sides.sessionSide.set(s.id, id), (cwdSides[s.cwd] = id);
+      // A side lists its own sessions only: not an ID the local daemon lists or has, nor one of another side.
+      const localIds = new Set((local.result as ListLike).sessions.map((s) => s.id));
+      const owned = await Promise.all(r.sessions.map(async (s) => !localIds.has(s.id) && (await claimSession(id, s.id))));
+      r.sessions = r.sessions.filter((_, i) => owned[i]);
+      for (const s of r.sessions) cwdSides[s.cwd] = id;
       for (const p of [...r.projects, ...r.recentProjects.map((x) => x.cwd), ...Object.values(r.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) cwdSides[p] = id;
       merged.worktrees = { ...merged.worktrees, ...r.worktrees };
       merged.sessions = [...merged.sessions, ...r.sessions];
@@ -809,14 +887,19 @@ export function createRouter(opts: {
       }
       case "permission.respond":
       case "question.respond": {
-        // Request IDs are unique across sides: the side that has it settles it.
-        const answers = await Promise.all(all().map((id) => call(id, msg)));
-        const settled = answers.some((a) => a.type === "reply" && (a.result as { settled?: boolean }).settled);
-        return send(settled || answers[0]!.type === "reply" ? { type: "reply", reqId: msg.reqId, result: { settled } } : answers[0]!);
+        // Only the side that raised the request gets the answer; a request no side raised is the local daemon's.
+        const owner = typeof msg.requestId === "string" ? requestSide.get(msg.requestId) : undefined;
+        const answer = await call(owner && conns.has(owner) ? owner : LOCAL_SIDE, msg);
+        if (answer.type === "reply" && typeof msg.requestId === "string") requestSide.delete(msg.requestId);
+        return send(answer);
       }
       case "push.focus":
-        // Each side suppresses pushes for the session shown here.
-        for (const id of conns.keys()) void sideCall(id, msg);
+        // Each side suppresses pushes for the sessions shown here that it owns, and learns no other ID.
+        for (const id of conns.keys()) {
+          const mine = (x: unknown) => typeof x === "string" && sides.sessionSide.get(x) === id;
+          const { sessionId, covered, ...rest } = msg as { sessionId?: unknown; covered?: unknown };
+          void sideCall(id, { ...rest, ...(mine(sessionId) && { sessionId }), ...(Array.isArray(covered) && { covered: covered.filter(mine) }) } as ClientMessage);
+        }
         return opts.local(msg);
       case "fs.watch": {
         if (!Array.isArray(msg.paths)) return opts.local(msg);
