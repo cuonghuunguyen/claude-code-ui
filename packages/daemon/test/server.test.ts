@@ -10,6 +10,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { openChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
@@ -23,6 +24,12 @@ import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery
 vi.mock("../src/git.ts", async (importOriginal) => {
   const git = await importOriginal<typeof import("../src/git.ts")>();
   return { ...git, listWorktrees: vi.fn(git.listWorktrees), gitBlobRead: vi.fn(git.gitBlobRead) };
+});
+
+// The seam between allowed() and the open: a test runs code there (a swap) through mockImplementationOnce; behaviour unchanged.
+vi.mock("../src/fd-check.ts", async (importOriginal) => {
+  const fd = await importOriginal<typeof import("../src/fd-check.ts")>();
+  return { ...fd, openChecked: vi.fn(fd.openChecked) };
 });
 
 const added = (...cwds: string[]) => {
@@ -1208,6 +1215,30 @@ describe("daemon", () => {
     expect(readFileSync(file, "utf8")).toBe("short");
     expect(statSync(file).ino).toBe(ino);
     expect(await c.request({ type: "fs.write", path: join(webRoot, "proj"), content: "x" })).toMatchObject({ code: "not_a_file" });
+  });
+
+  it.skipIf(!posix)("fs.read and fs.write refuse a folder swapped for a symlink between the root check and the open (GH-282)", async () => {
+    const outsideDir = mkdtempSync(join(tmpdir(), "outside-"));
+    const outside = join(outsideDir, "f.txt");
+    writeFileSync(outside, "outside secret");
+    for (const type of ["fs.read", "fs.write"] as const) {
+      const dir = join(webRoot, `swap-${type}`);
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, "f.txt");
+      writeFileSync(file, "inside");
+      const real = vi.mocked(openChecked).getMockImplementation()!;
+      // allowed() already passed for `file`; now the folder becomes a link to the outside folder.
+      vi.mocked(openChecked).mockImplementationOnce((path, flags) => {
+        rmSync(dir, { recursive: true });
+        symlinkSync(outsideDir, dir);
+        return real(path, flags);
+      });
+      const c = await client();
+      const reply = await c.request({ type, path: file, content: "overwritten" });
+      expect(reply, type).toMatchObject({ code: "path_not_allowed" });
+      expect(JSON.stringify(reply), type).not.toContain("outside secret");
+      expect(readFileSync(outside, "utf8"), type).toBe("outside secret");
+    }
   });
 
   it("reads and writes files inside the roots only, refusing a write over a newer disk version", async () => {
