@@ -11,6 +11,9 @@ import { perf, type PerfSpanHandle } from "./perf.ts";
 import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import type { Exec } from "./docker-side.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
+import type { Push } from "./push.ts";
+import { logPrefix, MAX_SIDE_LINE_CHARS, parseSideFrame } from "./side-frame.ts";
+export { MAX_SIDE_LINE_CHARS };
 
 /** A started side process: `wsl.exe -d <distro> ...` or `docker exec -i <name> ...` (tests: an in-process side). */
 export type SideProcess = { stdin: Writable; stdout: Readable; stderr: Readable; kill(): void; on(event: "exit", l: (code: number | null) => void): unknown };
@@ -281,14 +284,30 @@ export const wslArgs = (distro: string, script: string) => ["-d", distro, "--exe
 /** Arguments for docker.exe: the script is one argv item for `sh -c` (no shell on the host; the image's environment, not a login shell). */
 export const dockerExecArgs = (name: string, script: string) => ["exec", "-i", name, "sh", "-c", script];
 
-/** Calls `onLine` for each complete line of `stream`. */
-function lines(stream: Readable, onLine: (line: string) => void) {
+/** `onPush` of the hub: a side's push goes to the user's browsers or desktop; a failure is logged, never an unhandled rejection. */
+export const forwardSidePush = (push: Pick<Push, "send">) => (p: PushPayload) => void push.send(p).catch((e) => console.error("push from a side failed:", (e as Error).message));
+
+/**
+ * Calls `onLine` for each complete line of `stream`. A line longer than `max` characters is dropped (`onTooLong` once, with its
+ * length so far when the cap was hit): it is never buffered beyond `max`, the next line is read normally.
+ */
+function lines(stream: Readable, onLine: (line: string) => void, max = Infinity, onTooLong?: () => void) {
   let rest = "";
+  let skipping = false;
   stream.setEncoding("utf8");
   stream.on("data", (d: string) => {
-    const parts = (rest + d).split("\n");
-    rest = parts.pop()!;
-    parts.forEach(onLine);
+    const parts = d.split("\n");
+    const last = parts.pop()!;
+    for (const [i, part] of parts.entries()) {
+      const line = i === 0 ? rest + part : part;
+      rest = "";
+      if (skipping) skipping = false;
+      else if (line.length > max) onTooLong?.();
+      else onLine(line);
+    }
+    if (skipping) return;
+    rest = parts.length ? last : rest + last;
+    if (rest.length > max) (skipping = true), (rest = ""), onTooLong?.();
   });
 }
 
@@ -320,6 +339,8 @@ export function createSides(opts: {
   save?: (ids: string[]) => void;
   /** Local paths can be POSIX too (Linux, macOS): an unknown POSIX path then stays local. */
   posixLocal?: boolean;
+  /** Longest line a side may write (default MAX_SIDE_LINE_CHARS; tests lower it). */
+  maxLineChars?: number;
 }) {
   const sides = new Map<string, Side>(opts.targets.map((t) => [t.id, { ...t, state: "off", conns: new Map() }]));
   const routers = new Set<Router>();
@@ -340,6 +361,42 @@ export function createSides(opts: {
   const sessionSide = new Map<string, string>();
   const terminalSide = new Map<string, string>();
   const cwdSide = new Map<string, string>();
+  /** Permission and question request ID -> the side that raised it; shared by every connection, so a reconnect still answers it. Bounded; a side's entries go when it exits. */
+  const requestSide = new Map<string, string>();
+  /** Each side's request IDs, oldest first: the cap is per side, so a side cannot push another side's request out. */
+  const requestsOf = new Map<string, Set<string>>();
+  const MAX_REQUESTS_PER_SIDE = 1000;
+  /** Forgets a request; with `side`, only when that side owns it. */
+  function forgetRequest(requestId: string, side?: string) {
+    const owner = requestSide.get(requestId);
+    if (!owner || (side && owner !== side)) return;
+    requestSide.delete(requestId);
+    requestsOf.get(owner)?.delete(requestId);
+  }
+  function noteRequest(id: string, p: { type?: unknown; requestId?: unknown; settled?: unknown } | undefined) {
+    if (!p || (p.type !== "permission_request" && p.type !== "question") || typeof p.requestId !== "string") return;
+    if (p.settled) return forgetRequest(p.requestId, id);
+    // Another side's request ID stays with its first owner.
+    if (requestSide.has(p.requestId)) return;
+    requestSide.set(p.requestId, id);
+    const mine = requestsOf.get(id) ?? requestsOf.set(id, new Set()).get(id)!;
+    mine.add(p.requestId);
+    // At the cap this side's oldest goes, never another side's.
+    if (mine.size > MAX_REQUESTS_PER_SIDE) forgetRequest(mine.values().next().value!);
+  }
+  /** Sides that already showed the clash notice in this run. */
+  const clashed = new Set<string>();
+  /** A side named a session ID the local daemon has: left out; says so once (log) and in the side's message. */
+  function clash(id: string, sessionId: string) {
+    const s = sides.get(id);
+    if (!s || clashed.has(id)) return;
+    clashed.add(id);
+    console.error(`side ${id}: session ${sessionId} exists on this computer too: left out (a shared ~/.claude?); other such sessions are left out silently`);
+    if (s.state === "ready") {
+      s.message = `Some sessions of ${s.label} are left out: their IDs also exist on this computer (is ~/.claude shared with it?).`;
+      changed();
+    }
+  }
   const write = (s: Side, frame: object) => {
     try {
       s.proc?.stdin.write(JSON.stringify(frame) + "\n");
@@ -413,30 +470,36 @@ export function createSides(opts: {
         for (const row of rows) crashLine = CRASH.exec(row)?.[1] ?? crashLine;
       });
       proc.stdin.on("error", () => {});
+      let dropped = 0;
       lines(proc.stdout, (line) => {
         const phase = /^CLAUDE_UI_PHASE (installing|starting)$/.exec(line.trim());
         if (phase) return setPhase(s, phase[1] as SidePhase);
         const setup = /^CLAUDE_UI_SETUP (\S+) ?(.*)$/.exec(line.trim());
         if (setup) return void ((setupCode = setup[1]), (setupError = setupMessage(setup[1]!, setup[2]!, s.label, isDocker(s.id))));
-        let f: { ready?: boolean; c?: number; m?: ServerMessage; push?: PushPayload };
-        try {
-          f = JSON.parse(line);
-        } catch {
-          // Shell start-up output (motd, .bashrc).
+        const parsed = parseSideFrame(line);
+        if ("error" in parsed) {
+          // Before the first frame this is shell start-up output (motd, .bashrc): not logged. Later lines are logged, at most 20 per run.
+          if (s.state === "ready" && dropped++ < 20) console.error(`side ${s.id}: dropped a line (${parsed.error}, ${line.length} chars) ${logPrefix(line)}`);
           return;
         }
-        if (f.ready) {
+        const f = parsed.frame;
+        if (f.kind === "ready") {
           endSpans(s, false);
           delete s.phase;
+          clashed.delete(s.id);
           Object.assign(s, { state: "ready", message: undefined });
           started.add(s.id);
           opts.save?.([...started]);
           resolve();
           routers.forEach((r) => r.attach(s.id));
           changed();
-        } else if (f.push) opts.onPush?.(f.push);
-        else if (f.c !== undefined && f.m) s.conns.get(f.c)?.(f.m);
-      });
+        } else if (f.kind === "push") {
+          // A side notifies for its own sessions only (GH-279): not for one another side owns.
+          const owner = sessionSide.get(f.push.sessionId);
+          if (!owner || owner === s.id) opts.onPush?.(f.push);
+        }
+        else s.conns.get(f.c)?.(f.m);
+      }, opts.maxLineChars ?? MAX_SIDE_LINE_CHARS, () => console.error(`side ${s.id}: dropped a line (too long, more than ${opts.maxLineChars ?? MAX_SIDE_LINE_CHARS} chars)`));
       proc.on("exit", (code) => {
         const wasReady = s.state === "ready";
         // A crashed side logs `claude-ui daemon: uncaughtException: <error>` first; Node's own fatal print ends in frames and a `Node.js vX` trailer.
@@ -462,6 +525,7 @@ export function createSides(opts: {
         delete s.phase;
         Object.assign(s, notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
+        for (const reqId of [...(requestsOf.get(s.id) ?? [])]) forgetRequest(reqId);
         if (!wasReady) reject(new Error(message));
         routers.forEach((r) => r.detach(s.id));
         changed();
@@ -475,10 +539,7 @@ export function createSides(opts: {
     const s = sides.get(id);
     if (s?.state !== "ready") return undefined;
     const c = nextConn++;
-    s.conns.set(c, (m) => {
-      learn(id, m);
-      onMessage(m);
-    });
+    s.conns.set(c, onMessage);
     write(s, { c, o: 1 });
     return {
       send: (m) => write(s, { c, m }),
@@ -489,12 +550,13 @@ export function createSides(opts: {
     };
   }
 
-  /** Owner of each session and terminal a side's messages name. */
+  /**
+   * Owner of each terminal and cwd a side's reply names. Only for a reply to a request the router forwarded to that side
+   * (createRouter drops the rest). Sessions are not learned here: the router claims them (GH-279).
+   */
   function learn(id: string, m: ServerMessage) {
-    if (m.type === "event") sessionSide.set(m.sessionId, id);
     if (m.type !== "reply" || !m.result || typeof m.result !== "object") return;
     const r = m.result as { cwd?: unknown; session?: { id?: unknown; cwd?: unknown }; terminal?: { id?: unknown }; terminals?: { id?: unknown }[] };
-    if (typeof r.session?.id === "string") sessionSide.set(r.session.id, id);
     // A local cwd (POSIX hub) keeps its routing: a container cannot take over a host path.
     const claim = (cwd: string) => cwdSide.get(cwd) !== LOCAL_SIDE && cwdSide.set(cwd, id);
     if (typeof r.session?.cwd === "string") claim(r.session.cwd);
@@ -594,6 +656,11 @@ export function createSides(opts: {
     refresh,
     posixLocal: !!opts.posixLocal,
     open,
+    learn,
+    requestSide,
+    noteRequest,
+    forgetRequest,
+    clash,
     sessionSide,
     terminalSide,
     cwdSide,
@@ -639,21 +706,77 @@ export function createRouter(opts: {
   /** Calls waiting for a side's answer, by their hub reqId: detach settles them. */
   const pending = new Map<string, { id: string; settle: (m: ServerMessage) => void }>();
   let nextReq = 1;
-  const onSide = (m: ServerMessage) => {
-    if ((m.type === "reply" || m.type === "error") && m.reqId && own.has(m.reqId)) {
-      own.get(m.reqId)!(m);
-      own.delete(m.reqId);
-      return;
+  /** Requests forwarded to each side, by the browser's reqId: only a reply or error to one of these is accepted from that side (GH-279). */
+  const forwarded = new Map<string, Set<string>>();
+  const { noteRequest, requestSide, forgetRequest } = sides;
+  /**
+   * A side owns a session ID only when it was told so by a reply to a request it was sent (or by its own /clear heir): never an
+   * ID the local daemon has or another side owns. Returns whether `id` now belongs to `side`.
+   */
+  async function claimSession(side: string, sessionId: string): Promise<boolean> {
+    const owner = sides.sessionSide.get(sessionId);
+    if (owner) return owner === side;
+    if (await opts.isLocalSession(sessionId)) return sides.clash(side, sessionId), false;
+    // Another claim may have won while the local check ran.
+    const now = sides.sessionSide.get(sessionId);
+    if (now) return now === side;
+    sides.sessionSide.set(sessionId, side);
+    return true;
+  }
+  const noteReply = async (id: string, m: Extract<ServerMessage, { type: "reply" }>): Promise<boolean> => {
+    const r = m.result as { session?: { id?: unknown }; snapshot?: { heads?: { part?: unknown }[]; page?: { parts?: unknown[] }; aux?: { part?: unknown }[] }; page?: { parts?: unknown[] } } | null;
+    if (!r || typeof r !== "object") return true;
+    if (typeof r.session?.id === "string" && !(await claimSession(id, r.session.id))) return false;
+    sides.learn(id, m);
+    const parts = [...(r.snapshot?.heads?.map((h) => h.part) ?? []), ...(r.snapshot?.page?.parts ?? []), ...(r.snapshot?.aux?.map((a) => a.part) ?? []), ...(r.page?.parts ?? [])];
+    for (const p of parts) noteRequest(id, p as never);
+    return true;
+  };
+  const conflict = (m: ServerMessage & { reqId?: string }): ServerMessage => ({ type: "error", reqId: m.reqId, code: "side_conflict", message: "the side named a session it does not own" });
+  /** One message of side `id`, after the ones before it (a claim may wait for the local check). */
+  const onSide = async (id: string, m: ServerMessage) => {
+    if (m.type === "reply" || m.type === "error" || m.type === "sessions.search.result") {
+      const reqId = m.reqId;
+      if (reqId && own.has(reqId)) {
+        // A hub request: only the side it was sent to answers it.
+        if (pending.get(reqId)?.id !== id) return;
+        if (m.type === "reply" && !(await noteReply(id, m))) return own.get(reqId)!(conflict(m)), own.delete(reqId);
+        own.get(reqId)?.(m);
+        own.delete(reqId);
+        return;
+      }
+      // An error may carry no reqId (a message the side could not parse); everything else answers a forwarded request.
+      if (!(m.type === "error" && !reqId)) {
+        const f = forwarded.get(id);
+        if (!reqId || !f?.has(reqId)) return;
+        // A search streams results before its reply.
+        if (m.type !== "sessions.search.result") f.delete(reqId);
+      }
+      if (m.type === "reply" && !(await noteReply(id, m))) return send(conflict(m));
+      return send(m);
+    }
+    if (m.type === "event") {
+      const owner = sides.sessionSide.get(m.sessionId);
+      if (owner !== id) return;
+      // /clear: the owner hands the live query to a new session, announced on the old one.
+      if (m.part.type === "session_cleared" && !(await claimSession(id, m.part.sessionId))) return;
+      noteRequest(id, m.part as never);
+      return send(m);
     }
     // Plan usage is the local account's; a side's would overwrite it.
     if (m.type === "plan_usage") return;
+    // A side deletes its own sessions from the list only.
+    if (m.type === "sessions.changed" && m.deleted !== undefined && sides.sessionSide.get(m.deleted) !== id) return send({ type: "sessions.changed" });
     send(m);
   };
   const router: Router = {
     attach(id) {
       if (conns.has(id)) return;
-      const c = sides.open(id, onSide);
+      // Messages of one side are handled in order.
+      let tail: Promise<unknown> = Promise.resolve();
+      const c = sides.open(id, (m) => void (tail = tail.then(() => onSide(id, m)).catch((e) => console.error(`side ${id}: ${(e as Error).message}`))));
       if (!c) return;
+      forwarded.set(id, new Set());
       conns.set(id, c);
       void syncSettings(id);
       // Its projects and sessions join the list.
@@ -661,6 +784,7 @@ export function createRouter(opts: {
     },
     detach(id) {
       if (!conns.delete(id)) return;
+      forwarded.delete(id);
       // A call the side can no longer answer ends with side_not_ready (a GET /media waiting for a piece ends).
       for (const [reqId, pend] of pending) if (pend.id === id) pend.settle({ type: "error", reqId, code: "side_not_ready", message: `${id} stopped` });
       send({ type: "sessions.changed" });
@@ -689,6 +813,7 @@ export function createRouter(opts: {
   const forward = (id: string, msg: ClientMessage) => {
     const c = conns.get(id);
     if (!c) return send({ type: "error", reqId: msg.reqId, code: "side_not_ready", message: `${sides.list().find((s) => s.id === id)?.label ?? id} is not running. Open it in the project picker to start it.` });
+    forwarded.get(id)?.add(msg.reqId);
     c.send(msg);
   };
   const all = () => [LOCAL_SIDE, ...conns.keys()];
@@ -715,7 +840,8 @@ export function createRouter(opts: {
         // A link or notification to a side session this connection has not listed yet: ask each side.
         for (const id of conns.keys()) {
           const r = await sideCall(id, { type: "session.subscribe", sessionId: msg.sessionId, sinceSeq: Number.MAX_SAFE_INTEGER, background: true, reqId: "" } as ClientMessage);
-          if (r.type === "reply") return sides.sessionSide.set(msg.sessionId, id), id;
+          // The reply claimed the session for that side (not when it is local or another side's).
+          if (r.type === "reply" && sides.sessionSide.get(msg.sessionId) === id) return id;
         }
       }
       return LOCAL_SIDE;
@@ -734,9 +860,13 @@ export function createRouter(opts: {
     const docker = sides.docker();
     for (const [id, a] of answers.slice(1)) {
       // A side that fails its list leaves it out; its state shows in `sides`.
-      if (a.type !== "reply") continue;
+      if (a.type !== "reply" || !Array.isArray((a.result as ListLike | null)?.sessions)) continue;
       const r = a.result as ListLike;
-      for (const s of r.sessions) sides.sessionSide.set(s.id, id), (cwdSides[s.cwd] = id);
+      // A side lists its own sessions only: not an ID the local daemon lists or has, nor one of another side.
+      const localIds = new Set((local.result as ListLike).sessions.map((s) => s.id));
+      const owned = await Promise.all(r.sessions.map(async (s) => (localIds.has(s.id) ? (sides.clash(id, s.id), false) : await claimSession(id, s.id))));
+      r.sessions = r.sessions.filter((_, i) => owned[i]);
+      for (const s of r.sessions) cwdSides[s.cwd] = id;
       for (const p of [...r.projects, ...r.recentProjects.map((x) => x.cwd), ...Object.values(r.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) cwdSides[p] = id;
       merged.worktrees = { ...merged.worktrees, ...r.worktrees };
       merged.sessions = [...merged.sessions, ...r.sessions];
@@ -787,14 +917,19 @@ export function createRouter(opts: {
       }
       case "permission.respond":
       case "question.respond": {
-        // Request IDs are unique across sides: the side that has it settles it.
-        const answers = await Promise.all(all().map((id) => call(id, msg)));
-        const settled = answers.some((a) => a.type === "reply" && (a.result as { settled?: boolean }).settled);
-        return send(settled || answers[0]!.type === "reply" ? { type: "reply", reqId: msg.reqId, result: { settled } } : answers[0]!);
+        // Only the side that raised the request gets the answer; a request no side raised is the local daemon's.
+        const owner = typeof msg.requestId === "string" ? requestSide.get(msg.requestId) : undefined;
+        const answer = await call(owner && conns.has(owner) ? owner : LOCAL_SIDE, msg);
+        if (answer.type === "reply" && typeof msg.requestId === "string") forgetRequest(msg.requestId);
+        return send(answer);
       }
       case "push.focus":
-        // Each side suppresses pushes for the session shown here.
-        for (const id of conns.keys()) void sideCall(id, msg);
+        // Each side suppresses pushes for the sessions shown here that it owns, and learns no other ID.
+        for (const id of conns.keys()) {
+          const mine = (x: unknown) => typeof x === "string" && sides.sessionSide.get(x) === id;
+          const { sessionId, covered, ...rest } = msg as { sessionId?: unknown; covered?: unknown };
+          void sideCall(id, { ...rest, ...(mine(sessionId) && { sessionId }), ...(Array.isArray(covered) && { covered: covered.filter(mine) }) } as ClientMessage);
+        }
         return opts.local(msg);
       case "fs.watch": {
         if (!Array.isArray(msg.paths)) return opts.local(msg);
@@ -876,7 +1011,7 @@ export function runSide(opts: { input: Readable; output: Writable; accept: (ws: 
     } catch {
       return;
     }
-    if (typeof f.c !== "number") return;
+    if (!f || typeof f.c !== "number") return;
     const c = f.c;
     if (f.o) {
       const ws = new SideSocket(
