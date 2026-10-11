@@ -315,6 +315,9 @@ function lines(stream: Readable, onLine: (line: string) => void, max = Infinity,
 type Side = SideInfo & { proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void> };
 
 
+/** Longest wait for one side's answer to the lookup of an unlisted session ID (GH-321). */
+export const PROBE_TIMEOUT_MS = 5_000;
+
 /** A path a side may claim as a cwd: absolute, normalized, no trailing slash (GH-320: other spellings slip past prefix checks). */
 const canonical = (p: string) => p.startsWith("/") && !p.includes("\0") && posix.normalize(p) === p && (p === "/" || !p.endsWith("/"));
 /** `p` is `dir` or inside it (POSIX). */
@@ -396,14 +399,22 @@ export function createSides(opts: {
   }
   /** Sides that already showed the clash notice in this run. */
   const clashed = new Set<string>();
+  /** Session IDs two or more sides named while no side owned them (GH-321): no side gets them, until one of those sides exits. */
+  const contested = new Map<string, Set<string>>();
+  const MAX_CONTESTED = 1000;
+  function contest(sessionId: string, ids: string[]) {
+    contested.set(sessionId, new Set(ids));
+    if (contested.size > MAX_CONTESTED) contested.delete(contested.keys().next().value!);
+    for (const id of ids) clash(id, sessionId, true);
+  }
   /** A side named a session ID the local daemon has: left out; says so once (log) and in the side's message. */
-  function clash(id: string, sessionId: string) {
+  function clash(id: string, sessionId: string, other = false) {
     const s = sides.get(id);
     if (!s || clashed.has(id)) return;
     clashed.add(id);
-    console.error(`side ${id}: session ${sessionId} exists on this computer too: left out (a shared ~/.claude?); other such sessions are left out silently`);
+    console.error(`side ${id}: session ${sessionId} ${other ? "is named by another side too" : "exists on this computer too"}: left out (a shared ~/.claude?); other such sessions are left out silently`);
     if (s.state === "ready") {
-      s.message = `Some sessions of ${s.label} are left out: their IDs also exist on this computer (is ~/.claude shared with it?).`;
+      s.message = `Some sessions of ${s.label} are left out: ${other ? "another side lists the same IDs" : "their IDs also exist on this computer"} (is ~/.claude shared${other ? "" : " with it"}?).`;
       changed();
     }
   }
@@ -535,6 +546,7 @@ export function createSides(opts: {
         delete s.phase;
         Object.assign(s, notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
+        for (const [k, v] of contested) if (v.has(s.id)) contested.delete(k);
         for (const reqId of [...(requestsOf.get(s.id) ?? [])]) forgetRequest(reqId);
         if (!wasReady) reject(new Error(message));
         routers.forEach((r) => r.detach(s.id));
@@ -686,6 +698,8 @@ export function createSides(opts: {
     noteRequest,
     forgetRequest,
     clash,
+    contest,
+    contested,
     sessionSide,
     terminalSide,
     cwdSide,
@@ -724,6 +738,8 @@ export function createRouter(opts: {
   /** fs.media of a side's path: the hub serves it (server.ts sideMedia); `call` asks that side. Absent: refused with side_unsupported. */
   /** Longest wait for one media piece from a side (default MEDIA_PIECE_TIMEOUT_MS). */
   mediaTimeoutMs?: number;
+  /** Longest wait for a side's answer to the session lookup of an unlisted ID (default PROBE_TIMEOUT_MS); no answer: not that side's. */
+  probeTimeoutMs?: number;
   media?: (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>) => Promise<ServerMessage>;
 }) {
   const { sides, send } = opts;
@@ -731,7 +747,7 @@ export function createRouter(opts: {
   /** Answers of side requests the router asked itself (merged lists, fan-outs), by internal reqId. */
   const own = new Map<string, (m: ServerMessage) => void>();
   /** Calls waiting for a side's answer, by their hub reqId: detach settles them. */
-  const pending = new Map<string, { id: string; settle: (m: ServerMessage) => void; type: string }>();
+  const pending = new Map<string, { id: string; settle: (m: ServerMessage) => void; type: string; probe: boolean }>();
   let nextReq = 1;
   /** Requests forwarded to each side, by the browser's reqId: only a reply or error to one of these is accepted from that side (GH-279). */
   const forwarded = new Map<string, Map<string, string>>();
@@ -743,10 +759,12 @@ export function createRouter(opts: {
   async function claimSession(side: string, sessionId: string): Promise<boolean> {
     const owner = sides.sessionSide.get(sessionId);
     if (owner) return owner === side;
+    if (sides.contested.has(sessionId)) return false;
     if (await opts.isLocalSession(sessionId)) return sides.clash(side, sessionId), false;
     // Another claim may have won while the local check ran.
     const now = sides.sessionSide.get(sessionId);
     if (now) return now === side;
+    if (sides.contested.has(sessionId)) return false;
     sides.sessionSide.set(sessionId, side);
     return true;
   }
@@ -759,6 +777,7 @@ export function createRouter(opts: {
     for (const p of parts) noteRequest(id, p as never);
     return true;
   };
+  const sideConflict = (reqId: string): ServerMessage => ({ type: "error", reqId, code: "side_conflict", message: "more than one side has this session" });
   const conflict = (m: ServerMessage & { reqId?: string }): ServerMessage => ({ type: "error", reqId: m.reqId, code: "side_conflict", message: "the side named a session it does not own" });
   /** One message of side `id`, after the ones before it (a claim may wait for the local check). */
   const onSide = async (id: string, m: ServerMessage) => {
@@ -768,7 +787,7 @@ export function createRouter(opts: {
       if (reqId && own.has(reqId)) {
         // A hub request: only the side it was sent to answers it.
         if (pending.get(reqId)?.id !== id) return;
-        if (m.type === "reply" && !(await noteReply(id, m, pending.get(reqId)!.type))) return own.get(reqId)!(conflict(m)), own.delete(reqId);
+        if (m.type === "reply" && !pending.get(reqId)!.probe && !(await noteReply(id, m, pending.get(reqId)!.type))) return own.get(reqId)!(conflict(m)), own.delete(reqId);
         own.get(reqId)?.(m);
         own.delete(reqId);
         return;
@@ -821,7 +840,7 @@ export function createRouter(opts: {
   };
 
   /** A side's answer to `msg`; an error answer when the side is gone. */
-  const sideCall = (id: string, msg: ClientMessage, timeoutMs?: number) =>
+  const sideCall = (id: string, msg: ClientMessage, timeoutMs?: number, probe = false) =>
     new Promise<ServerMessage>((resolve) => {
       const c = conns.get(id);
       if (!c) return resolve({ type: "error", reqId: msg.reqId, code: "side_not_ready", message: `${id} is not running` });
@@ -834,7 +853,7 @@ export function createRouter(opts: {
         resolve({ ...m, reqId: msg.reqId } as ServerMessage);
       };
       own.set(reqId, settle);
-      pending.set(reqId, { id, settle, type: msg.type });
+      pending.set(reqId, { id, settle, type: msg.type, probe });
       if (timeoutMs) timer = setTimeout(() => settle({ type: "error", reqId, code: "side_timeout", message: `${id} did not answer in ${timeoutMs} ms` }), timeoutMs);
       c.send({ ...msg, reqId } as ClientMessage);
     });
@@ -860,17 +879,23 @@ export function createRouter(opts: {
   }
 
   /** The side a message goes to. */
-  async function target(msg: ClientMessage & Record<string, unknown>): Promise<string> {
+  async function target(msg: ClientMessage & Record<string, unknown>): Promise<string | null> {
     if (typeof msg.side === "string" && (msg.side === LOCAL_SIDE || sides.has(msg.side))) return msg.side;
     if (typeof msg.sessionId === "string") {
       const known = sides.sessionSide.get(msg.sessionId);
       if (known) return known;
+      if (sides.contested.has(msg.sessionId)) return null;
       if (conns.size && !(await opts.isLocalSession(msg.sessionId))) {
-        // A link or notification to a side session this connection has not listed yet: ask each side.
-        for (const id of conns.keys()) {
-          const r = await sideCall(id, { type: "session.subscribe", sessionId: msg.sessionId, sinceSeq: Number.MAX_SAFE_INTEGER, background: true, reqId: "" } as ClientMessage);
-          // The reply claimed the session for that side (not when it is local or another side's).
-          if (r.type === "reply" && sides.sessionSide.get(msg.sessionId) === id) return id;
+        // A link or notification to a side session this connection has not listed yet: ask every side at once (GH-321). Exactly one side naming the ID gets it; two or more: none.
+        const ids = [...conns.keys()];
+        const probe = { type: "session.subscribe", sessionId: msg.sessionId, sinceSeq: Number.MAX_SAFE_INTEGER, background: true, reqId: "" } as ClientMessage;
+        const answers = await Promise.all(ids.map((id) => sideCall(id, probe, opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS, true)));
+        const named = (a: ServerMessage) => a.type === "reply" && (a.result as { session?: { id?: unknown } } | null)?.session?.id === msg.sessionId;
+        const hits = ids.filter((_, i) => named(answers[i]!));
+        if (hits.length > 1) return sides.contest(msg.sessionId, hits), null;
+        if (hits.length === 1) {
+          const hit = hits[0]!;
+          if ((await noteReply(hit, answers[ids.indexOf(hit)] as Extract<ServerMessage, { type: "reply" }>, "session.subscribe")) && sides.sessionSide.get(msg.sessionId) === hit) return hit;
         }
       }
       return LOCAL_SIDE;
@@ -892,12 +917,19 @@ export function createRouter(opts: {
       const l = local.result as ListLike;
       for (const p of [...l.sessions.map((s) => s.cwd), ...l.projects, ...l.recentProjects.map((x) => x.cwd), ...Object.values(l.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) sides.markLocal(p);
     }
+    // An unowned ID two or more sides list in one round is contested: neither gets it (GH-321).
+    const localIds = new Set((local.result as ListLike).sessions.map((s) => s.id));
+    const listedBy = new Map<string, string[]>();
+    for (const [id, a] of answers.slice(1)) {
+      if (a.type !== "reply" || !Array.isArray((a.result as ListLike | null)?.sessions)) continue;
+      for (const sid of new Set((a.result as ListLike).sessions.map((s) => s.id))) if (!localIds.has(sid) && !sides.sessionSide.has(sid)) listedBy.set(sid, [...(listedBy.get(sid) ?? []), id]);
+    }
+    for (const [sid, ids] of listedBy) if (ids.length > 1) sides.contest(sid, ids);
     for (const [id, a] of answers.slice(1)) {
       // A side that fails its list leaves it out; its state shows in `sides`.
       if (a.type !== "reply" || !Array.isArray((a.result as ListLike | null)?.sessions)) continue;
       const r = a.result as ListLike;
       // A side lists its own sessions only: not an ID the local daemon lists or has, nor one of another side.
-      const localIds = new Set((local.result as ListLike).sessions.map((s) => s.id));
       const owned = await Promise.all(r.sessions.map(async (s) => (localIds.has(s.id) ? (sides.clash(id, s.id), false) : await claimSession(id, s.id))));
       r.sessions = r.sessions.filter((_, i) => owned[i]);
       for (const p of [...r.sessions.map((s) => s.cwd), ...r.projects, ...r.recentProjects.map((x) => x.cwd), ...Object.values(r.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) if (sides.claimCwd(id, p)) cwdSides[p] = id;
@@ -968,6 +1000,7 @@ export function createRouter(opts: {
       }
       case "fs.media": {
         const id = await target(msg);
+        if (id === null) return send(sideConflict(msg.reqId));
         if (id === LOCAL_SIDE) return opts.local(msg);
         if (!opts.media) return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for files in ${id.startsWith("docker:") ? "Docker" : "WSL"}` });
         const { side: _side, ...rest } = msg;
@@ -975,6 +1008,7 @@ export function createRouter(opts: {
       }
       default: {
         const id = await target(msg);
+        if (id === null) return send(sideConflict(msg.reqId));
         if (id === LOCAL_SIDE) {
           // The folder the local daemon opened is local at once, before the next list (GH-320).
           if (msg.type === "project.open" && sides.posixLocal) {
