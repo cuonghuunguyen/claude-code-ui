@@ -11,7 +11,7 @@ import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
-import { checkWslSide, createSides, dockerExecArgs, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
+import { checkWslSide, createSides, dockerExecArgs, forwardSidePush, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
 import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
 import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
@@ -103,7 +103,7 @@ if (side) {
           // side.check: read-only (docker inspect + one docker exec, or one wsl.exe run of the check script).
           key: sideKey,
           check: (id) => (id.startsWith("docker:") ? checkDockerSide({ name: id.slice("docker:".length), pkgDir: sidePackage, key: sideKey() }) : checkWslSide({ distro: id.slice("wsl:".length), pkgDir: sidePackage, key: sideKey(), exec: execRun })),
-          onPush: (p) => void push.send(p),
+          onPush: forwardSidePush(push),
           saved: readSaved(sidesFile),
           save: (ids) => writeFileSync(sidesFile, JSON.stringify(ids)),
         })

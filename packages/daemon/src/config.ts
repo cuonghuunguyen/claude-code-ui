@@ -166,11 +166,16 @@ function toInfo(s: McpServerStatus): McpServerInfo {
   };
 }
 
-/** Query-string values and a password in a server URL may be tokens: `***` in their place; an unparsable URL loses its query and userinfo. */
+/** Query-string values and a password in a server URL may be tokens: `***` in their place; an unparsable URL loses its query and userinfo; so does a URL whose username the parser rewrote. */
 function redactUrl(url: string) {
   try {
     const u = new URL(url);
-    if (u.password) u.password = "***";
+    // A username the parser rewrote (a space, a newline) is not the plain shape the dialog keeps: drop the whole userinfo.
+    const rawUser = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)@/i.exec(url)?.[1]?.split(":")[0];
+    if (rawUser !== undefined && rawUser !== u.username) {
+      u.username = "";
+      u.password = "";
+    } else if (u.password) u.password = "***";
     // Not via searchParams: it would re-encode the keys.
     u.search = u.search.replace(/=[^&]*/g, "=***");
     return u.href;

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { brotliCompressSync, gunzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { serveStatic } from "../src/static.ts";
+import { APP_CSP, serveStatic } from "../src/static.ts";
 
 const js = "export const hello = 'world';\n".repeat(200);
 const br = brotliCompressSync(js);
@@ -158,5 +158,55 @@ describe("static files: cache headers and validators", () => {
     expect(h.headers["content-length"]).toBe(String(br.length));
     expect(h.headers["content-encoding"]).toBe("br");
     expect(h.body.length).toBe(0);
+  });
+});
+
+describe("static files: CSP and anti-framing (GH-280)", () => {
+  const paths = ["/", "/index.html", "/sw.js", "/manifest.webmanifest", "/icon-192.png", "/assets/app-abc123.js", "/some/client/route", "/assets/missing.js", "/missing.png", "/assets/app-abc123.js.br"];
+  for (const method of ["GET", "HEAD"]) {
+    for (const path of paths) {
+      it(`${method} ${path} carries anti-framing and CSP headers`, async () => {
+        const r = await get(path, { "accept-encoding": "br" }, method);
+        expect(r.headers["x-frame-options"]).toBe("DENY");
+        expect(String(r.headers["content-security-policy"])).toBe(APP_CSP);
+        expect(r.headers["x-content-type-options"]).toBe("nosniff");
+      });
+    }
+  }
+  it("304 and 405 responses carry them too", async () => {
+    const first = await get("/index.html");
+    const r304 = await get("/index.html", { "if-none-match": String(first.headers.etag) });
+    expect(r304.status).toBe(304);
+    expect(r304.headers["x-frame-options"]).toBe("DENY");
+    const r405 = await get("/index.html", {}, "POST");
+    expect(r405.status).toBe(405);
+    expect(r405.headers["x-frame-options"]).toBe("DENY");
+    expect(String(r405.headers["content-security-policy"])).toContain("frame-ancestors 'none'");
+  });
+  it("policy is exactly this, per directive (any loosening fails)", () => {
+    const d = Object.fromEntries(APP_CSP.split(";").map((x) => x.trim().split(/\s+/)).map(([k, ...v]) => [k, v]));
+    expect(d).toEqual({
+      "default-src": ["'self'"],
+      "script-src": ["'self'", "'wasm-unsafe-eval'"],
+      "style-src": ["'self'", "'unsafe-inline'"],
+      "img-src": ["'self'", "data:", "blob:"],
+      "media-src": ["'self'"],
+      "font-src": ["'self'"],
+      "connect-src": ["'self'"],
+      "worker-src": ["'self'"],
+      "manifest-src": ["'self'"],
+      "frame-src": ["'none'"],
+      "object-src": ["'none'"],
+      "base-uri": ["'none'"],
+      "form-action": ["'none'"],
+      "frame-ancestors": ["'none'"],
+    });
+  });
+  it("a path outside the root (403) carries them too", async () => {
+    const r = await get("/..%2Fx");
+    expect(r.status).toBe(403);
+    expect(r.headers["x-frame-options"]).toBe("DENY");
+    expect(r.headers["content-security-policy"]).toBe(APP_CSP);
+    expect(r.headers["x-content-type-options"]).toBe("nosniff");
   });
 });
