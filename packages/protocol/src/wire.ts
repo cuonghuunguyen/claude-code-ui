@@ -488,7 +488,7 @@ export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
 export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true } };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
-export type PerfSpanName = "session.open" | "session.start" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
+export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */
 export type PerfStall = { kind: "stall"; at: number; ms: number; spans: { name: PerfSpanName; id: number }[] };
 /** A child process: `cmd` and `sub` come from closed lists; `request` = the request type it served ("background" = none in flight). */

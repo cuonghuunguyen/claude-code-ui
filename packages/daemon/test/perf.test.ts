@@ -100,6 +100,23 @@ describe("spans", () => {
     s.end();
     expect(p.report().worst.some((w) => w.kind === "stall" && w.spans[0]?.name === "session.open")).toBe(true);
   });
+  it("a session.start span that never ends closes as a timeout after 60 s, with no stall label afterwards", () => {
+    const { p } = make();
+    p.setEnabled(true);
+    const s = p.span("session.start");
+    tick(61_000);
+    const r = p.report();
+    expect(r.spans["session.start"]).toBeUndefined();
+    expect(r.spans["session.start.timeout"]?.n).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    s.end();
+    expect(p.report().spans["session.start"]).toBeUndefined();
+    const q = p.span("session.open");
+    tick(300);
+    const stall = p.report().worst.filter((w) => w.kind === "stall").at(-1);
+    expect(stall && stall.kind === "stall" && stall.spans.map((x) => x.name)).toEqual(["session.open"]);
+    q.end();
+  });
   it("no watchdog timer without an open span", () => {
     const { p } = make();
     p.setEnabled(true);

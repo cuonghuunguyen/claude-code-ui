@@ -19,32 +19,36 @@ const top = (...maps: Record<string, HistSummary>[]): Row[] =>
     .sort((a, b) => (b.s.p95 ?? b.s.max ?? 0) - (a.s.p95 ?? a.s.max ?? 0))
     .slice(0, 5);
 
-const GRID = "grid grid-cols-[minmax(0,1fr)_2.5rem_4rem_4rem_4rem] items-center gap-x-2";
 function Table({ id, title, rows }: { id: string; title: string; rows: Row[] }) {
+  const num = "w-16 px-1 text-right font-normal tabular-nums";
   return (
     <div className="border-t py-2" data-testid={id}>
-      <h4 className="pb-1 text-sm">{title}</h4>
+      <h4 id={`${id}-title`} className="pb-1 text-sm">{title}</h4>
       {rows.length === 0 ? (
         <p className="text-muted-foreground text-xs">Nothing yet.</p>
       ) : (
-        <div className="text-xs">
-          <div className={`${GRID} text-muted-foreground`}>
-            <span>Name</span>
-            <span className="text-right">n</span>
-            <span className="text-right">p50</span>
-            <span className="text-right">p95</span>
-            <span className="text-right">Worst</span>
-          </div>
-          {rows.map((r) => (
-            <div key={r.name} data-row className={`${GRID} py-0.5 tabular-nums`}>
-              <span className="truncate">{r.name}</span>
-              <span className="text-right">{r.s.n}</span>
-              <span className="text-right">{ms(r.s.p50)}</span>
-              <span className="text-right">{ms(r.s.p95)}</span>
-              <span className="text-right">{ms(r.s.max)}</span>
-            </div>
-          ))}
-        </div>
+        <table aria-labelledby={`${id}-title`} className="w-full table-fixed text-xs">
+          <thead className="text-muted-foreground">
+            <tr>
+              <th scope="col" className="px-0 text-left font-normal">Name</th>
+              <th scope="col" className="w-10 px-1 text-right font-normal">n</th>
+              <th scope="col" className={num}>p50</th>
+              <th scope="col" className={num}>p95</th>
+              <th scope="col" className={num}>Worst</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.name} data-row className="tabular-nums">
+                <th scope="row" className="truncate py-0.5 pr-1 text-left font-normal">{r.name}</th>
+                <td className="w-10 px-1 text-right">{r.s.n}</td>
+                <td className={num}>{ms(r.s.p50)}</td>
+                <td className={num}>{ms(r.s.p95)}</td>
+                <td className={num}>{ms(r.s.max)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );
@@ -115,7 +119,8 @@ export function PerformanceSection({ request }: { request: <T>(msg: Request) => 
     a.href = url;
     a.download = `claude-ui-perf-${stamp(new Date())}.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    // Not in the same tick: the download may still be reading the object.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
   const clear = () => void ask.current({ type: "perf.clear" }).then(load, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
 
@@ -152,7 +157,7 @@ export function PerformanceSection({ request }: { request: <T>(msg: Request) => 
             </div>
             <Sparkline memory={d.memory} />
           </div>
-          {row("perf-cost", "Monitor cost", `${ms(d.cost.ownMs)} (${d.cost.wallMs > 0 ? ((d.cost.ownMs / d.cost.wallMs) * 100).toFixed(3) : "0"} %)`, "JavaScript time of the monitor itself. The timer that measures event-loop delay adds about 11 ms of CPU per 10 s.")}
+          {row("perf-cost", "Monitor cost", `${ms(d.cost.ownMs)} (${d.cost.wallMs > 0 ? ((d.cost.ownMs / d.cost.wallMs) * 100).toFixed(3) : "0"} %)`, "JavaScript time of the monitor itself. The timer that measures event-loop delay adds a few ms of CPU per 10 s on top, more on some platforms.")}
           <div className="flex gap-2 border-t pt-2">
             <Button variant="outline" onClick={clear} className="max-md:h-11" data-testid="perf-clear">
               Clear

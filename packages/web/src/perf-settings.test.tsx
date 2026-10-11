@@ -72,6 +72,19 @@ it("p95 shows — when n < 30", async () => {
   expect(row("git.log").textContent).toContain("30 ms");
 });
 
+it("the tables are real tables with column and row headers, named by their title", async () => {
+  await mount(async () => report());
+  const t = host.querySelector('[data-testid="perf-slowest"] table')!;
+  expect(t.getAttribute("aria-labelledby")).toBe("perf-slowest-title");
+  expect([...t.querySelectorAll("thead th[scope=col]")].map((h) => h.textContent)).toEqual(["Name", "n", "p50", "p95", "Worst"]);
+  expect(t.querySelector("tbody th[scope=row]")?.textContent).toBeTruthy();
+});
+
+it("the cost hint does not state one platform's number", async () => {
+  await mount(async () => report());
+  expect(text()).not.toMatch(/11 ms/);
+});
+
 it("says so when the monitor is off", async () => {
   const r = report();
   r.daemon.monitor = false;
@@ -97,6 +110,10 @@ it("Export JSON has no titles, prompts or paths", async () => {
   await mount(async () => r);
   await act(async () => (host.querySelector('[data-testid="perf-export"]') as HTMLElement).click());
   expect(click).toHaveBeenCalled();
+  const revoke = vi.spyOn(URL, "revokeObjectURL");
+  expect(revoke).not.toHaveBeenCalled();
+  await act(async () => void (await vi.advanceTimersByTimeAsync(10_000)));
+  expect(revoke).toHaveBeenCalledWith("blob:x");
   const json = await blobs[0]!.text();
   const out = JSON.parse(json) as { app: { web: string }; report: PerfReport };
   expect(out.report).toEqual(r);

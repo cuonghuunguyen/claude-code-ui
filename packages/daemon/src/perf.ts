@@ -92,6 +92,8 @@ const STALL_MS = 50;
 const WORST_MAX = 50;
 const MEMORY_MAX = 60;
 const LONG_LIVED = 600_000;
+/** Longest a span may stay open; then it closes as `<name>.timeout`. */
+const SPAN_MAX: Partial<Record<PerfSpanName, number>> = { "session.start": 60_000 };
 
 const NOOP_END = () => {};
 const NOOP_SPAN: PerfSpanHandle = { id: 0, end: NOOP_END };
@@ -166,8 +168,20 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
     if (c.ms >= (o.worstMs ?? 200) || (c.heldMs ?? 0) >= (o.worstMs ?? 20)) addWorst({ kind: "child", at: Date.now(), ...c });
   };
 
+  // A span that never ends (the CLI sends nothing until a prompt) must not keep the watchdog running or label every later stall.
+  const endSpan = (id: number, timeout = false) => {
+    const s = open.get(id);
+    if (!s) return;
+    open.delete(id);
+    if (open.size === 0) (clearTimeout(watch), (watch = undefined));
+    const ms = now() - s.t0;
+    const name = timeout ? (`${s.name}.timeout` as PerfSpanName) : s.name;
+    record(hist(st.spans, name), ms);
+    if (ms >= (o.worstMs ?? 100)) addWorst({ kind: "span", at: Date.now(), name, id, parent: s.parent, ms, elu: elu(s.elu0).utilization });
+  };
   const check = () => {
     const t = now();
+    for (const [id, s] of open) if (SPAN_MAX[s.name] !== undefined && t - s.t0 >= SPAN_MAX[s.name]!) endSpan(id, true);
     const late = t - expected;
     expected = t + WATCH_MS;
     if (late >= STALL_MS && open.size > 0) addWorst({ kind: "stall", at: Date.now(), ms: late, spans: [...open].map(([id, s]) => ({ name: s.name, id })) });
@@ -290,14 +304,9 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
         id,
         end: () =>
           own(() => {
-            const s = open.get(id);
-            if (!s) return;
+            if (!open.has(id)) return;
             check();
-            open.delete(id);
-            if (open.size === 0) (clearTimeout(watch), (watch = undefined));
-            const ms = now() - s.t0;
-            record(hist(st.spans, s.name), ms);
-            if (ms >= (o.worstMs ?? 100)) addWorst({ kind: "span", at: Date.now(), name: s.name, id, parent: s.parent, ms, elu: elu(s.elu0).utilization });
+            endSpan(id);
           }),
       };
     },

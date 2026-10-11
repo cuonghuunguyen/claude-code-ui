@@ -255,9 +255,10 @@ export class Session {
     return new Session(cwd, opts, { id, history, read });
   }
 
-  private start() {
+  /** `timed` false: no prompt follows (rewind, bash records), so the CLI may stay silent and there is no start to time. */
+  private start(timed = true) {
     this.startSpan?.end();
-    this.startSpan = perf.span("session.start");
+    this.startSpan = timed ? perf.span("session.start") : undefined;
     const owner = (this.owner = { session: this as Session });
     // The level is per CLI process (SDK): a new one starts empty.
     this.backgroundLevel = new Set();
@@ -485,7 +486,7 @@ export class Session {
       }
       // The next prompt's rewind fork point is after the records, else rewinding it would drop them from Claude's view.
       this.lastAssistant = outId;
-      if (!this.query) this.start();
+      if (!this.query) this.start(false);
       records.forEach((content, i) => this.input.push({ type: "user", uuid: uuids[i], shouldQuery: false, message: { role: "user", content }, parent_tool_use_id: null }));
     });
   }
@@ -780,7 +781,7 @@ export class Session {
     if (this.bashRun) throw new Error("a shell command is running: stop it first");
     if (this.state !== "idle") throw new Error("session is running: interrupt the turn first");
     if (!this.checkpoints.has(userMessageId)) throw new Error(`unknown user message ${userMessageId}`);
-    return this.query ?? this.start();
+    return this.query ?? this.start(false);
   }
 
   /** Rules already saved never reach this callback. No timeout: the promise waits for respond() or the SDK's abort. */
