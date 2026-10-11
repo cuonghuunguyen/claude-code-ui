@@ -1163,6 +1163,18 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "linked" })).toMatchObject({ result: { paths: ["linkedin"] } });
   });
 
+  it("fs.write keeps the inode, leaves no tail bytes, and refuses a directory (GH-282)", async () => {
+    const file = join(webRoot, "proj", "w.txt");
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    writeFileSync(file, "long content here");
+    const ino = statSync(file).ino;
+    const c = await client();
+    await c.request({ type: "fs.write", path: file, content: "short" });
+    expect(readFileSync(file, "utf8")).toBe("short");
+    expect(statSync(file).ino).toBe(ino);
+    expect(await c.request({ type: "fs.write", path: join(webRoot, "proj"), content: "x" })).toMatchObject({ code: "not_a_file" });
+  });
+
   it("reads and writes files inside the roots only, refusing a write over a newer disk version", async () => {
     const file = join(webRoot, "proj", "a.txt");
     mkdirSync(join(webRoot, "proj"), { recursive: true });
