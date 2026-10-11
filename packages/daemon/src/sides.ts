@@ -891,7 +891,8 @@ export function createRouter(opts: {
     const valid = answers.filter((x): x is readonly [string, Extract<ServerMessage, { type: "reply" }>] => x[1].type === "reply" && Array.isArray((x[1].result as ListLike | null)?.sessions));
     const listedBy = new Map<string, string[]>();
     for (const [id, a] of valid) for (const sid of new Set((a.result as ListLike).sessions.map((s) => s.id))) if (!localIds.has(sid) && !sides.sessionSide.has(sid)) listedBy.set(sid, [...(listedBy.get(sid) ?? []), id]);
-    for (const [sid, ids] of listedBy) if (ids.length > 1) sides.contest(sid, ids);
+    // A local ID is never contested (a shared ~/.claude): each side's row is left out as a clash below (GH-328).
+    for (const [sid, ids] of listedBy) if (ids.length > 1 && !(await opts.isLocalSession(sid))) sides.contest(sid, ids);
     const out = new Map<string, ListLike>();
     for (const [id, a] of valid) {
       const r = a.result as ListLike;
@@ -915,7 +916,7 @@ export function createRouter(opts: {
     if (typeof msg.sessionId === "string") {
       const known = sides.sessionSide.get(msg.sessionId);
       if (known) return known;
-      if (sides.contested.has(msg.sessionId)) return null;
+      if (sides.contested.has(msg.sessionId) && !(await opts.isLocalSession(msg.sessionId))) return null;
       if (conns.size && !(await opts.isLocalSession(msg.sessionId))) {
         // A link or notification to a side session this connection has not listed yet: list every side, never send the ID to one (GH-328).
         await lookUp();

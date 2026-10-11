@@ -8,6 +8,7 @@ import { createRouter, createSides, dockerSide, type SideProcess } from "../src/
 const LOCAL = "11111111-1111-4111-8111-111111111111";
 const A1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const B1 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const Z = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const HEIR = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
 /** A side the test drives by hand: `out(m)` writes a message frame, `got` holds what the hub sent it. */
@@ -584,6 +585,22 @@ describe("session lookup (GH-321, GH-328)", () => {
       const msg = t.sides.list().find((x) => x.id === "docker:a")?.message;
       expect(msg).toMatch(/this computer/);
       expect(msg).toMatch(/another side/);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("two sides list a local id (shared ~/.claude): a lookup of another id does not lock the local user out of it", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const a = fakeSide(lists(LOCAL));
+      const b = fakeSide(lists(LOCAL));
+      const t = await setup(a, b);
+      await t.req({ type: "session.subscribe", sessionId: Z, sinceSeq: 0 });
+      const r = await t.req({ type: "session.subscribe", sessionId: LOCAL, sinceSeq: 0 });
+      expect(t.sides.contested.has(LOCAL)).toBe(false);
+      expect(r).not.toMatchObject([{ type: "error", code: "side_conflict" }]);
+      expect(t.localSeen.filter((m: any) => m.type === "session.subscribe" && m.sessionId === LOCAL)).toHaveLength(1);
     } finally {
       err.mockRestore();
     }
