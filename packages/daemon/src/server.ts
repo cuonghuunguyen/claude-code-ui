@@ -1434,7 +1434,7 @@ export function createDaemon(opts: {
             owner = sessions.get(msg.sessionId)?.uploadOwner ?? msg.sessionId;
           } else if (msg.draft !== undefined) {
             owner = uploads.ownerOfDraft(msg.draft);
-            if (!owner) return fail("bad_upload", typeof msg.draft === "string" && uploads.draftClaimed(msg.draft) ? "draft already used; upload with the sessionId" : "draft must be 64 hex characters");
+            if (!owner) return typeof msg.draft === "string" && uploads.draftClaimed(msg.draft) ? fail("draft_claimed", "draft already used; use a new draft or the sessionId") : fail("bad_upload", "draft must be 64 hex characters");
           } else return fail("bad_upload", "sessionId or draft required; reload the page");
           const buf = Buffer.from(msg.data, "base64");
           if (buf.length > MAX_UPLOAD_BYTES) return fail("too_large", `larger than ${MAX_UPLOAD_BYTES} bytes: ${msg.name}`);

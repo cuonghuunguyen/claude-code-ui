@@ -95,6 +95,15 @@ describe("uploads", () => {
     expect(up.ownerOfDraft(T)).not.toBe(id);
   });
 
+  it("hasDraftId honours the expiry, so an abandoned draft folder can be swept", () => {
+    let now = 1_000_000;
+    const up = createUploads({ dir: tmp(), now: () => now });
+    const id = up.ownerOfDraft(T)!;
+    expect(up.hasDraftId(id)).toBe(true);
+    now += 24 * 3600_000 + 1;
+    expect(up.hasDraftId(id)).toBe(false);
+  });
+
   it("caps the draft map by dropping the oldest", () => {
     let now = 1;
     const up = createUploads({ dir: tmp(), now: () => now++ });

@@ -109,6 +109,22 @@ it("startSession sends the draft token with session.create; without one no draft
   expect(requests[0]).not.toHaveProperty("draft");
 });
 
+it("startSession spends the draft token as soon as session.create replied, before the prompt; a reused session does not spend another", async () => {
+  const order: string[] = [];
+  const request = vi.fn(async (msg: { type: string }) => {
+    order.push(msg.type);
+    if (msg.type === "session.prompt") throw new Error("disconnected");
+    return { session: { id: "s1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" } };
+  });
+  const opts = { model: "default", mode: "default", effort: "default", draft: "d".repeat(64) } as const;
+  const created: { current?: never } = {};
+  await expect(startSession(request as never, created, "/p/a", opts, { text: "hi", images: [] }, () => {}, () => order.push("spent"))).rejects.toThrow("disconnected");
+  expect(order).toEqual(["session.create", "spent", "session.prompt"]);
+  order.length = 0;
+  await expect(startSession(request as never, created, "/p/a", opts, { text: "hi", images: [] }, () => {}, () => order.push("spent"))).rejects.toThrow("disconnected");
+  expect(order).toEqual(["session.prompt"]);
+});
+
 it('"!" in the first prompt box is bash mode: Enter starts the session with the command and the chosen mode; no project, no bash mode', async () => {
   const onStart = vi.fn(async () => {});
   const { el, box, rerender } = await render({ onStart });

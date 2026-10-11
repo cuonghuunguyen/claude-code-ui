@@ -125,7 +125,7 @@ import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGr
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
-import { draftToken, rotateDraftToken } from "./upload-owner.ts";
+import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -940,12 +940,10 @@ export function App() {
       // The new-session tab (and its draft) stays until the first prompt is taken.
       const session = await startSession(client.current!.request, unprompted, cwd, { ...opts, draft: draftUpload.current }, first, (s) => {
         setInfos((i) => ({ ...i, [s.id]: s }));
-        // The token is spent by session.create: later attachments (a retry after a failed first prompt) go by session id.
-        draftUpload.current = rotateDraftToken();
         setOptimistic((o) => (o[NEW_TAB] ? { ...o, [NEW_TAB]: o[NEW_TAB].map((p) => ({ ...p, sessionId: s.id })) } : o));
         // Listed (and so subscribed) before the prompt goes out: its echo can be in the view before the tab switches.
         if (!listed) (listed = true), void refreshList();
-      });
+      }, () => void (draftUpload.current = rotateDraftToken()));
       setOptimistic((o) => movePending(o, session.id));
       setTabs((t) => replaceTab(t, NEW_TAB, session.id));
       open(session.id);
@@ -1166,10 +1164,10 @@ export function App() {
   const sidePane = pane === "graph" && !isGit ? "files" : pane;
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
-  const upload = (owner: { sessionId: string } | { draft: string }, uploadCwd?: string) => async (file: File) => {
+  const upload = (owner: () => UploadOwner, uploadCwd?: string, rotate: () => void = () => {}) => async (file: File) => {
     const data = (await readDataUrl(file)).replace(/^data:[^,]*,/, "");
     // The session's side keeps the file: its Claude reads it there.
-    return (await client.current!.request<UploadResult>({ type: "fs.upload", name: file.name, data, ...owner, ...(uploadCwd && { cwd: uploadCwd }) })).path;
+    return uploadWithRetry(async (o) => (await client.current!.request<UploadResult>({ type: "fs.upload", name: file.name, data, ...o, ...(uploadCwd && { cwd: uploadCwd }) })).path, owner, rotate);
   };
   // Offline, a request would wait for the reconnect with no feedback; a reply that never comes times out.
   const search = (cwd: string) => (query: string) =>
@@ -1725,7 +1723,7 @@ export function App() {
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
-                        onUpload={upload({ sessionId: s.id }, s.cwd)}
+                        onUpload={upload(() => ({ sessionId: s.id }), s.cwd)}
                         onPrompt={(text, images) => {
                           // While the /clear runs the message waits: its bubble shows now, it is sent once the tab follows (or the /clear ends without).
                           if (!v.externalTurn && clearing(v, pend)) {
@@ -1851,7 +1849,7 @@ export function App() {
                   onDraft={changeDraft}
                   modes={draftModes}
                   onOpenProject={() => setOpeningProject(true)}
-                  onUpload={(file: File) => upload(unprompted.current?.cwd === draftProject ? { sessionId: unprompted.current.id } : { draft: draftUpload.current }, draftProject)(file)}
+                  onUpload={upload(() => uploadOwnerFor(unprompted.current, draftProject, draftUpload.current), draftProject, () => void (draftUpload.current = rotateDraftToken()))}
                   onSearch={search}
                   commandsRev={Object.values(configChanged).reduce((a, b) => a + b, 0)}
                   onCommands={(cwd) => client.current!.request<CommandsResult>({ type: "session.commands", cwd }).then((r) => r.commands)}
@@ -2191,9 +2189,12 @@ export async function startSession(
   { model, mode, effort, draft }: StartOptions,
   first: FirstMessage,
   onInfo: (s: SessionInfo) => void = () => {},
+  /** The draft token is spent by session.create: the caller makes a new one at once (later attachments go by session id). */
+  onDraftClaimed: () => void = () => {},
 ): Promise<SessionInfo> {
   const reused = created.current?.cwd === cwd;
   let session = reused ? created.current! : (await request<CreateResult>({ type: "session.create", cwd, model, ...(draft && { draft }) })).session;
+  if (!reused && draft) onDraftClaimed();
   created.current = session;
   onInfo(session);
   // Before the first prompt, mode and effort become the query's start options; on failure the prompt is not sent.

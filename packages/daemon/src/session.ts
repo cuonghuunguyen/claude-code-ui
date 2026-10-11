@@ -219,7 +219,7 @@ export class Session {
   private commandsAsked = false;
   /**
    * Whose upload folder the running CLI was started with (`uploadDir(uploadOwner)`). A /clear heir keeps its parent's until
-   * its own query starts: the CLI cannot get another directory, so uploads go where it already reads.
+   * its CLI closes (`dropQuery`: idle close, restart, rewind) and a query of its own starts: the CLI cannot get another directory, so uploads go where it already reads.
    */
   uploadOwner: string;
   /** After a failed load no new throwaway starts before this time (ms). */
@@ -270,7 +270,6 @@ export class Session {
     // The level is per CLI process (SDK): a new one starts empty.
     this.backgroundLevel = new Set();
     this.ambientTasks.clear();
-    this.uploadOwner = this.id;
     const up = this.opts.uploadDir?.(this.id);
     const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
     const rules = sessionRules(this.grants);
@@ -656,6 +655,8 @@ export class Session {
     this.generation++;
     this.query?.close();
     this.query = undefined;
+    // The next query is granted this session's own folder (a /clear heir read its parent's until now).
+    this.uploadOwner = this.id;
     // The old drive loop's finally skips this (newer generation): a background run of the closed query stops with it.
     this.tasks.clear();
     for (const part of this.adapter.endCalls()) this.emit(part);

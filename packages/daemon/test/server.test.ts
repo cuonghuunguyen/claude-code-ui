@@ -753,7 +753,7 @@ describe("daemon", () => {
     const second = (await c.request({ type: "session.create", cwd: webRoot, draft: T })) as { result: { session: { id: string } } };
     expect(second.result.session.id).not.toBe(X);
     // A claimed token is spent: a copy of it (duplicated tab) cannot place files in that session's folder.
-    expect(await c.request({ type: "fs.upload", name: "f3.txt", data, draft: T })).toMatchObject({ code: "bad_upload" });
+    expect(await c.request({ type: "fs.upload", name: "f3.txt", data, draft: T })).toMatchObject({ code: "draft_claimed" });
     expect(readdirSync(join(uploadParent, X)).length).toBe(2);
     // The retry path uses the session id.
     const again = (await c.request({ type: "fs.upload", name: "f3.txt", data, sessionId: X })) as { result: { path: string } };
@@ -4130,30 +4130,73 @@ describe("keep-alive ping on a side's virtual connection (GH-263)", () => {
 });
 
 describe("uploads after the session id changes under a running CLI", () => {
-  it("after /clear an upload with the heir's id lands in the folder the running CLI was granted, and is deleted with the right session", async () => {
+  const setup = async (extra: Record<string, unknown> = {}) => {
     const P = join(mkdtempSync(join(tmpdir(), "up-")), "uploads");
+    const gone = new Set<string>();
     let oldId = "";
-    const d = createDaemon({ webRoot, roots: [webRoot], projects: added(webRoot), query: clearQuery as never, token, uploadDir: P, settingsFile: join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json"), history: { listSessions: (async () => []) as never, getSessionInfo: (async (id: string) => (id === oldId ? { sessionId: id, summary: "s", cwd: webRoot } : undefined)) as never, getSessionMessages: (async () => []) as never, deleteSession: (async () => {}) as never } });
+    const d = createDaemon({ webRoot, roots: [webRoot], projects: added(webRoot), query: clearQuery as never, token, uploadDir: P, settingsFile: join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json"), ...extra, history: { listSessions: (async () => []) as never, getSessionInfo: (async (id: string) => (id === oldId && !gone.has(id) ? { sessionId: id, summary: "s", cwd: webRoot } : undefined)) as never, getSessionMessages: (async () => []) as never, deleteSession: (async (id: string) => void gone.add(id)) as never } });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
+    const old = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+    oldId = old;
+    await c.request({ type: "session.subscribe", sessionId: old, sinceSeq: 0 });
+    calls.length = 0;
+    await c.request({ type: "session.prompt", sessionId: old, text: "hi" });
+    await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+    await c.request({ type: "session.prompt", sessionId: old, text: "/clear" });
+    const cleared = (await c.waitFor((m) => m.type === "event" && m.part.type === "session_cleared")) as Extract<ServerMessage, { type: "event" }>;
+    const heir = (cleared.part as { sessionId: string }).sessionId;
+    return { P, d, c, old, heir };
+  };
+  const covered = (path: string, o: { additionalDirectories?: string[] }) => !!o.additionalDirectories?.some((g) => path.startsWith(`${g}${sep}`));
+
+  it("after /clear an upload with the heir's id lands in the folder the running CLI was granted", async () => {
+    const { P, d, c, old, heir } = await setup();
     try {
-      const c = await client((d.address() as AddressInfo).port);
-      const old = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
-      oldId = old;
-      await c.request({ type: "session.subscribe", sessionId: old, sinceSeq: 0 });
-      calls.length = 0;
-      await c.request({ type: "session.prompt", sessionId: old, text: "hi" });
-      await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
-      await c.request({ type: "session.prompt", sessionId: old, text: "/clear" });
-      const cleared = (await c.waitFor((m) => m.type === "event" && m.part.type === "session_cleared")) as Extract<ServerMessage, { type: "event" }>;
-      const heir = (cleared.part as { sessionId: string }).sessionId;
-      const granted = calls.at(-1)!.additionalDirectories!;
+      const granted = calls.at(-1)!;
       const queries = calls.length;
       const up = (await c.request({ type: "fs.upload", name: "after-clear.txt", data: "aGk=", sessionId: heir })) as { result: { path: string } };
       expect(calls.length).toBe(queries); // the CLI was not restarted
-      expect(granted).toEqual([join(P, old)]);
-      expect(granted.some((g) => up.result.path.startsWith(`${g}${sep}`))).toBe(true);
+      expect(granted.additionalDirectories).toEqual([join(P, old)]);
+      expect(covered(up.result.path, granted)).toBe(true);
       // Deleting the parent session keeps the folder while the heir's CLI is still granted it.
       expect(await c.request({ type: "session.delete", sessionId: old })).toMatchObject({ type: "reply" });
+      expect(existsSync(up.result.path)).toBe(true);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("after /clear and an idle close the heir's next upload lands in the folder its next query is granted", async () => {
+    const { P, d, c, old, heir } = await setup({ idleCloseMs: 60 });
+    try {
+      await c.request({ type: "session.unsubscribe", sessionId: old });
+      await c.request({ type: "session.unsubscribe", sessionId: heir });
+      await c.request({ type: "session.subscribe", sessionId: heir, sinceSeq: 0, background: true });
+      await vi.waitFor(() => expect(closedQueries.some((o) => o.sessionId === old || o.resume === old)).toBe(true), { timeout: 3000 });
+      await new Promise((r) => setTimeout(r, 150));
+      const up = (await c.request({ type: "fs.upload", name: "late.txt", data: "aGk=", sessionId: heir })) as { result: { path: string } };
+      expect(up.result.path.startsWith(`${join(P, heir)}${sep}`)).toBe(true);
+      const before = calls.length;
+      await c.request({ type: "session.prompt", sessionId: heir, text: "read it" });
+      await vi.waitFor(() => expect(calls.length).toBeGreaterThan(before));
+      expect(covered(up.result.path, calls.at(-1)!)).toBe(true);
+      // The dormant heir no longer pins the parent's folder: deleting the parent removes it.
+      expect(await c.request({ type: "session.delete", sessionId: old })).toMatchObject({ type: "reply" });
+      expect(existsSync(join(P, old))).toBe(false);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("the sweep spares the parent's folder while a live heir's CLI reads it", async () => {
+    const { P, d, c, old, heir } = await setup({ uploadSweepFirstMs: 30, uploadSweepMs: 100 });
+    try {
+      const up = (await c.request({ type: "fs.upload", name: "f.txt", data: "aGk=", sessionId: heir })) as { result: { path: string } };
+      expect(await c.request({ type: "session.delete", sessionId: old })).toMatchObject({ type: "reply" });
+      const t = new Date(Date.now() - 48 * 3600_000);
+      for (const x of [up.result.path, dirname(up.result.path), join(P, old)]) utimesSync(x, t, t);
+      await new Promise((r) => setTimeout(r, 400));
       expect(existsSync(up.result.path)).toBe(true);
     } finally {
       d.close();

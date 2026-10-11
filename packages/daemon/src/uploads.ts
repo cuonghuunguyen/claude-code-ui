@@ -109,7 +109,7 @@ export function createUploads(o: { dir?: string; now?: () => number; uid?: numbe
       return !!d?.claimed && !expired(d);
     },
     hasDraftId(id: string): boolean {
-      for (const d of drafts.values()) if (d.id === id) return true;
+      for (const d of drafts.values()) if (d.id === id && !expired(d)) return true;
       return false;
     },
     /** Deletes <parent>/<id> (a symlink there: only the link). Never touches anything outside the parent. */
