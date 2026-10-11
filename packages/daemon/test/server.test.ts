@@ -1009,6 +1009,30 @@ describe("daemon", () => {
       }
     });
 
+    it("session.list lists no worktrees for a project whose main repository is outside the roots", async () => {
+      const { out } = outer();
+      const git = (cwd: string, ...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd, encoding: "utf8" }).trim();
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "gh290-list-")));
+      const linked = join(root, "linked");
+      git(out, "worktree", "add", "-q", "-b", "l", linked);
+      const d = createDaemon({
+        webRoot,
+        token,
+        roots: [root],
+        query: fakeQuery as never,
+        projects: added(linked),
+        history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+      });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        const r = ((await c.request({ type: "session.list" })) as { result: { worktrees: Record<string, unknown[]> } }).result;
+        expect(r.worktrees[linked] ?? []).toEqual([]);
+      } finally {
+        d.close();
+      }
+    });
+
     it("a linked worktree of a repository inside the roots still works; one whose main repository is outside is refused", async () => {
       const { out } = outer();
       const git = (cwd: string, ...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd, encoding: "utf8" }).trim();
@@ -1374,17 +1398,16 @@ describe("daemon", () => {
 
   it("a git worktree list that failed is read again on the next session.list, not reused", async () => {
     const { repo, d, list } = await repoDaemon("wtfail-");
-    const before = process.env.GIT_DIR;
+    const before = process.env.PATH;
+    const restore = () => void (process.env.PATH = before);
     try {
-      // git fails without any change to the repository's files (as a killed process or a spawn error would).
-      process.env.GIT_DIR = join(repo, "no-such-git-dir");
+      // git fails without any change to the repository's files (a spawn error): no git on the PATH.
+      process.env.PATH = join(repo, "no-such-bin");
       expect((await list()).worktrees).toEqual([]);
-      if (before === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = before;
+      restore();
       expect((await list()).worktrees).toEqual([`${repo}@main`]);
     } finally {
-      if (before === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = before;
+      restore();
       d.close();
     }
   });

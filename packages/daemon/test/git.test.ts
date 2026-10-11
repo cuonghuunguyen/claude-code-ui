@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
 import { createWorktree, gitDiff, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus } from "../src/git.ts";
@@ -830,6 +830,80 @@ describe("gitLog / gitShow / gitFileAt", () => {
     expect(gitRefs(r.dir, () => true)).toBe(refsStamp(r.dir));
     expect(gitRefs(mkdtempSync(join(tmpdir(), "nogit-")), () => true)).toBeNull();
     expect(gitRefs(r.dir, () => false)).toBeNull();
+  });
+
+  describe("git runs on the repository that was validated (GH-290)", () => {
+    const seenEnv = async (fn: () => Promise<unknown>) => {
+      const envs: NodeJS.ProcessEnv[] = [];
+      setGitRunner(async (o: GitRunOptions) => {
+        envs.push(o.env);
+        return threadRunner(o);
+      });
+      try {
+        await fn();
+      } finally {
+        setGitRunner(undefined);
+      }
+      return envs;
+    };
+    it("every graph call gets GIT_DIR (real path), GIT_COMMON_DIR, GIT_WORK_TREE and a ceiling above the top", async () => {
+      const r = graphRepo();
+      const envs = await seenEnv(async () => {
+        await gitLog(r.dir, { allowed: all });
+        await gitStatus(r.dir);
+        await gitDiff(r.dir, { base: "head", allowed: all });
+      });
+      expect(envs.length).toBeGreaterThan(3);
+      for (const e of envs) expect(e).toMatchObject({ GIT_DIR: join(r.dir, ".git"), GIT_COMMON_DIR: join(r.dir, ".git"), GIT_WORK_TREE: r.dir, GIT_CEILING_DIRECTORIES: expect.stringContaining(dirname(r.dir)) });
+    });
+    it.skipIf(process.platform === "win32")("a .git symlink to a folder inside the roots is pinned to its real path and works", async () => {
+      const r = graphRepo();
+      const dot = realpathSync(mkdtempSync(join(tmpdir(), "dot-")));
+      renameSync(join(r.dir, ".git"), join(dot, "g"));
+      symlinkSync(join(dot, "g"), join(r.dir, ".git"));
+      const envs = await seenEnv(async () => expect((await gitLog(r.dir, { allowed: all }))!.commits.length).toBeGreaterThan(0));
+      for (const e of envs) expect(e.GIT_DIR).toBe(join(dot, "g"));
+    });
+    it("a linked worktree and a subfolder of a repository keep working; git.diff from a subfolder", async () => {
+      const r = graphRepo();
+      const wt = join(realpathSync(mkdtempSync(join(tmpdir(), "wtp-"))), "w");
+      run(r.dir, "worktree", "add", "-q", "-b", "wb", wt);
+      mkdirSync(join(wt, "sub"));
+      const envs = await seenEnv(async () => {
+        expect((await gitLog(wt, { allowed: all }))!.commits.length).toBeGreaterThan(0);
+        expect((await gitStatus(join(wt, "sub")))!.branch).toBe("wb");
+        expect(await gitDiff(join(wt, "sub"), { base: "head", allowed: all })).not.toBeNull();
+        expect((await listWorktrees(wt))!.map((w) => w.path)).toContain(wt);
+      });
+      for (const e of envs) expect(e).toMatchObject({ GIT_COMMON_DIR: join(r.dir, ".git"), GIT_WORK_TREE: wt });
+    });
+    it("a submodule-style gitdir file works, and GIT_WORK_TREE overrides core.worktree", async () => {
+      const r = graphRepo();
+      const base = realpathSync(mkdtempSync(join(tmpdir(), "sm-")));
+      const work = join(base, "work");
+      mkdirSync(work);
+      const gd = join(base, "modules", "m");
+      run(base, "clone", "-q", "--bare", r.dir, gd);
+      run(gd, "config", "core.bare", "false");
+      run(gd, "config", "core.worktree", "/nonexistent-elsewhere");
+      writeFileSync(join(work, ".git"), `gitdir: ${gd}\n`);
+      const envs = await seenEnv(async () => expect((await gitLog(work, { allowed: all }))!.commits.length).toBeGreaterThan(0));
+      for (const e of envs) expect(e).toMatchObject({ GIT_DIR: gd, GIT_WORK_TREE: work });
+    });
+    it("a repository whose objects/info/alternates names a folder outside the roots is refused; one inside the roots works", async () => {
+      const r = graphRepo();
+      const base = realpathSync(mkdtempSync(join(tmpdir(), "alt-")));
+      const roots = join(base, "roots");
+      mkdirSync(roots);
+      const inRoots = (p: string) => p === roots || p.startsWith(roots + sep);
+      const clone = join(roots, "c");
+      run(roots, "clone", "-q", "--shared", r.dir, clone);
+      expect(readFileSync(join(clone, ".git", "objects", "info", "alternates"), "utf8")).toContain(r.dir);
+      expect(gitEscapes(clone, inRoots)).toBe(true);
+      await expect(gitLog(clone, { allowed: inRoots })).rejects.toMatchObject({ code: "cwd_not_allowed" });
+      writeFileSync(join(clone, ".git", "objects", "info", "alternates"), "# none\n");
+      expect(gitEscapes(clone, inRoots)).toBe(false);
+    });
   });
 
   describe.skipIf(process.platform === "win32")("gitEscapes (GH-290)", () => {

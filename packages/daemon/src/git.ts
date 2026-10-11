@@ -33,15 +33,53 @@ export function limiter(n: number) {
  */
 const gitSlot = limiter(4);
 /**
- * Git looks for a repository upward and skips an invalid `.git` (an empty folder): without a ceiling, a project whose `.git`
- * is empty would show the repository above the allowed roots. The ceiling is the folder above the repository top that
- * `gitTopOf` found (the one `topIn` checked against the roots), so git never leaves it.
+ * The repository of `cwd` resolved once: canonical top, own git dir, shared git dir and the object directories its
+ * `objects/info/alternates` names. File system only; null outside a work tree or without a readable `.git`.
  */
+type Repo = { top: string; own: string; common: string; alternates: string[] };
+function repoOf0(cwd: string): Repo | null {
+  const top = gitTopOf(cwd);
+  if (!top) return null;
+  const dirs = gitDirsOf(top);
+  if (!dirs) return null;
+  const own = real(dirs.own);
+  const common = real(dirs.common);
+  const alternates: string[] = [];
+  try {
+    const objects = join(common, "objects");
+    for (const l of readFileSync(join(objects, "info", "alternates"), "utf8").split("\n")) {
+      const t = l.trim();
+      if (t && !t.startsWith("#")) alternates.push(real(resolve(objects, t.replace(/^"(.*)"$/, "$1"))));
+    }
+  } catch {
+    // No alternates.
+  }
+  return { top, own, common, alternates };
+}
+const escapesRoots = (r: Repo, allowed: (p: string) => boolean) => ![r.top, r.own, r.common, ...r.alternates].every(allowed);
+/**
+ * Git looks for a repository upward and skips an invalid `.git` (an empty folder), and re-reads `.git` at every start (a
+ * link swapped after the roots check would win). So git gets the repository that was resolved once: `GIT_DIR` (own git dir,
+ * real path), `GIT_COMMON_DIR`, `GIT_WORK_TREE` (also overrides `core.worktree`) and a ceiling above the top, all from the same
+ * values. `pins` keeps what `topIn` validated against the roots for the later calls of the same request.
+ */
+const pins = new Map<string, NodeJS.ProcessEnv>();
+const pinFor = (r: Repo): NodeJS.ProcessEnv => {
+  const up = dirname(r.top);
+  return {
+    GIT_DIR: r.own,
+    GIT_COMMON_DIR: r.common,
+    GIT_WORK_TREE: r.top,
+    ...(up !== r.top && { GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES ? `${up}${delimiter}${process.env.GIT_CEILING_DIRECTORIES}` : up }),
+  };
+};
 const ceilingEnv = (cwd: string): NodeJS.ProcessEnv => {
   const top = gitTopOf(cwd);
-  const up = top ? dirname(top) : undefined;
-  if (!top || !up || up === top) return {};
-  return { GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES ? `${up}${delimiter}${process.env.GIT_CEILING_DIRECTORIES}` : up };
+  if (!top) return {};
+  const kept = pins.get(top);
+  if (kept) return kept;
+  const r = repoOf0(top);
+  return r ? pinFor(r) : {};
 };
 const git = async (cwd: string, ...args: string[]) => (await gitSlot(() => runGit({ cwd, args: [...READ_ONLY, ...args], env: { ...readEnv(), ...ceilingEnv(cwd) } }))).stdout.toString("utf8").trim();
 
@@ -508,7 +546,7 @@ export async function gitTop(cwd: string): Promise<string | null> {
 }
 /**
  * True when the repository of `cwd` is not entirely inside the roots (`allowed` gets canonical paths): its top, its own git
- * dir or the one its worktrees share (`gitDirsOf`, resolved through links). A project inside the roots whose `.git` is a
+ * dir, the one its worktrees share (`gitDirsOf`, resolved through links) or an object directory of `objects/info/alternates`. A project inside the roots whose `.git` is a
  * symlink or a `gitdir:` file to elsewhere, or a linked worktree whose main repository is outside, would show that repository.
  * File system only; false outside a work tree.
  */
@@ -516,17 +554,26 @@ export function gitEscapes(cwd: string, allowed: (p: string) => boolean): boolea
   const top = gitTopOf(cwd);
   if (!top) return false;
   if (!allowed(top)) return true;
-  const dirs = gitDirsOf(top);
-  if (!dirs) return false;
-  return [dirs.own, dirs.common].some((d) => {
-    const r = real(d);
-    return !r || !allowed(r);
-  });
+  const r = repoOf0(top);
+  return r ? escapesRoots(r, allowed) : false;
 }
-/** A cwd inside the roots whose repository (top or git dirs) is outside must not expose files outside the roots through git objects. */
+/**
+ * A cwd inside the roots whose repository (top, git dirs, alternates) is outside must not expose files outside the roots
+ * through git objects. The values checked are the ones git then gets (`pins`): no gap for a `.git` swap.
+ */
 function topIn(cwd: string, allowed: (p: string) => boolean): string | null {
   const top = gitTopOf(cwd);
-  if (top && gitEscapes(cwd, allowed)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  if (!top) return null;
+  if (!allowed(top)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  const r = repoOf0(top);
+  if (!r) {
+    pins.delete(top);
+    return top;
+  }
+  if (escapesRoots(r, allowed)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  pins.delete(top);
+  pins.set(top, pinFor(r));
+  if (pins.size > 64) pins.delete(pins.keys().next().value!);
   return top;
 }
 
