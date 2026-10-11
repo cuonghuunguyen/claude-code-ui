@@ -275,17 +275,24 @@ function SidePicker({
       ) : !ready ? (
         <SidePanel key={current.id} side={current} state={panels[current.id] ?? {}} onRun={(m) => void run(current.id, m)} onCheck={() => void runCheck(current.id)} />
       ) : (
-        <Browser
-          key={`${side}:${start.n}`}
-          input={input}
-          list={(path) => list(path, side)}
-          onPick={(cwd) => onPick(cwd, side)}
-          onPickRecent={(cwd) => onPick(cwd, sideOf(cwd))}
-          recent={recent}
-          initial={start.value}
-          onTyped={onTyped}
-          hint={hint}
-        />
+        <>
+          {current?.message && (
+            <p role="status" className="px-4 py-2 text-xs text-muted-foreground [overflow-wrap:anywhere]" data-testid="side-notice">
+              {current.message}
+            </p>
+          )}
+          <Browser
+            key={`${side}:${start.n}`}
+            input={input}
+            list={(path) => list(path, side)}
+            onPick={(cwd) => onPick(cwd, side)}
+            onPickRecent={(cwd) => onPick(cwd, sideOf(cwd))}
+            recent={recent}
+            initial={start.value}
+            onTyped={onTyped}
+            hint={hint}
+          />
+        </>
       )}
     </>
   );
