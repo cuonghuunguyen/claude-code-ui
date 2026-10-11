@@ -6,6 +6,7 @@ import { readdir } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { perf } from "./perf.ts";
 import { deniedRead, pathLow } from "./risk-tier.ts";
 
 /** One option: `value` absent = takes none; else the value must match (when `optional`, the bare option is fine too). */
@@ -131,7 +132,7 @@ const gitOpts = (cwd: string) => ({
 });
 const CONFIG_ARGS = ["config", "--list", "-z", "--show-scope", "--show-origin"];
 const LS_ARGS = ["ls-files", "-z", "--format=%(objectmode)"];
-const gitSync = (cwd: string, args: string[]) => execFileSync("git", args, { ...gitOpts(cwd), stdio: ["ignore", "pipe", "ignore"] });
+const gitSync = (cwd: string, args: string[]) => perf.syncChild("git", args, () => execFileSync("git", args, { ...gitOpts(cwd), stdio: ["ignore", "pipe", "ignore"] }));
 /**
  * Git off the event loop. Even an async spawn creates the process on the main thread, and on Windows under load (antivirus)
  * that alone held the loop for hundreds of ms; so git runs in a worker thread (plain JS, eval'd: nothing to bundle), which
@@ -229,7 +230,9 @@ const gitAsync = (cwd: string, args: string[]) =>
       void w.terminate();
     }, gitThreadConfig.queueTimeoutMs);
     timer.unref();
-    calls.set(id, { ok, fail, timer, w });
+    // The thread runs git: the diagnostics channel does not see it, so the call is timed here (thread time, not main-loop time).
+    const done = perf.child({ cmd: "git", args, cwd, thread: "worker" });
+    calls.set(id, { ok: (o) => (done(0), ok(o)), fail: (e) => (done("error"), fail(e)), timer, w });
     w.postMessage({ id, args, opts: gitOpts(cwd) });
   });
 

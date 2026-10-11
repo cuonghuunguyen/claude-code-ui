@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { parseOmitted, type Event } from "@claude-ui/protocol";
 import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, INTERRUPT_GRACE_MS, queuedQuery, Session, STALE_TURN_MS, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
+import { createPerf, setPerf } from "../src/perf.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
 import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped } from "./fake-query.ts";
 
@@ -1014,6 +1015,22 @@ describe("Session rewind", () => {
     checkpointFiles.files = [];
     expect((await s.previewRewind("u2")).filesChanged).toEqual([]);
     checkpointFiles.files = ["/repo/a.ts"];
+  });
+
+  it("a rewind starts the CLI without a session.start span (GH-272)", async () => {
+    const p = createPerf();
+    p.setEnabled(true);
+    const span = vi.spyOn(p, "span");
+    setPerf(p);
+    try {
+      const { s } = restored();
+      await s.previewRewind("u2");
+      expect(span).not.toHaveBeenCalledWith("session.start", expect.anything());
+      expect(span.mock.calls.map((c) => c[0])).not.toContain("session.start");
+    } finally {
+      p.close();
+      setPerf(createPerf());
+    }
   });
 
   it("code mode calls rewindFiles and keeps the conversation", async () => {

@@ -1,6 +1,7 @@
 // WebSocket wire protocol (docs/spec.md "Wire protocol"). JSON, one message per frame.
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import type { Effort, Part, PermissionMode, PlanUsage, SessionState, SlashCommand } from "./parts.ts";
+import type { HistSummary } from "./histogram.ts";
 
 export type { ModelInfo };
 
@@ -102,6 +103,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "settings.get" }
   /** Sets only the fields in `patch`; reply `{settings}`, error `bad_settings` for an invalid value. Broadcasts `settings_changed`. */
   | { type: "settings.set"; patch: SettingsPatch }
+  /** Performance data of this daemon (docs/spec.md "Performance monitor"); reply PerfReport. */
+  | { type: "perf.report" }
+  /** Empties the performance store; reply {}. */
+  | { type: "perf.clear" }
   /** Sets the SDK custom title (the terminal CLI shows it too). Needs a transcript: a session with no prompt yet has none. */
   | { type: "session.rename"; sessionId: string; title: string }
   | { type: "session.archive"; sessionId: string; archived: boolean }
@@ -475,10 +480,44 @@ export type ConfigScope = "local" | "user" | "project";
 /** `orchestration.workerMode`: the permission mode of a new worker when the coordinator names none; `coordinator` = the coordinator's own mode. */
 export const WORKER_MODES = ["coordinator", "default", "acceptEdits", "plan", "auto"] as const;
 export type WorkerModeSetting = (typeof WORKER_MODES)[number];
-export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean } };
+export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
+  /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */
+  performance: { monitor: boolean };
+};
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
 export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true } };
+/** Spans of the daemon the monitor times (code constants; never a user value). */
+export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
+/** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */
+export type PerfStall = { kind: "stall"; at: number; ms: number; spans: { name: PerfSpanName; id: number }[] };
+/** A child process: `cmd` and `sub` come from closed lists; `request` = the request type it served ("background" = none in flight). */
+export type PerfChild = { kind: "child"; at: number; cmd: string; sub?: string; ms: number; heldMs?: number; thread: "main" | "worker"; request: string; exit: number | "error" | "signal" };
+export type PerfSpan = { kind: "span"; at: number; name: PerfSpanName; id: number; parent?: number; ms: number; elu?: number };
+export type PerfHandler = { kind: "handler"; at: number; request: string; ms: number };
+export type PerfWorst = PerfStall | PerfChild | PerfSpan | PerfHandler;
+export type PerfDaemon = {
+  pid: number;
+  version?: string;
+  /** Epoch ms of the last Clear or the start. */
+  since: number;
+  monitor: boolean;
+  /** Event-loop delay over the idle floor (ms) per 10 s window; resolution of the timer in ms. */
+  eld: { excessP95?: number; excessMax?: number; idleP50?: number; resolutionMs: number };
+  /** Event-loop utilization (0-1) of the last 10 s window. */
+  elu: number;
+  handlers: Record<string, HistSummary>;
+  spans: Partial<Record<PerfSpanName, HistSummary>>;
+  /** Key "git log", "git status", "claude", ... */
+  children: Record<string, HistSummary>;
+  /** Last 60 samples, one per 10 s. */
+  memory: { at: number; rss: number; heapUsed: number }[];
+  /** The 50 slowest events, slowest first. */
+  worst: PerfWorst[];
+  /** The monitor's own JS time since `since` (ms) and the time it was on. */
+  cost: { ownMs: number; wallMs: number };
+};
+export type PerfReport = { daemon: PerfDaemon };
 export type ConfigKind = "mcp" | "plugins" | "skills";
 /** `McpServerStatus.status` of the SDK. */
 export type McpStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";

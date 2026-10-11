@@ -39,6 +39,7 @@ import {
 import type { PlanTracker } from "./plan-usage.ts";
 import { runBash, type BashRun } from "./bash.ts";
 import { PartIndex } from "./part-index.ts";
+import { perf, type PerfSpanHandle } from "./perf.ts";
 import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
 import { tierAsync, type Tier, type TierContext } from "./risk-tier.ts";
 
@@ -168,6 +169,8 @@ export class Session {
   private tasks = new Map<string, string>();
   /** Bumped per refreshUsage(): an older answer that arrives later is dropped. */
   private usageRequest = 0;
+  /** Open from start() until the CLI sends its first message (performance monitor, GH-272). */
+  private startSpan?: PerfSpanHandle;
   /** False until the first start(): the first query creates the transcript (sessionId), every later one resumes it. */
   private started: boolean;
   /** The current query's CLI keeps every Bash command in the cwd (CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR). */
@@ -252,7 +255,10 @@ export class Session {
     return new Session(cwd, opts, { id, history, read });
   }
 
-  private start() {
+  /** `timed` false: no prompt follows (rewind, bash records), so the CLI may stay silent and there is no start to time. */
+  private start(timed = true) {
+    this.startSpan?.end();
+    this.startSpan = timed ? perf.span("session.start") : undefined;
     const owner = (this.owner = { session: this as Session });
     // The level is per CLI process (SDK): a new one starts empty.
     this.backgroundLevel = new Set();
@@ -480,7 +486,7 @@ export class Session {
       }
       // The next prompt's rewind fork point is after the records, else rewinding it would drop them from Claude's view.
       this.lastAssistant = outId;
-      if (!this.query) this.start();
+      if (!this.query) this.start(false);
       records.forEach((content, i) => this.input.push({ type: "user", uuid: uuids[i], shouldQuery: false, message: { role: "user", content }, parent_tool_use_id: null }));
     });
   }
@@ -775,7 +781,7 @@ export class Session {
     if (this.bashRun) throw new Error("a shell command is running: stop it first");
     if (this.state !== "idle") throw new Error("session is running: interrupt the turn first");
     if (!this.checkpoints.has(userMessageId)) throw new Error(`unknown user message ${userMessageId}`);
-    return this.query ?? this.start();
+    return this.query ?? this.start(false);
   }
 
   /** Rules already saved never reach this callback. No timeout: the promise waits for respond() or the SDK's abort. */
@@ -986,6 +992,8 @@ export class Session {
           generation = s.generation;
           reset = undefined;
         }
+        this.startSpan?.end();
+        this.startSpan = undefined;
         s.receive(m, q);
       }
       if (generation === s.generation) s.setState("closed");
@@ -995,6 +1003,8 @@ export class Session {
       s.emit({ type: "raw", id: randomUUID(), message: { error: String(err) } });
       s.setState("error");
     } finally {
+      this.startSpan?.end();
+      this.startSpan = undefined;
       // Nothing waits for these answers any more, and no call of this query runs.
       for (const id of [...s.pending.keys()]) s.cancel(id, "Session ended");
       // A newer generation (conversation rewind) already ended them, and its query may run tasks of its own.
