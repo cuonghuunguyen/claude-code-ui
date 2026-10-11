@@ -11,6 +11,9 @@ import { perf, type PerfSpanHandle } from "./perf.ts";
 import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import type { Exec } from "./docker-side.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
+import type { Push } from "./push.ts";
+import { logPrefix, MAX_SIDE_LINE_CHARS, parseSideFrame } from "./side-frame.ts";
+export { MAX_SIDE_LINE_CHARS };
 
 /** A started side process: `wsl.exe -d <distro> ...` or `docker exec -i <name> ...` (tests: an in-process side). */
 export type SideProcess = { stdin: Writable; stdout: Readable; stderr: Readable; kill(): void; on(event: "exit", l: (code: number | null) => void): unknown };
@@ -281,14 +284,30 @@ export const wslArgs = (distro: string, script: string) => ["-d", distro, "--exe
 /** Arguments for docker.exe: the script is one argv item for `sh -c` (no shell on the host; the image's environment, not a login shell). */
 export const dockerExecArgs = (name: string, script: string) => ["exec", "-i", name, "sh", "-c", script];
 
-/** Calls `onLine` for each complete line of `stream`. */
-function lines(stream: Readable, onLine: (line: string) => void) {
+/** `onPush` of the hub: a side's push goes to the user's browsers or desktop; a failure is logged, never an unhandled rejection. */
+export const forwardSidePush = (push: Pick<Push, "send">) => (p: PushPayload) => void push.send(p).catch((e) => console.error("push from a side failed:", (e as Error).message));
+
+/**
+ * Calls `onLine` for each complete line of `stream`. A line longer than `max` characters is dropped (`onTooLong` once, with its
+ * length so far when the cap was hit): it is never buffered beyond `max`, the next line is read normally.
+ */
+function lines(stream: Readable, onLine: (line: string) => void, max = Infinity, onTooLong?: () => void) {
   let rest = "";
+  let skipping = false;
   stream.setEncoding("utf8");
   stream.on("data", (d: string) => {
-    const parts = (rest + d).split("\n");
-    rest = parts.pop()!;
-    parts.forEach(onLine);
+    const parts = d.split("\n");
+    const last = parts.pop()!;
+    for (const [i, part] of parts.entries()) {
+      const line = i === 0 ? rest + part : part;
+      rest = "";
+      if (skipping) skipping = false;
+      else if (line.length > max) onTooLong?.();
+      else onLine(line);
+    }
+    if (skipping) return;
+    rest = parts.length ? last : rest + last;
+    if (rest.length > max) (skipping = true), (rest = ""), onTooLong?.();
   });
 }
 
@@ -320,6 +339,8 @@ export function createSides(opts: {
   save?: (ids: string[]) => void;
   /** Local paths can be POSIX too (Linux, macOS): an unknown POSIX path then stays local. */
   posixLocal?: boolean;
+  /** Longest line a side may write (default MAX_SIDE_LINE_CHARS; tests lower it). */
+  maxLineChars?: number;
 }) {
   const sides = new Map<string, Side>(opts.targets.map((t) => [t.id, { ...t, state: "off", conns: new Map() }]));
   const routers = new Set<Router>();
@@ -413,19 +434,20 @@ export function createSides(opts: {
         for (const row of rows) crashLine = CRASH.exec(row)?.[1] ?? crashLine;
       });
       proc.stdin.on("error", () => {});
+      let dropped = 0;
       lines(proc.stdout, (line) => {
         const phase = /^CLAUDE_UI_PHASE (installing|starting)$/.exec(line.trim());
         if (phase) return setPhase(s, phase[1] as SidePhase);
         const setup = /^CLAUDE_UI_SETUP (\S+) ?(.*)$/.exec(line.trim());
         if (setup) return void ((setupCode = setup[1]), (setupError = setupMessage(setup[1]!, setup[2]!, s.label, isDocker(s.id))));
-        let f: { ready?: boolean; c?: number; m?: ServerMessage; push?: PushPayload };
-        try {
-          f = JSON.parse(line);
-        } catch {
-          // Shell start-up output (motd, .bashrc).
+        const parsed = parseSideFrame(line);
+        if ("error" in parsed) {
+          // Before the first frame this is shell start-up output (motd, .bashrc): not logged. Later lines are logged, at most 20 per run.
+          if (s.state === "ready" && dropped++ < 20) console.error(`side ${s.id}: dropped a line (${parsed.error}, ${line.length} chars) ${logPrefix(line)}`);
           return;
         }
-        if (f.ready) {
+        const f = parsed.frame;
+        if (f.kind === "ready") {
           endSpans(s, false);
           delete s.phase;
           Object.assign(s, { state: "ready", message: undefined });
@@ -434,9 +456,9 @@ export function createSides(opts: {
           resolve();
           routers.forEach((r) => r.attach(s.id));
           changed();
-        } else if (f.push) opts.onPush?.(f.push);
-        else if (f.c !== undefined && f.m) s.conns.get(f.c)?.(f.m);
-      });
+        } else if (f.kind === "push") opts.onPush?.(f.push);
+        else s.conns.get(f.c)?.(f.m);
+      }, opts.maxLineChars ?? MAX_SIDE_LINE_CHARS, () => console.error(`side ${s.id}: dropped a line (too long, more than ${opts.maxLineChars ?? MAX_SIDE_LINE_CHARS} chars)`));
       proc.on("exit", (code) => {
         const wasReady = s.state === "ready";
         // A crashed side logs `claude-ui daemon: uncaughtException: <error>` first; Node's own fatal print ends in frames and a `Node.js vX` trailer.
@@ -876,7 +898,7 @@ export function runSide(opts: { input: Readable; output: Writable; accept: (ws: 
     } catch {
       return;
     }
-    if (typeof f.c !== "number") return;
+    if (!f || typeof f.c !== "number") return;
     const c = f.c;
     if (f.o) {
       const ws = new SideSocket(
