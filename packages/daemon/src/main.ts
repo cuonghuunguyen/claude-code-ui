@@ -1,5 +1,5 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
@@ -25,6 +25,13 @@ logExit(process, console.error);
 let cleanup = () => {};
 exitOnSignal(process, () => cleanup());
 
+const realOr = (p: string) => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+};
 const cli = parseCli(process.argv.slice(2), process.env, homedir());
 if (cli.kind === "help") (console.log(HELP), process.exit(0));
 // The package.json next to dist/ (installed) or src/ (source checkout, no version: "dev").
@@ -92,6 +99,7 @@ if (side) {
           targets: distros.map(wslSide),
           localLabel: process.platform === "win32" ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux",
           posixLocal: process.platform !== "win32",
+          localDirs: [homedir(), ...roots].flatMap((p) => [p, realOr(p)]),
           ...(docker && { discover: async () => {
               const s = await dockerStatus();
               dockerState = s.state;

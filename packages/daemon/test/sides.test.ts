@@ -550,8 +550,7 @@ const dockSession = "6e2f3a4b-5c6d-4e7f-8091-92b3c4d5e6f7";
 
 // These route by POSIX paths (the side's roots are POSIX): they run where the daemon runs, on Linux and macOS.
 describe.skipIf(process.platform === "win32")("docker sides", () => {
-  const localRoot = join(dockRoot, "host");
-  mkdirSync(localRoot);
+  const localRoot = dir("dock-host-");
   let dockSaved: string[] = [];
   let containers = ["dev", "stopped"];
   let dockerState: "ok" | "down" | "empty" | undefined = "ok";
@@ -640,7 +639,7 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
     c.ws.close();
   });
 
-  it("a host project under a container's cwd stays local on a POSIX hub", async () => {
+  it("a host project and a container project each route to their own side on a POSIX hub", async () => {
     const c = await client(await dport());
     await c.request({ type: "project.open", cwd: localRoot, side: "local" });
     await c.request({ type: "session.list" });
