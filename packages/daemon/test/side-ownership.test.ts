@@ -622,6 +622,22 @@ describe("session lookup (GH-321, GH-328)", () => {
     expect(frames(a, "session.subscribe")).toEqual([]);
   });
 
+  it("a contest entry for a local id never blocks the local user", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const a = fakeSide();
+      const b = fakeSide();
+      const t = await setup(a, b);
+      t.sides.contest(LOCAL, ["docker:a", "docker:b"]);
+      const r = await t.req({ type: "session.delete", sessionId: LOCAL });
+      expect(r).not.toMatchObject([{ type: "error", code: "side_conflict" }]);
+      expect(t.localSeen.some((m: any) => m.type === "session.delete")).toBe(true);
+      expect(seenId(a, LOCAL) || seenId(b, LOCAL)).toBe(false);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
   it("a contest stays when one contender exits; the remaining side never gets the id", async () => {
     const a = fakeSide(lists(B1));
     const b = fakeSide(lists(B1));
