@@ -6,6 +6,7 @@ import { wslHostPath, wslPathOf } from "@claude-ui/protocol";
 import { ceilingEnv, gitDirsOf, gitRefs, real, topIn, WorktreeError } from "./git.ts";
 import { BATCH_SSH, runGit } from "./git-runner.ts";
 import { redact } from "./plugins.ts";
+import { foreignPointer } from "./remote-path.ts";
 
 export const REMOTE_TIMEOUT = 120_000;
 /** Test seam: the timeout of a remote operation. */
@@ -91,12 +92,14 @@ async function local(top: string, args: string[], env: NodeJS.ProcessEnv, timeou
 }
 
 /** A remote whose URL is a local folder must be inside the roots: fetch would import objects from outside them, push would write there. */
-async function checkRemotes(top: string, names: string[], push: boolean, env: NodeJS.ProcessEnv, allowed: (p: string) => boolean): Promise<void> {
+async function checkRemotes(top: string, names: string[], push: boolean, env: NodeJS.ProcessEnv, allowed: (p: string) => boolean, platform: string): Promise<void> {
   for (const name of names) {
     if (!/^[^\0\s-][^\0\s]*$/.test(name)) throw new WorktreeError("bad_request", "Unsupported remote name");
     const { out } = await local(top, ["remote", "get-url", ...(push ? ["--push"] : []), "--all", name], env);
     for (const line of out.split("\n").filter(Boolean)) {
       const p = localRemotePath(line, top);
+      // A UNC or device path (also as the raw value, or as `file://host/share`): refused on the string, before any file call (SMB lookup, NTLM).
+      if (foreignPointer(line.trim(), top, platform) || (p !== undefined && foreignPointer(p, top, platform))) throw new WorktreeError("remote_not_allowed", `The remote ${name} is on another host or a device path`);
       if (p !== undefined && (p === "" || !allowed(real(p)))) throw new WorktreeError("remote_not_allowed", `The remote ${name} is a folder outside the allowed roots`);
     }
   }
@@ -118,7 +121,7 @@ async function remoteOp(top: string, verb: string, args: string[], env: NodeJS.P
 export type RemoteResult = { output: string; refs: string | null };
 
 /** `git fetch --all` in the repository of `cwd`; null outside a work tree. */
-export async function gitFetch(cwd: string, o: { allowed: (p: string) => boolean }): Promise<RemoteResult | null> {
+export async function gitFetch(cwd: string, o: { allowed: (p: string) => boolean; platform?: string }): Promise<RemoteResult | null> {
   // The WSL runners (side, wsl.exe) cannot end a timed-out fetch's ssh child, so its lock could not be trusted.
   if (wslPathOf(cwd)) throw new WorktreeError("bad_request", "Fetch is not supported for WSL projects yet");
   const top = topIn(cwd, o.allowed);
@@ -137,7 +140,7 @@ export async function gitFetch(cwd: string, o: { allowed: (p: string) => boolean
     if (names.size === 0) throw new WorktreeError("bad_request", "No remote to fetch from");
     if (names.size > MAX_REMOTES) throw new WorktreeError("bad_request", `Too many remotes (${names.size}): fetch in a terminal`);
     const env = remoteEnv(top, sshCommand);
-    await checkRemotes(top, [...names], false, env, o.allowed);
+    await checkRemotes(top, [...names], false, env, o.allowed, o.platform ?? process.platform);
     const output = await remoteOp(top, "fetch", FETCH_ARGS, env);
     return { output, refs: gitRefs(top, o.allowed) };
   });

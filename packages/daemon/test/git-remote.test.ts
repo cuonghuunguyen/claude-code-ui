@@ -82,6 +82,38 @@ describe("gitFetch", () => {
     expect(calls).not.toContain("fetch");
   });
 
+  it.each(["//host/share/r.git", "\\\\host\\share\\r.git", "file://host/share/r.git", "//?/C:/r.git"])("on Windows refuses the foreign remote %s without any file call on it", async (url) => {
+    const { a, inside } = remoteRepo();
+    run(a, "remote", "set-url", "origin", url);
+    const seen: string[] = [];
+    const allowed = (p: string) => (seen.push(p), inside(p));
+    const calls: string[] = [];
+    setGitRunner((o) => (calls.push(o.args.includes("fetch") ? "fetch" : o.args[0]!), threadRunner(o)));
+    await expect(gitFetch(a, { allowed, platform: "win32" })).rejects.toMatchObject({ code: "remote_not_allowed" });
+    // `allowed` only ever gets the repository's own paths: `real()` of the remote was never called.
+    expect(seen.filter((p) => /host|share|\?/.test(p) && !p.startsWith(a) && !p.startsWith(realpathSync(a)))).toEqual([]);
+    expect(calls).not.toContain("fetch");
+  });
+
+  it("refuses a repository whose .git points outside the roots", async () => {
+    const { root, a } = remoteRepo();
+    const outer = realpathSync(mkdtempSync(join(tmpdir(), "outer-")));
+    const roots = (p: string) => p.startsWith(root) && !p.startsWith(outer);
+    const calls: string[] = [];
+    setGitRunner((o) => (calls.push(o.args.includes("fetch") ? "fetch" : o.args[0]!), threadRunner(o)));
+    // alternates outside the roots
+    writeFileSync(join(a, ".git", "objects", "info", "alternates"), `${join(outer, "objects")}\n`);
+    await expect(gitFetch(a, { allowed: roots })).rejects.toMatchObject({ code: "cwd_not_allowed" });
+    writeFileSync(join(a, ".git", "objects", "info", "alternates"), "# none\n");
+    // gitdir file to a git dir outside the roots
+    run(root, "clone", "-q", "r.git", join(outer, "c"));
+    const w = join(root, "w");
+    mkdirSync(w);
+    writeFileSync(join(w, ".git"), `gitdir: ${join(outer, "c", ".git")}\n`);
+    await expect(gitFetch(w, { allowed: roots })).rejects.toMatchObject({ code: "cwd_not_allowed" });
+    expect(calls).toEqual([]);
+  });
+
   it("reports no remote", async () => {
     const { a, inside } = remoteRepo();
     run(a, "remote", "remove", "origin");
