@@ -58,6 +58,14 @@ describe("applyEvent", () => {
     expect(applyEvent(s, ev(2, { type: "auto_continue", id: "auto_continue", at: null })).continueAt).toBeUndefined();
   });
 
+  it("prompt_queue sets and clears queue and adds no timeline item", () => {
+    const items = [{ id: "i1", text: "second", imageCount: 1 }];
+    const s = applyEvent(emptySession(), ev(1, { type: "prompt_queue", id: "prompt_queue", items, held: { reason: "usage_limit", until: 9 } }));
+    expect(s.queue).toEqual({ items, held: { reason: "usage_limit", until: 9 } });
+    expect(s.order).toEqual([]);
+    expect(applyEvent(s, ev(2, { type: "prompt_queue", id: "prompt_queue", items: [] })).queue).toBeUndefined();
+  });
+
   it("tabs, sidebar and header show an idle session running while a terminal CLI turn runs", () => {
     const s = applyEvent(emptySession(), ev(1, { type: "external_turn", id: "external_turn", running: true }));
     expect(shownState(s)).toBe("running");

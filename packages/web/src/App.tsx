@@ -12,6 +12,7 @@ import type {
   ListResult,
   McpListResult,
   RecentProject,
+  ArtifactPreviewResult,
   MediaResult,
   ModelInfo,
   ModelsResult,
@@ -49,8 +50,10 @@ import { clearing, heirView } from "./clear.ts";
 import { addPending, dropPending, movePending, pendingKey, promptedIds, pruneEchoed, titleLoading, unechoed, type Pending } from "./optimistic.ts";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
+import { QueueChips } from "./queue-chips.tsx";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
+import { ArtifactConnectedContext, ArtifactPreviewContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
@@ -68,6 +71,7 @@ import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
 import { noteRefs } from "./git-refs.ts";
+import { agentLinks, NO_LINKS, sameLinks, workerState, type AgentLinks } from "./workers.ts";
 import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
@@ -120,7 +124,7 @@ import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
 import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
-import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
+import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
@@ -622,6 +626,12 @@ export function App() {
     });
   }
 
+  /** Queued messages (GH-77): the daemon holds them; like sendPrompt, nothing waits for a reconnect. */
+  function queueRequest<T = unknown>(msg: Request): Promise<T> {
+    if (statusRef.current !== "connected") return Promise.reject(new Error(`the daemon is ${statusRef.current}`));
+    return client.current!.request<T>(msg);
+  }
+
   /** Drops the view of a session this tab no longer follows; `unsubscribe`: also stops the daemon's events. */
   function drop(sessionId: string, unsubscribe = true) {
     held.current.delete(sessionId);
@@ -1094,6 +1104,13 @@ export function App() {
   }
 
   // A session with a worker (the list flag): its orchestration notices show as chips.
+  /** Orchestration links per session, the previous object while equal: memo panes do not re-render on every event. */
+  const linksCache = useRef(new Map<string, AgentLinks>());
+  const linksOf = (id: string) => {
+    const l = sameLinks(linksCache.current.get(id), agentLinks(list, views, id));
+    linksCache.current.set(id, l);
+    return l;
+  };
   const isCoordinator = (id: string) => !!list.find((s) => s.id === id)?.coordinator;
   const sessionOf = (id: string): SessionInfo | undefined => infos[id] ?? list.find((s) => s.id === id);
   const groupOfTab = (id: string) => (id === NEW_TAB ? "" : tabGroup(sessionOf(id)?.cwd, grouping, worktrees).key);
@@ -1648,7 +1665,7 @@ export function App() {
               list={list}
               projects={projects}
               worktrees={worktrees}
-              state={(s) => shownState(views[s.id]) ?? s.state}
+              state={(s) => (s.coordinatorId ? workerState(s, views[s.id]) : (shownState(views[s.id]) ?? s.state))}
               titleLoading={(s) => titleLoading(s.title, prompted.has(s.id))}
               unread={unread}
               activeId={activeId}
@@ -1710,6 +1727,8 @@ export function App() {
                         onRevealShown={() => setRevealHit(undefined)}
                         run={id === activeId ? run : undefined}
                         onOpenRun={(r) => openRun(s.id, r)}
+                        links={linksOf(id)}
+                        onOpenSession={(sid) => open(sid)}
                         onLoadOlder={(opts) => loadOlder(s.id, opts)}
                         loadingOlder={!!olderLoading[s.id]}
                         onStopRun={(subagentId) => client.current!.request({ type: "session.stopSubagent", sessionId: s.id, subagentId })}
@@ -1740,6 +1759,9 @@ export function App() {
                             ? client.current!.request({ type: "session.bash", sessionId: s.id, command })
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
+                        onQueue={(text, images) => queueRequest({ type: "session.enqueue", sessionId: s.id, text, images })}
+                        onDequeue={(itemId) => queueRequest<{ text: string; images: string[] }>({ type: "session.dequeue", sessionId: s.id, itemId })}
+                        onSendQueued={(itemId) => queueRequest({ type: "session.sendQueued", sessionId: s.id, itemId })}
                         onCancelContinue={() => client.current!.request({ type: "session.cancelContinue", sessionId: s.id }).catch((e) => setError((e as Error).message))}
                         onInterrupt={() =>
                           client.current!.request({ type: "session.interrupt", sessionId: s.id }).catch((e) => setError((e as Error).message))
@@ -1751,6 +1773,7 @@ export function App() {
                           client.current!.request({ type: "session.rewind", sessionId: s.id, userMessageId, mode })
                         }
                         onMedia={(partId, index) => client.current!.request<MediaResult>({ type: "session.media", sessionId: s.id, partId, index }).then((r) => r.dataUrl)}
+                        onArtifactPreview={(partId) => client.current!.request<ArtifactPreviewResult>({ type: "artifact.preview", sessionId: s.id, partId })}
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
@@ -2475,6 +2498,8 @@ export function SessionPane({
   scrollKey,
   run,
   onOpenRun = () => {},
+  links = NO_LINKS,
+  onOpenSession = () => {},
   onStopRun = async () => {},
   insert,
   onInserted,
@@ -2493,6 +2518,9 @@ export function SessionPane({
   onEffort,
   onUpload,
   onPrompt,
+  onQueue,
+  onDequeue,
+  onSendQueued,
   onBash,
   onSearch,
   onInterrupt,
@@ -2500,6 +2528,7 @@ export function SessionPane({
   onRewindPreview,
   onRewind,
   onMedia,
+  onArtifactPreview,
   onRespond,
   onAnswer,
   connected,
@@ -2514,6 +2543,9 @@ export function SessionPane({
   run?: string;
   /** Opens a run's subagent view; undefined: the session view. */
   onOpenRun?: (id?: string) => void;
+  /** Orchestration links for the agent map: the coordinator and the workers (workers.ts); `onOpenSession` opens or focuses a session's tab. */
+  links?: AgentLinks;
+  onOpenSession?: (id: string) => void;
   /** Stop agent: stops that subagent run only; rejects with the daemon's error. */
   onStopRun?: (id: string) => Promise<unknown>;
   insert?: string;
@@ -2542,6 +2574,12 @@ export function SessionPane({
   onUpload: (file: File) => Promise<string>;
   /** Rejects when the prompt was not taken; the prompt box then gets the text back. */
   onPrompt: (text: string, images: string[]) => Promise<unknown>;
+  /** Queues a message for when the session is idle (Alt+Enter, send menu); rejects when it was not queued. */
+  onQueue?: (text: string, images: string[]) => Promise<unknown>;
+  /** Removes a queued message and resolves to its text and images (Edit, Delete); rejects with code unknown_item when it was already sent. */
+  onDequeue?: (itemId: string) => Promise<{ text: string; images: string[] }>;
+  /** Send now: steers the queued message into the running turn, or starts a turn when idle. */
+  onSendQueued?: (itemId: string) => Promise<unknown>;
   /** Bash mode (`!`): runs a shell command in the session cwd; rejects when it was not run. */
   onBash?: (command: string) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
@@ -2551,6 +2589,8 @@ export function SessionPane({
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
   /** Loads a payload a snapshot or page left out (session.media). */
   onMedia?: MediaLoader;
+  /** Asks for the preview URL of an Artifact publish part (artifact.preview). */
+  onArtifactPreview?: ArtifactPreviewLoader;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
   onAnswer: (requestId: string, answers: Record<string, string>) => void;
@@ -2623,6 +2663,18 @@ export function SessionPane({
     <ThinkingRow className={shownPending.length ? "mt-3" : ""} />
   );
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
+  // A queued message taken back (Edit) or an error of a chip action: the prompt box shows it once per key.
+  const [takeBack, setTakeBack] = useState<{ key: string; text: string; images: string[]; error?: string }>();
+  const chipAction = (id: string, how: "edit" | "delete" | "send") => {
+    const fail = (e: Error) => {
+      // Delete and Send now of an item that is gone: nothing to report, nothing to change in the box.
+      const gone = (e as RequestError).code === "unknown_item";
+      if (gone && how !== "edit") return;
+      setTakeBack({ key: pendingKey(), text: "", images: [], error: gone ? "Already sent" : `${how === "send" ? "Send now" : how === "edit" ? "Edit" : "Delete"} failed: ${e.message}` });
+    };
+    if (how === "send") return void onSendQueued?.(id).catch(fail);
+    void onDequeue?.(id).then((r) => how === "edit" && setTakeBack({ key: pendingKey(), text: r.text, images: r.images }), fail);
+  };
   const prompt = useRef<HTMLTextAreaElement>(null);
   const dock = useRef<HTMLDivElement>(null);
   // Phone: scrolling up through an idle transcript hides the prompt dock for reading space; scrolling down or the end brings it back (GH-166).
@@ -2630,12 +2682,16 @@ export function SessionPane({
   const card = useRef<HTMLElement | null>(null);
   useEffect(() => void (card.current = dock.current?.parentElement ?? null), []);
   const [dockFocused, setDockFocused] = useState(false);
+  const agentCtx = useMemo(() => ({ links, onOpenSession }), [links, onOpenSession]);
   const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
 
   return (
     <MediaContext value={onMedia}>
+    <ArtifactPreviewContext value={onArtifactPreview}>
+    <ArtifactConnectedContext value={connected}>
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
+    <AgentLinksContext value={agentCtx}>
       {current ? (
         <SubagentBar view={view} run={current} onOpen={onOpenRun} />
       ) : (
@@ -2781,6 +2837,16 @@ export function SessionPane({
         onFocus={() => setDockFocused(true)}
         onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setDockFocused(false)}
       >
+        {!current && (
+          <QueueChips
+            items={view.queue?.items ?? []}
+            held={view.queue?.held}
+            onSendNow={(id) => chipAction(id, "send")}
+            onEdit={(id) => chipAction(id, "edit")}
+            onDelete={(id) => chipAction(id, "delete")}
+            onEmpty={() => prompt.current?.focus()}
+          />
+        )}
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} mode={modePicker} onStop={onInterrupt} />
         ) : question ? (
@@ -2805,6 +2871,8 @@ export function SessionPane({
               onMode={onMode}
               onUpload={onUpload}
               onPrompt={onPrompt}
+              onQueue={onQueue}
+              takeBack={takeBack}
               onBash={onBash}
               onSearch={onSearch}
               insert={insert}
@@ -2821,14 +2889,17 @@ export function SessionPane({
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
               inputRef={prompt}
-              placeholder={phone ? (turnRunning ? "Claude is working…" : "Ask Claude…") : turnRunning ? "Claude is working… (Enter to steer, Esc to stop)" : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
+              placeholder={phone ? (turnRunning ? "Claude is working…" : "Ask Claude…") : turnRunning ? (onQueue ? "Claude is working… (Enter to steer, Alt+Enter to queue, Esc to stop)" : "Claude is working… (Enter to steer, Esc to stop)") : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
             />
           </>
         )}
         <StatusBar view={view} git={onGitStatus} />
       </div>
+    </AgentLinksContext>
     </OpenRunContext>
     </CwdContext>
+    </ArtifactConnectedContext>
+    </ArtifactPreviewContext>
     </MediaContext>
   );
 }
@@ -2855,6 +2926,8 @@ function PromptBox({
   onMode,
   onUpload,
   onPrompt,
+  onQueue,
+  takeBack,
   onBash,
   onSearch,
   insert,
@@ -2894,6 +2967,10 @@ function PromptBox({
   onUpload: (file: File) => Promise<string>;
   /** Rejects when the prompt was not taken; the prompt box then gets the text back. */
   onPrompt: (text: string, images: string[]) => Promise<unknown>;
+  /** Given (session view): Alt+Enter and the send menu queue the message instead of steering; rejects when it was not queued. */
+  onQueue?: (text: string, images: string[]) => Promise<unknown>;
+  /** A queued message taken back: its text goes before the typed text, its images in front; `error` only shows. Handled once per `key`. */
+  takeBack?: { key: string; text: string; images: string[]; error?: string };
   /** Given: `!` at the start of the box enters bash mode, Enter runs the command; rejects when it was not run. Not on the new-session tab. */
   onBash?: (command: string) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
@@ -3011,6 +3088,15 @@ function PromptBox({
     input.current?.focus();
   }, [insert]);
   useEffect(() => {
+    if (!takeBack) return;
+    if (takeBack.error) return setSendError(takeBack.error);
+    // Only an item that was really returned (text or images) goes back into the box.
+    if (!takeBack.text && !takeBack.images.length) return;
+    restore(takeBack.text);
+    setImages((cur) => [...takeBack.images, ...cur]);
+    input.current?.focus();
+  }, [takeBack?.key]);
+  useEffect(() => {
     if (!draft) return;
     edit(draft.text);
     setImages(draft.images);
@@ -3023,7 +3109,7 @@ function PromptBox({
     errorCwd.current = cwd;
     setSendError(undefined);
   }, [cwd]);
-  const send = (t = text) => {
+  const send = (t = text, how: "send" | "queue" = "send") => {
     if (bash) {
       const command = t.trim();
       if (!command || blocked) return;
@@ -3042,6 +3128,20 @@ function PromptBox({
     if (dialog && (!images.length || dialog === "resume")) {
       const arg = dialogArg(t);
       return arg ? onDialog(dialog, arg) : onDialog(dialog), edit("");
+    }
+    if (how === "queue" && onQueue) {
+      // The queue waits for the idle session, also behind a terminal CLI turn or a running /clear.
+      const sent = images;
+      setSendError(undefined);
+      onQueue(t, sent).catch((e: Error) => {
+        restore(t);
+        setImages((cur) => [...sent, ...cur]);
+        setSendError(`Not queued: ${e.message}`);
+      });
+      dropDraft();
+      edit("");
+      setImages([]);
+      return;
     }
     if (blocked && !queueing) return;
     const sent = images;
@@ -3122,6 +3222,11 @@ function PromptBox({
       e.preventDefault();
       const next = nextMode(modes, mode);
       return next !== mode && onMode(next);
+    }
+    // Alt+Enter queues the message, also with the picker open (the picker keeps plain Enter). Without a queue (new-session tab) it is Enter.
+    if (e.key === "Enter" && e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      return send(text, "queue");
     }
     if (pickerOpen) {
       const n = rows;
@@ -3272,6 +3377,7 @@ function PromptBox({
         state={state}
         hasInput={!disabled && !blocked && (!!text.trim() || images.length > 0)}
         onSend={() => send()}
+        onQueue={onQueue && (() => send(text, "queue"))}
         onStop={() => onInterrupt?.()}
         // Not on touch screens: focusing the prompt box there opens the soft keyboard (OpenCode leaves focus on the page).
         onFocusLost={() => !window.matchMedia?.("(pointer: coarse)").matches && input.current?.focus()}

@@ -1077,6 +1077,12 @@ export function createRouter(opts: {
         const { side: _side, ...rest } = msg;
         return send(await opts.media(id, rest as Extract<ClientMessage, { type: "fs.media" }>, (m) => sideCall(id, m, opts.mediaTimeoutMs ?? MEDIA_PIECE_TIMEOUT_MS)));
       }
+      case "artifact.preview": {
+        const id = await target(msg);
+        if (id === null) return send(sideConflict(msg.reqId));
+        if (id === LOCAL_SIDE) return opts.local(msg);
+        return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for sessions in ${id.startsWith("docker:") ? "Docker" : "WSL"}` });
+      }
       default: {
         const id = await target(msg);
         if (id === null) return send(sideConflict(msg.reqId));

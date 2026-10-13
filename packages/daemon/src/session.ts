@@ -1,5 +1,6 @@
 // A live session: one long-lived streaming-input query() whose SDK messages become logged events.
 import { randomUUID } from "node:crypto";
+import { artifactFileOf, type ArtifactFile } from "./artifact-preview.ts";
 import {
   query as sdkQuery,
   type CanUseTool,
@@ -73,6 +74,8 @@ type SessionOpts = Partial<SessionSettings> & {
   query?: typeof sdkQuery;
   onSettings?: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => void;
   onCleared?: (heir: Session) => void;
+  /** A CLI process started or was dropped (worker_close, Plugins Restart, idle close, rewind): the session's `live` changed, the daemon re-lists it. */
+  onLiveChange?: (id: string) => void;
   /** The turn just ended because the plan usage limit was hit (assistant error rate_limit); `resetsAt` ms from its rejected rate_limit_event. */
   onLimitStop?: (id: string, resetsAt: number | undefined) => void;
   /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */
@@ -317,6 +320,7 @@ export class Session {
     if (!this.started) this.settingsChanged([]);
     this.started = true;
     this.driving = this.drive(q);
+    this.opts.onLiveChange?.(this.id);
     // Later changes arrive as system/commands_changed through drive().
     q.supportedCommands().then(
       (list) => this.adapter.commands(list).forEach((p) => this.emit(p)),
@@ -367,6 +371,11 @@ export class Session {
       return src?.type === "base64" && typeof src.data === "string" ? `data:${String(src.media_type)};base64,${src.data}` : undefined;
     }
     return undefined;
+  }
+
+  /** The file an Artifact publish part of this session names (artifact.preview, GH-175). */
+  artifactFile(partId: string): ArtifactFile {
+    return artifactFileOf(this.index.get(partId), this.cwd);
   }
 
   /** Edit/Write parts older than the part `before`; undefined = unknown cursor. */
@@ -652,6 +661,7 @@ export class Session {
   /** Closes the live query for good; the next prompt starts a fresh one that resumes the transcript. */
   private dropQuery() {
     const hadTasks = this.tasks.size > 0;
+    const hadQuery = !!this.query;
     this.generation++;
     this.query?.close();
     this.query = undefined;
@@ -662,6 +672,8 @@ export class Session {
     for (const part of this.adapter.endCalls()) this.emit(part);
     this.input = new InputQueue();
     if (hadTasks) this.setState(this.state); // clients drop `working`
+    // Nothing to drop (a transcript sync, Plugins Restart of a session without a CLI): `live` did not change.
+    if (hadQuery) this.opts.onLiveChange?.(this.id);
   }
 
   /** Drops this prompt and everything after it from the timeline (a `rewind` event). */
@@ -773,6 +785,20 @@ export class Session {
     if (at === this.continueAt) return;
     this.continueAt = at;
     this.emit({ type: "auto_continue", id: "auto_continue", at });
+  }
+
+  /** Shows the queued messages and why they are paused (prompt-queue.ts). */
+  setQueue(items: { id: string; text: string; images: string[] }[], held: { reason: "usage_limit" | "not_live"; until?: number } | undefined) {
+    const next = { items: items.map((i) => ({ id: i.id, text: i.text, imageCount: i.images.length })), ...(held && { held }) };
+    if (JSON.stringify(next) === JSON.stringify(this.queueShown)) return;
+    this.queueShown = next;
+    this.emit({ type: "prompt_queue", id: "prompt_queue", ...next });
+  }
+  private queueShown: { items: unknown[]; held?: unknown } = { items: [] };
+
+  /** The session takes a queued message as a new turn now: idle and nothing else going on. A background task alone does not count as busy. */
+  takesQueued() {
+    return this.isLive() && this.state === "idle" && !this.pending.size && !this.rewinding && !this.bashRun && !this.externalTurn && !this.cliTurn;
   }
 
   private setExternalTurn(running: boolean) {

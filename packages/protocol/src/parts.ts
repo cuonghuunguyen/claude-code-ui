@@ -172,11 +172,16 @@ export type Part = { parentId?: string } & (
   | { type: "external_turn"; id: "external_turn"; running: boolean }
   /** A continue prompt is scheduled at `at` (ms) after a usage limit (docs/spec.md "Continue after a usage limit"); null = none. */
   | { type: "auto_continue"; id: "auto_continue"; at: number | null }
+  /** The session's queued messages (docs/spec.md "Queued messages"), sent one per turn when it is idle; `held`: sending is paused (usage limit until `until` ms, or the session cannot take prompts). */
+  | { type: "prompt_queue"; id: "prompt_queue"; items: QueuedPrompt[]; held?: { reason: "usage_limit" | "not_live"; until?: number } }
 );
+
+/** A queued message as the clients see it: images are counted, not sent. */
+export type QueuedPrompt = { id: string; text: string; imageCount: number };
 
 /** Part types that are not timeline entries: they set session state or edit the order (never in `order`). The daemon's PartIndex skips them; the web store handles each one explicitly in applyEvent. */
 export const TIMELINE_EXCLUDED: ReadonlySet<Part["type"]> = new Set<Part["type"]>([
-  "session_state", "session_model", "session_permission_mode", "session_effort", "commands", "context_usage", "todo_update", "external_turn", "auto_continue", "session_cleared", "rewind", "retract",
+  "session_state", "session_model", "session_permission_mode", "session_effort", "commands", "context_usage", "todo_update", "external_turn", "auto_continue", "prompt_queue", "session_cleared", "rewind", "retract",
 ]);
 
 /** A session_state that makes the session unread: needs input, or finished (idle without background work, or error) after being busy. */
