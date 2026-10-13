@@ -278,7 +278,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
         e.tier = await s.permissionTier(p.requestId);
         e.mayAnswer = e.tier === "low" && deps.settings().coordinatorPermissions;
         // A /clear of the coordinator during the read moved the link: deliver to the current coordinator.
-        deliver(linkOf(s.id)?.coordinatorId ?? captured, e);
+        deliver(resolve(linkOf(s.id)?.coordinatorId ?? captured), e);
       });
     } else if (p.type === "tool_call") {
       e.toolUseId = p.toolUseId;
@@ -286,7 +286,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       e.input = cut(JSON.stringify(p.input) ?? "");
     }
     const captured = l.coordinatorId;
-    if (ordered.has(s.id)) inOrder(s.id, async () => deliver(linkOf(s.id)?.coordinatorId ?? captured, e));
+    if (ordered.has(s.id)) inOrder(s.id, async () => deliver(resolve(linkOf(s.id)?.coordinatorId ?? captured), e));
     else deliver(captured, e);
   }
 

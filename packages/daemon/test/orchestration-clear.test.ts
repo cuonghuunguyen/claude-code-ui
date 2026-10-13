@@ -59,6 +59,7 @@ function setup(links = createSessionSettings()) {
 }
 
 const turnEnd = { part: { type: "turn_result", id: "r", durationMs: 1, isError: false } } as any;
+const perm = (r: string) => ({ part: { type: "permission_request", id: "p" + r, requestId: r, tool: "Bash", input: {}, settled: false } }) as any;
 const tick = () => new Promise((r) => setTimeout(r, 10));
 
 async function mcp(server: any) {
@@ -70,7 +71,7 @@ async function mcp(server: any) {
 }
 
 describe("orchestration /clear hand-over (GH-334 review)", () => {
-  it(" a notice out before /clear does not suppress notices to the new session", async () => {
+  it("a notice out before /clear does not suppress notices to the new session", async () => {
     const { o, sessions, prompts, links } = setup();
     const C = fakeSession("C"), H = fakeSession("H"), W = fakeSession("W");
     [C, H, W].forEach((s) => sessions.set(s.id, s));
@@ -88,7 +89,7 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     expect(prompts.filter((p) => p[0] === "H").length).toBeGreaterThan(0);
   });
 
-  it(" a permission event whose tier read spans the /clear goes to the new session, not the old one", async () => {
+  it("a permission event whose tier read spans the /clear goes to the new session, not the old one", async () => {
     const { o, sessions, prompts, links } = setup();
     const C = fakeSession("C"), H = fakeSession("H"), W = fakeSession("W");
     [C, H, W].forEach((s) => sessions.set(s.id, s));
@@ -108,7 +109,7 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     expect(prompts.filter((p) => p[0] === "H").length).toBe(1);
   });
 
-  it(" a sessions.json write failure during handOver does not throw into the drive loop", () => {
+  it("a sessions.json write failure during handOver does not throw into the drive loop", () => {
     const real = createSessionSettings();
     let fail = false;
     const links = { ...real, set: (...a: Parameters<typeof real.set>) => { if (fail) throw new Error("EACCES"); return real.set(...a); } } as typeof real;
@@ -120,7 +121,7 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     expect(() => o.handOver("C", "H")).not.toThrow();
   });
 
-  it(" two /clear while worker_start creates a worktree: the worker links to the last session, no reservation leak", async () => {
+  it("two /clear while worker_start creates a worktree: the worker links to the last session, no reservation leak", async () => {
     const { o, sessions, links, gate } = setup();
     const A = fakeSession("A");
     sessions.set("A", A);
@@ -142,7 +143,7 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     await c.close();
   });
 
-  it(" worker /clear: name stays unique, old worker is plain, coordinator sees the new id", async () => {
+  it("worker /clear: name stays unique, old worker is plain, coordinator sees the new id", async () => {
     const { o, sessions, links } = setup();
     const C = fakeSession("C"), W = fakeSession("W"), W2 = fakeSession("W2");
     [C, W, W2].forEach((s) => sessions.set(s.id, s));
@@ -158,7 +159,7 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     await c.close();
   });
 
-  it(" a coordinator's own blocked worker_wait, /clear, then event: the waiter takes it (no queue, no notice)", async () => {
+  it("a coordinator's own blocked worker_wait, /clear, then event: the waiter takes it (no queue, no notice)", async () => {
     const { o, sessions, prompts, links } = setup();
     const C = fakeSession("C"), H = fakeSession("H"), W = fakeSession("W");
     [C, H, W].forEach((s) => sessions.set(s.id, s));
@@ -221,5 +222,41 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     const r = JSON.parse(((await c.callTool({ name: "worker_wait", arguments: { timeoutMs: 0 } })) as any).content[0].text);
     expect(r.events).toEqual([]);
     await c.close();
+  });
+
+  it("coordinator and worker both cleared during a worker's tier read: the event goes to the coordinator's heir, not the old coordinator", async () => {
+    const { o, sessions, prompts, links } = setup();
+    const C = fakeSession("C"), H = fakeSession("H"), W = fakeSession("W"), W2 = fakeSession("W2");
+    [C, H, W, W2].forEach((s) => sessions.set(s.id, s));
+    o.mcpServers("C");
+    links.set("W", { coordinatorId: "C", name: "w" });
+    let release!: (t: string) => void;
+    W.tier = () => new Promise<string>((r) => (release = r));
+    W.pending.add("r1");
+    o.observe(W, perm("r1"));
+    await tick();
+    C.live = false;
+    o.handOver("C", "H");
+    o.handOver("W", "W2");
+    release("low");
+    await tick();
+    expect(prompts.filter((p) => p[0] === "C")).toEqual([]);
+    expect(prompts.filter((p) => p[0] === "H").length).toBe(1);
+  });
+
+  it("the old coordinator resumed with its own server after /clear: its card approves its own call, not the heir's", async () => {
+    const { o, sessions, links } = setup();
+    ["C", "H"].forEach((id) => sessions.set(id, fakeSession(id)));
+    o.mcpServers("C");
+    o.handOver("C", "H");
+    const cs = await mcp(o.mcpServers("C"));
+    const sdk = { name: "orchestration", source: "sdk" };
+    const input = { name: "own", cwd: "/", prompt: "p", mode: "acceptEdits" };
+    const card = o.permissionCard("C", "mcp__orchestration__worker_start", input, sdk)!;
+    card.onAllow!();
+    const r = (await cs.callTool({ name: "worker_start", arguments: input })) as any;
+    expect(r.isError).toBeFalsy();
+    expect(links.get(JSON.parse(r.content[0].text).sessionId)?.coordinatorId).toBe("C");
+    await cs.close();
   });
 });
