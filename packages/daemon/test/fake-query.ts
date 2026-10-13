@@ -347,6 +347,8 @@ export function subagentQuery({ prompt, options }: { prompt: AsyncIterable<SDKUs
  * waits for stopTask() of it, whose task_notification and the CLI's own turn after it come under the new session_id.
  * "notify" ends the background call with its task_notification.
  */
+/** clearQuery waits this long before it answers /clear, so a test can act while the /clear turn runs. */
+export const clearState = { delayMs: 0 };
 export function clearQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
   calls.push(options ?? {});
   let sid = options?.sessionId ?? options?.resume ?? "x";
@@ -375,6 +377,7 @@ export function clearQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserM
         continue;
       }
       if (m.message.content === "/clear") {
+        if (clearState.delayMs) await new Promise((r) => setTimeout(r, clearState.delayMs));
         yield { type: "conversation_reset", new_conversation_id: randomUUID(), trigger: "clear", user_message_uuid: m.uuid, uuid: randomUUID(), session_id: sid } as SDKMessage;
         sid = randomUUID();
         yield { type: "system", subtype: "hook_started", hook_id: "h", hook_name: "SessionStart:clear", hook_event: "SessionStart", uuid: randomUUID(), session_id: sid } as never as SDKMessage;

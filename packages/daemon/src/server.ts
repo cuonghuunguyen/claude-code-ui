@@ -18,8 +18,9 @@ import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
-import { createPlanTracker, usesOauthToken } from "./plan-usage.ts";
-import { CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
+import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
+import { createPromptQueue } from "./prompt-queue.ts";
+import { CONTINUE_GAP_MS, CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
@@ -323,7 +324,12 @@ export function createDaemon(opts: {
     ...initial,
     plan,
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
-    onLimitStop: (id: string, resetsAt: number | undefined) => autoContinue.schedule(id, resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined)),
+    onLimitStop: (id: string, resetsAt: number | undefined) => {
+      const at = resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined);
+      autoContinue.schedule(id, at);
+      // Queued messages wait for the reset (after an automatic continue), else for the user: sending into the limit would burn them one by one.
+      queue.hold(id, at ? at + (opts.autoContinue?.graceMs ?? RESET_GRACE_MS) + (opts.autoContinue?.gapMs ?? CONTINUE_GAP_MS) : undefined);
+    },
     allowBypass: opts.allowBypass,
     supportsAuto,
     uploadDir: (id: string) => {
@@ -525,6 +531,7 @@ export function createDaemon(opts: {
         if (live.some((s) => ["running", "needs_input"].includes(s.info().state))) throw new WorktreeError("has_sessions_running", "A session in this worktree is running or needs input: stop it first");
         for (const s of live) {
           sessions.delete(s.id);
+          queue.drop(s.id);
           touched.delete(s.id);
           await s.close().catch(() => {});
         }
@@ -678,8 +685,25 @@ export function createDaemon(opts: {
     touched.set(id, Date.now());
   };
 
+  const queue = createPromptQueue({
+    ready: (id) => !!sessions.get(id)?.takesQueued() && !autoContinue.isScheduled(id),
+    send: async (id, item) => {
+      const s = sessions.get(id);
+      if (!s) return { code: "session_not_live", message: `no session ${id}` };
+      const err = await sendPrompt(s, item.text, item.images);
+      if (!err) autoContinue.cancel(id);
+      return err;
+    },
+    show: (id, items, held) => sessions.get(id)?.setQueue(items, held),
+  });
+
   function track(s: Session) {
     sessions.set(s.id, s);
+    s.subscribe(Infinity, (e) => {
+      const t = e.part.type;
+      if (t === "session_cleared") queue.move(s.id, (e.part as { sessionId: string }).sessionId);
+      else if (t === "session_state" || t === "external_turn" || t === "bash") queue.kick(s.id);
+    });
     s.subscribe(Infinity, notifier.observe);
     s.subscribe(Infinity, (e) => orchestration.observe(s, e));
     s.subscribe(Infinity, () => touched.set(s.id, Date.now()));
@@ -954,6 +978,7 @@ export function createDaemon(opts: {
     if (state === "running" || state === "needs_input") return { code: "session_running", message: "stop the session before deleting it" };
     // The CLI exits first: it writes session metadata on exit, which would recreate the transcript. A failed delete keeps the transcript.
     autoContinue.cancel(id);
+    queue.drop(id);
     deleting.add(id);
     sessions.delete(id);
     touched.delete(id);
@@ -1391,12 +1416,39 @@ export function createDaemon(opts: {
           const s = await find(msg.sessionId);
           if (!s) return;
           autoContinue.cancel(s.id);
+          queue.release(s.id);
           const images = msg.images ?? [];
           if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
             return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
           if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return fail("bad_prompt", "empty prompt");
           const err = await sendPrompt(s, msg.text, images);
           return err ? fail(err.code, err.message) : reply({});
+        }
+        case "session.enqueue": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          const images = msg.images ?? [];
+          if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
+            return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
+          if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return fail("bad_prompt", "empty prompt");
+          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
+          const r = queue.enqueue(s.id, { text: msg.text, images });
+          return typeof r === "string" ? reply({ itemId: r }) : fail(r.code, r.message);
+        }
+        case "session.dequeue": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          const item = queue.take(s.id, msg.itemId);
+          return item ? reply({ text: item.text, images: item.images }) : fail("unknown_item", "queued message not found (already sent?)");
+        }
+        case "session.sendQueued": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          autoContinue.cancel(s.id);
+          const err = await queue.sendNow(s.id, msg.itemId);
+          if (err) return fail(err.code, err.message);
+          queue.release(s.id);
+          return reply({});
         }
         case "session.bash": {
           const s = await find(msg.sessionId);

@@ -892,3 +892,123 @@ it("sending drops the stored draft even when the box unmounts before it renders 
   });
   expect(localStorage.getItem("claude-ui.draft.s1")).toBeNull();
 });
+
+
+// GH-77: queued messages.
+const queueView = (items: { id: string; text: string; imageCount: number }[], state: "idle" | "running" = "running") =>
+  applyEvent({ ...emptySession(), state }, { type: "event", sessionId: "s1", seq: 1, part: { type: "prompt_queue", id: "prompt_queue", items } });
+
+it("GH-77: Alt+Enter while a turn runs queues the text, clears the box and sends nothing", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
+  const { box } = await render({ onPrompt, onQueue }, { ...emptySession(), state: "running" });
+  await type(box, "later");
+  await key(box, { key: "Enter", altKey: true });
+  expect(onQueue).toHaveBeenCalledWith("later", []);
+  expect(onPrompt).not.toHaveBeenCalled();
+  expect(box.value).toBe("");
+});
+
+it("GH-77: Enter still steers while a turn runs", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
+  const { box } = await render({ onPrompt, onQueue }, { ...emptySession(), state: "running" });
+  await type(box, "now");
+  await key(box, { key: "Enter" });
+  expect(onPrompt).toHaveBeenCalledWith("now", []);
+  expect(onQueue).not.toHaveBeenCalled();
+});
+
+it("GH-77: Alt+Enter during an IME composition does nothing", async () => {
+  const onQueue = vi.fn(async () => {});
+  const { box } = await render({ onQueue }, { ...emptySession(), state: "running" });
+  await type(box, "ime");
+  await key(box, { key: "Enter", altKey: true, isComposing: true });
+  await key(box, { key: "Process", keyCode: 229, altKey: true });
+  expect(onQueue).not.toHaveBeenCalled();
+  expect(box.value).toBe("ime");
+});
+
+it("GH-77: Alt+Enter in bash mode runs the command like Enter", async () => {
+  const onBash = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
+  const { box } = await render({ onBash, onQueue });
+  await key(box, { key: "!" });
+  await type(box, "ls");
+  await key(box, { key: "Enter", altKey: true });
+  expect(onBash).toHaveBeenCalledWith("ls");
+  expect(onQueue).not.toHaveBeenCalled();
+});
+
+it("GH-77: a rejected queue puts the text back and shows Not queued", async () => {
+  const onQueue = vi.fn(() => Promise.reject(new Error("queue_full")));
+  const { box, el } = await render({ onQueue }, { ...emptySession(), state: "running" });
+  await type(box, "later");
+  await key(box, { key: "Enter", altKey: true });
+  await act(async () => {});
+  expect(box.value).toBe("later");
+  expect(el.querySelector('[data-testid="prompt-error"]')!.textContent).toBe("Not queued: queue_full");
+});
+
+it("GH-77: Edit takes the message back before the typed text; the chip button dequeues it", async () => {
+  const onDequeue = vi.fn(async () => ({ text: "old text", images: ["data:image/png;base64,AA=="] }));
+  const { box, el } = await render({ onDequeue }, queueView([{ id: "q1", text: "old text", imageCount: 1 }]));
+  await type(box, "typed");
+  await act(async () => void (el.querySelector('[aria-label="Edit: old text"]') as HTMLElement).click());
+  expect(onDequeue).toHaveBeenCalledWith("q1");
+  expect(box.value).toBe("old text\ntyped");
+  expect(el.querySelectorAll('[data-testid="image-strip"] img, img[alt]').length).toBeGreaterThan(0);
+});
+
+it("GH-77: Edit of an item already sent shows Already sent", async () => {
+  const onDequeue = vi.fn(() => Promise.reject(Object.assign(new Error("gone"), { code: "unknown_item" })));
+  const { el } = await render({ onDequeue }, queueView([{ id: "q1", text: "gone", imageCount: 0 }]));
+  await act(async () => void (el.querySelector('[aria-label="Edit: gone"]') as HTMLElement).click());
+  expect(el.querySelector('[data-testid="prompt-error"]')!.textContent).toBe("Already sent");
+});
+
+it("GH-77: Delete and Send now call the daemon; chips show above the prompt box", async () => {
+  const onDequeue = vi.fn(async () => ({ text: "x", images: [] }));
+  const onSendQueued = vi.fn(async () => {});
+  const { el } = await render({ onDequeue, onSendQueued }, queueView([{ id: "q1", text: "one", imageCount: 0 }]));
+  const chips = el.querySelector('section[aria-label="Queued messages"]')!;
+  expect(chips.compareDocumentPosition(el.querySelector('[data-testid="prompt-box"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await act(async () => void (el.querySelector('[aria-label="Send now: one"]') as HTMLElement).click());
+  expect(onSendQueued).toHaveBeenCalledWith("q1");
+  await act(async () => void (el.querySelector('[aria-label="Delete: one"]') as HTMLElement).click());
+  expect(onDequeue).toHaveBeenCalledWith("q1");
+});
+
+it("GH-77: chips also show above a permission request", async () => {
+  const view = applyEvent(queueView([{ id: "q1", text: "one", imageCount: 0 }]), { type: "event", sessionId: "s1", seq: 2, part: { type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "ls" }, suggestions: [], settled: false } });
+  const { el } = await render({}, { ...view, state: "needs_input" });
+  expect(el.querySelector('section[aria-label="Queued messages"]')).not.toBeNull();
+});
+
+it("GH-77: the send menu shows only while running with input, and queues or steers", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
+  const idle = await render({ onQueue });
+  await type(idle.box, "x");
+  expect(idle.el.querySelector('[aria-label="More send options"]')).toBeNull();
+  unmount();
+  localStorage.clear();
+  const run = await render({ onPrompt, onQueue }, { ...emptySession(), state: "running" });
+  expect(run.el.querySelector('[aria-label="More send options"]')).toBeNull();
+  await type(run.box, "hello");
+  const menu = run.el.querySelector<HTMLElement>('[aria-label="More send options"]')!;
+  expect(menu).not.toBeNull();
+  await act(async () => menu.click());
+  const item = (name: string) => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent!.includes(name))!;
+  await act(async () => item("Queue for when Claude is idle").click());
+  expect(onQueue).toHaveBeenCalledWith("hello", []);
+  await type(run.box, "again");
+  await act(async () => run.el.querySelector<HTMLElement>('[aria-label="More send options"]')!.click());
+  await act(async () => item("Steer now").click());
+  expect(onPrompt).toHaveBeenCalledWith("again", []);
+});
+
+it("GH-77: the desktop placeholder mentions Alt+Enter while running", async () => {
+  const { box } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  expect(box.placeholder).toBe("Claude is working… (Enter to steer, Alt+Enter to queue, Esc to stop)");
+});

@@ -4,7 +4,7 @@ import { isAttention, PAGE_PARTS, PAGE_TURNS, TIMELINE_EXCLUDED } from "@claude-
 import type { Event, Part, PosPart, SessionState, TimelinePage } from "@claude-ui/protocol";
 
 type Entry = { part: Part; pos: number; seq: number };
-const HEAD_TYPES = new Set<Part["type"]>(["session_state", "commands", "context_usage", "external_turn", "auto_continue", "todo_update"]);
+const HEAD_TYPES = new Set<Part["type"]>(["session_state", "commands", "context_usage", "external_turn", "auto_continue", "prompt_queue", "todo_update"]);
 const EDIT_TOOLS = new Set(["Edit", "Write"]);
 
 export class PartIndex {
