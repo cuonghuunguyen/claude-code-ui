@@ -757,32 +757,32 @@ describe("gitLog / gitShow / gitFileAt", () => {
   it("refsStamp changes on commit, branch create and delete, checkout, tag and pack-refs; not on a working-tree edit", async () => {
     const r = graphRepo();
     const tick = () => new Promise((res) => setTimeout(res, 30));
-    let last = refsStamp(r.dir);
+    let last = await refsStamp(r.dir);
     const changed = async (what: string, act: () => void) => {
       await tick();
       act();
-      const now = refsStamp(r.dir);
+      const now = await refsStamp(r.dir);
       expect(now, what).not.toBe(last);
       last = now;
     };
-    expect(refsStamp(r.dir)).toBe(last);
+    expect(await refsStamp(r.dir)).toBe(last);
     await tick();
     writeFileSync(join(r.dir, "b.txt"), "edited\n");
-    expect(refsStamp(r.dir)).toBe(last);
+    expect(await refsStamp(r.dir)).toBe(last);
     await changed("commit", () => sh(r.dir, { GIT_AUTHOR_NAME: "a", GIT_AUTHOR_EMAIL: "a@x.test", GIT_COMMITTER_NAME: "a", GIT_COMMITTER_EMAIL: "a@x.test" }, "commit", "-q", "--allow-empty", "-m", "x"));
     await changed("branch create", () => run(r.dir, "branch", "deep/er/b"));
     await changed("branch delete", () => run(r.dir, "branch", "-D", "deep/er/b"));
     await changed("checkout", () => run(r.dir, "checkout", "-q", "-f", "f"));
     await changed("tag", () => run(r.dir, "tag", "t1"));
     await changed("pack-refs", () => run(r.dir, "pack-refs", "--all"));
-    expect(refsStamp(mkdtempSync(join(tmpdir(), "nogit-")))).toBe("-");
+    expect(await refsStamp(mkdtempSync(join(tmpdir(), "nogit-")))).toBe("-");
   });
 
   it("page 0 carries head and refs: head is refs/heads/main attached, absent detached", async () => {
     const r = graphRepo();
     const a = (await gitLog(r.dir, { allowed: all }))!;
     expect(a.head).toBe("refs/heads/main");
-    expect(a.refs).toBe(refsStamp(r.dir));
+    expect(a.refs).toBe(await refsStamp(r.dir));
     const more = (await gitLog(r.dir, { skip: 1, limit: 1, allowed: all }))!;
     expect(more.head).toBeUndefined();
     expect(more.refs).toBeUndefined();
@@ -830,9 +830,9 @@ describe("gitLog / gitShow / gitFileAt", () => {
 
   it("gitRefs is the refs stamp without a git process, null outside a repository", async () => {
     const r = graphRepo();
-    expect(gitRefs(r.dir, () => true)).toBe(refsStamp(r.dir));
-    expect(gitRefs(mkdtempSync(join(tmpdir(), "nogit-")), () => true)).toBeNull();
-    expect(gitRefs(r.dir, () => false)).toBeNull();
+    expect(await gitRefs(r.dir, () => true)).toBe(await refsStamp(r.dir));
+    expect(await gitRefs(mkdtempSync(join(tmpdir(), "nogit-")), () => true)).toBeNull();
+    expect(await gitRefs(r.dir, () => false)).toBeNull();
   });
 
   describe("git runs on the repository that was validated (GH-290)", () => {
@@ -902,10 +902,10 @@ describe("gitLog / gitShow / gitFileAt", () => {
       const clone = join(roots, "c");
       run(roots, "clone", "-q", "--shared", r.dir, clone);
       expect(readFileSync(join(clone, ".git", "objects", "info", "alternates"), "utf8")).toContain(r.dir);
-      expect(gitEscapes(clone, inRoots)).toBe(true);
+      expect(await gitEscapes(clone, inRoots)).toBe(true);
       await expect(gitLog(clone, { allowed: inRoots })).rejects.toMatchObject({ code: "cwd_not_allowed" });
       writeFileSync(join(clone, ".git", "objects", "info", "alternates"), "# none\n");
-      expect(gitEscapes(clone, inRoots)).toBe(false);
+      expect(await gitEscapes(clone, inRoots)).toBe(false);
     });
   });
 
@@ -918,7 +918,7 @@ describe("gitLog / gitShow / gitFileAt", () => {
       run(base, "init", "-q", "-b", "main", "outer");
       return { roots, outer, inRoots: (p: string) => p === roots || p.startsWith(roots + "/") };
     };
-    it("a symlinked .git, a gitdir file (absolute and relative) and a commondir that leave the roots escape", () => {
+    it("a symlinked .git, a gitdir file (absolute and relative) and a commondir that leave the roots escape", async () => {
       const { roots, outer, inRoots } = mk();
       mkdirSync(join(roots, "a"));
       symlinkSync(join(outer, ".git"), join(roots, "a", ".git"));
@@ -929,9 +929,9 @@ describe("gitLog / gitShow / gitFileAt", () => {
       mkdirSync(join(roots, "d", "own"), { recursive: true });
       writeFileSync(join(roots, "d", ".git"), "gitdir: own\n");
       writeFileSync(join(roots, "d", "own", "commondir"), `${join(outer, ".git")}\n`);
-      for (const p of ["a", "b", "c", "d"]) expect(gitEscapes(join(roots, p), inRoots), p).toBe(true);
+      for (const p of ["a", "b", "c", "d"]) expect(await gitEscapes(join(roots, p), inRoots), p).toBe(true);
     });
-    it("a normal repository, a subfolder, a linked worktree and a submodule-style gitdir inside the roots do not escape; a worktree of an outer repository does", () => {
+    it("a normal repository, a subfolder, a linked worktree and a submodule-style gitdir inside the roots do not escape; a worktree of an outer repository does", async () => {
       const { roots, outer, inRoots } = mk();
       const main = join(roots, "main");
       run(roots, "init", "-q", "-b", "main", "main");
@@ -941,17 +941,17 @@ describe("gitLog / gitShow / gitFileAt", () => {
       mkdirSync(join(main, ".git", "modules", "m"), { recursive: true });
       mkdirSync(join(main, "mod"));
       writeFileSync(join(main, "mod", ".git"), "gitdir: ../.git/modules/m\n");
-      for (const p of [main, join(main, "sub"), join(main, ".claude", "worktrees", "w"), join(main, "mod")]) expect(gitEscapes(p, inRoots), p).toBe(false);
+      for (const p of [main, join(main, "sub"), join(main, ".claude", "worktrees", "w"), join(main, "mod")]) expect(await gitEscapes(p, inRoots), p).toBe(false);
       run(outer, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i");
       run(outer, "worktree", "add", "-q", "-b", "o", join(roots, "linked"));
-      expect(gitEscapes(join(roots, "linked"), inRoots)).toBe(true);
+      expect(await gitEscapes(join(roots, "linked"), inRoots)).toBe(true);
     });
-    it("a folder without .git below a repository outside the roots escapes; outside any repository it does not", () => {
+    it("a folder without .git below a repository outside the roots escapes; outside any repository it does not", async () => {
       const { roots, outer, inRoots } = mk();
       const sub = join(outer, "sub");
       mkdirSync(sub);
-      expect(gitEscapes(sub, inRoots)).toBe(true);
-      expect(gitEscapes(mkdtempSync(join(tmpdir(), "nogit-")), inRoots)).toBe(false);
+      expect(await gitEscapes(sub, inRoots)).toBe(true);
+      expect(await gitEscapes(mkdtempSync(join(tmpdir(), "nogit-")), inRoots)).toBe(false);
       void roots;
     });
   });
@@ -961,19 +961,19 @@ describe("gitLog / gitShow / gitFileAt", () => {
       const d = realpathSync(mkdtempSync(join(tmpdir(), "gh282-")));
       return d;
     };
-    it("a .git file without a gitdir line counts as outside the roots (fail closed)", () => {
+    it("a .git file without a gitdir line counts as outside the roots (fail closed)", async () => {
       const d = proj();
       writeFileSync(join(d, ".git"), "nonsense\n");
-      expect(gitEscapes(d, () => true)).toBe(true);
+      expect(await gitEscapes(d, () => true)).toBe(true);
     });
-    it("a gitdir to another UNC share is not resolved on Windows, and the repository counts as outside", () => {
+    it("a gitdir to another UNC share is not resolved on Windows, and the repository counts as outside", async () => {
       const d = proj();
       writeFileSync(join(d, ".git"), "gitdir: \\\\evil-gh282\\share\\x\n");
       const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
       Object.defineProperty(process, "platform", { value: "win32" });
       try {
         expect(gitDirsOf(d)).toBeUndefined();
-        expect(gitEscapes(d, () => true)).toBe(true);
+        expect(await gitEscapes(d, () => true)).toBe(true);
       } finally {
         Object.defineProperty(process, "platform", orig);
       }
@@ -997,7 +997,7 @@ describe("gitLog / gitShow / gitFileAt", () => {
       await new Promise((res) => setTimeout(res, 20));
       seen.length = 0;
       const during = await gitStatus(a.dir);
-      expect(during).toEqual({ ...primed, refs: refsStamp(a.dir) });
+      expect(during).toEqual({ ...primed, refs: await refsStamp(a.dir) });
       expect(seen.some((x) => x.includes("diff"))).toBe(false);
       // A folder with no earlier status waits for the graph to finish.
       let done = false;
