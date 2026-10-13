@@ -707,3 +707,43 @@ it("menu items are disabled while a remote operation runs", async () => {
   expect(items().every((i) => i.hasAttribute("data-disabled"))).toBe(true);
   fetchReply = async () => ({ remote: { output: "", refs: null } });
 });
+
+it("Push (plain) sends the plain push argv, not the force one, and no lease", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-push").click());
+  c.sent.length = 0;
+  await act(async () => byId("git-push-confirm").click());
+  await flush();
+  const sent = c.sent.filter((m) => m.type === "git.push");
+  expect(sent).toEqual([{ type: "git.push", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().push }]);
+  expect(sent[0]).not.toHaveProperty("lease");
+  expect(JSON.stringify(sent[0])).not.toContain("force-with-lease");
+});
+
+it("a click on empty list space then Shift+F10 opens the selected row's branches, not an empty menu", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await select(0);
+  // The press on empty space leaves a press with no target; the key press clears it.
+  await act(async () => void list().dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true })));
+  c.sent.length = 0;
+  await act(async () => void list().dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
+  await menuAt(list());
+  expect(c.sent.filter((m) => m.type === "git.branch").map((m) => m.ref)).toEqual(["refs/heads/main"]);
+  expect(itemTexts()).toEqual(expect.arrayContaining(["Push", "Force push…", "Pull"]));
+});
+
+it("the command block wraps at spaces (a long -c prefix is not cut mid-word)", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-push").click());
+  const cls = byId("git-command").className;
+  expect(cls).toContain("whitespace-pre-wrap");
+  expect(cls).toContain("[overflow-wrap:anywhere]");
+  expect(cls).not.toContain("break-all");
+  await act(async () => byId("git-push-cancel").click());
+  await flush();
+});

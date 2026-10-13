@@ -271,6 +271,9 @@ describe("remote operations never follow submodules (their remotes are outside t
   it("the fetch variant of pull (branch checked out nowhere) does not fetch submodules either", async () => {
     const x = bumpedSubmodule();
     run(x.a, "checkout", "-q", "--detach");
+    // Without the switch these settings make `git fetch` follow the submodule.
+    run(x.a, "config", "submodule.recurse", "true");
+    run(x.a, "config", "fetch.recurseSubmodules", "yes");
     const i = (await gitBranch(x.a, MAIN, { allowed: x.inside }))!;
     expect(i.pull?.[4]).toBe("fetch");
     await gitPull(x.a, { ref: MAIN, local: i.local, argv: i.pull!, allowed: x.inside }).catch(() => undefined);

@@ -136,7 +136,7 @@ export function BranchMenu({ client, cwd, busy, onRun, fallback, children }: { c
         testId={dialog?.kind === "force" ? "git-force-push" : dialog?.kind === "pull" ? "git-pull" : "git-push"}
       >
         {argv && (
-          <pre className="whitespace-pre-wrap break-all rounded bg-secondary p-2 font-mono text-xs" data-testid="git-command">
+          <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] rounded bg-secondary p-2 font-mono text-xs" data-testid="git-command">
             {command(argv)}
           </pre>
         )}
