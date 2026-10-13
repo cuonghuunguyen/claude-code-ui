@@ -247,7 +247,7 @@ describe("sides", () => {
   describe.skipIf(!hasSh || process.platform === "win32")("the setup script and npm_config_nodedir", () => {
     const FAKE = "22.99.1";
     /** Runs the docker setup script with a fake node (prints FAKE) and a fake npm that records npm_config_nodedir; `headers`: node.h and node_version.h under <prefix>/include/node. */
-    function run({ headers, version = FAKE, env = {} }: { headers?: "prefix" | "none"; version?: string; env?: Record<string, string> }) {
+    function run({ headers, version = FAKE, env = {}, symlinked, nodeH = true }: { headers?: "prefix" | "none"; version?: string; env?: Record<string, string>; symlinked?: boolean; nodeH?: boolean }) {
       const home = dir("nd-home-");
       const prefix = dir("nd-prefix-");
       const bin = join(prefix, "bin");
@@ -257,15 +257,23 @@ describe("sides", () => {
       const [maj, min, pat] = version.split(".");
       if (headers === "prefix") {
         mkdirSync(join(prefix, "include/node"), { recursive: true });
-        writeFileSync(join(prefix, "include/node/node.h"), "");
+        if (nodeH) writeFileSync(join(prefix, "include/node/node.h"), "");
         writeFileSync(join(prefix, "include/node/node_version.h"), `#define NODE_MAJOR_VERSION ${maj}\n#define NODE_MINOR_VERSION ${min}\n#define NODE_PATCH_VERSION ${pat}\n`);
       }
-      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -v) echo v${FAKE};; -p) case "$2" in *split*) echo 22;; *) echo ${FAKE};; esac;; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
+      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -v) echo v${FAKE};; -p) case "$2" in *split*) echo 22;; *execPath*) echo "$(dirname "$(readlink -f "$0")")/node";; *) echo ${FAKE};; esac;; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
+      // symlinked: node reaches PATH through a link in a folder without headers (Volta, asdf, /usr/bin/node -> /opt/node/bin/node)
+      let nodeBin = bin;
+      if (symlinked) {
+        const link = dir("nd-link-");
+        mkdirSync(join(link, "bin"));
+        symlinkSync(join(bin, "node"), join(link, "bin/node"));
+        nodeBin = join(link, "bin");
+      }
       const log = join(home, "nodedir.log");
-      writeFileSync(join(tools, "npm"), `#!/bin/sh\nwhile [ "$1" != --prefix ]; do shift; done; p=$2\necho "\${npm_config_nodedir-unset}" >> '${log}'\nmkdir -p "$p/node_modules/claude-code-ui/dist" "$p/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"\necho 'console.log("side started")' > "$p/node_modules/claude-code-ui/dist/cli.js"\n`, { mode: 0o755 });
+      writeFileSync(join(tools, "npm"), `#!/bin/sh\nwhile [ "$1" != --prefix ]; do shift; done; p=$2\necho "\${npm_config_nodedir-unset}" >> '${log}'\nmkdir -p "$p/node_modules/claude-code-ui/dist" "$p/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"\necho 'console.log("side started nodedir=" + process.env.npm_config_nodedir)' > "$p/node_modules/claude-code-ui/dist/cli.js"\n`, { mode: 0o755 });
       const tgz = join(home, "side.tgz");
       writeFileSync(tgz, "");
-      const r = spawnSync("sh", ["-c", setupScript(tgz, "0.5.0-1", "docker")], { cwd: home, encoding: "utf8", env: { PATH: `${bin}:${tools}:${process.env.PATH}`, HOME: home, ANTHROPIC_API_KEY: "test", ...env } });
+      const r = spawnSync("sh", ["-c", setupScript(tgz, "0.5.0-1", "docker")], { cwd: home, encoding: "utf8", env: { PATH: `${nodeBin}:${tools}:${process.env.PATH}`, HOME: home, ANTHROPIC_API_KEY: "test", ...env } });
       return { out: r.stdout, nodedir: readFileSync(log, "utf8").trim(), prefix };
     }
 
@@ -282,12 +290,24 @@ describe("sides", () => {
     it("does not set npm_config_nodedir when the headers are another version than the node", () => {
       expect(run({ headers: "prefix", version: "22.98.0" }).nodedir).toBe("unset");
     });
+    it("does not set npm_config_nodedir when node_version.h exists but node.h is missing", () => {
+      expect(run({ headers: "prefix", nodeH: false }).nodedir).toBe("unset");
+    });
+    it("finds the headers of the real node when node on PATH is a symlink (process.execPath)", () => {
+      const r = run({ headers: "prefix", symlinked: true });
+      expect(r.nodedir).toBe(r.prefix);
+    });
+    it("the started side process does not get npm_config_nodedir", () => {
+      const r = run({ headers: "prefix" });
+      expect(r.nodedir).toBe(r.prefix);
+      expect(r.out).toContain("side started nodedir=undefined");
+    });
     it("keeps an npm_config_nodedir the environment already has", () => {
       expect(run({ headers: "prefix", env: { npm_config_nodedir: "/custom" } }).nodedir).toBe("/custom");
     });
     it("the script text sets it only in the install, from the three header places", () => {
       const s = setupScript("/tmp/a.tgz", "1-1", "docker");
-      for (const part of ["/usr /usr/local", 'dirname "$(dirname "$(command -v node)")"', "include/node/node.h", "npm_config_nodedir"]) expect(s).toContain(part);
+      for (const part of ["/usr /usr/local", 'dirname "$(dirname "$(node -p process.execPath 2>/dev/null)")"', "include/node/node.h", "npm_config_nodedir"]) expect(s).toContain(part);
       expect(s.indexOf("npm_config_nodedir")).toBeLessThan(s.indexOf('npm install --prefix "$new"'));
     });
   });

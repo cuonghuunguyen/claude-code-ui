@@ -101,7 +101,7 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     // when they are the running node's version (else node-gyp downloads as before). A set npm_config_nodedir stays.
     "  nd=; if [ -z \"$npm_config_nodedir\" ]; then",
     '    nv=$(node -p process.versions.node 2>/dev/null)',
-    '    for c in "$(dirname "$(dirname "$(command -v node)")")" /usr /usr/local; do',
+    '    for c in "$(dirname "$(dirname "$(node -p process.execPath 2>/dev/null)")")" /usr /usr/local; do',
     '      h="$c/include/node/node_version.h"; [ -f "$c/include/node/node.h" ] && [ -f "$h" ] || continue',
     '      hv=$(for k in MAJOR MINOR PATCH; do sed -n "s/^#define NODE_${k}_VERSION \\([0-9][0-9]*\\).*/\\1/p" "$h" | head -n 1; done | tr \'\\n\' . | sed \'s/\\.$//\')',
     '      [ -n "$nv" ] && [ "$hv" = "$nv" ] && { nd="$c"; break; }',
