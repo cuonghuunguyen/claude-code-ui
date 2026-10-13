@@ -43,7 +43,7 @@ function fakeSide(reply: (m: any) => unknown = (m) => (m.type === "session.list"
 type SetupOpts = { sides?: Partial<Parameters<typeof createSides>[0]>; router?: Partial<Parameters<typeof createRouter>[0]> };
 async function setup(sideA: ReturnType<typeof fakeSide>, sideB?: ReturnType<typeof fakeSide>, onPush?: (p: any) => void, o: SetupOpts = {}) {
   const procs = [sideA, ...(sideB ? [sideB] : [])].map((s) => s.proc);
-  const sides = createSides({ targets: [], localLabel: "Linux", posixLocal: true, ...(onPush && { onPush }), discoverMs: 0, discover: async () => [dockerSide("a"), ...(sideB ? [dockerSide("b")] : [])], spawn: (id) => procs[id === "docker:a" ? 0 : 1]!, ...o.sides });
+  const sides = createSides({ targets: [], localLabel: "Linux", posixLocal: true, localPathExists: () => false, ...(onPush && { onPush }), discoverMs: 0, discover: async () => [dockerSide("a"), ...(sideB ? [dockerSide("b")] : [])], spawn: (id) => procs[id === "docker:a" ? 0 : 1]!, ...o.sides });
   await sides.refresh();
   const sent: ServerMessage[] = [];
   const localSeen: ClientMessage[] = [];
@@ -662,5 +662,17 @@ describe("session lookup (GH-321, GH-328)", () => {
     await t.settle();
     await t.req({ type: "session.list" });
     expect(t.sides.sessionSide.get(B1)).not.toBe("docker:a");
+  });
+});
+
+describe("existing sub-folders of a local dir (GH-328)", () => {
+  it("a side cannot claim a folder under home that exists on the hub; a container-only one stays the side's", async () => {
+    const a = fakeSide((m) => (m.type === "session.list" ? { sessions: [], projects: ["/home/hub/notes", "/home/hub/ctonly"], recentProjects: [] } : null));
+    const t = await setup(a, undefined, undefined, { sides: { localDirs: ["/home/hub"], localPathExists: (p: string) => p === "/home/hub" || p === "/home/hub/notes" } });
+    await t.req({ type: "session.list" });
+    await t.req({ type: "fs.write", path: "/home/hub/notes/todo.md", content: "secret" });
+    expect(frames(a, "fs.write")).toEqual([]);
+    expect(t.localSeen.some((m) => m.type === "fs.write")).toBe(true);
+    expect(t.sides.pathSide("/home/hub/ctonly/x")).toBe("docker:a");
   });
 });

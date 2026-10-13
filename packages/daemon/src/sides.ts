@@ -351,6 +351,8 @@ export function createSides(opts: {
   posixLocal?: boolean;
   /** Folders that are this computer's whatever a side says (hub home and roots, POSIX hub); default: the home folder when posixLocal. */
   localDirs?: string[];
+  /** Whether the hub has this path (default: the file system when posixLocal, else never). A side never claims an existing folder inside a local dir (GH-328). */
+  localPathExists?: (p: string) => boolean;
   /** Longest line a side may write (default MAX_SIDE_LINE_CHARS; tests lower it). */
   maxLineChars?: number;
 }) {
@@ -577,9 +579,10 @@ export function createSides(opts: {
     };
   }
 
-  /** A local folder, whatever a side says (GH-320): a local dir or a parent of one; a local cwd, a parent or a sub-folder of one. */
+  const exists = opts.localPathExists ?? ((p: string) => !!opts.posixLocal && existsSync(p));
+  /** A local folder, whatever a side says (GH-320): a local dir or a parent of one; a folder inside a local dir that exists on the hub (GH-328); a local cwd, a parent or a sub-folder of one. */
   function localFolder(p: string): boolean {
-    return localDirs.some((d) => within(d, p)) || [...cwdSide].some(([c, s]) => s === LOCAL_SIDE && (within(c, p) || within(p, c)));
+    return localDirs.some((d) => within(d, p) || (p !== d && within(p, d) && exists(p))) || [...cwdSide].some(([c, s]) => s === LOCAL_SIDE && (within(c, p) || within(p, c)));
   }
   /** Records that side `id` has cwd `p`; refused (false) when `p` is not canonical or is a local folder. */
   function claimCwd(id: string, p: unknown): boolean {
