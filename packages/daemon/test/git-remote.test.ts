@@ -47,11 +47,11 @@ describe("gitFetch", () => {
   it("brings a new remote branch into the branch list and the graph", async () => {
     const { a, b, inside } = remoteRepo();
     newBranch(b, "feat");
-    const before = gitRefs(a);
+    const before = gitRefs(a, inside);
     const r = await gitFetch(a, { allowed: inside });
     expect(r?.output).toMatch(/feat\s+-> origin\/feat/);
     expect(r?.refs).not.toBe(before);
-    expect(r?.refs).toBe(gitRefs(a));
+    expect(r?.refs).toBe(gitRefs(a, inside));
     const log = await gitLog(a, { allowed: inside, fresh: true });
     expect(log?.branches).toContain("refs/remotes/origin/feat");
   });

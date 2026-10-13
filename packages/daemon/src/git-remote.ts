@@ -139,6 +139,6 @@ export async function gitFetch(cwd: string, o: { allowed: (p: string) => boolean
     const env = remoteEnv(top, sshCommand);
     await checkRemotes(top, [...names], false, env, o.allowed);
     const output = await remoteOp(top, "fetch", FETCH_ARGS, env);
-    return { output, refs: gitRefs(top) };
+    return { output, refs: gitRefs(top, o.allowed) };
   });
 }
