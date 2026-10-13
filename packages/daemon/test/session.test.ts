@@ -650,6 +650,21 @@ describe("Session /clear", () => {
     expect(heirs[0]!.untitled()).toBe(false);
   });
 
+  it("onCleared gets the new session and the one that was cleared", async () => {
+    const got: [string, string][] = [];
+    const s = new Session("/repo", { query: clearQuery as never, onCleared: (h, from) => got.push([h.id, from.id]) });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hi");
+    await until(events, (e) => e.part.type === "turn_result");
+    const old = s.id;
+    s.prompt("/clear");
+    await until(events, (e) => e.part.type === "session_cleared");
+    expect(got).toHaveLength(1);
+    expect(got[0]![1]).toBe(old);
+    expect(got[0]![0]).not.toBe(old);
+  });
+
   it("hands the live query to a new session under the CLI's next session ID; the old one keeps its history and resumes its own transcript", async () => {
     const heirs: Session[] = [];
     const s = new Session("/repo", { query: clearQuery as never, onCleared: (h) => heirs.push(h) });

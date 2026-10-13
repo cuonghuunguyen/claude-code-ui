@@ -72,7 +72,7 @@ type SessionOpts = Partial<SessionSettings> & {
   uploadDir?: (id: string) => string | undefined;
   query?: typeof sdkQuery;
   onSettings?: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => void;
-  onCleared?: (heir: Session) => void;
+  onCleared?: (heir: Session, from: Session) => void;
   /** The turn just ended because the plan usage limit was hit (assistant error rate_limit); `resetsAt` ms from its rejected rate_limit_event. */
   onLimitStop?: (id: string, resetsAt: number | undefined) => void;
   /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */
@@ -1137,7 +1137,7 @@ export class Session {
     this.input = new InputQueue();
     heir.setState(this.state);
     heir.settingsChanged([]);
-    this.opts.onCleared?.(heir);
+    this.opts.onCleared?.(heir, this);
     if (clearId && this.checkpoints.has(clearId)) this.cut(clearId);
     this.emit({ type: "session_cleared", id: randomUUID(), sessionId: id });
     this.setState("idle");
