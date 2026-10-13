@@ -2,6 +2,12 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- Windows: a terminal whose shell exits by itself (`exit`) no longer stays in the daemon's memory; an error in node-pty's output pipe, output worker or process-list helper ends only that terminal instead of the daemon; input typed before the shell's first output counts against the 1 MiB input cap ([#268](https://github.com/cuonghuunguyen/claude-code-ui/issues/268)).
+
 ## 0.5.1 - 2026-10-10
 
 ### Fixed

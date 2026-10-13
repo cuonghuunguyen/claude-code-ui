@@ -1,16 +1,20 @@
 // Subagent runs (CONTEXT.md "Subagent run"): Agents button + agent map, the subagent view's top bar and its not-promptable notice.
-import { createContext, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
-import { ArrowLeftIcon, CheckIcon, ChevronDownIcon, LoaderCircleIcon, NetworkIcon, SquareIcon, XCircleIcon } from "lucide-react";
-import type { Part, ToolStatus } from "@claude-ui/protocol";
+import { ArrowLeftIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, CircleIcon, CornerLeftUpIcon, LoaderCircleIcon, NetworkIcon, SquareIcon, XCircleIcon } from "lucide-react";
+import type { Part, SessionState, ToolStatus } from "@claude-ui/protocol";
 import { partOf, wholeParts, type SessionView } from "./store.ts";
 import { GHOST } from "./toolbar.tsx";
+import { NO_LINKS, type AgentLinks, type WorkerRow } from "./workers.ts";
 
 export type Run = Extract<Part, { type: "subagent" }>;
 
 /** Opens the subagent view of a run; `undefined` goes back to the session view. Provided by the session pane. */
 export const OpenRunContext = createContext<((id?: string) => void) | undefined>(undefined);
+
+/** Orchestration links of the session (its workers, its coordinator) and how to open another session; provided by the session pane. */
+export const AgentLinksContext = createContext<{ links: AgentLinks; onOpenSession: (id: string) => void }>({ links: NO_LINKS, onOpenSession: () => {} });
 
 /** Runs started by `parentId` (undefined = by the session), oldest first. */
 export const runsOf = (view: SessionView, parentId?: string): Run[] =>
@@ -31,6 +35,8 @@ export function inRun(view: SessionView, toolUseId: string, runId: string) {
 }
 
 const STATUS_LABEL: Record<ToolStatus, string> = { pending: "Running", running: "Running", done: "Done", error: "Failed", denied: "Denied", stopped: "Stopped" };
+
+const WORKER_LABEL: Record<SessionState, string> = { running: "Running", idle: "Idle", needs_input: "Needs input", error: "Error", closed: "Closed" };
 
 /** 12s, 3m 05s, 1h 02m. */
 export function duration(ms: number) {
@@ -66,36 +72,92 @@ export function StatusMark({ run }: { run: Run }) {
   );
 }
 
-/** `pos` / `size`: place among its siblings (aria-posinset / aria-setsize); `children`: number of runs it started. */
-type Node = { run?: Run; level: number; parent?: number; pos: number; size: number; children: number };
+export function WorkerMark({ state }: { state: SessionState }) {
+  const cls = "size-4 shrink-0";
+  return state === "running" ? (
+    <LoaderCircleIcon aria-hidden className={`${cls} animate-spin text-muted-foreground motion-reduce:animate-none`} />
+  ) : state === "needs_input" ? (
+    <CircleAlertIcon aria-hidden className={`${cls} text-warning`} />
+  ) : state === "error" ? (
+    <XCircleIcon aria-hidden className={`${cls} text-destructive`} />
+  ) : (
+    <CircleIcon aria-hidden className={`${cls} text-muted-foreground`} />
+  );
+}
 
-/** Depth-first rows: the session (level 1), then every run under the run that started it. */
-function flatten(view: SessionView): Node[] {
-  const rows: Node[] = [{ level: 1, pos: 1, size: 1, children: 0 }];
+/** `pos` / `size`: place among its siblings (aria-posinset / aria-setsize); `children`: number of rows below it. */
+type Base = { level: number; parent?: number; pos: number; size: number; children: number };
+type Node = Base &
+  (
+    | { kind: "coordinator"; id: string; title: string }
+    | { kind: "session" }
+    | { kind: "run"; run: Run }
+    | { kind: "workers" }
+    | { kind: "worker"; worker: WorkerRow }
+    | { kind: "closed"; n: number; open: boolean }
+  );
+
+/**
+ * Depth-first rows: the coordinator (a worker's own map), the session (level 1) with every run under the run that started it,
+ * then the Workers node with the open workers and the Closed node (its workers only while it is open).
+ */
+function flatten(view: SessionView, links: AgentLinks, closedOpen: boolean): Node[] {
+  const rows: Node[] = [];
+  if (links.coordinator) rows.push({ kind: "coordinator", id: links.coordinator.id, title: links.coordinator.title, level: 1, pos: 1, size: 1, children: 0 });
+  const root = rows.length;
+  rows.push({ kind: "session", level: 1, pos: 1, size: 1, children: 0 });
   const walk = (parentId: string | undefined, level: number, parent: number) => {
     const runs = runsOf(view, parentId);
     rows[parent]!.children = runs.length;
     runs.forEach((run, i) => {
-      rows.push({ run, level, parent, pos: i + 1, size: runs.length, children: 0 });
+      rows.push({ kind: "run", run, level, parent, pos: i + 1, size: runs.length, children: 0 });
       walk(run.id, level + 1, rows.length - 1);
     });
   };
-  walk(undefined, 2, 0);
+  walk(undefined, 2, root);
+  if (links.workers.length || links.closed.length) {
+    const at = rows.length;
+    rows.push({ kind: "workers", level: 1, pos: 1, size: 1, children: links.workers.length + (links.closed.length ? 1 : 0) });
+    links.workers.forEach((worker, i) => rows.push({ kind: "worker", worker, level: 2, parent: at, pos: i + 1, size: rows[at]!.children, children: 0 }));
+    if (links.closed.length) {
+      const c = rows.length;
+      rows.push({ kind: "closed", n: links.closed.length, open: closedOpen, level: 2, parent: at, pos: rows[at]!.children, size: rows[at]!.children, children: closedOpen ? links.closed.length : 0 });
+      if (closedOpen) links.closed.forEach((worker, i) => rows.push({ kind: "worker", worker, level: 3, parent: c, pos: i + 1, size: links.closed.length, children: 0 }));
+    }
+  }
+  const top = rows.filter((r) => r.level === 1);
+  top.forEach((r, i) => ((r.pos = i + 1), (r.size = top.length)));
   return rows;
 }
 
 /**
- * Agents button in the prompt toolbar (only with at least one run) and the agent map popover: a tree with the session as root.
+ * Agents button in the prompt toolbar (only with a run, a worker or a coordinator) and the agent map popover: a tree with the session as root.
  * `current`: the run whose view shows (undefined = the session view). Arrow keys move, Enter opens, Esc closes.
  */
 export function AgentsButton({ view, current, onOpen, side = "top" }: { view: SessionView; current?: string; onOpen: (id?: string) => void; side?: "top" | "bottom" }) {
   const [open, setOpen] = useState(false);
   const all = wholeParts(view).filter((p): p is Run => p.type === "subagent");
-  const running = all.filter(isRunning).length;
-  if (!all.length) return null;
+  const { links, onOpenSession } = useContext(AgentLinksContext);
+  // Another session's tab hides this pane (Activity), which would freeze the closing popup: it opens that tab once the map is closed.
+  const target = useRef<string>(undefined);
+  const running = all.filter(isRunning).length + links.workers.filter((w) => w.state === "running").length;
+  if (!all.length && !links.workers.length && !links.closed.length && !links.coordinator) return null;
   const label = running ? `Agents, ${running} running` : "Agents";
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Root
+      open={open}
+      onOpenChange={(o) => {
+        // Reopened before the close of a worker row finished: that worker is no longer wanted.
+        if (o) target.current = undefined;
+        setOpen(o);
+      }}
+      onOpenChangeComplete={(o) => {
+        if (o || !target.current) return;
+        const id = target.current;
+        target.current = undefined;
+        onOpenSession(id);
+      }}
+    >
       <Popover.Trigger aria-label={label} title={label} data-testid="agents-button" className={`${GHOST} flex shrink-0 items-center`}>
         <NetworkIcon aria-hidden className="size-4" />
         <span className="hidden @2xl:inline">Agents</span>
@@ -116,9 +178,14 @@ export function AgentsButton({ view, current, onOpen, side = "top" }: { view: Se
             <AgentTree
               view={view}
               current={current}
+              links={links}
               onOpen={(id) => {
                 setOpen(false);
                 onOpen(id);
+              }}
+              onOpenSession={(id) => {
+                target.current = id;
+                setOpen(false);
               }}
               onClose={() => setOpen(false)}
             />
@@ -129,32 +196,50 @@ export function AgentsButton({ view, current, onOpen, side = "top" }: { view: Se
   );
 }
 
-function AgentTree({ view, current, onOpen, onClose }: { view: SessionView; current?: string; onOpen: (id?: string) => void; onClose: () => void }) {
-  const rows = flatten(view);
-  const now = useNow(rows.some((r) => r.run && isRunning(r.run)));
-  const start = Math.max(0, rows.findIndex((r) => r.run?.id === current));
-  const [focus, setFocus] = useState(start);
+const rowKey = (r: Node) => (r.kind === "run" ? r.run.id : r.kind === "worker" ? `w:${r.worker.id}` : r.kind);
+
+function AgentTree({ view, current, links, onOpen, onOpenSession, onClose }: { view: SessionView; current?: string; links: AgentLinks; onOpen: (id?: string) => void; onOpenSession: (id: string) => void; onClose: () => void }) {
+  const [closedOpen, setClosedOpen] = useState(false);
+  const rows = flatten(view, links, closedOpen);
+  const now = useNow(rows.some((r) => r.kind === "run" && isRunning(r.run)));
+  const found = rows.findIndex((r) => r.kind === "run" && r.run.id === current);
+  const start = found >= 0 ? found : rows.findIndex((r) => r.kind === "session");
+  // The focused row by key: a worker that moves into the collapsed Closed group leaves the rows, focus goes to that group's header.
+  const [focusKey, setFocusKey] = useState(rowKey(rows[start]!));
+  const setFocus = (i: number) => setFocusKey(rowKey(rows[i]!));
   const items = useRef<(HTMLLIElement | null)[]>([]);
-  const at = Math.min(focus, rows.length - 1);
+  const foundAt = rows.findIndex((r) => rowKey(r) === focusKey);
+  const fallback = ["closed", "workers", "session"].map((k) => rows.findIndex((r) => r.kind === k)).find((i) => i >= 0)!;
+  const at = foundAt >= 0 ? foundAt : fallback;
   // The popup opens with the current node focused, so the arrow keys work at once.
-  useEffect(() => void items.current[at]?.focus(), [at]);
+  useEffect(() => void items.current[at]?.focus(), [at, focusKey, rows.length]);
+  const activate = (row: Node) => {
+    if (row.kind === "run") onOpen(row.run.id);
+    else if (row.kind === "session") onOpen(undefined);
+    else if (row.kind === "coordinator") onOpenSession(row.id);
+    else if (row.kind === "worker") onOpenSession(row.worker.id);
+    else if (row.kind === "closed") setClosedOpen((o) => !o);
+  };
   const onKeyDown = (e: KeyboardEvent) => {
     const row = rows[at]!;
     const firstChild = rows.findIndex((r) => r.parent === at);
+    const closed = row.kind === "closed" ? row : undefined;
     const next: Record<string, number | undefined> = {
       ArrowDown: Math.min(at + 1, rows.length - 1),
       ArrowUp: Math.max(at - 1, 0),
       Home: 0,
       End: rows.length - 1,
-      ArrowLeft: row.parent,
-      ArrowRight: firstChild >= 0 ? firstChild : undefined,
+      ArrowLeft: closed?.open ? undefined : row.parent,
+      ArrowRight: closed && !closed.open ? undefined : firstChild >= 0 ? firstChild : undefined,
     };
     if (e.key in next) {
       e.preventDefault();
-      if (next[e.key] !== undefined) setFocus(next[e.key]!);
+      if (e.key === "ArrowLeft" && closed?.open) setClosedOpen(false);
+      else if (e.key === "ArrowRight" && closed && !closed.open) setClosedOpen(true);
+      else if (next[e.key] !== undefined) setFocus(next[e.key]!);
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      onOpen(row.run?.id);
+      activate(row);
     } else if (e.key === "Escape") {
       // Handled here: the session's Esc would stop the turn.
       e.preventDefault();
@@ -165,36 +250,56 @@ function AgentTree({ view, current, onOpen, onClose }: { view: SessionView; curr
   return (
     <ul role="tree" aria-label="Agent map" className="max-h-[min(60vh,420px)] overflow-y-auto" onKeyDown={onKeyDown}>
       {rows.map((r, i) => {
-        const name = r.run ? r.run.description || "Subagent run" : "Session";
-        const status = r.run ? `${STATUS_LABEL[r.run.status]}, ${runDuration(r.run, now)}` : "";
-        const selected = (r.run?.id ?? undefined) === current;
+        const run = r.kind === "run" ? r.run : undefined;
+        const name = r.kind === "run" ? r.run.description || "Subagent run" : r.kind === "session" ? "Session" : r.kind === "coordinator" ? `Coordinator: ${r.title}` : r.kind === "workers" ? "Workers" : r.kind === "worker" ? r.worker.name : `Closed (${r.n})`;
+        const status = run ? `${STATUS_LABEL[run.status]}, ${runDuration(run, now)}` : r.kind === "worker" ? `worker, ${WORKER_LABEL[r.worker.state]}` : "";
+        const selected = (r.kind === "run" || r.kind === "session") && (run?.id ?? undefined) === current;
+        const inert = r.kind === "workers";
+        const testId = r.kind === "run" || r.kind === "session" ? "agent-node" : `agent-${r.kind}`;
         return (
           <li
-            key={r.run?.id ?? "session"}
+            key={rowKey(r)}
             ref={(el) => void (items.current[i] = el)}
             role="treeitem"
             aria-level={r.level}
             aria-posinset={r.pos}
             aria-setsize={r.size}
-            // Every node is always open: the map shows the whole tree.
-            aria-expanded={r.children ? true : undefined}
+            // Runs, Workers and the open Closed node show their children: the map shows the whole tree, except closed workers.
+            aria-expanded={r.kind === "closed" ? r.open : r.children ? true : undefined}
             aria-selected={selected}
             aria-label={status ? `${name}, ${status}` : name}
             tabIndex={i === at ? 0 : -1}
-            data-testid="agent-node"
-            data-status={r.run?.status}
-            onClick={() => onOpen(r.run?.id)}
+            data-testid={testId}
+            data-status={run?.status}
+            data-state={r.kind === "worker" ? r.worker.state : undefined}
+            data-session-id={r.kind === "worker" ? r.worker.id : undefined}
+            onClick={() => activate(r)}
             onFocus={() => setFocus(i)}
             style={{ paddingLeft: 8 + (r.level - 1) * 16 }}
-            className={`flex min-h-8 cursor-pointer items-center gap-2 rounded-md pr-2 outline-none hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-info pointer-coarse:min-h-11 ${selected ? "bg-accent" : ""}`}
+            className={`flex min-h-8 items-center gap-2 rounded-md pr-2 outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-info pointer-coarse:min-h-11 ${inert ? "cursor-default" : "cursor-pointer hover:bg-accent"} ${selected ? "bg-accent" : ""}`}
           >
-            {r.run ? <StatusMark run={r.run} /> : <NetworkIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />}
-            <span title={name} className={`min-w-0 flex-1 truncate ${r.run ? "" : "font-medium"}`}>
+            {run ? (
+              <StatusMark run={run} />
+            ) : r.kind === "worker" ? (
+              <WorkerMark state={r.worker.state} />
+            ) : r.kind === "coordinator" ? (
+              <CornerLeftUpIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            ) : r.kind === "closed" ? (
+              <ChevronRightIcon aria-hidden className={`size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${r.open ? "rotate-90" : ""}`} />
+            ) : (
+              <NetworkIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            )}
+            <span title={r.kind === "worker" ? r.worker.title : name} className={`min-w-0 flex-1 truncate ${r.kind === "session" || r.kind === "workers" ? "font-medium" : ""} ${r.kind === "worker" && r.level === 3 ? "text-muted-foreground" : ""}`}>
               {name}
             </span>
-            {r.run && (
+            {run && (
               <span aria-hidden className="shrink-0 text-[12px] text-muted-foreground tabular-nums">
-                {STATUS_LABEL[r.run.status]} · {runDuration(r.run, now)}
+                {STATUS_LABEL[run.status]} · {runDuration(run, now)}
+              </span>
+            )}
+            {r.kind === "worker" && (
+              <span aria-hidden className="shrink-0 text-[12px] text-muted-foreground">
+                {WORKER_LABEL[r.worker.state]}
               </span>
             )}
           </li>

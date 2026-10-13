@@ -6,6 +6,9 @@ import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
 import { createWorktree, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
+import { wslGitRunner } from "../src/wsl-git.ts";
+import { execFile } from "node:child_process";
+import { afterEach } from "vitest";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
 
@@ -1192,5 +1195,42 @@ describe("limiter", () => {
     expect(most).toBe(2);
     expect(order).toEqual([0, 1, 2, 3, 4]);
     expect(results.map((r) => r.status)).toEqual(["fulfilled", "rejected", "fulfilled", "fulfilled", "fulfilled"]);
+  });
+});
+
+describe("WSL projects opened by their UNC path", () => {
+  afterEach(() => (setGitRunner(undefined), vi.restoreAllMocks()));
+  const unc = (p: string) => `\\\\wsl.localhost\\X${p.replace(/\//g, "\\")}`;
+
+  it("listWorktrees of a UNC WSL cwd maps the POSIX paths git prints to the same UNC form", async () => {
+    const out = "worktree /home/me/repo\0HEAD abcdef1234\0branch refs/heads/main\0\0worktree /mnt/c/wt\0HEAD abcdef1234\0detached\0\0";
+    setGitRunner(async () => ({ stdout: Buffer.from(out), stderr: "" }));
+    const list = await listWorktrees("\\\\wsl.localhost\\Ubuntu\\home\\me\\repo");
+    expect(list).toEqual([
+      { path: "\\\\wsl.localhost\\Ubuntu\\home\\me\\repo", branch: "main", main: true },
+      { path: "C:\\wt", branch: "abcdef1", main: false },
+    ]);
+  });
+
+  it("gitStatus of a UNC WSL cwd reads through the WSL runner", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "wslst-")));
+    run(dir, "init", "-q", "-b", "main");
+    writeFileSync(join(dir, "a.txt"), "1\n");
+    run(dir, "add", ".");
+    run(dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+    writeFileSync(join(dir, "a.txt"), "1\n2\n");
+    const files: (string | undefined)[] = [];
+    // Stands for wsl.exe: bash runs the script (cd to the POSIX path, git) like the distro would.
+    const local = (o: GitRunOptions) =>
+      new Promise<{ stdout: Buffer; stderr: string }>((ok, fail) => {
+        files.push(o.file);
+        execFile("bash", o.args.slice(4), { encoding: "buffer" }, (err, stdout, stderr) => (err ? fail(Object.assign(err, { stderr: String(stderr) })) : ok({ stdout, stderr: String(stderr) })));
+      });
+    setGitRunner(wslGitRunner({ local }));
+    // On Linux a UNC path is relative: resolved from a cwd outside any repository, so no host repository is pinned (Windows resolves the UNC path itself).
+    vi.spyOn(process, "cwd").mockReturnValue(realpathSync(tmpdir()));
+    expect(await gitStatus(unc(dir))).toMatchObject({ branch: "main", added: 1, removed: 0 });
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.every((f) => f === "wsl.exe")).toBe(true);
   });
 });

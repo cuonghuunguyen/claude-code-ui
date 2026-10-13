@@ -272,6 +272,43 @@ describe("Session", () => {
     expect(calls.at(-1)).toMatchObject({ resume: s.id, model: "sonnet", permissionMode: "acceptEdits" });
   });
 
+  it("a CLI start, restartQuery and releaseQuery call onLiveChange with the session id; a drop with no CLI does not", async () => {
+    const dropped: string[] = [];
+    const s = new Session("/tmp", { query: fakeQuery as never, onLiveChange: (id) => dropped.push(id) });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hi");
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(dropped).toEqual([s.id]);
+    expect(s.releaseQuery()).toBe(true);
+    expect(dropped).toEqual([s.id, s.id]);
+    s.prompt("again");
+    await until(events, (e) => e.part.type === "turn_result" && events.filter((x) => x.part.type === "turn_result").length === 2);
+    expect(dropped).toHaveLength(3);
+    s.restartQuery();
+    expect(dropped).toHaveLength(4);
+  });
+
+  it("Plugins Restart of a session without a CLI process does not call onLiveChange", () => {
+    const dropped: string[] = [];
+    const s = Session.restore(randomUUID(), "/tmp", history, { query: fakeQuery as never, onLiveChange: (id) => dropped.push(id) });
+    expect(s.liveQuery()).toBeUndefined();
+    s.restartQuery();
+    expect(dropped).toEqual([]);
+  });
+
+  it("a transcript sync with new terminal CLI messages and no CLI process of ours does not call onLiveChange", async () => {
+    const dropped: string[] = [];
+    let n = 0;
+    const msg = (i: number) => ({ type: "user", uuid: `cli-${i}`, session_id: "x", message: { role: "user", content: `from the terminal ${i}` }, parent_tool_use_id: null, parent_agent_id: null });
+    const readTranscript = async () => ({ main: [...history, ...Array.from({ length: ++n }, (_, i) => msg(i))] as never, runs: [] });
+    const s = Session.restore(randomUUID(), "/tmp", history, { query: fakeQuery as never, readTranscript, onLiveChange: (sid) => dropped.push(sid) });
+    await s.sync();
+    await s.sync();
+    expect(s.liveQuery()).toBeUndefined();
+    expect(dropped).toEqual([]);
+  });
+
   it("releaseQuery without a live query is false", () => {
     expect(new Session("/tmp", { query: fakeQuery as never }).releaseQuery()).toBe(false);
     expect(Session.restore(randomUUID(), "/tmp", history, { query: fakeQuery as never }).releaseQuery()).toBe(false);
