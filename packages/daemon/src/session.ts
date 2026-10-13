@@ -73,6 +73,8 @@ type SessionOpts = Partial<SessionSettings> & {
   query?: typeof sdkQuery;
   onSettings?: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => void;
   onCleared?: (heir: Session) => void;
+  /** The live query was dropped (worker_close, Plugins Restart, idle close, rewind): the daemon re-lists the session (live false). */
+  onDropped?: (id: string) => void;
   /** The turn just ended because the plan usage limit was hit (assistant error rate_limit); `resetsAt` ms from its rejected rate_limit_event. */
   onLimitStop?: (id: string, resetsAt: number | undefined) => void;
   /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */
@@ -662,6 +664,7 @@ export class Session {
     for (const part of this.adapter.endCalls()) this.emit(part);
     this.input = new InputQueue();
     if (hadTasks) this.setState(this.state); // clients drop `working`
+    this.opts.onDropped?.(this.id);
   }
 
   /** Drops this prompt and everything after it from the timeline (a `rewind` event). */

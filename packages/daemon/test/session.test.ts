@@ -272,6 +272,21 @@ describe("Session", () => {
     expect(calls.at(-1)).toMatchObject({ resume: s.id, model: "sonnet", permissionMode: "acceptEdits" });
   });
 
+  it("restartQuery and releaseQuery call onDropped with the session id", async () => {
+    const dropped: string[] = [];
+    const s = new Session("/tmp", { query: fakeQuery as never, onDropped: (id) => dropped.push(id) });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hi");
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(s.releaseQuery()).toBe(true);
+    expect(dropped).toEqual([s.id]);
+    s.prompt("again");
+    await until(events, (e) => e.part.type === "turn_result" && events.filter((x) => x.part.type === "turn_result").length === 2);
+    s.restartQuery();
+    expect(dropped).toEqual([s.id, s.id]);
+  });
+
   it("releaseQuery without a live query is false", () => {
     expect(new Session("/tmp", { query: fakeQuery as never }).releaseQuery()).toBe(false);
     expect(Session.restore(randomUUID(), "/tmp", history, { query: fakeQuery as never }).releaseQuery()).toBe(false);

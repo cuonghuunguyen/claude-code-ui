@@ -325,6 +325,8 @@ export function createDaemon(opts: {
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
     onLimitStop: (id: string, resetsAt: number | undefined) => autoContinue.schedule(id, resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined)),
     allowBypass: opts.allowBypass,
+    // A session without a CLI process lists as live: false.
+    onDropped: () => broadcast({ type: "sessions.changed" }),
     supportsAuto,
     uploadDir: (id: string) => {
       try {
@@ -843,13 +845,14 @@ export function createDaemon(opts: {
     const lastAt = new Map(await mapLimit(all, 8, async (t) => [t.sessionId, t.cwd && allowedCwd(t.cwd) ? await lastMessageAt(projectsDir, t.cwd, t.sessionId, t) : undefined] as const));
     for (const t of all) {
       if (!t.cwd || !allowedCwd(t.cwd)) continue;
-      const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
+      const loaded = sessions.get(t.sessionId);
+      const live = loaded?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
       const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...(!loaded?.liveQuery() && { live: false as const }), ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
-      if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...links(s.id) });
+      if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.liveQuery() && { live: false as const }), ...links(s.id) });
     const listed = [...items.values()];
     // Upgrade from "every transcript cwd is a project": the projects with saved claude-ui state stay, once.
     if (!projects.seeded)

@@ -68,6 +68,7 @@ import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
 import { noteRefs } from "./git-refs.ts";
+import { agentLinks, NO_LINKS, sameLinks, type AgentLinks } from "./workers.ts";
 import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
@@ -120,7 +121,7 @@ import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
 import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
-import { AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
+import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
@@ -1094,6 +1095,13 @@ export function App() {
   }
 
   // A session with a worker (the list flag): its orchestration notices show as chips.
+  /** Orchestration links per session, the previous object while equal: memo panes do not re-render on every event. */
+  const linksCache = useRef(new Map<string, AgentLinks>());
+  const linksOf = (id: string) => {
+    const l = sameLinks(linksCache.current.get(id), agentLinks(list, views, id));
+    linksCache.current.set(id, l);
+    return l;
+  };
   const isCoordinator = (id: string) => !!list.find((s) => s.id === id)?.coordinator;
   const sessionOf = (id: string): SessionInfo | undefined => infos[id] ?? list.find((s) => s.id === id);
   const groupOfTab = (id: string) => (id === NEW_TAB ? "" : tabGroup(sessionOf(id)?.cwd, grouping, worktrees).key);
@@ -1710,6 +1718,8 @@ export function App() {
                         onRevealShown={() => setRevealHit(undefined)}
                         run={id === activeId ? run : undefined}
                         onOpenRun={(r) => openRun(s.id, r)}
+                        links={linksOf(id)}
+                        onOpenSession={(sid) => open(sid)}
                         onLoadOlder={(opts) => loadOlder(s.id, opts)}
                         loadingOlder={!!olderLoading[s.id]}
                         onStopRun={(subagentId) => client.current!.request({ type: "session.stopSubagent", sessionId: s.id, subagentId })}
@@ -2475,6 +2485,8 @@ export function SessionPane({
   scrollKey,
   run,
   onOpenRun = () => {},
+  links = NO_LINKS,
+  onOpenSession = () => {},
   onStopRun = async () => {},
   insert,
   onInserted,
@@ -2514,6 +2526,9 @@ export function SessionPane({
   run?: string;
   /** Opens a run's subagent view; undefined: the session view. */
   onOpenRun?: (id?: string) => void;
+  /** Orchestration links for the agent map: the coordinator and the workers (workers.ts); `onOpenSession` opens or focuses a session's tab. */
+  links?: AgentLinks;
+  onOpenSession?: (id: string) => void;
   /** Stop agent: stops that subagent run only; rejects with the daemon's error. */
   onStopRun?: (id: string) => Promise<unknown>;
   insert?: string;
@@ -2630,12 +2645,14 @@ export function SessionPane({
   const card = useRef<HTMLElement | null>(null);
   useEffect(() => void (card.current = dock.current?.parentElement ?? null), []);
   const [dockFocused, setDockFocused] = useState(false);
+  const agentCtx = useMemo(() => ({ links, onOpenSession }), [links, onOpenSession]);
   const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
 
   return (
     <MediaContext value={onMedia}>
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
+    <AgentLinksContext value={agentCtx}>
       {current ? (
         <SubagentBar view={view} run={current} onOpen={onOpenRun} />
       ) : (
@@ -2827,6 +2844,7 @@ export function SessionPane({
         )}
         <StatusBar view={view} git={onGitStatus} />
       </div>
+    </AgentLinksContext>
     </OpenRunContext>
     </CwdContext>
     </MediaContext>
