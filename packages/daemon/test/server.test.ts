@@ -6,10 +6,12 @@ import { request as httpRequest } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { openChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
@@ -23,6 +25,12 @@ import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery
 vi.mock("../src/git.ts", async (importOriginal) => {
   const git = await importOriginal<typeof import("../src/git.ts")>();
   return { ...git, listWorktrees: vi.fn(git.listWorktrees), gitBlobRead: vi.fn(git.gitBlobRead) };
+});
+
+// The seam between allowed() and the open: a test runs code there (a swap) through mockImplementationOnce; behaviour unchanged.
+vi.mock("../src/fd-check.ts", async (importOriginal) => {
+  const fd = await importOriginal<typeof import("../src/fd-check.ts")>();
+  return { ...fd, openChecked: vi.fn(fd.openChecked) };
 });
 
 const added = (...cwds: string[]) => {
@@ -1081,6 +1089,29 @@ describe("daemon", () => {
       });
     }
 
+    it("git.status is null for a project without .git below a repository outside the roots (GH-282)", async () => {
+      const { out } = outer();
+      const root = join(out, "sub");
+      mkdirSync(join(root, "proj"), { recursive: true });
+      const d = createDaemon({ webRoot, token, roots: [root], query: fakeQuery as never });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        expect(await c.request({ type: "git.status", cwd: join(root, "proj") })).toMatchObject({ result: { status: null } });
+      } finally {
+        d.close();
+      }
+    });
+
+    it("a .git file without a gitdir line: git.status is null, git.log refused (GH-282)", async () => {
+      const proj = join(webRoot, "gh282-nogitdir");
+      mkdirSync(proj, { recursive: true });
+      writeFileSync(join(proj, ".git"), "nonsense\n");
+      const c = await client();
+      expect(await c.request({ type: "git.status", cwd: proj })).toMatchObject({ result: { status: null } });
+      expect(await c.request({ type: "git.log", cwd: proj })).toMatchObject({ code: "cwd_not_allowed" });
+    });
+
     it("git.refs is null for a project without .git below a repository outside the roots", async () => {
       const { out } = outer();
       // The root itself lies inside the outer repository; the project has no .git of its own.
@@ -1161,6 +1192,79 @@ describe("daemon", () => {
     symlinkSync(join(webRoot, "proj"), join(webRoot, "linkedin"), "junction");
     const c = await client();
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "linked" })).toMatchObject({ result: { paths: ["linkedin"] } });
+  });
+
+  it("two consecutive saves with the returned mtime both succeed (GH-282)", async () => {
+    const file = join(webRoot, "proj", "twice.txt");
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    writeFileSync(file, "one");
+    const c = await client();
+    const read = (await c.request({ type: "fs.read", path: file })) as { result: { mtime: number } };
+    const w1 = (await c.request({ type: "fs.write", path: file, content: "two", baseMtime: read.result.mtime })) as { result: { mtime: number } };
+    expect(w1.result.mtime).toBe(statSync(file).mtimeMs);
+    expect(await c.request({ type: "fs.write", path: file, content: "three", baseMtime: w1.result.mtime })).toMatchObject({ result: {} });
+    expect(readFileSync(file, "utf8")).toBe("three");
+  });
+
+  it("fs.write keeps the inode, leaves no tail bytes, and refuses a directory (GH-282)", async () => {
+    const file = join(webRoot, "proj", "w.txt");
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    writeFileSync(file, "long content here");
+    const ino = statSync(file).ino;
+    const c = await client();
+    await c.request({ type: "fs.write", path: file, content: "short" });
+    expect(readFileSync(file, "utf8")).toBe("short");
+    expect(statSync(file).ino).toBe(ino);
+    expect(await c.request({ type: "fs.write", path: join(webRoot, "proj"), content: "x" })).toMatchObject({ code: "not_a_file" });
+  });
+
+  it.skipIf(!posix)("fs.read and fs.write refuse a folder swapped for a symlink between the root check and the open (GH-282)", async () => {
+    const outsideDir = mkdtempSync(join(tmpdir(), "outside-"));
+    const outside = join(outsideDir, "f.txt");
+    writeFileSync(outside, "outside secret");
+    for (const type of ["fs.read", "fs.write"] as const) {
+      const dir = join(webRoot, `swap-${type}`);
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, "f.txt");
+      writeFileSync(file, "inside");
+      const real = vi.mocked(openChecked).getMockImplementation()!;
+      // allowed() already passed for `file`; now the folder becomes a link to the outside folder.
+      vi.mocked(openChecked).mockImplementationOnce((path, flags) => {
+        rmSync(dir, { recursive: true });
+        symlinkSync(outsideDir, dir);
+        return real(path, flags);
+      });
+      const c = await client();
+      const reply = await c.request({ type, path: file, content: "overwritten" });
+      expect(reply, type).toMatchObject({ code: "path_not_allowed" });
+      expect(JSON.stringify(reply), type).not.toContain("outside secret");
+      expect(readFileSync(outside, "utf8"), type).toBe("outside secret");
+    }
+  });
+
+  it("fs.read refuses a UNC path on Windows with no file system call (GH-282)", async () => {
+    const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
+    // The CommonJS fs object: spying there and syncing makes the daemon's named imports call the spy.
+    const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
+    const native = vi.spyOn(fs.realpathSync, "native");
+    const exists = vi.spyOn(fs, "existsSync");
+    syncBuiltinESMExports();
+    const c = await client();
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      for (const path of ["\\\\evil\\s\\x", "//evil/s/x", "\\\\.host\\s\\x"]) {
+        native.mockClear();
+        exists.mockClear();
+        expect(await c.request({ type: "fs.read", path }), path).toMatchObject({ code: "path_not_allowed" });
+        expect(native, path).not.toHaveBeenCalled();
+        expect(exists, path).not.toHaveBeenCalled();
+      }
+    } finally {
+      Object.defineProperty(process, "platform", orig);
+      native.mockRestore();
+      exists.mockRestore();
+      syncBuiltinESMExports();
+    }
   });
 
   it("reads and writes files inside the roots only, refusing a write over a newer disk version", async () => {

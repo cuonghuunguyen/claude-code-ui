@@ -5,6 +5,7 @@ import { takeFirstUseSnapshot } from "./guide.ts";
 import "./index.css";
 import { applyTheme, loadPref } from "./theme.ts";
 import { reloadOnStalePage } from "./preload-reload.ts";
+import { adoptToken } from "./pairing.ts";
 
 // First thing, before the theme or the app write any claude-ui.* key: the guided tour starts only in a browser that has none (docs/spec.md "First-use guide").
 takeFirstUseSnapshot();
@@ -20,8 +21,11 @@ reloadOnStalePage();
 // Web Push needs a service worker; secure contexts only (https or localhost).
 void navigator.serviceWorker?.register("/sw.js").catch((e) => console.error("service worker:", e));
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
+// A `#token=` fragment is adopted before the first connect (it may need one GET /auth); without a fragment this resolves at once.
+void adoptToken().finally(() =>
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  ),
 );

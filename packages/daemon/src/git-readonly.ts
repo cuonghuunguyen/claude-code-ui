@@ -86,7 +86,14 @@ const TABLES: Record<Cmd, Record<string, Opt>> = {
  * inside the cwd (always high to Write). No result cache: every read looks again.
  * The daemon uses repoSafetyAsync (git runs off the event loop); repoSafety (synchronous) is for tests and direct tier() calls.
  */
-export type RepoSafety = { unsafe: boolean; failed: boolean; why: string[]; protectedPaths: string[] };
+export type RepoSafety = {
+  unsafe: boolean;
+  failed: boolean;
+  why: string[];
+  protectedPaths: string[];
+  /** A path in the index or the HEAD tree is on the read deny list (`deniedRead`); unknown = true. A plain `git diff` then prints it (GH-282). */
+  trackedDenied: boolean;
+};
 
 /** Program values the user's own system or global config may hold without making a repository unsafe (bare names via PATH). */
 const KNOWN: Record<string, string> = {
@@ -131,7 +138,10 @@ const gitOpts = (cwd: string) => ({
   env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
 });
 const CONFIG_ARGS = ["config", "--list", "-z", "--show-scope", "--show-origin"];
-const LS_ARGS = ["ls-files", "-z", "--format=%(objectmode)"];
+/** Index and HEAD tree in one process (a staged deletion still lists its path). An unborn HEAD fails this call: LS_ARGS_NO_HEAD. */
+const LS_ARGS = ["ls-files", "-z", "--with-tree=HEAD", "--format=%(objectmode) %(path)"];
+const LS_ARGS_NO_HEAD = ["ls-files", "-z", "--format=%(objectmode) %(path)"];
+const HEAD_ARGS = ["rev-parse", "--verify", "-q", "HEAD"];
 const gitSync = (cwd: string, args: string[]) => perf.syncChild("git", args, () => execFileSync("git", args, { ...gitOpts(cwd), stdio: ["ignore", "pipe", "ignore"] }));
 /**
  * Git off the event loop. Even an async spawn creates the process on the main thread, and on Windows under load (antivirus)
@@ -247,7 +257,7 @@ function inRepo(dir: string): boolean {
 /** The steps both readers share; only how git runs and how folders are listed differ. */
 type Scan = { top: string; out: RepoSafety; flag: (why: string) => void; inside: (p: string) => boolean };
 function begin(cwd: string): Scan {
-  const out: RepoSafety = { unsafe: false, failed: false, why: [], protectedPaths: [] };
+  const out: RepoSafety = { unsafe: false, failed: false, why: [], protectedPaths: [], trackedDenied: true };
   const flag = (why: string) => {
     out.unsafe = true;
     out.why.push(why);
@@ -313,14 +323,33 @@ function visit({ top, flag }: Scan, d: string, depth: number, entries: Dirent[],
 }
 
 const failClosed = (s: Scan | undefined): RepoSafety => {
-  const out = s?.out ?? { unsafe: false, failed: false, why: [], protectedPaths: [] };
+  const out = s?.out ?? { unsafe: false, failed: false, why: [], protectedPaths: [], trackedDenied: true };
   out.failed = out.unsafe = true;
+  out.trackedDenied = true;
   out.why.push("could not read the repository's config or index");
   return out;
 };
-const gitlinks = (s: Scan, modes: string) => {
-  if (modes.split("\u0000").includes("160000")) s.flag("a submodule (gitlink) in the index");
+/** Parses `ls-files` records (`<mode> <path>`, NUL separated): gitlinks make the repository unsafe; a denied path sets trackedDenied. */
+const listing = (s: Scan, text: string) => {
+  let denied = false;
+  for (const rec of text.split("\u0000")) {
+    const sp = rec.indexOf(" ");
+    if (sp < 0) continue;
+    if (rec.slice(0, sp) === "160000") s.flag("a submodule (gitlink) in the index");
+    if (deniedRead(rec.slice(sp + 1).split("/"))) denied = true;
+  }
+  s.out.trackedDenied = denied;
 };
+
+const headExists = (run: () => string) => {
+  try {
+    run();
+    return true;
+  } catch {
+    return false;
+  }
+};
+const headExistsAsync = (run: () => Promise<string>) => run().then(() => true, () => false);
 
 /** Synchronous read: blocks the event loop for two git processes. Tests and direct tier() calls only; the daemon awaits repoSafetyAsync. */
 export function repoSafety(cwd: string): RepoSafety {
@@ -336,13 +365,19 @@ export function repoSafety(cwd: string): RepoSafety {
     };
     if (!s.out.unsafe) walk(s.top, 0);
     if (!s.out.unsafe) {
-      let modes = "";
+      let text = "";
       try {
-        modes = gitSync(s.top, LS_ARGS);
+        try {
+          text = gitSync(s.top, LS_ARGS);
+        } catch (e) {
+          // Unborn HEAD (no tree to list): the index is all there is. A HEAD that exists but did not list fails closed.
+          if (headExists(() => gitSync(s!.top, HEAD_ARGS))) throw e;
+          text = gitSync(s.top, LS_ARGS_NO_HEAD);
+        }
       } catch (e) {
         if (inRepo(s.top)) throw e;
       }
-      gitlinks(s, modes);
+      listing(s, text);
     }
     return s.out;
   } catch {
@@ -376,13 +411,18 @@ export function repoSafetyAsync(cwd: string, since = performance.now() - SHARE_M
       };
       if (!s.out.unsafe) await walk(s.top, 0);
       if (!s.out.unsafe) {
-        let modes = "";
+        let text = "";
         try {
-          modes = await gitAsync(s.top, LS_ARGS);
+          try {
+            text = await gitAsync(s.top, LS_ARGS);
+          } catch (e) {
+            if (await headExistsAsync(() => gitAsync(s!.top, HEAD_ARGS))) throw e;
+            text = await gitAsync(s.top, LS_ARGS_NO_HEAD);
+          }
         } catch (e) {
           if (inRepo(s.top)) throw e;
         }
-        gitlinks(s, modes);
+        listing(s, text);
       }
       return s.out;
     } catch {
@@ -451,7 +491,13 @@ function positionalOk(tok: string, cwd: string, isPath: boolean): boolean {
   return true;
 }
 
-function segmentOk(seg: string, cwd: string, execUnsafe: () => boolean): boolean {
+/** Options that print file content (a patch) in diff, show and log. A bundle (`-pw`) counts when it holds `p` or `u`. */
+const contentOpt = (tok: string) => /^(-p|-u|--patch|--unified(=.*)?|-U\d+|--word-diff(=.*)?|--check)$/.test(tok) || (/^-[A-Za-z]{2,}$/.test(tok) && /[pu]/.test(tok.slice(1)));
+/** Options that replace the patch with names or counts. */
+const noContentOpt = (tok: string) => /^(--stat(=.*)?|--numstat|--shortstat|--name-only|--name-status|--summary|--compact-summary|--raw|-s|--no-patch)$/.test(tok) || (/^-[A-Za-z]{2,}$/.test(tok) && tok.slice(1).includes("s"));
+const regularFile = (p: string, cwd: string) => !!lstatSync(resolve(cwd, p), { throwIfNoEntry: false })?.isFile() && pathLow(p, cwd, false);
+
+function segmentOk(seg: string, cwd: string, facts: () => RepoSafety): boolean {
   const w = seg.trim().split(/ +/);
   if (w[0] !== "git") return false;
   let i = 1;
@@ -465,20 +511,43 @@ function segmentOk(seg: string, cwd: string, execUnsafe: () => boolean): boolean
   if (sub === "rev-parse") return rest.length > 0 && rest.every((a) => REV_PARSE.has(a));
   if (sub !== "status" && sub !== "log" && sub !== "show" && sub !== "diff") return false;
   // These run hooks and config-defined programs: only in a plain repository (repoSafety).
-  if (execUnsafe()) return false;
+  if (facts().unsafe) return false;
   let dashes = false;
+  const opts: string[] = [];
+  const bare: string[] = [];
+  const afterDashes: string[] = [];
   for (let k = 0; k < rest.length; k++) {
     const tok = rest[k]!;
     if (dashes) {
       if (!positionalOk(tok, cwd, true)) return false;
+      afterDashes.push(tok);
     } else if (tok === "--") dashes = true;
     else if (tok === "-n" && sub !== "status" && sub !== "diff") {
       if (!N.test(rest[++k] ?? "")) return false;
     } else if (tok.startsWith("-")) {
       if (!optionOk(tok, sub)) return false;
+      opts.push(tok);
     } else if (!positionalOk(tok, cwd, false)) return false;
+    else bare.push(tok);
   }
-  return true;
+  if (sub === "status") return true;
+  // A bare object name prints that blob or tree, whatever the options or pathspec (`git show <hash>`): never low.
+  if (sub === "show" && bare.some((t) => /^[0-9a-f]{4,64}$/i.test(t))) return false;
+  const hasContent = opts.some(contentOpt);
+  const content = sub === "log" ? hasContent : hasContent || !opts.some(noContentOpt);
+  if (!content) return true;
+  // `git diff <blob-id> -- a.ts` prints that blob (the id of a deleted `.env` is in `git log --raw`): a bare object id in a patch is never low.
+  if (sub === "diff" && bare.some((t) => /^[0-9a-f]{4,64}$/i.test(t))) return false;
+  // A patch can print a denied file's content (a tracked `.env`, a key): only for named, existing, regular, readable files, or (diff) the index and HEAD with no denied path in them.
+  const objectPaths = bare.filter((t) => t.includes(":"));
+  const plain = bare.filter((t) => !t.includes(":"));
+  const pathspecs = [...afterDashes, ...plain.filter((t) => lstatSync(resolve(cwd, t), { throwIfNoEntry: false }))];
+  const revs = plain.filter((t) => !pathspecs.includes(t));
+  if (pathspecs.length > 0 && pathspecs.every((p) => regularFile(p, cwd))) return true;
+  // `git show HEAD:src/a.ts`: a blob or tree, already path-checked; any other positional would print a commit patch.
+  if (sub === "show" && pathspecs.length === 0 && revs.length === 0 && objectPaths.length > 0) return true;
+  if (sub === "diff" && revs.length === 0 && objectPaths.length === 0 && !opts.includes("--merge-base")) return !facts().trackedDenied;
+  return false;
 }
 
 /**
@@ -496,9 +565,9 @@ export function gitReadOnly(input: unknown, cwd: string, safety?: RepoSafety): b
     if (!lstatSync(join(cwd, ".git"), { throwIfNoEntry: false })) return false;
     const segs = cmd.split(/\s*(?:&&|\|\||;)\s*/);
     if (segs.length > MAX_SEGMENTS) return false;
-    let unsafe: boolean | undefined;
-    const execUnsafe = () => (unsafe ??= (safety ?? repoSafety(cwd)).unsafe);
-    return segs.every((s) => s.trim() !== "" && !/[&|]/.test(s) && segmentOk(s, cwd, execUnsafe));
+    let read: RepoSafety | undefined;
+    const facts = () => (read ??= safety ?? repoSafety(cwd));
+    return segs.every((s) => s.trim() !== "" && !/[&|]/.test(s) && segmentOk(s, cwd, facts));
   } catch {
     return false;
   }

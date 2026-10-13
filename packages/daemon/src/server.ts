@@ -1,5 +1,5 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
-import { closeSync, constants, createReadStream, existsSync, fstatSync, openSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, mkdirSync, readdirSync, readFileSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -9,6 +9,8 @@ import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
+import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
+import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createWorktree, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
@@ -108,16 +110,6 @@ const ARCHIVED_TAG = "archived";
 
 const LOCAL_HOSTNAMES = ["127.0.0.1", "localhost"];
 
-/** Canonical path (symlinks resolved), or undefined when it does not exist. */
-function real(path: string) {
-  try {
-    // Windows: only the native call gives the on-disk case (c:\users\me -> C:\Users\me), so one folder is one project.
-    return process.platform === "win32" ? realpathSync.native(path) : realpathSync(path);
-  } catch {
-    return undefined;
-  }
-}
-
 /** Bytes read from a transcript's end to find its last message; more than a few large tool results. */
 const TAIL_BYTES = 256 * 1024;
 /**
@@ -141,6 +133,7 @@ function worktreeStamp(cwd: string) {
   const checkout = (gitdirFile: string) => {
     try {
       const path = readFileSync(gitdirFile, "utf8").trim();
+      if (foreignPointer(path, gitdirFile)) return "-";
       return `${path}@${stamp(resolve(dirname(gitdirFile), path))}`;
     } catch {
       return "-";
@@ -423,6 +416,9 @@ export function createDaemon(opts: {
     });
   const supportsAuto = (model: string) => known.some((m) => m.value === model && m.supportsAutoMode);
   const roots = opts.roots.map(real).filter((r) => r !== undefined);
+  /** UNC roots (configured and canonical form): the only UNC paths that may reach the file system (GH-282: an SMB lookup sends the NTLM hash). */
+  const uncRoots = [...opts.roots, ...roots].filter((r) => winPathKind(r) === "unc");
+  const refused = (p: string) => refusedPath(p, uncRoots);
   const inRoots = (path: string) =>
     roots.some((r) => {
       const rel = relative(r, path);
@@ -432,7 +428,7 @@ export function createDaemon(opts: {
   const gitOutside = (cwd: string) => gitEscapes(cwd, (p) => inRoots(real(p) ?? p));
   /** The canonical path when it is an existing path inside a root. */
   const allowed = (path: unknown) => {
-    const p = typeof path === "string" && isAbsolute(path) ? real(path) : undefined;
+    const p = typeof path === "string" && isAbsolute(path) && !refused(path) ? real(path) : undefined;
     return p && inRoots(p) ? p : undefined;
   };
 
@@ -447,7 +443,7 @@ export function createDaemon(opts: {
 
   /** A missing absolute path whose nearest existing ancestor is allowed: deleted inside the roots (outside them, existence stays hidden). */
   const missingInRoots = (path: unknown) => {
-    if (typeof path !== "string" || !isAbsolute(path) || existsSync(path)) return false;
+    if (typeof path !== "string" || !isAbsolute(path) || refused(path) || existsSync(path)) return false;
     let dir = dirname(resolve(path));
     while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
     return !!allowed(dir);
@@ -1042,8 +1038,8 @@ export function createDaemon(opts: {
     let fd: number;
     let size: number;
     try {
-      // ponytail: realpath check then open races with an intermediate directory swapped for a symlink; O_NOFOLLOW covers the last component; O_NONBLOCK keeps a swapped-in FIFO from blocking the open (fstat isFile then refuses it). Full fix: openat2 RESOLVE_BENEATH, not in Node.
-      fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      // ponytail: the open file must be the canonical path's file (device and inode, no link component): a swapped directory is detected. Remaining limit: hard links (a second name for an outside file). O_NONBLOCK keeps a swapped-in FIFO from blocking the open (fstat isFile then refuses it).
+      fd = openChecked(path, OPEN_READ);
       const st = fstatSync(fd);
       if (!st.isFile()) {
         closeSync(fd);
@@ -1241,11 +1237,12 @@ export function createDaemon(opts: {
       let fh;
       try {
         // Same open as GET /media (no-follow, non-blocking: see the ponytail there).
-        fh = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+        fh = await open(file, OPEN_READ);
       } catch (err) {
         return { code: "fs_error", message: String(err) };
       }
       try {
+        if (!sameFile(fh.fd, file)) return { code: "path_not_allowed", message: `changed during the request: ${m.path}` };
         const st = await fh.stat();
         if (!st.isFile()) return { code: "not_a_file", message: `not a file: ${m.path}` };
         const n = Math.max(0, Math.min(m.length, st.size - m.offset));
@@ -1279,10 +1276,18 @@ export function createDaemon(opts: {
     const local = async (msg: ClientMessage, out: (m: ServerMessage) => void) => {
       const reply = (result: unknown) => out({ type: "reply", reqId: msg.reqId, result });
       const fail = (code: string, message: string, size?: number) => out({ type: "error", reqId: msg.reqId, code, message, size });
+      /** An fs.read/fs.write failure: a path that changed during the request is refused; a directory is not a file. */
+      const fsFail = (err: unknown, path: string) => {
+        const code = (err as { code?: string }).code;
+        if (code === "ECHANGED") return fail("path_not_allowed", `changed during the request: ${path}`);
+        if (code === "EISDIR") return fail("not_a_file", `not a file: ${path}`);
+        return fail("fs_error", String(err));
+      };
       const find = async (id: string) => (await findSession(id)) ?? void fail("unknown_session", `no session ${id}`);
 
       switch (msg.type) {
         case "session.create": {
+          if (typeof msg.cwd === "string" && refused(msg.cwd)) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (typeof msg.cwd !== "string" || !existsSync(msg.cwd) || !statSync(msg.cwd).isDirectory())
             return fail("bad_cwd", `not a directory: ${msg.cwd}`);
           if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
@@ -1685,17 +1690,20 @@ export function createDaemon(opts: {
           // A missing file whose nearest existing ancestor is allowed (deleted after an Edit, also with its directory): the changes tab shows it deleted.
           if (!file && missingInRoots(msg.path)) return fail("not_found", `no such file: ${msg.path}`);
           if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
+          let fd: number | undefined;
           try {
-            const st = statSync(file);
+            fd = openChecked(file, OPEN_READ);
+            const st = fstatSync(fd);
             if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
             if (st.size > MAX_FILE_BYTES) return fail("too_large", `larger than ${MAX_FILE_BYTES} bytes: ${msg.path}`, st.size);
-            const buf = readFileSync(file);
-            const t = decodeText(buf);
+            const t = decodeText(readAll(fd, st.size));
             if ("code" in t) return fail(t.code, `${t.code === "binary" ? "binary file" : "not UTF-8 text"}: ${msg.path}`, st.size);
             const content = t.content;
             return reply({ content, mtime: st.mtimeMs });
           } catch (err) {
-            return fail("fs_error", String(err));
+            return fsFail(err, msg.path);
+          } finally {
+            if (fd !== undefined) closeSync(fd);
           }
         }
         case "media.read": {
@@ -1734,15 +1742,24 @@ export function createDaemon(opts: {
           const file = allowed(msg.path);
           if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           if (typeof msg.content !== "string") return fail("bad_content", "content must be a string");
+          let fd: number | undefined;
           try {
-            const st = statSync(file);
+            fd = openChecked(file, OPEN_WRITE);
+            const st = fstatSync(fd);
             if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
             if (msg.baseMtime !== undefined && st.mtimeMs !== msg.baseMtime)
               return fail("conflict", `changed on disk since it was read: ${msg.path}`);
-            writeFileSync(file, msg.content);
+            const data = Buffer.from(msg.content);
+            ftruncateSync(fd, 0);
+            writeAll(fd, data);
+            // Closed first: NTFS may set the write time when the handle closes, and the editor keeps this value as its next baseMtime.
+            closeSync(fd);
+            fd = undefined;
             return reply({ mtime: statSync(file).mtimeMs });
           } catch (err) {
-            return fail("fs_error", String(err));
+            return fsFail(err, msg.path);
+          } finally {
+            if (fd !== undefined) closeSync(fd);
           }
         }
         case "fs.watch": {
