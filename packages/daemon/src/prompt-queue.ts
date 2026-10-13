@@ -92,6 +92,17 @@ export function createPromptQueue(o: {
       show(id);
       kick(id);
     },
+    /** The session cannot take prompts (error, closed): the queue is shown paused; back to normal: the pause ends. */
+    setNotLive(id: string, notLive: boolean) {
+      const e = map.get(id);
+      if (!e) return;
+      if (notLive) {
+        if (!e.items.length || e.held?.reason === "not_live") return;
+        clearTimer(e);
+        e.held = { reason: "not_live" };
+        show(id);
+      } else if (e.held?.reason === "not_live") this.release(id);
+    },
     /** /clear: the queue follows the conversation. */
     move(from: string, to: string) {
       const a = map.get(from);

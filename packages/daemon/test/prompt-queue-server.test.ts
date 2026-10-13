@@ -184,4 +184,68 @@ describe("queued messages in the daemon", { timeout: 20_000 }, () => {
     await vi.waitFor(() => expect(h.texts(c2, id)).toEqual(["hello", "later"]), { timeout: 5000 });
     c.ws.close(); c2.ws.close();
   });
+
+  it("Send now of an unknown item does not cancel a scheduled auto-continue", async () => {
+    limitState.repeatEvent = true; limitState.continueHits = false; limitState.inSeconds = 30; limitState.resetsAt = 0;
+    const h = await harness(limitQuery, { autoContinue: { graceMs: 0, gapMs: 300, retryMs: 500 } });
+    const c = await h.client();
+    await c.request({ type: "settings.set", patch: { usageLimit: { autoContinue: true } } });
+    const id = await h.session(c);
+    await c.request({ type: "session.prompt", sessionId: id, text: "limit" });
+    const at = () => h.parts(c, id).filter((p) => p.type === "auto_continue").map((p: any) => p.at).at(-1);
+    await vi.waitFor(() => expect(at()).toEqual(expect.any(Number)), { timeout: 5000 });
+    const r = await c.request({ type: "session.sendQueued", sessionId: id, itemId: "nope" });
+    expect(r.code).toBe("unknown_item");
+    await sleep(200);
+    expect(at()).toEqual(expect.any(Number));
+    c.ws.close();
+  });
+
+  it("a refused prompt does not end the usage-limit pause", async () => {
+    limitState.repeatEvent = true; limitState.continueHits = false; limitState.inSeconds = 60; limitState.resetsAt = 0;
+    const h = await harness(limitQuery);
+    const c = await h.client();
+    const id = await h.session(c);
+    await c.request({ type: "session.prompt", sessionId: id, text: "limit" });
+    await c.request({ type: "session.enqueue", sessionId: id, text: "later" });
+    await vi.waitFor(() => expect(h.lastQueue(c, id)?.held).toMatchObject({ reason: "usage_limit" }), { timeout: 5000 });
+    expect((await c.request({ type: "session.prompt", sessionId: id, text: "  " })).code).toBe("bad_prompt");
+    await sleep(300);
+    expect(h.lastQueue(c, id)?.held).toMatchObject({ reason: "usage_limit" });
+    expect(h.texts(c, id)).toEqual(["limit"]);
+    c.ws.close();
+  });
+
+  it("dequeue and Send now on a session that is not in memory do not load it from disk", async () => {
+    const h = await harness(fakeQuery);
+    const c = await h.client();
+    const id = "11111111-2222-3333-4444-555555555555";
+    expect((await c.request({ type: "session.dequeue", sessionId: id, itemId: "x" })).code).toBe("unknown_item");
+    expect((await c.request({ type: "session.sendQueued", sessionId: id, itemId: "x" })).code).toBe("unknown_item");
+    c.ws.close();
+  });
+
+  it("the CLI crashes while a message is queued: the queue shows Paused (not_live)", async () => {
+    const crashQuery = (args: any) => {
+      const base = fakeQuery(args) as any;
+      const it = (async function* () {
+        for await (const _m of args.prompt) {
+          await sleep(400);
+          throw new Error("crash");
+        }
+      })();
+      for (const k of Object.keys(base)) if (!["next", "return", "throw"].includes(k)) (it as any)[k] = base[k];
+      (it as any).close = () => void it.return(undefined);
+      return it;
+    };
+    const h = await harness(crashQuery);
+    const c = await h.client();
+    const id = await h.session(c);
+    await c.request({ type: "session.prompt", sessionId: id, text: "work" });
+    await c.request({ type: "session.enqueue", sessionId: id, text: "later" });
+    await vi.waitFor(() => expect(h.parts(c, id).some((p) => p.type === "session_state" && p.state === "error")).toBe(true), { timeout: 5000 });
+    await vi.waitFor(() => expect(h.lastQueue(c, id)?.held).toMatchObject({ reason: "not_live" }), { timeout: 2000 });
+    expect(h.lastQueue(c, id)?.items.map((i) => i.text)).toEqual(["later"]);
+    c.ws.close();
+  });
 });

@@ -1021,3 +1021,56 @@ it("GH-77: Stop, Steer and the send menu trigger are 44px below md and on coarse
     expect(el!.className).toContain("pointer-coarse:size-11");
   }
 });
+
+// GH-77 review fixes.
+it("GH-77: Delete of a chip another tab already sent leaves the typed text unchanged", async () => {
+  const onDequeue = vi.fn(() => Promise.reject(Object.assign(new Error("gone"), { code: "unknown_item" })));
+  const { box, el } = await render({ onDequeue }, queueView([{ id: "q1", text: "gone", imageCount: 0 }]));
+  await type(box, "typed");
+  await act(async () => void (el.querySelector('[aria-label="Delete: gone"]') as HTMLElement).click());
+  await act(async () => {});
+  expect(JSON.stringify(box.value)).toBe(JSON.stringify("typed"));
+  expect(el.querySelector('[data-testid="prompt-error"]')).toBeNull();
+});
+
+it("GH-77: Send now of a chip already sent leaves the typed text unchanged", async () => {
+  const onSendQueued = vi.fn(() => Promise.reject(Object.assign(new Error("gone"), { code: "unknown_item" })));
+  const { box, el } = await render({ onSendQueued }, queueView([{ id: "q1", text: "gone", imageCount: 0 }]));
+  await type(box, "typed");
+  await act(async () => void (el.querySelector('[aria-label="Send now: gone"]') as HTMLElement).click());
+  await act(async () => {});
+  expect(JSON.stringify(box.value)).toBe(JSON.stringify("typed"));
+});
+
+it("GH-77: Delete of the last chip moves focus to the prompt box", async () => {
+  const onDequeue = vi.fn(async () => ({ text: "one", images: [] }));
+  const first = queueView([{ id: "q1", text: "one", imageCount: 0 }]);
+  const d = await render({ onDequeue }, first);
+  const del = d.el.querySelector('[aria-label="Delete: one"]') as HTMLElement;
+  del.focus();
+  await act(async () => void del.click());
+  await d.rerender({ view: applyEvent(first, { type: "event", sessionId: "s1", seq: 2, part: { type: "prompt_queue", id: "prompt_queue", items: [] } }) });
+  expect(document.activeElement?.tagName).toBe("TEXTAREA");
+});
+
+it("GH-77: after Delete of the first of two chips focus moves to the next Delete", async () => {
+  const onDequeue = vi.fn(async () => ({ text: "one", images: [] }));
+  const two = [{ id: "q1", text: "one", imageCount: 0 }, { id: "q2", text: "two", imageCount: 0 }];
+  const first = queueView(two);
+  const d = await render({ onDequeue }, first);
+  const del = d.el.querySelector('[aria-label="Delete: one"]') as HTMLElement;
+  del.focus();
+  await act(async () => void del.click());
+  await d.rerender({ view: applyEvent(first, { type: "event", sessionId: "s1", seq: 2, part: { type: "prompt_queue", id: "prompt_queue", items: [two[1]!] } }) });
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Delete: two");
+});
+
+it("GH-77: after a choice in the send menu focus is in the prompt box", async () => {
+  const { box, el } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  await type(box, "hello");
+  await act(async () => el.querySelector<HTMLElement>('[aria-label="More send options"]')!.click());
+  const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent!.includes("Queue for"))!;
+  await act(async () => item.click());
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(box);
+});

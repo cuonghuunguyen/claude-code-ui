@@ -2645,7 +2645,12 @@ export function SessionPane({
   // A queued message taken back (Edit) or an error of a chip action: the prompt box shows it once per key.
   const [takeBack, setTakeBack] = useState<{ key: string; text: string; images: string[]; error?: string }>();
   const chipAction = (id: string, how: "edit" | "delete" | "send") => {
-    const fail = (e: Error) => setTakeBack({ key: pendingKey(), text: "", images: [], error: (e as RequestError).code === "unknown_item" ? (how === "edit" ? "Already sent" : undefined) : `${how === "send" ? "Send now" : how === "edit" ? "Edit" : "Delete"} failed: ${e.message}` });
+    const fail = (e: Error) => {
+      // Delete and Send now of an item that is gone: nothing to report, nothing to change in the box.
+      const gone = (e as RequestError).code === "unknown_item";
+      if (gone && how !== "edit") return;
+      setTakeBack({ key: pendingKey(), text: "", images: [], error: gone ? "Already sent" : `${how === "send" ? "Send now" : how === "edit" ? "Edit" : "Delete"} failed: ${e.message}` });
+    };
     if (how === "send") return void onSendQueued?.(id).catch(fail);
     void onDequeue?.(id).then((r) => how === "edit" && setTakeBack({ key: pendingKey(), text: r.text, images: r.images }), fail);
   };
@@ -2807,10 +2812,10 @@ export function SessionPane({
         onFocus={() => setDockFocused(true)}
         onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setDockFocused(false)}
       >
-        {!current && view.queue && (
+        {!current && (
           <QueueChips
-            items={view.queue.items}
-            held={view.queue.held}
+            items={view.queue?.items ?? []}
+            held={view.queue?.held}
             onSendNow={(id) => chipAction(id, "send")}
             onEdit={(id) => chipAction(id, "edit")}
             onDelete={(id) => chipAction(id, "delete")}
@@ -3057,6 +3062,8 @@ function PromptBox({
   useEffect(() => {
     if (!takeBack) return;
     if (takeBack.error) return setSendError(takeBack.error);
+    // Only an item that was really returned (text or images) goes back into the box.
+    if (!takeBack.text && !takeBack.images.length) return;
     restore(takeBack.text);
     setImages((cur) => [...takeBack.images, ...cur]);
     input.current?.focus();

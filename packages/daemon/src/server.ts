@@ -702,7 +702,10 @@ export function createDaemon(opts: {
     s.subscribe(Infinity, (e) => {
       const t = e.part.type;
       if (t === "session_cleared") queue.move(s.id, (e.part as { sessionId: string }).sessionId);
-      else if (t === "session_state" || t === "external_turn" || t === "bash") queue.kick(s.id);
+      else if (t === "session_state" || t === "external_turn" || t === "bash") {
+        if (t === "session_state") queue.setNotLive(s.id, !s.isLive());
+        queue.kick(s.id);
+      }
     });
     s.subscribe(Infinity, notifier.observe);
     s.subscribe(Infinity, (e) => orchestration.observe(s, e));
@@ -1416,12 +1419,13 @@ export function createDaemon(opts: {
           const s = await find(msg.sessionId);
           if (!s) return;
           autoContinue.cancel(s.id);
-          queue.release(s.id);
           const images = msg.images ?? [];
           if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
             return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
           if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return fail("bad_prompt", "empty prompt");
           const err = await sendPrompt(s, msg.text, images);
+          // A refused prompt keeps a usage-limit pause.
+          if (!err) queue.release(s.id);
           return err ? fail(err.code, err.message) : reply({});
         }
         case "session.enqueue": {
@@ -1436,14 +1440,15 @@ export function createDaemon(opts: {
           return typeof r === "string" ? reply({ itemId: r }) : fail(r.code, r.message);
         }
         case "session.dequeue": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
+          // In memory only: a session not loaded has no queue, and find() would restore it from disk.
+          const s = sessions.get(msg.sessionId);
+          if (!s) return fail("unknown_item", "queued message not found (already sent?)");
           const item = queue.take(s.id, msg.itemId);
           return item ? reply({ text: item.text, images: item.images }) : fail("unknown_item", "queued message not found (already sent?)");
         }
         case "session.sendQueued": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
+          const s = sessions.get(msg.sessionId);
+          if (!s || !queue.items(s.id).some((i) => i.id === msg.itemId)) return fail("unknown_item", "queued message not found (already sent?)");
           autoContinue.cancel(s.id);
           const err = await queue.sendNow(s.id, msg.itemId);
           if (err) return fail(err.code, err.message);
