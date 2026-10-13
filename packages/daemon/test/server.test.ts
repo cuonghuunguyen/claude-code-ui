@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomBytes, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -11,6 +11,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
 import { openChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
@@ -4514,5 +4515,221 @@ describe("upload sweep wiring", () => {
     } finally {
       d.close();
     }
+  });
+});
+
+describe("artifact.preview and /artifact (GH-175)", () => {
+  const sessionId = "7d4e5f60-8192-4ca3-9db4-c5d6e7f8091a";
+  const otherId = "8e5f6071-92a3-4db4-8ec5-d6e7f8091a2b";
+  const outside = mkdtempSync(join(tmpdir(), "art-"));
+  const page = join(outside, "page.html");
+  const pageBytes = "<!doctype html><script>document.title='x'</script><p>hello</p>";
+  writeFileSync(page, pageBytes);
+  mkdirSync(join(webRoot, "rel"), { recursive: true });
+  writeFileSync(join(webRoot, "rel", "p.html"), "<p>relative</p>");
+  writeFileSync(join(outside, "n.txt"), "x");
+  mkdirSync(join(outside, "d.html"));
+  writeFileSync(join(outside, "big.html"), "");
+  const MAX = 16 << 20;
+  truncateSync(join(outside, "big.html"), MAX + 1);
+  let canSymlink = true;
+  try {
+    symlinkSync(page, join(outside, "link.html"));
+  } catch {
+    canSymlink = false;
+  }
+  const publish = (id: string, input: object) => ({ id, input: { title: "T", ...input } });
+  const calls_ = [
+    publish("toolu_a", { file_path: page }),
+    publish("toolu_rel", { file_path: "rel/p.html" }),
+    publish("toolu_txt", { file_path: join(outside, "n.txt") }),
+    publish("toolu_link", { file_path: join(outside, "link.html") }),
+    publish("toolu_gone", { file_path: join(outside, "gone.html") }),
+    publish("toolu_dir", { file_path: join(outside, "d.html") }),
+    publish("toolu_big", { file_path: join(outside, "big.html") }),
+    publish("toolu_read", { action: "read", file_path: page }),
+    publish("toolu_err", { file_path: page }),
+    publish("toolu_grow", { file_path: join(outside, "grow.html") }),
+  ];
+  const turn = (sid: string, items: { id: string; input: object }[], extra: { id: string; name: string; input: object }[] = []) => {
+    const all = [...items.map((c) => ({ id: c.id, name: "Artifact", input: c.input })), ...extra];
+    return [
+      { type: "user", uuid: `u-${sid}`, session_id: sid, parent_tool_use_id: null, message: { role: "user", content: "publish" } },
+      { type: "assistant", uuid: `a-${sid}`, session_id: sid, parent_tool_use_id: null, message: { id: `m-${sid}`, role: "assistant", content: all.map((c) => ({ type: "tool_use", ...c })), stop_reason: "tool_use" } },
+      { type: "user", uuid: `r-${sid}`, session_id: sid, parent_tool_use_id: null, message: { role: "user", content: all.map((c) => ({ type: "tool_result", tool_use_id: c.id, content: "ok", ...(c.id === "toolu_err" && { is_error: true }) })) } },
+    ];
+  };
+  const transcripts: Record<string, unknown[]> = {
+    [sessionId]: turn(sessionId, calls_, [{ id: "toolu_r", name: "Read", input: { file_path: page } }]),
+    [otherId]: turn(otherId, [publish("toolu_other", { file_path: page })]),
+  };
+  const d = createDaemon({
+    webRoot,
+    token,
+    roots: [webRoot],
+    query: fakeQuery as never,
+    history: {
+      listSessions: (async () => []) as never,
+      getSessionInfo: (async (sid: string) => (transcripts[sid] ? { sessionId: sid, cwd: webRoot, summary: "Art" } : undefined)) as never,
+      getSessionMessages: (async (sid: string) => transcripts[sid] ?? []) as never,
+    },
+  });
+  const listening = new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+  afterAll(() => d.close());
+  const dport = () => (d.address() as AddressInfo).port;
+  const open = async () => {
+    await listening;
+    const c = await client(dport());
+    await c.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+    return c;
+  };
+  const preview = async (c: Awaited<ReturnType<typeof client>>, partId: unknown, sid: unknown = sessionId) =>
+    (await c.request({ type: "artifact.preview", sessionId: sid, partId })) as { type: string; code?: string; result: { url: string; size: number; mtime: number } };
+  const get = (url: string, headers: Record<string, string> = {}, method = "GET") =>
+    new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }>((resolve, reject) => {
+      const req = httpRequest({ host: "127.0.0.1", port: dport(), path: url, method, headers: { "sec-fetch-dest": "iframe", ...headers } }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (x) => chunks.push(x));
+        res.on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body: Buffer.concat(chunks) }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+
+  it("replies a nonce URL for a done publish outside the roots; GET serves the bytes with the sandbox headers", async () => {
+    const c = await open();
+    const r = await preview(c, "toolu_a");
+    expect(r.type).toBe("reply");
+    expect(r.result.url).toMatch(/^\/artifact\/[0-9a-f]{32}\/page\.html\?v=\d/);
+    expect(r.result.size).toBe(pageBytes.length);
+    const g = await get(r.result.url);
+    expect(g.status).toBe(200);
+    expect(g.body.toString()).toBe(pageBytes);
+    expect(g.headers).toMatchObject(ARTIFACT_HEADERS);
+    expect(g.headers["x-frame-options"]).toBeUndefined();
+    const h = await get(r.result.url, {}, "HEAD");
+    expect(h.status).toBe(200);
+    expect(h.headers["content-length"]).toBe(String(pageBytes.length));
+    expect(h.body.length).toBe(0);
+    c.ws.close();
+  });
+
+  it("resolves a relative file_path against the session cwd", async () => {
+    const c = await open();
+    const g = await get((await preview(c, "toolu_rel")).result.url);
+    expect(g.status).toBe(200);
+    expect(g.body.toString()).toBe("<p>relative</p>");
+    c.ws.close();
+  });
+
+  it("refuses any part not an Artifact publish of this session", async () => {
+    const c = await open();
+    for (const id of ["toolu_r", "toolu_read", "toolu_err", "nope"]) expect(await preview(c, id), id).toMatchObject({ type: "error", code: "unknown_part" });
+    expect(await preview(c, "toolu_other")).toMatchObject({ type: "error", code: "unknown_part" });
+    expect(await preview(c, 5)).toMatchObject({ type: "error", code: "bad_request" });
+    expect(await preview(c, "toolu_a", "00000000-0000-4000-8000-000000000000")).toMatchObject({ type: "error", code: "unknown_session" });
+    c.ws.close();
+  });
+
+  it("refuses a non-HTML, a symlink, a directory, a missing and a too large file", async () => {
+    const c = await open();
+    expect(await preview(c, "toolu_txt")).toMatchObject({ type: "error", code: "unsupported_type" });
+    if (canSymlink) expect(await preview(c, "toolu_link")).toMatchObject({ type: "error", code: "path_not_allowed" });
+    expect(await preview(c, "toolu_dir")).toMatchObject({ type: "error", code: "not_a_file" });
+    expect(await preview(c, "toolu_gone")).toMatchObject({ type: "error", code: "not_found" });
+    expect(await preview(c, "toolu_big")).toMatchObject({ type: "error", code: "too_large" });
+    c.ws.close();
+  });
+
+  it("GET re-checks the file: replaced by a symlink, deleted or grown past the cap after the URL was issued -> 404", async () => {
+    const c = await open();
+    writeFileSync(join(outside, "swap.html"), "<p>x</p>");
+    const url = (await preview(c, "toolu_a")).result.url;
+    expect((await get(url)).status).toBe(200);
+    if (canSymlink) {
+      const keep = readFileSync(page);
+      rmSync(page);
+      symlinkSync(join(outside, "swap.html"), page);
+      expect((await get(url)).status).toBe(404);
+      rmSync(page);
+      writeFileSync(page, keep);
+    }
+    const grown = (await preview(c, "toolu_a")).result.url;
+    const keep = readFileSync(page);
+    truncateSync(page, MAX + 1);
+    expect((await get(grown)).status).toBe(404);
+    writeFileSync(page, keep);
+    const gone = (await preview(c, "toolu_a")).result.url;
+    rmSync(page);
+    expect((await get(gone)).status).toBe(404);
+    writeFileSync(page, keep);
+    c.ws.close();
+  });
+
+  it("a page that grows while it streams is cut at Content-Length (review attack)", async () => {
+    const MiB = 1 << 20;
+    const grow = join(outside, "grow.html");
+    writeFileSync(grow, Buffer.alloc(15 * MiB, 0x41));
+    const c = await open();
+    const r = await preview(c, "toolu_grow");
+    expect(r.type).toBe("reply");
+    const wire = await new Promise<{ cl: number; body: number }>((ok, fail) => {
+      const s = connect(dport(), "127.0.0.1", () => s.write(`GET ${r.result.url} HTTP/1.1\r\nhost: 127.0.0.1:${dport()}\r\nsec-fetch-dest: iframe\r\nsec-fetch-site: same-origin\r\nconnection: close\r\n\r\n`));
+      let buf = Buffer.alloc(0);
+      let appended = false;
+      s.on("data", (x) => {
+        buf = Buffer.concat([buf, x as Buffer]);
+        if (!appended && buf.includes("\r\n\r\n")) {
+          appended = true;
+          s.pause(); // backpressure: the daemon's stream stops before EOF
+          appendFileSync(grow, Buffer.alloc(4 * MiB, 0x42));
+          setTimeout(() => s.resume(), 200);
+        }
+      });
+      s.on("end", () => {
+        const i = buf.indexOf("\r\n\r\n");
+        ok({ cl: Number(/content-length: (\d+)/i.exec(buf.subarray(0, i).toString())![1]), body: buf.length - i - 4 });
+      });
+      s.on("error", fail);
+    });
+    c.ws.close();
+    expect(wire.cl).toBe(15 * MiB);
+    expect(wire.body).toBe(wire.cl);
+  });
+
+  it("the page carries X-DNS-Prefetch-Control: off", async () => {
+    const c = await open();
+    expect((await get((await preview(c, "toolu_a")).result.url)).headers["x-dns-prefetch-control"]).toBe("off");
+    c.ws.close();
+  });
+
+  it("GET refuses a top-level load, a cross-site or foreign-origin request, an unknown host and POST", async () => {
+    const c = await open();
+    const { url } = (await preview(c, "toolu_a")).result;
+    expect((await get(url, { "sec-fetch-dest": "document" })).status).toBe(403);
+    expect((await get(url, { "sec-fetch-site": "cross-site" })).status).toBe(403);
+    expect((await get(url, { origin: "http://evil.example" })).status).toBe(403);
+    expect((await get(url, { host: "evil.example" })).status).toBe(403);
+    expect((await get(url, {}, "POST")).status).toBe(405);
+    c.ws.close();
+  });
+
+  it("nonces do not cross routes and die with the connection", async () => {
+    const c = await open();
+    const { url } = (await preview(c, "toolu_a")).result;
+    const nonce = /\/artifact\/([0-9a-f]{32})\//.exec(url)![1]!;
+    expect((await get(`/media/${nonce}/x.html`)).status).toBe(404);
+    const png = join(webRoot, "rel", "a.png");
+    writeFileSync(png, "png");
+    const m = (await c.request({ type: "fs.media", path: png })) as { result: { url: string } };
+    expect((await get(m.result.url.replace("/media/", "/artifact/"))).status).toBe(404);
+    for (const p of [`/artifact/${"0".repeat(32)}/a.html`, "/artifact/abc/a.html", "/artifact/", "/artifact/../index.html"]) {
+      const r = await get(p);
+      expect(r.status, p).toBe(404);
+      expect(r.body.toString()).not.toContain("<h1>app</h1>");
+    }
+    expect((await get(url)).status).toBe(200);
+    c.ws.close();
+    await expect.poll(async () => (await get(url)).status).toBe(404);
   });
 });

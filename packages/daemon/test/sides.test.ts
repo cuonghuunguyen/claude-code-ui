@@ -380,6 +380,15 @@ describe("sides", () => {
     c.ws.close();
   });
 
+  it.skipIf(win32)("artifact.preview of a side session is side_unsupported", async () => {
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    const created = await c.request({ type: "session.create", cwd: wslRoot });
+    expect(await c.request({ type: "artifact.preview", sessionId: created.result.session.id, partId: "toolu_a" })).toMatchObject({ type: "error", code: "side_unsupported" });
+    c.ws.close();
+  });
+
   it.skipIf(win32)("fs.media of a side path keeps the side's rules: a symlink out of its roots path_not_allowed, .txt unsupported_type, missing not_found", async () => {
     const outside = join(dir("outside-"), "o.png");
     writeFileSync(outside, "png");
