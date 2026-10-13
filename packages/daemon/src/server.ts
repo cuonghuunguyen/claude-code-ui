@@ -1,5 +1,5 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
-import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, mkdirSync, readdirSync, readFileSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -8,6 +8,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { ARTIFACT_HEADERS, ARTIFACT_PREVIEW_MAX } from "./artifact-preview.ts";
 import { searchFiles } from "./search.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
@@ -18,8 +19,9 @@ import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
-import { createPlanTracker, usesOauthToken } from "./plan-usage.ts";
-import { CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
+import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
+import { createPromptQueue } from "./prompt-queue.ts";
+import { CONTINUE_GAP_MS, CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
@@ -323,8 +325,15 @@ export function createDaemon(opts: {
     ...initial,
     plan,
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
-    onLimitStop: (id: string, resetsAt: number | undefined) => autoContinue.schedule(id, resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined)),
+    onLimitStop: (id: string, resetsAt: number | undefined) => {
+      const at = resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined);
+      autoContinue.schedule(id, at);
+      // Queued messages wait for the reset (after an automatic continue), else for the user: sending into the limit would burn them one by one.
+      queue.hold(id, at ? at + (opts.autoContinue?.graceMs ?? RESET_GRACE_MS) + (opts.autoContinue?.gapMs ?? CONTINUE_GAP_MS) : undefined);
+    },
     allowBypass: opts.allowBypass,
+    // `live` of the session list changed (CLI started or dropped).
+    onLiveChange: () => broadcast({ type: "sessions.changed" }),
     supportsAuto,
     uploadDir: (id: string) => {
       try {
@@ -527,6 +536,7 @@ export function createDaemon(opts: {
         if (live.some((s) => ["running", "needs_input"].includes(s.info().state))) throw new WorktreeError("has_sessions_running", "A session in this worktree is running or needs input: stop it first");
         for (const s of live) {
           sessions.delete(s.id);
+          queue.drop(s.id);
           touched.delete(s.id);
           await s.close().catch(() => {});
         }
@@ -680,8 +690,28 @@ export function createDaemon(opts: {
     touched.set(id, Date.now());
   };
 
+  const queue = createPromptQueue({
+    ready: (id) => !!sessions.get(id)?.takesQueued() && !autoContinue.isScheduled(id),
+    send: async (id, item) => {
+      const s = sessions.get(id);
+      if (!s) return { code: "session_not_live", message: `no session ${id}` };
+      const err = await sendPrompt(s, item.text, item.images);
+      if (!err) autoContinue.cancel(id);
+      return err;
+    },
+    show: (id, items, held) => sessions.get(id)?.setQueue(items, held),
+  });
+
   function track(s: Session) {
     sessions.set(s.id, s);
+    s.subscribe(Infinity, (e) => {
+      const t = e.part.type;
+      if (t === "session_cleared") queue.move(s.id, (e.part as { sessionId: string }).sessionId);
+      else if (t === "session_state" || t === "external_turn" || t === "bash") {
+        if (t === "session_state") queue.setNotLive(s.id, !s.isLive());
+        queue.kick(s.id);
+      }
+    });
     s.subscribe(Infinity, notifier.observe);
     s.subscribe(Infinity, (e) => orchestration.observe(s, e));
     s.subscribe(Infinity, () => touched.set(s.id, Date.now()));
@@ -845,13 +875,14 @@ export function createDaemon(opts: {
     const lastAt = new Map(await mapLimit(all, 8, async (t) => [t.sessionId, t.cwd && allowedCwd(t.cwd) ? await lastMessageAt(projectsDir, t.cwd, t.sessionId, t) : undefined] as const));
     for (const t of all) {
       if (!t.cwd || !allowedCwd(t.cwd)) continue;
-      const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
+      const loaded = sessions.get(t.sessionId);
+      const live = loaded?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
       const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...(!loaded?.liveQuery() && { live: false as const }), ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
-      if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...links(s.id) });
+      if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.liveQuery() && { live: false as const }), ...links(s.id) });
     const listed = [...items.values()];
     // Upgrade from "every transcript cwd is a project": the projects with saved claude-ui state stay, once.
     if (!projects.seeded)
@@ -956,6 +987,7 @@ export function createDaemon(opts: {
     if (state === "running" || state === "needs_input") return { code: "session_running", message: "stop the session before deleting it" };
     // The CLI exits first: it writes session metadata on exit, which would recreate the transcript. A failed delete keeps the transcript.
     autoContinue.cancel(id);
+    queue.drop(id);
     deleting.add(id);
     sessions.delete(id);
     touched.delete(id);
@@ -987,7 +1019,7 @@ export function createDaemon(opts: {
   /** Piece of a media file: undefined when it can no longer be read (gone, outside the roots, side stopped). */
   type MediaRead = (offset: number, length: number) => Promise<MediaReadResult | undefined>;
   /** fs.media capabilities: nonce -> a hub file (canonical path, streamed from disk) or bytes read in pieces (a file at a commit, a side's file), issuing connection, last use. */
-  const media = new Map<string, { src: { kind: "file"; path: string } | { kind: "bytes"; read: MediaRead; mime: string; name: string }; ws: Conn; used: number; live?: Set<ServerResponse> }>();
+  const media = new Map<string, { src: { kind: "file"; path: string } | { kind: "artifact"; named: string; path: string } | { kind: "bytes"; read: MediaRead; mime: string; name: string }; ws: Conn; used: number; live?: Set<ServerResponse> }>();
   const mediaHead = (type: string, name: string, size: number, start: number, end: number, ranged: boolean) => ({
     ...MEDIA_HEADERS,
     "content-type": type,
@@ -1025,17 +1057,72 @@ export function createDaemon(opts: {
     media.delete(nonce);
     return undefined;
   };
-  /** GET /media/<nonce>/<name>: the file comes only from the nonce entry; <name> is cosmetic. */
-  const serveMedia = (req: IncomingMessage, res: ServerResponse, nonce: string) => {
-    if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
+  /** Host, Origin and Sec-Fetch-Site of a /media or /artifact request: the own host names, own origin, same-origin or direct navigation only. */
+  const requestOk = (req: IncomingMessage) => {
     const site = req.headers["sec-fetch-site"];
     let hostOk = false;
     try {
       hostOk = hostnames.has(new URL("http://" + req.headers.host).hostname);
     } catch {}
-    if (!hostOk || (req.headers.origin && !isOwnOrigin(req, hostnames)) || (site && site !== "same-origin" && site !== "none")) return void res.writeHead(403).end();
+    return hostOk && !(req.headers.origin && !isOwnOrigin(req, hostnames)) && !(site && site !== "same-origin" && site !== "none");
+  };
+  /** The canonical file of a named Artifact page, or why not (GH-175): no UNC/device path, the named file itself no symlink, a regular file within the cap. */
+  const checkArtifact = (named: string): { path: string; size: number; mtime: number } | { code: string; message: string } => {
+    if (refused(named)) return { code: "path_not_allowed", message: `refused path: ${named}` };
+    let l;
+    try {
+      l = lstatSync(named);
+    } catch {
+      return { code: "not_found", message: `file is gone: ${named}` };
+    }
+    if (l.isSymbolicLink()) return { code: "path_not_allowed", message: `a symlink: ${named}` };
+    if (!l.isFile()) return { code: "not_a_file", message: `not a file: ${named}` };
+    const path = real(named);
+    if (!path || refused(path)) return { code: "path_not_allowed", message: `refused path: ${named}` };
+    if (!/\.html?$/i.test(path)) return { code: "unsupported_type", message: `not an HTML page: ${named}` };
+    if (l.size > ARTIFACT_PREVIEW_MAX) return { code: "too_large", message: `larger than 16 MiB: ${named}` };
+    return { path, size: l.size, mtime: l.mtimeMs };
+  };
+  /** GET /artifact/<nonce>/<name> (GH-175): the page of an artifact.preview nonce in a sandbox CSP, for an iframe only; <name> is cosmetic. */
+  const serveArtifact = (req: IncomingMessage, res: ServerResponse, nonce: string) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
+    const dest = req.headers["sec-fetch-dest"];
+    if (!requestOk(req) || (dest && dest !== "iframe")) return void res.writeHead(403).end();
     const entry = mediaEntry(nonce);
-    if (!entry) return void res.writeHead(404).end();
+    if (!entry || entry.src.kind !== "artifact") return void res.writeHead(404).end();
+    entry.used = Date.now();
+    const c = checkArtifact(entry.src.named);
+    if ("code" in c || c.path !== entry.src.path) return void res.writeHead(404).end();
+    let fd: number;
+    let size: number;
+    try {
+      // Same no-follow open and device/inode match as /media.
+      fd = openChecked(c.path, OPEN_READ);
+      const st = fstatSync(fd);
+      if (!st.isFile() || st.size > ARTIFACT_PREVIEW_MAX) {
+        closeSync(fd);
+        return void res.writeHead(404).end();
+      }
+      size = st.size;
+    } catch {
+      return void res.writeHead(404).end();
+    }
+    res.writeHead(200, { ...ARTIFACT_HEADERS, "content-length": size });
+    if (req.method === "HEAD" || size === 0) {
+      closeSync(fd);
+      return void res.end();
+    }
+    const stream = createReadStream("", { fd, start: 0, end: size - 1 });
+    res.on("close", () => stream.destroy());
+    stream.on("error", () => res.destroy());
+    stream.pipe(res);
+  };
+  /** GET /media/<nonce>/<name>: the file comes only from the nonce entry; <name> is cosmetic. */
+  const serveMedia = (req: IncomingMessage, res: ServerResponse, nonce: string) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
+    if (!requestOk(req)) return void res.writeHead(403).end();
+    const entry = mediaEntry(nonce);
+    if (!entry || entry.src.kind === "artifact") return void res.writeHead(404).end(); // a preview nonce never serves under /media
     entry.used = Date.now();
     if (entry.src.kind === "bytes") {
       // The connection's close ends a response still waiting on a side's piece.
@@ -1085,6 +1172,10 @@ export function createDaemon(opts: {
     if (rawPath.startsWith("/media/")) {
       const m = /^\/media\/([0-9a-f]{32})\/[^/]*$/.exec(rawPath);
       return m ? serveMedia(req, res, m[1]!) : void res.writeHead(404).end();
+    }
+    if (rawPath.startsWith("/artifact/")) {
+      const m = /^\/artifact\/([0-9a-f]{32})\/[^/]*$/.exec(rawPath);
+      return m ? serveArtifact(req, res, m[1]!) : void res.writeHead(404).end();
     }
     try {
       path = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
@@ -1383,6 +1474,18 @@ export function createDaemon(opts: {
           const dataUrl = s.media(msg.partId, msg.index);
           return dataUrl ? reply({ dataUrl }) : fail("unknown_media", `no media ${msg.index} in part ${msg.partId}`);
         }
+        case "artifact.preview": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (typeof msg.partId !== "string" || msg.partId.length > 200) return fail("bad_request", "partId must be a part id");
+          const f = s.artifactFile(msg.partId);
+          if ("code" in f) return fail(f.code, f.message);
+          const c = checkArtifact(f.path);
+          if ("code" in c) return fail(c.code, c.message);
+          const nonce = nonceFor(`artifact\0${c.path}`);
+          media.set(nonce, { src: { kind: "artifact", named: f.path, path: c.path }, ws, used: Date.now() });
+          return reply({ url: `/artifact/${nonce}/${encodeURIComponent(basename(c.path))}?v=${c.mtime}`, size: c.size, mtime: c.mtime });
+        }
         case "session.unsubscribe": {
           // No find(): this must not restore a session.
           unsubscribes.get(msg.sessionId)?.();
@@ -1398,7 +1501,37 @@ export function createDaemon(opts: {
             return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
           if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return fail("bad_prompt", "empty prompt");
           const err = await sendPrompt(s, msg.text, images);
+          // A refused prompt keeps a usage-limit pause.
+          if (!err) queue.release(s.id);
           return err ? fail(err.code, err.message) : reply({});
+        }
+        case "session.enqueue": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          const images = msg.images ?? [];
+          if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
+            return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
+          if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return fail("bad_prompt", "empty prompt");
+          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
+          const r = queue.enqueue(s.id, { text: msg.text, images });
+          return typeof r === "string" ? reply({ itemId: r }) : fail(r.code, r.message);
+        }
+        case "session.dequeue": {
+          // In memory only: a session not loaded has no queue, and find() would restore it from disk.
+          const s = sessions.get(msg.sessionId);
+          if (!s) return fail("unknown_item", "queued message not found (already sent?)");
+          const item = queue.take(s.id, msg.itemId);
+          return item ? reply({ text: item.text, images: item.images }) : fail("unknown_item", "queued message not found (already sent?)");
+        }
+        case "session.sendQueued": {
+          const s = sessions.get(msg.sessionId);
+          if (!s || !queue.items(s.id).some((i) => i.id === msg.itemId)) return fail("unknown_item", "queued message not found (already sent?)");
+          const err = await queue.sendNow(s.id, msg.itemId);
+          // A refused Send now (any reason) leaves a scheduled auto-continue alone.
+          if (err) return fail(err.code, err.message);
+          autoContinue.cancel(s.id);
+          queue.release(s.id);
+          return reply({});
         }
         case "session.bash": {
           const s = await find(msg.sessionId);

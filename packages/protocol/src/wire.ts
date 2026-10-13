@@ -32,8 +32,9 @@ export type SessionInfo = {
  * `archived`: hidden from the list unless the archived filter is on (SDK session tag "archived").
  * `transcript`: false until the first prompt; such a session cannot be renamed or archived (the SDK has no file to write to).
  * `coordinator`: started as coordinator; `coordinatorId` + `workerName`: a worker's link (sessions.json, survives restarts).
+ * `live`: false when the session has no CLI process in this daemon (never prompted, `worker_close`, idle close, CLI ended, not loaded); absent while one runs (and from older daemons).
  */
-export type SessionListItem = SessionInfo & { title: string; lastActivity: number; archived: boolean; transcript: boolean; coordinator?: true; coordinatorId?: string; workerName?: string };
+export type SessionListItem = SessionInfo & { title: string; lastActivity: number; archived: boolean; transcript: boolean; coordinator?: true; coordinatorId?: string; workerName?: string; live?: false };
 export type FsEntry = { name: string; path: string; isDir: boolean };
 
 /**
@@ -59,6 +60,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.edits"; sessionId: string; logEpoch: string; before: string }
   /** A base64 payload a snapshot or page left out (images.ts omitMedia): `index` into the tool_result output or the user_text images. Reply `MediaResult`; error `unknown_media`. */
   | { type: "session.media"; sessionId: string; partId: string; index: number }
+  /** URL of the local page an Artifact publish part of the session names (GH-175); reply ArtifactPreviewResult. */
+  | { type: "artifact.preview"; sessionId: string; partId: string }
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   /** Bash mode: runs `command` with the user's shell in the session cwd (idle only); output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. */
@@ -79,6 +82,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.interrupt"; sessionId: string }
   /** Drops the session's scheduled continue (auto_continue); reply `{}`, also when none was scheduled. */
   | { type: "session.cancelContinue"; sessionId: string }
+  /** Queues a message: sent as a prompt when the session is next idle (docs/spec.md "Queued messages"). Reply `{ itemId }`; errors bad_prompt, bad_images, queue_full, session_not_live. */
+  | { type: "session.enqueue"; sessionId: string; text: string; images?: string[] }
+  /** Removes a queued message (Delete, Edit); reply `{ text, images }`; error unknown_item. */
+  | { type: "session.dequeue"; sessionId: string; itemId: string }
+  /** Send now: removes the item and sends it like session.prompt (steers a running turn); reply `{}`; errors unknown_item and the session.prompt codes (the item stays queued on failure). */
+  | { type: "session.sendQueued"; sessionId: string; itemId: string }
   /** Stop agent: stops one running subagent run (`subagentId` = its subagent part id); the turn goes on. `unknown_subagent` when none runs. */
   | { type: "session.stopSubagent"; sessionId: string; subagentId: string }
   /**
@@ -273,7 +282,7 @@ export type PosPart = { part: Part; pos: number };
 /** Whole turns, oldest part first (parts as `omitMedia` leaves them); `older` absent = the start of the session. */
 export type TimelinePage = { parts: Part[]; older?: Cursor };
 /**
- * Paged subscribe reply: `heads` = the latest session_state, commands, context_usage, external_turn, auto_continue, todo_update events; `aux` = parts of the
+ * Paged subscribe reply: `heads` = the latest session_state, commands, context_usage, external_turn, auto_continue, prompt_queue, todo_update events; `aux` = parts of the
  * unloaded region that whole-session features need (subagent, turn_result, running background Bash calls).
  */
 export type Snapshot = { heads: Event[]; attentionSeq: number; page: TimelinePage; aux: PosPart[] };
@@ -438,6 +447,7 @@ export type RewindPreview = { filesChanged: string[]; insertions: number; deleti
 export type FsSearchResult = { paths: string[] };
 export type FsReadResult = { content: string; mtime: number };
 /** `url`: same-origin path, valid while this connection is open and used within 10 min. */
+export type ArtifactPreviewResult = { url: string; size: number; mtime: number };
 export type FsMediaResult = { url: string; mime: string; size: number; mtime: number };
 /** `data`: base64 of the bytes at the offset (shorter at the end of the file); `size` of the whole file; `mtime` 0 for a file at a commit. */
 export type MediaReadResult = { data: string; size: number; mtime: number; mime: string };

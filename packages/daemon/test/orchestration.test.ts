@@ -1495,6 +1495,22 @@ describe("orchestration", () => {
     }
   });
 
+  it("session.list marks a closed worker live: false and broadcasts sessions.changed on worker_close; worker_send makes it live again", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "lv", cwd: dirB, prompt: "hold" });
+    await until(() => runsOf(w.sessionId)[0]?.texts.length);
+    const item = async () => ((await c.request({ type: "session.list" })).result.sessions as any[]).find((x) => x.id === w.sessionId);
+    expect((await item()).live).toBeUndefined();
+    const seen = c.inbox.length;
+    await call(coord, "worker_close", { name: "lv" });
+    await until(() => c.inbox.slice(seen).some((m) => m.type === "sessions.changed"));
+    expect(await item()).toMatchObject({ live: false, state: "idle" });
+    await call(coord, "worker_send", { name: "lv", text: "again" });
+    for (let i = 0; i < 200 && (await item()).live === false; i++) await new Promise((r) => setTimeout(r, 10));
+    expect((await item()).live).toBeUndefined();
+  });
+
   it("a worker of a listed coordinator stays listed after its project is removed", async () => {
     enable();
     const coord = await coordinator();

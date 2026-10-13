@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ToolCall } from "./store.ts";
+import { ArtifactPreviewContext } from "./artifact-preview.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard } from "./tool-card.tsx";
 import { ViewerContext } from "./viewer.ts";
 
@@ -348,6 +349,20 @@ Live subscription: arming in the background.`));
     expect(html).toContain("2 published artifacts");
     expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
     expect(html).not.toContain("Parameters");
+  });
+  it("a done HTML publish body offers the preview; a failed or non-HTML one does not", () => {
+    const withCtx = (c: ToolCall) =>
+      renderToStaticMarkup(
+        <ArtifactPreviewContext value={async () => ({ url: "/artifact/x/a.html", size: 1, mtime: 1 })}>
+          <ToolCard call={c} result={result("ok")} awaiting />
+        </ArtifactPreviewContext>,
+      );
+    const ok = withCtx(done("Artifact", publish));
+    expect(ok).toContain("artifact-preview-toggle");
+    expect(ok).toContain("/tmp/claude/scratchpad/page.html");
+    expect(withCtx({ ...done("Artifact", publish), status: "error" })).not.toContain("artifact-preview-toggle");
+    expect(withCtx(done("Artifact", { ...publish, file_path: "/tmp/a.txt" }))).not.toContain("artifact-preview-toggle");
+    expect(open(done("Artifact", publish), result("ok"))).not.toContain("artifact-preview-toggle");
   });
   it("a streaming call with empty input does not crash", () => {
     expect(renderToStaticMarkup(<ToolCard call={{ ...done("Artifact", {}), status: "pending" }} />)).toContain("Artifact");

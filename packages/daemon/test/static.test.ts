@@ -195,7 +195,7 @@ describe("static files: CSP and anti-framing (GH-280)", () => {
       "connect-src": ["'self'"],
       "worker-src": ["'self'"],
       "manifest-src": ["'self'"],
-      "frame-src": ["'none'"],
+      "frame-src": ["'self'"],
       "object-src": ["'none'"],
       "base-uri": ["'none'"],
       "form-action": ["'none'"],
