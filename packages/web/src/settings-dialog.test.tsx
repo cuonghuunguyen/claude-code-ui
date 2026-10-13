@@ -8,6 +8,7 @@ import { SettingsDialog } from "./settings-dialog.tsx";
 import { loadSignalOnly, saveSignalOnly } from "./signal.ts";
 import { bind, resetAll } from "./keymap.ts";
 import type { TabGrouping } from "./tab-grouping.ts";
+import { loadSidebarView, saveSidebarView } from "./sessions.ts";
 import { WEB_VERSION } from "./version.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -210,15 +211,20 @@ it("Sidebar section: Show only active sessions is the sidebar's own per-browser 
   expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).onlyActive).toBe(false);
 });
 
-it("Sidebar section: Layout is Default or Classic, stored in the sidebarView object and applied at once (GH-222)", async () => {
+it("Sidebar section: Group by is Worktree or Project, stored in the sidebarView object, applied at once and synced from the menu (GH-222, GH-333)", async () => {
   localStorage.clear();
   const { q, pick } = await render();
   await pick("sidebar");
-  expect(q("settings-sidebar-layout")!.textContent).toContain("Default");
+  expect(document.getElementById("settings-sidebar-layout-label")!.textContent).toBe("Group by");
+  expect(q("settings-sidebar-layout")!.textContent).toContain("Worktree");
   await act(async () => q("settings-sidebar-layout")!.click());
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-sidebar-layout-classic]")!.click());
   expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).layout).toBe("classic");
-  expect(q("settings-sidebar-layout")!.textContent).toContain("Classic");
+  expect(q("settings-sidebar-layout")!.textContent).toContain("Project");
+  await act(async () => saveSidebarView({ ...loadSidebarView(), layout: "default" }));
+  expect(q("settings-sidebar-layout")!.textContent).toContain("Worktree");
+  await act(async () => saveSidebarView({ ...loadSidebarView(), layout: "classic" }));
+  expect(q("settings-sidebar-layout")!.textContent).toContain("Project");
   localStorage.clear();
 });
 
