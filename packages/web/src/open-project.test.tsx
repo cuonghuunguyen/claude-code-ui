@@ -342,6 +342,23 @@ describe("side chooser", () => {
     expect(input()!.value).toBe("/home/u/");
   });
 
+  it("a ready side's message shows as a status note in plain text; no message, no note", async () => {
+    const text = "Some sessions of WSL: Ubuntu are left out: <img src=x onerror=alert(1)> <b>bold</b>";
+    const { kind, click } = await renderSides(sides("ready", text));
+    await click(kind("WSL"));
+    const note = document.querySelector<HTMLElement>('[data-testid="side-notice"]');
+    expect(note?.getAttribute("role")).toBe("status");
+    expect(note?.textContent).toBe(text);
+    expect(note?.querySelector("img, b")).toBeNull();
+    expect(note?.className).toContain("[overflow-wrap:anywhere]");
+    await act(async () => root!.unmount());
+    document.body.innerHTML = "";
+    const plain = await renderSides(sides("ready"));
+    await plain.click(plain.kind("WSL"));
+    expect(document.querySelector('[data-testid="folder-input"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="side-notice"]')).toBeNull();
+  });
+
   it("a typed POSIX path on Windows goes to a WSL distro before a container", async () => {
     const { checked, target, type } = await renderSides([S("local", "Windows"), ...docker("dev"), S("wsl:Ubuntu", "WSL: Ubuntu")]);
     await type("/home/u/cl");

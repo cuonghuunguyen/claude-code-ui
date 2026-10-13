@@ -7,7 +7,7 @@ import { createSettings, DEFAULTS } from "../src/settings.ts";
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -133,4 +133,12 @@ it("a notifications patch with a non-boolean or an unknown field is refused", ()
   const s = createSettings({ file: file() });
   expect(() => s.set({ notifications: { desktop: "x" as never } })).toThrow("Desktop notifications must be on or off");
   expect(() => s.set({ notifications: { foo: true } as never })).toThrow("unknown setting notifications.foo");
+});
+
+it("performance.monitor defaults to true and accepts a boolean; a string is refused", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.get().performance).toEqual({ monitor: true });
+  expect(s.set({ performance: { monitor: false } }).performance).toEqual({ monitor: false });
+  expect(() => s.set({ performance: { monitor: "x" as never } })).toThrow("Performance monitor must be on or off");
 });

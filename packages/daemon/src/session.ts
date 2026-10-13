@@ -20,6 +20,7 @@ import {
   createAdapter,
   imageBlock,
   MAX_FROM_PARTS,
+  omitMedia,
   permissionModesFor,
   type Effort,
   type Event,
@@ -38,6 +39,7 @@ import {
 import type { PlanTracker } from "./plan-usage.ts";
 import { runBash, type BashRun } from "./bash.ts";
 import { PartIndex } from "./part-index.ts";
+import { perf, type PerfSpanHandle } from "./perf.ts";
 import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
 import { tierAsync, type Tier, type TierContext } from "./risk-tier.ts";
 
@@ -56,7 +58,7 @@ type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number;
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
 /** `allowBypass`: daemon config enables bypassPermissions (docs/spec.md "Security"). */
-/** `uploadDir`: the fs.upload folder, readable by Claude without a permission request. */
+/** `uploadDir`: the folder of this session's fs.uploads by its id (created on call), readable by Claude without a permission request. */
 export type SessionSettings = Pick<SessionInfo, "model" | "permissionMode" | "effort">;
 /**
  * `onSettings`: called after model, permission mode or effort changed (the daemon persists them for a restore). `fields`: the
@@ -67,7 +69,7 @@ type SessionOpts = Partial<SessionSettings> & {
   allowBypass?: boolean;
   /** Whether a model value (`ModelInfo.value`) supports auto mode (`supportsAutoMode`); none = no model does. */
   supportsAuto?: (model: string) => boolean;
-  uploadDir?: string;
+  uploadDir?: (id: string) => string | undefined;
   query?: typeof sdkQuery;
   onSettings?: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => void;
   onCleared?: (heir: Session) => void;
@@ -98,7 +100,12 @@ type SessionOpts = Partial<SessionSettings> & {
   permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => { input: Record<string, unknown>; title?: string; onAllow?: () => void } | undefined;
 };
 
-export type Transcript = { main: SessionMessage[]; runs: SessionMessage[][] };
+export type Transcript = {
+  main: SessionMessage[];
+  runs: SessionMessage[][];
+  /** Raw main-transcript lines, when read through JsonlTail (restore: mode and effort fallback). */
+  entries?: readonly unknown[];
+};
 
 // ExitPlanMode comes without suggestions; Claude Code's "Yes, and auto-accept edits" (verified: the CLI then runs in acceptEdits).
 const ACCEPT_EDITS: PermissionUpdate = { type: "setMode", mode: "acceptEdits", destination: "session" };
@@ -162,6 +169,8 @@ export class Session {
   private tasks = new Map<string, string>();
   /** Bumped per refreshUsage(): an older answer that arrives later is dropped. */
   private usageRequest = 0;
+  /** Open from start() until the CLI sends its first message (performance monitor, GH-272). */
+  private startSpan?: PerfSpanHandle;
   /** False until the first start(): the first query creates the transcript (sessionId), every later one resumes it. */
   private started: boolean;
   /** The current query's CLI keeps every Bash command in the cwd (CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR). */
@@ -208,22 +217,29 @@ export class Session {
   private continueAt: number | null = null;
   /** The throwaway commands query was asked (once; a failure asks again at the next subscribe). */
   private commandsAsked = false;
+  /**
+   * Whose upload folder the running CLI was started with (`uploadDir(uploadOwner)`). A /clear heir keeps its parent's until
+   * its CLI closes (`dropQuery`: idle close, restart, rewind) and a query of its own starts: the CLI cannot get another directory, so uploads go where it already reads.
+   */
+  uploadOwner: string;
   /** After a failed load no new throwaway starts before this time (ms). */
   private commandsRetryAt = 0;
 
   constructor(
     readonly cwd: string,
     private readonly opts: SessionOpts = {},
-    restored?: { id: string; history: SessionMessage[]; read?: Iterable<string> },
+    /** Without `history`: a new session with a given id (a claimed draft, see uploads.ts). */
+    restored?: { id: string; history?: SessionMessage[]; read?: Iterable<string> },
   ) {
     this.id = restored?.id ?? randomUUID();
+    this.uploadOwner = this.id;
     this.model = opts.model ?? "default";
     this.permissionMode = opts.permissionMode ?? "default";
     this.effort = opts.effort ?? "default";
-    this.adapter = createAdapter({ resumed: !!restored });
-    this.started = !!restored;
+    this.adapter = createAdapter({ resumed: !!restored?.history });
+    this.started = !!restored?.history;
     // The CLI starts on the first prompt; until then a throwaway query lists the commands for the / menu.
-    if (!restored) {
+    if (!restored?.history) {
       void this.loadCommands();
       return;
     }
@@ -246,12 +262,16 @@ export class Session {
     return new Session(cwd, opts, { id, history, read });
   }
 
-  private start() {
+  /** `timed` false: no prompt follows (rewind, bash records), so the CLI may stay silent and there is no start to time. */
+  private start(timed = true) {
+    this.startSpan?.end();
+    this.startSpan = timed ? perf.span("session.start") : undefined;
     const owner = (this.owner = { session: this as Session });
     // The level is per CLI process (SDK): a new one starts empty.
     this.backgroundLevel = new Set();
     this.ambientTasks.clear();
-    const dirs = [...(this.opts.uploadDir ? [this.opts.uploadDir] : []), ...sessionDirs(this.grants)];
+    const up = this.opts.uploadDir?.(this.id);
+    const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
     const rules = sessionRules(this.grants);
     // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
     this.bashPinned = !!this.opts.worker?.(this.id);
@@ -326,12 +346,27 @@ export class Session {
   snapshot(from?: string): { seq: number; snapshot: Snapshot } {
     const page = (from !== undefined && this.index.pageFrom(from, MAX_FROM_PARTS)) || this.index.lastPage();
     const aux = page.older ? this.index.aux(page.older.pos) : [];
-    return { seq: this.seq(), snapshot: { heads: this.index.heads(), attentionSeq: this.index.attentionSeq, page, aux } };
+    return { seq: this.seq(), snapshot: { heads: this.index.heads(), attentionSeq: this.index.attentionSeq, page: { ...page, parts: page.parts.map(omitMedia) }, aux } };
   }
 
   /** The page before the part `before`; undefined = unknown cursor. */
   page(before: string, until?: string): TimelinePage | undefined {
-    return this.index.pageBefore(before, until);
+    const page = this.index.pageBefore(before, until);
+    return page && { ...page, parts: page.parts.map(omitMedia) };
+  }
+
+  /** Data URL of a base64 payload a snapshot or page left out (`session.media`); undefined when the part or payload is unknown. */
+  media(partId: string, index: number): string | undefined {
+    const part = this.index.get(partId);
+    if (part?.type === "user_text") {
+      const image = part.images[index];
+      return image?.startsWith("data:") ? image : undefined;
+    }
+    if (part?.type === "tool_result" && Array.isArray(part.output)) {
+      const src = (part.output[index] as { source?: { type?: unknown; media_type?: unknown; data?: unknown } } | undefined)?.source;
+      return src?.type === "base64" && typeof src.data === "string" ? `data:${String(src.media_type)};base64,${src.data}` : undefined;
+    }
+    return undefined;
   }
 
   /** Edit/Write parts older than the part `before`; undefined = unknown cursor. */
@@ -459,7 +494,7 @@ export class Session {
       }
       // The next prompt's rewind fork point is after the records, else rewinding it would drop them from Claude's view.
       this.lastAssistant = outId;
-      if (!this.query) this.start();
+      if (!this.query) this.start(false);
       records.forEach((content, i) => this.input.push({ type: "user", uuid: uuids[i], shouldQuery: false, message: { role: "user", content }, parent_tool_use_id: null }));
     });
   }
@@ -620,6 +655,8 @@ export class Session {
     this.generation++;
     this.query?.close();
     this.query = undefined;
+    // The next query is granted this session's own folder (a /clear heir read its parent's until now).
+    this.uploadOwner = this.id;
     // The old drive loop's finally skips this (newer generation): a background run of the closed query stops with it.
     this.tasks.clear();
     for (const part of this.adapter.endCalls()) this.emit(part);
@@ -754,7 +791,7 @@ export class Session {
     if (this.bashRun) throw new Error("a shell command is running: stop it first");
     if (this.state !== "idle") throw new Error("session is running: interrupt the turn first");
     if (!this.checkpoints.has(userMessageId)) throw new Error(`unknown user message ${userMessageId}`);
-    return this.query ?? this.start();
+    return this.query ?? this.start(false);
   }
 
   /** Rules already saved never reach this callback. No timeout: the promise waits for respond() or the SDK's abort. */
@@ -965,6 +1002,8 @@ export class Session {
           generation = s.generation;
           reset = undefined;
         }
+        this.startSpan?.end();
+        this.startSpan = undefined;
         s.receive(m, q);
       }
       if (generation === s.generation) s.setState("closed");
@@ -974,6 +1013,8 @@ export class Session {
       s.emit({ type: "raw", id: randomUUID(), message: { error: String(err) } });
       s.setState("error");
     } finally {
+      this.startSpan?.end();
+      this.startSpan = undefined;
       // Nothing waits for these answers any more, and no call of this query runs.
       for (const id of [...s.pending.keys()]) s.cancel(id, "Session ended");
       // A newer generation (conversation rewind) already ended them, and its query may run tasks of its own.
@@ -1068,6 +1109,7 @@ export class Session {
   private handOver(id: string, clearId: string | undefined): Session {
     const heir = Session.restore(id, this.cwd, [], { ...this.opts, model: this.model, permissionMode: this.permissionMode, effort: this.effort });
     heir.cleared = true;
+    heir.uploadOwner = this.uploadOwner;
     // Background calls (shells, subagent runs) still run in the CLI: the heir owns them (shells list, Stop agent, their
     // notification); here they end as a restore of this transcript shows them.
     for (const part of this.adapter.endCalls(true)) this.emit(part);

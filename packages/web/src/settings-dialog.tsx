@@ -15,10 +15,12 @@ import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
 import { USAGE_RINGS, saveUsageRing, useUsageRing, type UsageRing } from "./usage-ring.ts";
 import { GuideSection } from "./guide-settings.tsx";
 import { AboutSection } from "./about-settings.tsx";
+import { PerformanceSection } from "./perf-settings.tsx";
 import { saveSignalOnly, useSignalOnly } from "./signal.ts";
 import { IN_APP_EVENT, loadInApp, saveInApp } from "./notify.ts";
 import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
+import { KeyTipsRow } from "./key-tip.tsx";
 import { ChevronLeftIcon } from "lucide-react";
 
 const GROUP_KEY = "claude-ui.settingsGroup";
@@ -117,6 +119,13 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
     title: "Usage limits",
     rows: [
       { key: "autoContinue", kind: "switch", label: "Continue automatically after a usage limit resets", hint: "A session stopped by the plan usage limit gets the prompt “continue” once the limit resets; several sessions continue one after another. Sending a message yourself cancels it. A daemon restart drops scheduled continues." },
+    ],
+  },
+  {
+    id: "performance",
+    title: "Performance",
+    rows: [
+      { key: "monitor", kind: "switch", label: "Performance monitor", hint: "Measures responsiveness on this computer. Durations and counts only; nothing leaves this computer. Off stops all measuring." },
     ],
   },
 ];
@@ -431,13 +440,15 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
               Customize…
             </button>
           </div>
+          <KeyTipsRow />
         </section>
             ),
           },
         ]
       : []),
     ...(onRestartGuide ? [{ id: "guide", title: "Guide", body: <GuideSection onRestart={onRestartGuide} /> }] : []),
-    ...SECTIONS.map((sec) => ({ id: sec.id, title: sec.title, body: sec.id === "usageLimit" ? <>{daemonSection(sec)}<UsageRingRow /></> : daemonSection(sec) })),
+    // A section the daemon does not know (an older daemon lacks `performance`) is left out.
+    ...SECTIONS.filter((sec) => !settings || settings[sec.id]).map((sec) => ({ id: sec.id, title: sec.title, body: sec.id === "usageLimit" ? <>{daemonSection(sec)}<UsageRingRow /></> : sec.id === "performance" ? <>{daemonSection(sec)}<PerformanceSection request={request} /></> : daemonSection(sec) })),
     { id: "about", title: "About", body: <AboutSection daemonVersion={daemon?.version} /> },
   ];
   const selected = groups.find((g) => g.id === pick) ?? groups[0]!;

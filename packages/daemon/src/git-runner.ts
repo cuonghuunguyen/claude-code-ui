@@ -2,6 +2,7 @@
 // does not land on the main event loop. `setGitRunner` swaps the runner (tests; `wsl-git.ts` routes WSL projects).
 import { execFile } from "node:child_process";
 import { Worker } from "node:worker_threads";
+import { perf } from "./perf.ts";
 
 export type GitRunOptions = { cwd: string; args: string[]; env: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number; input?: string; file?: string };
 export type GitRunOutput = { stdout: Buffer; stderr: string };
@@ -123,7 +124,9 @@ export const threadRunner: GitRunner = (o) =>
       void w.terminate();
     }, (o.timeout ?? DEFAULT_TIMEOUT) + 10_000);
     timer.unref();
-    calls.set(id, { ok, fail, timer, w });
+    // The thread runs git: the diagnostics channel does not see it, so the call is timed here (thread time, not main-loop time).
+    const done = perf.child({ cmd: "git", args: o.args, cwd: o.cwd, thread: "worker" });
+    calls.set(id, { ok: (r) => (done(0), ok(r)), fail: (e) => (done("error"), fail(e)), timer, w });
     w.postMessage({ id, file: o.file, cwd: o.cwd, args: o.args, env: o.env, timeout: o.timeout ?? DEFAULT_TIMEOUT, maxBuffer: o.maxBuffer ?? DEFAULT_MAX_BUFFER, input: o.input });
   });
 

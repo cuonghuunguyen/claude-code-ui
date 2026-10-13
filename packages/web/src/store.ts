@@ -31,6 +31,8 @@ export type SessionView = {
   working?: boolean;
   /** Latest todo list (todo_update) of the live turn; cleared on idle, error and rewind. */
   todos: TodoItem[];
+  /** Latest todo list (todo_update), kept past idle and error for the Focus page's finished rows; cleared by a rewind (the next todo_update replaces it). */
+  lastTodos: TodoItem[];
   order: string[];
   parts: Map<string, Part>;
   /** Paging (docs/spec.md "Event log and sequence numbers"): the cursor of the oldest loaded turn; absent = the whole session is loaded. */
@@ -43,7 +45,7 @@ export type SessionView = {
   stale?: boolean;
 };
 
-export const emptySession = (): SessionView => ({ lastSeq: 0, settingsSeq: 0, state: "idle", attentionSeq: 0, commands: [], todos: [], order: [], parts: new Map(), aux: [] });
+export const emptySession = (): SessionView => ({ lastSeq: 0, settingsSeq: 0, state: "idle", attentionSeq: 0, commands: [], todos: [], lastTodos: [], order: [], parts: new Map(), aux: [] });
 
 /** A bash mode command of this session still runs: the prompt box shows Stop, Esc kills it. */
 export const bashRunning = (s: SessionView) => [...s.parts.values()].some((p) => p.type === "bash" && p.status === "running");
@@ -70,10 +72,10 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   if (part.type === "rewind") {
     const at = s.order.indexOf(part.userMessageId);
     // A paged view that does not hold the message: it is in the not loaded region, so the loaded parts are all after it.
-    if (at < 0) return s.older ? { ...s, lastSeq: e.seq, order: [], parts: new Map(), todos: [], stale: true } : { ...s, lastSeq: e.seq, todos: [] };
+    if (at < 0) return s.older ? { ...s, lastSeq: e.seq, order: [], parts: new Map(), todos: [], lastTodos: [], stale: true } : { ...s, lastSeq: e.seq, todos: [], lastTodos: [] };
     const parts = new Map(s.parts);
     for (const id of s.order.slice(at)) parts.delete(id);
-    return { ...s, lastSeq: e.seq, order: s.order.slice(0, at), parts, todos: [] };
+    return { ...s, lastSeq: e.seq, order: s.order.slice(0, at), parts, todos: [], lastTodos: [] };
   }
   if (part.type === "retract") {
     const gone = new Set(part.partIds);
@@ -85,7 +87,7 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   if (part.type === "auto_continue") return { ...s, lastSeq: e.seq, continueAt: part.at ?? undefined };
   // Not rendered: App moves a tab that shows the session live.
   if (part.type === "session_cleared") return { ...s, lastSeq: e.seq };
-  if (part.type === "todo_update") return { ...s, lastSeq: e.seq, todos: part.items };
+  if (part.type === "todo_update") return { ...s, lastSeq: e.seq, todos: part.items, lastTodos: part.items };
   // An update of a part in the not loaded region (pos below the cursor): only its aux entry follows; the page fetched later has the latest value.
   if (s.older && e.pos !== undefined && e.pos < s.older.pos && !s.parts.has(part.id)) {
     const i = s.aux.findIndex((a) => a.part.id === part.id);

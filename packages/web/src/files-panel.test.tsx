@@ -317,10 +317,15 @@ it("fs.changed on a media tab re-requests fs.media and the img src takes the new
   act(() => p.root.render(null));
 });
 
-it("fs.media refused for a WSL path shows the notice", async () => {
-  const p = mediaPanel({ media: () => Object.assign(new Error("Preview is not available for files in WSL"), { code: "side_unsupported" }) });
-  await p.show("/p/a.png");
-  expect(p.q("file-notice")!.textContent).toContain("Preview is not available for files in WSL");
-  expect(p.q("media-image")).toBeNull();
-  act(() => p.root.render(null));
+it("the editable editor is unchanged: not read-only, no tabindex", async () => {
+  const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : m.type === "fs.read" ? { content: "one", mtime: 1 } : {}));
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  const root = createRoot(el);
+  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} openPath="/p/main.ts" />));
+  const { EditorView } = await import("@codemirror/view");
+  const view = EditorView.findFromDOM(el.querySelector<HTMLElement>("[data-testid=code-editor] .cm-editor")!)!;
+  expect(view.state.readOnly).toBe(false);
+  expect(el.querySelector(".cm-content")!.hasAttribute("tabindex")).toBe(false);
+  act(() => root.render(null));
 });

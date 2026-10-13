@@ -4,7 +4,7 @@ import { ConfigDialog } from "./config-dialog.tsx";
 import { bind, bindingError, conflictOf, isChanged, pressError, resetAll, resetBinding, specFromEvent, specOf, useKeymap } from "./keymap.ts";
 import { PREFIX_KEYS } from "./leader.ts";
 import { FORMAT_KEYS } from "./markdown-toolbar.tsx";
-import { IS_MAC, SHORTCUTS, keyLabels, type ShortcutGroup } from "./shortcuts.ts";
+import { IS_MAC, SHORTCUTS, keyLabels, shortcutById, type ShortcutGroup } from "./shortcuts.ts";
 
 const GROUPS: ShortcutGroup[] = ["General", "Tabs", "Panels", "Session", "Prefix"];
 const GROUP_TITLE: Record<ShortcutGroup, string> = { General: "General", Tabs: "Tabs", Panels: "Panels", Session: "Session", Prefix: "Prefix key" };
@@ -30,7 +30,7 @@ const FIXED: { title: string; spec: string }[] = [
   { title: "Change permission mode (prompt box)", spec: "shift+tab" },
 ];
 
-export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ShortcutsDialog({ open, onClose, edit }: { open: boolean; onClose: () => void; /** Opens recording on this command's row (the key promoter's "Assign a shortcut…"). */ edit?: string }) {
   useKeymap();
   const [filter, setFilter] = useState("");
   const [recording, setRecording] = useState<string>();
@@ -38,17 +38,22 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
   const [error, setError] = useState<string>();
 
   const filterRef = useRef<HTMLInputElement>(null);
-  // The filter takes the focus once when the dialog opens (after the dialog's own focus move), not on each render.
+  const editRefs = useRef(new Map<string, HTMLButtonElement>());
+  // The filter (or the Edit button of the command to assign) takes the focus once when the dialog opens (after the dialog's own focus move), not on each render.
   useEffect(() => {
     if (!open) return;
-    const t = setTimeout(() => filterRef.current?.focus(), 0);
+    if (edit && shortcutById(edit)) setRecording(edit);
+    const t = setTimeout(() => {
+      const b = edit ? editRefs.current.get(edit) : undefined;
+      if (b) (b.scrollIntoView?.({ block: "nearest" }), b.focus());
+      else filterRef.current?.focus();
+    }, 0);
     return () => clearTimeout(t);
-  }, [open]);
+  }, [open, edit]);
 
   const stop = () => (setRecording(undefined), setPending(undefined), setError(undefined));
 
   // Reset, Replace and Cancel unmount the focused button: the focus moves to the row's Edit button, or the filter when the row is filtered out.
-  const editRefs = useRef(new Map<string, HTMLButtonElement>());
   const [refocus, setRefocus] = useState<string>();
   useEffect(() => {
     if (!refocus) return;
