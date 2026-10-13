@@ -24,9 +24,11 @@ They talk to the daemon running on this computer. They never start it and never 
 | `projects` | List projects |
 | `workers` | List orchestration workers by coordinator |
 
-Options of every command: `--json` (machine-readable; fields may be added), `--port <n>` (default: `PORT`, the port of the running daemon, else `4280`), `--token-file <path>` (default: `CLAUDE_UI_TOKEN_FILE`, else `token` in the config folder).
+Options of every command: `--json` (machine-readable; fields may be added), `--port <n>` (default: the port of the running daemon from `daemon.json`, else `PORT`, else `4280`), `--token-file <path>` (default: `CLAUDE_UI_TOKEN_FILE`, else `token` in the config folder).
 
 Exit codes: `0` ok, `1` the daemon refused (for example an unknown session id), `2` wrong usage, `3` daemon not running or token missing or rejected. Only `open --print` writes the token to the terminal.
+
+After `claude-ui update` the global `claude-ui` command stays the old one: run `npm i -g claude-code-ui` to get the new launcher. An old launcher treats a command that fails within 10 seconds (for example `status` with no daemon running) as a broken new version.
 
 Not yet: `new`, `send`, `tail`, `interrupt`, `doctor`, `logs`, `stop` (names reserved). A daemon on Windows cannot be reached from WSL; run `claude-ui` in PowerShell.
 

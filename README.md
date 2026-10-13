@@ -25,7 +25,7 @@ claude-ui
 
 It prints a pairing link and a QR code. Open the link to use the app.
 
-With the daemon running, other terminals can ask it: `claude-ui status`, `claude-ui sessions` (`--json` for scripts), `claude-ui projects`, `claude-ui workers`, and `claude-ui open` to open the app in your browser (`--print` prints the pairing link). To use it from your phone, start it with `claude-ui --tailscale`.
+With the daemon running, other terminals can ask it: `claude-ui status`, `claude-ui sessions` (`--json` for scripts), `claude-ui projects`, `claude-ui workers`, and `claude-ui open` to open the app in your browser (`--print` prints the pairing link). After `claude-ui update`, run `npm i -g claude-code-ui` to get the new launcher with these commands. To use it from your phone, start it with `claude-ui --tailscale`.
 
 ## What you get
 

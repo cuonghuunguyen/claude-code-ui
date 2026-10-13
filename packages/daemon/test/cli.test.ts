@@ -87,6 +87,7 @@ describe("parseCli", () => {
       expect(isDaemonRun([])).toBe(true);
       expect(isDaemonRun(["--port", "5000", "--lan"])).toBe(true);
       for (const a of [["status"], ["update"], ["-h"], ["-v"], ["--help"], ["--port", "5000", "--version"], ["new"], ["ls"]]) expect(isDaemonRun(a), a.join(" ")).toBe(false);
+      for (const a of [["--port", "4000", "status"], ["--json", "status"], ["--token-file", "f", "sessions"], ["--port=4000", "status"], ["--future-flag", "status"], ["--port", "4000", "--json", "open", "--print"]]) expect(isDaemonRun(a), a.join(" ")).toBe(false);
       // Not strict: a flag of a newer release still counts as a daemon start (an old launcher runs a newer daemon).
       for (const a of [["--future-flag"], ["--port", "5000", "--future-flag"], ["--port", "x"]]) expect(isDaemonRun(a), a.join(" ")).toBe(true);
     });

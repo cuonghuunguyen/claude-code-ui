@@ -287,6 +287,13 @@ describe("robustness (review)", () => {
     expect(r).toContain("not JSON");
     expect(uncaught).toEqual([]);
   });
+  it("a crash between the write and the rename leaves the old daemon.json intact", () => {
+    const d = tmp("cu-crash-");
+    writeDaemonFile(d, { port: 1, pid: 5, version: "old", startedAt: "a" });
+    const boom = () => { throw new Error("crash"); };
+    expect(() => writeDaemonFile(d, { port: 2, pid: 6, version: "new", startedAt: "b" }, { writeFileSync, renameSync: boom as never })).toThrow("crash");
+    expect(readDaemonFile(d)).toMatchObject({ port: 1, version: "old" });
+  });
   it("the daemon file is written through a rename (no temp file left, no partial read)", () => {
     const d = tmp("cu-atomic-");
     writeDaemonFile(d, { port: 1, pid: 5, version: "x", startedAt: "a" });

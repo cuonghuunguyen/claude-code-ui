@@ -132,6 +132,26 @@ describe("launcher", () => {
     expect(runs).toHaveLength(1);
   });
 
+  it("a client command after flags is not a daemon start: no mark, no previous-version rerun", async () => {
+    for (const args of [["--port", "4000", "status"], ["--json", "status"], ["--token-file", "f", "sessions"], ["--port=4000", "status"]]) {
+      const dir = mkdtempSync(join(tmpdir(), "cu-launch-"));
+      install(dir, "0.2.1");
+      const { spawn, runs } = fakeSpawn([3, 0]);
+      expect(await launch({ args, own, dir, spawn, signals: new EventEmitter() as never, log: () => {} }), args.join(" ")).toBe(3);
+      expect(runs, args.join(" ")).toHaveLength(1);
+      expect(existsSync(join(dir, "0.2.1", FAILED_MARK))).toBe(false);
+    }
+  });
+
+  it("exit 2 (usage error) of a daemon start is never a failed start", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cu-launch-"));
+    install(dir, "0.2.1");
+    const { spawn, runs } = fakeSpawn([2, 0]);
+    expect(await launch({ args: ["--port", "5000"], own, dir, spawn, signals: new EventEmitter() as never, log: () => {} })).toBe(2);
+    expect(runs).toHaveLength(1);
+    expect(existsSync(join(dir, "0.2.1", FAILED_MARK))).toBe(false);
+  });
+
   it("a daemon started with a flag this launcher does not know still restarts on 75", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cu-launch-"));
     const { spawn, runs } = fakeSpawn([75, 0]);

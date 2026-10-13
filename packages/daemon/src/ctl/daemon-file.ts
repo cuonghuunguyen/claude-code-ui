@@ -7,10 +7,10 @@ export type DaemonInfo = { port: number; pid: number; version: string; startedAt
 export const daemonFile = (dir: string) => join(dir, "daemon.json");
 
 /** Temp file + rename: a reader never sees half a file. */
-export function writeDaemonFile(dir: string, info: DaemonInfo) {
+export function writeDaemonFile(dir: string, info: DaemonInfo, fs: { writeFileSync: typeof writeFileSync; renameSync: typeof renameSync } = { writeFileSync, renameSync }) {
   const tmp = `${daemonFile(dir)}.${info.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(info) + "\n", { mode: 0o600 });
-  renameSync(tmp, daemonFile(dir));
+  fs.writeFileSync(tmp, JSON.stringify(info) + "\n", { mode: 0o600 });
+  fs.renameSync(tmp, daemonFile(dir));
 }
 
 /** The file's content; undefined when it is absent or not a daemon.json. */

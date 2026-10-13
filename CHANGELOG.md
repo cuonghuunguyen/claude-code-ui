@@ -6,7 +6,11 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 
 ### Added
 
-- Client commands: `claude-ui status`, `open`, `sessions` (`ls`), `projects` and `workers` ask the running daemon from another terminal, with `--json`. The daemon writes `daemon.json` (port, pid, version) to its config folder. `claude-ui update` does not replace the global launcher: run `npm i -g claude-code-ui` to get the new launcher (an old launcher marks the new version as failed when a client command exits non-zero within 10 seconds, for example when the daemon is not running). Usage errors now exit 2 (were 1).
+- Client commands: `claude-ui status`, `open`, `sessions` (`ls`), `projects` and `workers` ask the running daemon from another terminal, with `--json`. The daemon writes `daemon.json` (port, pid, version) to its config folder. `claude-ui update` does not replace the global launcher: run `npm i -g claude-code-ui` to get the new launcher (an old launcher marks the new version as failed when a client command exits non-zero within 10 seconds, for example when the daemon is not running).
+
+### Changed
+
+- Usage errors (a bad flag or an unknown command) now exit 2 (were 1).
 
 ### Fixed
 

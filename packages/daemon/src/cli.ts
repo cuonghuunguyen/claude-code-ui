@@ -12,7 +12,7 @@ Commands:
   sessions, ls                 list sessions [--project <dir>] [--state <state>] [--archived]
   projects                     list projects
   workers                      list orchestration workers by coordinator
-Command options: --json (machine output), --port <n> (default: PORT, the running daemon, 4280),
+Command options: --json (machine output), --port <n> (default: daemon.json of the running daemon, PORT, 4280),
   --token-file <path> (default: CLAUDE_UI_TOKEN_FILE, <config dir>/token). Exit codes: 0 ok, 1 daemon
   error, 2 usage, 3 daemon not running or no token.
 
@@ -52,10 +52,20 @@ const STATES = ["idle", "running", "needs_input", "error", "closed"];
 const CLIENT_FLAGS: Record<ClientCmd, string[]> = { status: [], open: ["print"], sessions: ["project", "state", "archived"], projects: [], workers: [] };
 
 /**
- * Whether `argv` starts the daemon: everything but a known client command, a reserved name or `update` as the first word, or help or version.
- * Not strict on flags: an older launcher stays installed while a newer daemon (with flags it does not know) runs under it.
+ * Whether `argv` starts the daemon: everything but a known client command, a reserved name or `update` as the first positional argument, or help or version.
+ * Flag tokens are skipped, with the value of the flags this release takes a value for. An unknown flag counts as a daemon flag: an older launcher stays
+ * installed while a newer daemon (with flags it does not know) runs under it.
  */
-export const isDaemonRun = (argv: string[]) => !(NOT_A_START.includes(argv[0] ?? "") || argv.some((a) => ["-h", "-v", "--help", "--version"].includes(a)));
+export function isDaemonRun(argv: string[]) {
+  if (argv.some((a) => ["-h", "-v", "--help", "--version"].includes(a))) return false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (!a.startsWith("-")) return !NOT_A_START.includes(a);
+    if (VALUE_FLAGS.includes(a)) i++;
+  }
+  return true;
+}
+const VALUE_FLAGS = ["--port", "--roots", "--hostname", "--token-file", "--project", "--state"];
 const NOT_A_START = [...Object.keys(CLIENT_CMDS), ...RESERVED, "update"];
 const DAEMON_ONLY = ["lan", "roots", "hostname", "tailscale", "allow-bypass", "no-update-check", "no-os-notify", "side"];
 
