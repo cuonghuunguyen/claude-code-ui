@@ -17,6 +17,24 @@ const env = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0" });
 describe("git-runner", () => {
   afterEach(() => gitRunnerConfig.reset());
 
+  it("runs another program when file is set, in the thread and in the child-process fallback", async () => {
+    const dir = repo();
+    const o = { cwd: dir, file: process.execPath, args: ["-e", "process.stdout.write('ok')"], env: env() };
+    expect((await runGit(o)).stdout.toString()).toBe("ok");
+    expect(gitRunnerConfig.started).toBe(true);
+    gitRunnerConfig.reset();
+    const script = gitRunnerConfig.script;
+    gitRunnerConfig.script = "throw new Error('x')";
+    try {
+      await runGit(o).catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(gitRunnerConfig.broken).toBe(true);
+      expect((await runGit(o)).stdout.toString()).toBe("ok");
+    } finally {
+      gitRunnerConfig.script = script;
+    }
+  });
+
   it("runs git in a worker thread: stdout bytes, stdin input, exit code and stderr on failure", async () => {
     const dir = repo();
     gitRunnerConfig.reset();
