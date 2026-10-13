@@ -8,6 +8,10 @@ A browser UI that drives Claude Agent SDK sessions running in a local daemon. Fu
 The local process that owns all sessions, runs the SDK, and serves browsers over WebSocket. Single source of truth.
 _Avoid_: server, backend
 
+**Client command**:
+A `claude-ui <command>` (status, open, sessions, projects, workers) that asks the running Daemon from a terminal and exits. It never starts a Daemon and never creates the token. It finds the Daemon through `daemon.json` in the config dir.
+_Avoid_: CLI session, remote control
+
 **Session**:
 One SDK session in one working directory, identified by its session ID. The SDK transcript is its durable history. It may be driven by several `query()` runs over time (e.g. resumed after a daemon restart).
 _Avoid_: chat, conversation, thread

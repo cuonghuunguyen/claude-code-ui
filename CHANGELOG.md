@@ -2,6 +2,16 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Client commands: `claude-ui status`, `open`, `sessions` (`ls`), `projects` and `workers` ask the running daemon from another terminal, with `--json`. The daemon writes `daemon.json` (port, pid, version) to its config folder.
+
+### Fixed
+
+- `claude-ui update` that fails within 10 seconds no longer marks the running version as failed to start.
+
 ## 0.5.1 - 2026-10-10
 
 ### Fixed
