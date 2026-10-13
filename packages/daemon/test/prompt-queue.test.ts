@@ -130,4 +130,27 @@ describe("prompt queue", () => {
     for (let i = 0; i < MAX_QUEUED; i++) expect(typeof q.enqueue("s", { text: String(i), images: [] })).toBe("string");
     expect(q.enqueue("s", { text: "x", images: [] })).toEqual({ code: "queue_full", message: expect.any(String) });
   });
+
+  it("Send now marks the queue busy while it sends: a kick then sends no second item", async () => {
+    const sent: string[] = [];
+    const done: (() => void)[] = [];
+    const q = createPromptQueue({ ready: () => true, send: (_id, i) => (sent.push(i.text), new Promise((r) => done.push(() => r(undefined)))), show: () => {} });
+    // A held queue places both items without sending.
+    q.hold("s");
+    q.enqueue("s", { text: "a", images: [] });
+    q.enqueue("s", { text: "b", images: [] });
+    const [a] = q.items("s");
+    const now = q.sendNow("s", a!.id);
+    await flush();
+    expect(sent).toEqual(["a"]);
+    q.release("s"); // hold gone while the Send now is still in flight
+    q.kick("s");
+    await flush();
+    expect(sent).toEqual(["a"]);
+    done[0]!();
+    await now;
+    q.kick("s");
+    await flush();
+    expect(sent).toEqual(["a", "b"]);
+  });
 });

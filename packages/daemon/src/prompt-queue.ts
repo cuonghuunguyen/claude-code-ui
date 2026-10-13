@@ -5,7 +5,7 @@ export const MAX_QUEUED = 20;
 export type QueueItem = { id: string; text: string; images: string[] };
 export type QueueHeld = { reason: "usage_limit" | "not_live"; until?: number };
 type Err = { code: string; message: string };
-type Entry = { items: QueueItem[]; held?: QueueHeld; timer?: NodeJS.Timeout; inflight: boolean };
+type Entry = { items: QueueItem[]; held?: QueueHeld; timer?: NodeJS.Timeout; inflight: boolean; /** Send nows running: like inflight, no kick sends meanwhile. */ now: number };
 
 export function createPromptQueue(o: {
   /** The session takes a prompt as a new turn now. */
@@ -15,7 +15,7 @@ export function createPromptQueue(o: {
   show: (id: string, items: QueueItem[], held: QueueHeld | undefined) => void;
 }) {
   const map = new Map<string, Entry>();
-  const entry = (id: string) => map.get(id) ?? (map.set(id, { items: [], inflight: false }), map.get(id)!);
+  const entry = (id: string) => map.get(id) ?? (map.set(id, { items: [], inflight: false, now: 0 }), map.get(id)!);
   const show = (id: string) => {
     const e = map.get(id);
     o.show(id, e ? [...e.items] : [], e?.held);
@@ -24,7 +24,7 @@ export function createPromptQueue(o: {
 
   async function run(id: string) {
     const e = map.get(id);
-    if (!e || e.inflight || e.held || !e.items.length || !o.ready(id)) return;
+    if (!e || e.inflight || e.now || e.held || !e.items.length || !o.ready(id)) return;
     const item = e.items.shift()!;
     e.inflight = true;
     show(id);
@@ -64,7 +64,9 @@ export function createPromptQueue(o: {
       if (!e || at < 0) return { code: "unknown_item", message: "queued message not found (already sent?)" };
       const [item] = e.items.splice(at, 1);
       show(id);
+      e.now++;
       const err = await o.send(id, item!).catch((x): Err => ({ code: "prompt_failed", message: String(x) }));
+      e.now--;
       if (err) {
         e.items.splice(Math.min(at, e.items.length), 0, item!);
         show(id);

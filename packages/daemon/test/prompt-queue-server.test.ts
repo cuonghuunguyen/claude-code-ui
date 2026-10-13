@@ -8,16 +8,16 @@ import type { Part, ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
 import { createSettings } from "../src/settings.ts";
-import { clearQuery, clearState, fakeQuery, interruptQuery, limitQuery, limitState, permissionQuery } from "./fake-query.ts";
+import { clearQuery, clearState, closedQueries, fakeQuery, interruptQuery, limitQuery, limitState, permissionQuery } from "./fake-query.ts";
 
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 const servers: { close(): unknown }[] = [];
 afterAll(() => servers.forEach((s) => s.close()));
 vi.spyOn(console, "log").mockImplementation(() => {});
 
-async function harness(query: unknown) {
+async function harness(query: unknown, extra: { idleCloseMs?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pq-"));
-  const http = createDaemon({ webRoot: dir, roots: [dir], query: query as never, token, appSettings: createSettings({ file: join(dir, "settings.json") }) });
+  const http = createDaemon({ webRoot: dir, roots: [dir], query: query as never, token, appSettings: createSettings({ file: join(dir, "settings.json") }), ...extra });
   servers.push(http);
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
   const port = (http.address() as AddressInfo).port;
@@ -155,5 +155,33 @@ describe("queued messages in the daemon", { timeout: 20_000 }, () => {
     await c.request({ type: "session.prompt", sessionId: id, text: "hello" });
     await vi.waitFor(() => expect(h.texts(c, id)).toEqual(["limit", "hello", "later"]), { timeout: 5000 });
     c.ws.close();
+  });
+
+  it("a paused queue survives the idle close of its session: shown paused on reopen, nothing sent until resumed", async () => {
+    limitState.repeatEvent = true;
+    limitState.continueHits = false;
+    limitState.inSeconds = 60;
+    limitState.resetsAt = 0;
+    const h = await harness(limitQuery, { idleCloseMs: 150 });
+    const c = await h.client();
+    const id = await h.session(c);
+    await c.request({ type: "session.prompt", sessionId: id, text: "limit" });
+    await c.request({ type: "session.enqueue", sessionId: id, text: "later" });
+    await vi.waitFor(() => expect(h.lastQueue(c, id)?.held).toMatchObject({ reason: "usage_limit" }), { timeout: 5000 });
+    const closes = () => closedQueries.filter((o) => o.sessionId === id || o.resume === id).length;
+    const before = closes();
+    await c.request({ type: "session.unsubscribe", sessionId: id });
+    await vi.waitFor(() => expect(closes()).toBeGreaterThan(before), { timeout: 3000 });
+    await sleep(400);
+    const c2 = await h.client();
+    const sub = await c2.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0, paged: true });
+    const head = sub.result.snapshot.heads.find((e: any) => e.part.type === "prompt_queue");
+    expect(head.part.items.map((i: any) => i.text)).toEqual(["later"]);
+    expect(head.part.held).toMatchObject({ reason: "usage_limit" });
+    expect(h.texts(c, id)).toEqual(["limit"]);
+    // A user message resumes the CLI and releases the queue.
+    await c2.request({ type: "session.prompt", sessionId: id, text: "hello" });
+    await vi.waitFor(() => expect(h.texts(c2, id)).toEqual(["hello", "later"]), { timeout: 5000 });
+    c.ws.close(); c2.ws.close();
   });
 });
