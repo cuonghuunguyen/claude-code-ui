@@ -7,6 +7,8 @@ import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type PermissionMode, type PushPayload, type ServerMessage } from "@claude-ui/protocol";
 import { INSTRUCTIONS, MAX_WAIT_MS, workerMode } from "../src/orchestration.ts";
 import { createDaemon } from "../src/server.ts";
@@ -19,17 +21,20 @@ type Run = { options: Options; texts: string[]; closed?: boolean };
 const runs: Run[] = [];
 const runsIn = (cwd: string) => runs.filter((r) => r.options.cwd === cwd && r.options.canUseTool);
 const runsOf = (id: string) => runs.filter((r) => r.options.canUseTool && (r.options.sessionId === id || r.options.resume === id));
+/** CLI session ID changes by /clear (old -> new). */
+const clears: { from: string; to: string }[] = [];
 
 /**
  * Fake query(): replays each prompt; "hold" runs a turn that ends only when the next prompt arrives (Steering, "released by
  * <text>"); "ask" asks an AskUserQuestion and replies with the answer; "perm <json>" calls `{tool, input, ...options}` through
  * canUseTool (with a "don't ask again" suggestion) and replies "perm: <PermissionResult JSON>"; "classified" is a tool call the
- * auto-mode classifier denies; any other prompt replies "done: <text>". Each turn ends with a result.
+ * auto-mode classifier denies; "/clear" resets the conversation under a new session ID (no turn, as the CLI); any other prompt
+ * replies "done: <text>". Each turn ends with a result.
  */
 function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
   const run: Run = { options, texts: [] };
   runs.push(run);
-  const sid = options.sessionId ?? options.resume ?? "x";
+  let sid = options.sessionId ?? options.resume ?? "x";
   const out: SDKMessage[] = [];
   let wake = () => {};
   const emit = (m: unknown) => (out.push(m as SDKMessage), wake());
@@ -82,6 +87,13 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
     for await (const m of prompt) {
       const text = m.message.content as string;
       run.texts.push(text);
+      if (text === "/clear") {
+        emit({ type: "conversation_reset", new_conversation_id: randomUUID(), trigger: "clear", user_message_uuid: m.uuid, uuid: randomUUID(), session_id: sid });
+        clears.push({ from: sid, to: (sid = randomUUID()) });
+        emit({ type: "system", subtype: "init", terminal_slash_commands: [], permissionMode: "default", uuid: randomUUID(), session_id: sid });
+        emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: sid, is_error: false, duration_ms: 1, total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 }, permission_denials: [], result: "" });
+        continue;
+      }
       emit({ ...m, session_id: sid, isReplay: true });
       if (held) {
         const h = held;
@@ -1547,5 +1559,141 @@ describe("orchestration", () => {
     }
     expect(existsSync(wt)).toBe(false);
     expect(runs.filter((r) => r.options.cwd === wt)).toEqual([]);
+  });
+});
+
+describe("orchestration /clear (GH-334)", () => {
+  const sdk = { mcpServer: { name: "orchestration", source: "sdk" } };
+  const perm = (tool: string, input: object, extra: object = {}) => `perm ${JSON.stringify({ tool, input, ...extra })}`;
+  const link = (id: string) => JSON.parse(readFileSync(settingsFile, "utf8"))[id] ?? {};
+  const settle = async (id: string) => {
+    const end = Date.now() + 5000;
+    while ((await state(id).catch(() => undefined)) !== "idle") {
+      if (Date.now() > end) throw new Error(`${id} not idle`);
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  };
+  /** /clear in a session; returns the new session ID once it is idle. */
+  async function clear(id: string) {
+    const n = clears.length;
+    await c.request({ type: "session.prompt", sessionId: id, text: "/clear" });
+    const heir = (await until(() => clears.length > n && clears.at(-1))).to;
+    await settle(heir);
+    return heir;
+  }
+  /** Calls a tool through the MCP server instance the query was started with (what the CLI calls). */
+  async function liveCall(run: Run, name: string, args: Record<string, unknown> = {}) {
+    const cfg = (run.options.mcpServers as any).orchestration;
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await cfg.instance.connect(b);
+    const mcp = new Client({ name: "test", version: "1" });
+    await mcp.connect(a);
+    const r = (await mcp.callTool({ name, arguments: args })) as { content: { text: string }[]; isError?: boolean };
+    await mcp.close();
+    return r.isError ? { error: r.content[0]!.text } : JSON.parse(r.content[0]!.text);
+  }
+
+  it("/clear in a coordinator moves its workers to the new session: links, worker_send, notices; the old session does not resume", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "p", cwd: dirB, prompt: "hold" });
+    await until(async () => (await state(w.sessionId)) === "running");
+    const heir = await clear(coord);
+    expect(link(w.sessionId).coordinatorId).toBe(heir);
+    expect((await call(heir, "worker_list")).workers.map((x: { name: string }) => x.name)).toEqual(["p"]);
+    await call(heir, "worker_send", { name: "p", text: "end" });
+    // The notice goes into the live query, which the new session owns.
+    await until(() => runsOf(coord)[0]!.texts.some((t) => t.includes("Worker p: turn end")));
+    expect(runs.filter((r) => r.options.resume === coord)).toEqual([]);
+    expect((await call(heir, "worker_wait", { timeoutMs: 1000 })).events).toEqual([expect.objectContaining({ name: "p", type: "turn_end" })]);
+  });
+
+  it("after /clear, worker_start through the query's own server links the new worker to the new session", async () => {
+    enable();
+    const coord = await coordinator();
+    const heir = await clear(coord);
+    const w = await liveCall(runsOf(coord)[0]!, "worker_start", { name: "q", cwd: dirB, prompt: "x" });
+    expect(link(w.sessionId).coordinatorId).toBe(heir);
+    expect((await call(heir, "worker_list")).workers.map((x: { name: string }) => x.name)).toEqual(["q"]);
+    // The old session, resumed later, is a fresh coordinator without workers.
+    expect((await call(coord, "worker_list")).workers).toEqual([]);
+  });
+
+  it("events queued for the coordinator before /clear reach the new session's worker_wait", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "qd", cwd: dirB, prompt: "hold" });
+    await until(async () => (await state(w.sessionId)) === "running");
+    appSettings.set({ orchestration: { enabled: false } });
+    await call(coord, "worker_send", { name: "qd", text: "end" });
+    await settle(w.sessionId);
+    const heir = await clear(coord);
+    enable();
+    expect((await call(coord, "worker_wait", { timeoutMs: 0 })).events ?? []).toEqual([]);
+    expect((await call(heir, "worker_wait", { timeoutMs: 0 })).events).toEqual([expect.objectContaining({ name: "qd", type: "turn_end" })]);
+  });
+
+  it("a blocked worker_wait of the coordinator ends with the new session's events", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "bw", cwd: dirB, prompt: "hold" });
+    await until(async () => (await state(w.sessionId)) === "running");
+    const heir = await clear(coord);
+    const waiting = call(heir, "worker_wait", { timeoutMs: 5000 });
+    await call(heir, "worker_send", { name: "bw", text: "end" });
+    expect((await waiting).events).toEqual([expect.objectContaining({ name: "bw", type: "turn_end" })]);
+  });
+
+  it("a daemon restart after /clear keeps the new link", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "rs", cwd: dirB, prompt: "x" });
+    await settle(w.sessionId);
+    const heir = await clear(coord);
+    const t = (sessionId: string, cwd: string) => ({ sessionId, cwd, summary: sessionId, lastModified: 1 });
+    const other = await start({ ...history, listSessions: async () => [t(coord, dirA), t(heir, dirA), t(w.sessionId, dirB)] });
+    const c2 = await client((other.address() as AddressInfo).port);
+    try {
+      expect((await call(heir, "worker_list", {}, {}, other)).workers).toEqual([expect.objectContaining({ name: "rs", sessionId: w.sessionId })]);
+      expect((await call(coord, "worker_list", {}, {}, other)).workers).toEqual([]);
+      const items = (await c2.request({ type: "session.list" })).result.sessions as any[];
+      expect(items.find((x) => x.id === w.sessionId)).toEqual(expect.objectContaining({ coordinatorId: heir, workerName: "rs" }));
+      expect(items.find((x) => x.id === heir)?.coordinator).toBe(true);
+      expect(items.find((x) => x.id === coord)?.coordinator).toBeUndefined();
+    } finally {
+      c2.ws.close();
+      other.close();
+    }
+  });
+
+  it("a worker's /clear keeps it a worker under the new session ID; the old session is plain", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "wc", cwd: dirB, prompt: "x" });
+    await settle(w.sessionId);
+    await call(coord, "worker_send", { name: "wc", text: "/clear" });
+    const heir = (await until(() => clears.find((x) => x.from === w.sessionId))).to;
+    await settle(heir);
+    expect((await call(coord, "worker_list")).workers).toEqual([expect.objectContaining({ name: "wc", sessionId: heir })]);
+    expect(link(w.sessionId).coordinatorId).toBeUndefined();
+    expect(link(w.sessionId).name).toBeUndefined();
+    expect(link(heir)).toEqual(expect.objectContaining({ coordinatorId: coord, name: "wc", cwd: dirB }));
+    // The heir's turn end reaches the coordinator with the worker's name.
+    await call(coord, "worker_wait", { timeoutMs: 0 });
+    await call(coord, "worker_send", { name: "wc", text: "again" });
+    expect((await call(coord, "worker_wait", { names: ["wc"], timeoutMs: 5000 })).events).toEqual([expect.objectContaining({ name: "wc", sessionId: heir, type: "turn_end", result: "done: again" })]);
+  });
+
+  it("a card-approved worker above the coordinator's mode starts after /clear", async () => {
+    enable();
+    const coord = await coordinator();
+    const input = { name: "cc", cwd: dirB, prompt: "p", mode: "acceptEdits" };
+    await settle(coord);
+    await c.request({ type: "session.prompt", sessionId: coord, text: perm("mcp__orchestration__worker_start", input, sdk) });
+    const e = await until(() => [...c.inbox].reverse().find((m) => m.type === "event" && m.sessionId === coord && m.part.type === "permission_request" && !m.part.settled));
+    await c.request({ type: "permission.respond", requestId: (e as any).part.requestId, decision: "allow" });
+    await settle(coord);
+    const heir = await clear(coord);
+    expect((await call(heir, "worker_start", input)).mode).toBe("acceptEdits");
   });
 });

@@ -64,7 +64,7 @@ export type SessionSettings = Pick<SessionInfo, "model" | "permissionMode" | "ef
 /**
  * `onSettings`: called after model, permission mode or effort changed (the daemon persists them for a restore). `fields`: the
  * settings this change set; none when the first query starts or a /clear heir begins (saved only if the session has no entry).
- * `onCleared`: a /clear handed the live query to `heir`, a new session (the daemon lists it).
+ * `onCleared`: a /clear handed the live query of `from` (the session that was cleared) to `heir`, a new session (the daemon lists it).
  */
 type SessionOpts = Partial<SessionSettings> & {
   allowBypass?: boolean;
@@ -73,7 +73,7 @@ type SessionOpts = Partial<SessionSettings> & {
   uploadDir?: (id: string) => string | undefined;
   query?: typeof sdkQuery;
   onSettings?: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => void;
-  onCleared?: (heir: Session) => void;
+  onCleared?: (heir: Session, from: Session) => void;
   /** A CLI process started or was dropped (worker_close, Plugins Restart, idle close, rewind): the session's `live` changed, the daemon re-lists it. */
   onLiveChange?: (id: string) => void;
   /** The turn just ended because the plan usage limit was hit (assistant error rate_limit); `resetsAt` ms from its rejected rate_limit_event. */
@@ -1163,7 +1163,7 @@ export class Session {
     this.input = new InputQueue();
     heir.setState(this.state);
     heir.settingsChanged([]);
-    this.opts.onCleared?.(heir);
+    this.opts.onCleared?.(heir, this);
     if (clearId && this.checkpoints.has(clearId)) this.cut(clearId);
     this.emit({ type: "session_cleared", id: randomUUID(), sessionId: id });
     this.setState("idle");

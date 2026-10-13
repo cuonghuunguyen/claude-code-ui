@@ -351,8 +351,10 @@ export function createDaemon(opts: {
     // Only the fields this change set: a daemon on another port may have changed the others of the same session (GH-91).
     onSettings: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => saveSettings(() => settings.set(id, s, fields)),
     // /clear: the new session is listed; tabs that show the old one follow its session_cleared part.
-    onCleared: (heir: Session) => {
+    onCleared: (heir: Session, from: Session) => {
       track(heir);
+      // Workers, queued events and the server's binding follow the live query (orchestration "/clear").
+      orchestration.handOver(from.id, heir.id);
       broadcast({ type: "sessions.changed" });
     },
     worker: (id: string) => !!settings.get(id)?.coordinatorId,
@@ -750,7 +752,7 @@ export function createDaemon(opts: {
       queueMicrotask(() => broadcast({ type: "sessions.changed" }));
       return s;
     },
-    prompt: async (s, text) => (autoContinue.cancel(s.id), (await sendPrompt(s, text))?.message),
+    prompt: async (s, text, stillWanted) => (autoContinue.cancel(s.id), (await sendPrompt(s, text, [], stillWanted))?.message),
     allowed: (path) => allowed(path),
     sideOf: (path) => {
       const id = opts.sides?.pathSide(path);
@@ -990,6 +992,7 @@ export function createDaemon(opts: {
     queue.drop(id);
     deleting.add(id);
     sessions.delete(id);
+    orchestration.forget(id);
     touched.delete(id);
     try {
       await at.live?.close();
