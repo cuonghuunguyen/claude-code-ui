@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protocol";
 import { SessionList } from "./sidebar.tsx";
+import { loadSidebarView, saveSidebarView } from "./sessions.ts";
 import { SideLabel } from "./sides.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -358,6 +359,59 @@ describe("worktrees", () => {
     const d = await render({ ...props, list: l });
     expect(d.el.querySelector('[data-testid="session-state"]')).toBeNull();
     expect(worktreeRows(d.el).length).toBe(3);
+  });
+
+  const gq = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+  const openMenu = () => act(async () => gq("sidebar-options").click());
+  const stored = () => JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).layout;
+
+  it("options menu Group by (GH-333): Worktree checked by default; Project merges worktree rows, closes the menu and survives a reload", async () => {
+    localStorage.clear();
+    let r = await render(props);
+    await openMenu();
+    expect(gq("sidebar-opt-group-worktree").getAttribute("role")).toBe("menuitemradio");
+    expect(gq("sidebar-opt-group-worktree").getAttribute("aria-checked")).toBe("true");
+    expect(gq("sidebar-opt-group-project").getAttribute("aria-checked")).toBe("false");
+    const text = gq("sidebar-options-menu").textContent!;
+    expect(text).toContain("Group by");
+    expect(text.indexOf("Group by")).toBeLessThan(text.indexOf("Sort projects"));
+    await act(async () => gq("sidebar-opt-group-project").click());
+    expect(document.querySelector('[data-testid="sidebar-options-menu"]')).toBeNull();
+    expect(worktreeRows(r.el)).toEqual([]);
+    expect(stored()).toBe("classic");
+    root!.unmount();
+    r = await render(props);
+    expect(worktreeRows(r.el)).toEqual([]);
+    await openMenu();
+    expect(gq("sidebar-opt-group-project").getAttribute("aria-checked")).toBe("true");
+    await act(async () => gq("sidebar-opt-group-worktree").click());
+    expect(worktreeRows(r.el).length).toBe(3);
+  });
+
+  it("Group by follows a change from Settings (VIEW_EVENT)", async () => {
+    localStorage.clear();
+    const { el } = await render(props);
+    expect(worktreeRows(el).length).toBe(3);
+    await act(async () => saveSidebarView({ ...loadSidebarView(), layout: "classic" }));
+    expect(worktreeRows(el)).toEqual([]);
+    await openMenu();
+    expect(gq("sidebar-opt-group-project").getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("Group by: ArrowDown and Enter pick Project", async () => {
+    localStorage.clear();
+    const { el } = await render(props);
+    await openMenu();
+    const key = (target: Element, k: string) => act(async () => void target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })));
+    const worktree = gq("sidebar-opt-group-worktree");
+    await act(async () => worktree.focus());
+    await key(worktree, "ArrowDown");
+    const next = document.activeElement!;
+    expect(next).toBe(gq("sidebar-opt-group-project"));
+    await key(next, "Enter");
+    expect(stored()).toBe("classic");
+    expect(worktreeRows(el)).toEqual([]);
+    expect(document.querySelector('[data-testid="sidebar-options-menu"]')).toBeNull();
   });
 
   it("a row collapses and stays collapsed after a reload, apart from its project group", async () => {
