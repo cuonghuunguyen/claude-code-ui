@@ -3,6 +3,7 @@
 ```sh
 claude-ui [options]
 claude-ui update     # install the latest version; the next start runs it
+claude-ui <command>  # ask the running daemon (below)
 ```
 
 Example:
@@ -10,6 +11,26 @@ Example:
 ```sh
 claude-ui --port 5000 --roots ~/projects:~/oss
 ```
+
+## Commands
+
+They talk to the daemon running on this computer. They never start it and never create the token file.
+
+| Command | Does |
+| --- | --- |
+| `status` | Daemon up, version, port, sessions by state |
+| `open [sessionId] [--print]` | Open claude-ui in your browser. `--print` prints the link instead. Without a session id the link holds the pairing token; with one it is a plain link for a browser that is already paired |
+| `sessions` (`ls`) | List sessions. `--project <dir>`, `--state <idle\|running\|needs_input\|error\|closed>`, `--archived` (also show archived ones) |
+| `projects` | List projects |
+| `workers` | List orchestration workers by coordinator |
+
+Options of every command: `--json` (machine-readable; fields may be added), `--port <n>` (default: the port of the running daemon from `daemon.json`, else `PORT`, else `4280`), `--token-file <path>` (default: `CLAUDE_UI_TOKEN_FILE`, else `token` in the config folder).
+
+Exit codes: `0` ok, `1` the daemon refused (for example an unknown session id), `2` wrong usage, `3` daemon not running or token missing or rejected. Only `open --print` writes the token to the terminal.
+
+After `claude-ui update` the global `claude-ui` command stays the old one: run `npm i -g claude-code-ui` to get the new launcher. An old launcher treats a command that fails within 10 seconds (for example `status` with no daemon running) as a broken new version.
+
+Not yet: `new`, `send`, `tail`, `interrupt`, `doctor`, `logs`, `stop` (names reserved). A daemon on Windows cannot be reached from WSL; run `claude-ui` in PowerShell.
 
 ## Flags
 
@@ -49,6 +70,7 @@ The **config folder** holds the daemon's own data:
 
 | File | Holds |
 | --- | --- |
+| `daemon.json` | Port, pid, version and start time of the running daemon (no token). Removed when it exits |
 | `token` | The pairing token. Delete it and restart to unpair every browser. |
 | `projects.json` | Your project list |
 | `sessions.json` | Each session's model, mode, effort and worker links |

@@ -5,6 +5,7 @@ import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
+import { isDaemonRun } from "./cli.ts";
 import { compareVersions, FAILED_MARK, installedVersions, isVersion, RESTART_CODE, versionCli } from "./update.ts";
 
 /** A daemon from the versions dir that exits (not 0, not RESTART_CODE) this soon after its start failed to start. */
@@ -30,6 +31,8 @@ export async function launch(opts: {
   const spawn = opts.spawn ?? ((cli, args) => nodeSpawn(process.execPath, [cli, ...args], { stdio: "inherit", env: { ...process.env, CLAUDE_UI_LAUNCHER: "1" } }));
   const signals = opts.signals ?? process;
   const log = opts.log ?? console.error;
+  // Only a daemon start restarts on 75 and can fail "to start"; a client command, `update` or help just ends with its code.
+  const daemon = isDaemonRun(opts.args);
   let child: ChildProcess | undefined;
   let stopped = false;
   /** Versions this run marked as failed to start. */
@@ -49,9 +52,9 @@ export async function launch(opts: {
         child!.on("exit", (c, s) => resolve([c, s]));
       });
       if (stopped) return exitCode(code, signal);
-      if (code === RESTART_CODE) continue;
+      if (daemon && code === RESTART_CODE) continue;
       // 129, 130, 143: the daemon ended on a signal it handled or because its parent ended, not a broken release (a native crash code still counts).
-      const failedEarly = code !== null && code !== 0 && !SIGNAL_EXITS.includes(code) && signal === null && Date.now() - startedAt < START_WINDOW_MS;
+      const failedEarly = daemon && code !== null && code !== 0 && code !== USAGE_EXIT && !SIGNAL_EXITS.includes(code) && signal === null && Date.now() - startedAt < START_WINDOW_MS;
       if (failedEarly && pick.version) {
         // A broken release: run the previous version; a newer one (or a reinstall, which clears the mark) is tried again.
         try {
@@ -71,5 +74,7 @@ export async function launch(opts: {
 }
 
 const SIGNAL_EXITS = [129, 130, 143];
+/** A usage error (bad flag, unknown command): never a broken release. */
+const USAGE_EXIT = 2;
 /** The child's code; killed by a signal: 128 + its number, as a shell reports it. */
 const exitCode = (code: number | null, signal: NodeJS.Signals | null) => code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);

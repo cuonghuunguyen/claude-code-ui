@@ -1,11 +1,12 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
-import { HELP, PHONE_HINT, parseCli } from "./cli.ts";
+import { HELP, PHONE_HINT, USAGE_HINT, parseCli } from "./cli.ts";
 import { createSettings } from "./settings.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
@@ -18,12 +19,16 @@ import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
 import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
 import { startServe, tailscalePreflight } from "./tailscale.ts";
+import { openInBrowser, runClient } from "./ctl/commands.ts";
+import { claimDaemonFile } from "./ctl/daemon-file.ts";
 import { configDir, loadToken, pairingUrl } from "./token.ts";
 import { defaultUploadsDir } from "./uploads.ts";
 import { installVersion, latestNewer, parseRegistry, pruneVersions, versionsDir } from "./update.ts";
 import { createBuildInfo } from "./build-info.ts";
 
-logExit(process, console.error);
+const cli = parseCli(process.argv.slice(2), process.env, homedir());
+// The exit line is for a daemon's log; a client command, update, help or a usage error prints only its own output.
+logExit(process, (line) => cli.kind === "run" && console.error(line));
 let cleanup = () => {};
 exitOnSignal(process, () => cleanup());
 
@@ -34,12 +39,15 @@ const realOr = (p: string) => {
     return p;
   }
 };
-const cli = parseCli(process.argv.slice(2), process.env, homedir());
 if (cli.kind === "help") (console.log(HELP), process.exit(0));
 // The package.json next to dist/ (installed) or src/ (source checkout, no version: "dev").
 const version: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version ?? "dev";
 if (cli.kind === "version") (console.log(version), process.exit(0));
-if (cli.kind === "error") (console.error(`claude-ui: ${cli.message}\n\n${HELP}`), process.exit(1));
+if (cli.kind === "error") (console.error(`claude-ui: ${cli.message}\n${USAGE_HINT}`), process.exit(2));
+if (cli.kind === "client") {
+  // A client command only talks to a running daemon: no token creation, sides or update check. Never exits 75.
+  process.exit(await runClient(cli, { env: process.env, dir: configDir(), stdout: (s) => process.stdout.write(s), stderr: (s) => process.stderr.write(s), openUrl: openInBrowser }));
+}
 /** Registry of the update check and install; a mirror, or a fake one in tests. */
 let registry: string | undefined;
 try {
@@ -140,7 +148,15 @@ if (side) {
   const update = updateCheck !== false && version !== "dev" && launched ? { current: version, dir: versionsDir(), registry, exit: (code: number) => void setTimeout(() => process.exit(code), 200) } : undefined;
   // A source checkout compares its files with the start; a release compares its version with the installed ones (build-info.ts).
   const buildInfo = createBuildInfo({ version, srcDirs: [fileURLToPath(new URL("../src", import.meta.url)), fileURLToPath(new URL("../../protocol/src", import.meta.url))], versionsDir: versionsDir() });
-  createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true }).listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
+  const server = createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true });
+  server.listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
+    // Where this daemon listens, for the client commands (no token in it); gone with the process.
+    const dir = configDir();
+    try {
+      process.on("exit", claimDaemonFile(dir, { port: (server.address() as AddressInfo).port, pid: process.pid, version, startedAt: new Date().toISOString() }));
+    } catch (e) {
+      console.error(`claude-ui: cannot write daemon.json: ${(e as Error).message}`);
+    }
     if (ts && "cli" in ts) {
       if (ts.serve) {
         const serve = startServe({ cli: ts.cli, port, spawn, log: console.error, platform: process.platform });
