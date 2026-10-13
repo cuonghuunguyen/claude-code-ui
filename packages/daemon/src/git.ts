@@ -1,6 +1,6 @@
 // Git branch and diff size of a session cwd, for the status bar (`git.status`).
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
-import { lstat, open } from "node:fs/promises";
+import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { GIT_LOG_MAX_LIMIT, worktreeNameError, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
 import { runGit } from "./git-runner.ts";
@@ -38,22 +38,22 @@ const gitSlot = limiter(4);
  * `objects/info/alternates` names. File system only; null outside a work tree or without a readable `.git`.
  */
 type Repo = { top: string; own: string; common: string; alternates: string[] };
-function repoOf0(cwd: string): Repo | null {
-  const top = gitTopOf(cwd);
+async function repoOf0(cwd: string): Promise<Repo | null> {
+  const top = await gitTopOf(cwd);
   if (!top) return null;
-  const dirs = gitDirsOf(top);
+  const dirs = await gitDirsOfAsync(top);
   if (!dirs) return null;
-  const own = real(dirs.own);
-  const common = real(dirs.common);
+  const own = await realAsync(dirs.own);
+  const common = await realAsync(dirs.common);
   const alternates: string[] = [];
   try {
     const objects = join(common, "objects");
-    for (const l of readFileSync(join(objects, "info", "alternates"), "utf8").split("\n")) {
+    for (const l of (await readFile(join(objects, "info", "alternates"), "utf8")).split("\n")) {
       const t = l.trim().replace(/^"(.*)"$/, "$1");
       if (!t || t.startsWith("#")) continue;
       // A UNC alternate to another share, or a device path: no file call (NTLM), the repository counts as unresolved.
       if (foreignPointer(t, objects)) return null;
-      alternates.push(real(resolve(objects, t)));
+      alternates.push(await realAsync(resolve(objects, t)));
     }
   } catch {
     // No alternates.
@@ -77,15 +77,20 @@ const pinFor = (r: Repo): NodeJS.ProcessEnv => {
     ...(up !== r.top && { GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES ? `${up}${delimiter}${process.env.GIT_CEILING_DIRECTORIES}` : up }),
   };
 };
-export const ceilingEnv = (cwd: string): NodeJS.ProcessEnv => {
-  const top = gitTopOf(cwd);
+export const ceilingEnv = async (cwd: string): Promise<NodeJS.ProcessEnv> => {
+  const top = await gitTopOf(cwd);
   if (!top) return {};
   const kept = pins.get(top);
   if (kept) return kept;
-  const r = repoOf0(top);
+  const r = await repoOf0(top);
   return r ? pinFor(r) : {};
 };
-const git = async (cwd: string, ...args: string[]) => (await gitSlot(() => runGit({ cwd, args: [...READ_ONLY, ...args], env: { ...readEnv(), ...ceilingEnv(cwd) } }))).stdout.toString("utf8").trim();
+/** The repository pin (#317) for a git call made outside this module (`search.ts`, `git-readonly.ts`); file calls are async. */
+export const pinEnv = ceilingEnv;
+const git = async (cwd: string, ...args: string[]) => {
+  const env = { ...readEnv(), ...(await ceilingEnv(cwd)) };
+  return (await gitSlot(() => runGit({ cwd, args: [...READ_ONLY, ...args], env, idempotent: true }))).stdout.toString("utf8").trim();
+};
 
 /**
  * `cwd`'s own git dir and the one its worktrees share; undefined without a readable `cwd/.git`. In a linked worktree `.git`
@@ -112,9 +117,30 @@ export function gitDirsOf(cwd: string): { own: string; common: string } | undefi
   }
 }
 
-const statOf = (p: string) => {
+async function gitDirsOfAsync(cwd: string): Promise<{ own: string; common: string } | undefined> {
+  const dotGit = join(cwd, ".git");
   try {
-    const st = statSync(p);
+    if ((await stat(dotGit)).isDirectory()) return { own: dotGit, common: dotGit };
+    const gitdir = /^gitdir:\s*(.+)$/m.exec(await readFile(dotGit, "utf8"))?.[1];
+    if (!gitdir) return undefined;
+    // A pointer to another UNC share or a device path is never followed (an SMB lookup sends the NTLM hash).
+    if (foreignPointer(gitdir.trim(), cwd)) return undefined;
+    const own = resolve(cwd, gitdir.trim());
+    try {
+      const common = (await readFile(join(own, "commondir"), "utf8")).trim();
+      if (foreignPointer(common, own)) return undefined;
+      return { own, common: resolve(own, common) };
+    } catch {
+      return { own, common: own };
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+const statOf = async (p: string) => {
+  try {
+    const st = await stat(p);
     return `${st.mtimeMs}:${st.size}:${st.ino}`;
   } catch {
     return "-";
@@ -127,42 +153,42 @@ let uncached = 0;
  * and every folder under refs/. A loose ref update is a lock-file rename in its folder, so the folder mtime changes; a
  * working-tree edit does not change it. "-" without a readable `.git`; "*<n>" (never equal) past 5000 folders.
  */
-export function refsStamp(cwd: string): string {
-  const top = gitTopOf(cwd) ?? cwd;
-  const dirs = gitDirsOf(top);
+export async function refsStamp(cwd: string): Promise<string> {
+  const top = (await gitTopOf(cwd)) ?? cwd;
+  const dirs = await gitDirsOfAsync(top);
   if (!dirs) return "-";
-  const parts = [statOf(join(dirs.own, "HEAD")), statOf(join(dirs.common, "packed-refs")), statOf(join(dirs.common, "reftable", "tables.list"))];
+  const parts = [await statOf(join(dirs.own, "HEAD")), await statOf(join(dirs.common, "packed-refs")), await statOf(join(dirs.common, "reftable", "tables.list"))];
   try {
-    for (const n of readdirSync(join(dirs.common, "worktrees")).sort()) parts.push(`${n}:${statOf(join(dirs.common, "worktrees", n, "HEAD"))}`);
+    for (const n of (await readdir(join(dirs.common, "worktrees"))).sort()) parts.push(`${n}:${await statOf(join(dirs.common, "worktrees", n, "HEAD"))}`);
   } catch {
     // No linked worktree.
   }
   let count = 0;
-  const walk = (rel: string): boolean => {
+  const walk = async (rel: string): Promise<boolean> => {
     let entries;
     try {
-      entries = readdirSync(join(dirs.common, "refs", rel), { withFileTypes: true });
+      entries = await readdir(join(dirs.common, "refs", rel), { withFileTypes: true });
     } catch {
       return true;
     }
     if (++count > MAX_STAMP_DIRS) return false;
-    parts.push(`${rel}:${statOf(join(dirs.common, "refs", rel))}`);
-    for (const e of entries) if (e.isDirectory() && !walk(rel ? `${rel}/${e.name}` : e.name)) return false;
+    parts.push(`${rel}:${await statOf(join(dirs.common, "refs", rel))}`);
+    for (const e of entries) if (e.isDirectory() && !(await walk(rel ? `${rel}/${e.name}` : e.name))) return false;
     return true;
   };
-  if (!walk("")) return `*${++uncached}`;
+  if (!(await walk(""))) return `*${++uncached}`;
   return parts.join("|");
 }
 /** `refsStamp` of the repository `cwd` belongs to, null outside a work tree; file stats only, no git process (`git.refs`). */
-export function gitRefs(cwd: string, allowed: (p: string) => boolean): string | null {
-  return gitTopOf(cwd) && !gitEscapes(cwd, allowed) ? refsStamp(cwd) : null;
+export async function gitRefs(cwd: string, allowed: (p: string) => boolean): Promise<string | null> {
+  return (await gitTopOf(cwd)) && !(await gitEscapes(cwd, allowed)) ? refsStamp(cwd) : null;
 }
 /** The full ref HEAD points to (`refs/heads/x`); undefined when detached or unreadable. */
-function headRef(top: string): string | undefined {
-  const dirs = gitDirsOf(top);
+async function headRef(top: string): Promise<string | undefined> {
+  const dirs = await gitDirsOfAsync(top);
   if (!dirs) return undefined;
   try {
-    return /^ref: (refs\/heads\/\S+)\s*$/.exec(readFileSync(join(dirs.own, "HEAD"), "utf8"))?.[1];
+    return /^ref: (refs\/heads\/\S+)\s*$/.exec(await readFile(join(dirs.own, "HEAD"), "utf8"))?.[1];
   } catch {
     return undefined;
   }
@@ -204,7 +230,7 @@ const lastStatus = new Map<string, GitStatus>();
 export async function gitStatus(cwd: string): Promise<GitStatus | null> {
   if (graphActive) {
     const last = lastStatus.get(cwd);
-    if (last) return { ...last, refs: refsStamp(cwd) };
+    if (last) return { ...last, refs: await refsStamp(cwd) };
     await graphIdle();
   }
   let branch: string;
@@ -223,7 +249,7 @@ export async function gitStatus(cwd: string): Promise<GitStatus | null> {
     added += Number(a) || 0;
     removed += Number(r) || 0;
   }
-  const s = { branch, added, removed, refs: refsStamp(cwd) };
+  const s = { branch, added, removed, refs: await refsStamp(cwd) };
   lastStatus.set(cwd, s);
   return s;
 }
@@ -270,9 +296,9 @@ export class WorktreeError extends Error {
 }
 
 /** git with a timeout, no shell; failure becomes a WorktreeError git_failed with the first stderr line. */
-async function run(cwd: string, args: string[], timeout = 30_000, env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" }, urgent = false): Promise<string> {
+async function run(cwd: string, args: string[], timeout = 30_000, env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" }, urgent = false, idempotent = false): Promise<string> {
   try {
-    return (await gitSlot(() => runGit({ cwd, args, timeout, env }), urgent)).stdout.toString("utf8").trim();
+    return (await gitSlot(() => runGit({ cwd, args, timeout, env, idempotent }), urgent)).stdout.toString("utf8").trim();
   } catch (e) {
     const err = e as { killed?: boolean; stderr?: string; message: string };
     throw new WorktreeError("git_failed", err.killed ? `git ${args[0]} timed out` : (err.stderr?.split("\n").find((l) => l.trim()) ?? err.message));
@@ -283,6 +309,7 @@ const inside = (root: string, p: string) => {
   const r = relative(root, p);
   return r === "" || (!r.startsWith("..") && !isAbsolute(r));
 };
+export const realAsync = (p: string) => realpath(p).catch(() => p);
 export const real = (p: string) => {
   try {
     return realpathSync(p);
@@ -518,7 +545,7 @@ const MAX_COMMIT_FILES = 3000;
 const MAX_BRANCHES = 2000;
 const SAFE = [...READ_ONLY, "-c", "log.showSignature=false", "-c", "core.quotePath=false"];
 /** Every git call of the graph: SAFE config first, no lazy fetch. */
-const g = (cwd: string, args: string[]) => run(cwd, [...SAFE, ...args], 30_000, { ...readEnv(), ...ceilingEnv(cwd) }, true);
+const g = async (cwd: string, args: string[]) => run(cwd, [...SAFE, ...args], 30_000, { ...readEnv(), ...(await ceilingEnv(cwd)) }, true, true);
 const gok = (cwd: string, ...args: string[]) => g(cwd, args).then(() => true, () => false);
 const bad = (m: string) => new WorktreeError("bad_request", m);
 
@@ -543,10 +570,10 @@ const intIn = (v: unknown, min: number, max: number, def: number, what: string):
  * The canonical repository top of `cwd` (the first folder up with a `.git` entry), null outside a work tree. File system only,
  * like `gitDirsOf`: a `safe.directory` refusal shows as `git_failed` from the next git call instead of not-a-repo.
  */
-export function gitTopOf(cwd: string): string | null {
+export async function gitTopOf(cwd: string): Promise<string | null> {
   let d = resolve(cwd);
   for (;;) {
-    if (lstatSync(join(d, ".git"), { throwIfNoEntry: false })) return real(d);
+    if (await lstat(join(d, ".git")).then(() => true, () => false)) return realAsync(d);
     const up = dirname(d);
     if (up === d) return null;
     d = up;
@@ -562,11 +589,11 @@ export async function gitTop(cwd: string): Promise<string | null> {
  * symlink or a `gitdir:` file to elsewhere, or a linked worktree whose main repository is outside, would show that repository.
  * File system only; false outside a work tree.
  */
-export function gitEscapes(cwd: string, allowed: (p: string) => boolean): boolean {
-  const top = gitTopOf(cwd);
+export async function gitEscapes(cwd: string, allowed: (p: string) => boolean): Promise<boolean> {
+  const top = await gitTopOf(cwd);
   if (!top) return false;
   if (!allowed(top)) return true;
-  const r = repoOf0(top);
+  const r = await repoOf0(top);
   // A `.git` entry exists but cannot be resolved (no gitdir line, unreadable, foreign pointer): outside, fail closed.
   return r ? escapesRoots(r, allowed) : true;
 }
@@ -574,11 +601,11 @@ export function gitEscapes(cwd: string, allowed: (p: string) => boolean): boolea
  * A cwd inside the roots whose repository (top, git dirs, alternates) is outside must not expose files outside the roots
  * through git objects. The values checked are the ones git then gets (`pins`): no gap for a `.git` swap.
  */
-export function topIn(cwd: string, allowed: (p: string) => boolean): string | null {
-  const top = gitTopOf(cwd);
+export async function topIn(cwd: string, allowed: (p: string) => boolean): Promise<string | null> {
+  const top = await gitTopOf(cwd);
   if (!top) return null;
   if (!allowed(top)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
-  const r = repoOf0(top);
+  const r = await repoOf0(top);
   if (!r) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
   if (escapesRoots(r, allowed)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
   pins.delete(top);
@@ -623,12 +650,13 @@ export async function gitLog(cwd: string, o: GitLogOptions): Promise<GitLog | nu
   const limit = intIn(o.limit, 1, GIT_LOG_MAX_LIMIT, LOG_DEFAULT, "limit");
   const author = filterText(o.author, "author");
   const text = filterText(o.text, "text");
-  const top = topIn(cwd, o.allowed);
+  const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   return graphTask(async () => {
     // Taken before any git call: a ref that moves meanwhile gives a stamp older than the data, never newer.
-    const stamp = refsStamp(top);
-    const first = (log: GitLog, branches: string[]): GitLog => (skip === 0 ? { ...log, branches, refs: stamp, ...optional("head", headRef(top)) } : log);
+    const stamp = await refsStamp(top);
+    const head = await headRef(top);
+    const first = (log: GitLog, branches: string[]): GitLog => (skip === 0 ? { ...log, branches, refs: stamp, ...optional("head", head) } : log);
     const branches = skip === 0 ? branchList(top, o.fresh ? undefined : stamp) : undefined;
     // A rejection of the branch list would be unhandled while the ref is checked.
     branches?.catch(() => {});
@@ -725,7 +753,7 @@ async function commitFiles(top: string, hash: string, base: string | undefined):
 /** Header, message and changed files of one commit (no refs: decorating is slow with thousands of refs); null outside a git work tree. */
 export async function gitShow(cwd: string, hash: string, allowed: (p: string) => boolean): Promise<GitCommitDetail | null> {
   if (!isHash(hash)) throw bad("Invalid commit hash");
-  const top = topIn(cwd, allowed);
+  const top = await topIn(cwd, allowed);
   if (!top) return null;
   const key = `${top}\0${hash}`;
   const hit = commitCache.get(key);
@@ -752,7 +780,7 @@ export type BlobRef = { top: string; obj: string; size: number; max: number };
 export async function gitBlobRef(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<BlobRef> {
   if (!isHash(hash)) throw bad("Invalid commit hash");
   const p = repoPath(path);
-  const top = topIn(cwd, allowed);
+  const top = await topIn(cwd, allowed);
   if (!top) throw new WorktreeError("not_git", "Not in a git repository");
   const obj = `${hash}:${p}`;
   if (!(await gok(top, "cat-file", "-e", obj))) throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
@@ -764,7 +792,8 @@ export async function gitBlobRef(cwd: string, hash: string, path: string, allowe
 /** The bytes of a checked blob. */
 export async function gitBlobRead(ref: BlobRef): Promise<Buffer> {
   try {
-    return (await gitSlot(() => runGit({ cwd: ref.top, args: [...SAFE, "cat-file", "blob", ref.obj], maxBuffer: ref.max + 1, env: { ...readEnv(), ...ceilingEnv(ref.top) }, timeout: 30_000 }), true)).stdout;
+    const env = { ...readEnv(), ...(await ceilingEnv(ref.top)) };
+    return (await gitSlot(() => runGit({ cwd: ref.top, args: [...SAFE, "cat-file", "blob", ref.obj], maxBuffer: ref.max + 1, env, timeout: 30_000, idempotent: true }), true)).stdout;
   } catch (e) {
     throw new WorktreeError("git_failed", (e as Error).message.split("\n")[0]!);
   }
@@ -773,7 +802,7 @@ export async function gitBlobRead(ref: BlobRef): Promise<Buffer> {
 export async function gitFileAt(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<Buffer> {
   if (!isHash(hash)) throw bad("Invalid commit hash");
   const p = repoPath(path);
-  const top = topIn(cwd, allowed);
+  const top = await topIn(cwd, allowed);
   if (!top) throw new WorktreeError("not_git", "Not in a git repository");
   const obj = `${hash}:${p}`;
   return graphTask(async () => {
@@ -783,7 +812,8 @@ export async function gitFileAt(cwd: string, hash: string, path: string, allowed
     const first = (e: { stderr?: string; message: string }) => e.stderr?.split("\n").find((l) => l.trim()) ?? e.message.split("\n")[0]!;
     let stdout: Buffer;
     try {
-      stdout = (await gitSlot(() => runGit({ cwd: top, args, input: odd ? undefined : `${obj}\n`, maxBuffer: max + 512, env: { ...readEnv(), ...ceilingEnv(top) }, timeout: 30_000 }), true)).stdout;
+      const env = { ...readEnv(), ...(await ceilingEnv(top)) };
+      stdout = (await gitSlot(() => runGit({ cwd: top, args, input: odd ? undefined : `${obj}\n`, maxBuffer: max + 512, env, timeout: 30_000, idempotent: true }), true)).stdout;
     } catch (e) {
       const err = e as { code?: string | number; stdout?: Buffer; stderr?: string; killed?: boolean; message: string };
       const overflow = err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
@@ -852,7 +882,7 @@ export type GitDiffOptions = { base: unknown; ref?: unknown; allowed: (p: string
 export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff | null> {
   if (o.base !== "head" && o.base !== "branch") throw bad("Invalid base");
   if (o.ref !== undefined && typeof o.ref !== "string") throw bad("Invalid ref");
-  const top = topIn(cwd, o.allowed);
+  const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   const prefix = await g(cwd, ["rev-parse", "--show-prefix"]);
   const head = await g(top, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]).catch(() => "");

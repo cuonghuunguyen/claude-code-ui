@@ -573,7 +573,7 @@ export function createSides(opts: {
         s.conns.clear();
         for (const [gid, c] of s.gits) {
           clearTimeout(c.timer);
-          c.fail(new SideGone(`${s.label} stopped`));
+          c.fail(new SideGone(`${s.label} stopped`, true));
           s.gits.delete(gid);
         }
         for (const reqId of [...(requestsOf.get(s.id) ?? [])]) forgetRequest(reqId);

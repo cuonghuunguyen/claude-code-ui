@@ -43,9 +43,9 @@ export function tidy(text: string, max: number): string {
 }
 
 /** Env of every remote operation: no prompt of any kind (credentials come from the user's helpers and ssh-agent only). */
-export function remoteEnv(top: string, sshCommand: string): NodeJS.ProcessEnv {
+export async function remoteEnv(top: string, sshCommand: string): Promise<NodeJS.ProcessEnv> {
   const ownSsh = process.env.GIT_SSH_COMMAND || process.env.GIT_SSH || sshCommand;
-  return { ...process.env, ...ceilingEnv(top), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", ...(!ownSsh && { GIT_SSH_COMMAND: BATCH_SSH }) };
+  return { ...process.env, ...(await ceilingEnv(top)), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", ...(!ownSsh && { GIT_SSH_COMMAND: BATCH_SSH }) };
 }
 
 /**
@@ -127,7 +127,7 @@ export type RemoteResult = { output: string; refs: string | null };
 
 /** Remote names and the user's own ssh command of the repository (`core.sshCommand`). */
 async function remoteConfigOf(top: string): Promise<{ names: Set<string>; sshCommand: string }> {
-  const base = { ...process.env, ...ceilingEnv(top), GIT_TERMINAL_PROMPT: "0" };
+  const base = { ...process.env, ...(await ceilingEnv(top)), GIT_TERMINAL_PROMPT: "0" };
   const cfg = await local(top, ["config", "--get-regexp", "^(remote\\..+\\.url|core\\.sshcommand)$"], base);
   const names = new Set<string>();
   let sshCommand = "";
@@ -147,16 +147,16 @@ export type RemoteOptions = { allowed: (p: string) => boolean; platform?: string
 export async function gitFetch(cwd: string, o: RemoteOptions): Promise<RemoteResult | null> {
   // The WSL runners (side, wsl.exe) cannot end a timed-out fetch's ssh child, so its lock could not be trusted.
   if (wslPathOf(cwd)) throw new WorktreeError("bad_request", "Fetch is not supported for WSL projects yet");
-  const top = topIn(cwd, o.allowed);
+  const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   return exclusive(top, async () => {
     const { names, sshCommand } = await remoteConfigOf(top);
     if (names.size === 0) throw new WorktreeError("bad_request", "No remote to fetch from");
     if (names.size > MAX_REMOTES) throw new WorktreeError("bad_request", `Too many remotes (${names.size}): fetch in a terminal`);
-    const env = remoteEnv(top, sshCommand);
+    const env = await remoteEnv(top, sshCommand);
     await checkRemotes(top, [...names], false, env, o.allowed, o.platform ?? process.platform);
     const output = await remoteOp(top, "fetch", FETCH_ARGS, env);
-    return { output, refs: gitRefs(top, o.allowed) };
+    return { output, refs: await gitRefs(top, o.allowed) };
   });
 }
 
@@ -231,10 +231,10 @@ async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remo
 export async function gitBranch(cwd: string, ref: string, o: RemoteOptions): Promise<GitBranchResult["branch"]> {
   if (wslPathOf(cwd)) throw new WorktreeError("bad_request", WSL_REFUSED);
   const r = branchRef(ref);
-  const top = topIn(cwd, o.allowed);
+  const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   const { names } = await remoteConfigOf(top);
-  return branchInfo(top, r, { ...process.env, ...ceilingEnv(top), GIT_TERMINAL_PROMPT: "0" }, names);
+  return branchInfo(top, r, { ...process.env, ...(await ceilingEnv(top)), GIT_TERMINAL_PROMPT: "0" }, names);
 }
 
 /** `argv`: the command the dialog showed; the daemon runs only what it computes again to the same words. */
@@ -245,11 +245,11 @@ async function writeOp(cwd: string, o: Write, verb: "push" | "pull"): Promise<Re
   if (!hex(o.local)) throw new WorktreeError("bad_request", "Bad commit");
   if (o.lease !== undefined && !hex(o.lease)) throw new WorktreeError("bad_request", "Bad lease");
   if (!Array.isArray(o.argv) || o.argv.length > 64 || !o.argv.every((a) => typeof a === "string")) throw new WorktreeError("bad_request", "Missing command");
-  const top = topIn(cwd, o.allowed);
+  const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   return exclusive(top, async () => {
     const { names, sshCommand } = await remoteConfigOf(top);
-    const env = remoteEnv(top, sshCommand);
+    const env = await remoteEnv(top, sshCommand);
     const info = await branchInfo(top, ref, env, names);
     const x = ref.slice(11);
     if (o.local !== info.local) throw new WorktreeError("stale", `${x} moved since the menu opened: reopen it`);
@@ -278,7 +278,7 @@ async function writeOp(cwd: string, o: Write, verb: "push" | "pull"): Promise<Re
       if (o.lease !== undefined && e instanceof WorktreeError && /stale info/.test(e.message)) throw new WorktreeError("stale", "The remote branch changed since the menu opened; fetch and retry");
       throw e;
     });
-    return { output, refs: gitRefs(top, o.allowed) };
+    return { output, refs: await gitRefs(top, o.allowed) };
   });
 }
 export const gitPush = (cwd: string, o: Write) => writeOp(cwd, o, "push");

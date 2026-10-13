@@ -4,7 +4,7 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import { perf } from "./perf.ts";
 
-export type GitRunOptions = { cwd: string; args: string[]; env: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number; input?: string; file?: string;
+export type GitRunOptions = { cwd: string; args: string[]; env: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number; input?: string; file?: string; /** May run twice: the call only reads. A WSL side lost after the call was sent re-runs it through wsl.exe only then. */ idempotent?: boolean;
   /** The process and everything it starts (ssh, per-remote fetches) run in their own group, which a timeout kills as a whole; the call settles after the group's pipes closed. */
   killTree?: boolean };
 export type GitRunOutput = { stdout: Buffer; stderr: string };

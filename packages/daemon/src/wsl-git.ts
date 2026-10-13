@@ -69,8 +69,13 @@ export function wslExeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return out;
 }
 
-/** A side transport failure (side not ready / exited): the caller may use wsl.exe instead. */
-export class SideGone extends Error {}
+/** A side transport failure (side not ready / exited): the caller may use wsl.exe instead, unless `sent` and the call is not idempotent. */
+export class SideGone extends Error {
+  /** The call was already sent to the side before it stopped: git may have run. */
+  constructor(message: string, readonly sent = false) {
+    super(message);
+  }
+}
 
 export type WslGitOptions = {
   local: GitRunner;
@@ -99,6 +104,6 @@ export function wslGitRunner(o: WslGitOptions): GitRunner {
     const viaExe = () => o.local({ ...r, file: "wsl.exe", cwd: homedir(), args: wslGitArgs(w.distro, wslGitScript(w.posix, args, env)), env: wslExeEnv(process.env) });
     const id = o.side?.(w.distro);
     if (!id || !o.sideRun) return viaExe();
-    return o.sideRun(id, { ...r, cwd: w.posix, args, env }).catch((e) => (e instanceof SideGone ? viaExe() : Promise.reject(e)));
+    return o.sideRun(id, { ...r, cwd: w.posix, args, env }).catch((e) => (e instanceof SideGone && (!e.sent || r.idempotent) ? viaExe() : Promise.reject(e)));
   };
 }
