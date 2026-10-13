@@ -778,3 +778,35 @@ describe("lookup of a session in a project not added on its side (GH-328 F1)", (
     expect(t.sides.sessionSide.get(A1)).toBeUndefined();
   });
 });
+
+describe("session.ids fallback and malformed answers (GH-328 F1)", () => {
+  const owner = () => fakeSide((m) => (m.type === "session.ids" ? { ids: [B1] } : m.type === "session.list" ? EMPTY : null));
+  /** A side that claims not to know session.ids and answers session.list with `list` (raw result). */
+  const oldSide = (list: unknown) => {
+    const s: ReturnType<typeof fakeSide> = fakeSide((m) => {
+      if (m.type === "session.ids") return void setTimeout(() => s.out({ type: "error", reqId: m.reqId, code: "unknown_type", message: "x" }));
+      if (m.type === "session.list") return void setTimeout(() => s.out({ type: "reply", reqId: m.reqId, result: list }));
+      return null;
+    });
+    return s;
+  };
+  for (const [name, list] of [["null result", null], ["sessions not an array", { sessions: "x" }], ["sessions [null]", { sessions: [null] }], ["sessions [1]", { sessions: [1] }]] as const) {
+    it(`a malformed fallback list (${name}) is no error; the owner still gets the link`, async () => {
+      const a = oldSide(list);
+      const b = owner();
+      const t = await setup(a, b);
+      const r = await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+      expect(r.filter((m) => m.type === "error")).toEqual([]);
+      expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
+    });
+  }
+
+  it("a session.ids that times out does not fall back to the list", async () => {
+    const a = fakeSide((m) => (m.type === "session.ids" ? undefined : lists(B1)(m)));
+    const t = await setup(a, undefined, undefined, { router: { lookupTimeoutMs: 50 } });
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(frames(a, "session.list")).toEqual([]);
+    expect(t.sides.sessionSide.get(B1)).toBeUndefined();
+  });
+});

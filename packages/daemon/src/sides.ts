@@ -915,7 +915,7 @@ export function createRouter(opts: {
     if (a.type !== "error" || a.code !== "unknown_type") return new Set();
     const l = await sideCall(id, { type: "session.list", reqId: "" } as ClientMessage, t);
     const rows = l.type === "reply" ? (l.result as ListLike | null)?.sessions : undefined;
-    return new Set(Array.isArray(rows) ? rows.map((x) => x.id) : []);
+    return new Set(Array.isArray(rows) ? rows.flatMap((x) => (typeof x?.id === "string" ? [x.id] : [])) : []);
   }
   let round: Promise<Map<string, Set<string>>> | undefined;
   /** Every side's session IDs; one round at a time, shared by concurrent lookups. */
@@ -937,7 +937,7 @@ export function createRouter(opts: {
       if (known) return known;
       if (sides.contested.has(msg.sessionId) && !(await opts.isLocalSession(msg.sessionId))) return null;
       if (conns.size && !(await opts.isLocalSession(msg.sessionId))) {
-        // A link or notification to a side session this connection has not listed yet: list every side, never send the ID to one (GH-328).
+        // A link or notification to a side session this connection has not listed yet: ask every side for its session IDs, never send the ID to one (GH-328).
         await lookUp(msg.sessionId);
         const owner = sides.sessionSide.get(msg.sessionId);
         if (owner) return owner;
