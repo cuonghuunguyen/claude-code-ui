@@ -123,4 +123,33 @@ describe("ArtifactPreview", () => {
     await mount(loader, 0, "toolu_rc2", true);
     expect(loader).not.toHaveBeenCalled();
   });
+
+  it("a request cut by a dropped connection is asked again on reconnect", async () => {
+    const loader = vi
+      .fn<ArtifactPreviewLoader>()
+      .mockRejectedValueOnce(new Error("disconnected"))
+      .mockResolvedValue({ url: "/artifact/n/p.html?v=9", size: 1, mtime: 9 });
+    await mount(loader, 0, "toolu_pd");
+    await click("Show preview");
+    expect(el.textContent).toContain("disconnected");
+    await mount(loader, 0, "toolu_pd", false);
+    await mount(loader, 0, "toolu_pd", true);
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(el.querySelector("iframe")!.getAttribute("src")).toContain("v=9");
+  });
+
+  it("another failure is not asked again on reconnect", async () => {
+    const loader = vi.fn(async () => Promise.reject(Object.assign(new Error("larger"), { code: "too_large" })));
+    await mount(loader, 0, "toolu_pe");
+    await click("Show preview");
+    await mount(loader, 0, "toolu_pe", false);
+    await mount(loader, 0, "toolu_pe", true);
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it("the offline note names what is blocked", async () => {
+    await mount(ok());
+    await click("Show preview");
+    expect(el.textContent).toContain("Local file, shown offline: network requests, remote scripts, images, fonts and links are blocked.");
+  });
 });

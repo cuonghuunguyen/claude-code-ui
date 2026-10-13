@@ -4549,6 +4549,7 @@ describe("artifact.preview and /artifact (GH-175)", () => {
     publish("toolu_big", { file_path: join(outside, "big.html") }),
     publish("toolu_read", { action: "read", file_path: page }),
     publish("toolu_err", { file_path: page }),
+    publish("toolu_grow", { file_path: join(outside, "grow.html") }),
   ];
   const turn = (sid: string, items: { id: string; input: object }[], extra: { id: string; name: string; input: object }[] = []) => {
     const all = [...items.map((c) => ({ id: c.id, name: "Artifact", input: c.input })), ...extra];
@@ -4662,6 +4663,43 @@ describe("artifact.preview and /artifact (GH-175)", () => {
     rmSync(page);
     expect((await get(gone)).status).toBe(404);
     writeFileSync(page, keep);
+    c.ws.close();
+  });
+
+  it("a page that grows while it streams is cut at Content-Length (review attack)", async () => {
+    const MiB = 1 << 20;
+    const grow = join(outside, "grow.html");
+    writeFileSync(grow, Buffer.alloc(15 * MiB, 0x41));
+    const c = await open();
+    const r = await preview(c, "toolu_grow");
+    expect(r.type).toBe("reply");
+    const wire = await new Promise<{ cl: number; body: number }>((ok, fail) => {
+      const s = connect(dport(), "127.0.0.1", () => s.write(`GET ${r.result.url} HTTP/1.1\r\nhost: 127.0.0.1:${dport()}\r\nsec-fetch-dest: iframe\r\nsec-fetch-site: same-origin\r\nconnection: close\r\n\r\n`));
+      let buf = Buffer.alloc(0);
+      let appended = false;
+      s.on("data", (x) => {
+        buf = Buffer.concat([buf, x as Buffer]);
+        if (!appended && buf.includes("\r\n\r\n")) {
+          appended = true;
+          s.pause(); // backpressure: the daemon's stream stops before EOF
+          appendFileSync(grow, Buffer.alloc(4 * MiB, 0x42));
+          setTimeout(() => s.resume(), 200);
+        }
+      });
+      s.on("end", () => {
+        const i = buf.indexOf("\r\n\r\n");
+        ok({ cl: Number(/content-length: (\d+)/i.exec(buf.subarray(0, i).toString())![1]), body: buf.length - i - 4 });
+      });
+      s.on("error", fail);
+    });
+    c.ws.close();
+    expect(wire.cl).toBe(15 * MiB);
+    expect(wire.body).toBe(wire.cl);
+  });
+
+  it("the page carries X-DNS-Prefetch-Control: off", async () => {
+    const c = await open();
+    expect((await get((await preview(c, "toolu_a")).result.url)).headers["x-dns-prefetch-control"]).toBe("off");
     c.ws.close();
   });
 

@@ -1079,7 +1079,7 @@ export function createDaemon(opts: {
       closeSync(fd);
       return void res.end();
     }
-    const stream = createReadStream("", { fd });
+    const stream = createReadStream("", { fd, start: 0, end: size - 1 });
     res.on("close", () => stream.destroy());
     stream.on("error", () => res.destroy());
     stream.pipe(res);

@@ -8,7 +8,7 @@ export const ARTIFACT_PREVIEW_MAX = 16 << 20;
 /** The CSP of a preview page, one directive per entry with its reason; relax here only (docs/spec.md "Security"). */
 export const ARTIFACT_CSP = [
   "sandbox allow-scripts", // opaque origin also on a top-level load: no cookies, storage, parent DOM; no popups, forms, top navigation
-  "default-src 'none'", // no network: connect, frame, worker, object, manifest all none
+  "default-src 'none'", // no fetch/XHR/image/script/frame/navigation requests (WebRTC is not governed by CSP in browsers: not blocked)
   "script-src 'unsafe-inline'", // the page's own inline scripts; no remote script, no eval (CDN libraries do not load: documented)
   "style-src 'unsafe-inline'",
   "img-src data: blob:",
@@ -26,6 +26,7 @@ export const ARTIFACT_HEADERS = {
   "cache-control": "no-store",
   "cross-origin-resource-policy": "same-origin",
   "referrer-policy": "no-referrer",
+  "x-dns-prefetch-control": "off", // no speculative DNS lookups from links in the page
 } as const;
 
 export type ArtifactFile = { path: string } | { code: "unknown_part" | "unsupported_type"; message: string };

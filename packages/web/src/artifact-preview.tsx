@@ -12,7 +12,7 @@ export const ArtifactConnectedContext = createContext(true);
 // ponytail: part ids whose preview the user opened, kept outside React like `expanded` in tool-card.tsx so a remount keeps it open (the URL is requested again).
 const opened = new Set<string>();
 
-type State = "idle" | "loading" | { url: string; n: number } | { error: string };
+type State = "idle" | "loading" | { url: string; n: number } | { error: string; retry?: boolean };
 
 const btn = "min-h-11 md:min-h-0";
 
@@ -29,7 +29,7 @@ export function ArtifactPreview({ partId, title, files }: { partId: string; titl
     setState("loading");
     loader(partId).then(
       (r) => mine === run.current && setState({ url: r.url, n: ++frame.current }),
-      (e: { code?: string; message?: string }) => mine === run.current && setState({ error: `Preview not available: ${e?.code === "not_found" ? "file is gone" : (e?.message ?? "unknown error")}` }),
+      (e: { code?: string; message?: string }) => mine === run.current && setState({ error: `Preview not available: ${e?.code === "not_found" ? "file is gone" : (e?.message ?? "unknown error")}`, retry: e?.message === "disconnected" }),
     );
   };
   useEffect(() => {
@@ -42,7 +42,7 @@ export function ArtifactPreview({ partId, title, files }: { partId: string; titl
   const live = useRef(state);
   live.current = state;
   useEffect(() => {
-    if (connected && !was.current && load && typeof live.current === "object" && "url" in live.current) request(load);
+    if (connected && !was.current && load && typeof live.current === "object" && ("url" in live.current || live.current.retry)) request(load);
     was.current = connected;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
@@ -68,7 +68,7 @@ export function ArtifactPreview({ partId, title, files }: { partId: string; titl
           Reload
         </Button>
       </div>
-      <p className="text-muted-foreground text-xs">Local file, shown offline: remote scripts, images and fonts do not load.</p>
+      <p className="text-muted-foreground text-xs">Local file, shown offline: network requests, remote scripts, images, fonts and links are blocked.</p>
       {files > 0 && <p className="text-muted-foreground text-xs">{`Main page only: ${files} supporting ${files === 1 ? "file" : "files"} not loaded.`}</p>}
       {state === "loading" && (
         <p aria-live="polite" className="text-muted-foreground text-xs">
