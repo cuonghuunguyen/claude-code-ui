@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import fuzzysort from "fuzzysort";
+import { perf } from "./perf.ts";
 
 const SKIP = new Set([".git", "node_modules"]);
 // ponytail: lists the tree on every request, capped; cache per cwd if big repos feel slow.
@@ -33,7 +34,8 @@ function walk(dir: string): string[] {
 }
 
 const git = (dir: string, args: string[]) =>
-  execFileSync("git", ["ls-files", "-z", ...args], { cwd: dir, encoding: "utf8", maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "ignore"] })
+  perf
+    .syncChild("git", ["ls-files"], () => execFileSync("git", ["ls-files", "-z", ...args], { cwd: dir, encoding: "utf8", maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "ignore"] }))
     .split("\0")
     .filter(Boolean);
 

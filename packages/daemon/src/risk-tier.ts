@@ -2,6 +2,7 @@
 // coordinator may settle a `low` request, every other request is the user's. Unknown -> high. Any error -> high.
 import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { foreignPointer } from "./remote-path.ts";
 import { gitReadOnly, repoSafety, repoSafetyAsync, type RepoSafety } from "./git-readonly.ts";
 
 export type Tier = "low" | "high";
@@ -66,6 +67,7 @@ export function mainCheckoutOf(cwd: string): string | undefined {
   if (!dotGit?.isFile() || dotGit.size > 4096) return;
   const m = /^gitdir: (.+?)\s*$/m.exec(readFileSync(join(real, ".git"), "utf8"));
   if (!m) return;
+  if (foreignPointer(m[1]!, real)) return;
   const rel = relative(realpathSync(join(main, ".git", "worktrees")), realpathSync(resolve(real, m[1]!)));
   return rel && !rel.startsWith("..") && !isAbsolute(rel) && !rel.includes(sep) ? main : undefined;
 }
@@ -79,6 +81,8 @@ const dotdot = (p: string) => p.split(/[/\\]/).includes("..");
  */
 export function pathLow(p: unknown, cwd: string, write: boolean, cwdOk = !write, roots: string[] = [cwd], safety?: RepoSafety): boolean {
   if (typeof p !== "string" || !p || p.includes("\0") || dotdot(p)) return false;
+  // A UNC or device path would reach the network (NTLM) in the lstat below: high without a file call.
+  if (foreignPointer(p, cwd)) return false;
   const target = resolve(cwd, p);
   let base = target;
   const rest: string[] = [];

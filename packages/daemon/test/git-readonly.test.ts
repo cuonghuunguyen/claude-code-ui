@@ -35,18 +35,15 @@ const low = [
   "git diff",
   "git diff --stat",
   "git diff --cached",
-  "git diff HEAD~1 -- src",
-  "git diff main...HEAD",
   "git log main..HEAD --oneline",
   "git log --format=%h",
   "git log --pretty=format:%h%x20%s",
   "git log --since=2.weeks --author=bob",
   "git log --branches --tags --oneline",
-  "git show HEAD",
   "git show HEAD^:src/a.ts",
   "git show HEAD:CLAUDE.md",
-  "git show @{u}",
   "git log HEAD@{1}",
+  "git diff HEAD~1 -- src/a.ts",
   "git diff src/a.ts",
   "git diff -- .claude/skills/x/SKILL.md",
   "git branch --show-current",
@@ -170,7 +167,88 @@ const high = [
   "git rev-parse --git-path hooks",
   "git rev-parse --parseopt",
   "git rev-parse",
+  // GH-282: content of a commit without a file pathspec.
+  "git diff HEAD~1 -- src",
+  "git diff main...HEAD",
+  "git show HEAD",
+  "git show @{u}",
 ];
+
+/** A committed repository tracking `.env` and `src/a.ts` (and, optionally, nothing denied). */
+const committed = (name: string, files: string[]) => {
+  const d = repo(join(root, name));
+  mkdirSync(join(d, "src"), { recursive: true });
+  for (const f of files) writeFileSync(join(d, f), `secret-of-${f}\n`);
+  git(d, "add", ".");
+  git(d, "-c", "user.name=T", "-c", "user.email=t@x.test", "commit", "-q", "-m", "one");
+  return d;
+};
+const out = (dir: string, ...args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+
+describe("tracked deny-listed files (GH-282)", () => {
+  const d = committed("gh282-denied", [".env", "src/a.ts", "src/b.ts"]);
+  const blobEnv = out(d, "rev-parse", "--short=7", "HEAD:.env");
+  const blobA = out(d, "rev-parse", "--short=7", "HEAD:src/a.ts");
+  const blobB = out(d, "rev-parse", "--short=7", "HEAD:src/b.ts");
+  const commit = out(d, "rev-parse", "--short=7", "HEAD");
+  const clean = committed("gh282-clean", ["src/a.ts"]);
+  const highRows = [
+    "git diff",
+    "git diff --cached",
+    "git show HEAD",
+    "git log -p",
+    "git log -U3",
+    "git log --word-diff",
+    "git log -p -- src",
+    "git log -p -- gone.txt",
+    `git show ${blobEnv}`,
+    `git show --stat ${blobEnv}`,
+    `git show --no-patch ${blobEnv}`,
+    `git show --stat ${commit}`,
+    `git diff ${blobA} ${blobB}`,
+    "git diff HEAD~1 -- src",
+    "git show HEAD -- src",
+    // A blob id from `git log --raw` of a deleted .env: diff of the blob against a file prints the blob.
+    `git diff ${blobEnv} -- src/a.ts`,
+    `git diff -p ${blobEnv} -- src/a.ts`,
+    `git diff ${blobEnv} src/a.ts`,
+    `git diff ${blobEnv} HEAD -- src/a.ts`,
+  ];
+  const lowRows = [
+    "git diff --stat",
+    "git diff --name-only",
+    "git show --stat HEAD",
+    "git log --oneline",
+    "git diff -- src/a.ts",
+    "git diff src/a.ts",
+    "git log -p -- src/a.ts",
+    "git show HEAD -- src/a.ts",
+    "git show HEAD:src/a.ts",
+    `git show ${commit}~0 --stat`,
+    "git status",
+    "git log --raw",
+    "git log -p -- src/a.ts",
+  ];
+  it.each(highRows)("high: %s", (command) => expect(gitReadOnly({ command }, d)).toBe(false));
+  it.each(lowRows)("low: %s", (command) => expect(gitReadOnly({ command }, d)).toBe(true));
+  it("a repository that tracks no denied file keeps plain git diff low", () => {
+    expect(gitReadOnly({ command: "git diff" }, clean)).toBe(true);
+    expect(gitReadOnly({ command: "git diff --cached" }, clean)).toBe(true);
+    expect(gitReadOnly({ command: "git show HEAD" }, clean)).toBe(false);
+  });
+  it("repoSafety.trackedDenied", () => {
+    expect(repoSafety(clean).trackedDenied).toBe(false);
+    expect(repoSafety(d).trackedDenied).toBe(true);
+    const staged = committed("gh282-staged", [".env", "src/a.ts"]);
+    git(staged, "rm", "-q", "--cached", ".env");
+    expect(repoSafety(staged).trackedDenied).toBe(true);
+    expect(repoSafety(repo(join(root, "gh282-unborn"))).trackedDenied).toBe(false);
+    expect(repoSafety(join(root, "gone")).trackedDenied).toBe(true);
+  });
+  it("repoSafetyAsync agrees with repoSafety", async () => {
+    for (const x of [clean, d, repo(join(root, "gh282-unborn2"))]) expect((await repoSafetyAsync(x)).trackedDenied).toBe(repoSafety(x).trackedDenied);
+  });
+});
 
 describe("gitReadOnly", () => {
   it.each(low)("low: %s", (command) => expect(gitReadOnly({ command }, cwd)).toBe(true));
@@ -228,7 +306,7 @@ describe("gitReadOnly", () => {
       for (const kv of [["core.hooksPath", outside], ["core.fsmonitor", "false"], ["core.fsmonitor", "true"], ["diff.external", ""], ["core.autocrlf", "true"]] as const) {
         const d = withConfig(`ok-${kv[0]}-${kv[1].length}`, kv[0], kv[1]);
         expect(gitReadOnly({ command: "git status" }, d), kv.join("=")).toBe(true);
-        expect(gitReadOnly({ command: "git log -p" }, d), kv.join("=")).toBe(true);
+        expect(gitReadOnly({ command: "git log --stat" }, d), kv.join("=")).toBe(true);
       }
     }, 120_000);
 

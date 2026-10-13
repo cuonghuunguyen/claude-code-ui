@@ -1,5 +1,5 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
@@ -11,12 +11,15 @@ import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
-import { checkWslSide, createSides, dockerExecArgs, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
+import { runGit, setGitRunner, threadRunner } from "./git-runner.ts";
+import { wslGitRunner } from "./wsl-git.ts";
+import { checkWslSide, createSides, dockerExecArgs, forwardSidePush, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
 import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
 import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
 import { startServe, tailscalePreflight } from "./tailscale.ts";
 import { configDir, loadToken, pairingUrl } from "./token.ts";
+import { defaultUploadsDir } from "./uploads.ts";
 import { installVersion, latestNewer, parseRegistry, pruneVersions, versionsDir } from "./update.ts";
 import { createBuildInfo } from "./build-info.ts";
 
@@ -24,6 +27,13 @@ logExit(process, console.error);
 let cleanup = () => {};
 exitOnSignal(process, () => cleanup());
 
+const realOr = (p: string) => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+};
 const cli = parseCli(process.argv.slice(2), process.env, homedir());
 if (cli.kind === "help") (console.log(HELP), process.exit(0));
 // The package.json next to dist/ (installed) or src/ (source checkout, no version: "dev").
@@ -59,7 +69,7 @@ const lanIps = lan ? Object.values(networkInterfaces()).flat().filter((a) => a &
 // The installed package ships the web build as dist/web beside this file; a source checkout builds packages/web/dist.
 const bundledWeb = new URL("./web", import.meta.url);
 const webRoot = fileURLToPath(existsSync(bundledWeb) ? bundledWeb : new URL("../../web/dist", import.meta.url));
-const state = { settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }) };
+const state = { uploadDir: defaultUploadsDir(), settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }) };
 
 if (side) {
   // A fresh container has no ~/.config: the hub's loadToken creates the config dir, a side has none.
@@ -69,7 +79,7 @@ if (side) {
   let push: (p: Parameters<Push["send"]>[0]) => void = () => {};
   const sidePush = { publicKey: "", subscribe: () => false, send: async (p) => push(p) } satisfies Push;
   const daemon = createDaemon({ webRoot, token: "", roots, push: sidePush, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state });
-  push = runSide({ input: process.stdin, output: process.stdout, accept: daemon.accept, onEnd: () => process.exit(0) }).push;
+  push = runSide({ input: process.stdin, output: process.stdout, accept: daemon.accept, git: runGit, onEnd: () => process.exit(0) }).push;
 } else {
   const token = loadToken();
   const sidesFile = join(configDir(), "sides.json");
@@ -91,6 +101,7 @@ if (side) {
           targets: distros.map(wslSide),
           localLabel: process.platform === "win32" ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux",
           posixLocal: process.platform !== "win32",
+          localDirs: [homedir(), ...roots].flatMap((p) => [p, realOr(p)]),
           ...(docker && { discover: async () => {
               const s = await dockerStatus();
               dockerState = s.state;
@@ -103,12 +114,14 @@ if (side) {
           // side.check: read-only (docker inspect + one docker exec, or one wsl.exe run of the check script).
           key: sideKey,
           check: (id) => (id.startsWith("docker:") ? checkDockerSide({ name: id.slice("docker:".length), pkgDir: sidePackage, key: sideKey() }) : checkWslSide({ distro: id.slice("wsl:".length), pkgDir: sidePackage, key: sideKey(), exec: execRun })),
-          onPush: (p) => void push.send(p),
+          onPush: forwardSidePush(push),
           saved: readSaved(sidesFile),
           save: (ids) => writeFileSync(sidesFile, JSON.stringify(ids)),
         })
       : undefined;
   void sides?.refresh();
+  // A project opened by its \\wsl$ path: git runs in the distro (its ready side, else wsl.exe), never Windows git over the UNC path.
+  if (process.platform === "win32") setGitRunner(wslGitRunner({ local: threadRunner, ...(sides && { side: sides.wslReady, sideRun: sides.git }) }));
   const tsEnv = { ...process.env, TAILSCALE_BE_CLI: "1" };
   const exec = promisify(execFile);
   const ts = tailscale ? await tailscalePreflight({ port, platform: process.platform, env: process.env, exec: (f, a) => exec(f, a, { timeout: 10_000, windowsHide: true, env: tsEnv }) }) : undefined;
@@ -127,7 +140,7 @@ if (side) {
   const update = updateCheck !== false && version !== "dev" && launched ? { current: version, dir: versionsDir(), registry, exit: (code: number) => void setTimeout(() => process.exit(code), 200) } : undefined;
   // A source checkout compares its files with the start; a release compares its version with the installed ones (build-info.ts).
   const buildInfo = createBuildInfo({ version, srcDirs: [fileURLToPath(new URL("../src", import.meta.url)), fileURLToPath(new URL("../../protocol/src", import.meta.url))], versionsDir: versionsDir() });
-  createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false }).listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
+  createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true }).listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
     if (ts && "cli" in ts) {
       if (ts.serve) {
         const serve = startServe({ cli: ts.cli, port, spawn, log: console.error, platform: process.platform });

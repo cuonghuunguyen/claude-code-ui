@@ -26,7 +26,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   const onRestartGuide = vi.fn();
   const onTabCompact = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } };
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
@@ -34,8 +34,9 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
     if (msg.type === "settings.set") {
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) } };
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) } };
     }
+    if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
     return { settings, ...(daemon && { daemon }) };
   });
   const el = document.createElement("div");
@@ -236,8 +237,19 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups: Timeline first, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Timeline", "Notifications", "Changes", "Sidebar", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "About"]);
+  expect(ids).toEqual(["Timeline", "Notifications", "Changes", "Sidebar", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "About"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
+});
+
+it("lists Performance after Usage limits and before About: a switch sends its patch, and the results load from perf.report", async () => {
+  const { q, pick, calls } = await render();
+  await pick("performance");
+  const sw = q("settings-performance-monitor")!;
+  expect(sw.getAttribute("aria-checked")).toBe("true");
+  expect(calls.some((c) => c.type === "perf.report")).toBe(true);
+  expect(q("perf-section")).toBeTruthy();
+  await act(async () => sw.click());
+  expect(calls.find((c) => c.type === "settings.set")).toMatchObject({ patch: { performance: { monitor: false } } });
 });
 
 it("the Keyboard section's Customize button opens the shortcuts dialog", async () => {
@@ -246,6 +258,17 @@ it("the Keyboard section's Customize button opens the shortcuts dialog", async (
   expect(q("settings-keyboard")?.textContent).toContain("Keyboard");
   await act(async () => q("settings-shortcuts")!.click());
   expect(onShortcuts).toHaveBeenCalledOnce();
+});
+
+it("Keyboard has a Show shortcut tips switch, on by default, kept in this browser", async () => {
+  localStorage.removeItem("claude-ui.key-tips");
+  const { q, pick } = await render();
+  await pick("keyboard");
+  expect(q("settings-key-tips")!.getAttribute("aria-checked")).toBe("true");
+  await act(async () => q("settings-key-tips")!.click());
+  expect(q("settings-key-tips")!.getAttribute("aria-checked")).toBe("false");
+  expect(JSON.parse(localStorage.getItem("claude-ui.key-tips")!).off).toBe(true);
+  localStorage.removeItem("claude-ui.key-tips");
 });
 
 it("shows one group at a time: the first by default, picking another swaps the panel and the choice is remembered per browser", async () => {

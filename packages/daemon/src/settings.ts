@@ -3,7 +3,7 @@
 import { createJsonFile } from "./json-file.ts";
 import { WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } };
 
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string };
 const bool = (label: string): Check => ({ valid: (v) => typeof v === "boolean", label, rule: "on or off" });
@@ -17,6 +17,7 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
   },
   usageLimit: { autoContinue: bool("Continue automatically after a usage limit resets") },
   notifications: { desktop: bool("Desktop notifications") },
+  performance: { monitor: bool("Performance monitor") },
 };
 const checks = CHECKS as Record<string, Record<string, Check>>;
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);

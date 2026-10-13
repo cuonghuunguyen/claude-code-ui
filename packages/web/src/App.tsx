@@ -12,6 +12,7 @@ import type {
   ListResult,
   McpListResult,
   RecentProject,
+  MediaResult,
   ModelInfo,
   ModelsResult,
   Part,
@@ -50,6 +51,7 @@ import { Message, MessageAction, MessageActions, MessageContent, MessageResponse
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
+import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
@@ -84,6 +86,8 @@ import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./un
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { ViewerContext, latestPlan, useOpenViewer, type ViewerState } from "./viewer.ts";
+import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
@@ -107,6 +111,8 @@ import { GuideTour } from "./guide-tour.tsx";
 import { keyText, matchesKey, withKey } from "./shortcuts.ts";
 import { specOf, useKeymap } from "./keymap.ts";
 import { LEADER_MS, PREFIX_KEYS, leaderStep } from "./leader.ts";
+import { KeyTips } from "./key-tip.tsx";
+import { markKeyUsed, resetAllKeyTips } from "./key-tips.ts";
 import { loadClosed, popClosed, pushClosed, restoreClosed, saveClosed } from "./closed-tabs.ts";
 import { ShortcutsDialog } from "./shortcuts-dialog.tsx";
 import { isImeKey } from "./ime.ts";
@@ -119,6 +125,7 @@ import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGr
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
+import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -207,6 +214,7 @@ export function App() {
   // Settings dialog; `settingsChanged`: another client changed the settings (the open dialog reloads).
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [shortcutsEdit, setShortcutsEdit] = useState<string>();
   // Shortcut labels and the shortcuts themselves follow the user's bindings.
   useKeymap();
   // Closed session tabs (Reopen closed tab), per browser.
@@ -244,6 +252,8 @@ export function App() {
   const [focusSel, setFocusSel] = useState<string>();
   // When this browser first saw a request that came without the daemon's `at`.
   const firstSeen = useRef(new Map<string, number>());
+  /** Last live event per session (ms): the Focus page's quiet time. */
+  const liveAt = useRef(new Map<string, number>());
   // Signal only (GH-159, one setting for the browser since GH-205), set in Settings.
   const signalOnly = useSignalOnly();
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
@@ -354,6 +364,9 @@ export function App() {
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
   const [openFile, setOpenFile] = useState<string>();
+  // Popup viewer (GH-238): what shows, for which session; `opener` takes the focus back on close.
+  const [viewer, setViewer] = useState<ViewerState>();
+  useEffect(() => setViewer(undefined), [activeId]);
   const quickOpener = useRef<Element>(null);
   // Title editor: in the sidebar row or in the tab the Rename action came from.
   const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab" }>();
@@ -754,6 +767,7 @@ export function App() {
         // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
         // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
         const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+        if (live) liveAt.current.set(e.sessionId, Date.now());
         notifyRef.current?.(e, live);
         // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
         if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
@@ -912,6 +926,8 @@ export function App() {
    */
   // A session whose first prompt failed: the retry from the new-session tab sends to it instead of creating another.
   const unprompted = useRef<SessionInfo>(undefined);
+  // GH-281: the new-session tab's uploads belong to this token until session.create claims them; the next draft gets a new one.
+  const draftUpload = useRef(draftToken());
   async function createSession(cwd: string, opts: StartOptions, first: FirstMessage) {
     setError(undefined);
     if (status !== "connected") throw new Error(`the daemon is ${status}`);
@@ -922,12 +938,12 @@ export function App() {
     let listed = false;
     try {
       // The new-session tab (and its draft) stays until the first prompt is taken.
-      const session = await startSession(client.current!.request, unprompted, cwd, opts, first, (s) => {
+      const session = await startSession(client.current!.request, unprompted, cwd, { ...opts, draft: draftUpload.current }, first, (s) => {
         setInfos((i) => ({ ...i, [s.id]: s }));
         setOptimistic((o) => (o[NEW_TAB] ? { ...o, [NEW_TAB]: o[NEW_TAB].map((p) => ({ ...p, sessionId: s.id })) } : o));
         // Listed (and so subscribed) before the prompt goes out: its echo can be in the view before the tab switches.
         if (!listed) (listed = true), void refreshList();
-      });
+      }, () => void (draftUpload.current = rotateDraftToken()));
       setOptimistic((o) => movePending(o, session.id));
       setTabs((t) => replaceTab(t, NEW_TAB, session.id));
       open(session.id);
@@ -1148,10 +1164,10 @@ export function App() {
   const sidePane = pane === "graph" && !isGit ? "files" : pane;
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
-  const upload = (uploadCwd?: string) => async (file: File) => {
+  const upload = (owner: () => UploadOwner, uploadCwd?: string, rotate: () => void = () => {}) => async (file: File) => {
     const data = (await readDataUrl(file)).replace(/^data:[^,]*,/, "");
     // The session's side keeps the file: its Claude reads it there.
-    return (await client.current!.request<UploadResult>({ type: "fs.upload", name: file.name, data, ...(uploadCwd && { cwd: uploadCwd }) })).path;
+    return uploadWithRetry(async (o) => (await client.current!.request<UploadResult>({ type: "fs.upload", name: file.name, data, ...o, ...(uploadCwd && { cwd: uploadCwd }) })).path, owner, rotate);
   };
   // Offline, a request would wait for the reconnect with no feedback; a reply that never comes times out.
   const search = (cwd: string) => (query: string) =>
@@ -1176,6 +1192,8 @@ export function App() {
     setPane("files");
     setPanel(true);
   };
+  const openViewer = useOpenViewer(shown, setViewer);
+  const latest = useMemo(() => (view ? latestPlan(view) : undefined), [view?.parts, view?.aux]);
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
     const seen = fileTree && (wide(1024) ? panel && sidePane !== "changes" && sidePane !== "graph" : sidePane === "files");
@@ -1314,6 +1332,8 @@ export function App() {
     },
     openShortcuts: () => setShortcutsOpen(true),
     isGit,
+    viewChanges: shown && !draftShown ? () => openViewer({ kind: "changes" }) : undefined,
+    viewPlan: shown && !draftShown && latest ? () => openViewer({ kind: "plan", plan: latest }) : undefined,
     focusPrompt: focusShownPrompt,
     setModel: (model) => (draftShown ? changeDraft({ ...draft, model }) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
     setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
@@ -1326,6 +1346,7 @@ export function App() {
     toggleSignalOnly: () => saveSignalOnly(!loadSignalOnly()),
     openSettings: () => setSettingsOpen(true),
     startGuide: () => startGuide("palette"),
+    resetKeyTips: () => (resetAllKeyTips(), setToast("Shortcut tips reset.")),
     openMcp: project ? () => openMcp() : undefined,
     openSkills: project ? openSkills : undefined,
     openPlugins: project ? openPlugins : undefined,
@@ -1405,6 +1426,7 @@ export function App() {
       const c = isPalette ? undefined : shortcutFor(latestCommands.current, e);
       if (!isPalette && !c) return;
       e.preventDefault();
+      if (c) markKeyUsed(c.id);
       if (c && "run" in c) return c.run();
       // Focus goes back there when the palette closes, like quick open.
       paletteOpener.current = document.activeElement;
@@ -1436,6 +1458,7 @@ export function App() {
         paletteOpener.current = document.activeElement;
         return setPalette({});
       }
+      markKeyUsed(r.run);
       const c = latestCommands.current.find((i) => i.id === r.run);
       if (c && "run" in c) c.run();
     };
@@ -1668,6 +1691,7 @@ export function App() {
               )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
               <div className={`${card} flex-1 ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}>
+                <ViewerContext value={openViewer}>
                 <QuoteContext value={setInsert}>
                 {tabs.map((id) => {
                   const s = id === NEW_TAB ? undefined : sessionOf(id);
@@ -1699,7 +1723,7 @@ export function App() {
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
-                        onUpload={upload(s.cwd)}
+                        onUpload={upload(() => ({ sessionId: s.id }), s.cwd)}
                         onPrompt={(text, images) => {
                           // While the /clear runs the message waits: its bubble shows now, it is sent once the tab follows (or the /clear ends without).
                           if (!v.externalTurn && clearing(v, pend)) {
@@ -1726,6 +1750,7 @@ export function App() {
                         onRewind={(userMessageId, mode) =>
                           client.current!.request({ type: "session.rewind", sessionId: s.id, userMessageId, mode })
                         }
+                        onMedia={(partId, index) => client.current!.request<MediaResult>({ type: "session.media", sessionId: s.id, partId, index }).then((r) => r.dataUrl)}
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
@@ -1742,6 +1767,7 @@ export function App() {
                   );
                 })}
                 </QuoteContext>
+                </ViewerContext>
               </div>
               {shown && (panel || terminalOpen) && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
               {panelSession && (
@@ -1779,6 +1805,7 @@ export function App() {
                       cwd={panelSession.cwd}
                       onOpen={(path) => (setOpenFile(path), setPane("files"))}
                       sessionId={panelSession.id}
+                      onPopOut={() => openViewer({ kind: "changes" })}
                     />
                   )}
                   {isGit && (sidePane === "graph" || graphCwd === panelSession.cwd) && (
@@ -1822,7 +1849,7 @@ export function App() {
                   onDraft={changeDraft}
                   modes={draftModes}
                   onOpenProject={() => setOpeningProject(true)}
-                  onUpload={upload(draftProject)}
+                  onUpload={upload(() => uploadOwnerFor(unprompted.current, draftProject, draftUpload.current), draftProject, () => void (draftUpload.current = rotateDraftToken()))}
                   onSearch={search}
                   commandsRev={Object.values(configChanged).reduce((a, b) => a + b, 0)}
                   onCommands={(cwd) => client.current!.request<CommandsResult>({ type: "session.commands", cwd }).then((r) => r.commands)}
@@ -1852,6 +1879,9 @@ export function App() {
                   onRespond={respond}
                   onAnswer={answer}
                   onOpenSession={(id) => open(id)}
+                  unread={unread}
+                  activity={(id) => Math.max(liveAt.current.get(id) ?? 0, list.find((s) => s.id === id)?.lastActivity ?? 0)}
+                  onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
                 />
               )}
               {activeId !== NEW_TAB && activeId !== FOCUS_TAB && !shown && (
@@ -1972,7 +2002,19 @@ export function App() {
         />
       )}
       <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
-      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      {shown && client.current && (
+        <ViewerDialog
+          target={viewer?.target}
+          opener={viewer?.opener}
+          client={client.current}
+          cwd={viewer?.cwd ?? shown.cwd}
+          view={viewer ? views[viewer.sessionId] : undefined}
+          sessionId={viewer?.sessionId}
+          onClose={() => setViewer(undefined)}
+          onOpenInEditor={(p) => (setViewer(undefined), setOpenFile(p), setPane("files"), setPanel(true))}
+        />
+      )}
+      <ShortcutsDialog open={shortcutsOpen} edit={shortcutsEdit} onClose={() => (setShortcutsOpen(false), setShortcutsEdit(undefined))} />
       {/* Always mounted so a screen reader announces the hint when it fills in. */}
       <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 left-1/2 z-50 w-max max-w-[calc(100vw-24px)] -translate-x-1/2" data-testid="prefix-hint">
         {prefixOn && (
@@ -2001,6 +2043,11 @@ export function App() {
           />
         )}
         {toast && <Toast key={toast.key} message={toast.message} action={toast.action} onClose={closeToast} />}
+        <KeyTips
+          hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || openingProject || !!guideRun}
+          onAssign={(id) => (setShortcutsEdit(id), setShortcutsOpen(true))}
+          onTurnedOff={() => setToast("Shortcut tips off. Turn them on in Settings › Keyboard.")}
+        />
         <NotificationStack
           items={cardItems}
           now={cardsNow}
@@ -2139,12 +2186,15 @@ export async function startSession(
   request: Client["request"],
   created: { current?: SessionInfo },
   cwd: string,
-  { model, mode, effort }: StartOptions,
+  { model, mode, effort, draft }: StartOptions,
   first: FirstMessage,
   onInfo: (s: SessionInfo) => void = () => {},
+  /** The draft token is spent by session.create: the caller makes a new one at once (later attachments go by session id). */
+  onDraftClaimed: () => void = () => {},
 ): Promise<SessionInfo> {
   const reused = created.current?.cwd === cwd;
-  let session = reused ? created.current! : (await request<CreateResult>({ type: "session.create", cwd, model })).session;
+  let session = reused ? created.current! : (await request<CreateResult>({ type: "session.create", cwd, model, ...(draft && { draft }) })).session;
+  if (!reused && draft) onDraftClaimed();
   created.current = session;
   onInfo(session);
   // Before the first prompt, mode and effort become the query's start options; on failure the prompt is not sent.
@@ -2399,7 +2449,8 @@ const modesOf = (offered: PermissionMode[], model: string, models: ModelInfo[]) 
 
 const autoUnavailable = (models: ModelInfo[], model: string) => `Auto mode not available for ${models.find((m) => m.value === model)?.displayName ?? model}; switched to Ask`;
 
-export type StartOptions = { model: string; mode: PermissionMode; effort: Effort };
+/** `draft`: the new-session tab's upload token (upload-owner.ts), claimed by session.create. */
+export type StartOptions = { model: string; mode: PermissionMode; effort: Effort; draft?: string };
 /** What starts a session: a first prompt, or a bash mode command (`!` in the first prompt box). */
 export type FirstMessage = { text: string; images: string[] } | { command: string };
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
@@ -2448,6 +2499,7 @@ export function SessionPane({
   onCancelContinue,
   onRewindPreview,
   onRewind,
+  onMedia,
   onRespond,
   onAnswer,
   connected,
@@ -2497,6 +2549,8 @@ export function SessionPane({
   /** Drops the scheduled continue after a usage limit. */
   onCancelContinue?: () => void;
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
+  /** Loads a payload a snapshot or page left out (session.media). */
+  onMedia?: MediaLoader;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
   onAnswer: (requestId: string, answers: Record<string, string>) => void;
@@ -2579,6 +2633,7 @@ export function SessionPane({
   const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
 
   return (
+    <MediaContext value={onMedia}>
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
       {current ? (
@@ -2690,10 +2745,13 @@ export function SessionPane({
                     preview={() => onRewindPreview(item.part.id)}
                     rewind={async (mode) => {
                       const prompt = item.part as Extract<Part, { type: "user_text" }>;
+                      // Images a snapshot or page left out load before the rewind (it drops the prompt from the daemon). One that fails to load
+                      // stops the rewind with a notice in the panel: the image would be lost for good.
+                      const images = mode === "code" ? [] : await restoreImages(prompt.images, prompt.id, onMedia);
                       await onRewind(prompt.id, mode);
                       setRewinding(undefined);
                       // Conversation modes: the original prompt goes back into the prompt box.
-                      if (mode !== "code") setDraft({ text: prompt.text, images: prompt.images });
+                      if (mode !== "code") setDraft({ text: prompt.text, images });
                     }}
                     onCancel={() => setRewinding(undefined)}
                   />
@@ -2771,6 +2829,7 @@ export function SessionPane({
       </div>
     </OpenRunContext>
     </CwdContext>
+    </MediaContext>
   );
 }
 
@@ -3380,7 +3439,7 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
           {(text || part.images.length > 0) && (
             <Message from="user">
               <MessageContent className="[overflow-wrap:anywhere]">
-                <ImageStrip images={part.images} />
+                <ImageStrip images={part.images} partId={part.id} />
                 <UserMarkdown text={text} />
               </MessageContent>
             </Message>

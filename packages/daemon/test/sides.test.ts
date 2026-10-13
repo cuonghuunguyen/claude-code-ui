@@ -1,13 +1,16 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { PassThrough } from "node:stream";
 import type { AddressInfo } from "node:net";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type PushPayload, type ServerMessage } from "@claude-ui/protocol";
+import { runGit } from "../src/git-runner.ts";
+import { SideGone } from "../src/wsl-git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
@@ -73,6 +76,17 @@ const hub = createDaemon({ webRoot, token, roots: [winRoot], query: fakeQuery as
 await new Promise<void>((r) => hub.listen(0, "127.0.0.1", r));
 const { port } = hub.address() as AddressInfo;
 afterAll(() => void (hub.close(), sides.close()));
+
+const get = (url: string, headers: Record<string, string> = {}, method = "GET") =>
+  new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }>((resolve, reject) => {
+    const req = httpRequest({ host: "127.0.0.1", port, path: url, method, headers }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (d) => chunks.push(d));
+      res.on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body: Buffer.concat(chunks) }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
 
 async function client(p = port) {
   const ws = new WebSocket(`ws://127.0.0.1:${p}/ws`, [WS_PROTOCOL, TOKEN_PROTOCOL_PREFIX + token], { origin: `http://127.0.0.1:${p}` });
@@ -288,10 +302,23 @@ describe("sides", () => {
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });
     sides.sessionSide.delete(sideSession);
     expect(await c.request({ type: "session.subscribe", sessionId: sideSession, sinceSeq: 0 })).toMatchObject({ result: { session: { id: sideSession, cwd: wslRoot } } });
-    // The router's probe of the sides is a background subscription: it must not hold the side session's CLI forever.
-    expect(sideFrames.join("")).toMatch(/"sinceSeq":9007199254740991,"background":true/);
+    // The hub finds the session by asking the side for its IDs: no side frame names the ID before that (GH-328).
+    const at = (re: RegExp) => sideFrames.findIndex((f) => re.test(f));
+    expect(at(/"type":"session\.ids"/)).toBeGreaterThanOrEqual(0);
+    expect(at(new RegExp(sideSession))).toBeGreaterThan(at(/"type":"session\.ids"/));
     sidePush({ sessionId: sideSession, title: "side work", body: "Finished" });
     await expect.poll(() => pushes).toEqual([{ sessionId: sideSession, title: "side work", body: "Finished" }]);
+    c.ws.close();
+  });
+
+  it("finds a side session of a project that is not added on the side, and adds the project", async () => {
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "project.remove", cwd: wslRoot, side: "wsl:Ubuntu" });
+    expect((await c.request({ type: "session.list" })).result.sessions.map((x: { id: string }) => x.id)).not.toContain(sideSession);
+    sides.sessionSide.delete(sideSession);
+    expect(await c.request({ type: "session.subscribe", sessionId: sideSession, sinceSeq: 0, addProject: true })).toMatchObject({ result: { session: { id: sideSession, cwd: wslRoot } } });
+    expect(sides.sessionSide.get(sideSession)).toBe("wsl:Ubuntu");
     c.ws.close();
   });
 
@@ -326,16 +353,188 @@ describe("sides", () => {
 
   // Routes by the path's form: a real WSL path is POSIX, while this test stands in for it with a native temp dir, which on a Windows host is a Windows path and so (correctly) local.
   // The in-process side needs that same path on the real filesystem, so these cannot run on Windows; they run on Linux and macOS.
-  it.skipIf(process.platform === "win32")("fs.media of a side path fails side_unsupported; a local path is served", async () => {
-    writeFileSync(join(wslRoot, "s.png"), "png");
+  const win32 = process.platform === "win32";
+  it.skipIf(win32)("fs.media of a side path: the hub serves the side's bytes at its own /media URL; a local path is served", async () => {
+    const big = Buffer.from(Array.from({ length: (1 << 20) + 10 }, (_, i) => i % 251));
+    writeFileSync(join(wslRoot, "s.png"), big);
     writeFileSync(join(winRoot, "l.png"), "png");
     const c = await client();
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });
     await c.request({ type: "session.list" });
-    expect(await c.request({ type: "fs.media", path: join(wslRoot, "s.png") })).toMatchObject({ type: "error", code: "side_unsupported", message: "Preview is not available for files in WSL" });
+    const r = await c.request({ type: "fs.media", path: join(wslRoot, "s.png") });
+    expect(r).toMatchObject({ type: "reply", result: { mime: "image/png", size: 1048586 } });
+    expect(r.result.url).toMatch(/^\/media\/[0-9a-f]{32}\/s\.png\?v=/);
+    const all = await get(r.result.url);
+    expect(all.status).toBe(200);
+    expect(all.body.equals(big)).toBe(true);
+    expect(all.headers).toMatchObject({ "content-type": "image/png", "x-content-type-options": "nosniff" });
+    const rg = await get(r.result.url, { range: "bytes=1048570-1048585" });
+    expect(rg.status).toBe(206);
+    expect(rg.body.equals(big.subarray(1048570, 1048586))).toBe(true);
+    const h = await get(r.result.url, {}, "HEAD");
+    expect(h.status).toBe(200);
+    expect(h.body.length).toBe(0);
+    expect(sideFrames.join("")).toContain('"media.read"');
     const ok = await c.request({ type: "fs.media", path: join(winRoot, "l.png") });
     expect(ok).toMatchObject({ type: "reply", result: { mime: "image/png", size: 3 } });
     c.ws.close();
+  });
+
+  it.skipIf(win32)("fs.media of a side path keeps the side's rules: a symlink out of its roots path_not_allowed, .txt unsupported_type, missing not_found", async () => {
+    const outside = join(dir("outside-"), "o.png");
+    writeFileSync(outside, "png");
+    symlinkSync(outside, join(wslRoot, "out.png"));
+    writeFileSync(join(wslRoot, "n.txt"), "x");
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    expect(await c.request({ type: "fs.media", path: join(wslRoot, "out.png") })).toMatchObject({ type: "error", code: "path_not_allowed" });
+    expect(await c.request({ type: "fs.media", path: join(wslRoot, "sub", "..", "..", "x.png") })).toMatchObject({ type: "error" });
+    expect(await c.request({ type: "fs.media", path: join(wslRoot, "n.txt") })).toMatchObject({ type: "error", code: "unsupported_type" });
+    expect(await c.request({ type: "fs.media", path: join(wslRoot, "none.png") })).toMatchObject({ type: "error", code: "not_found" });
+    c.ws.close();
+  });
+
+  it.skipIf(win32)("fs.media with cwd and hash of a side project is read in the side", async () => {
+    const repo = join(wslRoot, "gitimg");
+    mkdirSync(repo, { recursive: true });
+    const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd: repo, encoding: "utf8" }).trim();
+    git("init", "-q");
+    const committed = Buffer.from(Array.from({ length: 200 }, (_, i) => (i * 5) % 256));
+    writeFileSync(join(repo, "p.png"), committed);
+    git("add", "-A");
+    git("commit", "-q", "-m", "one");
+    const hash = git("rev-parse", "HEAD");
+    writeFileSync(join(repo, "p.png"), "changed");
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    const r = await c.request({ type: "fs.media", cwd: repo, hash, path: "p.png" });
+    expect(r).toMatchObject({ type: "reply", result: { size: 200, mtime: 0 } });
+    expect((await get(r.result.url)).body.equals(committed)).toBe(true);
+    expect(await c.request({ type: "fs.media", cwd: repo, hash, path: "missing.png" })).toMatchObject({ type: "error", code: "not_found" });
+    c.ws.close();
+  });
+
+  it.skipIf(win32)("a side nonce dies with the browser connection", async () => {
+    writeFileSync(join(wslRoot, "d.png"), "png");
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    const { url } = (await c.request({ type: "fs.media", path: join(wslRoot, "d.png") })).result;
+    expect((await get(url)).status).toBe(200);
+    c.ws.close();
+    await vi.waitFor(async () => expect((await get(url)).status).toBe(404));
+  });
+});
+
+describe.skipIf(process.platform === "win32")("side media failures", () => {
+  /** An own hub and side (the shared ones keep running): `tamper` edits the side's stdout text; `muteAfterPieces` stops the side reading after that many data pieces; `die` ends it as a crash would. */
+  async function isolated(tamper: (line: string) => string = (l) => l, timeoutMs?: number, muteAfterPieces?: number) {
+    let die = () => {};
+    const own = createSides({
+      targets: [wslSide("Ubuntu")],
+      posixLocal: true,
+      spawn: () => {
+        const p = inProcessSide();
+        const out = new PassThrough();
+        let rest = "";
+        let pieces = 0;
+        p.stdout.on("data", (d) => {
+          const lines = (rest + String(d)).split("\n");
+          rest = lines.pop()!;
+          for (const l of lines) {
+            out.write(tamper(l) + "\n");
+            // The side stops reading after this many data pieces: the next one is never answered.
+            if (/"data":"[A-Za-z0-9+/=]+"/.test(l) && ++pieces === muteAfterPieces) (p.stdin as unknown as { pause(): void }).pause();
+          }
+        });
+        const exits: ((code: number | null) => void)[] = [];
+        die = () => ((p.stdin as unknown as { pause(): void }).pause(), exits.forEach((l) => l(1)));
+        return { ...p, stdout: out, on: (e, l) => (exits.push(l), p.on(e, l)) };
+      },
+    });
+    const h = createDaemon({ webRoot, token, roots: [winRoot], query: fakeQuery as never, projects: createProjects(), history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never }, sides: own, sideCallTimeoutMs: timeoutMs });
+    await new Promise<void>((r) => h.listen(0, "127.0.0.1", r));
+    const p = (h.address() as AddressInfo).port;
+    const c = await client(p);
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    const getRaw = (url: string, headers: Record<string, string> = {}, onData?: () => void) =>
+      new Promise<{ status: number; body: Buffer; complete: boolean }>((resolve) => {
+        const chunks: Buffer[] = [];
+        let status = 0;
+        let complete = false;
+        const done = () => resolve({ status, body: Buffer.concat(chunks), complete });
+        const req = httpRequest({ host: "127.0.0.1", port: p, path: url, headers }, (res) => {
+          status = res.statusCode!;
+          res.on("data", (d) => (chunks.push(d), onData?.()));
+          // `complete` is true only when the whole body (content-length) arrived.
+          res.on("close", () => ((complete = res.complete), done()));
+          res.on("error", () => {});
+        });
+        req.on("error", done);
+        req.end();
+      });
+    const media = async (name: string, size: number) => {
+      const f = join(wslRoot, name);
+      const bytes = Buffer.from(Array.from({ length: size }, (_, i) => i % 249));
+      writeFileSync(f, bytes);
+      return { bytes, reply: await c.request({ type: "fs.media", path: f }) };
+    };
+    return { media, getRaw, die: () => die(), close: () => (c.ws.close(), h.close(), own.close()) };
+  }
+
+  it("a side that exits while a GET is streaming ends the response", async () => {
+    // The side reads one piece, then stops answering; the next piece request is pending when it exits.
+    const t = await isolated(undefined, undefined, 1);
+    const { bytes, reply } = await t.media("k.png", 4 << 20);
+    setTimeout(() => t.die(), 200);
+    const r = await t.getRaw(reply.result.url);
+    expect(r.complete).toBe(false);
+    expect(r.body.length).toBeLessThan(bytes.length);
+    t.close();
+  }, 10_000);
+
+  it("a side that stays up but never answers ends the response after the timeout", async () => {
+    const t = await isolated(undefined, 200, 1);
+    const { reply } = await t.media("h.png", 3 << 20);
+    const r = await t.getRaw(reply.result.url);
+    expect(r.complete).toBe(false);
+    t.close();
+  }, 10_000);
+
+  it("a piece shorter or longer than asked cuts the response", async () => {
+    for (const edit of [(d: string) => d.slice(0, -4), (d: string) => "AAAA" + d]) {
+      let tamper = false;
+      const t = await isolated((l) => (tamper ? l.replace(/"data":"([A-Za-z0-9+/=]+)"/, (_m, d) => `"data":"${edit(d)}"`) : l));
+      const { bytes, reply } = await t.media("p.png", 3 << 20);
+      tamper = true;
+      const r = await t.getRaw(reply.result.url);
+      expect(r.complete).toBe(false);
+      expect(r.body.length).toBeLessThan(bytes.length + 1);
+      t.close();
+    }
+  }, 10_000);
+
+  it("the hub takes the type from the extension, not from the side's reply", async () => {
+    const t = await isolated((l) => l.replace(/"mime":"image\/png"/g, '"mime":"text/html"'));
+    const { reply } = await t.media("m.png", 10);
+    expect(reply.result.mime).toBe("image/png");
+    expect((await t.getRaw(reply.result.url)).status).toBe(200);
+    t.close();
+  });
+
+  it("a side file with an unusable Range gets the whole file, an unsatisfiable one 416", async () => {
+    const t = await isolated();
+    const { bytes, reply } = await t.media("r.png", 1000);
+    for (const range of ["bytes=abc", "bytes=5-2", "bytes=0-1,5-6", "items=0-1"]) {
+      const r = await t.getRaw(reply.result.url, { range });
+      expect(r.status, range).toBe(200);
+      expect(r.body.equals(bytes), range).toBe(true);
+    }
+    for (const range of ["bytes=1000-", "bytes=99999999-", "bytes=-0"]) expect((await t.getRaw(reply.result.url, { range })).status, range).toBe(416);
+    t.close();
   });
 });
 
@@ -366,8 +565,7 @@ const dockSession = "6e2f3a4b-5c6d-4e7f-8091-92b3c4d5e6f7";
 
 // These route by POSIX paths (the side's roots are POSIX): they run where the daemon runs, on Linux and macOS.
 describe.skipIf(process.platform === "win32")("docker sides", () => {
-  const localRoot = join(dockRoot, "host");
-  mkdirSync(localRoot);
+  const localRoot = dir("dock-host-");
   let dockSaved: string[] = [];
   let containers = ["dev", "stopped"];
   let dockerState: "ok" | "down" | "empty" | undefined = "ok";
@@ -440,7 +638,23 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
     c.ws.close();
   });
 
-  it("a host project under a container's cwd stays local on a POSIX hub", async () => {
+  it("a draft upload and its session.create route by cwd to the same side; a session upload routes by session", async () => {
+    const c = await client(await dport());
+    await c.request({ type: "side.start", side: "docker:dev" });
+    await c.request({ type: "project.open", cwd: dockRoot, side: "docker:dev" });
+    await c.request({ type: "session.list" });
+    const draft = "c".repeat(64);
+    const up = await c.request({ type: "fs.upload", name: "a.txt", data: "aGk=", cwd: dockRoot, draft });
+    expect(up.type).toBe("reply");
+    const created = await c.request({ type: "session.create", cwd: dockRoot, draft });
+    const id = created.result.session.id;
+    expect(up.result.path).toContain(`${sep}${id}${sep}u-`);
+    const own = await c.request({ type: "fs.upload", name: "b.txt", data: "aGk=", sessionId: id });
+    expect(own.result.path).toContain(`${sep}${id}${sep}u-`);
+    c.ws.close();
+  });
+
+  it("a host project and a container project each route to their own side on a POSIX hub", async () => {
     const c = await client(await dport());
     await c.request({ type: "project.open", cwd: localRoot, side: "local" });
     await c.request({ type: "session.list" });
@@ -663,6 +877,35 @@ describe("local cwds on a POSIX hub", () => {
     s.close();
   });
 
+  it("closing the router settles a pending side call at once (not after the piece timeout)", async () => {
+    const s = createSides({ targets: [], localLabel: "Linux", posixLocal: true, discoverMs: 0, discover: async () => [dockerSide("dev")], spawn: () => {
+      // A side that is ready and never answers.
+      const stdout = new PassThrough();
+      stdout.write(JSON.stringify({ ready: true }) + "\n");
+      return { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => {}, on: () => {} } as unknown as SideProcess;
+    } });
+    await s.refresh();
+    await s.start("docker:dev");
+    const sent: ServerMessage[] = [];
+    let answered: ServerMessage | undefined;
+    const router = createRouter({
+      sides: s,
+      send: (m) => sent.push(m),
+      local: async () => {},
+      localCall: async (msg) => ({ type: "reply", reqId: msg.reqId, result: {} }),
+      isLocalSession: async () => false,
+      media: async (_id, _msg, call) => (answered = await call({ type: "media.read", reqId: "", path: "/x/a.png", offset: 0, length: 0 } as never)),
+    });
+    await router.handle({ type: "side.start", reqId: "s1", side: "docker:dev" } as never);
+    const done = router.handle({ type: "fs.media", reqId: "m1", path: "/x/a.png", side: "docker:dev" } as never);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(answered).toBeUndefined();
+    router.close();
+    await Promise.race([done, new Promise((_, rej) => setTimeout(() => rej(new Error("call still pending")), 2000))]);
+    expect(answered).toMatchObject({ type: "error", code: "side_not_ready" });
+    s.close();
+  });
+
   it("a spawn failure names the side", async () => {
     const s = createSides({ targets: [dockerSide("gone")], localLabel: "Linux", posixLocal: true, spawn: () => Promise.reject(new Error("docker exited")) });
     await expect(s.start("docker:gone")).rejects.toThrow("Docker: gone: docker exited");
@@ -671,5 +914,50 @@ describe("local cwds on a POSIX hub", () => {
     await expect(named.start("docker:gone")).rejects.toThrow(/^Docker: gone is not running\.$/);
     s.close();
     named.close();
+  });
+});
+
+describe("git frames", () => {
+  /** A side that answers git frames only (stdio, no daemon). */
+  const gitSide = (git?: (o: never) => Promise<{ stdout: Buffer; stderr: string }>) => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const exit = new EventEmitter();
+    runSide({ input: stdin, output: stdout, accept: () => {}, ...(git && { git: git as never }) });
+    return { proc: { stdin, stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 0), on: (e: "exit", l: (c: number | null) => void) => exit.on(e, l) } satisfies SideProcess, exit };
+  };
+
+  it("a ready side runs git for the hub: stdout bytes, stdin input, git errors", async () => {
+    const repo = dir("gitframe-");
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=a", "-c", "user.email=a@x.test", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
+    const side = gitSide(runGit);
+    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    await s.start("wsl:Ubuntu");
+    expect(s.wslReady("ubuntu")).toBe("wsl:Ubuntu");
+    const r = await s.git("wsl:Ubuntu", { cwd: repo, args: ["cat-file", "--batch"], env: { GIT_TERMINAL_PROMPT: "0" }, input: "HEAD\n" });
+    expect(r.stdout.toString()).toMatch(/^[0-9a-f]{40} commit \d+\n/);
+    await expect(s.git("wsl:Ubuntu", { cwd: repo, args: ["no-such-cmd"], env: {} })).rejects.toMatchObject({ code: 1, stderr: expect.stringMatching(/\S/) });
+    s.close();
+  });
+
+  it("git to a side that is not ready rejects SideGone; a side that exits fails its pending git with SideGone", async () => {
+    const side = gitSide(() => new Promise(() => {}));
+    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    expect(s.wslReady("Ubuntu")).toBeUndefined();
+    await expect(s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} })).rejects.toBeInstanceOf(SideGone);
+    await s.start("wsl:Ubuntu");
+    const pending = s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} });
+    side.exit.emit("exit", 1);
+    await expect(pending).rejects.toBeInstanceOf(SideGone);
+    expect(s.wslReady("Ubuntu")).toBeUndefined();
+  });
+
+  it("a side without a git runner answers an error instead of hanging", async () => {
+    const side = gitSide();
+    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    await s.start("wsl:Ubuntu");
+    await expect(s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} })).rejects.toThrow("no git");
+    s.close();
   });
 });

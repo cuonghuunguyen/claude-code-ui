@@ -1,7 +1,7 @@
 // One WebSocket per tab, reconnected with backoff. Requests resolve on the reply with the same reqId; events go to onEvent.
 // onOpen runs after every (re)connect, so the caller resubscribes there with its last seq and logEpoch.
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type Event, type PlanUsage, type ServerMessage, type SessionsSearchResult } from "@claude-ui/protocol";
-import { takeToken } from "./pairing.ts";
+import { storedToken } from "./pairing.ts";
 import { browserWakeEvents, type WakeEvents } from "./wake.ts";
 
 export type Request = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M, "reqId"> : never) : never;
@@ -68,7 +68,7 @@ export function connect(opts: {
   let markOpen!: () => void;
   let ready = new Promise<void>((r) => (markOpen = r));
 
-  const token = "token" in opts ? opts.token : takeToken();
+  const token = "token" in opts ? opts.token : storedToken();
   const protocols = token ? [WS_PROTOCOL, TOKEN_PROTOCOL_PREFIX + token] : [WS_PROTOCOL];
 
   // A rejected upgrade closes before open like a down daemon (the browser hides the HTTP status), so ask the daemon over HTTP.
