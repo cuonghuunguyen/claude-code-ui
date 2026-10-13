@@ -108,7 +108,7 @@ _Avoid_: child session, subagent (different thing: a subagent run lives inside o
 A coordinator hands a worker's pending question or permission request to the user (`worker_escalate`); only the user answers it then. The coordinator can still stop or close the worker, which cancels it.
 
 **Focus**:
-The app-level page (sidebar row, pinned tab, `#focus`) that lists every pending permission request and question across all projects, oldest first, and answers them in place.
+The app-level page (sidebar row, pinned tab, `#focus`) that lists every pending permission request and question, and every session that needs a look (error, usage limit, quiet, finished unread), across all projects; answers requests in place.
 _Avoid_: inbox, queue page
 
 **In-app notification**:

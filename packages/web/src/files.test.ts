@@ -136,7 +136,4 @@ describe("media", () => {
     expect(mediaKind("C:\\p\\a.MP3")).toBe("audio");
     for (const p of ["/p/a.ts", "/p/a.html", "/p/noext", "/p.png/file", "/p/a.constructor"]) expect(mediaKind(p)).toBeUndefined();
   });
-  it("readFailure: side_unsupported is a notice with its message", () => {
-    expect(readFailure(Object.assign(new Error("Preview is not available for files in WSL"), { code: "side_unsupported" }))).toEqual({ text: "Preview is not available for files in WSL", notice: true });
-  });
 });

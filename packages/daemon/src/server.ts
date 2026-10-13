@@ -1,35 +1,40 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
-import { closeSync, constants, createReadStream, existsSync, fstatSync, openSync, readSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, mkdirSync, readdirSync, readFileSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
-import { MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
-import { createWorktree, gitDiff, gitDirsOf, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
+import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
+import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
+import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
+import { createWorktree, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { gitFetch } from "./git-remote.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
-import { createPlanTracker } from "./plan-usage.ts";
+import { createPlanTracker, usesOauthToken } from "./plan-usage.ts";
 import { CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
 import { createPlugins, redact, type PluginsRequest } from "./plugins.ts";
 import { searchTranscripts } from "./content-search.ts";
-import { cliTurnRunning, interleaveRuns, JsonlTail, transcriptEnd } from "./transcript.ts";
+import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
+import { createUploads, SESSION_DIR } from "./uploads.ts";
 import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
 import { serveStatic } from "./static.ts";
+import { lastEntryTime, listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
 
 export { MAX_SETTINGS } from "./session-settings.ts";
 
@@ -79,6 +84,8 @@ function decodeText(buf: Buffer): { content: string } | { code: "binary" | "not_
 const WATCH_INTERVAL_MS = 1000;
 /** Idle close of unheld sessions (docs/spec.md "Idle close"): the one place of the timeout and the scan interval. */
 export const IDLE_CLOSE_MS = 10 * 60_000;
+/** Orphaned upload folders are looked for this often (uploads.ts sweep). */
+const UPLOAD_SWEEP_MS = 6 * 3600_000;
 const IDLE_CHECK_MS = 60_000;
 
 /** A new connection gets a fresh plan usage read when the last one is older (reset times pass without a turn). */
@@ -104,16 +111,6 @@ const ARCHIVED_TAG = "archived";
 
 const LOCAL_HOSTNAMES = ["127.0.0.1", "localhost"];
 
-/** Canonical path (symlinks resolved), or undefined when it does not exist. */
-function real(path: string) {
-  try {
-    // Windows: only the native call gives the on-disk case (c:\users\me -> C:\Users\me), so one folder is one project.
-    return process.platform === "win32" ? realpathSync.native(path) : realpathSync(path);
-  } catch {
-    return undefined;
-  }
-}
-
 /** Bytes read from a transcript's end to find its last message; more than a few large tool results. */
 const TAIL_BYTES = 256 * 1024;
 /**
@@ -137,6 +134,7 @@ function worktreeStamp(cwd: string) {
   const checkout = (gitdirFile: string) => {
     try {
       const path = readFileSync(gitdirFile, "utf8").trim();
+      if (foreignPointer(path, gitdirFile)) return "-";
       return `${path}@${stamp(resolve(dirname(gitdirFile), path))}`;
     } catch {
       return "-";
@@ -161,27 +159,16 @@ const transcriptFile = (projectsDir: string, cwd: string, sessionId: string) => 
 
 /**
  * Permission mode of the last prompt and effort of the last reply in a session's raw transcript (getSessionMessages() drops
- * both fields): the restore fallback when sessions.json has no entry. Absent fields stay undefined.
+ * both fields): the restore fallback when sessions.json has no entry. Absent fields stay undefined. Reads the raw lines readTranscript
+ * parsed (GH-274: no second read of the file).
  */
-function transcriptSettings(projectsDir: string, cwd: string, sessionId: string): { permissionMode?: unknown; effort?: unknown } {
-  let lines: string[];
-  try {
-    lines = readFileSync(transcriptFile(projectsDir, cwd, sessionId), "utf8").split("\n");
-  } catch {
-    return {};
-  }
+function transcriptSettings(entries: readonly unknown[]): { permissionMode?: unknown; effort?: unknown } {
   const found: { permissionMode?: unknown; effort?: unknown } = {};
-  for (let i = lines.length - 1; i >= 0 && (found.permissionMode === undefined || found.effort === undefined); i--) {
-    const line = lines[i]!;
-    if (!line.includes('"permissionMode"') && !line.includes('"effort"')) continue;
-    try {
-      const e = JSON.parse(line) as { type?: string; isSidechain?: boolean; permissionMode?: unknown; effort?: unknown };
-      if (e.isSidechain) continue;
-      if (e.type === "user" && found.permissionMode === undefined) found.permissionMode = e.permissionMode;
-      if (e.type === "assistant" && found.effort === undefined) found.effort = e.effort;
-    } catch {
-      // A line cut by a concurrent write.
-    }
+  for (let i = entries.length - 1; i >= 0 && (found.permissionMode === undefined || found.effort === undefined); i--) {
+    const e = entries[i] as { type?: string; isSidechain?: boolean; permissionMode?: unknown; effort?: unknown } | null;
+    if (!e || typeof e !== "object" || e.isSidechain) continue;
+    if (e.type === "user" && found.permissionMode === undefined && "permissionMode" in e) found.permissionMode = e.permissionMode;
+    if (e.type === "assistant" && found.effort === undefined && "effort" in e) found.effort = e.effort;
   }
   return found;
 }
@@ -195,9 +182,9 @@ function transcriptSettings(projectsDir: string, cwd: string, sessionId: string)
  */
 async function withParallelCalls(file: string | undefined, messages: SessionMessage[]): Promise<SessionMessage[]> {
   if (!file) return messages;
-  let text: string;
+  let buf: Buffer;
   try {
-    text = await readFile(file, "utf8");
+    buf = await readFile(file);
   } catch {
     return messages;
   }
@@ -207,20 +194,15 @@ async function withParallelCalls(file: string | undefined, messages: SessionMess
   const parentOf = new Map<string, string>();
   const lost = new Map<string, Line>();
   const index = new Map<string, number>();
-  for (const line of text.split("\n")) {
-    if (!line) continue;
-    try {
-      const e = JSON.parse(line) as Line;
-      if (!e.uuid) continue;
-      index.set(e.uuid, index.size);
-      if (e.parentUuid) parentOf.set(e.uuid, e.parentUuid);
-      if (have.has(e.uuid)) continue;
-      const content = e.message?.content;
-      const result = e.type === "user" && Array.isArray(content) && content.some((b) => (b as { type?: unknown })?.type === "tool_result");
-      if (result || (e.type === "assistant" && apiIds.has(e.message?.id))) lost.set(e.uuid, e);
-    } catch {
-      // A line cut by a concurrent write.
-    }
+  for (const raw of await parseJsonl(buf)) {
+    const e = raw as Line;
+    if (!e?.uuid) continue;
+    index.set(e.uuid, index.size);
+    if (e.parentUuid) parentOf.set(e.uuid, e.parentUuid);
+    if (have.has(e.uuid)) continue;
+    const content = e.message?.content;
+    const result = e.type === "user" && Array.isArray(content) && content.some((b) => (b as { type?: unknown })?.type === "tool_result");
+    if (result || (e.type === "assistant" && apiIds.has(e.message?.id))) lost.set(e.uuid, e);
   }
   if (!lost.size) return messages;
   const children = new Map<string, Line[]>();
@@ -238,79 +220,26 @@ async function withParallelCalls(file: string | undefined, messages: SessionMess
   return out.sort((a, b) => (index.get(a.uuid) ?? 0) - (index.get(b.uuid) ?? 0));
 }
 
-/** Names, sizes and mtimes of every transcript under `projectsDir`; undefined when it cannot be read. */
-function transcriptStamp(projectsDir: string) {
-  try {
-    const parts: string[] = [];
-    for (const dir of readdirSync(projectsDir, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue;
-      const path = join(projectsDir, dir.name);
-      for (const f of readdirSync(path)) {
-        if (!f.endsWith(".jsonl")) continue;
-        try {
-          const st = statSync(join(path, f));
-          parts.push(`${dir.name}/${f}:${st.size}:${st.mtimeMs}`);
-        } catch {
-          // Deleted meanwhile.
-        }
-      }
-    }
-    return parts.join("\n");
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Time of the last user or assistant entry in a session's transcript, read from its end. Not the file mtime: on exit
  * the CLI appends metadata (`last-prompt`, `cost-state`), so every live session looks just used after a daemon restart.
  * Undefined when the file or such an entry is not found (e.g. the entry is further back than `TAIL_BYTES`).
  */
-function lastMessageAt(projectsDir: string, cwd: string, sessionId: string, scanned?: { lastModified: number; fileSize?: number }) {
-  // Not found (long cwd): the list falls back to the file mtime.
+async function lastMessageAt(projectsDir: string, cwd: string, sessionId: string, scanned?: { lastModified: number; fileSize?: number }) {
   const file = transcriptFile(projectsDir, cwd, sessionId);
-  // The scan's own stamp: no open per transcript per list, which blocks the event loop (slow on Windows with hundreds of transcripts).
   const listed = scanned?.fileSize !== undefined ? `${scanned.lastModified}:${scanned.fileSize}` : undefined;
   const hit = listed && lastMessageCache.get(file);
   if (hit && hit.listed === listed) return hit.at;
-  let fd: number | undefined;
-  try {
-    fd = openSync(file, "r");
-    const { size, mtimeMs } = fstatSync(fd);
-    const version = `${mtimeMs}:${size}`;
-    const cached = lastMessageCache.get(file);
-    if (cached?.version === version) return (lastMessageCache.set(file, { ...cached, listed }), cached.at);
-    let at: number | undefined;
-    const buf = Buffer.alloc(Math.min(size, TAIL_BYTES));
-    readSync(fd, buf, 0, buf.length, size - buf.length);
-    const lines = buf.toString("utf8").split("\n");
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (!lines[i].includes('"timestamp"')) continue;
-      try {
-        const e = JSON.parse(lines[i]) as { type?: string; timestamp?: string };
-        const t = (e.type === "user" || e.type === "assistant") && Date.parse(e.timestamp ?? "");
-        if (t) {
-          at = t;
-          break;
-        }
-      } catch {
-        // The first line of the tail is cut.
-      }
-    }
-    lastMessageCache.set(file, { version, listed, at });
-    return at;
-  } catch {
-    // No transcript at that path.
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-  return undefined;
+  const read = await lastEntryTime(file, TAIL_BYTES);
+  if (!read) return undefined;
+  lastMessageCache.set(file, { version: read.version, listed, at: read.at });
+  return read.at;
 }
 
 /**
  * `roots`: allowlisted directories for session cwds, the session list and the directory picker (docs/spec.md "Security").
  * `push`: Web Push sender; without it push.* requests fail. `allowBypass`: sessions may switch to bypassPermissions.
- * `uploadDir`: parent of the fs.upload folders (default: the OS temp dir).
+ * `uploadDir`: parent of the per-session upload folders (default: a fresh mkdtemp folder, tests); main.ts passes defaultUploadsDir().
  * `projectsDir`: the SDK's transcript folder (default: `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`).
  * `settingsFile`: JSON file keeping each session's model, permission mode and effort for a restore after a restart
  * (the SDK transcript has mode and effort only per prompt); none = not kept.
@@ -331,6 +260,10 @@ export function createDaemon(opts: {
   push?: Push;
   allowBypass?: boolean;
   uploadDir?: string;
+  /** Orphan sweep of the upload parent: first run after 60 s, then every `uploadSweepMs` (default 6 h); 0 = off (tests). */
+  uploadSweepMs?: number;
+  /** Delay of the first sweep (default 60 s); tests shorten it. */
+  uploadSweepFirstMs?: number;
   projectsDir?: string;
   settingsFile?: string;
   /** The Claude user config folder (`settings.json` holds `permissions.defaultMode`); default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. */
@@ -343,20 +276,28 @@ export function createDaemon(opts: {
   listCache?: boolean;
   /** Interval of the WebSocket ping that drops a half-open socket (default 15 s; tests use a few hundred ms). */
   pingMs?: number;
+  /** The Claude login is CLAUDE_CODE_OAUTH_TOKEN (plan-usage.ts fallback); default: whether the env var is set. Never its value. */
+  oauthToken?: boolean;
   hostnames?: string[];
   /** Name shown for this computer in Settings (default: the OS host name); `desktopForcedOff`: started with --no-os-notify. */
   host?: string;
   desktopForcedOff?: boolean;
+  /** List once when the server starts listening (model list, transcript scan, last-message times), so the first browser connect does not pay for them (GH-276). */
+  warmUp?: boolean;
   cli?: CliRunner;
   configHoldMs?: number;
   configPollMs?: number;
   modelListWaitMs?: number;
   /** Idle close of unheld sessions (docs/spec.md "Idle close"); 0: off. Default IDLE_CLOSE_MS. */
   idleCloseMs?: number;
+  /** Longest wait for one media piece from a side before its GET is cut (default 30 s; tests shorten it). */
+  sideCallTimeoutMs?: number;
   /** WSL distros and Docker containers this daemon routes to (sides.ts). */
   sides?: Sides;
   /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
   buildInfo?: { version?: string; stale(): string | undefined };
+  /** Test seam (GH-272): the performance monitor (default: a real one, on unless the `performance.monitor` setting is off). */
+  perf?: PerfMonitor;
   /** How long worker_stop and worker_close wait for a stopped worker to leave running/needs_input (orchestration.ts); tests shorten it. */
   stopWaitMs?: number;
   /** Update checks and installs (update.ts); none: no update_available, update.* fail. Checks start with the daemon. */
@@ -364,12 +305,8 @@ export function createDaemon(opts: {
 }) {
   const hostnames = new Set([...LOCAL_HOSTNAMES, ...(opts.hostnames ?? [])]);
   const logEpoch = randomUUID();
-  /**
-   * fs.upload parent: one private (0700, mkdtemp) folder per daemon. Made up front: every session gets it as an
-   * additional directory, so Claude reads an attachment without asking.
-   */
-  const uploadParent = opts.uploadDir ?? mkdtempSync(join(tmpdir(), "claude-ui-"));
-  mkdirSync(uploadParent, { recursive: true, mode: 0o700 });
+  /** fs.upload storage: one private folder per session; a session gets only its own as an additional directory, so Claude reads an attachment without asking (uploads.ts). */
+  const uploads = createUploads({ dir: opts.uploadDir });
   const sessions = new Map<string, Session>();
   const settings = createSessionSettings({ file: opts.settingsFile });
   /** A failed save keeps the change in memory for the run (session-settings.ts). */
@@ -381,7 +318,7 @@ export function createDaemon(opts: {
     }
   };
   // Account-wide, so not a session event: every connection gets each change.
-  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query) });
+  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query), oauthToken: opts.oauthToken ?? usesOauthToken() });
   /** Options of every session: settings changes are saved under its ID. */
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
@@ -390,7 +327,14 @@ export function createDaemon(opts: {
     onLimitStop: (id: string, resetsAt: number | undefined) => autoContinue.schedule(id, resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined)),
     allowBypass: opts.allowBypass,
     supportsAuto,
-    uploadDir: uploadParent,
+    uploadDir: (id: string) => {
+      try {
+        return uploads.dirFor(id);
+      } catch (e) {
+        console.error(`session ${id}: upload folder failed:`, e);
+        return undefined;
+      }
+    },
     query: opts.query,
     readTranscript,
     // The stale-turn check reads only the transcript's tail, not the chain and its subagent runs (GH-239).
@@ -411,11 +355,15 @@ export function createDaemon(opts: {
   const restoring = new Map<string, Promise<Session | undefined>>();
   // Sessions whose delete is in progress (session.delete).
   const deleting = new Set<string>();
-  const history = { listSessions, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, ...opts.history };
+  const history = { listSessions: listSessionsOffThread, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, ...opts.history };
   const claudeDir = opts.claudeDir ?? (process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
+  // The monitor follows the `performance.monitor` setting: on start, on settings.set, and on its 10 s tick (another daemon's change to off).
+  const perfMon = opts.perf ?? createPerf({ version: opts.buildInfo?.version, poll: () => appSettings.get().performance.monitor });
+  setPerf(perfMon);
+  perfMon.setEnabled(appSettings.get().performance.monitor);
   const autoContinue = createAutoContinue({
     ...opts.autoContinue,
     enabled: () => appSettings.get().usageLimit.autoContinue,
@@ -469,14 +417,19 @@ export function createDaemon(opts: {
     });
   const supportsAuto = (model: string) => known.some((m) => m.value === model && m.supportsAutoMode);
   const roots = opts.roots.map(real).filter((r) => r !== undefined);
+  /** UNC roots (configured and canonical form): the only UNC paths that may reach the file system (GH-282: an SMB lookup sends the NTLM hash). */
+  const uncRoots = [...opts.roots, ...roots].filter((r) => winPathKind(r) === "unc");
+  const refused = (p: string) => refusedPath(p, uncRoots);
   const inRoots = (path: string) =>
     roots.some((r) => {
       const rel = relative(r, path);
       return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
     });
+  /** A repository (top, git dirs: GH-290) that is not entirely inside the roots: no git request may read it. */
+  const gitOutside = (cwd: string) => gitEscapes(cwd, (p) => inRoots(real(p) ?? p));
   /** The canonical path when it is an existing path inside a root. */
   const allowed = (path: unknown) => {
-    const p = typeof path === "string" && isAbsolute(path) ? real(path) : undefined;
+    const p = typeof path === "string" && isAbsolute(path) && !refused(path) ? real(path) : undefined;
     return p && inRoots(p) ? p : undefined;
   };
 
@@ -491,7 +444,7 @@ export function createDaemon(opts: {
 
   /** A missing absolute path whose nearest existing ancestor is allowed: deleted inside the roots (outside them, existence stays hidden). */
   const missingInRoots = (path: unknown) => {
-    if (typeof path !== "string" || !isAbsolute(path) || existsSync(path)) return false;
+    if (typeof path !== "string" || !isAbsolute(path) || refused(path) || existsSync(path)) return false;
     let dir = dirname(resolve(path));
     while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
     return !!allowed(dir);
@@ -534,7 +487,8 @@ export function createDaemon(opts: {
     const stamp = worktreeStamp(cwd);
     const hit = worktreeLists.get(cwd);
     if (hit?.stamp === stamp) return hit.list;
-    const entry = { stamp, list: listWorktrees(cwd) };
+    const sp = perfMon.span("worktree.list");
+    const entry = { stamp, list: (gitOutside(cwd) ? Promise.resolve(null) : listWorktrees(cwd)).finally(() => sp.end()) };
     worktreeLists.set(cwd, entry);
     // A failed read of a git folder (spawn error, killed process) is not kept: the next list reads again.
     void entry.list.then((l) => l === null && stamp !== "-" && worktreeLists.get(cwd) === entry && worktreeLists.delete(cwd));
@@ -548,7 +502,7 @@ export function createDaemon(opts: {
   const statusReads = new Map<string, ReturnType<typeof gitStatus>>();
   const statusOf = (cwd: string) => {
     let read = statusReads.get(cwd);
-    if (!read) statusReads.set(cwd, (read = gitStatus(cwd).finally(() => statusReads.delete(cwd))));
+    if (!read) statusReads.set(cwd, (read = (gitOutside(cwd) ? Promise.resolve(null) : gitStatus(cwd)).finally(() => statusReads.delete(cwd))));
     return read;
   };
 
@@ -654,7 +608,7 @@ export function createDaemon(opts: {
           .catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []));
       }),
     );
-    return { main, runs };
+    return { main, runs, entries: stamp === undefined ? undefined : cache.tail.entries };
   }
 
   /**
@@ -799,12 +753,13 @@ export function createDaemon(opts: {
   function transcripts(): ReturnType<typeof listSessions> {
     if (!scan) {
       // Taken before the scan: a file written during it changes the next stamp.
-      const stamp = listCache ? transcriptStamp(projectsDir) : undefined;
-      if (stamp !== undefined && lastScan?.stamp === stamp) return Promise.resolve(lastScan.result);
-      return (scan = history
-        .listSessions()
-        .then((result) => ((lastScan = stamp === undefined ? undefined : { stamp, result }), result))
-        .finally(() => (scan = undefined)));
+      return (scan = (async () => {
+        const stamp = listCache ? await transcriptStamp(projectsDir) : undefined;
+        if (stamp !== undefined && lastScan?.stamp === stamp) return lastScan.result;
+        const result = await history.listSessions();
+        lastScan = stamp === undefined ? undefined : { stamp, result };
+        return result;
+      })().finally(() => (scan = undefined)));
     }
     return (nextScan ??= scan.catch(() => {}).then(() => ((nextScan = undefined), transcripts())));
   }
@@ -853,6 +808,16 @@ export function createDaemon(opts: {
     return (nextListing ??= listing.catch(() => {}).then(() => ((nextListing = undefined), list())));
   }
 
+  /** session.ids: what findSession could restore, without reading any transcript (the cached scan, one realpath per cwd). */
+  async function sessionIds(): Promise<string[]> {
+    const ok = new Map<string, boolean>();
+    const inRootsCwd = (cwd: string) => (ok.has(cwd) ? ok.get(cwd)! : (ok.set(cwd, !!allowed(cwd)), ok.get(cwd)!));
+    const ids = new Set((await transcripts()).filter((t) => t.cwd && inRootsCwd(t.cwd)).map((t) => t.sessionId));
+    for (const id of sessions.keys()) ids.add(id);
+    for (const id of deleting) ids.delete(id);
+    return [...ids];
+  }
+
   async function listNow(): Promise<ListResult> {
     // The model list starts a CLI: not waiting longer than this offers no auto mode until it is there.
     await new Promise<void>((done) => {
@@ -876,11 +841,12 @@ export function createDaemon(opts: {
     // transcripts share a few dozen cwds.
     const canonical = new Map<string, string | undefined>();
     const allowedCwd = (cwd: string) => (canonical.has(cwd) ? canonical.get(cwd) : (canonical.set(cwd, allowed(cwd)), canonical.get(cwd)));
+    const lastAt = new Map(await mapLimit(all, 8, async (t) => [t.sessionId, t.cwd && allowedCwd(t.cwd) ? await lastMessageAt(projectsDir, t.cwd, t.sessionId, t) : undefined] as const));
     for (const t of all) {
       if (!t.cwd || !allowedCwd(t.cwd)) continue;
       const live = sessions.get(t.sessionId)?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
       const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastMessageAt(projectsDir, t.cwd, t.sessionId, t) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
@@ -941,14 +907,14 @@ export function createDaemon(opts: {
         transcriptCwds.set(id, info.cwd);
         // Before the read: a write during it changes the stamp, so the first subscriber syncs it.
         stamps.set(id, statStamp(transcriptFile(projectsDir, info.cwd, id)));
-        const { main: messages, runs } = await readTranscript(id, info.cwd);
+        const { main: messages, runs, entries } = await readTranscript(id, info.cwd);
         await modelList().catch(() => {});
         // Its worktree is being removed: no live session in a directory about to go.
         if (isRemoving(info.cwd)) return undefined;
         // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
         const used = transcriptModel(messages);
         // No entry (sessions.json lost, a session of the terminal CLI): mode and effort the transcript last recorded.
-        const saved = settings.get(id) ?? { model: undefined, ...transcriptSettings(projectsDir, info.cwd, id) };
+        const saved = settings.get(id) ?? { model: undefined, ...transcriptSettings(entries ?? []) };
         const model = isModel(saved?.model) ? saved.model : used && ((await modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
         // A mode the daemon does not enable now (bypass without CLAUDE_UI_ALLOW_BYPASS) falls back to the default.
         const modes = permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model ?? "default") });
@@ -976,6 +942,9 @@ export function createDaemon(opts: {
     return cwd ? { cwd, live, transcript: !!info } : undefined;
   }
 
+  /** A live session whose CLI reads the folder of `id` (itself or, after /clear, its parent's folder). */
+  const folderInUse = (id: string) => [...sessions.values()].some((s) => s.uploadOwner === id);
+
   /** session.delete, also the web app's Remove and worker_remove: the error to report, or undefined once the session is gone. */
   async function deleteSessionById(id: string): Promise<{ code: string; message: string } | undefined> {
     // A restore already in flight would put the session back after the delete; let it finish, then close it below.
@@ -998,6 +967,8 @@ export function createDaemon(opts: {
       deleting.delete(id);
     }
     caches.delete(id);
+    // The folder of a session whose CLI a /clear heir still uses stays with the heir.
+    if (!folderInUse(id)) await uploads.remove(id).catch((e) => console.error(`session ${id}: removing its uploads failed:`, e));
     if (settings.get(id)) saveSettings(() => settings.delete([id]));
     broadcast({ type: "sessions.changed", deleted: id });
     return undefined;
@@ -1012,8 +983,41 @@ export function createDaemon(opts: {
       .map((p) => p.trim())
       .some((p) => p.startsWith(TOKEN_PROTOCOL_PREFIX) && isToken(p.slice(TOKEN_PROTOCOL_PREFIX.length)));
 
-  /** fs.media capabilities: nonce -> canonical path, issuing connection, last use. */
-  const media = new Map<string, { path: string; ws: Conn; used: number }>();
+  /** Piece of a media file: undefined when it can no longer be read (gone, outside the roots, side stopped). */
+  type MediaRead = (offset: number, length: number) => Promise<MediaReadResult | undefined>;
+  /** fs.media capabilities: nonce -> a hub file (canonical path, streamed from disk) or bytes read in pieces (a file at a commit, a side's file), issuing connection, last use. */
+  const media = new Map<string, { src: { kind: "file"; path: string } | { kind: "bytes"; read: MediaRead; mime: string; name: string }; ws: Conn; used: number; live?: Set<ServerResponse> }>();
+  const mediaHead = (type: string, name: string, size: number, start: number, end: number, ranged: boolean) => ({
+    ...MEDIA_HEADERS,
+    "content-type": type,
+    "content-length": size === 0 ? 0 : end - start + 1,
+    ...(ranged && { "content-range": `bytes ${start}-${end}/${size}` }),
+    "content-disposition": `${type === "image/svg+xml" ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+  });
+  /** A bytes entry: size from a first empty read, then the range in MEDIA_CHUNK pieces, one at a time, waiting for drain. A piece that fails, is short, or sees another size or mtime (the file changed) cuts the response. */
+  const serveBytes = async (req: IncomingMessage, res: ServerResponse, src: { read: MediaRead; mime: string; name: string }) => {
+    const head = await src.read(0, 0);
+    if (!head) return void res.writeHead(404).end();
+    const { size, mtime } = head;
+    const r = parseRange(req.headers.range, size);
+    if (r === "unsatisfiable") return void res.writeHead(416, { ...MEDIA_HEADERS, "content-range": `bytes */${size}` }).end();
+    const start = r?.start ?? 0;
+    const end = r?.end ?? size - 1;
+    res.writeHead(r ? 206 : 200, mediaHead(src.mime, src.name, size, start, end, !!r));
+    if (req.method === "HEAD" || size === 0) return void res.end();
+    let closed = false;
+    res.on("close", () => (closed = true));
+    for (let at = start; at <= end; ) {
+      const want = Math.min(MEDIA_CHUNK, end + 1 - at);
+      const p = await src.read(at, want);
+      if (closed) return;
+      const data = p && p.size === size && p.mtime === mtime ? Buffer.from(p.data, "base64") : undefined;
+      if (!data || data.length !== want) return void res.destroy();
+      at += want;
+      if (!res.write(data)) await new Promise<void>((ok) => (res.once("drain", ok), res.once("close", ok)));
+    }
+    res.end();
+  };
   const mediaEntry = (nonce: string) => {
     const e = media.get(nonce);
     if (e && Date.now() - e.used < MEDIA_TTL_MS) return e; // closing the connection deletes its nonces
@@ -1032,13 +1036,21 @@ export function createDaemon(opts: {
     const entry = mediaEntry(nonce);
     if (!entry) return void res.writeHead(404).end();
     entry.used = Date.now();
-    const type = mediaType(entry.path);
-    if (!type || allowed(entry.path) !== entry.path) return void res.writeHead(404).end();
+    if (entry.src.kind === "bytes") {
+      // The connection's close ends a response still waiting on a side's piece.
+      const live = (entry.live ??= new Set());
+      live.add(res);
+      res.once("close", () => live.delete(res));
+      return void serveBytes(req, res, entry.src).catch(() => res.destroy());
+    }
+    const path = entry.src.path;
+    const type = mediaType(path);
+    if (!type || allowed(path) !== path) return void res.writeHead(404).end();
     let fd: number;
     let size: number;
     try {
-      // ponytail: realpath check then open races with an intermediate directory swapped for a symlink; O_NOFOLLOW covers the last component; O_NONBLOCK keeps a swapped-in FIFO from blocking the open (fstat isFile then refuses it). Full fix: openat2 RESOLVE_BENEATH, not in Node.
-      fd = openSync(entry.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      // ponytail: the open file must be the canonical path's file (device and inode, no link component): a swapped directory is detected. Remaining limit: hard links (a second name for an outside file). O_NONBLOCK keeps a swapped-in FIFO from blocking the open (fstat isFile then refuses it).
+      fd = openChecked(path, OPEN_READ);
       const st = fstatSync(fd);
       if (!st.isFile()) {
         closeSync(fd);
@@ -1055,13 +1067,7 @@ export function createDaemon(opts: {
     }
     const start = r?.start ?? 0;
     const end = r?.end ?? size - 1;
-    res.writeHead(r ? 206 : 200, {
-      ...MEDIA_HEADERS,
-      "content-type": type,
-      "content-length": size === 0 ? 0 : end - start + 1,
-      ...(r && { "content-range": `bytes ${start}-${end}/${size}` }),
-      "content-disposition": `${type === "image/svg+xml" ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(basename(entry.path)).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
-    });
+    res.writeHead(r ? 206 : 200, mediaHead(type, basename(path), size, start, end, !!r));
     if (req.method === "HEAD" || size === 0) {
       closeSync(fd);
       return void res.end();
@@ -1103,6 +1109,7 @@ export function createDaemon(opts: {
 
   // A side's start, failure or stop changes the side list every client shows.
   opts.sides?.onChange(() => broadcast({ type: "sessions.changed" }));
+  if (opts.warmUp) http.once("listening", () => void list().catch((e) => console.warn("warm-up list failed:", (e as Error).message)));
   /** This daemon has the session: live, or a transcript inside the roots. */
   const isLocalSession = async (id: string) => sessions.has(id) || (UUID.test(id) && !!allowed((await history.getSessionInfo(id).catch(() => undefined))?.cwd));
 
@@ -1149,8 +1156,26 @@ export function createDaemon(opts: {
     if (stale) send(ws, { type: "daemon_stale", note: stale });
     const unsubscribes = new Map<string, () => void>();
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
-    // fs.media: canonical path -> nonce issued to this connection.
+    // fs.media: key (canonical path, "blob\0cwd\0hash\0path", "<side>\0cwd\0hash\0path") -> nonce issued to this connection.
     const mediaNonces = new Map<string, string>();
+    /** Files at a commit that media.read read (a commit's file never changes): least recently used first, at most MEDIA_BLOB_CACHE_MAX bytes per connection. */
+    const blobs = new Map<string, Buffer>();
+    const blobCached = (key: string) => {
+      const b = blobs.get(key);
+      if (b) (blobs.delete(key), blobs.set(key, b));
+      return b;
+    };
+    const blobKeep = (key: string, buf: Buffer) => {
+      blobs.set(key, buf);
+      let total = 0;
+      blobs.forEach((b) => (total += b.length));
+      for (const [k, b] of blobs) {
+        if (total <= MEDIA_BLOB_CACHE_MAX || k === key) break;
+        blobs.delete(k);
+        total -= b.length;
+      }
+    };
+    const nonceFor = (key: string) => mediaNonces.get(key) ?? (mediaNonces.set(key, randomBytes(16).toString("hex")), mediaNonces.get(key)!);
     const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();
     // Attached terminals: ID → detach.
     const attached = new Map<string, () => void>();
@@ -1164,7 +1189,8 @@ export function createDaemon(opts: {
     ws.on("close", () => {
       router?.close();
       connections.delete(ws);
-      mediaNonces.forEach((n) => media.delete(n));
+      mediaNonces.forEach((n) => (media.get(n)?.live?.forEach((r) => r.destroy()), media.delete(n)));
+      blobs.clear();
       unsubscribes.forEach((u) => u());
       unwatchAll();
       attached.forEach((d) => d());
@@ -1182,17 +1208,97 @@ export function createDaemon(opts: {
       if (typeof msg !== "object" || msg === null || Array.isArray(msg))
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
       if (msg.type === "ping") return send(ws, { type: "reply", reqId: msg.reqId, result: {} });
-      if (router) return router.handle(msg as ClientMessage & Record<string, unknown>);
-      return local(msg, (m) => send(ws, m));
+      // Timed here, before the router, so a request a side serves or the router answers itself is attributed too.
+      const end = perfMon.request(String(msg.type), typeof (msg as { cwd?: unknown }).cwd === "string" ? (msg as { cwd: string }).cwd : undefined);
+      try {
+        if (router) return await router.handle(msg as ClientMessage & Record<string, unknown>);
+        return await local(msg, (m) => send(ws, m));
+      } finally {
+        end();
+      }
     };
     /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
+    type MediaFail = { code: string; message: string; size?: number };
+    /** media.read and fs.media {hash}: a piece of a media file or of a file at a commit, with the roots and extension checks. */
+    const readMedia = async (m: { path: unknown; cwd?: unknown; hash?: unknown; offset: number; length: number }): Promise<MediaReadResult | MediaFail> => {
+      if (typeof m.path !== "string") return { code: "bad_request", message: "path must be a string" };
+      const mime = mediaType(m.path);
+      if (m.hash !== undefined) {
+        const cwd = allowed(m.cwd);
+        if (!cwd) return { code: "cwd_not_allowed", message: `outside the allowlisted roots: ${String(m.cwd)}` };
+        if (!mime) return { code: "unsupported_type", message: `not an image, video or audio file: ${m.path}` };
+        const key = `${cwd}\0${String(m.hash)}\0${m.path}`;
+        try {
+          let buf = blobCached(key);
+          // Size only (the first read of every GET): git cat-file -s, no blob read.
+          if (!buf && m.length === 0) return { data: "", size: (await gitBlobRef(cwd, m.hash as string, m.path, (p) => inRoots(real(p) ?? p), MEDIA_BLOB_MAX)).size, mtime: 0, mime };
+          if (!buf) {
+            buf = await gitBlobRead(await gitBlobRef(cwd, m.hash as string, m.path, (p) => inRoots(real(p) ?? p), MEDIA_BLOB_MAX));
+            blobKeep(key, buf);
+          }
+          return { data: buf.subarray(m.offset, m.offset + m.length).toString("base64"), size: buf.length, mtime: 0, mime };
+        } catch (e) {
+          return { code: e instanceof WorktreeError ? e.code : "git_failed", message: (e as Error).message, size: e instanceof WorktreeError ? e.size : undefined };
+        }
+      }
+      const file = allowed(m.path);
+      if (!file) return missingInRoots(m.path) ? { code: "not_found", message: `no such file: ${m.path}` } : { code: "path_not_allowed", message: `outside the allowlisted roots: ${m.path}` };
+      const fileMime = mediaType(file);
+      if (!fileMime) return { code: "unsupported_type", message: `not an image, video or audio file: ${m.path}` };
+      let fh;
+      try {
+        // Same open as GET /media (no-follow, non-blocking: see the ponytail there).
+        fh = await open(file, OPEN_READ);
+      } catch (err) {
+        return { code: "fs_error", message: String(err) };
+      }
+      try {
+        if (!sameFile(fh.fd, file)) return { code: "path_not_allowed", message: `changed during the request: ${m.path}` };
+        const st = await fh.stat();
+        if (!st.isFile()) return { code: "not_a_file", message: `not a file: ${m.path}` };
+        const n = Math.max(0, Math.min(m.length, st.size - m.offset));
+        const buf = Buffer.alloc(n);
+        const got = n ? (await fh.read(buf, 0, n, m.offset)).bytesRead : 0;
+        return { data: buf.subarray(0, got).toString("base64"), size: st.size, mtime: st.mtimeMs, mime: fileMime };
+      } finally {
+        await fh.close();
+      }
+    };
+    const isPiece = (o: unknown, l: unknown) => Number.isSafeInteger(o) && (o as number) >= 0 && Number.isSafeInteger(l) && (l as number) >= 0 && (l as number) <= MEDIA_CHUNK;
+    /** fs.media of a side's file or commit: the side checks it (media.read, length 0); the hub issues its own URL and reads the bytes from the side per GET. */
+    const sideMedia = async (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>): Promise<ServerMessage> => {
+      const args = { path: msg.path, ...(msg.hash !== undefined && { cwd: msg.cwd, hash: msg.hash }) };
+      const ask = (offset: number, length: number) => call({ type: "media.read", reqId: "", ...args, offset, length } as ClientMessage);
+      const head = await ask(0, 0);
+      if (head.type !== "reply") return { ...head, reqId: msg.reqId } as ServerMessage;
+      const r = head.result as MediaReadResult;
+      // The type comes from the extension here, never from the side's reply.
+      const mime = mediaType(msg.path);
+      if (!mime) return { type: "error", reqId: msg.reqId, code: "unsupported_type", message: `not an image, video or audio file: ${msg.path}` };
+      const name = msg.path.split(/[\\/]/).pop() ?? "";
+      const nonce = nonceFor(`${id}\0${msg.cwd ?? ""}\0${msg.hash ?? ""}\0${msg.path}`);
+      const read: MediaRead = async (offset, length) => {
+        const a = await ask(offset, length);
+        return a.type === "reply" ? (a.result as MediaReadResult) : undefined;
+      };
+      media.set(nonce, { src: { kind: "bytes", read, mime, name }, ws, used: Date.now() });
+      return { type: "reply", reqId: msg.reqId, result: { url: `/media/${nonce}/${encodeURIComponent(name)}?v=${msg.hash ?? r.mtime}`, mime, size: r.size, mtime: r.mtime } };
+    };
     const local = async (msg: ClientMessage, out: (m: ServerMessage) => void) => {
       const reply = (result: unknown) => out({ type: "reply", reqId: msg.reqId, result });
       const fail = (code: string, message: string, size?: number) => out({ type: "error", reqId: msg.reqId, code, message, size });
+      /** An fs.read/fs.write failure: a path that changed during the request is refused; a directory is not a file. */
+      const fsFail = (err: unknown, path: string) => {
+        const code = (err as { code?: string }).code;
+        if (code === "ECHANGED") return fail("path_not_allowed", `changed during the request: ${path}`);
+        if (code === "EISDIR") return fail("not_a_file", `not a file: ${path}`);
+        return fail("fs_error", String(err));
+      };
       const find = async (id: string) => (await findSession(id)) ?? void fail("unknown_session", `no session ${id}`);
 
       switch (msg.type) {
         case "session.create": {
+          if (typeof msg.cwd === "string" && refused(msg.cwd)) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (typeof msg.cwd !== "string" || !existsSync(msg.cwd) || !statSync(msg.cwd).isDirectory())
             return fail("bad_cwd", `not a directory: ${msg.cwd}`);
           if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
@@ -1202,7 +1308,10 @@ export function createDaemon(opts: {
           await modelList().catch(() => {});
           // A removal may have started during the await: no live session in a deleted directory.
           if (isRemoving(cwd) || !existsSync(cwd)) return fail("worktree_removing", "This worktree is being removed");
-          const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode: defaultModeFor(cwd, msg.model) })));
+          // The draft token of the new-session tab's uploads: the session gets their id, and with it their folder (one claim per token).
+          const claimed = typeof msg.draft === "string" ? uploads.claim(msg.draft) : undefined;
+          if (msg.draft !== undefined && !claimed) console.log("session.create: draft uploads not claimed");
+          const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode: defaultModeFor(cwd, msg.model) }), claimed ? { id: claimed } : undefined));
           addProject(cwd);
           return reply({ session: s.info() });
         }
@@ -1222,30 +1331,35 @@ export function createDaemon(opts: {
           }
         }
         case "session.subscribe": {
-          const s = await find(msg.sessionId);
-          const title = s && (await titleOf(s));
-          if (!s || ws.readyState !== ws.OPEN) return;
-          // Only an explicit open (link, notification) adds the project; a reconnect resubscribe must not bring back a removed one.
-          if (msg.addProject === true) addProject(s.cwd);
-          unsubscribes.get(s.id)?.();
-          // A plain subscribe holds the session's CLI (idle close) until it is released; `background` only follows.
-          const hold = msg.background !== true;
-          const keep = (stop: () => void, release: () => void) => {
-            if (hold) holds.set(s.id, (holds.get(s.id) ?? 0) + 1);
-            unsubscribes.set(s.id, () => (stop(), release(), hold && unhold(s.id)));
-          };
-          // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
-          const since = msg.logEpoch === logEpoch ? msg.sinceSeq : 0;
-          // Paged, first subscribe or new epoch: a snapshot (last page) instead of the replay; reply, snapshot and subscribe in one synchronous step.
-          if (msg.paged === true && since === 0) {
-            const { seq, snapshot } = s.snapshot(typeof msg.from === "string" ? msg.from : undefined);
-            reply({ logEpoch, seq, session: s.info(), title: title!, snapshot });
-            const stop = s.subscribe(seq, (e) => send(ws, e));
+          const span = perfMon.span("session.open");
+          try {
+            const s = await find(msg.sessionId);
+            const title = s && (await titleOf(s));
+            if (!s || ws.readyState !== ws.OPEN) return;
+            // Only an explicit open (link, notification) adds the project; a reconnect resubscribe must not bring back a removed one.
+            if (msg.addProject === true) addProject(s.cwd);
+            unsubscribes.get(s.id)?.();
+            // A plain subscribe holds the session's CLI (idle close) until it is released; `background` only follows.
+            const hold = msg.background !== true;
+            const keep = (stop: () => void, release: () => void) => {
+              if (hold) holds.set(s.id, (holds.get(s.id) ?? 0) + 1);
+              unsubscribes.set(s.id, () => (stop(), release(), hold && unhold(s.id)));
+            };
+            // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
+            const since = msg.logEpoch === logEpoch ? msg.sinceSeq : 0;
+            // Paged, first subscribe or new epoch: a snapshot (last page) instead of the replay; reply, snapshot and subscribe in one synchronous step.
+            if (msg.paged === true && since === 0) {
+              const { seq, snapshot } = s.snapshot(typeof msg.from === "string" ? msg.from : undefined);
+              reply({ logEpoch, seq, session: s.info(), title: title!, snapshot });
+              const stop = s.subscribe(seq, (e) => send(ws, e));
+              return keep(stop, mirror(s));
+            }
+            reply({ logEpoch, seq: s.seq(), session: s.info(), title: title! });
+            const stop = s.subscribe(since, (e) => send(ws, e));
             return keep(stop, mirror(s));
+          } finally {
+            span.end();
           }
-          reply({ logEpoch, seq: s.seq(), session: s.info(), title: title! });
-          const stop = s.subscribe(since, (e) => send(ws, e));
-          return keep(stop, mirror(s));
         }
         case "session.page":
         case "session.edits": {
@@ -1260,6 +1374,13 @@ export function createDaemon(opts: {
           if (msg.until !== undefined && (typeof msg.until !== "string" || msg.until.length > 200)) return fail("bad_request", "until must be a string of at most 200 characters");
           const page = s.page(msg.before, msg.until);
           return page ? reply({ page }) : fail("unknown_cursor", `no part ${msg.before}`);
+        }
+        case "session.media": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (typeof msg.partId !== "string" || msg.partId.length > 200 || !Number.isInteger(msg.index) || msg.index < 0) return fail("bad_request", "partId must be a part id and index a non-negative integer");
+          const dataUrl = s.media(msg.partId, msg.index);
+          return dataUrl ? reply({ dataUrl }) : fail("unknown_media", `no media ${msg.index} in part ${msg.partId}`);
         }
         case "session.unsubscribe": {
           // No find(): this must not restore a session.
@@ -1323,16 +1444,20 @@ export function createDaemon(opts: {
         }
         case "fs.upload": {
           if (typeof msg.data !== "string" || typeof msg.name !== "string") return fail("bad_upload", "name and data (base64) required");
-          // basename: the name must not climb out of the upload folder.
-          const name = basename(msg.name).replace(/^\.+/, "") || "file";
+          let owner: string | undefined;
+          if (msg.sessionId !== undefined) {
+            if (typeof msg.sessionId !== "string" || !SESSION_DIR.test(msg.sessionId) || deleting.has(msg.sessionId) || !(await locate(msg.sessionId)))
+              return fail("unknown_session", "no such session");
+            // After /clear the heir's CLI still reads its parent's folder: the file goes where the CLI can read it.
+            owner = sessions.get(msg.sessionId)?.uploadOwner ?? msg.sessionId;
+          } else if (msg.draft !== undefined) {
+            owner = uploads.ownerOfDraft(msg.draft);
+            if (!owner) return typeof msg.draft === "string" && uploads.draftClaimed(msg.draft) ? fail("draft_claimed", "draft already used; use a new draft or the sessionId") : fail("bad_upload", "draft must be 64 hex characters");
+          } else return fail("bad_upload", "sessionId or draft required; reload the page");
           const buf = Buffer.from(msg.data, "base64");
-          if (buf.length > MAX_UPLOAD_BYTES) return fail("too_large", `larger than ${MAX_UPLOAD_BYTES} bytes: ${name}`);
+          if (buf.length > MAX_UPLOAD_BYTES) return fail("too_large", `larger than ${MAX_UPLOAD_BYTES} bytes: ${msg.name}`);
           try {
-            // One folder per upload keeps the original name, so Claude sees it.
-            // ponytail: uploads are never removed (spec: temp folder, OS temp cleanup); delete on session end if disk use matters.
-            const file = join(mkdtempSync(join(uploadParent, "u-")), name);
-            writeFileSync(file, buf, { mode: 0o600 });
-            return reply({ path: file });
+            return reply({ path: uploads.store(owner, msg.name, buf) });
           } catch (err) {
             return fail("fs_error", String(err));
           }
@@ -1389,6 +1514,8 @@ export function createDaemon(opts: {
         }
         case "session.list":
           return reply(await list());
+        case "session.ids":
+          return reply({ ids: await sessionIds() } satisfies SessionIdsResult);
         case "project.open": {
           const cwd = allowed(msg.cwd);
           if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
@@ -1410,12 +1537,18 @@ export function createDaemon(opts: {
           }
           broadcast({ type: "sessions.changed" });
           return reply({});
+        case "perf.report":
+          return reply({ daemon: perfMon.report() });
+        case "perf.clear":
+          perfMon.clear();
+          return reply({});
         case "settings.get":
           return reply({ settings: appSettings.get(), daemon: daemonInfo() });
         case "settings.set": {
           try {
             const settings = appSettings.set(msg.patch);
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
+            perfMon.setEnabled(settings.performance.monitor);
             broadcast({ type: "settings_changed", settings });
             return reply({ settings, daemon: daemonInfo() });
           } catch (err) {
@@ -1509,7 +1642,7 @@ export function createDaemon(opts: {
         case "git.refs": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          return reply({ refs: gitRefs(cwd) });
+          return reply({ refs: gitRefs(cwd, (p) => inRoots(real(p) ?? p)) });
         }
         case "git.log":
         case "git.diff":
@@ -1550,6 +1683,7 @@ export function createDaemon(opts: {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (msg.type === "worktree.create" && msg.name !== undefined && typeof msg.name !== "string") return fail("bad_name", "name must be a string");
+          if (gitOutside(cwd)) return fail("cwd_not_allowed", "The repository is outside the allowed roots");
           const path = msg.type === "worktree.create" ? undefined : allowed(msg.path);
           if (msg.type !== "worktree.create" && !path) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           try {
@@ -1580,20 +1714,38 @@ export function createDaemon(opts: {
           // A missing file whose nearest existing ancestor is allowed (deleted after an Edit, also with its directory): the changes tab shows it deleted.
           if (!file && missingInRoots(msg.path)) return fail("not_found", `no such file: ${msg.path}`);
           if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
+          let fd: number | undefined;
           try {
-            const st = statSync(file);
+            fd = openChecked(file, OPEN_READ);
+            const st = fstatSync(fd);
             if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
             if (st.size > MAX_FILE_BYTES) return fail("too_large", `larger than ${MAX_FILE_BYTES} bytes: ${msg.path}`, st.size);
-            const buf = readFileSync(file);
-            const t = decodeText(buf);
+            const t = decodeText(readAll(fd, st.size));
             if ("code" in t) return fail(t.code, `${t.code === "binary" ? "binary file" : "not UTF-8 text"}: ${msg.path}`, st.size);
             const content = t.content;
             return reply({ content, mtime: st.mtimeMs });
           } catch (err) {
-            return fail("fs_error", String(err));
+            return fsFail(err, msg.path);
+          } finally {
+            if (fd !== undefined) closeSync(fd);
           }
         }
+        case "media.read": {
+          if (!isPiece(msg.offset, msg.length)) return fail("bad_request", `offset and length must be integers, length at most ${MEDIA_CHUNK}`);
+          const r = await readMedia(msg);
+          return "code" in r ? fail(r.code, r.message, r.size) : reply(r);
+        }
         case "fs.media": {
+          if (msg.hash !== undefined) {
+            const r = await readMedia({ ...msg, offset: 0, length: 0 });
+            if ("code" in r) return fail(r.code, r.message, r.size);
+            const nonce = nonceFor(`blob\0${allowed(msg.cwd)}\0${msg.hash}\0${msg.path}`);
+            const args = { path: msg.path, cwd: msg.cwd, hash: msg.hash };
+            const read: MediaRead = (offset, length) => readMedia({ ...args, offset, length }).then((x) => ("code" in x ? undefined : x));
+            const name = msg.path.split(/[\\/]/).pop() ?? "";
+            media.set(nonce, { src: { kind: "bytes", read, mime: r.mime, name }, ws, used: Date.now() });
+            return reply({ url: `/media/${nonce}/${encodeURIComponent(name)}?v=${msg.hash}`, mime: r.mime, size: r.size, mtime: 0 });
+          }
           const file = allowed(msg.path);
           if (!file && missingInRoots(msg.path)) return fail("not_found", `no such file: ${msg.path}`);
           if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
@@ -1602,12 +1754,8 @@ export function createDaemon(opts: {
             if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
             const mime = mediaType(file);
             if (!mime) return fail("unsupported_type", `not an image, video or audio file: ${msg.path}`);
-            let nonce = mediaNonces.get(file);
-            if (!nonce) {
-              nonce = randomBytes(16).toString("hex");
-              mediaNonces.set(file, nonce);
-            }
-            media.set(nonce, { path: file, ws, used: Date.now() });
+            const nonce = nonceFor(file);
+            media.set(nonce, { src: { kind: "file", path: file }, ws, used: Date.now() });
             return reply({ url: `/media/${nonce}/${encodeURIComponent(basename(file))}?v=${st.mtimeMs}`, mime, size: st.size, mtime: st.mtimeMs });
           } catch (err) {
             return fail("fs_error", String(err));
@@ -1618,15 +1766,24 @@ export function createDaemon(opts: {
           const file = allowed(msg.path);
           if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           if (typeof msg.content !== "string") return fail("bad_content", "content must be a string");
+          let fd: number | undefined;
           try {
-            const st = statSync(file);
+            fd = openChecked(file, OPEN_WRITE);
+            const st = fstatSync(fd);
             if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
             if (msg.baseMtime !== undefined && st.mtimeMs !== msg.baseMtime)
               return fail("conflict", `changed on disk since it was read: ${msg.path}`);
-            writeFileSync(file, msg.content);
+            const data = Buffer.from(msg.content);
+            ftruncateSync(fd, 0);
+            writeAll(fd, data);
+            // Closed first: NTFS may set the write time when the handle closes, and the editor keeps this value as its next baseMtime.
+            closeSync(fd);
+            fd = undefined;
             return reply({ mtime: statSync(file).mtimeMs });
           } catch (err) {
-            return fail("fs_error", String(err));
+            return fsFail(err, msg.path);
+          } finally {
+            if (fd !== undefined) closeSync(fd);
           }
         }
         case "fs.watch": {
@@ -1763,6 +1920,8 @@ export function createDaemon(opts: {
             local(msg, resolve).catch((err) => (console.error("request handler failed:", err), resolve({ type: "error", reqId: msg.reqId, code: "internal_error", message: "request failed" }))),
           ),
         isLocalSession,
+        media: sideMedia,
+        mediaTimeoutMs: opts.sideCallTimeoutMs,
       });
     // A handler that throws fails its request: a rejected promise nobody awaits would end the process (Node's default).
     ws.on("message", (data) =>
@@ -1792,7 +1951,15 @@ export function createDaemon(opts: {
               console.log(`session ${s.id}: idle ${Math.round(idleCloseMs / 60_000)} min without a tab, CLI closed`);
         }, Math.min(IDLE_CHECK_MS, idleCloseMs)).unref()
       : undefined;
-  http.on("close", () => (orchestration.shutdown(), clearInterval(reaper)));
+  const sweepMs = opts.uploadSweepMs ?? UPLOAD_SWEEP_MS;
+  const sweepUploads = () =>
+    uploads
+      .sweep(async (id) => sessions.has(id) || restoring.has(id) || uploads.hasDraftId(id) || folderInUse(id) || (await history.getSessionInfo(id).catch(() => true)) !== undefined)
+      .then((gone) => gone.length && console.log(`uploads: removed ${gone.length} orphaned folder(s)`))
+      .catch((e) => console.error("uploads: sweep failed:", e));
+  const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
+  const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
+  http.on("close", () => (orchestration.shutdown(), clearInterval(reaper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, { accept, transcriptCaches: () => [...caches.keys()], orchestration });
 }

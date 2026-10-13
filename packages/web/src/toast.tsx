@@ -15,7 +15,7 @@ export function ToastRegion({ children }: { children?: ReactNode }) {
   );
 }
 
-export function Toast({ message, action, onClose }: { message: string; /** A text button after the message (Undo); it runs, then the toast goes. */ action?: { label: string; onClick: () => void }; onClose: () => void }) {
+export function Toast({ message, action, onClose, bigTargets, silent }: { message: string; /** A text button after the message (Undo); it runs, then the toast goes. */ action?: { label: string; onClick: () => void }; onClose: () => void; /** 44 px buttons below `md` also for a mouse (a toast a narrow desktop window can show, like the key tip), not only for a coarse pointer. */ bigTargets?: boolean; /** No `role="status"`: the owner announces the message through its own live region that exists before the text (screen readers skip a live region created with its text). */ silent?: boolean }) {
   const [open, setOpen] = useState(false);
   const exit = useRef<ReturnType<typeof setTimeout>>(undefined);
   // A toast that is replaced while it leaves must not close its successor.
@@ -41,7 +41,7 @@ export function Toast({ message, action, onClose }: { message: string; /** A tex
   }, [message, held]);
   return (
     <div
-      role="status"
+      role={silent ? undefined : "status"}
       data-testid="toast"
       data-state={open ? "open" : "closed"}
       onPointerEnter={() => setHover(true)}
@@ -56,7 +56,7 @@ export function Toast({ message, action, onClose }: { message: string; /** A tex
           <button
             type="button"
             onClick={() => (action.onClick(), close())}
-            className="cursor-pointer rounded-sm px-1 text-[13px] leading-5 font-medium text-info outline-none hover:underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:min-h-11"
+            className={`cursor-pointer rounded-sm px-1 text-[13px] leading-5 font-medium text-info outline-none hover:underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:min-h-11${bigTargets ? " max-md:min-h-11 max-md:min-w-11" : ""}`}
           >
             {action.label}
           </button>
@@ -66,7 +66,7 @@ export function Toast({ message, action, onClose }: { message: string; /** A tex
         type="button"
         aria-label="Dismiss"
         onClick={close}
-        className="flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:-m-3 pointer-coarse:size-11"
+        className={`flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:-m-3 pointer-coarse:size-11${bigTargets ? " max-md:-m-3 max-md:size-11" : ""}`}
       >
         <XIcon className="size-4" />
       </button>

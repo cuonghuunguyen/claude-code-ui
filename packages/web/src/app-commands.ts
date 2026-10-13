@@ -46,6 +46,10 @@ export type CommandContext = {
   canReopen: boolean;
   /** Opens the Keyboard shortcuts dialog. */
   openShortcuts: () => void;
+  /** Opens the shown session's changes in the popup viewer; none without a session. */
+  viewChanges?: () => void;
+  /** Opens the newest plan of the shown session in the popup viewer; none while it has no plan. */
+  viewPlan?: () => void;
   /** Git graph needs a repository. */
   isGit?: boolean;
   /** `id`: the tab just selected; default the shown one. */
@@ -67,6 +71,8 @@ export type CommandContext = {
   openSettings: () => void;
   /** Restarts the guided tour from its first step. */
   startGuide: () => void;
+  /** Clears the key promoter's counters and turns tips on (GH-234). */
+  resetKeyTips: () => void;
   /** Opens the MCP servers dialog of the shown project; none without a project. */
   openMcp?: () => void;
   /** Opens the "Slash commands" dialog of the shown project; none without a project. */
@@ -107,12 +113,15 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.focusNotifications && cmd("notifications.focus", "Go to notifications", c.focusNotifications),
     cmd("settings.open", "Open settings", c.openSettings),
     cmd("guide.start", "Show guide", c.startGuide),
+    cmd("tips.reset", "Reset shortcut tips", c.resetKeyTips),
     cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar),
     s && !s.draft && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel),
     s && !s.draft && cmd("filetree.toggle", "Toggle file tree", c.toggleFileTree),
     s && !s.draft && cmd("pane.files", "Show files", () => c.showPane("files")),
     s && !s.draft && cmd("pane.changes", "Show changes", () => c.showPane("changes")),
     s && !s.draft && c.isGit && cmd("pane.graph", "Show git graph", () => c.showPane("graph")),
+    s && !s.draft && c.viewChanges && cmd("viewer.changes", "View changes in popup", c.viewChanges),
+    s && !s.draft && c.viewPlan && cmd("viewer.plan", "View plan", c.viewPlan),
     s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
     cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
     s && !s.draft && cmd("terminal.new", "New terminal", c.newTerminal),
@@ -155,9 +164,9 @@ export function appCommands(c: CommandContext): PaletteItem[] {
       ),
     s?.running && { ...cmd("session.stop", "Stop", c.stop), keys: "escape" },
     // The extension's command menu section "Customize".
-    c.openMcp && { id: "mcp.open", group: "Customize", title: "MCP servers", description: "Configure Model Context Protocol servers", run: c.openMcp },
-    c.openSkills && { id: "skills.open", group: "Customize", title: "Slash commands", description: "Browse slash commands", run: c.openSkills },
-    c.openPlugins && { id: "plugins.open", group: "Customize", title: "Manage plugins", description: "Install, enable, or disable plugins", run: c.openPlugins },
+    c.openMcp && { id: "mcp.open", group: "Customize", keys: specOf("mcp.open"), title: "MCP servers", description: "Configure Model Context Protocol servers", run: c.openMcp },
+    c.openSkills && { id: "skills.open", group: "Customize", keys: specOf("skills.open"), title: "Slash commands", description: "Browse slash commands", run: c.openSkills },
+    c.openPlugins && { id: "plugins.open", group: "Customize", keys: specOf("plugins.open"), title: "Manage plugins", description: "Install, enable, or disable plugins", run: c.openPlugins },
     // Newest first; the recent ones also show before anything is typed (OpenCode lists recent items there, not all).
     ...[...c.sessions]
       .sort((a, b) => b.lastActivity - a.lastActivity)

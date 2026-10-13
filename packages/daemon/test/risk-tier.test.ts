@@ -231,6 +231,19 @@ describe("tier", () => {
   // The Bash rows stay high with the shell cwd pinned too.
   it.each(usable(high).filter((c) => c[1] === "Bash" && !c[0].includes("not pinned")))("high pinned: %s", (_, tool, input, ctx) => expect(tier(tool, input, { cwd, bashCwdPinned: true, ...ctx })).toBe("high"));
 
+  it("a UNC or device path is high without a file call on Windows (GH-282)", () => {
+    const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      for (const p of ["\\\\evil\\s\\x", "//evil/s/x", "\\\\?\\C:\\x"]) {
+        expect(tier("Read", { file_path: p }, { cwd }), p).toBe("high");
+        expect(tier("Write", { file_path: p }, { cwd }), p).toBe("high");
+      }
+    } finally {
+      Object.defineProperty(process, "platform", orig);
+    }
+  });
+
   it("a missing cwd or an fs error is high", () => {
     const gone = mkdtempSync(join(tmpdir(), "tier-gone-"));
     rmSync(gone, { recursive: true });

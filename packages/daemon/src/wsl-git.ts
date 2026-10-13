@@ -5,16 +5,37 @@ import { wslPathOf } from "@claude-ui/protocol";
 import { BATCH_SSH, type GitRunOptions, type GitRunOutput, type GitRunner } from "./git-runner.ts";
 
 const FORWARD_ENV = ["GIT_TERMINAL_PROMPT", "GIT_NO_LAZY_FETCH", "GIT_OPTIONAL_LOCKS", "GIT_ASKPASS", "SSH_ASKPASS", "GCM_INTERACTIVE"];
+/** The repository pin of git.ts (`pinFor`): paths git must use as they are, never re-discovered. */
+const PIN_ENV = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
+/** A pin value that is no path in the distro: git is not run (an unpinned git would re-discover the repository, #317). */
+export class WslPinError extends Error {
+  readonly code = 128;
+  readonly stdout = Buffer.alloc(0);
+  readonly stderr: string;
+  constructor(key: string) {
+    super(`${key} is outside the WSL distro`);
+    this.stderr = `fatal: ${this.message}`;
+  }
+}
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /**
- * Only git's own switches cross into Linux, not the Windows environment. `GIT_CEILING_DIRECTORIES` (Windows `;` list) keeps the
- * entries that are paths in this distro, as POSIX (`:` list); Windows drive paths mean nothing there.
+ * Only git's own switches cross into Linux, not the Windows environment. The repository pin of git.ts (`GIT_DIR`,
+ * `GIT_COMMON_DIR`, `GIT_WORK_TREE`) is mapped to POSIX paths of this distro; a pin value that is no path in it (drive path,
+ * other distro or share, relative) throws `WslPinError`: fail closed, git is never run unpinned (#317). `GIT_CEILING_DIRECTORIES`
+ * (Windows `;` list) keeps the entries that are paths in this distro, as POSIX (`:` list); Windows drive paths mean nothing there.
  */
 export function wslEnv(env: NodeJS.ProcessEnv, distro: string): Record<string, string> {
   const out: Record<string, string> = Object.fromEntries(FORWARD_ENV.filter((k) => env[k] !== undefined).map((k) => [k, env[k]!]));
   // A Windows ssh path means nothing in Linux: only our own BatchMode command crosses.
   if (env.GIT_SSH_COMMAND === BATCH_SSH) out.GIT_SSH_COMMAND = BATCH_SSH;
+  for (const k of PIN_ENV) {
+    const v = env[k];
+    if (v === undefined) continue;
+    const p = wslPathOf(v);
+    if (!p || p.distro.toLowerCase() !== distro.toLowerCase()) throw new WslPinError(k);
+    out[k] = p.posix;
+  }
   const ceiling = (env.GIT_CEILING_DIRECTORIES ?? "")
     .split(";")
     .flatMap((e) => {
@@ -32,6 +53,21 @@ export function wslGitScript(posix: string, args: string[], env: Record<string, 
 
 /** wsl.exe arguments: the script travels base64-encoded (like `wslArgs`), bash without login files. */
 export const wslGitArgs = (distro: string, script: string) => ["-d", distro, "--exec", "bash", "-c", `. <(echo ${Buffer.from(script).toString("base64")} | base64 -d)`];
+
+/**
+ * The environment of `wsl.exe`: `WSLENV` names the Windows variables wsl.exe copies into the distro (`NAME/flags:NAME2`), so a
+ * `GIT_*` entry there would reach git next to the forwarded list. Those entries are removed (same rule as the side's own `GIT_*`).
+ */
+export function wslExeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out = { ...env };
+  for (const k of Object.keys(out)) {
+    if (!/^WSLENV$/i.test(k)) continue;
+    const kept = (out[k] ?? "").split(":").filter((e) => e && !/^GIT_/i.test(e.split("/")[0]!));
+    if (kept.length) out[k] = kept.join(":");
+    else delete out[k];
+  }
+  return out;
+}
 
 /** A side transport failure (side not ready / exited): the caller may use wsl.exe instead. */
 export class SideGone extends Error {}
@@ -54,8 +90,13 @@ export function wslGitRunner(o: WslGitOptions): GitRunner {
       const p = wslPathOf(a);
       return p && same(p.distro) ? p.posix : a;
     });
-    const env = wslEnv(r.env, w.distro);
-    const viaExe = () => o.local({ ...r, file: "wsl.exe", cwd: homedir(), args: wslGitArgs(w.distro, wslGitScript(w.posix, args, env)), env: process.env });
+    let env: Record<string, string>;
+    try {
+      env = wslEnv(r.env, w.distro);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    const viaExe = () => o.local({ ...r, file: "wsl.exe", cwd: homedir(), args: wslGitArgs(w.distro, wslGitScript(w.posix, args, env)), env: wslExeEnv(process.env) });
     const id = o.side?.(w.distro);
     if (!id || !o.sideRun) return viaExe();
     return o.sideRun(id, { ...r, cwd: w.posix, args, env }).catch((e) => (e instanceof SideGone ? viaExe() : Promise.reject(e)));

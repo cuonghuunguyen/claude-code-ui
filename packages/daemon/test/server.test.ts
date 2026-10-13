@@ -1,18 +1,21 @@
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
-import { MAX_TERMINAL_INPUT_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
-import { listWorktrees } from "../src/git.ts";
+import { MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { openChecked } from "../src/fd-check.ts";
+import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
+import { scanThreadConfig } from "../src/session-scan.ts";
 import { SideSocket } from "../src/sides.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
 import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, yielded } from "./fake-query.ts";
@@ -21,7 +24,13 @@ import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery
 // Counts `git worktree list` reads (the session list's cache); behaviour unchanged.
 vi.mock("../src/git.ts", async (importOriginal) => {
   const git = await importOriginal<typeof import("../src/git.ts")>();
-  return { ...git, listWorktrees: vi.fn(git.listWorktrees) };
+  return { ...git, listWorktrees: vi.fn(git.listWorktrees), gitBlobRead: vi.fn(git.gitBlobRead) };
+});
+
+// The seam between allowed() and the open: a test runs code there (a swap) through mockImplementationOnce; behaviour unchanged.
+vi.mock("../src/fd-check.ts", async (importOriginal) => {
+  const fd = await importOriginal<typeof import("../src/fd-check.ts")>();
+  return { ...fd, openChecked: vi.fn(fd.openChecked) };
 });
 
 const added = (...cwds: string[]) => {
@@ -37,7 +46,8 @@ if (!posix) vi.setConfig({ testTimeout: 120_000 });
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
-const http = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, uploadDir: join(mkdtempSync(join(tmpdir(), "up-")), "claude-ui-uploads") });
+const uploadParent = join(mkdtempSync(join(tmpdir(), "up-")), "claude-ui-uploads");
+const http = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, uploadDir: uploadParent });
 await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
 const { address, port } = http.address() as AddressInfo;
 afterAll(() => void http.close());
@@ -196,6 +206,39 @@ describe("daemon", () => {
 
     await b.request({ type: "session.prompt", sessionId, text: "again" });
     await b.waitFor((m) => m.type === "event" && m.part.type === "turn_result" && m.seq > seen);
+  });
+
+  it("session.media replies the payload a paged snapshot left out; errors unknown_media and bad_request (GH-274)", async () => {
+    const sessionId = "6c3d4e5f-7081-4b92-8ca3-b4c5d6e7f809";
+    const png = `data:image/png;base64,${"iVBOR".repeat(4000)}`;
+    const turn = [
+      { type: "user", uuid: "u1", session_id: sessionId, parent_tool_use_id: null, message: { role: "user", content: [{ type: "text", text: "look" }, { type: "image", source: { type: "base64", media_type: "image/png", data: png.split(",")[1] } }] } },
+      { type: "assistant", uuid: "a1", session_id: sessionId, parent_tool_use_id: null, message: { id: "m1", role: "assistant", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" } },
+    ];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (sid: string) => (sid === sessionId ? { sessionId, cwd: webRoot, summary: "Img" } : undefined)) as never,
+        getSessionMessages: (async () => turn) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const b = await client((d.address() as AddressInfo).port);
+      const sub = (await b.request({ type: "session.subscribe", sessionId, sinceSeq: 0, paged: true })) as { result: { snapshot: Snapshot } };
+      expect(JSON.stringify(sub).length).toBeLessThan(5000);
+      const user = sub.result.snapshot.page.parts.find((p) => p.type === "user_text")!;
+      expect(user.type === "user_text" && user.images[0]!.startsWith("omitted:image/png;")).toBe(true);
+      expect(await b.request({ type: "session.media", sessionId, partId: user.id, index: 0 })).toMatchObject({ result: { dataUrl: png } });
+      expect(await b.request({ type: "session.media", sessionId, partId: user.id, index: 3 })).toMatchObject({ type: "error", code: "unknown_media" });
+      expect(await b.request({ type: "session.media", sessionId, partId: user.id, index: -1 })).toMatchObject({ type: "error", code: "bad_request" });
+    } finally {
+      d.close();
+    }
   });
 
   it("paged subscribe replies with the last page and replays no event; session.page, session.edits and their errors; from snapshots a new epoch at that turn", async () => {
@@ -664,23 +707,109 @@ describe("daemon", () => {
     expect(await restored("haiku", "auto")).toBe("default");
   });
 
-  it("stores an uploaded file under its own name in a fresh folder and replies the path", async () => {
-    const c = await client();
-    const r = (await c.request({ type: "fs.upload", name: "../notes.txt", data: Buffer.from("hi").toString("base64") })) as { result: { path: string } };
-    expect(r.result.path).toMatch(/claude-ui-uploads[\\/]u-[^\\/]+[\\/]notes\.txt$/);
-    expect(readFileSync(r.result.path, "utf8")).toBe("hi");
-    expect(await c.request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
-  });
-
-  it("sessions get the upload folder as an additional directory, so Claude reads an attachment without a permission request", async () => {
-    // A prompt with an image is a block array; the CLI does not expand @path there and Claude calls Read on the upload.
+  it("stores an upload in its session's folder and replies the path", async () => {
     const c = await client();
     const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
-    const up = (await c.request({ type: "fs.upload", name: "notes.txt", data: Buffer.from("hi").toString("base64") })) as { result: { path: string } };
-    await c.request({ type: "session.prompt", sessionId: created.result.session.id, text: "read it" });
-    const dirs = calls.find((o) => o.sessionId === created.result.session.id)!.additionalDirectories!;
-    expect(dirs).toHaveLength(1);
-    expect(up.result.path.startsWith(`${dirs[0]}${sep}`)).toBe(true);
+    const id = created.result.session.id;
+    const data = Buffer.from("hi").toString("base64");
+    const r = (await c.request({ type: "fs.upload", name: "../notes.txt", data, sessionId: id })) as { result: { path: string } };
+    expect(r.result.path).toMatch(new RegExp(`claude-ui-uploads[\\\\/]${id}[\\\\/]u-[^\\\\/]+[\\\\/]notes\\.txt$`));
+    expect(readFileSync(r.result.path, "utf8")).toBe("hi");
+    expect(await c.request({ type: "fs.upload", name: "x", data: 5, sessionId: id })).toMatchObject({ code: "bad_upload" });
+    expect(await c.request({ type: "fs.upload", name: "x", data })).toMatchObject({ code: "bad_upload" });
+    expect(await c.request({ type: "fs.upload", name: "x", data, sessionId: randomUUID() })).toMatchObject({ code: "unknown_session" });
+    expect(await c.request({ type: "fs.upload", name: "x", data, sessionId: "../x" })).toMatchObject({ code: "unknown_session" });
+    expect(await c.request({ type: "fs.upload", name: "x", data, draft: "short" })).toMatchObject({ code: "bad_upload" });
+    expect(existsSync(join(uploadParent, "..", "x"))).toBe(false);
+  });
+
+  it("refuses an upload above the size limit", async () => {
+    const c = await client();
+    const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+    const big = Buffer.alloc(MAX_UPLOAD_BYTES + 1).toString("base64");
+    expect(await c.request({ type: "fs.upload", name: "big", data: big, sessionId: created.result.session.id })).toMatchObject({ code: "too_large" });
+  });
+
+  it("a session gets only its own upload folder as an additional directory, so Claude reads an attachment without a permission request and not another session's", async () => {
+    // A prompt with an image is a block array; the CLI does not expand @path there and Claude calls Read on the upload.
+    const c = await client();
+    const make = async () => ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+    const [a, b] = [await make(), await make()];
+    const up = (await c.request({ type: "fs.upload", name: "notes.txt", data: Buffer.from("hi").toString("base64"), sessionId: a })) as { result: { path: string } };
+    await c.request({ type: "session.prompt", sessionId: a, text: "read it" });
+    await c.request({ type: "session.prompt", sessionId: b, text: "read it" });
+    const dirs = (id: string) => calls.find((o) => o.sessionId === id)!.additionalDirectories!;
+    expect(dirs(a)).toEqual([join(uploadParent, a)]);
+    expect(dirs(b)).toEqual([join(uploadParent, b)]);
+    expect(up.result.path.startsWith(`${dirs(a)[0]}${sep}`)).toBe(true);
+    expect(up.result.path.startsWith(`${dirs(b)[0]}${sep}`)).toBe(false);
+    expect([...dirs(a), ...dirs(b)]).not.toContain(uploadParent);
+  });
+
+  it("draft uploads go to the session created with the draft token; a second create cannot claim them", async () => {
+    const c = await client();
+    const T = randomBytes(32).toString("hex");
+    const data = Buffer.from("hi").toString("base64");
+    const [u1, u2] = (await Promise.all([1, 2].map((n) => c.request({ type: "fs.upload", name: `f${n}.txt`, data, draft: T })))) as { result: { path: string } }[];
+    const X = relative(uploadParent, u1!.result.path).split(sep)[0]!;
+    expect(X).toMatch(/^[0-9a-f-]{36}$/);
+    expect(relative(uploadParent, u2!.result.path).split(sep)[0]).toBe(X);
+    const created = (await c.request({ type: "session.create", cwd: webRoot, draft: T })) as { result: { session: { id: string } } };
+    expect(created.result.session.id).toBe(X);
+    await c.request({ type: "session.prompt", sessionId: X, text: "read it" });
+    expect(calls.find((o) => o.sessionId === X)!.additionalDirectories![0]).toBe(join(uploadParent, X));
+    const second = (await c.request({ type: "session.create", cwd: webRoot, draft: T })) as { result: { session: { id: string } } };
+    expect(second.result.session.id).not.toBe(X);
+    // A claimed token is spent: a copy of it (duplicated tab) cannot place files in that session's folder.
+    expect(await c.request({ type: "fs.upload", name: "f3.txt", data, draft: T })).toMatchObject({ code: "draft_claimed" });
+    expect(readdirSync(join(uploadParent, X)).length).toBe(2);
+    // The retry path uses the session id.
+    const again = (await c.request({ type: "fs.upload", name: "f3.txt", data, sessionId: X })) as { result: { path: string } };
+    expect(relative(uploadParent, again.result.path).split(sep)[0]).toBe(X);
+    const bad = (await c.request({ type: "session.create", cwd: webRoot, draft: "zz" })) as { type: string; result: { session: { id: string } } };
+    expect(bad.type).toBe("reply");
+    expect(bad.result.session.id).not.toBe(X);
+  });
+
+  it("a restored session keeps its upload folder", async () => {
+    const id = "6d3d4e5f-6071-4829-9bac-1d2e3f4a5b6c";
+    const cwd = join(webRoot, "restore-proj");
+    mkdirSync(cwd, { recursive: true });
+    const P = join(mkdtempSync(join(tmpdir(), "up-")), "uploads");
+    const daemon = () =>
+      createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        query: permissionQuery as never,
+        projects: added(cwd),
+        uploadDir: P,
+        history: {
+          listSessions: (async () => [{ sessionId: id, summary: "s", lastModified: 1000, cwd }]) as never,
+          getSessionInfo: (async (sid: string) => (sid === id ? { sessionId: id, summary: "s", lastModified: 1000, cwd } : undefined)) as never,
+          getSessionMessages: (async () => history) as never,
+        },
+      });
+    const run = async (d: ReturnType<typeof daemon>, f: (c: Awaited<ReturnType<typeof client>>) => Promise<void>) => {
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        await f(await client((d.address() as AddressInfo).port));
+      } finally {
+        d.close();
+      }
+    };
+    let path = "";
+    await run(daemon(), async (c) => {
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      path = ((await c.request({ type: "fs.upload", name: "a.txt", data: Buffer.from("hi").toString("base64"), sessionId: id })) as { result: { path: string } }).result.path;
+    });
+    calls.length = 0;
+    await run(daemon(), async (c) => {
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await c.request({ type: "session.prompt", sessionId: id, text: "again" });
+      expect(calls.filter((o) => o.resume === id).at(-1)!.additionalDirectories![0]).toBe(join(P, id));
+      expect(readFileSync(path, "utf8")).toBe("hi");
+    });
   });
 
   it("survives a frame above ws maxPayload: that socket closes with 1009, the daemon keeps answering", async () => {
@@ -937,6 +1066,115 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "nope" })).toMatchObject({ code: "not_found" });
   });
 
+  describe.skipIf(process.platform === "win32")("a .git that leaves the roots (GH-290)", () => {
+    /** An outer repository outside the roots with one commit; a project in the roots whose .git is a symlink to it or a gitdir file. */
+    const outer = () => {
+      const out = realpathSync(mkdtempSync(join(tmpdir(), "gh290-out-")));
+      const git = (cwd: string, ...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd, encoding: "utf8" }).trim();
+      git(out, "init", "-q", "-b", "main");
+      writeFileSync(join(out, "secret.txt"), "secret\n");
+      git(out, "add", ".");
+      git(out, "commit", "-q", "-m", "outer");
+      return { out, hash: git(out, "rev-parse", "HEAD") };
+    };
+    for (const kind of ["symlink", "gitdir file"]) {
+      it(`refuses every git request of a project whose .git is a ${kind} to a repository outside the roots`, async () => {
+        const { out, hash } = outer();
+        const proj = join(webRoot, `gh290-${kind.replace(" ", "-")}`);
+        mkdirSync(proj, { recursive: true });
+        if (kind === "symlink") symlinkSync(join(out, ".git"), join(proj, ".git"));
+        else writeFileSync(join(proj, ".git"), `gitdir: ${join(out, ".git")}\n`);
+        const c = await client();
+        expect(await c.request({ type: "git.status", cwd: proj })).toMatchObject({ result: { status: null } });
+        expect(await c.request({ type: "git.refs", cwd: proj })).toMatchObject({ result: { refs: null } });
+        for (const type of ["git.log", "git.commit", "git.fileAt"]) expect(await c.request({ type, cwd: proj, hash, path: "secret.txt" })).toMatchObject({ code: "cwd_not_allowed" });
+        expect(await c.request({ type: "git.diff", cwd: proj, base: "head" })).toMatchObject({ code: "cwd_not_allowed" });
+        expect(await c.request({ type: "worktree.create", cwd: proj, name: "x" })).toMatchObject({ code: "cwd_not_allowed" });
+        expect(await c.request({ type: "worktree.status", cwd: proj, path: proj })).toMatchObject({ code: "cwd_not_allowed" });
+        expect(await c.request({ type: "worktree.remove", cwd: proj, path: proj })).toMatchObject({ code: "cwd_not_allowed" });
+      });
+    }
+
+    it("git.status is null for a project without .git below a repository outside the roots (GH-282)", async () => {
+      const { out } = outer();
+      const root = join(out, "sub");
+      mkdirSync(join(root, "proj"), { recursive: true });
+      const d = createDaemon({ webRoot, token, roots: [root], query: fakeQuery as never });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        expect(await c.request({ type: "git.status", cwd: join(root, "proj") })).toMatchObject({ result: { status: null } });
+      } finally {
+        d.close();
+      }
+    });
+
+    it("a .git file without a gitdir line: git.status is null, git.log refused (GH-282)", async () => {
+      const proj = join(webRoot, "gh282-nogitdir");
+      mkdirSync(proj, { recursive: true });
+      writeFileSync(join(proj, ".git"), "nonsense\n");
+      const c = await client();
+      expect(await c.request({ type: "git.status", cwd: proj })).toMatchObject({ result: { status: null } });
+      expect(await c.request({ type: "git.log", cwd: proj })).toMatchObject({ code: "cwd_not_allowed" });
+    });
+
+    it("git.refs is null for a project without .git below a repository outside the roots", async () => {
+      const { out } = outer();
+      // The root itself lies inside the outer repository; the project has no .git of its own.
+      const root = join(out, "sub");
+      mkdirSync(join(root, "proj"), { recursive: true });
+      const d = createDaemon({ webRoot, token, roots: [root], query: fakeQuery as never });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        expect(await c.request({ type: "git.refs", cwd: join(root, "proj") })).toMatchObject({ result: { refs: null } });
+      } finally {
+        d.close();
+      }
+    });
+
+    it("session.list lists no worktrees for a project whose main repository is outside the roots", async () => {
+      const { out } = outer();
+      const git = (cwd: string, ...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd, encoding: "utf8" }).trim();
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "gh290-list-")));
+      const linked = join(root, "linked");
+      git(out, "worktree", "add", "-q", "-b", "l", linked);
+      const d = createDaemon({
+        webRoot,
+        token,
+        roots: [root],
+        query: fakeQuery as never,
+        projects: added(linked),
+        history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+      });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        const r = ((await c.request({ type: "session.list" })) as { result: { worktrees: Record<string, unknown[]> } }).result;
+        expect(r.worktrees[linked] ?? []).toEqual([]);
+      } finally {
+        d.close();
+      }
+    });
+
+    it("a linked worktree of a repository inside the roots still works; one whose main repository is outside is refused", async () => {
+      const { out } = outer();
+      const git = (cwd: string, ...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd, encoding: "utf8" }).trim();
+      const main = join(webRoot, "gh290-main");
+      mkdirSync(main, { recursive: true });
+      git(main, "init", "-q", "-b", "main");
+      git(main, "commit", "-q", "--allow-empty", "-m", "in");
+      git(main, "worktree", "add", "-q", "-b", "w", join(main, ".claude", "worktrees", "w"));
+      const c = await client();
+      expect(await c.request({ type: "git.status", cwd: join(main, ".claude", "worktrees", "w") })).toMatchObject({ result: { status: { branch: "w" } } });
+      expect(await c.request({ type: "git.log", cwd: join(main, ".claude", "worktrees", "w") })).toMatchObject({ result: { log: { commits: [{ subject: "in" }] } } });
+      // Main repository outside the roots, linked worktree inside.
+      git(out, "worktree", "add", "-q", "-b", "o", join(webRoot, "zz290x"));
+      expect(await c.request({ type: "git.status", cwd: join(webRoot, "zz290x") })).toMatchObject({ result: { status: null } });
+      expect(await c.request({ type: "git.log", cwd: join(webRoot, "zz290x") })).toMatchObject({ code: "cwd_not_allowed" });
+    });
+  });
+
   it("answers git.diff for a cwd inside the roots only", async () => {
     const c = await client();
     expect(await c.request({ type: "git.diff", cwd: webRoot, base: "head" })).toMatchObject({ result: { diff: null } });
@@ -960,6 +1198,79 @@ describe("daemon", () => {
     symlinkSync(join(webRoot, "proj"), join(webRoot, "linkedin"), "junction");
     const c = await client();
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "linked" })).toMatchObject({ result: { paths: ["linkedin"] } });
+  });
+
+  it("two consecutive saves with the returned mtime both succeed (GH-282)", async () => {
+    const file = join(webRoot, "proj", "twice.txt");
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    writeFileSync(file, "one");
+    const c = await client();
+    const read = (await c.request({ type: "fs.read", path: file })) as { result: { mtime: number } };
+    const w1 = (await c.request({ type: "fs.write", path: file, content: "two", baseMtime: read.result.mtime })) as { result: { mtime: number } };
+    expect(w1.result.mtime).toBe(statSync(file).mtimeMs);
+    expect(await c.request({ type: "fs.write", path: file, content: "three", baseMtime: w1.result.mtime })).toMatchObject({ result: {} });
+    expect(readFileSync(file, "utf8")).toBe("three");
+  });
+
+  it("fs.write keeps the inode, leaves no tail bytes, and refuses a directory (GH-282)", async () => {
+    const file = join(webRoot, "proj", "w.txt");
+    mkdirSync(join(webRoot, "proj"), { recursive: true });
+    writeFileSync(file, "long content here");
+    const ino = statSync(file).ino;
+    const c = await client();
+    await c.request({ type: "fs.write", path: file, content: "short" });
+    expect(readFileSync(file, "utf8")).toBe("short");
+    expect(statSync(file).ino).toBe(ino);
+    expect(await c.request({ type: "fs.write", path: join(webRoot, "proj"), content: "x" })).toMatchObject({ code: "not_a_file" });
+  });
+
+  it.skipIf(!posix)("fs.read and fs.write refuse a folder swapped for a symlink between the root check and the open (GH-282)", async () => {
+    const outsideDir = mkdtempSync(join(tmpdir(), "outside-"));
+    const outside = join(outsideDir, "f.txt");
+    writeFileSync(outside, "outside secret");
+    for (const type of ["fs.read", "fs.write"] as const) {
+      const dir = join(webRoot, `swap-${type}`);
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, "f.txt");
+      writeFileSync(file, "inside");
+      const real = vi.mocked(openChecked).getMockImplementation()!;
+      // allowed() already passed for `file`; now the folder becomes a link to the outside folder.
+      vi.mocked(openChecked).mockImplementationOnce((path, flags) => {
+        rmSync(dir, { recursive: true });
+        symlinkSync(outsideDir, dir);
+        return real(path, flags);
+      });
+      const c = await client();
+      const reply = await c.request({ type, path: file, content: "overwritten" });
+      expect(reply, type).toMatchObject({ code: "path_not_allowed" });
+      expect(JSON.stringify(reply), type).not.toContain("outside secret");
+      expect(readFileSync(outside, "utf8"), type).toBe("outside secret");
+    }
+  });
+
+  it("fs.read refuses a UNC path on Windows with no file system call (GH-282)", async () => {
+    const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
+    // The CommonJS fs object: spying there and syncing makes the daemon's named imports call the spy.
+    const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
+    const native = vi.spyOn(fs.realpathSync, "native");
+    const exists = vi.spyOn(fs, "existsSync");
+    syncBuiltinESMExports();
+    const c = await client();
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      for (const path of ["\\\\evil\\s\\x", "//evil/s/x", "\\\\.host\\s\\x"]) {
+        native.mockClear();
+        exists.mockClear();
+        expect(await c.request({ type: "fs.read", path }), path).toMatchObject({ code: "path_not_allowed" });
+        expect(native, path).not.toHaveBeenCalled();
+        expect(exists, path).not.toHaveBeenCalled();
+      }
+    } finally {
+      Object.defineProperty(process, "platform", orig);
+      native.mockRestore();
+      exists.mockRestore();
+      syncBuiltinESMExports();
+    }
   });
 
   it("reads and writes files inside the roots only, refusing a write over a newer disk version", async () => {
@@ -1284,17 +1595,16 @@ describe("daemon", () => {
 
   it("a git worktree list that failed is read again on the next session.list, not reused", async () => {
     const { repo, d, list } = await repoDaemon("wtfail-");
-    const before = process.env.GIT_DIR;
+    const before = process.env.PATH;
+    const restore = () => void (process.env.PATH = before);
     try {
-      // git fails without any change to the repository's files (as a killed process or a spawn error would).
-      process.env.GIT_DIR = join(repo, "no-such-git-dir");
+      // git fails without any change to the repository's files (a spawn error): no git on the PATH.
+      process.env.PATH = join(repo, "no-such-bin");
       expect((await list()).worktrees).toEqual([]);
-      if (before === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = before;
+      restore();
       expect((await list()).worktrees).toEqual([`${repo}@main`]);
     } finally {
-      if (before === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = before;
+      restore();
       d.close();
     }
   });
@@ -1544,6 +1854,63 @@ describe("daemon", () => {
     }
   });
 
+  it("warmUp lists once when the server starts: the first session.list reuses that scan", async () => {
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    mkdirSync(join(projectsDir, "-p"));
+    writeFileSync(join(projectsDir, "-p", "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b.jsonl"), "{}\n");
+    let scans = 0;
+    const make = (warmUp?: boolean) =>
+      createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        query: fakeQuery as never,
+        projectsDir,
+        listCache: true,
+        warmUp,
+        history: { listSessions: (async () => (scans++, [])) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+      });
+    const cold = make();
+    await new Promise<void>((r) => cold.listen(0, "127.0.0.1", r));
+    await new Promise((r) => setTimeout(r, 100));
+    cold.close();
+    expect(scans).toBe(0);
+    const d = make(true);
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      await vi.waitFor(() => expect(scans).toBe(1));
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.list" });
+      expect(scans).toBe(1);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("the default history scans transcripts in the worker thread, not on the main thread", async () => {
+    const root = mkdtempSync(join(tmpdir(), "claude-cfg-"));
+    mkdirSync(join(root, "projects"));
+    const mark = join(root, "thread-ran");
+    const realEnv = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = root;
+    scanThreadConfig.reset();
+    const realScript = scanThreadConfig.script;
+    scanThreadConfig.script = `const { parentPort } = require("node:worker_threads"); parentPort.on("message", ({ id }) => { require("node:fs").writeFileSync(${JSON.stringify(mark)}, "x"); parentPort.postMessage({ id, sessions: [] }); });`;
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, claudeDir: root });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "session.list" });
+      expect(existsSync(mark)).toBe(true);
+    } finally {
+      d.close();
+      scanThreadConfig.script = realScript;
+      scanThreadConfig.reset();
+      if (realEnv === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = realEnv;
+    }
+  });
+
   it("lists by the last message time in the transcript, not the file mtime that metadata appended on CLI exit bumps", async () => {
     const [older, newer, noFile] = ["4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", "5b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", "6b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b"];
     const cwd = join(webRoot, "my proj");
@@ -1749,6 +2116,37 @@ describe("daemon", () => {
       }
     });
 
+    it("session.ids names every session inside the roots, of added projects or not, and none outside", async () => {
+      const [a, b] = [cwdOf("a"), cwdOf("b")];
+      const x = await start(
+        [
+          { sessionId: sid(1), summary: "a1", lastModified: 10, cwd: a },
+          { sessionId: sid(2), summary: "b1", lastModified: 30, cwd: b },
+          { sessionId: sid(3), summary: "a2", lastModified: 20, cwd: a },
+          { sessionId: sid(4), summary: "outside", lastModified: 40, cwd: "/etc" },
+        ],
+        createProjects(),
+      );
+      try {
+        const r = (await x.c.request({ type: "session.ids" })) as { result: { ids: string[] } };
+        expect([...r.result.ids].sort()).toEqual([sid(1), sid(2), sid(3)]);
+        expect((await list(x.c)).sessions).toEqual([]);
+      } finally {
+        x.d.close();
+      }
+    });
+
+    it("session.ids names a live session that has no transcript yet", async () => {
+      const x = await start([], createProjects());
+      try {
+        const created = (await x.c.request({ type: "session.create", cwd: cwdOf("live") })) as { result: { session: { id: string } } };
+        const r = (await x.c.request({ type: "session.ids" })) as { result: { ids: string[] } };
+        expect(r.result.ids).toEqual([created.result.session.id]);
+      } finally {
+        x.d.close();
+      }
+    });
+
     it("project.open keeps a project across a restart and moves it from recent to the list with its sessions; project.remove hides it again", async () => {
       const cwd = cwdOf("proj");
       const empty = cwdOf("empty");
@@ -1876,12 +2274,14 @@ describe("daemon", () => {
       { sessionId: id, summary: "fix the bug", lastModified: 1000, cwd },
     ];
     const mutations: unknown[][] = [];
+    const uploads = join(mkdtempSync(join(tmpdir(), "up-")), "uploads");
     const d = createDaemon({
       webRoot,
       token,
       roots: [webRoot],
       query: permissionQuery as never,
       projects: added(cwd),
+      uploadDir: uploads,
       history: {
         listSessions: (async () => transcripts) as never,
         getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,
@@ -1930,15 +2330,60 @@ describe("daemon", () => {
       await a.request({ type: "session.subscribe", sessionId: live, sinceSeq: 0 });
       await a.request({ type: "session.prompt", sessionId: live, text: "run tests" });
       await a.waitFor((m) => m.type === "event" && m.part.type === "permission_request");
+      const up = (sid: string) => a.request({ type: "fs.upload", name: "f.txt", data: "aGk=", sessionId: sid });
+      await up(live);
+      await up(id);
+      expect(existsSync(join(uploads, id))).toBe(true);
       expect(await a.request({ type: "session.delete", sessionId: live })).toMatchObject({ code: "session_running" });
+      expect(existsSync(join(uploads, live))).toBe(true);
       // Never prompted into a transcript (fake history): it has nothing to rename.
       expect(await a.request({ type: "session.rename", sessionId: live, title: "x" })).toMatchObject({ code: "rename_failed" });
 
       expect(await a.request({ type: "session.delete", sessionId: id })).toMatchObject({ type: "reply" });
       expect(mutations.at(-1)).toEqual(["delete", id, { dir: cwd }]);
+      expect(existsSync(join(uploads, id))).toBe(false);
+      expect(existsSync(join(uploads, live))).toBe(true);
       await b.waitFor((m) => m.type === "sessions.changed" && m.deleted === id);
       expect((await listed()).map((s) => s.id)).toEqual([live]);
       expect(await a.request({ type: "session.delete", sessionId: id })).toMatchObject({ code: "unknown_session" });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.ids leaves out a session whose delete is in progress", async () => {
+    const id = "5c2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5c";
+    const cwd = join(webRoot, "proj");
+    mkdirSync(cwd, { recursive: true });
+    let transcripts = [{ sessionId: id, summary: "fix the bug", lastModified: 1000, cwd }];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: permissionQuery as never,
+      history: {
+        listSessions: (async () => transcripts) as never,
+        getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,
+        getSessionMessages: (async () => history) as never,
+        deleteSession: (async () => {
+          await gate;
+          transcripts = [];
+        }) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const p = (d.address() as AddressInfo).port;
+    try {
+      const [a, b] = await Promise.all([client(p), client(p)]);
+      const ids = async () => ((await b.request({ type: "session.ids" })) as { result: { ids: string[] } }).result.ids;
+      expect(await ids()).toEqual([id]);
+      const deleted = a.request({ type: "session.delete", sessionId: id });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(await ids()).toEqual([]);
+      release();
+      await deleted;
     } finally {
       d.close();
     }
@@ -1973,6 +2418,8 @@ describe("daemon", () => {
       const deleted = a.request({ type: "session.delete", sessionId: id });
       await new Promise((r) => setTimeout(r, 20));
       expect(await b.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
+      // The transcript still exists while the delete runs: only the deleting guard refuses an upload now.
+      expect(await b.request({ type: "fs.upload", name: "late.txt", data: "aGk=", sessionId: id })).toMatchObject({ code: "unknown_session" });
       release();
       expect(await deleted).toMatchObject({ type: "reply" });
       const list = (await b.request({ type: "session.list" })) as { result: { sessions: unknown[] } };
@@ -3565,6 +4012,111 @@ describe("fs.media and /media", () => {
     await vi.waitFor(async () => expect((await get(url)).status).toBe(404));
   });
 
+  const readPiece = async (c: Awaited<ReturnType<typeof client>>, m: Record<string, unknown>) => (await c.request({ type: "media.read", ...m })) as { type: string; code?: string; result: { data: string; size: number; mtime: number; mime: string } };
+
+  it("media.read returns base64 bytes at an offset with size, mtime and mime; length 0 gives only the facts", async () => {
+    const c = await client();
+    const f = join(dir, "a.png");
+    const a = await readPiece(c, { path: f, offset: 10, length: 20 });
+    expect(Buffer.from(a.result.data, "base64").equals(png.subarray(10, 30))).toBe(true);
+    expect(a.result).toMatchObject({ size: 300, mime: "image/png", mtime: statSync(f).mtimeMs });
+    expect(Buffer.from((await readPiece(c, { path: f, offset: 290, length: 20 })).result.data, "base64").length).toBe(10);
+    expect((await readPiece(c, { path: f, offset: 0, length: 0 })).result).toMatchObject({ data: "", size: 300 });
+    c.ws.close();
+  });
+
+  it("media.read refuses: bad offset or length (bad_request), outside the roots and .. paths (path_not_allowed), .txt (unsupported_type), a directory (not_a_file), missing (not_found)", async () => {
+    const c = await client();
+    const f = join(dir, "a.png");
+    for (const bad of [{ offset: 0, length: (1 << 20) + 1 }, { offset: -1, length: 1 }, { offset: 0.5, length: 1 }, { offset: 0, length: -1 }, { offset: "0", length: 1 }]) expect(await readPiece(c, { path: f, ...bad }), JSON.stringify(bad)).toMatchObject({ code: "bad_request" });
+    const outside = join(mkdtempSync(join(tmpdir(), "outside-")), "o.png");
+    writeFileSync(outside, png);
+    expect(await readPiece(c, { path: outside, offset: 0, length: 1 })).toMatchObject({ code: "path_not_allowed" });
+    expect(await readPiece(c, { path: join(dir, "..", "..", basename(dirname(outside)), "o.png"), offset: 0, length: 1 })).toMatchObject({ code: "path_not_allowed" });
+    expect(await readPiece(c, { path: join(dir, "..", "..", "..", "etc", "x.png"), offset: 0, length: 1 })).toMatchObject({ type: "error" });
+    expect(await readPiece(c, { path: join(dir, "n.txt"), offset: 0, length: 1 })).toMatchObject({ code: "unsupported_type" });
+    expect(await readPiece(c, { path: join(dir, "d.png"), offset: 0, length: 1 })).toMatchObject({ code: "not_a_file" });
+    expect(await readPiece(c, { path: join(dir, "missing.png"), offset: 0, length: 1 })).toMatchObject({ code: "not_found" });
+    expect(await readPiece(c, { path: outside, cwd: outside, hash: "a".repeat(40), offset: 0, length: 1 })).toMatchObject({ code: "cwd_not_allowed" });
+    c.ws.close();
+  });
+
+  describe("a file at a commit (cwd + hash)", () => {
+    const repo = join(dir, "repo");
+    mkdirSync(join(repo, "img"), { recursive: true });
+    const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd: repo, encoding: "utf8" }).trim();
+    git("init", "-q");
+    const bytesA = Buffer.from(Array.from({ length: 300 }, (_, i) => (i * 7) % 256));
+    const bytesB = Buffer.from(Array.from({ length: 300 }, (_, i) => (i * 3) % 256));
+    writeFileSync(join(repo, "img", "p.png"), bytesA);
+    writeFileSync(join(repo, "n.txt"), "x");
+    git("add", "-A");
+    git("commit", "-q", "-m", "one");
+    const hash = git("rev-parse", "HEAD");
+    writeFileSync(join(repo, "img", "p.png"), bytesB);
+    const at = async (c: Awaited<ReturnType<typeof client>>, m: Record<string, unknown>) => (await c.request({ type: "fs.media", cwd: repo, hash, path: "img/p.png", ...m })) as { type: string; code?: string; size?: number; result: { url: string; mime: string; size: number; mtime: number } };
+
+    it("fs.media with cwd and hash serves the file at that commit; the plain fs.media serves the disk", async () => {
+      const c = await client();
+      const { url, mtime, size } = (await at(c, {})).result;
+      expect(url).toMatch(new RegExp(`\\?v=${hash}$`));
+      expect(mtime).toBe(0);
+      expect(size).toBe(300);
+      const r = await get(url);
+      expect(r.status).toBe(200);
+      expect(r.body.equals(bytesA)).toBe(true);
+      expect(r.headers).toMatchObject({ "content-type": "image/png", "x-content-type-options": "nosniff" });
+      expect(String(r.headers["content-security-policy"])).toContain("sandbox");
+      const rg = await get(url, { range: "bytes=0-99" });
+      expect(rg.status).toBe(206);
+      expect(rg.body.length).toBe(100);
+      expect(rg.headers["content-range"]).toBe("bytes 0-99/300");
+      expect((await get(url, { range: "bytes=300-" })).status).toBe(416);
+      expect((await get(url, {}, "HEAD")).body.length).toBe(0);
+      const disk = (await media(c, join(repo, "img", "p.png"))).result;
+      expect((await get(disk.url)).body.equals(bytesB)).toBe(true);
+      c.ws.close();
+    });
+
+    it("with a hash: not_found for a path missing at the commit, unsupported_type for .txt, cwd_not_allowed outside the roots, bad_request for a short hash", async () => {
+      const c = await client();
+      expect(await at(c, { path: "img/none.png" })).toMatchObject({ code: "not_found" });
+      expect(await at(c, { path: "n.txt" })).toMatchObject({ code: "unsupported_type" });
+      expect(await at(c, { cwd: tmpdir() })).toMatchObject({ code: "cwd_not_allowed" });
+      expect(await at(c, { hash: "abc" })).toMatchObject({ type: "error" });
+      expect(await at(c, { path: "../x.png" })).toMatchObject({ type: "error" });
+      c.ws.close();
+    });
+
+    it("the size comes from git without reading the blob; two images at once read each blob once", async () => {
+      writeFileSync(join(repo, "img", "q.png"), bytesB);
+      git("add", "-A");
+      git("commit", "-q", "-m", "two");
+      const hash2 = git("rev-parse", "HEAD");
+      const c = await client();
+      const reads = vi.mocked(gitBlobRead);
+      reads.mockClear();
+      const a = (await at(c, {})).result;
+      const b = (await at(c, { hash: hash2, path: "img/q.png" })).result;
+      expect(a.size).toBe(300);
+      expect(b.size).toBe(300);
+      expect(reads).not.toHaveBeenCalled();
+      // Pieces of both images interleaved (a viewer asks for both): each blob is read from git once.
+      for (const u of [a.url, b.url, a.url, b.url]) expect((await get(u)).status).toBe(200);
+      expect((await get(a.url, { range: "bytes=10-19" })).body.equals(bytesA.subarray(10, 20))).toBe(true);
+      expect(reads).toHaveBeenCalledTimes(2);
+      c.ws.close();
+    });
+
+    it("a commit nonce is dead after its connection closes", async () => {
+      const c = await client();
+      const { url } = (await at(c, {})).result;
+      expect((await get(url)).status).toBe(200);
+      c.ws.close();
+      await vi.waitFor(async () => expect((await get(url)).status).toBe(404));
+    });
+  });
+
   it("the nonce expires after 10 min idle; a GET extends it", async () => {
     const c = await client();
     const { url } = (await media(c, join(dir, "a.png"))).result;
@@ -3836,6 +4388,136 @@ describe("keep-alive ping on a side's virtual connection (GH-263)", () => {
       expect(uncaught).not.toHaveBeenCalled();
     } finally {
       process.off("uncaughtException", uncaught);
+      d.close();
+    }
+  });
+});
+
+describe("uploads after the session id changes under a running CLI", () => {
+  const setup = async (extra: Record<string, unknown> = {}) => {
+    const P = join(mkdtempSync(join(tmpdir(), "up-")), "uploads");
+    const gone = new Set<string>();
+    let oldId = "";
+    const d = createDaemon({ webRoot, roots: [webRoot], projects: added(webRoot), query: clearQuery as never, token, uploadDir: P, settingsFile: join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json"), ...extra, history: { listSessions: (async () => []) as never, getSessionInfo: (async (id: string) => (id === oldId && !gone.has(id) ? { sessionId: id, summary: "s", cwd: webRoot } : undefined)) as never, getSessionMessages: (async () => []) as never, deleteSession: (async (id: string) => void gone.add(id)) as never } });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
+    const old = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+    oldId = old;
+    await c.request({ type: "session.subscribe", sessionId: old, sinceSeq: 0 });
+    calls.length = 0;
+    await c.request({ type: "session.prompt", sessionId: old, text: "hi" });
+    await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+    await c.request({ type: "session.prompt", sessionId: old, text: "/clear" });
+    const cleared = (await c.waitFor((m) => m.type === "event" && m.part.type === "session_cleared")) as Extract<ServerMessage, { type: "event" }>;
+    const heir = (cleared.part as { sessionId: string }).sessionId;
+    return { P, d, c, old, heir };
+  };
+  const covered = (path: string, o: { additionalDirectories?: string[] }) => !!o.additionalDirectories?.some((g) => path.startsWith(`${g}${sep}`));
+
+  it("after /clear an upload with the heir's id lands in the folder the running CLI was granted", async () => {
+    const { P, d, c, old, heir } = await setup();
+    try {
+      const granted = calls.at(-1)!;
+      const queries = calls.length;
+      const up = (await c.request({ type: "fs.upload", name: "after-clear.txt", data: "aGk=", sessionId: heir })) as { result: { path: string } };
+      expect(calls.length).toBe(queries); // the CLI was not restarted
+      expect(granted.additionalDirectories).toEqual([join(P, old)]);
+      expect(covered(up.result.path, granted)).toBe(true);
+      // Deleting the parent session keeps the folder while the heir's CLI is still granted it.
+      expect(await c.request({ type: "session.delete", sessionId: old })).toMatchObject({ type: "reply" });
+      expect(existsSync(up.result.path)).toBe(true);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("after /clear and an idle close the heir's next upload lands in the folder its next query is granted", async () => {
+    const { P, d, c, old, heir } = await setup({ idleCloseMs: 60 });
+    try {
+      await c.request({ type: "session.unsubscribe", sessionId: old });
+      await c.request({ type: "session.unsubscribe", sessionId: heir });
+      await c.request({ type: "session.subscribe", sessionId: heir, sinceSeq: 0, background: true });
+      await vi.waitFor(() => expect(closedQueries.some((o) => o.sessionId === old || o.resume === old)).toBe(true), { timeout: 3000 });
+      await new Promise((r) => setTimeout(r, 150));
+      const up = (await c.request({ type: "fs.upload", name: "late.txt", data: "aGk=", sessionId: heir })) as { result: { path: string } };
+      expect(up.result.path.startsWith(`${join(P, heir)}${sep}`)).toBe(true);
+      const before = calls.length;
+      await c.request({ type: "session.prompt", sessionId: heir, text: "read it" });
+      await vi.waitFor(() => expect(calls.length).toBeGreaterThan(before));
+      expect(covered(up.result.path, calls.at(-1)!)).toBe(true);
+      // The dormant heir no longer pins the parent's folder: deleting the parent removes it.
+      expect(await c.request({ type: "session.delete", sessionId: old })).toMatchObject({ type: "reply" });
+      expect(existsSync(join(P, old))).toBe(false);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("the sweep spares the parent's folder while a live heir's CLI reads it", async () => {
+    const { P, d, c, old, heir } = await setup({ uploadSweepFirstMs: 30, uploadSweepMs: 100 });
+    try {
+      const up = (await c.request({ type: "fs.upload", name: "f.txt", data: "aGk=", sessionId: heir })) as { result: { path: string } };
+      expect(await c.request({ type: "session.delete", sessionId: old })).toMatchObject({ type: "reply" });
+      const t = new Date(Date.now() - 48 * 3600_000);
+      for (const x of [up.result.path, dirname(up.result.path), join(P, old)]) utimesSync(x, t, t);
+      await new Promise((r) => setTimeout(r, 400));
+      expect(existsSync(up.result.path)).toBe(true);
+    } finally {
+      d.close();
+    }
+  });
+});
+
+describe("upload sweep wiring", () => {
+  const aged = (P: string, id: string) => {
+    const dir = join(P, id, "u-aaaaaa");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "f.txt"), "x");
+    const t = new Date(Date.now() - 48 * 3600_000);
+    for (const x of [join(dir, "f.txt"), dir, join(P, id)]) utimesSync(x, t, t);
+    return join(P, id);
+  };
+  it("sweeps orphans on a timer and spares live sessions, transcript-only sessions and sessions whose transcript read fails", async () => {
+    const P = join(mkdtempSync(join(tmpdir(), "up-")), "uploads");
+    const [known, broken, orphan, later] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    const d = createDaemon({
+      webRoot,
+      roots: [webRoot],
+      projects: added(webRoot),
+      query: fakeQuery as never,
+      token,
+      uploadDir: P,
+      uploadSweepFirstMs: 30,
+      uploadSweepMs: 100,
+      history: {
+        listSessions: (async () => []) as never,
+        getSessionInfo: (async (id: string) => {
+          if (id === broken) throw new Error("EBUSY");
+          return id === known ? { sessionId: id, summary: "s", cwd: webRoot } : undefined;
+        }) as never,
+        getSessionMessages: (async () => []) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const live = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      await c.request({ type: "fs.upload", name: "f.txt", data: "aGk=", sessionId: live });
+      const t = new Date(Date.now() - 48 * 3600_000);
+      for (const x of [join(P, live), ...readdirSync(join(P, live)).map((n) => join(P, live, n))]) utimesSync(x, t, t);
+      const dirs = [known, broken, orphan].map((id) => aged(P, id));
+      const until = async (f: () => boolean) => {
+        for (let i = 0; i < 100 && !f(); i++) await new Promise((r) => setTimeout(r, 20));
+        expect(f()).toBe(true);
+      };
+      await until(() => !existsSync(dirs[2]!));
+      expect(existsSync(join(P, live))).toBe(true);
+      expect(existsSync(dirs[0]!)).toBe(true);
+      expect(existsSync(dirs[1]!)).toBe(true);
+      // The interval keeps running.
+      const l = aged(P, later);
+      await until(() => !existsSync(l));
+    } finally {
       d.close();
     }
   });

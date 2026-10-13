@@ -113,7 +113,7 @@ const DEFAULTS: [string, boolean, Press, string][] = [
 describe("a default shortcut fires on its key on every layout", () => {
   it.each(DEFAULTS)("%s", (_, mac, p, id) => {
     const s = SHORTCUTS.find((x) => x.id === id)!;
-    expect(matchesKey(defaultSpec(s, mac), ev(p), mac)).toBe(true);
+    expect(matchesKey(defaultSpec(s, mac)!, ev(p), mac)).toBe(true);
   });
 });
 
@@ -161,7 +161,7 @@ describe("AltGr (Ctrl+Alt off macOS) typing a character is never a shortcut", ()
     expect(pressError(ev(p), false)).toMatch(/AltGr/);
   });
   it.each(ALTGR)("%s: no default and no recordable binding fires on it", (_, p) => {
-    const specs = [...SHORTCUTS.map((s) => defaultSpec(s, false)), ...ACCEPTED.filter(([, mac]) => !mac).map(([, , , spec]) => spec)];
+    const specs = [...SHORTCUTS.flatMap((s) => defaultSpec(s, false) ?? []), ...ACCEPTED.filter(([, mac]) => !mac).map(([, , , spec]) => spec)];
     // Bindings made on a US keyboard for the same key: Ctrl+Alt+Q, +7, +ß's key (-), +, (comma), +A.
     specs.push("mod+alt+q", "mod+alt+7", "mod+alt+-", "mod+alt+,", "mod+alt+a", "mod+alt+@", "mod+alt+ą", "mod+alt+\\", "mod+alt+<", "mod+alt+[", "mod+alt+]", "mod+alt+shift+{", "mod+alt+shift+}", "mod+alt+/");
     for (const spec of specs) expect(matchesKey(spec, ev(p), false), spec).toBe(false);
@@ -232,7 +232,7 @@ const ALT_CODES: [string, Press][] = [
 ];
 
 /** The specs every press is checked against: all defaults and all recordable bindings of the platform. */
-const specsOf = (mac: boolean) => [...SHORTCUTS.map((s) => defaultSpec(s, mac)), ...ACCEPTED.filter(([, m]) => m === mac).map(([, , , spec]) => spec)];
+const specsOf = (mac: boolean) => [...SHORTCUTS.flatMap((s) => defaultSpec(s, mac) ?? []), ...ACCEPTED.filter(([, m]) => m === mac).map(([, , , spec]) => spec)];
 
 describe("Alt+number pad digits are a Windows Alt code, not a shortcut", () => {
   it.each(ALT_CODES)("%s: the recorder refuses it", (_, p) => {
@@ -316,7 +316,7 @@ describe("the prompt box's editing keys cannot be bound", () => {
 describe("every default passes the binding rules", () => {
   it.each([false, true])("macOS %s", (mac) => {
     // The macOS prefix key Option+A is a default, not a binding: it types å, and the recorder refuses it for a user's own binding (Reset restores it).
-    for (const s of SHORTCUTS) if (!(mac && s.id === "leader")) expect([s.id, bindingError(defaultSpec(s, mac), mac)]).toEqual([s.id, undefined]);
+    for (const s of SHORTCUTS) if (s.key && !(mac && s.id === "leader")) expect([s.id, bindingError(defaultSpec(s, mac)!, mac)]).toEqual([s.id, undefined]);
     expect(bindingError("alt+a", true)).toMatch(/Option/);
   });
 });

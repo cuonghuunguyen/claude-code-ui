@@ -181,3 +181,17 @@ it("after Reset hides the row (the filter no longer matches) the focus is on the
   expect(q("shortcut-row-sidebar.toggle")).toBeNull();
   expect(document.activeElement).toBe(filter);
 });
+
+it("edit opens recording on that command's row and focuses its Edit button", async () => {
+  await act(async () => root.render(<ShortcutsDialog open={false} onClose={onClose} />));
+  await act(async () => root.render(<ShortcutsDialog open edit="focus.open" onClose={onClose} />));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 0))));
+  expect(q("shortcut-row-focus.open")!.querySelector('[data-testid="shortcut-recording"]')).not.toBeNull();
+  expect(document.activeElement).toBe(q("shortcut-edit-focus.open"));
+  await press({ key: "o", code: "KeyO", ctrlKey: true, altKey: true });
+  expect(specOf("focus.open")).toBe("mod+alt+o");
+});
+
+it("unbound commands show Not set", () => {
+  expect(q("shortcut-row-guide.start")!.textContent).toContain("Not set");
+});

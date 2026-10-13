@@ -1,6 +1,7 @@
 // WebSocket wire protocol (docs/spec.md "Wire protocol"). JSON, one message per frame.
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import type { Effort, Part, PermissionMode, PlanUsage, SessionState, SlashCommand } from "./parts.ts";
+import type { HistSummary } from "./histogram.ts";
 
 export type { ModelInfo };
 
@@ -41,7 +42,8 @@ export type FsEntry = { name: string; path: string; isDir: boolean };
  */
 export type ClientMessage = { reqId: string; side?: string } & (
   /** `coordinator`: the session gets the orchestration tools (docs/spec.md "Orchestration"); refused while orchestration is off. */
-  | { type: "session.create"; cwd: string; model?: string }
+  /** `draft`: the new-session tab's upload token (fs.upload `draft`); the session gets the id, and with it the folder, of those uploads; one claim per token. */
+  | { type: "session.create"; cwd: string; model?: string; draft?: string }
   /** The mode a new session in `cwd` starts in: Claude settings `permissions.defaultMode` (local > project > user), when offered; else "default". */
   | { type: "session.defaultMode"; cwd: string }
   /** Commands and skills of a project, for the new-session tab's `/` menu (no session yet); the daemon caches the list per cwd for a minute. */
@@ -55,6 +57,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.page"; sessionId: string; logEpoch: string; before: string; until?: string }
   /** Edit/Write calls (and their results) older than the cursor `before`, for the changes tab. Reply `EditsResult`. */
   | { type: "session.edits"; sessionId: string; logEpoch: string; before: string }
+  /** A base64 payload a snapshot or page left out (images.ts omitMedia): `index` into the tool_result output or the user_text images. Reply `MediaResult`; error `unknown_media`. */
+  | { type: "session.media"; sessionId: string; partId: string; index: number }
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   /** Bash mode: runs `command` with the user's shell in the session cwd (idle only); output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. */
@@ -65,10 +69,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Applies from the next turn on (`applyFlagSettings({effortLevel})`); the `effort` start option before the query runs. */
   | { type: "session.setEffort"; sessionId: string; effort: Effort }
   /**
-   * Attach button, non-image file: the daemon stores it in a temp folder (a browser cannot tell a file's path)
+   * Attach button, non-image file: the daemon stores it in a folder of its own (a browser cannot tell a file's path)
    * and replies its absolute path, which the prompt gets as an `@path` mention. `data`: base64 content.
+   * Stored in the folder of `sessionId`, or of the draft `draft` (64 hex chars, made by the client, secret) before the
+   * session exists; one of them is required.
    */
-  | { type: "fs.upload"; name: string; data: string; cwd?: string }
+  | { type: "fs.upload"; name: string; data: string; cwd?: string; sessionId?: string; draft?: string }
   /** Stops the running turn; a no-op while idle. */
   | { type: "session.interrupt"; sessionId: string }
   /** Drops the session's scheduled continue (auto_continue); reply `{}`, also when none was scheduled. */
@@ -92,6 +98,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "question.respond"; requestId: string; answers: Record<string, string> }
   | { type: "models.list" }
   | { type: "session.list" }
+  /** Every session ID this daemon has (live, or a transcript inside its roots), added project or not; the hub's lookup of an unlisted ID (GH-328), which names no ID. Reply SessionIdsResult. */
+  | { type: "session.ids" }
   /** Adds a directory inside the roots to the known projects (kept across daemon restarts). */
   | { type: "project.open"; cwd: string }
   /** Removes a project from the list; files and transcripts stay. */
@@ -100,6 +108,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "settings.get" }
   /** Sets only the fields in `patch`; reply `{settings}`, error `bad_settings` for an invalid value. Broadcasts `settings_changed`. */
   | { type: "settings.set"; patch: SettingsPatch }
+  /** Performance data of this daemon (docs/spec.md "Performance monitor"); reply PerfReport. */
+  | { type: "perf.report" }
+  /** Empties the performance store; reply {}. */
+  | { type: "perf.clear" }
   /** Sets the SDK custom title (the terminal CLI shows it too). Needs a transcript: a session with no prompt yet has none. */
   | { type: "session.rename"; sessionId: string; title: string }
   | { type: "session.archive"; sessionId: string; archived: boolean }
@@ -134,7 +146,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Text files only; `mtime` (ms) identifies the disk version. */
   | { type: "fs.read"; path: string }
   /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). */
-  | { type: "fs.media"; path: string }
+  /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). With `hash` (and `cwd`): the file at that commit, `path` relative to the repository top as in git.fileAt, at most 32 MiB. A side's file or commit is served by the hub (bytes read with media.read). */
+  | { type: "fs.media"; path: string; cwd?: string; hash?: string }
+  /** Bytes of a media file, or of the file at a commit (`cwd` + `hash`, as fs.media): `length` at most 1 MiB, 0 for only size, mtime and type. The hub reads a side's media with it for GET /media. Reply MediaReadResult. */
+  | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number }
   /** Overwrites an existing file. Fails with `conflict` when `baseMtime` is given and the disk version differs. */
   | { type: "fs.write"; path: string; content: string; baseMtime?: number }
   /** Replaces this connection's watched files; each change on disk sends `fs.changed`. */
@@ -257,7 +272,7 @@ export const MAX_FROM_PARTS = 3000;
 /** Where a page ends: `before` = id of the oldest loaded turn start (a top-level user_text), `pos` = its first seq in this daemon run. */
 export type Cursor = { before: string; pos: number };
 export type PosPart = { part: Part; pos: number };
-/** Whole turns, oldest part first; `older` absent = the start of the session. */
+/** Whole turns, oldest part first (parts as `omitMedia` leaves them); `older` absent = the start of the session. */
 export type TimelinePage = { parts: Part[]; older?: Cursor };
 /**
  * Paged subscribe reply: `heads` = the latest session_state, commands, context_usage, external_turn, auto_continue, todo_update events; `aux` = parts of the
@@ -265,6 +280,7 @@ export type TimelinePage = { parts: Part[]; older?: Cursor };
  */
 export type Snapshot = { heads: Event[]; attentionSeq: number; page: TimelinePage; aux: PosPart[] };
 export type PageResult = { page: TimelinePage };
+export type MediaResult = { dataUrl: string };
 export type EditsResult = { parts: PosPart[] };
 
 export type ServerMessage =
@@ -326,6 +342,8 @@ export type DefaultModeResult = { mode: PermissionMode };
 /** session.commands. */
 export type CommandsResult = { commands: SlashCommand[] };
 export type UploadResult = { path: string };
+/** fs.upload / session.create `draft`: a secret token, 32 random bytes as lowercase hex. */
+export const DRAFT_TOKEN = /^[0-9a-f]{64}$/;
 /** fs.upload size cap; the client checks it before reading the file. */
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 /** permission.respond and question.respond. `settled`: false when the request was already settled (or unknown) and this answer was ignored. */
@@ -338,6 +356,9 @@ export type ModelsResult = { models: ModelInfo[] };
  */
 export const WS_PROTOCOL = "claude-ui";
 export const TOKEN_PROTOCOL_PREFIX = "token.";
+
+/** Reply to `session.ids`. */
+export type SessionIdsResult = { ids: string[] };
 
 /**
  * `projects`: added project cwds only (project.open, a created session, a deep link), newest activity first.
@@ -420,6 +441,8 @@ export type FsSearchResult = { paths: string[] };
 export type FsReadResult = { content: string; mtime: number };
 /** `url`: same-origin path, valid while this connection is open and used within 10 min. */
 export type FsMediaResult = { url: string; mime: string; size: number; mtime: number };
+/** `data`: base64 of the bytes at the offset (shorter at the end of the file); `size` of the whole file; `mtime` 0 for a file at a commit. */
+export type MediaReadResult = { data: string; size: number; mtime: number; mime: string };
 export type FsWriteResult = { mtime: number };
 /** `title`: "Terminal N", the smallest N free in its cwd. */
 export type TerminalInfo = { id: string; title: string };
@@ -473,10 +496,44 @@ export type ConfigScope = "local" | "user" | "project";
 /** `orchestration.workerMode`: the permission mode of a new worker when the coordinator names none; `coordinator` = the coordinator's own mode. */
 export const WORKER_MODES = ["coordinator", "default", "acceptEdits", "plan", "auto"] as const;
 export type WorkerModeSetting = (typeof WORKER_MODES)[number];
-export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean } };
+export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
+  /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */
+  performance: { monitor: boolean };
+};
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
 export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true } };
+/** Spans of the daemon the monitor times (code constants; never a user value). */
+export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
+/** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */
+export type PerfStall = { kind: "stall"; at: number; ms: number; spans: { name: PerfSpanName; id: number }[] };
+/** A child process: `cmd` and `sub` come from closed lists; `request` = the request type it served ("background" = none in flight). */
+export type PerfChild = { kind: "child"; at: number; cmd: string; sub?: string; ms: number; heldMs?: number; thread: "main" | "worker"; request: string; exit: number | "error" | "signal" };
+export type PerfSpan = { kind: "span"; at: number; name: PerfSpanName; id: number; parent?: number; ms: number; elu?: number };
+export type PerfHandler = { kind: "handler"; at: number; request: string; ms: number };
+export type PerfWorst = PerfStall | PerfChild | PerfSpan | PerfHandler;
+export type PerfDaemon = {
+  pid: number;
+  version?: string;
+  /** Epoch ms of the last Clear or the start. */
+  since: number;
+  monitor: boolean;
+  /** Event-loop delay over the idle floor (ms) per 10 s window; resolution of the timer in ms. */
+  eld: { excessP95?: number; excessMax?: number; idleP50?: number; resolutionMs: number };
+  /** Event-loop utilization (0-1) of the last 10 s window. */
+  elu: number;
+  handlers: Record<string, HistSummary>;
+  spans: Partial<Record<PerfSpanName, HistSummary>>;
+  /** Key "git log", "git status", "claude", ... */
+  children: Record<string, HistSummary>;
+  /** Last 60 samples, one per 10 s. */
+  memory: { at: number; rss: number; heapUsed: number }[];
+  /** The 50 slowest events, slowest first. */
+  worst: PerfWorst[];
+  /** The monitor's own JS time since `since` (ms) and the time it was on. */
+  cost: { ownMs: number; wallMs: number };
+};
+export type PerfReport = { daemon: PerfDaemon };
 export type ConfigKind = "mcp" | "plugins" | "skills";
 /** `McpServerStatus.status` of the SDK. */
 export type McpStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";

@@ -5,17 +5,42 @@ const KEY = "claude-ui.token";
 
 type Loc = Pick<Location, "hash" | "pathname" | "search">;
 
-export function takeToken(
+/** The token of this browser (read only), undefined when it was never paired. */
+export const storedToken = (storage: Pick<Storage, "getItem"> = localStorage): string | undefined => storage.getItem(KEY) ?? undefined;
+
+const daemonAccepts = (token: string) =>
+  fetch("/auth", { headers: { authorization: `Bearer ${token}` } }).then(
+    (r) => r.status === 204,
+    () => false,
+  );
+
+/**
+ * Takes a `#token=` fragment at page load (GH-282). The fragment always leaves the address bar. A browser that is not paired
+ * stores a token of the right shape; a paired one replaces its token only when `GET /auth` accepts the new one, so a link
+ * with another token (written by a model, clicked or pasted) never unpairs a working browser.
+ */
+export async function adoptToken(
   loc: Loc = location,
   storage: Pick<Storage, "getItem" | "setItem"> = localStorage,
   replaceUrl = (url: string) => history.replaceState(null, "", url),
-): string | undefined {
-  const fromUrl = new URLSearchParams(loc.hash.slice(1)).get("token");
-  if (fromUrl) {
-    storage.setItem(KEY, fromUrl);
-    replaceUrl(loc.pathname + loc.search);
+  accepted: (token: string) => Promise<boolean> = daemonAccepts,
+): Promise<"stored" | "kept" | "none"> {
+  const candidate = new URLSearchParams(loc.hash.slice(1)).get("token");
+  if (!candidate) return "none";
+  replaceUrl(loc.pathname + loc.search);
+  if (!TOKEN_SHAPE.test(candidate)) return "kept";
+  const stored = storedToken(storage);
+  if (stored === candidate) return "kept";
+  if (stored === undefined) {
+    storage.setItem(KEY, candidate);
+    return "stored";
   }
-  return storage.getItem(KEY) ?? undefined;
+  if (await accepted(candidate).catch(() => false)) {
+    storage.setItem(KEY, candidate);
+    return "stored";
+  }
+  console.warn("pairing link ignored: this daemon does not accept its token");
+  return "kept";
 }
 
 /** Daemon tokens are 43-char base64url; a shorter one is a typo or something else pasted. */

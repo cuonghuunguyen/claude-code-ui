@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { Event } from "@claude-ui/protocol";
+import { parseOmitted, type Event } from "@claude-ui/protocol";
 import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, INTERRUPT_GRACE_MS, queuedQuery, Session, STALE_TURN_MS, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
+import { createPerf, setPerf } from "../src/perf.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
 import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped } from "./fake-query.ts";
 
@@ -176,6 +177,38 @@ describe("Session", () => {
     expect(pages.flat()).toEqual(ids);
   });
 
+  it("snapshot and page leave out large media; media() returns it; live events keep it (GH-274)", () => {
+    const data = "iVBOR".repeat(4000);
+    const png = `data:image/png;base64,${data}`;
+    const msg = (type: string, uuid: string, content: unknown, extra: object = {}) => ({ type, uuid, session_id: "s", parent_tool_use_id: null, message: { role: type, content, ...extra } });
+    const msgs: unknown[] = [];
+    for (let i = 0; i < 12; i++) {
+      msgs.push(msg("user", `u${i}`, i === 11 ? [{ type: "text", text: "last" }, { type: "image", source: { type: "base64", media_type: "image/png", data } }] : `prompt ${i}`));
+      msgs.push(msg("assistant", `a${i}`, i === 0 ? [{ type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "/x.png" } }] : [{ type: "text", text: "ok" }], { id: `m${i}`, stop_reason: "end_turn" }));
+      if (i === 0) msgs.push(msg("user", "r0", [{ type: "tool_result", tool_use_id: "toolu_read", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data } }] }]));
+    }
+    const s = Session.restore(randomUUID(), "/tmp", msgs as never, { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    const userEvent = events.find((e) => e.part.type === "user_text" && e.part.text === "last")!.part;
+    expect(userEvent).toMatchObject({ images: [png] });
+    const { snapshot } = s.snapshot();
+    const last = snapshot.page.parts.find((p) => p.type === "user_text" && p.text === "last")!;
+    expect(last.type === "user_text" && parseOmitted(last.images[0]!)).toMatchObject({ mediaType: "image/png" });
+    let older = snapshot.page.older;
+    let omitted = false;
+    while (older) {
+      const page = s.page(older.before)!;
+      for (const p of page.parts) if (p.type === "tool_result") omitted = (p.output as { source: { type: string } }[])[0]!.source.type === "omitted";
+      older = page.older;
+    }
+    expect(omitted).toBe(true);
+    expect(s.media("toolu_read:result", 0)).toBe(png);
+    expect(s.media(userEvent.id, 0)).toBe(png);
+    expect(s.media("nope", 0)).toBeUndefined();
+    expect(s.media("toolu_read:result", 5)).toBeUndefined();
+  });
+
   it("emit sets pos on an update of an existing part", async () => {
     const s = new Session("/tmp", { query: fakeQuery as never });
     const events: Event[] = [];
@@ -256,7 +289,7 @@ describe("Session", () => {
   });
 
   it("session-scoped grants are re-applied when the query resumes; saved rules are not", async () => {
-    const s = new Session("/tmp", { query: permissionQuery as never, uploadDir: "/tmp/up" });
+    const s = new Session("/tmp", { query: permissionQuery as never, uploadDir: () => "/tmp/up" });
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
     const suggestions = [
@@ -272,6 +305,23 @@ describe("Session", () => {
     expect(s.releaseQuery()).toBe(true);
     s.prompt("again");
     expect(calls.at(-1)).toMatchObject({ allowedTools: ["Bash(ls \\(a\\):*)", "Read"], additionalDirectories: ["/tmp/up", "/tmp/x"] });
+  });
+
+  it("a new session with a given id starts the query with that sessionId, not resume", () => {
+    const X = "3f2a1b4c-0000-4000-8000-0000000000aa";
+    const s = new Session("/tmp", { query: permissionQuery as never }, { id: X });
+    expect(s.id).toBe(X);
+    s.prompt("hi");
+    expect(calls.at(-1)).toMatchObject({ sessionId: X });
+    expect(calls.at(-1)).not.toHaveProperty("resume");
+  });
+
+  it("uploadDir is asked with the session id", () => {
+    const asked: string[] = [];
+    const s = new Session("/tmp", { query: permissionQuery as never, uploadDir: (id) => (asked.push(id), `/up/${id}`) });
+    s.prompt("hi");
+    expect(asked).toEqual([s.id]);
+    expect(calls.at(-1)).toMatchObject({ additionalDirectories: [`/up/${s.id}`] });
   });
 
   it("a query without session grants starts without allowedTools", () => {
@@ -982,6 +1032,22 @@ describe("Session rewind", () => {
     checkpointFiles.files = [];
     expect((await s.previewRewind("u2")).filesChanged).toEqual([]);
     checkpointFiles.files = ["/repo/a.ts"];
+  });
+
+  it("a rewind starts the CLI without a session.start span (GH-272)", async () => {
+    const p = createPerf();
+    p.setEnabled(true);
+    const span = vi.spyOn(p, "span");
+    setPerf(p);
+    try {
+      const { s } = restored();
+      await s.previewRewind("u2");
+      expect(span).not.toHaveBeenCalledWith("session.start", expect.anything());
+      expect(span.mock.calls.map((c) => c[0])).not.toContain("session.start");
+    } finally {
+      p.close();
+      setPerf(createPerf());
+    }
   });
 
   it("code mode calls rewindFiles and keeps the conversation", async () => {

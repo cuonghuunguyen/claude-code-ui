@@ -4,6 +4,7 @@ import { lstat, open } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { GIT_LOG_MAX_LIMIT, worktreeNameError, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
 import { runGit } from "./git-runner.ts";
+import { foreignPointer } from "./remote-path.ts";
 
 // Read-only calls on a repository's own config: no fsmonitor hook (a program from .git/config), no transport (a partial clone's lazy fetch runs core.sshCommand), on any git version.
 const READ_ONLY = ["-c", "core.fsmonitor=false", "-c", "protocol.allow=never"];
@@ -33,15 +34,56 @@ export function limiter(n: number) {
  */
 const gitSlot = limiter(4);
 /**
- * Git looks for a repository upward and skips an invalid `.git` (an empty folder): without a ceiling, a project whose `.git`
- * is empty would show the repository above the allowed roots. The ceiling is the folder above the repository top that
- * `gitTopOf` found (the one `topIn` checked against the roots), so git never leaves it.
+ * The repository of `cwd` resolved once: canonical top, own git dir, shared git dir and the object directories its
+ * `objects/info/alternates` names. File system only; null outside a work tree or without a readable `.git`.
  */
+type Repo = { top: string; own: string; common: string; alternates: string[] };
+function repoOf0(cwd: string): Repo | null {
+  const top = gitTopOf(cwd);
+  if (!top) return null;
+  const dirs = gitDirsOf(top);
+  if (!dirs) return null;
+  const own = real(dirs.own);
+  const common = real(dirs.common);
+  const alternates: string[] = [];
+  try {
+    const objects = join(common, "objects");
+    for (const l of readFileSync(join(objects, "info", "alternates"), "utf8").split("\n")) {
+      const t = l.trim().replace(/^"(.*)"$/, "$1");
+      if (!t || t.startsWith("#")) continue;
+      // A UNC alternate to another share, or a device path: no file call (NTLM), the repository counts as unresolved.
+      if (foreignPointer(t, objects)) return null;
+      alternates.push(real(resolve(objects, t)));
+    }
+  } catch {
+    // No alternates.
+  }
+  return { top, own, common, alternates };
+}
+const escapesRoots = (r: Repo, allowed: (p: string) => boolean) => ![r.top, r.own, r.common, ...r.alternates].every(allowed);
+/**
+ * Git looks for a repository upward and skips an invalid `.git` (an empty folder), and re-reads `.git` at every start (a
+ * link swapped after the roots check would win). So git gets the repository that was resolved once: `GIT_DIR` (own git dir,
+ * real path), `GIT_COMMON_DIR`, `GIT_WORK_TREE` (also overrides `core.worktree`) and a ceiling above the top, all from the same
+ * values. `pins` keeps what `topIn` validated against the roots for the later calls of the same request.
+ */
+const pins = new Map<string, NodeJS.ProcessEnv>();
+const pinFor = (r: Repo): NodeJS.ProcessEnv => {
+  const up = dirname(r.top);
+  return {
+    GIT_DIR: r.own,
+    GIT_COMMON_DIR: r.common,
+    GIT_WORK_TREE: r.top,
+    ...(up !== r.top && { GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES ? `${up}${delimiter}${process.env.GIT_CEILING_DIRECTORIES}` : up }),
+  };
+};
 export const ceilingEnv = (cwd: string): NodeJS.ProcessEnv => {
   const top = gitTopOf(cwd);
-  const up = top ? dirname(top) : undefined;
-  if (!top || !up || up === top) return {};
-  return { GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES ? `${up}${delimiter}${process.env.GIT_CEILING_DIRECTORIES}` : up };
+  if (!top) return {};
+  const kept = pins.get(top);
+  if (kept) return kept;
+  const r = repoOf0(top);
+  return r ? pinFor(r) : {};
 };
 const git = async (cwd: string, ...args: string[]) => (await gitSlot(() => runGit({ cwd, args: [...READ_ONLY, ...args], env: { ...readEnv(), ...ceilingEnv(cwd) } }))).stdout.toString("utf8").trim();
 
@@ -55,9 +97,13 @@ export function gitDirsOf(cwd: string): { own: string; common: string } | undefi
     if (statSync(dotGit).isDirectory()) return { own: dotGit, common: dotGit };
     const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
     if (!gitdir) return undefined;
+    // A pointer to another UNC share or a device path is never followed (an SMB lookup sends the NTLM hash).
+    if (foreignPointer(gitdir.trim(), cwd)) return undefined;
     const own = resolve(cwd, gitdir.trim());
     try {
-      return { own, common: resolve(own, readFileSync(join(own, "commondir"), "utf8").trim()) };
+      const common = readFileSync(join(own, "commondir"), "utf8").trim();
+      if (foreignPointer(common, own)) return undefined;
+      return { own, common: resolve(own, common) };
     } catch {
       return { own, common: own };
     }
@@ -108,8 +154,8 @@ export function refsStamp(cwd: string): string {
   return parts.join("|");
 }
 /** `refsStamp` of the repository `cwd` belongs to, null outside a work tree; file stats only, no git process (`git.refs`). */
-export function gitRefs(cwd: string): string | null {
-  return gitTopOf(cwd) ? refsStamp(cwd) : null;
+export function gitRefs(cwd: string, allowed: (p: string) => boolean): string | null {
+  return gitTopOf(cwd) && !gitEscapes(cwd, allowed) ? refsStamp(cwd) : null;
 }
 /** The full ref HEAD points to (`refs/heads/x`); undefined when detached or unreadable. */
 function headRef(top: string): string | undefined {
@@ -510,10 +556,34 @@ export function gitTopOf(cwd: string): string | null {
 export async function gitTop(cwd: string): Promise<string | null> {
   return gitTopOf(cwd);
 }
-/** A cwd inside the roots whose repository top is outside must not expose files outside the roots through git objects. */
+/**
+ * True when the repository of `cwd` is not entirely inside the roots (`allowed` gets canonical paths): its top, its own git
+ * dir, the one its worktrees share (`gitDirsOf`, resolved through links) or an object directory of `objects/info/alternates`. A project inside the roots whose `.git` is a
+ * symlink or a `gitdir:` file to elsewhere, or a linked worktree whose main repository is outside, would show that repository.
+ * File system only; false outside a work tree.
+ */
+export function gitEscapes(cwd: string, allowed: (p: string) => boolean): boolean {
+  const top = gitTopOf(cwd);
+  if (!top) return false;
+  if (!allowed(top)) return true;
+  const r = repoOf0(top);
+  // A `.git` entry exists but cannot be resolved (no gitdir line, unreadable, foreign pointer): outside, fail closed.
+  return r ? escapesRoots(r, allowed) : true;
+}
+/**
+ * A cwd inside the roots whose repository (top, git dirs, alternates) is outside must not expose files outside the roots
+ * through git objects. The values checked are the ones git then gets (`pins`): no gap for a `.git` swap.
+ */
 export function topIn(cwd: string, allowed: (p: string) => boolean): string | null {
   const top = gitTopOf(cwd);
-  if (top && !allowed(top)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  if (!top) return null;
+  if (!allowed(top)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  const r = repoOf0(top);
+  if (!r) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  if (escapesRoots(r, allowed)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  pins.delete(top);
+  pins.set(top, pinFor(r));
+  if (pins.size > 64) pins.delete(pins.keys().next().value!);
   return top;
 }
 
@@ -677,6 +747,28 @@ export async function gitShow(cwd: string, hash: string, allowed: (p: string) =>
   });
 }
 
+/** A blob at a commit, checked (hash, path, repository inside `allowed`, exists, is a blob, at most `max`) but not read: its size comes from `git cat-file -s`. */
+export type BlobRef = { top: string; obj: string; size: number; max: number };
+export async function gitBlobRef(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<BlobRef> {
+  if (!isHash(hash)) throw bad("Invalid commit hash");
+  const p = repoPath(path);
+  const top = topIn(cwd, allowed);
+  if (!top) throw new WorktreeError("not_git", "Not in a git repository");
+  const obj = `${hash}:${p}`;
+  if (!(await gok(top, "cat-file", "-e", obj))) throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+  if ((await g(top, ["cat-file", "-t", obj])) !== "blob") throw new WorktreeError("not_found", `Not a file: ${p}`);
+  const size = Number(await g(top, ["cat-file", "-s", obj]));
+  if (size > max) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`, size);
+  return { top, obj, size, max };
+}
+/** The bytes of a checked blob. */
+export async function gitBlobRead(ref: BlobRef): Promise<Buffer> {
+  try {
+    return (await gitSlot(() => runGit({ cwd: ref.top, args: [...SAFE, "cat-file", "blob", ref.obj], maxBuffer: ref.max + 1, env: { ...readEnv(), ...ceilingEnv(ref.top) }, timeout: 30_000 }), true)).stdout;
+  } catch (e) {
+    throw new WorktreeError("git_failed", (e as Error).message.split("\n")[0]!);
+  }
+}
 /** The bytes of `path` (relative to the repository top) at commit `hash`; WorktreeError not_found / too_large (with `size`). */
 export async function gitFileAt(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<Buffer> {
   if (!isHash(hash)) throw bad("Invalid commit hash");
