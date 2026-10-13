@@ -51,8 +51,13 @@ const RESERVED = ["new", "send", "tail", "interrupt", "doctor", "logs", "stop"];
 const STATES = ["idle", "running", "needs_input", "error", "closed"];
 const CLIENT_FLAGS: Record<ClientCmd, string[]> = { status: [], open: ["print"], sessions: ["project", "state", "archived"], projects: [], workers: [] };
 
-/** Whether `argv` starts the daemon (bare, or daemon flags only); a client command, `update`, help, version or a usage error does not. */
-export const isDaemonRun = (argv: string[]) => parseCli(argv, {}, "").kind === "run";
+/**
+ * Whether `argv` starts the daemon: everything but a known client command, a reserved name or `update` as the first word, or help or version.
+ * Not strict on flags: an older launcher stays installed while a newer daemon (with flags it does not know) runs under it.
+ */
+export const isDaemonRun = (argv: string[]) => !(NOT_A_START.includes(argv[0] ?? "") || argv.some((a) => ["-h", "-v", "--help", "--version"].includes(a)));
+const NOT_A_START = [...Object.keys(CLIENT_CMDS), ...RESERVED, "update"];
+const DAEMON_ONLY = ["lan", "roots", "hostname", "tailscale", "allow-bypass", "no-update-check", "no-os-notify", "side"];
 
 export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string): Cli {
   let values;
@@ -78,6 +83,8 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string): 
     if (extra.length) return { kind: "error", message: `unexpected argument '${extra[0]}'` };
     const bad = ["print", "project", "state", "archived"].find((f) => (values as Record<string, unknown>)[f] !== undefined && !CLIENT_FLAGS[cmd].includes(f));
     if (bad) return { kind: "error", message: `--${bad} does not apply to '${word}'` };
+    const daemonOnly = DAEMON_ONLY.find((f) => (values as Record<string, unknown>)[f] !== undefined);
+    if (daemonOnly) return { kind: "error", message: `--${daemonOnly} starts the daemon; it does not apply to '${word}'` };
     if (values.state !== undefined && !STATES.includes(values.state)) return { kind: "error", message: `invalid state: ${values.state} (${STATES.join(", ")})` };
     if (values.port !== undefined && (!/^\d+$/.test(values.port) || Number(values.port) > 65535)) return { kind: "error", message: `invalid port: ${values.port}` };
     return {

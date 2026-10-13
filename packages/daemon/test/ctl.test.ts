@@ -3,11 +3,13 @@ import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync, exists
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
+import { createServer, type Server } from "node:http";
 import { afterAll, describe, expect, it } from "vitest";
+import { WebSocketServer } from "ws";
 import type { ListResult, SessionListItem } from "@claude-ui/protocol";
 import { parseCli, type Cli } from "../src/cli.ts";
 import { claimDaemonFile, daemonFile, readDaemonFile, removeDaemonFile, writeDaemonFile } from "../src/ctl/daemon-file.ts";
-import { resolvePort } from "../src/ctl/connect.ts";
+import { readToken, resolvePort, request } from "../src/ctl/connect.ts";
 import { runClient, runOpener, type ClientIo } from "../src/ctl/commands.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon } from "../src/server.ts";
@@ -45,8 +47,10 @@ describe("resolvePort: --port, PORT, live daemon.json, 4280", () => {
   it("order", () => {
     writeDaemonFile(dir, { port: 7000, pid: 1, version: "x", startedAt: "" });
     expect(resolvePort({ flag: 6000, env: { PORT: "5000" }, dir, alive })).toBe(6000);
-    expect(resolvePort({ env: { PORT: "5000" }, dir, alive })).toBe(5000);
+    // A stray PORT of the shell does not beat the live daemon.
+    expect(resolvePort({ env: { PORT: "5000" }, dir, alive })).toBe(7000);
     expect(resolvePort({ env: {}, dir, alive })).toBe(7000);
+    expect(resolvePort({ env: { PORT: "5000" }, dir, alive: () => false })).toBe(5000);
     expect(resolvePort({ env: {}, dir, alive: () => false })).toBe(4280);
     expect(resolvePort({ env: {}, dir: tmp("cu-port-"), alive })).toBe(4280);
   });
@@ -229,5 +233,74 @@ describe("usage error of the real entry point", () => {
     expect(r.err).toContain("claude-ui --help");
     expect(r.err).not.toContain("exit, code");
     expect(r.err).not.toContain("Commands:");
+  });
+});
+
+const listen = (srv: Server) => new Promise<number>((r) => srv.listen(0, "127.0.0.1", () => r((srv.address() as AddressInfo).port)));
+
+describe("token safety (review)", () => {
+  it("a live daemon.json beats a stray PORT: the other app never sees the token", async () => {
+    const seen: string[] = [];
+    const foreign = createServer((req, res) => (seen.push(String(req.headers.authorization)), res.writeHead(404).end()));
+    const fport = await listen(foreign);
+    const r = await run(["status"], { env: { PORT: String(fport) } , dir: (() => { const d = tmp("cu-live-"); writeFileSync(join(d, "token"), token); writeDaemonFile(d, { port, pid: process.pid, version: "x", startedAt: "" }); return d; })() });
+    foreign.close();
+    expect(r.code).toBe(0);
+    expect(seen).toEqual([]);
+  });
+  it("the probe does not follow a redirect to another origin", async () => {
+    const hits: string[] = [];
+    const second = createServer((req, res) => (hits.push(String(req.headers.authorization)), res.writeHead(204).end()));
+    const sport = await listen(second);
+    const first = createServer((_q, res) => res.writeHead(302, { location: `http://localhost:${sport}/x` }).end());
+    const fport = await listen(first);
+    const r = await run(["status", "--port", String(fport)]);
+    first.close();
+    second.close();
+    expect(r.code).toBe(3);
+    expect(hits).toEqual([]);
+  });
+  it("a pid of another user (EPERM) is not a live daemon", () => {
+    const real = process.kill;
+    process.kill = ((): never => { throw Object.assign(new Error("x"), { code: "EPERM" }); }) as never;
+    try {
+      const d = tmp("cu-eperm-");
+      writeDaemonFile(d, { port: 7001, pid: 1, version: "x", startedAt: "" });
+      expect(resolvePort({ env: {}, dir: d })).toBe(4280);
+    } finally {
+      process.kill = real;
+    }
+  });
+});
+
+describe("robustness (review)", () => {
+  it("a non-JSON frame rejects cleanly, nothing is uncaught", async () => {
+    const http = createServer();
+    new WebSocketServer({ server: http }).on("connection", (ws) => ws.send("not json"));
+    const p = await listen(http);
+    const uncaught: unknown[] = [];
+    const h = (e: unknown) => uncaught.push(e);
+    process.prependListener("uncaughtException", h);
+    const r = await request(p, token, { type: "session.list" }).then(() => "resolved", (e) => (e as Error).message);
+    process.off("uncaughtException", h);
+    http.close();
+    expect(r).toContain("not JSON");
+    expect(uncaught).toEqual([]);
+  });
+  it("the daemon file is written through a rename (no temp file left, no partial read)", () => {
+    const d = tmp("cu-atomic-");
+    writeDaemonFile(d, { port: 1, pid: 5, version: "x", startedAt: "a" });
+    expect(readdirSync(d)).toEqual(["daemon.json"]);
+  });
+  it("a token file with two lines gives the first non-empty line", () => {
+    const f = join(tmp("cu-tok-"), "token");
+    writeFileSync(f, "\n  first-line  \nsecond\n");
+    expect(readToken(f)).toBe("first-line");
+  });
+  it("no message says claude-ui twice", async () => {
+    const r = await run(["status"], { env: { PORT: "1" }, dir: tmp("cu-x-") });
+    const n = await run(["status"], { env: { PORT: "1" } });
+    expect(n.err).not.toContain("claude-ui: claude-ui");
+    expect(r.err).not.toContain("claude-ui: claude-ui");
   });
 });

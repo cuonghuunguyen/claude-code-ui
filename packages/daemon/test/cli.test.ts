@@ -86,7 +86,12 @@ describe("parseCli", () => {
     it("isDaemonRun: only a daemon start", () => {
       expect(isDaemonRun([])).toBe(true);
       expect(isDaemonRun(["--port", "5000", "--lan"])).toBe(true);
-      for (const a of [["status"], ["update"], ["-h"], ["-v"], ["bogus"], ["--port", "x"]]) expect(isDaemonRun(a), a.join(" ")).toBe(false);
+      for (const a of [["status"], ["update"], ["-h"], ["-v"], ["--help"], ["--port", "5000", "--version"], ["new"], ["ls"]]) expect(isDaemonRun(a), a.join(" ")).toBe(false);
+      // Not strict: a flag of a newer release still counts as a daemon start (an old launcher runs a newer daemon).
+      for (const a of [["--future-flag"], ["--port", "5000", "--future-flag"], ["--port", "x"]]) expect(isDaemonRun(a), a.join(" ")).toBe(true);
+    });
+    it("a command rejects daemon-only flags", () => {
+      for (const f of [["--lan"], ["--roots", "/x"], ["--hostname", "h"], ["--tailscale"], ["--allow-bypass"], ["--no-update-check"], ["--no-os-notify"]]) expect(parseCli(["status", ...f], {}, "/h"), f[0]).toMatchObject({ kind: "error", message: expect.stringContaining("starts the daemon") });
     });
     it("USAGE_HINT is short and points to --help", () => {
       expect(USAGE_HINT.split("\n").length).toBeLessThanOrEqual(2);

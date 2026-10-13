@@ -1,12 +1,17 @@
 // `<config>/daemon.json`: where a running daemon listens (docs/spec.md "CLI"). No token. Written when it listens, removed when it exits.
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type DaemonInfo = { port: number; pid: number; version: string; startedAt: string };
 
 export const daemonFile = (dir: string) => join(dir, "daemon.json");
 
-export const writeDaemonFile = (dir: string, info: DaemonInfo) => writeFileSync(daemonFile(dir), JSON.stringify(info) + "\n", { mode: 0o600 });
+/** Temp file + rename: a reader never sees half a file. */
+export function writeDaemonFile(dir: string, info: DaemonInfo) {
+  const tmp = `${daemonFile(dir)}.${info.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(info) + "\n", { mode: 0o600 });
+  renameSync(tmp, daemonFile(dir));
+}
 
 /** The file's content; undefined when it is absent or not a daemon.json. */
 export function readDaemonFile(dir: string): DaemonInfo | undefined {

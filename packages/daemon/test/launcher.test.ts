@@ -132,6 +132,13 @@ describe("launcher", () => {
     expect(runs).toHaveLength(1);
   });
 
+  it("a daemon started with a flag this launcher does not know still restarts on 75", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cu-launch-"));
+    const { spawn, runs } = fakeSpawn([75, 0]);
+    expect(await launch({ args: ["--future-flag"], own, dir, spawn, signals: new EventEmitter() as never, log: () => {} })).toBe(0);
+    expect(runs).toHaveLength(2);
+  });
+
   it("a daemon start from the versions dir still gets the failed-start mark", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cu-launch-"));
     install(dir, "0.2.1");

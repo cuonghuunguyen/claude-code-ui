@@ -25,22 +25,23 @@ const pidAlive = (pid: number) => {
     process.kill(pid, 0);
     return true;
   } catch (e) {
-    return (e as NodeJS.ErrnoException).code === "EPERM";
+    // EPERM: the pid belongs to someone else, so it is not this user's daemon.
+    return false;
   }
 };
 
-/** `--port`, then `PORT`, then the port of a live daemon.json, then 4280. */
+/** `--port`, then the port of a live daemon.json, then `PORT`, then 4280: a stray `PORT` of the shell must not send the token to another app. */
 export function resolvePort(o: { flag?: number; env: NodeJS.ProcessEnv; dir: string; alive?: (pid: number) => boolean }): number {
   if (o.flag !== undefined) return o.flag;
-  if (o.env.PORT && /^\d+$/.test(o.env.PORT)) return Number(o.env.PORT);
   const info = readDaemonFile(o.dir);
-  return info && (o.alive ?? pidAlive)(info.pid) ? info.port : DEFAULT_PORT;
+  if (info && (o.alive ?? pidAlive)(info.pid)) return info.port;
+  return o.env.PORT && /^\d+$/.test(o.env.PORT) ? Number(o.env.PORT) : DEFAULT_PORT;
 }
 
 /** Reads the token file; never creates it. */
 export function readToken(file: string, explicit = false): string {
   try {
-    const t = readFileSync(file, "utf8").trim();
+    const t = readFileSync(file, "utf8").split(/\r?\n/).map((l) => l.trim()).find(Boolean);
     if (t) return t;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw new CtlError(3, "no_token", `cannot read ${file}: ${(e as Error).message}`);
@@ -57,13 +58,13 @@ export const tokenPath = (o: { tokenFile?: string; env: NodeJS.ProcessEnv; dir: 
 
 const inWsl = () => process.platform === "linux" && /microsoft/i.test(release());
 const notRunning = (port: number) =>
-  new CtlError(3, "not_running", `claude-ui daemon not running on 127.0.0.1:${port}.` + (inWsl() ? " A daemon on Windows is out of reach from WSL: run claude-ui from PowerShell, or use WSL mirrored networking and --token-file /mnt/c/Users/<you>/AppData/Roaming/claude-ui/token" : ""));
+  new CtlError(3, "not_running", `daemon not running on 127.0.0.1:${port}.` + (inWsl() ? " A daemon on Windows is out of reach from WSL: run claude-ui from PowerShell, or use WSL mirrored networking and --token-file /mnt/c/Users/<you>/AppData/Roaming/claude-ui/token" : ""));
 
 /** `GET /auth`: the daemon answers and takes the token. */
 export async function probe(port: number, token: string) {
   let status: number;
   try {
-    status = (await fetch(`http://127.0.0.1:${port}/auth`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(TIMEOUT_MS) })).status;
+    status = (await fetch(`http://127.0.0.1:${port}/auth`, { headers: { authorization: `Bearer ${token}` }, redirect: "manual", signal: AbortSignal.timeout(TIMEOUT_MS) })).status;
   } catch {
     throw notRunning(port);
   }
@@ -82,7 +83,12 @@ export function request<T>(port: number, token: string, msg: { type: string } & 
     ws.on("error", () => done(() => reject(notRunning(port))));
     ws.on("close", () => done(() => reject(new CtlError(3, "not_running", "the daemon closed the connection"))));
     ws.on("message", (d) => {
-      const m = JSON.parse(String(d));
+      let m;
+      try {
+        m = JSON.parse(String(d));
+      } catch {
+        return done(() => reject(new CtlError(1, "bad_reply", "the daemon sent a frame that is not JSON")));
+      }
       if (m.reqId !== reqId) return;
       if (m.type === "reply") done(() => resolve(m.result as T));
       else if (m.type === "error") done(() => reject(new CtlError(1, m.code ?? "error", m.message ?? "request failed")));
