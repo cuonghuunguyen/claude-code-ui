@@ -1,9 +1,9 @@
-// Graph tab (docs/spec.md "Layout"): the commit history of the session's repository, read-only: lanes, filters, details, per-file diff.
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, FsReadResult } from "@claude-ui/protocol";
+// Graph tab (docs/spec.md "Layout"): the commit history of the session's repository: lanes, filters, Fetch, details, per-file diff.
+import { memo, useCallback, type ReactElement, useEffect, useMemo, useRef, useState } from "react";
+import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, GitRemoteResult, FsReadResult } from "@claude-ui/protocol";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { MultiFileDiff } from "@pierre/diffs/react";
-import { ArrowLeftIcon, GitCommitHorizontalIcon, RotateCwIcon, SearchIcon, TagIcon } from "lucide-react";
+import { ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon, LoaderCircleIcon, RotateCwIcon, SearchIcon, TagIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -12,6 +12,7 @@ import { KindBadge, StatsText, useNarrow } from "./changes-panel.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { readFailure } from "./files.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
+import { BranchMenu, type RemoteRequest } from "./git-branch-menu.tsx";
 import { noteRefs } from "./git-refs.ts";
 import { timeAgo } from "./sessions.ts";
 import { useDark } from "./theme.ts";
@@ -46,7 +47,7 @@ function RefChips({ refs }: { refs: string[] }) {
     <>
       {refs.includes("HEAD") && (!head || !names.length) && <Chip className={cn(REF_HEAD, "font-semibold")}>HEAD</Chip>}
       {names.map((r, i) => (
-        <Chip key={r} className={cn(head && i === 0 ? REF_HEAD : r.startsWith("refs/heads/") ? REF_LOCAL : r.startsWith("refs/remotes/") && REF_REMOTE, head && i === 0 && "font-semibold")}>
+        <Chip key={r} data-ref={r} className={cn(head && i === 0 ? REF_HEAD : r.startsWith("refs/heads/") ? REF_LOCAL : r.startsWith("refs/remotes/") && REF_REMOTE, head && i === 0 && "font-semibold")}>
           {r.startsWith("refs/tags/") && <TagIcon className="size-3" aria-hidden />}
           {short(r)}
         </Chip>
@@ -54,8 +55,8 @@ function RefChips({ refs }: { refs: string[] }) {
     </>
   );
 }
-const Chip = ({ children, className }: { children: React.ReactNode; className?: string }) => (
-  <span className={cn("inline-flex max-w-40 shrink-0 items-center gap-0.5 truncate rounded border px-1 text-xs", className)} data-testid="commit-ref">
+const Chip = ({ children, className, "data-ref": ref }: { children: React.ReactNode; className?: string; "data-ref"?: string }) => (
+  <span className={cn("inline-flex max-w-40 shrink-0 items-center gap-0.5 truncate rounded border px-1 text-xs", className)} data-testid="commit-ref" data-ref={ref}>
     {children}
   </span>
 );
@@ -96,6 +97,7 @@ const CommitRow = memo(function CommitRow({ c, row, start, on, filtered, h, sets
       className={cn("absolute top-0 left-0 flex w-full cursor-pointer items-center gap-2 px-2 text-sm hover:bg-accent", on && "bg-secondary")}
       style={{ height: h, transform: `translateY(${start}px)` }}
       data-testid="commit-row"
+      data-local-refs={c.refs.filter((r) => r.startsWith("refs/heads/")).join("\n")}
     >
       {!filtered && <GraphCell row={row} head={c.refs.includes("HEAD")} h={h} />}
       <RefChips refs={c.refs} />
@@ -162,6 +164,32 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
   // Set by the Refresh button: that read skips the daemon's caches.
   const freshNext = useRef(false);
   const gen = useRef(0);
+  // A remote operation (Fetch, Push, Pull) of this panel: one at a time; its result line shows under the filter row until the next one or Dismiss.
+  const [op, setOp] = useState<string>();
+  const [result, setResult] = useState<{ ok: boolean; text: string; output?: string }>();
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
+  const runRemote = (msg: RemoteRequest, done: string, running: string) => {
+    if (op || notGit) return;
+    const at = msg.cwd;
+    setOp(running);
+    setResult(undefined);
+    // Success or failure, the list reloads: a failed `fetch --all` may still have updated some remotes.
+    client
+      .request<GitRemoteResult>(msg)
+      .then(
+        (r) => {
+          noteRefs(at, r.remote?.refs ?? undefined);
+          if (cwdRef.current === at) setResult({ ok: true, text: done, output: r.remote?.output || undefined });
+        },
+        (e: RequestError) => cwdRef.current === at && setResult({ ok: false, text: e.message || "git failed" }),
+      )
+      .finally(() => {
+        setOp(undefined);
+        freshNext.current = true;
+        setReload((n) => n + 1);
+      });
+  };
   const filter = (skip: number) => ({ type: "git.log" as const, cwd, skip, limit: PAGE, ...(ref !== ALL && { ref }), ...(q.author && { author: q.author }), ...(q.text && { text: q.text }) });
 
   useEffect(() => {
@@ -283,10 +311,40 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
           </SelectContent>
         </Select>
         <input type="search" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Author" aria-label="Author" className={cn(INPUT, "w-32 flex-none")} data-testid="graph-filter-author" />
+        <Button size="icon-sm" variant="ghost" className="max-md:size-11 aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={!!op || notGit} onClick={() => runRemote({ type: "git.fetch", cwd }, "Fetched all remotes", "Fetching all remotes…")} title="Fetch all remotes" aria-label="Fetch" aria-busy={!!op} data-testid="graph-fetch">
+          {op ? <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" /> : <CloudDownloadIcon />}
+        </Button>
         <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => ((freshNext.current = true), setReload((n) => n + 1))} title="Refresh" aria-label="Refresh">
           <RotateCwIcon />
         </Button>
       </div>
+      <span role="status" className="sr-only">
+        {op ?? ""}
+      </span>
+      {result && (
+        <div className="flex shrink-0 items-start gap-2 border-b px-3 py-1.5 text-sm" data-testid="graph-remote-result">
+          {result.ok ? (
+            <div role="status" className="min-w-0 flex-1 text-muted-foreground">
+              {result.text}
+              {result.output && (
+                <details>
+                  <summary className="cursor-pointer">Output</summary>
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{result.output}</pre>
+                </details>
+              )}
+            </div>
+          ) : (
+            <div role="alert" className="min-w-0 flex-1 text-destructive">
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs" data-testid="graph-remote-error">
+                {result.text}
+              </pre>
+            </div>
+          )}
+          <Button size="icon-sm" variant="ghost" className="max-md:size-11" aria-label="Dismiss" onClick={() => setResult(undefined)}>
+            <XIcon />
+          </Button>
+        </div>
+      )}
       {notGit ? (
         <p className="m-auto p-4 text-muted-foreground">Not a git repository</p>
       ) : (
@@ -298,6 +356,7 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
               </p>
             )}
             {!error && !commits.length && !loading && <p className="m-auto p-4 text-muted-foreground">{filtered || (ref !== ALL && ref !== HEAD) ? "No commits match." : "No commits yet."}</p>}
+            <BranchMenu client={client} cwd={cwd} busy={!!op} onRun={runRemote} fallback={() => commits[index]?.refs.filter((r) => r.startsWith("refs/heads/")) ?? []}>
             <div
               ref={scroller}
               role="listbox"
@@ -315,13 +374,14 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
                 })}
               </div>
             </div>
+            </BranchMenu>
             {loading && <p className="absolute right-3 bottom-2 rounded bg-card px-2 text-muted-foreground text-xs">Loading…</p>}
           </div>
           {selected && (
             <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l", file ? "@max-2xl:max-h-3/4 @2xl:w-3/5" : "@max-2xl:max-h-1/2 @2xl:w-80", "shrink-0")} data-testid="commit-details">
               {detailError && <p className="p-3 text-destructive">{detailError}</p>}
               {!detail && !detailError && <p className="p-3 text-muted-foreground">Loading…</p>}
-              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
+              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} busy={!!op} onRun={runRemote} fallback={() => refs.filter((r) => r.startsWith("refs/heads/"))}>{el}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
             </div>
           )}
         </div>
@@ -333,7 +393,7 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
 const INPUT =
   "h-8 w-full rounded-md bg-secondary/60 pr-2 pl-2 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11";
 
-function Details({ detail: d, refs, loaded, onSelect, onFile }: { detail: GitCommitDetail; refs: string[]; loaded: GitCommit[]; onSelect: (h: string) => void; onFile: (f: GitFileChange) => void }) {
+function Details({ detail: d, refs, loaded, onSelect, onFile, wrap }: { wrap: (el: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }>, refs: string[]) => ReactElement; detail: GitCommitDetail; refs: string[]; loaded: GitCommit[]; onSelect: (h: string) => void; onFile: (f: GitFileChange) => void }) {
   const body = d.message.split("\n").slice(1).join("\n").trim();
   return (
     <div className="flex flex-col gap-2 p-3 text-sm">
@@ -354,11 +414,7 @@ function Details({ detail: d, refs, loaded, onSelect, onFile }: { detail: GitCom
           ))}
         </p>
       )}
-      {refs.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          <RefChips refs={refs} />
-        </div>
-      )}
+      {refs.length > 0 && wrap(<div className="flex flex-wrap gap-1"><RefChips refs={refs} /></div>, refs)}
       <p className="font-medium">
         {d.files.length} {d.files.length === 1 ? "file" : "files"} changed
       </p>

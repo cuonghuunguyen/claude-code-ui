@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { GitCommit, GitCommitDetail } from "@claude-ui/protocol";
+import type { GitBranchInfo, GitCommit, GitCommitDetail } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
@@ -61,6 +61,14 @@ afterEach(() => {
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 
 type Req = { type: string; skip?: number; hash?: string; path?: string; text?: string; ref?: string };
+let fetchReply: () => Promise<unknown> = async () => ({ remote: { output: "", refs: null } });
+const MAIN_ARGV = "refs/heads/main:refs/heads/main";
+const infoMain = (o: Partial<GitBranchInfo> = {}): GitBranchInfo => ({
+  ref: "refs/heads/main", local: hash(3), checkedOut: "here", remote: "origin", remoteRef: "refs/heads/main", tracking: "refs/remotes/origin/main", trackingHash: hash(2), upstream: "origin/main", ahead: 1, behind: 1,
+  push: ["push", "origin", MAIN_ARGV], forcePush: ["push", `--force-with-lease=refs/heads/main:${hash(2)}`, "origin", MAIN_ARGV], pull: ["pull", "--no-rebase", "--ff-only", "origin", "refs/heads/main"], ...o,
+});
+let branchInfo: (ref: string) => GitBranchInfo = () => infoMain();
+let writeReply: () => Promise<unknown> = async () => ({ remote: { output: "", refs: "s2" } });
 function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200, nogit = false) {
   const sent: Req[] = [];
   const request = vi.fn(async (m: Req) => {
@@ -70,6 +78,9 @@ function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200
       const slice = all.slice(skip, skip + page);
       return { log: nogit ? null : { commits: slice, more: skip + page < all.length, ...(skip === 0 && { branches: branchRefs(), ...(!noStamp && { refs: stampValue }), ...(branchRefs().includes(`refs/heads/${statusBranch}`) ? { head: `refs/heads/${statusBranch}` } : {}) }) } };
     }
+    if (m.type === "git.fetch") return fetchReply();
+    if (m.type === "git.branch") return { branch: branchInfo(m.ref!) };
+    if (m.type === "git.push" || m.type === "git.pull") return writeReply();
     if (m.type === "git.refs") return { refs: noStamp ? null : stampValue };
     if (m.type === "git.status") return { status: { branch: statusBranch, added: 0, removed: 0 } };
     if (m.type === "git.commit") return { commit: detail(all.find((c) => c.hash === m.hash)!, files) };
@@ -459,4 +470,280 @@ it("details show the ref chips of the loaded commit", async () => {
   await select(0);
   const d = el.querySelector("[data-testid=commit-details]")!;
   expect([...d.querySelectorAll("[data-testid=commit-ref]")].map((x) => x.textContent)).toContain("main");
+});
+
+it("Fetch shows a spinner, disables itself, then reloads the graph with fresh and says so", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  let done!: (v: unknown) => void;
+  fetchReply = () => new Promise((r) => (done = r));
+  const btn = () => el.querySelector<HTMLButtonElement>("[data-testid=graph-fetch]")!;
+  await act(async () => btn().click());
+  expect(btn().getAttribute("aria-disabled")).toBe("true");
+  expect(btn().disabled).toBe(false);
+  expect(btn().getAttribute("aria-busy")).toBe("true");
+  expect(btn().querySelector(".animate-spin")).not.toBeNull();
+  c.sent.length = 0;
+  await act(async () => done({ remote: { output: "x -> origin/x", refs: "s2" } }));
+  await flush();
+  expect(btn().getAttribute("aria-disabled")).not.toBe("true");
+  expect(c.sent.map((m) => m.type)).toEqual(["git.log"]);
+  expect(c.sent[0]).toMatchObject({ type: "git.log", skip: 0, fresh: true });
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Fetched all remotes");
+  expect(el.querySelector("[data-testid=graph-remote-result] pre")!.textContent).toBe("x -> origin/x");
+  expect(btn().className).toContain("max-md:size-11");
+});
+
+it("Fetch keeps focus while it runs and a second click sends nothing", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  fetchReply = () => new Promise(() => {});
+  const btn = el.querySelector<HTMLButtonElement>("[data-testid=graph-fetch]")!;
+  btn.focus();
+  await act(async () => btn.click());
+  expect(document.activeElement).toBe(btn);
+  expect(el.querySelector(".sr-only[role=status]")!.textContent).toBe("Fetching all remotes…");
+  await act(async () => btn.click());
+  expect(c.sent.filter((m) => m.type === "git.fetch")).toHaveLength(1);
+  fetchReply = async () => ({ remote: { output: "", refs: null } });
+});
+
+it("a failed fetch shows git's message, still reloads, and Dismiss removes it", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  fetchReply = () => Promise.reject(Object.assign(new Error("fatal: unable to access 'https://h/': Could not resolve host"), { code: "git_failed" }));
+  c.sent.length = 0;
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=graph-fetch]")!.click());
+  await flush();
+  expect(el.querySelector("[role=alert]")!.textContent).toContain("Could not resolve host");
+  expect(c.sent.at(-1)).toMatchObject({ type: "git.log", skip: 0, fresh: true });
+  await act(async () => el.querySelector<HTMLButtonElement>("button[aria-label=Dismiss]")!.click());
+  expect(el.querySelector("[data-testid=graph-remote-result]")).toBeNull();
+  fetchReply = async () => ({ remote: { output: "", refs: null } });
+});
+
+// ---- Branch menu (right click, long press, Shift+F10): push, force push, pull ----
+const menuAt = async (target: Element) => {
+  await act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  await flush();
+};
+const items = () => [...document.querySelectorAll<HTMLElement>("[role=menuitem]")];
+const itemTexts = () => items().map((i) => i.textContent);
+const byId = (id: string) => document.querySelector<HTMLElement>(`[data-testid=${id}]`)!;
+const withRefs = (): GitCommit[] => {
+  const h = history(3);
+  h[1] = { ...h[1]!, refs: ["refs/remotes/origin/main", "refs/heads/feat"] };
+  return h;
+};
+const chip = (ref: string) => el.querySelector(`[data-ref="${ref}"]`)!;
+const closeMenu = () => act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+afterEach(() => {
+  branchInfo = () => infoMain();
+  writeReply = async () => ({ remote: { output: "", refs: "s2" } });
+  document.body.querySelectorAll("[data-testid$=-dialog]").forEach((d) => d.remove());
+});
+
+it("right click on a local branch chip offers Push, Force push and Pull; a remote chip only Fetch", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(chip("refs/heads/main"));
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([{ type: "git.branch", cwd: "/p", ref: "refs/heads/main" }]);
+  expect(itemTexts()).toEqual(expect.arrayContaining(["Push", "Force push…", "Pull", "Fetch all remotes"]));
+  expect(items().every((i) => !i.hasAttribute("data-disabled"))).toBe(true);
+  await closeMenu();
+  c.sent.length = 0;
+  await menuAt(chip("refs/remotes/origin/main"));
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
+  expect(byId("branch-push")).toBeNull();
+  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
+  expect(byId("branch-none").hasAttribute("data-disabled")).toBe(true);
+});
+
+/** A touch held on `target`: pointerdown and touchstart, then the 500 ms long press timer of the menu; no `contextmenu` event (emulated and some real long presses fire none). */
+const longPress = async (target: Element) => {
+  const touch = { identifier: 1, target, clientX: 5, clientY: 5 };
+  await act(async () => {
+    target.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+    const ev = new Event("touchstart", { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, "touches", { value: [touch] });
+    target.dispatchEvent(ev);
+    await new Promise((r) => setTimeout(r, 650));
+  });
+  await flush();
+};
+
+it("a long press on a branch chip with touch (no contextmenu event) opens the full menu for that chip", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await longPress(chip("refs/heads/main"));
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([{ type: "git.branch", cwd: "/p", ref: "refs/heads/main" }]);
+  expect(itemTexts()).toEqual(expect.arrayContaining(["Push", "Force push…", "Pull", "Fetch all remotes"]));
+});
+
+it("a long press on a row with touch targets the row's local branches; on a remote chip only Fetch", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await longPress(rowEls()[1]!);
+  expect(c.sent.filter((m) => m.type === "git.branch").map((m) => m.ref)).toEqual(["refs/heads/feat"]);
+  await closeMenu();
+  c.sent.length = 0;
+  await longPress(chip("refs/remotes/origin/main"));
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
+  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
+});
+
+it("the group header keeps the branch name and the ownership note on separate lines", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  branchInfo = () => infoMain({ checkedOut: undefined });
+  await menuAt(chip("refs/heads/main"));
+  const head = byId("branch-menu-head");
+  expect([...head.children].map((x) => x.textContent)).toEqual(["main", "not checked out here"]);
+});
+
+it("a row right click targets its local branches; Shift+F10 on the list targets the selected row", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(rowEls()[1]!);
+  expect(c.sent.filter((m) => m.type === "git.branch").map((m) => m.ref)).toEqual(["refs/heads/feat"]);
+  await closeMenu();
+  c.sent.length = 0;
+  await select(0);
+  await act(async () => void list().dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
+  await menuAt(list());
+  expect(c.sent.filter((m) => m.type === "git.branch").map((m) => m.ref)).toEqual(["refs/heads/main"]);
+});
+
+it("a right click or long press on empty list space does not target the selected row", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await select(0);
+  c.sent.length = 0;
+  await act(async () => void list().dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true })));
+  await menuAt(list());
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
+  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
+  await closeMenu();
+  await longPress(list());
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
+  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
+});
+
+it("Force push asks first: the dialog shows the exact command; Cancel runs nothing; Confirm sends git.push with the lease and reloads fresh", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-force-push").click());
+  const dlg = byId("git-force-push-dialog");
+  expect(dlg.textContent).toContain(`git push --force-with-lease=refs/heads/main:${hash(2)} origin ${MAIN_ARGV}`);
+  expect(byId("git-command").textContent).toContain("--force-with-lease");
+  await act(async () => byId("git-force-push-cancel").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.push")).toEqual([]);
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-force-push").click());
+  c.sent.length = 0;
+  await act(async () => byId("git-force-push-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.push")).toEqual([{ type: "git.push", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().forcePush, lease: hash(2) }]);
+  expect(c.sent.at(-1)).toMatchObject({ type: "git.log", skip: 0, fresh: true });
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Pushed main");
+});
+
+it("Push and Pull confirm with the exact command too; Pull sends git.pull", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-push").click());
+  expect(byId("git-command").textContent).toBe(`git push origin ${MAIN_ARGV}`);
+  await act(async () => byId("git-push-cancel").click());
+  await flush();
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-pull").click());
+  expect(byId("git-command").textContent).toBe("git pull --no-rebase --ff-only origin refs/heads/main");
+  await act(async () => byId("git-pull-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.pull")).toEqual([{ type: "git.pull", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().pull }]);
+  expect(c.sent.filter((m) => m.type === "git.push")).toEqual([]);
+});
+
+it("a branch not checked out here says so in the menu and the dialog; one in another worktree disables Pull with the reason", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  branchInfo = () => infoMain({ checkedOut: undefined, pull: ["fetch", "origin", "refs/heads/main:refs/heads/main"] });
+  await menuAt(chip("refs/heads/main"));
+  expect(document.body.textContent).toContain("not checked out here");
+  await act(async () => byId("branch-push").click());
+  expect(byId("git-push-dialog").textContent).toContain("main is not checked out here");
+  await act(async () => byId("git-push-cancel").click());
+  await flush();
+  branchInfo = () => infoMain({ checkedOut: "/work/wt", pull: undefined, why: { pull: "Checked out in /work/wt: pull there" } });
+  await menuAt(chip("refs/heads/main"));
+  expect(document.body.textContent).toContain("checked out in wt");
+  expect(byId("branch-pull").hasAttribute("data-disabled")).toBe(true);
+  expect(byId("branch-pull").textContent).toContain("Checked out in /work/wt: pull there");
+});
+
+it("a rejected push shows git's message and still reloads", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  writeReply = () => Promise.reject(Object.assign(new Error("! [rejected] main -> main (non-fast-forward)"), { code: "git_failed" }));
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-push").click());
+  c.sent.length = 0;
+  await act(async () => byId("git-push-confirm").click());
+  await flush();
+  expect(el.querySelector("[role=alert]")!.textContent).toContain("non-fast-forward");
+  expect(c.sent.at(-1)).toMatchObject({ type: "git.log", fresh: true });
+});
+
+it("menu items are disabled while a remote operation runs", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  fetchReply = () => new Promise(() => {});
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=graph-fetch]")!.click());
+  await menuAt(chip("refs/heads/main"));
+  expect(items().length).toBeGreaterThan(0);
+  expect(items().every((i) => i.hasAttribute("data-disabled"))).toBe(true);
+  fetchReply = async () => ({ remote: { output: "", refs: null } });
+});
+
+it("Push (plain) sends the plain push argv, not the force one, and no lease", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-push").click());
+  c.sent.length = 0;
+  await act(async () => byId("git-push-confirm").click());
+  await flush();
+  const sent = c.sent.filter((m) => m.type === "git.push");
+  expect(sent).toEqual([{ type: "git.push", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().push }]);
+  expect(sent[0]).not.toHaveProperty("lease");
+  expect(JSON.stringify(sent[0])).not.toContain("force-with-lease");
+});
+
+it("a click on empty list space then Shift+F10 opens the selected row's branches, not an empty menu", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await select(0);
+  // The press on empty space leaves a press with no target; the key press clears it.
+  await act(async () => void list().dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true })));
+  c.sent.length = 0;
+  await act(async () => void list().dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
+  await menuAt(list());
+  expect(c.sent.filter((m) => m.type === "git.branch").map((m) => m.ref)).toEqual(["refs/heads/main"]);
+  expect(itemTexts()).toEqual(expect.arrayContaining(["Push", "Force push…", "Pull"]));
+});
+
+it("the command block wraps at spaces (a long -c prefix is not cut mid-word)", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-push").click());
+  const cls = byId("git-command").className;
+  expect(cls).toContain("whitespace-pre-wrap");
+  expect(cls).toContain("[overflow-wrap:anywhere]");
+  expect(cls).not.toContain("break-all");
+  await act(async () => byId("git-push-cancel").click());
+  await flush();
 });

@@ -66,3 +66,21 @@ describe("wsl-git runner", () => {
     expect(res.split("\0").slice(0, -1)).toEqual(args);
   });
 });
+
+describe("wslEnv remote switches", () => {
+  it("forwards the no-prompt switches and only our BatchMode ssh command", async () => {
+    const { wslEnv } = await import("../src/wsl-git.ts");
+    const { BATCH_SSH } = await import("../src/git-runner.ts");
+    expect(wslEnv({ GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", GIT_SSH_COMMAND: BATCH_SSH }, "Ubuntu")).toEqual({ GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", GIT_SSH_COMMAND: BATCH_SSH });
+    expect(wslEnv({ GIT_SSH_COMMAND: "C:\\ssh.exe" }, "Ubuntu")).toEqual({});
+  });
+
+  it("a wsl project's fetch still routes through the wsl runner with the no-prompt env", async () => {
+    const { wslGitRunner } = await import("../src/wsl-git.ts");
+    const { BATCH_SSH } = await import("../src/git-runner.ts");
+    const seen: GitRunOptions[] = [];
+    const r = wslGitRunner({ local: async () => ({ stdout: Buffer.alloc(0), stderr: "" }), side: () => "s1", sideRun: async (_id, o) => (seen.push(o), { stdout: Buffer.alloc(0), stderr: "" }) });
+    await r({ cwd: "\\\\wsl$\\Ubuntu\\home\\u\\p", args: ["fetch", "--all"], env: { GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", GIT_SSH_COMMAND: BATCH_SSH } });
+    expect(seen[0]).toMatchObject({ cwd: "/home/u/p", args: ["fetch", "--all"], env: { GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", GIT_SSH_COMMAND: BATCH_SSH } });
+  });
+});

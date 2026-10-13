@@ -1054,6 +1054,31 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.status", cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
   });
 
+  it("answers git.fetch for a cwd inside the roots only", async () => {
+    const c = await client();
+    expect(await c.request({ type: "git.fetch", cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+    expect(await c.request({ type: "git.fetch", cwd: webRoot })).toMatchObject({ result: { remote: null } });
+  });
+
+  it("answers git.branch, git.push and git.pull for a cwd inside the roots only, with checked arguments", async () => {
+    const c = await client();
+    const ref = "refs/heads/main";
+    const local = "a".repeat(40);
+    const outside = join(webRoot, "..");
+    for (const m of [{ type: "git.branch", ref }, { type: "git.push", ref, local, argv: [] }, { type: "git.pull", ref, local, argv: [] }]) {
+      expect(await c.request({ ...m, cwd: outside })).toMatchObject({ code: "cwd_not_allowed" });
+    }
+    expect(await c.request({ type: "git.branch", cwd: webRoot, ref })).toMatchObject({ result: { branch: null } });
+    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local, argv: [] })).toMatchObject({ result: { remote: null } });
+    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [] })).toMatchObject({ result: { remote: null } });
+    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local: "nope", argv: [] })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local: 5, argv: [] })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [1] })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.branch", cwd: webRoot, ref: 7 })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.branch", cwd: webRoot, ref: "HEAD" })).toMatchObject({ code: "bad_request" });
+  });
+
   it("answers git.log, git.commit and git.fileAt for a cwd inside the roots only", async () => {
     const c = await client();
     expect(await c.request({ type: "git.log", cwd: webRoot })).toMatchObject({ result: { log: null } });

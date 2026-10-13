@@ -77,7 +77,7 @@ const pinFor = (r: Repo): NodeJS.ProcessEnv => {
     ...(up !== r.top && { GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES ? `${up}${delimiter}${process.env.GIT_CEILING_DIRECTORIES}` : up }),
   };
 };
-const ceilingEnv = async (cwd: string): Promise<NodeJS.ProcessEnv> => {
+export const ceilingEnv = async (cwd: string): Promise<NodeJS.ProcessEnv> => {
   const top = await gitTopOf(cwd);
   if (!top) return {};
   const kept = pins.get(top);
@@ -288,7 +288,7 @@ export async function listWorktrees(cwd: string): Promise<Worktree[] | null> {
 
 // ---- Worktree create / remove (docs/spec.md "Worktrees") ----
 
-export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "bad_request" | "not_found" | "too_large";
+export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "bad_request" | "not_found" | "too_large" | "busy" | "stale" | "remote_not_allowed";
 export class WorktreeError extends Error {
   constructor(readonly code: WorktreeErrorCode, message: string, readonly size?: number) {
     super(message);
@@ -309,8 +309,8 @@ const inside = (root: string, p: string) => {
   const r = relative(root, p);
   return r === "" || (!r.startsWith("..") && !isAbsolute(r));
 };
-const realAsync = (p: string) => realpath(p).catch(() => p);
-const real = (p: string) => {
+export const realAsync = (p: string) => realpath(p).catch(() => p);
+export const real = (p: string) => {
   try {
     return realpathSync(p);
   } catch {
@@ -601,7 +601,7 @@ export async function gitEscapes(cwd: string, allowed: (p: string) => boolean): 
  * A cwd inside the roots whose repository (top, git dirs, alternates) is outside must not expose files outside the roots
  * through git objects. The values checked are the ones git then gets (`pins`): no gap for a `.git` swap.
  */
-async function topIn(cwd: string, allowed: (p: string) => boolean): Promise<string | null> {
+export async function topIn(cwd: string, allowed: (p: string) => boolean): Promise<string | null> {
   const top = await gitTopOf(cwd);
   if (!top) return null;
   if (!allowed(top)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
@@ -835,7 +835,7 @@ export async function gitFileAt(cwd: string, hash: string, path: string, allowed
 }
 
 /** `refs/heads/x` / `refs/remotes/o/x` to `x` / `o/x`. */
-const shortRef = (r: string) => r.replace(/^refs\/(heads|remotes)\//, "");
+export const shortRef = (r: string) => r.replace(/^refs\/(heads|remotes)\//, "");
 /** A full branch ref the caller named: refs/heads or refs/remotes, a valid name, existing. */
 async function checkBranchRef(top: string, ref: unknown, branches?: string[]): Promise<string> {
   const shaped = typeof ref === "string" && ref.length <= 255 && /^refs\/(heads|remotes)\/[^\0-\x20\x7f~^:?*[\\]+$/.test(ref) && !ref.includes("..") && !ref.includes("@{") && !ref.endsWith("/") && !ref.endsWith(".lock") && !ref.endsWith(".");

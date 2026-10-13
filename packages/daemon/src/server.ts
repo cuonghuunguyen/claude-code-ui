@@ -14,7 +14,8 @@ import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
-import { createWorktree, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, isHash, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -1801,6 +1802,33 @@ export function createDaemon(opts: {
             return "code" in t ? fail(t.code, `${t.code === "binary" ? "binary file" : "not UTF-8 text"}: ${msg.path}`, buf.length) : reply({ content: t.content });
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message, e instanceof WorktreeError ? e.size : undefined);
+          }
+        }
+        case "git.fetch": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          const inside = (p: string) => inRoots(real(p) ?? p);
+          // Output and URLs are never logged.
+          try {
+            return reply({ remote: await gitFetch(cwd, { allowed: inside }) });
+          } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.branch":
+        case "git.push":
+        case "git.pull": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          const inside = (p: string) => inRoots(real(p) ?? p);
+          try {
+            if (msg.type === "git.branch") return reply({ branch: await gitBranch(cwd, msg.ref, { allowed: inside }) });
+            if (typeof msg.ref !== "string" || !isHash(msg.local) || !Array.isArray(msg.argv) || !msg.argv.every((a) => typeof a === "string") || (msg.type === "git.push" && msg.lease !== undefined && !isHash(msg.lease))) return fail("bad_request", "ref, local, lease and argv must be a branch, full commit hashes and the shown command");
+            // Output and URLs are never logged.
+            const remote = msg.type === "git.push" ? await gitPush(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, lease: msg.lease, allowed: inside }) : await gitPull(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, allowed: inside });
+            return reply({ remote });
+          } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }
         case "worktree.create":

@@ -2,9 +2,9 @@
 // distro, never Windows git over the UNC path (spawn refuses a UNC cwd; safe.directory; slow).
 import { homedir } from "node:os";
 import { wslPathOf } from "@claude-ui/protocol";
-import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
+import { BATCH_SSH, type GitRunOptions, type GitRunOutput, type GitRunner } from "./git-runner.ts";
 
-const FORWARD_ENV = ["GIT_TERMINAL_PROMPT", "GIT_NO_LAZY_FETCH", "GIT_OPTIONAL_LOCKS"];
+const FORWARD_ENV = ["GIT_TERMINAL_PROMPT", "GIT_NO_LAZY_FETCH", "GIT_OPTIONAL_LOCKS", "GIT_ASKPASS", "SSH_ASKPASS", "GCM_INTERACTIVE"];
 /** The repository pin of git.ts (`pinFor`): paths git must use as they are, never re-discovered. */
 const PIN_ENV = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
 /** A pin value that is no path in the distro: git is not run (an unpinned git would re-discover the repository, #317). */
@@ -27,6 +27,8 @@ const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
  */
 export function wslEnv(env: NodeJS.ProcessEnv, distro: string): Record<string, string> {
   const out: Record<string, string> = Object.fromEntries(FORWARD_ENV.filter((k) => env[k] !== undefined).map((k) => [k, env[k]!]));
+  // A Windows ssh path means nothing in Linux: only our own BatchMode command crosses.
+  if (env.GIT_SSH_COMMAND === BATCH_SSH) out.GIT_SSH_COMMAND = BATCH_SSH;
   for (const k of PIN_ENV) {
     const v = env[k];
     if (v === undefined) continue;
