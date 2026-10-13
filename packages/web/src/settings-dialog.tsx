@@ -361,16 +361,16 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       </div>
       <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
         <div className="min-w-0 flex-1">
-          <span id="settings-sidebar-layout-label" className="block text-sm">Layout</span>
-          <span id="settings-sidebar-layout-hint" className="block text-muted-foreground text-xs">Default groups a project's sessions by worktree. Classic lists them directly under the project, with each session's state as text. Kept in this browser.</span>
+          <span id="settings-sidebar-layout-label" className="block text-sm">Group by</span>
+          <span id="settings-sidebar-layout-hint" className="block text-muted-foreground text-xs">Worktree groups a project's sessions by worktree. Project lists them directly under the project, with each session's state as text. Kept in this browser.</span>
         </div>
         <Select value={layout} onValueChange={(v) => v && saveSidebarView({ ...loadSidebarView(), layout: v as "default" | "classic" })}>
           <SelectTrigger aria-labelledby="settings-sidebar-layout-label" aria-describedby="settings-sidebar-layout-hint" data-testid="settings-sidebar-layout" className="w-40 max-md:data-[size=default]:h-11">
-            <SelectValue>{(v: string) => (v === "classic" ? "Classic" : "Default")}</SelectValue>
+            <SelectValue>{(v: string) => (v === "classic" ? "Project" : "Worktree")}</SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="default" data-testid="settings-sidebar-layout-default">Default</SelectItem>
-            <SelectItem value="classic" data-testid="settings-sidebar-layout-classic">Classic</SelectItem>
+            <SelectItem value="default" data-testid="settings-sidebar-layout-default">Worktree</SelectItem>
+            <SelectItem value="classic" data-testid="settings-sidebar-layout-classic">Project</SelectItem>
           </SelectContent>
         </Select>
       </div>

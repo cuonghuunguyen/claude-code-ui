@@ -47,4 +47,4 @@ On a phone, tap the tab switcher to see all tabs. Swipe a row left to close it. 
 - `/clear` (or `/reset`, `/new`) starts a fresh session in the same tab and keeps what you typed.
 - **Idle close:** a session that no tab shows closes its Claude process after 10 minutes idle. It stays in the list. The next prompt resumes it. Change the time with [`CLAUDE_UI_IDLE_CLOSE_MINUTES`](../reference/cli#environment-variables).
 - Change how tabs group (by project, by worktree, or none) and turn on **Compact tabs** in [Settings › Tabs](../reference/settings#tabs).
-- Sidebar layouts **Default** and **Classic**, and "Show only active sessions", are in [Settings › Sidebar](../reference/settings#sidebar).
+- Sidebar grouping **Worktree** and **Project** (also in the sidebar options menu), and "Show only active sessions", are in [Settings › Sidebar](../reference/settings#sidebar).
