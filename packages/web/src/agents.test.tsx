@@ -465,3 +465,50 @@ it("worker rows are 44px targets on touch", async () => {
   await click($("agent-closed")!);
   for (const row of [...$$("agent-worker"), $("agent-closed")!, $("agent-workers")!]) expect(row.className).toContain("pointer-coarse:min-h-11");
 });
+
+it("keyboard focus: a focused worker that moves into the collapsed Closed group leaves focus on the Closed header, arrow keys keep working", async () => {
+  await mountWorkers();
+  await click($("agents-button")!);
+  await act(async () => $$("agent-worker")[0]!.focus());
+  replies["session.list"] = listOf(coordinatorItem, worker(W1, "alpha", { live: false }), worker(W2, "beta"), worker(W3, "gamma", { live: false }));
+  await sendTo(W1, { type: "session_state", id: "session_state", state: "idle" });
+  await act(async () => changed({ type: "sessions.changed" }));
+  expect(workerRows()).toEqual(["beta, worker, Idle"]);
+  expect(document.activeElement).toBe($("agent-closed"));
+  await key(document.activeElement!, "ArrowUp");
+  expect(document.activeElement).toBe($$("agent-worker")[0]);
+});
+
+it("sidebar worker rows say closed for a worker without a CLI process, as the map does", async () => {
+  await mountWorkers();
+  const row = (name: string) => document.querySelector<HTMLElement>(`[aria-label^="${name}, worker"]`)?.getAttribute("aria-label");
+  expect(row("gamma")).toMatch(/^gamma, worker, closed/);
+  expect(row("beta")).toMatch(/^beta, worker, idle/);
+  expect(row("alpha")).toMatch(/^alpha, worker, running/);
+});
+
+it("reopening the map before a worker row's close animation ended does not open that worker on the next close", async () => {
+  await mountWorkers();
+  await click($("agents-button")!);
+  // A running close animation: Base UI waits for `finished` before it reports the map closed.
+  let finish!: () => void;
+  const gate = new Promise<void>((r) => (finish = r));
+  const proto = Element.prototype as { getAnimations?: () => unknown[] };
+  const before = proto.getAnimations;
+  proto.getAnimations = function (this: Element) {
+    return this.getAttribute("data-testid") === "agent-map" && this.hasAttribute("data-closed") ? [{ finished: gate }] : [];
+  };
+  try {
+    await click($$("agent-worker")[1]!);
+    expect(location.hash).toBe(`#${ID}`);
+    await click(shownButton());
+    finish();
+    await act(async () => void (await new Promise((r) => setTimeout(r, 20))));
+    expect(location.hash).toBe(`#${ID}`);
+    await key(document.activeElement ?? document.body, "Escape");
+    await act(async () => void (await new Promise((r) => setTimeout(r, 20))));
+    expect(location.hash).toBe(`#${ID}`);
+  } finally {
+    proto.getAnimations = before;
+  }
+});

@@ -325,8 +325,8 @@ export function createDaemon(opts: {
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
     onLimitStop: (id: string, resetsAt: number | undefined) => autoContinue.schedule(id, resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined)),
     allowBypass: opts.allowBypass,
-    // A session without a CLI process lists as live: false.
-    onDropped: () => broadcast({ type: "sessions.changed" }),
+    // `live` of the session list changed (CLI started or dropped).
+    onLiveChange: () => broadcast({ type: "sessions.changed" }),
     supportsAuto,
     uploadDir: (id: string) => {
       try {

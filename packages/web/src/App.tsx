@@ -68,7 +68,7 @@ import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
 import { noteRefs } from "./git-refs.ts";
-import { agentLinks, NO_LINKS, sameLinks, type AgentLinks } from "./workers.ts";
+import { agentLinks, NO_LINKS, sameLinks, workerState, type AgentLinks } from "./workers.ts";
 import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
@@ -1656,7 +1656,7 @@ export function App() {
               list={list}
               projects={projects}
               worktrees={worktrees}
-              state={(s) => shownState(views[s.id]) ?? s.state}
+              state={(s) => (s.coordinatorId ? workerState(s, views[s.id]) : (shownState(views[s.id]) ?? s.state))}
               titleLoading={(s) => titleLoading(s.title, prompted.has(s.id))}
               unread={unread}
               activeId={activeId}

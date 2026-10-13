@@ -146,7 +146,11 @@ export function AgentsButton({ view, current, onOpen, side = "top" }: { view: Se
   return (
     <Popover.Root
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(o) => {
+        // Reopened before the close of a worker row finished: that worker is no longer wanted.
+        if (o) target.current = undefined;
+        setOpen(o);
+      }}
       onOpenChangeComplete={(o) => {
         if (o || !target.current) return;
         const id = target.current;
@@ -192,17 +196,23 @@ export function AgentsButton({ view, current, onOpen, side = "top" }: { view: Se
   );
 }
 
+const rowKey = (r: Node) => (r.kind === "run" ? r.run.id : r.kind === "worker" ? `w:${r.worker.id}` : r.kind);
+
 function AgentTree({ view, current, links, onOpen, onOpenSession, onClose }: { view: SessionView; current?: string; links: AgentLinks; onOpen: (id?: string) => void; onOpenSession: (id: string) => void; onClose: () => void }) {
   const [closedOpen, setClosedOpen] = useState(false);
   const rows = flatten(view, links, closedOpen);
   const now = useNow(rows.some((r) => r.kind === "run" && isRunning(r.run)));
   const found = rows.findIndex((r) => r.kind === "run" && r.run.id === current);
   const start = found >= 0 ? found : rows.findIndex((r) => r.kind === "session");
-  const [focus, setFocus] = useState(start);
+  // The focused row by key: a worker that moves into the collapsed Closed group leaves the rows, focus goes to that group's header.
+  const [focusKey, setFocusKey] = useState(rowKey(rows[start]!));
+  const setFocus = (i: number) => setFocusKey(rowKey(rows[i]!));
   const items = useRef<(HTMLLIElement | null)[]>([]);
-  const at = Math.min(focus, rows.length - 1);
+  const foundAt = rows.findIndex((r) => rowKey(r) === focusKey);
+  const fallback = ["closed", "workers", "session"].map((k) => rows.findIndex((r) => r.kind === k)).find((i) => i >= 0)!;
+  const at = foundAt >= 0 ? foundAt : fallback;
   // The popup opens with the current node focused, so the arrow keys work at once.
-  useEffect(() => void items.current[at]?.focus(), [at]);
+  useEffect(() => void items.current[at]?.focus(), [at, focusKey, rows.length]);
   const activate = (row: Node) => {
     if (row.kind === "run") onOpen(row.run.id);
     else if (row.kind === "session") onOpen(undefined);
@@ -248,7 +258,7 @@ function AgentTree({ view, current, links, onOpen, onOpenSession, onClose }: { v
         const testId = r.kind === "run" || r.kind === "session" ? "agent-node" : `agent-${r.kind}`;
         return (
           <li
-            key={r.kind === "run" ? r.run.id : r.kind === "worker" ? `w:${r.worker.id}` : r.kind}
+            key={rowKey(r)}
             ref={(el) => void (items.current[i] = el)}
             role="treeitem"
             aria-level={r.level}
