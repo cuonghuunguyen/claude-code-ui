@@ -32,8 +32,9 @@ export type SessionInfo = {
  * `archived`: hidden from the list unless the archived filter is on (SDK session tag "archived").
  * `transcript`: false until the first prompt; such a session cannot be renamed or archived (the SDK has no file to write to).
  * `coordinator`: started as coordinator; `coordinatorId` + `workerName`: a worker's link (sessions.json, survives restarts).
+ * `live`: false when the session has no CLI process in this daemon (never prompted, `worker_close`, idle close, CLI ended, not loaded); absent while one runs (and from older daemons).
  */
-export type SessionListItem = SessionInfo & { title: string; lastActivity: number; archived: boolean; transcript: boolean; coordinator?: true; coordinatorId?: string; workerName?: string };
+export type SessionListItem = SessionInfo & { title: string; lastActivity: number; archived: boolean; transcript: boolean; coordinator?: true; coordinatorId?: string; workerName?: string; live?: false };
 export type FsEntry = { name: string; path: string; isDir: boolean };
 
 /**

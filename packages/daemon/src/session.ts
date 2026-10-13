@@ -74,6 +74,8 @@ type SessionOpts = Partial<SessionSettings> & {
   query?: typeof sdkQuery;
   onSettings?: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => void;
   onCleared?: (heir: Session) => void;
+  /** A CLI process started or was dropped (worker_close, Plugins Restart, idle close, rewind): the session's `live` changed, the daemon re-lists it. */
+  onLiveChange?: (id: string) => void;
   /** The turn just ended because the plan usage limit was hit (assistant error rate_limit); `resetsAt` ms from its rejected rate_limit_event. */
   onLimitStop?: (id: string, resetsAt: number | undefined) => void;
   /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */
@@ -318,6 +320,7 @@ export class Session {
     if (!this.started) this.settingsChanged([]);
     this.started = true;
     this.driving = this.drive(q);
+    this.opts.onLiveChange?.(this.id);
     // Later changes arrive as system/commands_changed through drive().
     q.supportedCommands().then(
       (list) => this.adapter.commands(list).forEach((p) => this.emit(p)),
@@ -658,6 +661,7 @@ export class Session {
   /** Closes the live query for good; the next prompt starts a fresh one that resumes the transcript. */
   private dropQuery() {
     const hadTasks = this.tasks.size > 0;
+    const hadQuery = !!this.query;
     this.generation++;
     this.query?.close();
     this.query = undefined;
@@ -668,6 +672,8 @@ export class Session {
     for (const part of this.adapter.endCalls()) this.emit(part);
     this.input = new InputQueue();
     if (hadTasks) this.setState(this.state); // clients drop `working`
+    // Nothing to drop (a transcript sync, Plugins Restart of a session without a CLI): `live` did not change.
+    if (hadQuery) this.opts.onLiveChange?.(this.id);
   }
 
   /** Drops this prompt and everything after it from the timeline (a `rewind` event). */

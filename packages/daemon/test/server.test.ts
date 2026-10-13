@@ -565,6 +565,20 @@ describe("daemon", () => {
       expect(sub.result.session).toMatchObject({ effort: "default", permissionMode: "default", model: "default" });
       second.d.close();
     });
+
+    it("session.list gives a session without a CLI process live: false (before its first prompt, not loaded); a running one has no live", async () => {
+      const unloaded = uuid(99);
+      const first = await daemon(file(), [{ sessionId: unloaded, cwd: webRoot }]);
+      const idle = ((await first.c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      const ran = ((await first.c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      await first.c.request({ type: "session.prompt", sessionId: ran, text: "hi" });
+      const items = async (c: typeof first.c) => ((await c.request({ type: "session.list" })) as { result: { sessions: { id: string; live?: false }[] } }).result.sessions;
+      const l1 = await items(first.c);
+      expect(l1.find((s) => s.id === idle)?.live).toBe(false);
+      expect(l1.find((s) => s.id === unloaded)?.live).toBe(false);
+      expect(l1.find((s) => s.id === ran)?.live).toBeUndefined();
+      first.d.close();
+    });
   });
 
   it("session.list names the modes a new session may start in: bypassPermissions only when the daemon enables it", async () => {
@@ -4227,6 +4241,20 @@ describe("idle close", () => {
   };
   const closes = (id: string) => closedQueries.filter((o) => o.sessionId === id || o.resume === id).length;
   const turns = (c: Awaited<ReturnType<typeof client>>, id: string) => c.inbox.filter((m) => m.type === "event" && m.sessionId === id && m.part.type === "turn_result").length;
+
+  it("idle close broadcasts sessions.changed and lists the session live: false", async () => {
+    const { c, id } = await open();
+    await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+    await c.request({ type: "session.prompt", sessionId: id, text: "hi" });
+    await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+    const item = async () => ((await c.request({ type: "session.list" })) as { result: { sessions: { id: string; live?: false }[] } }).result.sessions.find((s) => s.id === id);
+    expect((await item())?.live).toBeUndefined();
+    const seen = c.inbox.length;
+    await c.request({ type: "session.unsubscribe", sessionId: id });
+    await vi.waitFor(() => expect(closes(id)).toBe(1), { timeout: 3000 });
+    await vi.waitFor(() => expect(c.inbox.slice(seen).some((m) => m.type === "sessions.changed")).toBe(true));
+    expect((await item())?.live).toBe(false);
+  });
 
   it("an idle session no tab holds closes its CLI after the idle time; the next prompt resumes it", async () => {
     const { c, id } = await open();
