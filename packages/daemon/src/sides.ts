@@ -906,12 +906,28 @@ export function createRouter(opts: {
     }
     return out;
   }
-  let lookingUp: Promise<unknown> | undefined;
-  /** Each side's list, claimed by the list rules: the hub finds an unlisted ID without sending it to any side (GH-328). One round at a time. */
-  const lookUp = () =>
-    (lookingUp ??= Promise.all([...conns.keys()].map(async (id) => [id, await sideCall(id, { type: "session.list", reqId: "" } as ClientMessage, opts.lookupTimeoutMs ?? LOOKUP_TIMEOUT_MS)] as const))
-      .then((answers) => claimListed(answers, new Set()))
-      .finally(() => (lookingUp = undefined)));
+  /** Session IDs side `id` has: `session.ids`; an older side without it: the IDs of its list (added projects only). None on error or timeout. */
+  async function idsOf(id: string): Promise<Set<string>> {
+    const t = opts.lookupTimeoutMs ?? LOOKUP_TIMEOUT_MS;
+    const a = await sideCall(id, { type: "session.ids", reqId: "" } as ClientMessage, t);
+    const r = a.type === "reply" ? (a.result as { ids?: unknown } | null) : undefined;
+    if (Array.isArray(r?.ids)) return new Set(r.ids.filter((x): x is string => typeof x === "string"));
+    if (a.type !== "error" || a.code !== "unknown_type") return new Set();
+    const l = await sideCall(id, { type: "session.list", reqId: "" } as ClientMessage, t);
+    const rows = l.type === "reply" ? (l.result as ListLike | null)?.sessions : undefined;
+    return new Set(Array.isArray(rows) ? rows.map((x) => x.id) : []);
+  }
+  let round: Promise<Map<string, Set<string>>> | undefined;
+  /** Every side's session IDs; one round at a time, shared by concurrent lookups. */
+  const idsRound = () => (round ??= Promise.all([...conns.keys()].map(async (id) => [id, await idsOf(id)] as const)).then((e) => new Map(e)).finally(() => (round = undefined)));
+  /** Finds the side of an unlisted session ID without sending it to any side (GH-328): one side having it gets it, two or more contest it. */
+  async function lookUp(sessionId: string) {
+    const by = await idsRound();
+    if (sides.sessionSide.has(sessionId) || sides.contested.has(sessionId)) return;
+    const having = [...by].filter(([, ids]) => ids.has(sessionId)).map(([id]) => id);
+    if (having.length > 1) sides.contest(sessionId, having);
+    else if (having.length === 1) await claimSession(having[0]!, sessionId);
+  }
 
   /** The side a message goes to. */
   async function target(msg: ClientMessage & Record<string, unknown>): Promise<string | null> {
@@ -922,7 +938,7 @@ export function createRouter(opts: {
       if (sides.contested.has(msg.sessionId) && !(await opts.isLocalSession(msg.sessionId))) return null;
       if (conns.size && !(await opts.isLocalSession(msg.sessionId))) {
         // A link or notification to a side session this connection has not listed yet: list every side, never send the ID to one (GH-328).
-        await lookUp();
+        await lookUp(msg.sessionId);
         const owner = sides.sessionSide.get(msg.sessionId);
         if (owner) return owner;
         if (sides.contested.has(msg.sessionId)) return null;

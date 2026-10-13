@@ -248,7 +248,7 @@ describe("side session ownership (GH-279)", () => {
 
   it("a hub request is answered by the side it was sent to only", async () => {
     // Side a never answers its list; side b answers with a's hub reqId.
-    const a = fakeSide((m) => (m.type === "session.list" ? undefined : null));
+    const a = fakeSide((m) => (m.type === "session.list" || m.type === "session.ids" ? undefined : null));
     const b = fakeSide((m) => (m.type === "session.list" ? undefined : null));
     const t = await setup(a, b);
     const done = t.router.handle({ type: "session.list", reqId: "L" } as never);
@@ -335,12 +335,12 @@ describe("side session ownership (GH-279)", () => {
       expect(t.sent.filter((m) => m.type === "event")).toHaveLength(1);
     });
 
-    it("a link to an unlisted side session: the lookup list claims it", async () => {
+    it("a link to an unlisted side session: the lookup claims it", async () => {
       const a = fakeSide((m) => (m.type === "session.subscribe" ? { session: { id: A1, cwd: "/a" } } : lists(A1)(m)));
       const t = await setup(a);
       await t.req({ type: "session.subscribe", sessionId: A1, sinceSeq: 0 });
       expect(t.sides.sessionSide.get(A1)).toBe("docker:a");
-      expect(frames(a, "session.list")).toHaveLength(1);
+      expect(frames(a, "session.ids")).toHaveLength(1);
       expect(frames(a, "session.subscribe")).toHaveLength(1);
     });
 
@@ -470,12 +470,13 @@ function hostile() {
   return fakeSide((m) => {
     if (typeof m.sessionId === "string") seen.add(m.sessionId);
     if (m.type === "session.subscribe") return { session: { id: m.sessionId, cwd: "/ct" } };
+    if (m.type === "session.ids") return { ids: [...seen] };
     if (m.type === "session.list") return { sessions: [...seen].map((id) => ({ id, cwd: "/ct", lastActivity: 9 })), projects: [], recentProjects: [] };
     return null;
   });
 }
 const seenId = (s: ReturnType<typeof fakeSide>, id: string) => s.got.some((m) => JSON.stringify(m).includes(id));
-const lists = (...ids: string[]) => (m: any) => (m.type === "session.list" ? { sessions: ids.map((id) => ({ id, cwd: "/ct", lastActivity: 1 })), projects: [], recentProjects: [] } : null);
+const lists = (...ids: string[]) => (m: any) => (m.type === "session.ids" ? { ids } : m.type === "session.list" ? { sessions: ids.map((id) => ({ id, cwd: "/ct", lastActivity: 1 })), projects: [], recentProjects: [] } : null);
 
 describe("session lookup (GH-321, GH-328)", () => {
   const contested = async () => {
@@ -542,7 +543,7 @@ describe("session lookup (GH-321, GH-328)", () => {
   });
 
   it("a side whose list never answers does not hold the link", async () => {
-    const a = fakeSide((m) => (m.type === "session.list" ? undefined : null));
+    const a = fakeSide((m) => (m.type === "session.list" || m.type === "session.ids" ? undefined : null));
     const b = fakeSide(lists(B1));
     const t = await setup(a, b, undefined, { router: { lookupTimeoutMs: 50 } });
     const r = await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
@@ -550,11 +551,11 @@ describe("session lookup (GH-321, GH-328)", () => {
     expect(r.some((m) => m.type === "reply")).toBe(true);
   });
 
-  it("concurrent lookups share one list round per side", async () => {
+  it("concurrent lookups share one session.ids round per side", async () => {
     const a = fakeSide(lists(A1, B1));
     const t = await setup(a);
     await Promise.all([t.req({ type: "session.subscribe", sessionId: A1, sinceSeq: 0 }), t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 })]);
-    expect(frames(a, "session.list")).toHaveLength(1);
+    expect(frames(a, "session.ids")).toHaveLength(1);
   });
 
   it("two sides listing the same unowned id in one list: neither gets it, with one notice per side", async () => {
@@ -714,5 +715,66 @@ describe("existing sub-folders: the default file system check (GH-328)", () => {
       await t.req({ type: "session.list" });
       expect(t.sides.cwdSide.get(join(home, "notes"))).toBe("docker:a");
     });
+  });
+});
+
+/** A side with B1 on disk in a project that is not added: its list does not name B1, `session.ids` does. `old`: a build without `session.ids`. */
+function unadded(old = false) {
+  const s: ReturnType<typeof fakeSide> = fakeSide((m) => {
+    if (m.type === "session.list") return EMPTY;
+    if (m.type === "session.ids") return old ? (setTimeout(() => s.out({ type: "error", reqId: m.reqId, code: "unknown_type", message: "unknown message type session.ids" })), undefined) : { ids: [B1] };
+    return null;
+  });
+  return s;
+}
+
+describe("lookup of a session in a project not added on its side (GH-328 F1)", () => {
+  it("a link to a side session of a non-added project reaches that side; no other side sees the id", async () => {
+    const a = hostile();
+    const b = unadded();
+    const t = await setup(a, b);
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0, addProject: true });
+    expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
+    expect(frames(b, "session.subscribe").filter((m) => m.sessionId === B1 && m.addProject === true)).toHaveLength(1);
+    expect(frames(b, "session.ids")).toHaveLength(1);
+    expect(seenId(a, B1)).toBe(false);
+    expect(t.localSeen.some((m) => m.type === "session.subscribe")).toBe(false);
+  });
+
+  it("two sides having the id on disk: neither gets it (side_conflict)", async () => {
+    const a = unadded();
+    const b = unadded();
+    const t = await setup(a, b);
+    const r = await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(r).toMatchObject([{ type: "error", code: "side_conflict" }]);
+    expect(t.sides.sessionSide.get(B1)).toBeUndefined();
+  });
+
+  it("an older side without session.ids falls back to its list; the id is still sent to no side", async () => {
+    const a = unadded(true);
+    const b = fakeSide(lists(B1));
+    const t = await setup(a, b);
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
+    expect(seenId(a, B1)).toBe(false);
+  });
+
+  it("an older side without session.ids that lists the id gets the link through its list", async () => {
+    const a = fakeSide((m) => {
+      if (m.type === "session.ids") return void setTimeout(() => a.out({ type: "error", reqId: m.reqId, code: "unknown_type", message: "unknown message type session.ids" }));
+      return lists(B1)(m);
+    });
+    const t = await setup(a);
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(t.sides.sessionSide.get(B1)).toBe("docker:a");
+    expect(frames(a, "session.list").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("the lookup claims only the id looked up, not every id a side has on disk", async () => {
+    const b = fakeSide((m) => (m.type === "session.ids" ? { ids: [B1, A1] } : m.type === "session.list" ? EMPTY : null));
+    const t = await setup(b);
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(t.sides.sessionSide.get(B1)).toBe("docker:a");
+    expect(t.sides.sessionSide.get(A1)).toBeUndefined();
   });
 });

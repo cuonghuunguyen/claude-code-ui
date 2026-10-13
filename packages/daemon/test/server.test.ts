@@ -2110,6 +2110,26 @@ describe("daemon", () => {
       }
     });
 
+    it("session.ids names every session inside the roots, of added projects or not, and none outside", async () => {
+      const [a, b] = [cwdOf("a"), cwdOf("b")];
+      const x = await start(
+        [
+          { sessionId: sid(1), summary: "a1", lastModified: 10, cwd: a },
+          { sessionId: sid(2), summary: "b1", lastModified: 30, cwd: b },
+          { sessionId: sid(3), summary: "a2", lastModified: 20, cwd: a },
+          { sessionId: sid(4), summary: "outside", lastModified: 40, cwd: "/etc" },
+        ],
+        createProjects(),
+      );
+      try {
+        const r = (await x.c.request({ type: "session.ids" })) as { result: { ids: string[] } };
+        expect([...r.result.ids].sort()).toEqual([sid(1), sid(2), sid(3)]);
+        expect((await list(x.c)).sessions).toEqual([]);
+      } finally {
+        x.d.close();
+      }
+    });
+
     it("project.open keeps a project across a restart and moves it from recent to the list with its sessions; project.remove hides it again", async () => {
       const cwd = cwdOf("proj");
       const empty = cwdOf("empty");

@@ -300,12 +300,23 @@ describe("sides", () => {
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });
     sides.sessionSide.delete(sideSession);
     expect(await c.request({ type: "session.subscribe", sessionId: sideSession, sinceSeq: 0 })).toMatchObject({ result: { session: { id: sideSession, cwd: wslRoot } } });
-    // The hub finds the session by listing the side: no side frame names the ID before the list (GH-328).
+    // The hub finds the session by asking the side for its IDs: no side frame names the ID before that (GH-328).
     const at = (re: RegExp) => sideFrames.findIndex((f) => re.test(f));
-    expect(at(/"type":"session\.list"/)).toBeGreaterThanOrEqual(0);
-    expect(at(new RegExp(sideSession))).toBeGreaterThan(at(/"type":"session\.list"/));
+    expect(at(/"type":"session\.ids"/)).toBeGreaterThanOrEqual(0);
+    expect(at(new RegExp(sideSession))).toBeGreaterThan(at(/"type":"session\.ids"/));
     sidePush({ sessionId: sideSession, title: "side work", body: "Finished" });
     await expect.poll(() => pushes).toEqual([{ sessionId: sideSession, title: "side work", body: "Finished" }]);
+    c.ws.close();
+  });
+
+  it("finds a side session of a project that is not added on the side, and adds the project", async () => {
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "project.remove", cwd: wslRoot, side: "wsl:Ubuntu" });
+    expect((await c.request({ type: "session.list" })).result.sessions.map((x: { id: string }) => x.id)).not.toContain(sideSession);
+    sides.sessionSide.delete(sideSession);
+    expect(await c.request({ type: "session.subscribe", sessionId: sideSession, sinceSeq: 0, addProject: true })).toMatchObject({ result: { session: { id: sideSession, cwd: wslRoot } } });
+    expect(sides.sessionSide.get(sideSession)).toBe("wsl:Ubuntu");
     c.ws.close();
   });
 
