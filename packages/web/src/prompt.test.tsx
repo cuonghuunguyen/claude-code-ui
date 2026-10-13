@@ -1012,3 +1012,12 @@ it("GH-77: the desktop placeholder mentions Alt+Enter while running", async () =
   const { box } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
   expect(box.placeholder).toBe("Claude is working… (Enter to steer, Alt+Enter to queue, Esc to stop)");
 });
+
+it("GH-77: Stop, Steer and the send menu trigger are 44px below md and on coarse pointers (also with a fine pointer at 390px)", async () => {
+  const { $, box } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  await type(box, "x");
+  for (const el of [$("toolbar-stop"), $("send"), $("send-menu")]) {
+    expect(el!.className).toMatch(/\bmax-md:size-11\b/);
+    expect(el!.className).toContain("pointer-coarse:size-11");
+  }
+});

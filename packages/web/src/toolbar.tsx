@@ -256,7 +256,7 @@ function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, e
 
 export type SendState = "idle" | "running" | "needs_input" | "disconnected";
 
-const SEND_BASE = `relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-linear-to-b from-white/20 to-transparent shadow-button-contrast ${FOCUS} disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11`;
+const SEND_BASE = `relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-linear-to-b from-white/20 to-transparent shadow-button-contrast ${FOCUS} disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11 max-md:size-11`;
 
 /** OpenCode send/stop button plus the session state: spinner while running, warning color while Claude waits for an answer. */
 function SendButton({ state, hasInput, onSend, onQueue, onStop, onFocusLost }: { state: SendState; hasInput: boolean; onSend: () => void; onQueue?: () => void; onStop: () => void; onFocusLost: () => void }) {
@@ -320,7 +320,7 @@ function SendMenu({ onSteer, onQueue }: { onSteer: () => void; onQueue: () => vo
   const item = "flex h-8 cursor-pointer select-none items-center justify-between gap-4 rounded-md px-2 outline-none data-highlighted:bg-secondary max-md:h-11 pointer-coarse:h-11";
   return (
     <Menu.Root>
-      <Menu.Trigger aria-label="More send options" title="More send options" data-testid="send-menu" className={`${SEND_BASE} bg-secondary text-secondary-foreground max-md:size-11`}>
+      <Menu.Trigger aria-label="More send options" title="More send options" data-testid="send-menu" className={`${SEND_BASE} bg-secondary text-secondary-foreground`}>
         <ChevronUpIcon aria-hidden className="size-4" />
       </Menu.Trigger>
       <Menu.Portal>
