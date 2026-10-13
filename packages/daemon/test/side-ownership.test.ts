@@ -1,4 +1,7 @@
 // GH-279: a side owns a session only when the hub put it there; its own claims never move local or foreign sessions.
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -674,5 +677,42 @@ describe("existing sub-folders of a local dir (GH-328)", () => {
     expect(frames(a, "fs.write")).toEqual([]);
     expect(t.localSeen.some((m) => m.type === "fs.write")).toBe(true);
     expect(t.sides.pathSide("/home/hub/ctonly/x")).toBe("docker:a");
+  });
+});
+
+describe("existing sub-folders: the default file system check (GH-328)", () => {
+  /** A real host folder `home` with `notes/` in it; `localPathExists` is left to its default. */
+  async function withHome(run: (home: string) => Promise<void>) {
+    const root = mkdtempSync(join(tmpdir(), "gh328-"));
+    const home = join(root, "home");
+    mkdirSync(join(home, "notes"), { recursive: true });
+    try {
+      await run(home);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+  const projectsOf = (...p: string[]) => (m: any) => (m.type === "session.list" ? { sessions: [], projects: p, recentProjects: [] } : null);
+  const real = (home: string, extra: object = {}) => ({ sides: { localDirs: [home], localPathExists: undefined, ...extra } as never });
+
+  it("POSIX hub: an existing sub-folder of a local dir is refused, a container-only one is claimed", async () => {
+    await withHome(async (home) => {
+      const a = fakeSide(projectsOf(join(home, "notes"), join(home, "ctonly")));
+      const t = await setup(a, undefined, undefined, real(home));
+      await t.req({ type: "session.list" });
+      expect(t.sides.cwdSide.get(join(home, "notes"))).toBeUndefined();
+      expect(t.sides.pathSide(join(home, "ctonly", "x"))).toBe("docker:a");
+      await t.req({ type: "fs.write", path: join(home, "notes", "todo.md"), content: "secret" });
+      expect(frames(a, "fs.write")).toEqual([]);
+    });
+  });
+
+  it("not a POSIX hub: the file system is not checked, an existing sub-folder stays claimable", async () => {
+    await withHome(async (home) => {
+      const a = fakeSide(projectsOf(join(home, "notes")));
+      const t = await setup(a, undefined, undefined, real(home, { posixLocal: false, localLabel: "Windows" }));
+      await t.req({ type: "session.list" });
+      expect(t.sides.cwdSide.get(join(home, "notes"))).toBe("docker:a");
+    });
   });
 });
