@@ -892,3 +892,203 @@ it("sending drops the stored draft even when the box unmounts before it renders 
   });
   expect(localStorage.getItem("claude-ui.draft.s1")).toBeNull();
 });
+
+
+// GH-77: queued messages.
+const queueView = (items: { id: string; text: string; imageCount: number }[], state: "idle" | "running" = "running") =>
+  applyEvent({ ...emptySession(), state }, { type: "event", sessionId: "s1", seq: 1, part: { type: "prompt_queue", id: "prompt_queue", items } });
+
+it("GH-77: Alt+Enter while a turn runs queues the text, clears the box and sends nothing", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
+  const { box } = await render({ onPrompt, onQueue }, { ...emptySession(), state: "running" });
+  await type(box, "later");
+  await key(box, { key: "Enter", altKey: true });
+  expect(onQueue).toHaveBeenCalledWith("later", []);
+  expect(onPrompt).not.toHaveBeenCalled();
+  expect(box.value).toBe("");
+});
+
+it("GH-77: Enter still steers while a turn runs", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
+  const { box } = await render({ onPrompt, onQueue }, { ...emptySession(), state: "running" });
+  await type(box, "now");
+  await key(box, { key: "Enter" });
+  expect(onPrompt).toHaveBeenCalledWith("now", []);
+  expect(onQueue).not.toHaveBeenCalled();
+});
+
+it("GH-77: Alt+Enter during an IME composition does nothing", async () => {
+  const onQueue = vi.fn(async () => {});
+  const { box } = await render({ onQueue }, { ...emptySession(), state: "running" });
+  await type(box, "ime");
+  await key(box, { key: "Enter", altKey: true, isComposing: true });
+  await key(box, { key: "Process", keyCode: 229, altKey: true });
+  expect(onQueue).not.toHaveBeenCalled();
+  expect(box.value).toBe("ime");
+});
+
+it("GH-77: Alt+Enter in bash mode runs the command like Enter", async () => {
+  const onBash = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
+  const { box } = await render({ onBash, onQueue });
+  await key(box, { key: "!" });
+  await type(box, "ls");
+  await key(box, { key: "Enter", altKey: true });
+  expect(onBash).toHaveBeenCalledWith("ls");
+  expect(onQueue).not.toHaveBeenCalled();
+});
+
+it("GH-77: a rejected queue puts the text back and shows Not queued", async () => {
+  const onQueue = vi.fn(() => Promise.reject(new Error("queue_full")));
+  const { box, el } = await render({ onQueue }, { ...emptySession(), state: "running" });
+  await type(box, "later");
+  await key(box, { key: "Enter", altKey: true });
+  await act(async () => {});
+  expect(box.value).toBe("later");
+  expect(el.querySelector('[data-testid="prompt-error"]')!.textContent).toBe("Not queued: queue_full");
+});
+
+it("GH-77: Edit takes the message back before the typed text; the chip button dequeues it", async () => {
+  const onDequeue = vi.fn(async () => ({ text: "old text", images: ["data:image/png;base64,AA=="] }));
+  const { box, el } = await render({ onDequeue }, queueView([{ id: "q1", text: "old text", imageCount: 1 }]));
+  await type(box, "typed");
+  await act(async () => void (el.querySelector('[aria-label="Edit: old text"]') as HTMLElement).click());
+  expect(onDequeue).toHaveBeenCalledWith("q1");
+  expect(box.value).toBe("old text\ntyped");
+  expect(el.querySelectorAll('[data-testid="image-strip"] img, img[alt]').length).toBeGreaterThan(0);
+});
+
+it("GH-77: Edit of an item already sent shows Already sent", async () => {
+  const onDequeue = vi.fn(() => Promise.reject(Object.assign(new Error("gone"), { code: "unknown_item" })));
+  const { el } = await render({ onDequeue }, queueView([{ id: "q1", text: "gone", imageCount: 0 }]));
+  await act(async () => void (el.querySelector('[aria-label="Edit: gone"]') as HTMLElement).click());
+  expect(el.querySelector('[data-testid="prompt-error"]')!.textContent).toBe("Already sent");
+});
+
+it("GH-77: Delete and Send now call the daemon; chips show above the prompt box", async () => {
+  const onDequeue = vi.fn(async () => ({ text: "x", images: [] }));
+  const onSendQueued = vi.fn(async () => {});
+  const { el } = await render({ onDequeue, onSendQueued }, queueView([{ id: "q1", text: "one", imageCount: 0 }]));
+  const chips = el.querySelector('section[aria-label="Queued messages"]')!;
+  expect(chips.compareDocumentPosition(el.querySelector('[data-testid="prompt-box"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await act(async () => void (el.querySelector('[aria-label="Send now: one"]') as HTMLElement).click());
+  expect(onSendQueued).toHaveBeenCalledWith("q1");
+  await act(async () => void (el.querySelector('[aria-label="Delete: one"]') as HTMLElement).click());
+  expect(onDequeue).toHaveBeenCalledWith("q1");
+});
+
+it("GH-77: chips also show above a permission request", async () => {
+  const view = applyEvent(queueView([{ id: "q1", text: "one", imageCount: 0 }]), { type: "event", sessionId: "s1", seq: 2, part: { type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "ls" }, suggestions: [], settled: false } });
+  const { el } = await render({}, { ...view, state: "needs_input" });
+  expect(el.querySelector('section[aria-label="Queued messages"]')).not.toBeNull();
+});
+
+it("GH-77: the send menu shows only while running with input, and queues or steers", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
+  const idle = await render({ onQueue });
+  await type(idle.box, "x");
+  expect(idle.el.querySelector('[aria-label="More send options"]')).toBeNull();
+  unmount();
+  localStorage.clear();
+  const run = await render({ onPrompt, onQueue }, { ...emptySession(), state: "running" });
+  expect(run.el.querySelector('[aria-label="More send options"]')).toBeNull();
+  await type(run.box, "hello");
+  const menu = run.el.querySelector<HTMLElement>('[aria-label="More send options"]')!;
+  expect(menu).not.toBeNull();
+  await act(async () => menu.click());
+  const item = (name: string) => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent!.includes(name))!;
+  await act(async () => item("Queue for when Claude is idle").click());
+  expect(onQueue).toHaveBeenCalledWith("hello", []);
+  await type(run.box, "again");
+  await act(async () => run.el.querySelector<HTMLElement>('[aria-label="More send options"]')!.click());
+  await act(async () => item("Steer now").click());
+  expect(onPrompt).toHaveBeenCalledWith("again", []);
+});
+
+it("GH-77: the desktop placeholder mentions Alt+Enter while running", async () => {
+  const { box } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  expect(box.placeholder).toBe("Claude is working… (Enter to steer, Alt+Enter to queue, Esc to stop)");
+});
+
+it("GH-77: Stop, Steer and the send menu trigger are 44px below md and on coarse pointers (also with a fine pointer at 390px)", async () => {
+  const { $, box } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  await type(box, "x");
+  for (const el of [$("toolbar-stop"), $("send"), $("send-menu")]) {
+    expect(el!.className).toMatch(/\bmax-md:size-11\b/);
+    expect(el!.className).toContain("pointer-coarse:size-11");
+  }
+});
+
+// GH-77 review fixes.
+it("GH-77: Delete of a chip another tab already sent leaves the typed text unchanged", async () => {
+  const onDequeue = vi.fn(() => Promise.reject(Object.assign(new Error("gone"), { code: "unknown_item" })));
+  const { box, el } = await render({ onDequeue }, queueView([{ id: "q1", text: "gone", imageCount: 0 }]));
+  await type(box, "typed");
+  await act(async () => void (el.querySelector('[aria-label="Delete: gone"]') as HTMLElement).click());
+  await act(async () => {});
+  expect(JSON.stringify(box.value)).toBe(JSON.stringify("typed"));
+  expect(el.querySelector('[data-testid="prompt-error"]')).toBeNull();
+});
+
+it("GH-77: Send now of a chip already sent leaves the typed text unchanged", async () => {
+  const onSendQueued = vi.fn(() => Promise.reject(Object.assign(new Error("gone"), { code: "unknown_item" })));
+  const { box, el } = await render({ onSendQueued }, queueView([{ id: "q1", text: "gone", imageCount: 0 }]));
+  await type(box, "typed");
+  await act(async () => void (el.querySelector('[aria-label="Send now: gone"]') as HTMLElement).click());
+  await act(async () => {});
+  expect(JSON.stringify(box.value)).toBe(JSON.stringify("typed"));
+});
+
+it("GH-77: Delete of the last chip moves focus to the prompt box", async () => {
+  const onDequeue = vi.fn(async () => ({ text: "one", images: [] }));
+  const first = queueView([{ id: "q1", text: "one", imageCount: 0 }]);
+  const d = await render({ onDequeue }, first);
+  const del = d.el.querySelector('[aria-label="Delete: one"]') as HTMLElement;
+  del.focus();
+  await act(async () => void del.click());
+  await d.rerender({ view: applyEvent(first, { type: "event", sessionId: "s1", seq: 2, part: { type: "prompt_queue", id: "prompt_queue", items: [] } }) });
+  expect(document.activeElement?.tagName).toBe("TEXTAREA");
+});
+
+it("GH-77: after Delete of the first of two chips focus moves to the next Delete", async () => {
+  const onDequeue = vi.fn(async () => ({ text: "one", images: [] }));
+  const two = [{ id: "q1", text: "one", imageCount: 0 }, { id: "q2", text: "two", imageCount: 0 }];
+  const first = queueView(two);
+  const d = await render({ onDequeue }, first);
+  const del = d.el.querySelector('[aria-label="Delete: one"]') as HTMLElement;
+  del.focus();
+  await act(async () => void del.click());
+  await d.rerender({ view: applyEvent(first, { type: "event", sessionId: "s1", seq: 2, part: { type: "prompt_queue", id: "prompt_queue", items: [two[1]!] } }) });
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Delete: two");
+});
+
+it("GH-77: after a choice in the send menu focus is in the prompt box", async () => {
+  const run = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  const { box, el } = run;
+  await type(box, "hello");
+  await act(async () => el.querySelector<HTMLElement>('[aria-label="More send options"]')!.click());
+  expect(document.body.textContent).toContain("Enter");
+  expect(document.body.textContent).not.toContain("ENTER");
+  const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent!.includes("Queue for"))!;
+  await act(async () => item.click());
+  // The menu and Steer are gone once the box is empty; focus must still arrive, and stay.
+  expect(run.el.querySelector('[aria-label="More send options"]')).toBeNull();
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(box);
+  await act(async () => new Promise((r) => setTimeout(r, 300)));
+  expect(document.activeElement).toBe(box);
+});
+
+it("GH-77: Escape closes the send menu and focus is in the prompt box", async () => {
+  const { box, el } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  await type(box, "hello");
+  await act(async () => el.querySelector<HTMLElement>('[aria-label="More send options"]')!.click());
+  expect(document.querySelector('[role="menuitem"]')).not.toBeNull();
+  await act(async () => void document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => new Promise((r) => setTimeout(r, 100)));
+  expect(document.querySelector('[role="menuitem"]')).toBeNull();
+  expect(document.activeElement).toBe(box);
+});

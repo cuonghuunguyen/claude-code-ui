@@ -40,18 +40,7 @@ export function SideBadge({ cwd, short = false }: { cwd: string; short?: boolean
 /** The daemon's own side is Windows: drive-letter paths are local, POSIX paths belong to another side. */
 export const localIsWindows = (sides: SideInfo[]) => sides.find((s) => s.id === LOCAL_SIDE)?.label === "Windows";
 
-/** A Windows path into a WSL distro (`\\wsl$\Ubuntu\home\me`, `\\wsl.localhost\Ubuntu\...`) as that distro's side and POSIX path. */
-export function fromWslUnc(input: string): { side: string; path: string } | undefined {
-  const m = /^[\\/]{2}(?:wsl\$|wsl\.localhost)[\\/]([^\\/]+)(.*)$/i.exec(input);
-  if (!m) return undefined;
-  return { side: `wsl:${m[1]}`, path: m[2]!.replace(/\\/g, "/") || "/" };
-}
-
-/** A Windows drive seen from WSL (`/mnt/c/Users/me`) as the Windows path (`C:\Users\me`); undefined for other paths. */
-export function fromMnt(path: string) {
-  const m = /^\/mnt\/([a-z])(?:\/(.*))?$/i.exec(path);
-  return m ? `${m[1]!.toUpperCase()}:\\${(m[2] ?? "").replace(/\/+$/, "").replace(/\//g, "\\")}` : undefined;
-}
+export { fromMnt, fromWslUnc } from "@claude-ui/protocol";
 
 const SIDE_KEY = "claude-ui.side";
 export const loadSide = () => {
