@@ -1,11 +1,11 @@
 // GH-275 x #317: the repository pin (GIT_DIR, GIT_COMMON_DIR, GIT_WORK_TREE) must reach git in the distro.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runGit, type GitRunOptions } from "../src/git-runner.ts";
-import { wslEnv, wslGitRunner, wslGitScript } from "../src/wsl-git.ts";
+import { wslEnv, wslExeEnv, wslGitRunner, wslGitScript } from "../src/wsl-git.ts";
 
 const out = { stdout: Buffer.from("ok"), stderr: "" };
 const decode = (b64arg: string) => Buffer.from(/echo (\S+) \|/.exec(b64arg)![1]!, "base64").toString();
@@ -14,6 +14,11 @@ const R = "\\\\wsl.localhost\\Ubuntu\\home\\me\\repo";
 const pin = { GIT_DIR: `${R}\\.git`, GIT_COMMON_DIR: `${R}\\.git`, GIT_WORK_TREE: R, GIT_CEILING_DIRECTORIES: "\\\\wsl.localhost\\Ubuntu\\home\\me" };
 
 describe("wsl-git keeps the #317 pin", () => {
+  const temps: string[] = [];
+  afterEach(() => {
+    for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
   it("wslEnv maps the pin to POSIX paths of the distro", () => {
     expect(wslEnv({ GIT_TERMINAL_PROMPT: "0", ...pin }, "ubuntu")).toEqual({ GIT_TERMINAL_PROMPT: "0", GIT_DIR: "/home/me/repo/.git", GIT_COMMON_DIR: "/home/me/repo/.git", GIT_WORK_TREE: "/home/me/repo", GIT_CEILING_DIRECTORIES: "/home/me" });
   });
@@ -44,6 +49,7 @@ describe("wsl-git keeps the #317 pin", () => {
     // The distro is this Linux host: \\wsl$\Ubuntu<posix> maps back to <posix>.
     const unc = (p: string) => "\\\\wsl$\\Ubuntu" + p.replace(/\//g, "\\");
     const t = realpathSync(mkdtempSync(join(tmpdir(), "wslpin-")));
+    temps.push(t);
     const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
     const main = join(t, "main");
     const secret = join(t, "secret");
@@ -68,4 +74,20 @@ describe("wsl-git keeps the #317 pin", () => {
 
 it("wslGitScript is unchanged for an env without a pin", () => {
   expect(wslGitScript("/t", ["status"], {})).toBe("cd -- '/t' || exit 128\nexec git 'status'");
+});
+
+it("wsl.exe gets no GIT_* variable through WSLENV, other entries stay", async () => {
+  expect(wslExeEnv({ WSLENV: "GIT_DIR/p:FOO/u:git_work_tree:BAR", A: "1" })).toEqual({ WSLENV: "FOO/u:BAR", A: "1" });
+  expect(wslExeEnv({ WSLENV: "GIT_DIR/p:GIT_EXEC_PATH" })).toEqual({});
+  expect(wslExeEnv({ A: "1" })).toEqual({ A: "1" });
+  const prev = process.env.WSLENV;
+  process.env.WSLENV = "GIT_DIR/p:FOO";
+  try {
+    const local = vi.fn(async (_: GitRunOptions) => out);
+    await wslGitRunner({ local, side: () => undefined })({ cwd: R, args: ["status"], env: pin });
+    expect(local.mock.calls[0]![0].env.WSLENV).toBe("FOO");
+  } finally {
+    if (prev === undefined) delete process.env.WSLENV;
+    else process.env.WSLENV = prev;
+  }
 });

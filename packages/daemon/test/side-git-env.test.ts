@@ -1,6 +1,8 @@
 import { PassThrough } from "node:stream";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runSide } from "../src/sides.ts";
+
+afterEach(() => vi.unstubAllEnvs());
 
 it("side git: the side's own GIT_* environment never reaches git, only what the hub sent", async () => {
   vi.stubEnv("GIT_DIR", "/elsewhere/.git");
@@ -15,7 +17,6 @@ it("side git: the side's own GIT_* environment never reaches git, only what the 
   expect(env.GIT_DIR).toBeUndefined();
   expect(env.GIT_WORK_TREE).toBeUndefined();
   expect(env.GIT_TERMINAL_PROMPT).toBe("0");
-  vi.unstubAllEnvs();
 });
 
 it("side git: a git error with signal null is answered, not dropped by the frame schema", async () => {
