@@ -6,6 +6,9 @@ import { readdir } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { wslPathOf } from "@claude-ui/protocol";
+import { pinEnv } from "./git.ts";
+import { runGit } from "./git-runner.ts";
 import { perf } from "./perf.ts";
 import { deniedRead, pathLow } from "./risk-tier.ts";
 
@@ -223,7 +226,7 @@ function gitThread(): Worker | undefined {
   }
   return thread;
 }
-const gitAsync = (cwd: string, args: string[]) =>
+const gitProcess = (cwd: string, args: string[]) =>
   new Promise<string>((ok, fail) => {
     const w = gitThread();
     if (!w) {
@@ -349,6 +352,20 @@ const headExists = (run: () => string) => {
     return false;
   }
 };
+/** The host git's system and global entries (`git config --list` outside any repository); no host git = none. */
+async function hostConfig(): Promise<string> {
+  let text: string;
+  try {
+    text = (await runGit({ cwd: homedir(), args: CONFIG_ARGS, env: gitOpts(homedir()).env, timeout: GIT_TIMEOUT_MS, maxBuffer: 1 << 30, idempotent: true })).stdout.toString("utf8");
+  } catch (e) {
+    if ((e as { code?: unknown }).code === "ENOENT") return "";
+    throw e;
+  }
+  const f = text.split("\u0000");
+  const kept: string[] = [];
+  for (let i = 0; i + 2 < f.length; i += 3) if (f[i] === "system" || f[i] === "global") kept.push(f[i]!, f[i + 1]!, f[i + 2]!);
+  return kept.length ? `${kept.join("\u0000")}\u0000` : "";
+}
 const headExistsAsync = (run: () => Promise<string>) => run().then(() => true, () => false);
 
 /** Synchronous read: blocks the event loop for two git processes. Tests and direct tier() calls only; the daemon awaits repoSafetyAsync. */
@@ -401,7 +418,14 @@ export function repoSafetyAsync(cwd: string, since = performance.now() - SHARE_M
     let s: Scan | undefined;
     try {
       s = begin(cwd);
-      readConfig(s, await gitAsync(s.top, CONFIG_ARGS));
+      // A UNC WSL project: git runs in its distro through the git runner, pinned (#317); Windows git cannot use the UNC path.
+      const wsl = wslPathOf(cwd) !== undefined;
+      const top = s.top;
+      const pin = wsl ? await pinEnv(top) : {};
+      const gitAsync = wsl ? (_cwd: string, args: string[]) => runGit({ cwd: top, args, env: { ...gitOpts(top).env, ...pin }, timeout: GIT_TIMEOUT_MS, maxBuffer: 1 << 30, idempotent: true }).then((r) => r.stdout.toString("utf8")) : gitProcess;
+      readConfig(s, await gitAsync(top, CONFIG_ARGS));
+      // The Bash tool of such a project may run the host's git (Windows): its system and global config count too.
+      if (wsl) readConfig(s, await hostConfig());
       const seen = { n: 0, until: performance.now() + gitThreadConfig.walkDeadlineMs };
       const walk = async (d: string, depth: number): Promise<boolean> => {
         const subs: string[] = [];

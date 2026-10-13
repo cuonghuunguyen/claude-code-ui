@@ -496,7 +496,7 @@ export function createDaemon(opts: {
     const hit = worktreeLists.get(cwd);
     if (hit?.stamp === stamp) return hit.list;
     const sp = perfMon.span("worktree.list");
-    const entry = { stamp, list: (gitOutside(cwd) ? Promise.resolve(null) : listWorktrees(cwd)).finally(() => sp.end()) };
+    const entry = { stamp, list: gitOutside(cwd).then((out) => (out ? null : listWorktrees(cwd))).finally(() => sp.end()) };
     worktreeLists.set(cwd, entry);
     // A failed read of a git folder (spawn error, killed process) is not kept: the next list reads again.
     void entry.list.then((l) => l === null && stamp !== "-" && worktreeLists.get(cwd) === entry && worktreeLists.delete(cwd));
@@ -510,7 +510,7 @@ export function createDaemon(opts: {
   const statusReads = new Map<string, ReturnType<typeof gitStatus>>();
   const statusOf = (cwd: string) => {
     let read = statusReads.get(cwd);
-    if (!read) statusReads.set(cwd, (read = (gitOutside(cwd) ? Promise.resolve(null) : gitStatus(cwd)).finally(() => statusReads.delete(cwd))));
+    if (!read) statusReads.set(cwd, (read = gitOutside(cwd).then((out) => (out ? null : gitStatus(cwd))).finally(() => statusReads.delete(cwd))));
     return read;
   };
 
@@ -529,6 +529,8 @@ export function createDaemon(opts: {
     // Blocked from the start so no session slips in during git's checks; only paths that can be managed (the main checkout never is).
     if (path.includes(`${sep}.claude${sep}worktrees${sep}`)) removing.add(path);
     try {
+      // After the mark: this check awaits, and a session or terminal must not start in the worktree meanwhile.
+      if (await gitOutside(cwd)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
       await removeWorktree(cwd, path, (p) => inRoots(real(p) ?? p), async () => {
         const live = [...sessions.values()].filter((s) => isRemoving(s.cwd));
         if (live.some((s) => ["running", "needs_input"].includes(s.info().state))) throw new WorktreeError("has_sessions_running", "A session in this worktree is running or needs input: stop it first");
@@ -1740,7 +1742,7 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (typeof msg.query !== "string") return fail("bad_query", "query must be a string");
           // A symlink pointing outside the roots is not offered: the SDK would read its target (like fs.read refuses it).
-          return reply({ paths: searchFiles(cwd, msg.query).filter((p) => allowed(join(cwd, p))) });
+          return reply({ paths: (await searchFiles(cwd, msg.query)).filter((p) => allowed(join(cwd, p))) });
         }
         case "sessions.search": {
           // One search per connection: a newer query (or an empty one, the palette closing) stops the running scan.
@@ -1774,7 +1776,7 @@ export function createDaemon(opts: {
         case "git.refs": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          return reply({ refs: gitRefs(cwd, (p) => inRoots(real(p) ?? p)) });
+          return reply({ refs: await gitRefs(cwd, (p) => inRoots(real(p) ?? p)) });
         }
         case "git.log":
         case "git.diff":
@@ -1804,7 +1806,7 @@ export function createDaemon(opts: {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (msg.type === "worktree.create" && msg.name !== undefined && typeof msg.name !== "string") return fail("bad_name", "name must be a string");
-          if (gitOutside(cwd)) return fail("cwd_not_allowed", "The repository is outside the allowed roots");
+          if (msg.type !== "worktree.remove" && (await gitOutside(cwd))) return fail("cwd_not_allowed", "The repository is outside the allowed roots");
           const path = msg.type === "worktree.create" ? undefined : allowed(msg.path);
           if (msg.type !== "worktree.create" && !path) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           try {
