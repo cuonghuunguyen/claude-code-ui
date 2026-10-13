@@ -1066,12 +1066,19 @@ it("GH-77: after Delete of the first of two chips focus moves to the next Delete
 });
 
 it("GH-77: after a choice in the send menu focus is in the prompt box", async () => {
-  const { box, el } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  const run = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  const { box, el } = run;
   await type(box, "hello");
   await act(async () => el.querySelector<HTMLElement>('[aria-label="More send options"]')!.click());
+  expect(document.body.textContent).toContain("Enter");
+  expect(document.body.textContent).not.toContain("ENTER");
   const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent!.includes("Queue for"))!;
   await act(async () => item.click());
+  // The menu and Steer are gone once the box is empty; focus must still arrive, and stay.
+  expect(run.el.querySelector('[aria-label="More send options"]')).toBeNull();
   await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(box);
+  await act(async () => new Promise((r) => setTimeout(r, 300)));
   expect(document.activeElement).toBe(box);
 });
 

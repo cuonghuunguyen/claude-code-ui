@@ -316,22 +316,25 @@ function SendButton({ state, hasInput, onSend, onQueue, onStop, onFocusLost }: {
 }
 
 /** Beside Steer: "Steer now" (Enter) or "Queue for when Claude is idle" (Alt+Enter). Hints are for keyboards, so hidden on touch. */
+/** After the commit that removes the menu (its message cleared the box, so Steer and the menu are gone): the inert page and the focus return are settled by the next frame. */
+const later = (f: () => void) => void requestAnimationFrame(() => f());
+
 function SendMenu({ onSteer, onQueue, onClosed }: { onSteer: () => void; onQueue: () => void; onClosed: () => void }) {
   const item = "flex h-8 cursor-pointer select-none items-center justify-between gap-4 rounded-md px-2 outline-none data-highlighted:bg-secondary max-md:h-11 pointer-coarse:h-11";
   return (
-    <Menu.Root>
+    // The open menu makes the rest of the page inert and returns focus to its trigger, which is gone once the box is empty (a queued or steered message clears it): so focus moves only after the close finished.
+    <Menu.Root onOpenChangeComplete={(open) => !open && onClosed()}>
       <Menu.Trigger aria-label="More send options" title="More send options" data-testid="send-menu" className={`${SEND_BASE} bg-secondary text-secondary-foreground`}>
         <ChevronUpIcon aria-hidden className="size-4" />
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="top" align="end" sideOffset={6} className="z-50">
-          {/* Focus goes to the prompt box, not the trigger (gone once the box is empty); not on touch screens (soft keyboard). */}
-          <Menu.Popup finalFocus={() => (onClosed(), false)} className="z-50 min-w-40 rounded-lg bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none">
-            <Menu.Item className={item} onClick={() => (onSteer(), setTimeout(onClosed))}>
+          <Menu.Popup finalFocus={false} className="z-50 min-w-40 rounded-lg bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none">
+            <Menu.Item className={item} onClick={() => (onSteer(), later(onClosed))}>
               Steer now
-              <kbd className="text-muted-foreground text-xs pointer-coarse:hidden">{keyText("Enter")}</kbd>
+              <kbd className="text-muted-foreground text-xs pointer-coarse:hidden">{keyText("enter")}</kbd>
             </Menu.Item>
-            <Menu.Item className={item} onClick={() => (onQueue(), setTimeout(onClosed))}>
+            <Menu.Item className={item} onClick={() => (onQueue(), later(onClosed))}>
               Queue for when Claude is idle
               <kbd className="text-muted-foreground text-xs pointer-coarse:hidden">{keyText("alt+enter")}</kbd>
             </Menu.Item>
