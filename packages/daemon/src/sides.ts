@@ -3,6 +3,8 @@
 // browser request to the side that owns its session, terminal or path; one URL, one pairing, one page for every side.
 // Frames are JSON lines. hub -> side: {c, o} opens virtual connection c, {c, m} a client message, {c, x} closes it.
 // side -> hub: {ready} once listening, {c, m} a server message, {push} a Web Push payload. Other stdout lines are ignored.
+// Git of a WSL project the hub opened by its Windows path: hub -> side {g, git: {cwd, args, env, input?, timeout?, maxBuffer?}} runs git in
+// the side; side -> hub {g, out: <base64 stdout>, err, error?: {message, code?, killed, signal?}} answers it (`wsl-git.ts`).
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -11,6 +13,8 @@ import type { Readable, Writable } from "node:stream";
 import { perf, type PerfSpanHandle } from "./perf.ts";
 import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import type { Exec } from "./docker-side.ts";
+import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
+import { SideGone } from "./wsl-git.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
 import { logPrefix, MAX_SIDE_LINE_CHARS, parseSideFrame } from "./side-frame.ts";
@@ -312,7 +316,10 @@ function lines(stream: Readable, onLine: (line: string) => void, max = Infinity,
   });
 }
 
-type Side = SideInfo & { proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void> };
+type GitCall = { ok: (o: GitRunOutput) => void; fail: (e: Error) => void; timer: NodeJS.Timeout };
+type Side = SideInfo & { proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void>; gits: Map<number, GitCall> };
+
+let nextGit = 0;
 
 
 /** Longest wait for one side's list when the hub looks up an unlisted session ID (GH-328). */
@@ -356,7 +363,7 @@ export function createSides(opts: {
   /** Longest line a side may write (default MAX_SIDE_LINE_CHARS; tests lower it). */
   maxLineChars?: number;
 }) {
-  const sides = new Map<string, Side>(opts.targets.map((t) => [t.id, { ...t, state: "off", conns: new Map() }]));
+  const sides = new Map<string, Side>(opts.targets.map((t) => [t.id, { ...t, state: "off", conns: new Map(), gits: new Map() }]));
   const localDirs = (opts.localDirs ?? (opts.posixLocal ? [homedir()] : [])).map((p) => posix.normalize(p).replace(/(.)\/+$/, "$1")).filter(canonical);
   const routers = new Set<Router>();
   const changeListeners = new Set<() => void>();
@@ -512,6 +519,16 @@ export function createSides(opts: {
           return;
         }
         const f = parsed.frame;
+        if (f.kind === "git") {
+          const call = s.gits.get(f.g);
+          if (!call) return;
+          s.gits.delete(f.g);
+          clearTimeout(call.timer);
+          const stdout = Buffer.from(f.out, "base64");
+          if (!f.error) call.ok({ stdout, stderr: f.err });
+          else call.fail(Object.assign(new Error(f.error.message), { stderr: f.err, stdout, killed: !!f.error.killed, code: f.error.code, signal: f.error.signal ?? undefined }));
+          return;
+        }
         if (f.kind === "ready") {
           endSpans(s, false);
           delete s.phase;
@@ -554,6 +571,11 @@ export function createSides(opts: {
         delete s.phase;
         Object.assign(s, notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
+        for (const [gid, c] of s.gits) {
+          clearTimeout(c.timer);
+          c.fail(new SideGone(`${s.label} stopped`));
+          s.gits.delete(gid);
+        }
         for (const reqId of [...(requestsOf.get(s.id) ?? [])]) forgetRequest(reqId);
         if (!wasReady) reject(new Error(message));
         routers.forEach((r) => r.detach(s.id));
@@ -672,7 +694,7 @@ export function createSides(opts: {
           const ids = new Set(found.map((t) => t.id));
           for (const t of found)
             if (!sides.has(t.id)) {
-              sides.set(t.id, { ...t, state: "off", conns: new Map() });
+              sides.set(t.id, { ...t, state: "off", conns: new Map(), gits: new Map() });
               dynamic.add(t.id);
               diff = true;
             }
@@ -697,6 +719,23 @@ export function createSides(opts: {
     has: (id: string) => sides.has(id),
     check,
     ready: () => [...sides.values()].filter((s) => s.state === "ready").map((s) => s.id),
+    /** The ready `wsl:<x>` side whose distro `<x>` equals `distro` (case-insensitive). */
+    wslReady: (distro: string) => [...sides.values()].find((s) => s.state === "ready" && s.id.toLowerCase() === `wsl:${distro}`.toLowerCase())?.id,
+    /** Runs git in a ready side; rejects `SideGone` when it is not ready or ends meanwhile. */
+    git(id: string, o: GitRunOptions): Promise<GitRunOutput> {
+      const s = sides.get(id);
+      if (s?.state !== "ready" || !s.proc) return Promise.reject(new SideGone(`${id} is not running`));
+      const gid = ++nextGit;
+      return new Promise((ok, fail) => {
+        const timer = setTimeout(() => {
+          s.gits.delete(gid);
+          fail(Object.assign(new Error("git timed out"), { killed: true, stderr: "", stdout: Buffer.alloc(0) }));
+        }, (o.timeout ?? 30_000) + 10_000);
+        timer.unref();
+        s.gits.set(gid, { ok, fail, timer });
+        write(s, { g: gid, git: { cwd: o.cwd, args: o.args, env: o.env, input: o.input, timeout: o.timeout, maxBuffer: o.maxBuffer } });
+      });
+    },
     start,
     refresh,
     posixLocal: !!opts.posixLocal,
@@ -1038,6 +1077,12 @@ export function createRouter(opts: {
         const { side: _side, ...rest } = msg;
         return send(await opts.media(id, rest as Extract<ClientMessage, { type: "fs.media" }>, (m) => sideCall(id, m, opts.mediaTimeoutMs ?? MEDIA_PIECE_TIMEOUT_MS)));
       }
+      case "artifact.preview": {
+        const id = await target(msg);
+        if (id === null) return send(sideConflict(msg.reqId));
+        if (id === LOCAL_SIDE) return opts.local(msg);
+        return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for sessions in ${id.startsWith("docker:") ? "Docker" : "WSL"}` });
+      }
       default: {
         const id = await target(msg);
         if (id === null) return send(sideConflict(msg.reqId));
@@ -1102,17 +1147,30 @@ export class SideSocket extends EventEmitter {
  * Side mode (`claude-ui --side`, run by the hub inside a distro): serves virtual connections from `input` through `accept`
  * (the daemon's connection handler) and writes their messages to `output`. Ends the process when the hub goes away.
  */
-export function runSide(opts: { input: Readable; output: Writable; accept: (ws: SideSocket) => void; onEnd?: () => void }) {
+export function runSide(opts: { input: Readable; output: Writable; accept: (ws: SideSocket) => void; onEnd?: () => void; git?: GitRunner }) {
   const sockets = new Map<number, SideSocket>();
   const write = (s: string) => opts.output.write(s + "\n");
   lines(opts.input, (line) => {
-    let f: { c?: number; o?: unknown; m?: unknown; x?: unknown };
+    let f: { c?: number; o?: unknown; m?: unknown; x?: unknown; g?: number; git?: GitRunOptions };
     try {
       f = JSON.parse(line);
     } catch {
       return;
     }
-    if (!f || typeof f.c !== "number") return;
+    if (!f) return;
+    if (typeof f.g === "number" && f.git) {
+      const g = f.g;
+      const answer = (a: object) => write(JSON.stringify({ g, ...a }));
+      if (!opts.git) return answer({ out: "", err: "", error: { message: "no git" } });
+      // The side's own GIT_* (a login profile may set GIT_DIR, GIT_WORK_TREE ...) is dropped, whatever it is: git gets the hub's env only,
+      // like the wsl.exe path (fixed list, `wslExeEnv`). The hub sends every GIT_* variable it wants (the repository pin included).
+      opts.git({ ...f.git, env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_"))), ...f.git.env } }).then(
+        (r) => answer({ out: r.stdout.toString("base64"), err: r.stderr }),
+        (e: Error & { stdout?: Buffer; stderr?: string; code?: string | number; killed?: boolean; signal?: string }) => answer({ out: (e.stdout ?? Buffer.alloc(0)).toString("base64"), err: e.stderr ?? "", error: { message: e.message, code: e.code, killed: !!e.killed, signal: e.signal } }),
+      );
+      return;
+    }
+    if (typeof f.c !== "number") return;
     const c = f.c;
     if (f.o) {
       const ws = new SideSocket(

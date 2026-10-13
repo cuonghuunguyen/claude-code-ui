@@ -1,10 +1,10 @@
 // The one place git processes of `git.ts` start (docs/spec.md "Layout", Graph tab): in a worker thread, so the spawn cost
-// does not land on the main event loop. `setGitRunner` swaps the runner (tests; a later WSL runner chosen per cwd).
+// does not land on the main event loop. `setGitRunner` swaps the runner (tests; `wsl-git.ts` routes WSL projects).
 import { execFile } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import { perf } from "./perf.ts";
 
-export type GitRunOptions = { cwd: string; args: string[]; env: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number; input?: string };
+export type GitRunOptions = { cwd: string; args: string[]; env: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number; input?: string; file?: string };
 export type GitRunOutput = { stdout: Buffer; stderr: string };
 /** Rejection: Error & { stderr: string; stdout: Buffer; killed: boolean; code?: string | number; signal?: string } */
 export type GitRunner = (o: GitRunOptions) => Promise<GitRunOutput>;
@@ -15,9 +15,9 @@ const DEFAULT_MAX_BUFFER = 64 << 20;
 const GIT_RUN_THREAD = `
 const { parentPort } = require("node:worker_threads");
 const { execFile } = require("node:child_process");
-parentPort.on("message", ({ id, cwd, args, env, timeout, maxBuffer, input }) => {
+parentPort.on("message", ({ id, file, cwd, args, env, timeout, maxBuffer, input }) => {
   try {
-  const child = execFile("git", args, { cwd, env, timeout, maxBuffer, encoding: "buffer", windowsHide: true }, (err, stdout, stderr) => {
+  const child = execFile(file || "git", args, { cwd, env, timeout, maxBuffer, encoding: "buffer", windowsHide: true }, (err, stdout, stderr) => {
     const out = Buffer.from(stdout ?? []);
     const ab = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
     parentPort.postMessage({ id, stdout: ab, stderr: String(stderr ?? ""), error: err ? { message: err.message, code: err.code, killed: !!err.killed, signal: err.signal } : undefined }, [ab]);
@@ -101,7 +101,7 @@ function runThread(): Worker | undefined {
 
 const direct: GitRunner = (o) =>
   new Promise((ok, fail) => {
-    const child = execFile("git", o.args, { cwd: o.cwd, env: o.env, timeout: o.timeout ?? DEFAULT_TIMEOUT, maxBuffer: o.maxBuffer ?? DEFAULT_MAX_BUFFER, encoding: "buffer", windowsHide: true }, (err, stdout, stderr) => {
+    const child = execFile(o.file ?? "git", o.args, { cwd: o.cwd, env: o.env, timeout: o.timeout ?? DEFAULT_TIMEOUT, maxBuffer: o.maxBuffer ?? DEFAULT_MAX_BUFFER, encoding: "buffer", windowsHide: true }, (err, stdout, stderr) => {
       const out = Buffer.from(stdout ?? []);
       if (!err) return ok({ stdout: out, stderr: String(stderr ?? "") });
       const e = err as Error & { code?: string | number; killed?: boolean; signal?: string };
@@ -127,7 +127,7 @@ export const threadRunner: GitRunner = (o) =>
     // The thread runs git: the diagnostics channel does not see it, so the call is timed here (thread time, not main-loop time).
     const done = perf.child({ cmd: "git", args: o.args, cwd: o.cwd, thread: "worker" });
     calls.set(id, { ok: (r) => (done(0), ok(r)), fail: (e) => (done("error"), fail(e)), timer, w });
-    w.postMessage({ id, cwd: o.cwd, args: o.args, env: o.env, timeout: o.timeout ?? DEFAULT_TIMEOUT, maxBuffer: o.maxBuffer ?? DEFAULT_MAX_BUFFER, input: o.input });
+    w.postMessage({ id, file: o.file, cwd: o.cwd, args: o.args, env: o.env, timeout: o.timeout ?? DEFAULT_TIMEOUT, maxBuffer: o.maxBuffer ?? DEFAULT_MAX_BUFFER, input: o.input });
   });
 
 let runner: GitRunner = threadRunner;

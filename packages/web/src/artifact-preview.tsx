@@ -1,0 +1,97 @@
+import type { ArtifactPreviewResult } from "@claude-ui/protocol";
+import { createContext, use, useEffect, useRef, useState, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
+
+/** Asks the daemon for the preview URL of an Artifact publish part (artifact.preview). */
+export type ArtifactPreviewLoader = (partId: string) => Promise<ArtifactPreviewResult>;
+export const ArtifactPreviewContext = createContext<ArtifactPreviewLoader | undefined>(undefined);
+
+/** Whether the daemon connection is up: a reconnect while a preview is open asks for a fresh URL (a restarted daemon forgot the old nonce). */
+export const ArtifactConnectedContext = createContext(true);
+
+// ponytail: part ids whose preview the user opened, kept outside React like `expanded` in tool-card.tsx so a remount keeps it open (the URL is requested again).
+const opened = new Set<string>();
+
+type State = "idle" | "loading" | { url: string; n: number } | { error: string; retry?: boolean };
+
+const btn = "min-h-11 md:min-h-0";
+
+/** Collapsed "Show preview" of a local Artifact page; open: the page in a sandboxed iframe (no same-origin, scripts only, the daemon's CSP allows no network). */
+export function ArtifactPreview({ partId, title, files }: { partId: string; title: string; files: number }): ReactNode {
+  const load = use(ArtifactPreviewContext);
+  const [state, setState] = useState<State>("idle");
+  const connected = use(ArtifactConnectedContext);
+  const run = useRef(0);
+  const frame = useRef(0); // key of the iframe: every answer remounts it, so Reload reloads even when the URL is the same
+  const request = (loader: ArtifactPreviewLoader) => {
+    const mine = ++run.current;
+    opened.add(partId);
+    setState("loading");
+    loader(partId).then(
+      (r) => mine === run.current && setState({ url: r.url, n: ++frame.current }),
+      (e: { code?: string; message?: string }) => mine === run.current && setState({ error: `Preview not available: ${e?.code === "not_found" ? "file is gone" : (e?.message ?? "unknown error")}`, retry: e?.message === "disconnected" }),
+    );
+  };
+  useEffect(() => {
+    if (load && opened.has(partId)) request(load);
+    return () => void run.current++;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partId]);
+  // Down then up while open: the daemon may have restarted and forgotten the nonce.
+  const was = useRef(connected);
+  const live = useRef(state);
+  live.current = state;
+  useEffect(() => {
+    if (connected && !was.current && load && typeof live.current === "object" && ("url" in live.current || live.current.retry)) request(load);
+    was.current = connected;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
+  if (!load) return null;
+  const hide = () => {
+    run.current++;
+    opened.delete(partId);
+    setState("idle");
+  };
+  if (state === "idle")
+    return (
+      <Button variant="outline" size="sm" className={btn} aria-expanded={false} data-testid="artifact-preview-toggle" onClick={() => request(load)}>
+        Show preview
+      </Button>
+    );
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="outline" size="sm" className={btn} aria-expanded={true} onClick={hide}>
+          Hide preview
+        </Button>
+        <Button variant="outline" size="sm" className={btn} onClick={() => request(load)}>
+          Reload
+        </Button>
+      </div>
+      <p className="text-muted-foreground text-xs">Local file, shown offline: network requests, remote scripts, images, fonts and links are blocked.</p>
+      {files > 0 && <p className="text-muted-foreground text-xs">{`Main page only: ${files} supporting ${files === 1 ? "file" : "files"} not loaded.`}</p>}
+      {state === "loading" && (
+        <p aria-live="polite" className="text-muted-foreground text-xs">
+          Loading preview…
+        </p>
+      )}
+      {typeof state === "object" && "error" in state && (
+        <p role="alert" className="text-destructive text-xs">
+          {state.error}
+        </p>
+      )}
+      {typeof state === "object" && "url" in state && (
+        <iframe
+          key={state.n}
+          data-testid="artifact-preview"
+          title={`Preview: ${title}`}
+          src={state.url}
+          sandbox="allow-scripts"
+          referrerPolicy="no-referrer"
+          loading="lazy"
+          className="block h-[60vh] max-h-[480px] w-full rounded-md border bg-white"
+        />
+      )}
+    </div>
+  );
+}

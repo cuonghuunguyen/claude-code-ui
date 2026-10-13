@@ -95,6 +95,8 @@ export function createAutoContinue(o: {
     clear() {
       for (const id of [...entries.keys()]) this.cancel(id);
     },
+    /** A continue is scheduled or being sent for the session (the queue waits for it). */
+    isScheduled: (id: string) => entries.has(id) || inflight.has(id),
     /** Test seam. */
     scheduled: () => new Map(entries),
   };

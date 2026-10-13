@@ -17,7 +17,9 @@ const push = z.object({ sessionId: z.string(), title: z.string(), body: z.string
  * Closed set: a key not named here (a frame of a newer side) is not accepted, because every frame type needs a handler in the
  * hub anyway. Object schemas strip unknown keys (not `passthrough`): a frame carries only what the hub reads.
  */
-const FRAME = z.union([z.object({ ready: z.literal(true) }).transform(() => ({ kind: "ready" as const })), z.object({ push }).transform((f) => ({ kind: "push" as const, push: f.push as PushPayload })), z.object({ c: z.number().int().nonnegative(), m: message }).transform((f) => ({ kind: "message" as const, c: f.c, m: f.m as unknown as ServerMessage }))]);
+// `signal` is nullish: the error of Node's execFile carries `signal: null`, and a frame the schema drops leaves the hub call waiting for its timeout.
+const gitError = z.object({ message: z.string(), code: z.union([z.string(), z.number()]).optional(), killed: z.boolean().optional(), signal: z.string().nullish() });
+const FRAME = z.union([z.object({ ready: z.literal(true) }).transform(() => ({ kind: "ready" as const })), z.object({ push }).transform((f) => ({ kind: "push" as const, push: f.push as PushPayload })), z.object({ c: z.number().int().nonnegative(), m: message }).transform((f) => ({ kind: "message" as const, c: f.c, m: f.m as unknown as ServerMessage })), z.object({ g: z.number().int().nonnegative(), out: z.string(), err: z.string(), error: gitError.optional() }).transform((f) => ({ kind: "git" as const, ...f }))]);
 
 export type SideFrame = z.infer<typeof FRAME>;
 

@@ -2,8 +2,13 @@ import { chmodSync, closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, read
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { createTerminals, fixSpawnHelper, MAX_PENDING_INPUT_BYTES, nodePtyRoot, PAUSE_BYTES, shell, trimScrollback } from "../src/terminals.ts";
+
+setFlagsFromString("--expose-gc");
+const gc = runInNewContext("gc") as () => void;
 
 // POSIX-only assertions (file modes, PTY fds, sh syntax) are skipped on Windows.
 const posix = process.platform !== "win32";
@@ -298,30 +303,55 @@ describe("closing a worktree's terminals", () => {
   });
 });
 
-// GH-266: on Windows node-pty writes input to ConPTY through a net.Socket (`_agent.inSocket`) with no 'error' listener.
+// GH-266 / GH-268: on Windows node-pty writes input to ConPTY through a net.Socket (`_agent.inSocket`) with no 'error' listener.
 // A write that lands while ConPTY closes its pipe fails asynchronously (EAGAIN is libuv's name for ERROR_NO_DATA, "the
-// pipe is being closed"; EOF for a closed one), and an unhandled 'error' event ended the daemon.
-describe("Windows terminal input socket errors (GH-266)", () => {
-  /** A fake ConPTY IPty: `inSocket` is a plain EventEmitter, so emit("error") throws when nothing listens, as Node does. */
-  const conpty = () => {
-    const inSocket = Object.assign(new EventEmitter(), { writableLength: 0, destroyed: false, destroy: vi.fn() });
+// pipe is being closed"; EOF for a closed one), and an unhandled 'error' event ended the daemon. GH-268: the same for
+// node-pty's output socket, conout worker and console-list child; a shell that exits by itself leaked its terminal.
+describe("Windows terminals: node-pty pipe and worker errors (GH-266, GH-268)", () => {
+  /** `live`: stands for the GC roots of the running conout worker thread (its 'message' listener reaches the agent and the pty). */
+  const live = new Set<object>();
+  /** A fake ConPTY IPty: sockets are plain EventEmitters, so emit("error") throws when nothing listens, as Node does. */
+  // `fn`: vitest's vi.fn keeps every mock (and the closure scope of its implementation) alive in a global registry, so the
+  // GC tests use plain functions: otherwise the registry, not the daemon, would hold the terminal.
+  const conpty = (disposeStopsWorker = true, fn: (impl: (...a: any[]) => any) => any = vi.fn) => {
+    const inSocket = Object.assign(new EventEmitter(), { writableLength: 0, destroyed: false, destroy: fn(() => {}) });
+    const outSocket = Object.assign(new EventEmitter(), { destroyed: false });
+    const worker = new EventEmitter();
+    const conout: { _worker: EventEmitter; dispose: any; owner?: object } = { _worker: worker, dispose: fn(() => void (disposeStopsWorker && live.delete(conout))) };
     let onExit: (e: { exitCode: number }) => void = () => {};
+    let onData: (d: string) => void = () => {};
+    const agent = {
+      inSocket,
+      _conoutSocketWorker: conout,
+      _innerPid: 4242,
+      kill: fn(() => {}),
+      _getConsoleProcessList: (): Promise<number[]> => Promise.resolve([4242]),
+    };
     const pty = {
       fd: undefined,
-      _socket: { destroyed: false },
-      _agent: { inSocket },
-      onData() {},
+      _socket: outSocket,
+      _agent: agent,
+      onData: (cb: typeof onData) => void (onData = cb),
       onExit: (cb: typeof onExit) => void (onExit = cb),
-      write: vi.fn(),
-      kill: vi.fn(() => setTimeout(() => onExit({ exitCode: 1 }), 5)),
+      write: fn(() => {}),
+      kill: fn(() => setTimeout(() => onExit({ exitCode: 1 }), 5)),
     };
-    return { pty, inSocket, shellExits: () => onExit({ exitCode: 1 }) };
+    conout.owner = pty;
+    live.add(conout);
+    /** node-pty's first output: its own 'error' handler appears (throws when it is the only listener, like 1.1.0). */
+    const ready = (data = "PS> ") => {
+      outSocket.on("error", (err) => {
+        if (outSocket.listeners("error").length < 2) throw err;
+      });
+      onData(data);
+    };
+    return { pty, inSocket, outSocket, worker, conout, agent, ready, shellExits: () => onExit({ exitCode: 1 }) };
   };
   const errno = (code: string) => Object.assign(new Error(`write ${code}`), { code, syscall: "write" });
-  const setup = () => {
+  const setup = (opts: { fork?: unknown; root?: string } = {}) => {
     // Each spawn gets its own fake; `fake` is the first terminal's.
     const fakes: ReturnType<typeof conpty>[] = [];
-    const terms = createTerminals(nodePtyRoot(), "win32", (() => fakes[fakes.push(conpty()) - 1]!.pty) as never);
+    const terms = createTerminals(opts.root ?? nodePtyRoot(), "win32", (() => fakes[fakes.push(conpty()) - 1]!.pty) as never, undefined, opts.fork as never);
     const { id } = terms.create("C:\\repo", 80, 24, {});
     const fake = fakes[0]!;
     const t = terms.get(id)!;
@@ -333,7 +363,8 @@ describe("Windows terminal input socket errors (GH-266)", () => {
 
   for (const code of ["EAGAIN", "EOF"]) {
     it(`a ${code} on the input socket ends only that terminal, tells its client, and does not throw`, async () => {
-      const { inSocket, pty, terms, id, output, exit } = setup();
+      const { inSocket, pty, terms, id, output, exit, ready } = setup();
+      ready();
       const other = terms.create("C:\\repo", 80, 24, {});
       expect(() => inSocket.emit("error", errno(code))).not.toThrow();
       expect(terms.get(id)).toBeUndefined();
@@ -348,7 +379,9 @@ describe("Windows terminal input socket errors (GH-266)", () => {
   }
 
   it("an error after the terminal was closed (input still queued when ConPTY shut) is swallowed, with no second kill", () => {
-    const { inSocket, pty, terms, t, output } = setup();
+    const { inSocket, pty, terms, t, output, ready } = setup();
+    ready();
+    output.mockClear(); // the shell's first output
     terms.close(t);
     expect(() => inSocket.emit("error", errno("EAGAIN"))).not.toThrow();
     expect(() => inSocket.emit("error", errno("EOF"))).not.toThrow();
@@ -357,7 +390,8 @@ describe("Windows terminal input socket errors (GH-266)", () => {
   });
 
   it("refuses input with input_backlog while MAX_PENDING_INPUT_BYTES wait in the input socket", () => {
-    const { inSocket, pty, terms, t } = setup();
+    const { inSocket, pty, terms, t, ready } = setup();
+    ready();
     expect(terms.write(t, "dir\r")).toBeUndefined();
     expect(pty.write).toHaveBeenCalledWith(Buffer.from("dir\r"));
     inSocket.writableLength = MAX_PENDING_INPUT_BYTES - 2;
@@ -368,7 +402,8 @@ describe("Windows terminal input socket errors (GH-266)", () => {
   });
 
   it("counts the cap in bytes, not UTF-16 units: a Buffer is written", () => {
-    const { inSocket, pty, terms, t } = setup();
+    const { inSocket, pty, terms, t, ready } = setup();
+    ready();
     inSocket.writableLength = MAX_PENDING_INPUT_BYTES - 3;
     expect(terms.write(t, "é")).toBeUndefined(); // 2 bytes
     expect(terms.write(t, "éé")).toBe("input_backlog"); // 4 bytes, 2 chars
@@ -377,7 +412,9 @@ describe("Windows terminal input socket errors (GH-266)", () => {
   });
 
   it("destroys the input socket when the shell exits (node-pty never does), and a later error does nothing", () => {
-    const { inSocket, terms, id, exit, output, pty, shellExits } = setup();
+    const { inSocket, terms, id, exit, output, pty, shellExits, ready } = setup();
+    ready();
+    output.mockClear();
     shellExits();
     expect(exit).toHaveBeenCalledTimes(1);
     expect(terms.get(id)).toBeUndefined();
@@ -389,12 +426,13 @@ describe("Windows terminal input socket errors (GH-266)", () => {
     expect(exit).toHaveBeenCalledTimes(1);
   });
 
-  it("without node-pty's _agent.inSocket it still creates, writes and closes, and warns once per process", async () => {
+  it("without node-pty's Windows internals it still creates, writes and closes, and warns once per process", async () => {
     vi.resetModules(); // a fresh module, so its once-per-process flag is unset
     const mod = await import("../src/terminals.ts");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const plain = () => ({ fd: undefined, _socket: { destroyed: false }, onData() {}, onExit() {}, write: vi.fn(), kill: vi.fn() });
+      let exitPlain: (e: { exitCode: number }) => void = () => {};
+      const plain = () => ({ fd: undefined, _socket: { destroyed: false }, onData() {}, onExit: (cb: typeof exitPlain) => void (exitPlain = cb), write: vi.fn(), kill: vi.fn() });
       const ptys: ReturnType<typeof plain>[] = [];
       const terms = mod.createTerminals(nodePtyRoot(), "win32", (() => ptys[ptys.push(plain()) - 1]) as never);
       const a = terms.get(terms.create("C:\\repo", 80, 24, {}).id)!;
@@ -403,17 +441,262 @@ describe("Windows terminal input socket errors (GH-266)", () => {
       expect(ptys[0]!.write).toHaveBeenCalledTimes(1);
       expect(() => terms.close(a)).not.toThrow();
       expect(() => terms.close(b)).not.toThrow();
-      expect(warn.mock.calls.filter(([m]) => String(m).includes("node-pty internals changed"))).toHaveLength(1);
+      expect(() => exitPlain({ exitCode: 0 })).not.toThrow();
+      const warnings = warn.mock.calls.map(([m]) => String(m)).filter((m) => m.includes("node-pty internals changed"));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("_agent.inSocket");
+      expect(warnings[0]).toContain("_agent._conoutSocketWorker");
     } finally {
       warn.mockRestore();
     }
   });
 
   it("a synchronous write error is write_failed, not a throw", () => {
-    const { pty, terms, t } = setup();
+    const { pty, terms, t, ready } = setup();
+    ready();
     pty.write.mockImplementation(() => {
       throw errno("EPIPE");
     });
     expect(terms.write(t, "x")).toBe("write_failed");
+  });
+
+  describe("a shell that exits by itself (GH-268)", () => {
+    it("a shell that exits by itself stops node-pty's conout worker", () => {
+      const { terms, id, exit, inSocket, conout, ready, shellExits } = setup();
+      ready();
+      shellExits();
+      expect(terms.get(id)).toBeUndefined();
+      expect(conout.dispose).toHaveBeenCalledTimes(1);
+      expect(inSocket.destroy).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(1);
+    });
+
+    /** Creates inside a function: the test keeps only a WeakRef and the exit trigger, so nothing else holds the terminal. */
+    const spawnWeak = (disposeStopsWorker: boolean) => {
+      const fake = conpty(disposeStopsWorker, (impl) => impl);
+      const terms = createTerminals(nodePtyRoot(), "win32", (() => fake.pty) as never);
+      const { id } = terms.create("C:\\repo", 80, 24, {});
+      fake.ready();
+      return { ref: new WeakRef(terms.get(id)!), exits: fake.shellExits };
+    };
+    const collected = async (disposeStopsWorker: boolean) => {
+      live.clear();
+      let held: { ref: WeakRef<object>; exits: (() => void) | undefined } | undefined = spawnWeak(disposeStopsWorker);
+      const ref = held.ref;
+      held.exits!();
+      held = undefined;
+      await new Promise((r) => setTimeout(r, 0)); // WeakRef targets live until the end of the current job
+      gc();
+      return ref.deref() === undefined;
+    };
+
+    it("a shell that exits by itself leaves no terminal in memory (weak reference, forced GC)", async () => {
+      expect(await collected(true)).toBe(true);
+    });
+
+    it("control: a conout worker that is never disposed keeps the terminal", async () => {
+      expect(await collected(false)).toBe(false);
+    });
+  });
+
+  describe("an error from node-pty's pipes or workers ends at most that terminal (GH-268)", () => {
+    it("an output socket error before the first output ends only that terminal with a notice, through the agent (-1)", () => {
+      const { outSocket, terms, id, output, exit, agent, pty, inSocket, conout } = setup();
+      const other = terms.create("C:\\repo", 80, 24, {});
+      expect(() => outSocket.emit("error", errno("ENOENT"))).not.toThrow();
+      expect(terms.get(id)).toBeUndefined();
+      expect(terms.list("C:\\repo").map((t) => t.id)).toEqual([other.id]);
+      expect(output).toHaveBeenCalledWith(expect.stringContaining("terminal output failed"));
+      expect(output).toHaveBeenCalledWith(expect.stringContaining("ENOENT"));
+      expect(agent.kill).toHaveBeenCalledTimes(1);
+      expect(pty.kill).not.toHaveBeenCalled();
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(-1);
+      expect(inSocket.destroy).toHaveBeenCalled();
+      expect(conout.dispose).toHaveBeenCalled();
+    });
+
+    it("an output socket error after the first output closes the terminal and node-pty's own handler does not throw", async () => {
+      const { outSocket, pty, exit, ready } = setup();
+      ready();
+      expect(() => outSocket.emit("error", errno("ECONNRESET"))).not.toThrow();
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(exit).toHaveBeenCalledTimes(1);
+    });
+
+    it("EIO on the output socket is left to node-pty", () => {
+      const { outSocket, terms, id, output, pty, ready } = setup();
+      ready();
+      output.mockClear();
+      expect(() => outSocket.emit("error", errno("EIO"))).not.toThrow();
+      expect(terms.get(id)).toBeDefined();
+      expect(output).not.toHaveBeenCalled();
+      expect(pty.kill).not.toHaveBeenCalled();
+    });
+
+    it("an output socket or worker error after the terminal closed is swallowed", () => {
+      const { outSocket, worker, terms, t, pty, output, ready } = setup();
+      ready();
+      output.mockClear();
+      terms.close(t);
+      expect(() => outSocket.emit("error", errno("ECONNRESET"))).not.toThrow();
+      expect(() => worker.emit("error", new Error("boom"))).not.toThrow();
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+      expect(output).not.toHaveBeenCalled();
+    });
+
+    it("an error before the first output, then node-pty's own late exit: one exit, no second teardown", async () => {
+      const { outSocket, exit, conout, inSocket, shellExits } = setup();
+      outSocket.emit("error", errno("ENOENT"));
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(() => shellExits()).not.toThrow();
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(conout.dispose).toHaveBeenCalledTimes(1);
+      expect(inSocket.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("a conout worker error ends only that terminal with a notice", () => {
+      const { worker, terms, id, output, exit, agent } = setup();
+      const msg = "connect ENOENT \\\\.\\pipe\\conpty-1-out";
+      expect(() => worker.emit("error", new Error(msg))).not.toThrow();
+      expect(terms.get(id)).toBeUndefined();
+      expect(output).toHaveBeenCalledWith(expect.stringContaining(msg));
+      expect(agent.kill).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(-1);
+    });
+
+    it("a conout worker error after the first output closes the terminal through pty.kill", () => {
+      const { worker, pty, ready, output } = setup();
+      ready();
+      expect(() => worker.emit("error", new Error("boom"))).not.toThrow();
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+      expect(output).toHaveBeenCalledWith(expect.stringContaining("boom"));
+    });
+  });
+
+  describe("node-pty's console-list child (GH-268)", () => {
+    const child = () => Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const listPid = "4242";
+
+    it("a console-list child that fails falls back to the shell PID and does not throw", async () => {
+      const c = child();
+      const fork = vi.fn(() => c);
+      const { agent } = setup({ fork });
+      const list = agent._getConsoleProcessList();
+      expect(fork).toHaveBeenCalledWith(join(nodePtyRoot(), "lib", "conpty_console_list_agent"), [listPid]);
+      expect(() => c.emit("error", errno("EAGAIN"))).not.toThrow();
+      await expect(list).resolves.toEqual([4242]);
+    });
+
+    it("a fork that throws falls back to the shell PID", async () => {
+      const { agent } = setup({
+        fork: () => {
+          throw errno("EMFILE");
+        },
+      });
+      await expect(agent._getConsoleProcessList()).resolves.toEqual([4242]);
+    });
+
+    it("without an inner PID (0, as node-pty 1.2.x starts) it lists nothing and forks nothing, so kill() never signals PID 0", async () => {
+      const fork = vi.fn();
+      const { agent } = setup({ fork });
+      agent._innerPid = 0;
+      await expect(agent._getConsoleProcessList()).resolves.toEqual([]);
+      expect(fork).not.toHaveBeenCalled();
+    });
+
+    it("on a node-pty other than 1.1.x node-pty's own console-list method stays, with one warning", async () => {
+      vi.resetModules(); // a fresh module, so its once-per-process flag is unset
+      const mod = await import("../src/terminals.ts");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const root = mkdtempSync(join(tmpdir(), "node-pty-"));
+        writeFileSync(join(root, "package.json"), JSON.stringify({ name: "node-pty", version: "1.2.0-beta.1" }));
+        const fork = vi.fn();
+        const fakes: ReturnType<typeof conpty>[] = [];
+        const original = () => Promise.resolve([4242]);
+        const terms = mod.createTerminals(root, "win32", (() => {
+          const f = conpty();
+          f.agent._getConsoleProcessList = original;
+          return fakes[fakes.push(f) - 1]!.pty;
+        }) as never, undefined, fork as never);
+        terms.create("C:\\repo", 80, 24, {});
+        terms.create("C:\\repo", 80, 24, {});
+        expect(fakes[0]!.agent._getConsoleProcessList).toBe(original);
+        expect(fakes[1]!.agent._getConsoleProcessList).toBe(original);
+        expect(fork).not.toHaveBeenCalled();
+        const warnings = warn.mock.calls.map(([m]) => String(m)).filter((m) => m.includes("console-list"));
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain("1.2.0-beta.1");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("the console-list child's answer is used, and its timeout kills it otherwise", async () => {
+      vi.useFakeTimers();
+      try {
+        const answering = child();
+        const silent = child();
+        const fork = vi.fn().mockReturnValueOnce(answering).mockReturnValueOnce(silent);
+        const { agent } = setup({ fork });
+        const first = agent._getConsoleProcessList();
+        answering.emit("message", { consoleProcessList: [1, 2] });
+        await expect(first).resolves.toEqual([1, 2]);
+        vi.advanceTimersByTime(5000);
+        expect(answering.kill).not.toHaveBeenCalled();
+        const second = agent._getConsoleProcessList();
+        vi.advanceTimersByTime(5000);
+        expect(silent.kill).toHaveBeenCalled();
+        await expect(second).resolves.toEqual([4242]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("input before the shell's first output (GH-268)", () => {
+    it("input before the shell's first output counts against MAX_PENDING_INPUT_BYTES", () => {
+      const { pty, terms, t, ready } = setup();
+      expect(terms.write(t, "x".repeat(MAX_PENDING_INPUT_BYTES - 1))).toBeUndefined();
+      expect(terms.write(t, "ab")).toBe("input_backlog");
+      expect(pty.write).toHaveBeenCalledTimes(1);
+      ready(); // node-pty flushes its deferred input into the socket now
+      expect(terms.write(t, "ab")).toBeUndefined();
+    });
+
+    it("early input is counted in bytes", () => {
+      const { terms, t } = setup();
+      expect(terms.write(t, "x".repeat(MAX_PENDING_INPUT_BYTES - 3))).toBeUndefined();
+      expect(terms.write(t, "éé")).toBe("input_backlog");
+    });
+  });
+});
+
+describe("node-pty Windows internals (GH-268)", () => {
+  // Fails on a node-pty upgrade that renames what windowsInternals() in terminals.ts guards: recheck it, then update this test.
+  const src = (f: string) => readFileSync(join(nodePtyRoot(), "lib", f), "utf8");
+
+  it("node-pty still has the Windows internals the daemon guards", () => {
+    const terminal = src("windowsTerminal.js");
+    expect(terminal).toMatch(/_?this\._socket = _?this\._agent\.outSocket/);
+    expect(terminal).toMatch(/_deferreds/);
+    // The output-socket guard relies on this rule: node-pty rethrows only when no listener but its own exists.
+    expect(terminal).toMatch(/listeners\('error'\)\.length < 2/);
+    const agent = src("windowsPtyAgent.js");
+    expect(agent).toMatch(/_conoutSocketWorker/);
+    expect(agent).toMatch(/_getConsoleProcessList/);
+    // The console-list copy relies on kill() calling it (and on `process.kill` of its result).
+    expect(agent).toMatch(/_?this\._getConsoleProcessList\(\)\.then/);
+    expect(agent).toMatch(/"inSocket"|get inSocket/);
+    expect(agent).toMatch(/_innerPid/);
+    expect(agent).toMatch(/conpty_console_list_agent/);
+    const conout = src("windowsConoutConnection.js");
+    expect(conout).toMatch(/this\._worker = new/);
+    expect(conout).toMatch(/prototype\.dispose/);
+    expect(statSync(join(nodePtyRoot(), "lib", "conpty_console_list_agent.js")).isFile()).toBe(true);
   });
 });

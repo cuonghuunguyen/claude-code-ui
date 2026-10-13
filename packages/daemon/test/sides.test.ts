@@ -9,6 +9,8 @@ import type { AddressInfo } from "node:net";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type PushPayload, type ServerMessage } from "@claude-ui/protocol";
+import { runGit } from "../src/git-runner.ts";
+import { SideGone } from "../src/wsl-git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
@@ -375,6 +377,15 @@ describe("sides", () => {
     expect(sideFrames.join("")).toContain('"media.read"');
     const ok = await c.request({ type: "fs.media", path: join(winRoot, "l.png") });
     expect(ok).toMatchObject({ type: "reply", result: { mime: "image/png", size: 3 } });
+    c.ws.close();
+  });
+
+  it.skipIf(win32)("artifact.preview of a side session is side_unsupported", async () => {
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    const created = await c.request({ type: "session.create", cwd: wslRoot });
+    expect(await c.request({ type: "artifact.preview", sessionId: created.result.session.id, partId: "toolu_a" })).toMatchObject({ type: "error", code: "side_unsupported" });
     c.ws.close();
   });
 
@@ -912,5 +923,50 @@ describe("local cwds on a POSIX hub", () => {
     await expect(named.start("docker:gone")).rejects.toThrow(/^Docker: gone is not running\.$/);
     s.close();
     named.close();
+  });
+});
+
+describe("git frames", () => {
+  /** A side that answers git frames only (stdio, no daemon). */
+  const gitSide = (git?: (o: never) => Promise<{ stdout: Buffer; stderr: string }>) => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const exit = new EventEmitter();
+    runSide({ input: stdin, output: stdout, accept: () => {}, ...(git && { git: git as never }) });
+    return { proc: { stdin, stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 0), on: (e: "exit", l: (c: number | null) => void) => exit.on(e, l) } satisfies SideProcess, exit };
+  };
+
+  it("a ready side runs git for the hub: stdout bytes, stdin input, git errors", async () => {
+    const repo = dir("gitframe-");
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=a", "-c", "user.email=a@x.test", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
+    const side = gitSide(runGit);
+    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    await s.start("wsl:Ubuntu");
+    expect(s.wslReady("ubuntu")).toBe("wsl:Ubuntu");
+    const r = await s.git("wsl:Ubuntu", { cwd: repo, args: ["cat-file", "--batch"], env: { GIT_TERMINAL_PROMPT: "0" }, input: "HEAD\n" });
+    expect(r.stdout.toString()).toMatch(/^[0-9a-f]{40} commit \d+\n/);
+    await expect(s.git("wsl:Ubuntu", { cwd: repo, args: ["no-such-cmd"], env: {} })).rejects.toMatchObject({ code: 1, stderr: expect.stringMatching(/\S/) });
+    s.close();
+  });
+
+  it("git to a side that is not ready rejects SideGone; a side that exits fails its pending git with SideGone", async () => {
+    const side = gitSide(() => new Promise(() => {}));
+    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    expect(s.wslReady("Ubuntu")).toBeUndefined();
+    await expect(s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} })).rejects.toBeInstanceOf(SideGone);
+    await s.start("wsl:Ubuntu");
+    const pending = s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} });
+    side.exit.emit("exit", 1);
+    await expect(pending).rejects.toBeInstanceOf(SideGone);
+    expect(s.wslReady("Ubuntu")).toBeUndefined();
+  });
+
+  it("a side without a git runner answers an error instead of hanging", async () => {
+    const side = gitSide();
+    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    await s.start("wsl:Ubuntu");
+    await expect(s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} })).rejects.toThrow("no git");
+    s.close();
   });
 });
