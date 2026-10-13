@@ -97,7 +97,17 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     // Dot names: the sweep of earlier versions below ("$root"/*) never matches them.
     '  new="$root/.new-$$"; old="$root/.old-$$"',
     '  rm -rf "$new"; mkdir -p "$new" || say install_failed',
-    `  out=$(npm install --prefix "$new" ${docker ? "" : "--install-links "}--omit=dev --no-save --no-fund --no-audit --loglevel=error "$src" 2>&1 >/dev/null) || { rm -rf "$new"; say install_failed "$(printf '%s' "$out" | tail -n 3 | tr '\\n' ' ')"; }`,
+    // node-gyp downloads the Node headers unless npm_config_nodedir names a folder with include/node: use the side's own headers, only
+    // when they are the running node's version (else node-gyp downloads as before). A set npm_config_nodedir stays.
+    "  nd=; if [ -z \"$npm_config_nodedir\" ]; then",
+    '    nv=$(node -p process.versions.node 2>/dev/null)',
+    '    for c in "$(dirname "$(dirname "$(command -v node)")")" /usr /usr/local; do',
+    '      h="$c/include/node/node_version.h"; [ -f "$c/include/node/node.h" ] && [ -f "$h" ] || continue',
+    '      hv=$(for k in MAJOR MINOR PATCH; do sed -n "s/^#define NODE_${k}_VERSION \\([0-9][0-9]*\\).*/\\1/p" "$h" | head -n 1; done | tr \'\\n\' . | sed \'s/\\.$//\')',
+    '      [ -n "$nv" ] && [ "$hv" = "$nv" ] && { nd="$c"; break; }',
+    "    done",
+    "  fi",
+    `  out=$({ [ -z "$nd" ] || export npm_config_nodedir="$nd"; npm install --prefix "$new" ${docker ? "" : "--install-links "}--omit=dev --no-save --no-fund --no-audit --loglevel=error "$src" 2>&1 >/dev/null; }) || { rm -rf "$new"; say install_failed "$(printf '%s' "$out" | tail -n 3 | tr '\\n' ' ')"; }`,
     '  [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] || { rm -rf "$new"; say install_failed "the package has no dist/cli.js"; }',
     '  sdk "$new" || { rm -rf "$new"; say install_failed "npm did not install the Claude Agent SDK binary for Linux (an optional dependency)"; }',
     // The new install must run (node exits non-zero on a missing or unloadable dependency) before it replaces the old one.

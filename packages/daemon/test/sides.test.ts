@@ -243,6 +243,55 @@ describe("sides", () => {
     });
   });
 
+  // node-gyp downloads the Node headers unless npm_config_nodedir names a folder with include/node (GH-260).
+  describe.skipIf(!hasSh || process.platform === "win32")("the setup script and npm_config_nodedir", () => {
+    const FAKE = "22.99.1";
+    /** Runs the docker setup script with a fake node (prints FAKE) and a fake npm that records npm_config_nodedir; `headers`: node.h and node_version.h under <prefix>/include/node. */
+    function run({ headers, version = FAKE, env = {} }: { headers?: "prefix" | "none"; version?: string; env?: Record<string, string> }) {
+      const home = dir("nd-home-");
+      const prefix = dir("nd-prefix-");
+      const bin = join(prefix, "bin");
+      mkdirSync(bin, { recursive: true });
+      const tools = dir("nd-tools-");
+      for (const tool of ["make", "python3", "g++"]) writeFileSync(join(tools, tool), "#!/bin/sh\n", { mode: 0o755 });
+      const [maj, min, pat] = version.split(".");
+      if (headers === "prefix") {
+        mkdirSync(join(prefix, "include/node"), { recursive: true });
+        writeFileSync(join(prefix, "include/node/node.h"), "");
+        writeFileSync(join(prefix, "include/node/node_version.h"), `#define NODE_MAJOR_VERSION ${maj}\n#define NODE_MINOR_VERSION ${min}\n#define NODE_PATCH_VERSION ${pat}\n`);
+      }
+      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -v) echo v${FAKE};; -p) case "$2" in *split*) echo 22;; *) echo ${FAKE};; esac;; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
+      const log = join(home, "nodedir.log");
+      writeFileSync(join(tools, "npm"), `#!/bin/sh\nwhile [ "$1" != --prefix ]; do shift; done; p=$2\necho "\${npm_config_nodedir-unset}" >> '${log}'\nmkdir -p "$p/node_modules/claude-code-ui/dist" "$p/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"\necho 'console.log("side started")' > "$p/node_modules/claude-code-ui/dist/cli.js"\n`, { mode: 0o755 });
+      const tgz = join(home, "side.tgz");
+      writeFileSync(tgz, "");
+      const r = spawnSync("sh", ["-c", setupScript(tgz, "0.5.0-1", "docker")], { cwd: home, encoding: "utf8", env: { PATH: `${bin}:${tools}:${process.env.PATH}`, HOME: home, ANTHROPIC_API_KEY: "test", ...env } });
+      return { out: r.stdout, nodedir: readFileSync(log, "utf8").trim(), prefix };
+    }
+
+    it("sets npm_config_nodedir to the folder with include/node/node.h when its version is the node's", () => {
+      const r = run({ headers: "prefix" });
+      expect(r.out).toContain("side started");
+      expect(r.nodedir).toBe(r.prefix);
+    });
+    it("does not set npm_config_nodedir when the header is missing", () => {
+      const r = run({ headers: "none" });
+      expect(r.out).toContain("side started");
+      expect(r.nodedir).toBe("unset");
+    });
+    it("does not set npm_config_nodedir when the headers are another version than the node", () => {
+      expect(run({ headers: "prefix", version: "22.98.0" }).nodedir).toBe("unset");
+    });
+    it("keeps an npm_config_nodedir the environment already has", () => {
+      expect(run({ headers: "prefix", env: { npm_config_nodedir: "/custom" } }).nodedir).toBe("/custom");
+    });
+    it("the script text sets it only in the install, from the three header places", () => {
+      const s = setupScript("/tmp/a.tgz", "1-1", "docker");
+      for (const part of ["/usr /usr/local", 'dirname "$(dirname "$(command -v node)")"', "include/node/node.h", "npm_config_nodedir"]) expect(s).toContain(part);
+      expect(s.indexOf("npm_config_nodedir")).toBeLessThan(s.indexOf('npm install --prefix "$new"'));
+    });
+  });
+
   it("setup errors in a container name the container's next step", () => {
     expect(setupMessage("not_logged_in", "", "Docker: dev", true)).toBe("Claude is not logged in to Docker: dev. Run claude login in the container or copy your ~/.claude/.credentials.json into it (or start it with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN set), then retry.");
     expect(setupMessage("node_missing", "", "Docker: dev", true)).toBe("Node.js 22 or newer is not installed in Docker: dev. Use an image with Node.js 22+ (e.g. node:22) or install it in the container, then retry.");
