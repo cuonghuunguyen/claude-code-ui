@@ -69,7 +69,7 @@ function emptySearch(query: string, archived: boolean, projects: string[]) {
 const CHECK_ITEM = cn(ITEM, "gap-2");
 const Tick = ({ on }: { on: boolean }) => <span className="grid size-4 shrink-0 place-items-center">{on && <CheckIcon className="size-4" aria-hidden />}</span>;
 
-/** IntelliJ-style options of the sidebar (kebab in the Projects header): behavior, what shows, project order; below md also Expand all / Collapse all. */
+/** IntelliJ-style options of the sidebar (kebab in the Projects header): behavior, what shows, grouping, project order; below md also Expand all / Collapse all. */
 function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollapse, treeHint, narrow }: { view: SidebarView; onView: (v: Partial<SidebarView>) => void; archived: boolean; onArchived: (on: boolean) => void; onExpand: () => void; onCollapse: () => void; treeHint: string; narrow: boolean }) {
   const check = (label: string, on: boolean, set: (on: boolean) => void, testId: string) => (
     <Menu.CheckboxItem className={CHECK_ITEM} checked={on} onCheckedChange={set} data-testid={testId}>
@@ -106,6 +106,18 @@ function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollap
               {check("Archived sessions", archived, onArchived, "sidebar-opt-archived")}
               {check("Day headers", view.dayHeaders, (dayHeaders) => onView({ dayHeaders }), "sidebar-opt-day-headers")}
               {check("Only active sessions", view.onlyActive, (onlyActive) => onView({ onlyActive }), "sidebar-opt-only-active")}
+            </Menu.Group>
+            <Menu.Separator className="my-1 h-px bg-border" />
+            <Menu.Group>
+              <Menu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">Group by</Menu.GroupLabel>
+              <Menu.RadioGroup value={view.layout} onValueChange={(layout) => onView({ layout: layout as SidebarView["layout"] })}>
+                {(["default", "classic"] as const).map((v) => (
+                  <Menu.RadioItem key={v} value={v} className={CHECK_ITEM} closeOnClick data-testid={`sidebar-opt-group-${v === "default" ? "worktree" : "project"}`}>
+                    <Tick on={view.layout === v} />
+                    {v === "default" ? "Worktree" : "Project"}
+                  </Menu.RadioItem>
+                ))}
+              </Menu.RadioGroup>
             </Menu.Group>
             <Menu.Separator className="my-1 h-px bg-border" />
             <Menu.Group>

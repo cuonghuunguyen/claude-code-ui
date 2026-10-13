@@ -33,7 +33,7 @@ See [Notifications](../features/notifications).
 | Setting | Does |
 | --- | --- |
 | Show only active sessions | Lists only sessions that run or need input. Search still finds all. |
-| Layout | **Default** groups a project's sessions by worktree. **Classic** lists them right under the project, with their state as text. |
+| Group by | **Worktree** groups a project's sessions by worktree. **Project** lists them right under the project, with their state as text. |
 
 ## Tabs
 
