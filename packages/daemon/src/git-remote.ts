@@ -3,7 +3,8 @@
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { wslHostPath, wslPathOf } from "@claude-ui/protocol";
-import { ceilingEnv, gitDirsOf, gitRefs, real, topIn, WorktreeError } from "./git.ts";
+import type { GitBranchInfo, GitBranchResult } from "@claude-ui/protocol";
+import { ceilingEnv, gitDirsOf, gitRefs, isHash, real, topIn, WorktreeError } from "./git.ts";
 import { BATCH_SSH, runGit } from "./git-runner.ts";
 import { redact } from "./plugins.ts";
 import { foreignPointer } from "./remote-path.ts";
@@ -120,23 +121,32 @@ async function remoteOp(top: string, verb: string, args: string[], env: NodeJS.P
 
 export type RemoteResult = { output: string; refs: string | null };
 
+/** Remote names and the user's own ssh command of the repository (`core.sshCommand`). */
+async function remoteConfigOf(top: string): Promise<{ names: Set<string>; sshCommand: string }> {
+  const base = { ...process.env, ...ceilingEnv(top), GIT_TERMINAL_PROMPT: "0" };
+  const cfg = await local(top, ["config", "--get-regexp", "^(remote\\..+\\.url|core\\.sshcommand)$"], base);
+  const names = new Set<string>();
+  let sshCommand = "";
+  for (const line of cfg.out.split("\n").filter(Boolean)) {
+    const sp = line.indexOf(" ");
+    const key = sp < 0 ? line : line.slice(0, sp);
+    if (key.toLowerCase() === "core.sshcommand") sshCommand = line.slice(sp + 1);
+    else names.add(key.slice(7, -4));
+  }
+  return { names, sshCommand };
+}
+const WSL_REFUSED = "Fetch, push and pull are not supported for WSL projects yet";
+
+export type RemoteOptions = { allowed: (p: string) => boolean; platform?: string };
+
 /** `git fetch --all` in the repository of `cwd`; null outside a work tree. */
-export async function gitFetch(cwd: string, o: { allowed: (p: string) => boolean; platform?: string }): Promise<RemoteResult | null> {
+export async function gitFetch(cwd: string, o: RemoteOptions): Promise<RemoteResult | null> {
   // The WSL runners (side, wsl.exe) cannot end a timed-out fetch's ssh child, so its lock could not be trusted.
   if (wslPathOf(cwd)) throw new WorktreeError("bad_request", "Fetch is not supported for WSL projects yet");
   const top = topIn(cwd, o.allowed);
   if (!top) return null;
   return exclusive(top, async () => {
-    const base = { ...process.env, ...ceilingEnv(top), GIT_TERMINAL_PROMPT: "0" };
-    const cfg = await local(top, ["config", "--get-regexp", "^(remote\\..+\\.url|core\\.sshcommand)$"], base);
-    const names = new Set<string>();
-    let sshCommand = "";
-    for (const line of cfg.out.split("\n").filter(Boolean)) {
-      const sp = line.indexOf(" ");
-      const key = sp < 0 ? line : line.slice(0, sp);
-      if (key.toLowerCase() === "core.sshcommand") sshCommand = line.slice(sp + 1);
-      else names.add(key.slice(7, -4));
-    }
+    const { names, sshCommand } = await remoteConfigOf(top);
     if (names.size === 0) throw new WorktreeError("bad_request", "No remote to fetch from");
     if (names.size > MAX_REMOTES) throw new WorktreeError("bad_request", `Too many remotes (${names.size}): fetch in a terminal`);
     const env = remoteEnv(top, sshCommand);
@@ -145,3 +155,121 @@ export async function gitFetch(cwd: string, o: { allowed: (p: string) => boolean
     return { output, refs: gitRefs(top, o.allowed) };
   });
 }
+
+// ---- Branch menu: push, force push, pull (docs/spec.md "Layout", Graph tab) ----
+
+const hex = (h: unknown): h is string => isHash(h);
+/** Only local branches: a push or pull never acts on HEAD, a sha, a tag or a remote branch. */
+export function branchRef(ref: unknown): string {
+  const ok = typeof ref === "string" && ref.length <= 255 && /^refs\/heads\/[^\0-\x20\x7f~^:?*[\\]+$/.test(ref) && !ref.includes("..") && !ref.includes("@{") && !ref.endsWith("/") && !ref.endsWith(".lock") && !ref.endsWith(".") && !ref.includes("//");
+  if (!ok) throw new WorktreeError("bad_request", "Not a local branch");
+  return ref;
+}
+
+const RS = "\x1e";
+const US = "\x1f";
+const sameDir = (a: string, b: string) => real(a) === real(b);
+
+/** Everything the menu shows and the exact argv of each action, re-read from git. */
+async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remotes: Set<string>): Promise<GitBranchInfo> {
+  const f = (...fields: string[]) => `--format=${fields.join(`%1f`)}%1e`;
+  const rows = (out: string) => out.split(RS).map((r) => r.replace(/^\n/, "")).filter(Boolean).map((r) => r.split(US));
+  const own = rows((await local(top, ["for-each-ref", f("%(refname)", "%(objectname)", "%(upstream)", "%(upstream:remotename)", "%(upstream:remoteref)", "%(push:remotename)", "%(worktreepath)"), "--", ref], env)).out).find((r) => r[0] === ref);
+  if (!own) throw new WorktreeError("bad_request", "Unknown branch");
+  const [, localHash = "", upstream = "", upRemote = "", upRef = "", pushRemote = "", worktree = ""] = own;
+  const remoteRefs = new Map<string, string>();
+  const symrefs = new Map<string, string>();
+  for (const r of rows((await local(top, ["for-each-ref", f("%(refname)", "%(objectname)", "%(symref)"), "--", "refs/remotes"], env)).out)) {
+    remoteRefs.set(r[0]!, r[1]!);
+    if (r[2]) symrefs.set(r[0]!, r[2]);
+  }
+  const name = ref.slice(11);
+  const info: GitBranchInfo = { ref, local: localHash };
+  if (worktree) info.checkedOut = sameDir(worktree, top) ? "here" : worktree;
+  if (upstream) info.upstream = upstream.replace(/^refs\/(heads|remotes)\//, "");
+  const only = remotes.size === 1 ? [...remotes][0] : undefined;
+  const remote = [pushRemote, upRemote !== "." ? upRemote : "", only, remotes.has("origin") ? "origin" : undefined].find((r) => r && remotes.has(r));
+  const why: NonNullable<GitBranchInfo["why"]> = {};
+  if (!remote) {
+    why.push = "No remote";
+    why.forcePush = "No remote";
+  } else {
+    const remoteRef = upRemote === remote && upRef ? upRef : ref;
+    const tracking = `refs/remotes/${remote}/${remoteRef.replace(/^refs\/heads\//, "")}`;
+    info.remote = remote;
+    info.remoteRef = remoteRef;
+    const trackingHash = remoteRefs.get(tracking);
+    if (trackingHash) {
+      info.tracking = tracking;
+      info.trackingHash = trackingHash;
+      info.isDefault = symrefs.get(`refs/remotes/${remote}/HEAD`) === tracking;
+      const lr = await local(top, ["rev-list", "--left-right", "--count", `${ref}...${tracking}`], env);
+      const [a, b] = lr.out.split(/\s+/).map(Number);
+      if (Number.isInteger(a) && Number.isInteger(b)) {
+        info.ahead = a;
+        info.behind = b;
+      }
+    }
+    const spec = `${ref}:${remoteRef}`;
+    info.push = ["push", ...(upstream ? [] : ["--set-upstream"]), remote, spec];
+    if (trackingHash) info.forcePush = ["push", `--force-with-lease=${remoteRef}:${trackingHash}`, remote, spec];
+    else why.forcePush = `No ${remote}/${remoteRef.replace(/^refs\/heads\//, "")} yet: fetch first`;
+  }
+  if (!upstream) why.pull = "No upstream branch";
+  else if (upRemote === "." || !upRemote || !upRef) why.pull = "The upstream is a local branch: pull in a terminal";
+  else if (info.checkedOut === "here") info.pull = ["pull", "--no-rebase", "--ff-only", upRemote, upRef];
+  else if (info.checkedOut) why.pull = `Checked out in ${info.checkedOut}: pull there`;
+  else info.pull = ["fetch", upRemote, `${upRef}:${ref}`];
+  if (why.push || why.forcePush || why.pull) info.why = why;
+  void name;
+  return info;
+}
+
+/** Menu data of a local branch; null outside a work tree. */
+export async function gitBranch(cwd: string, ref: string, o: RemoteOptions): Promise<GitBranchResult["branch"]> {
+  if (wslPathOf(cwd)) throw new WorktreeError("bad_request", WSL_REFUSED);
+  const r = branchRef(ref);
+  const top = topIn(cwd, o.allowed);
+  if (!top) return null;
+  const { names } = await remoteConfigOf(top);
+  return branchInfo(top, r, { ...process.env, ...ceilingEnv(top), GIT_TERMINAL_PROMPT: "0" }, names);
+}
+
+type Write = { ref: string; local: string; lease?: string } & RemoteOptions;
+async function writeOp(cwd: string, o: Write, verb: "push" | "pull"): Promise<RemoteResult | null> {
+  if (wslPathOf(cwd)) throw new WorktreeError("bad_request", WSL_REFUSED);
+  const ref = branchRef(o.ref);
+  if (!hex(o.local)) throw new WorktreeError("bad_request", "Bad commit");
+  if (o.lease !== undefined && !hex(o.lease)) throw new WorktreeError("bad_request", "Bad lease");
+  const top = topIn(cwd, o.allowed);
+  if (!top) return null;
+  return exclusive(top, async () => {
+    const { names, sshCommand } = await remoteConfigOf(top);
+    const env = remoteEnv(top, sshCommand);
+    const info = await branchInfo(top, ref, env, names);
+    const x = ref.slice(11);
+    if (o.local !== info.local) throw new WorktreeError("stale", `${x} moved since the menu opened: reopen it`);
+    let argv: string[];
+    let remote: string | undefined;
+    if (verb === "push") {
+      remote = info.remote;
+      if (o.lease !== undefined) {
+        if (!info.forcePush) throw new WorktreeError("bad_request", info.why?.forcePush ?? "Force push is not available");
+        if (o.lease !== info.trackingHash) throw new WorktreeError("stale", `${info.tracking!.replace(/^refs\/remotes\//, "")} moved since the menu opened: fetch and reopen it`);
+        argv = info.forcePush;
+      } else {
+        if (!info.push) throw new WorktreeError("bad_request", info.why?.push ?? "Push is not available");
+        argv = info.push;
+      }
+    } else {
+      if (!info.pull) throw new WorktreeError("bad_request", info.why?.pull ?? "Pull is not available");
+      argv = info.pull;
+      remote = argv[argv[0] === "pull" ? 3 : 1];
+    }
+    await checkRemotes(top, remote ? [remote] : [], verb === "push", env, o.allowed, o.platform ?? process.platform);
+    const output = await remoteOp(top, verb, argv, env);
+    return { output, refs: gitRefs(top, o.allowed) };
+  });
+}
+export const gitPush = (cwd: string, o: Write) => writeOp(cwd, o, "push");
+export const gitPull = (cwd: string, o: Omit<Write, "lease">) => writeOp(cwd, o, "pull");

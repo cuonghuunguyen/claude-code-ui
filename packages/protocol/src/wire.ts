@@ -180,6 +180,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string }
   /** Graph tab Fetch: `git fetch --all` in `cwd`'s repository (docs/spec.md "Layout", Graph tab). Reply GitRemoteResult; `remote` null outside a git work tree. */
   | { type: "git.fetch"; cwd: string }
+  /** Branch menu data (docs/spec.md "Layout", Graph tab): where push/pull go and the exact git argv of each; `ref` a full refs/heads/ name. Reply GitBranchResult. */
+  | { type: "git.branch"; cwd: string; ref: string }
+  /** Push `ref` as `git.branch` showed it; `local`: the sha shown; `lease`: force push with --force-with-lease=<remoteRef>:<lease>. Reply GitRemoteResult. */
+  | { type: "git.push"; cwd: string; ref: string; local: string; lease?: string }
+  /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown. Reply GitRemoteResult. */
+  | { type: "git.pull"; cwd: string; ref: string; local: string }
   /** Creates `<repo>/.claude/worktrees/<name>` on branch `worktree-<name>` (docs/spec.md "Worktrees"); no `name`: a generated one. Reply WorktreeCreateResult. Broadcasts `sessions.changed`. */
   | { type: "worktree.create"; cwd: string; name?: string }
   /** What removing `path` loses; reply WorktreeStatusResult. */
@@ -488,6 +494,27 @@ export type GitDiffResult = { diff: GitDiff | null };
 export type GitRemote = { output: string; refs: string | null };
 /** `remote` null outside a git work tree. */
 export type GitRemoteResult = { remote: GitRemote | null };
+/** What the branch menu shows for a local branch and the exact git argv (without "git") of each action; an absent argv is unavailable and `why` says why. */
+export type GitBranchInfo = {
+  ref: string;
+  local: string;
+  /** "here": HEAD of the session's worktree; a path: checked out in that other worktree; absent: nowhere. */
+  checkedOut?: string;
+  remote?: string;
+  remoteRef?: string;
+  tracking?: string;
+  trackingHash?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  isDefault?: boolean;
+  push?: string[];
+  forcePush?: string[];
+  pull?: string[];
+  why?: { push?: string; forcePush?: string; pull?: string };
+};
+/** `branch` null outside a git work tree. */
+export type GitBranchResult = { branch: GitBranchInfo | null };
 export const GIT_LOG_MAX_LIMIT = 500;
 
 /** Where an MCP server (or plugin setting) is saved; Claude Code's term. local: this project, private; user: all projects; project: `.mcp.json`. */
