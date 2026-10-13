@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ArtifactPreview, ArtifactPreviewContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
+import { ArtifactConnectedContext, ArtifactPreview, ArtifactPreviewContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -11,8 +11,16 @@ document.body.append(el);
 const root = createRoot(el);
 let n = 0;
 const ok = () => vi.fn<ArtifactPreviewLoader>(async () => ({ url: `/artifact/${"a".repeat(32)}/p.html?v=${++n}`, size: 1, mtime: n }));
-const mount = async (loader: ArtifactPreviewLoader | undefined, files = 0, partId = `toolu_${n++}`) => {
-  await act(async () => root.render(<ArtifactPreviewContext value={loader}><ArtifactPreview partId={partId} title="T" files={files} /></ArtifactPreviewContext>));
+const mount = async (loader: ArtifactPreviewLoader | undefined, files = 0, partId = `toolu_${n++}`, connected = true) => {
+  await act(async () =>
+    root.render(
+      <ArtifactConnectedContext value={connected}>
+        <ArtifactPreviewContext value={loader}>
+          <ArtifactPreview partId={partId} title="T" files={files} />
+        </ArtifactPreviewContext>
+      </ArtifactConnectedContext>,
+    ),
+  );
 };
 const button = (label: string) => [...el.querySelectorAll("button")].find((b) => b.textContent === label) as HTMLButtonElement | undefined;
 const click = async (label: string) => void (await act(async () => button(label)!.click()));
@@ -85,5 +93,34 @@ describe("ArtifactPreview", () => {
       expect(button(l)!.className).toMatch(/min-h-11/);
       expect(button(l)!.className).toMatch(/md:min-h-0/);
     }
+  });
+
+  it("Reload remounts the frame even when the URL is unchanged", async () => {
+    const loader = vi.fn<ArtifactPreviewLoader>(async () => ({ url: "/artifact/same/p.html?v=1", size: 1, mtime: 1 }));
+    await mount(loader);
+    await click("Show preview");
+    const before = el.querySelector("iframe");
+    await click("Reload");
+    expect(el.querySelector("iframe")).not.toBe(before);
+  });
+
+  it("a reconnect while open asks for a fresh URL", async () => {
+    const loader = ok();
+    await mount(loader, 0, "toolu_rc");
+    await click("Show preview");
+    const first = el.querySelector("iframe")!.getAttribute("src");
+    await mount(loader, 0, "toolu_rc", false);
+    expect(loader).toHaveBeenCalledTimes(1);
+    await mount(loader, 0, "toolu_rc", true);
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(el.querySelector("iframe")!.getAttribute("src")).not.toBe(first);
+  });
+
+  it("a reconnect while collapsed asks for nothing", async () => {
+    const loader = ok();
+    await mount(loader, 0, "toolu_rc2");
+    await mount(loader, 0, "toolu_rc2", false);
+    await mount(loader, 0, "toolu_rc2", true);
+    expect(loader).not.toHaveBeenCalled();
   });
 });

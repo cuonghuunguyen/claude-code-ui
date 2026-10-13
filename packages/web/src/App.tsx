@@ -52,7 +52,7 @@ import { Message, MessageAction, MessageActions, MessageContent, MessageResponse
 import { Button } from "@/components/ui/button";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
-import { ArtifactPreviewContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
+import { ArtifactConnectedContext, ArtifactPreviewContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
@@ -2641,6 +2641,7 @@ export function SessionPane({
   return (
     <MediaContext value={onMedia}>
     <ArtifactPreviewContext value={onArtifactPreview}>
+    <ArtifactConnectedContext value={connected}>
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
       {current ? (
@@ -2836,6 +2837,7 @@ export function SessionPane({
       </div>
     </OpenRunContext>
     </CwdContext>
+    </ArtifactConnectedContext>
     </ArtifactPreviewContext>
     </MediaContext>
   );
