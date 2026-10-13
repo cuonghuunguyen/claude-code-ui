@@ -27,7 +27,8 @@ export async function runClient(cli: Client, io: ClientIo): Promise<number> {
   const json = (v: unknown) => out(JSON.stringify(v, null, 2));
   try {
     const port = resolvePort({ flag: cli.port, env: io.env, dir: io.dir });
-    const token = readToken(tokenPath({ tokenFile: cli.tokenFile, env: io.env, dir: io.dir }));
+    const tp = tokenPath({ tokenFile: cli.tokenFile, env: io.env, dir: io.dir });
+    const token = readToken(tp.file, tp.explicit);
     await probe(port, token);
     const list = () => (io.request ? io.request() : request<ListResult>(port, token, { type: "session.list" }));
     const url = `http://127.0.0.1:${port}/`;
@@ -107,14 +108,23 @@ const table = (head: string[], rows: string[][]) => {
   return all.map((r) => r.map((c, i) => (i === r.length - 1 ? c : c.padEnd(w[i]!))).join("  ").trimEnd()).join("\n");
 };
 
-/** Opens `url` in the default browser: `cmd.exe /c start` in WSL, `open` on macOS, `start` on Windows, else xdg-open. */
+/** How long an opener may run before it counts as launched (xdg-open may stay while the browser starts). */
+const OPENER_WAIT_MS = 5_000;
+
+/** Runs the opener; rejects when it cannot start or exits non-zero (a launcher that was still running after OPENER_WAIT_MS counts as launched). */
+export function runOpener(cmd: string, args: string[], waitMs = OPENER_WAIT_MS): Promise<void> {
+  return new Promise((ok, fail) => {
+    const c = spawn(cmd, args, { stdio: "ignore", windowsHide: true });
+    const timer = setTimeout(() => (c.unref(), ok()), waitMs);
+    c.once("error", (e) => (clearTimeout(timer), fail(e)));
+    c.once("exit", (code) => (clearTimeout(timer), code ? fail(new Error(`${cmd} exited with code ${code}`)) : ok()));
+  });
+}
+
+/** Opens `url` in the default browser: `open` on macOS, `cmd /c start` on Windows, `cmd.exe /c start` in WSL, else xdg-open. */
 export function openInBrowser(url: string): Promise<void> {
   const wsl = process.platform === "linux" && /microsoft/i.test(release());
   const [cmd, args]: [string, string[]] =
     process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : wsl ? ["cmd.exe", ["/c", "start", "", url]] : ["xdg-open", [url]];
-  return new Promise((ok, fail) => {
-    const c = spawn(cmd, args, { stdio: "ignore", detached: true, windowsHide: true });
-    c.once("error", fail);
-    c.once("spawn", () => (c.unref(), ok()));
-  });
+  return runOpener(cmd, args);
 }

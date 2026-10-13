@@ -35,6 +35,9 @@ Options (a flag overrides its environment variable):
   -h, --help          print this help
 `;
 
+/** Printed under a usage error; the full HELP is for `--help`. */
+export const USAGE_HINT = "Usage: claude-ui [options] | claude-ui update | claude-ui status|open|sessions|projects|workers [options]\nRun claude-ui --help for the options.";
+
 /** Printed under the pairing URL of an HTTPS start (--tailscale, --hostname): installing the app needs HTTPS. */
 export const PHONE_HINT = "Phone: open the link, then Install app (Android Chrome) or Share > Add to Home Screen (iOS Safari); on iOS paste the link into the app's pairing field.";
 

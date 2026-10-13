@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,9 +6,9 @@ import type { AddressInfo } from "node:net";
 import { afterAll, describe, expect, it } from "vitest";
 import type { ListResult, SessionListItem } from "@claude-ui/protocol";
 import { parseCli, type Cli } from "../src/cli.ts";
-import { daemonFile, readDaemonFile, removeDaemonFile, writeDaemonFile } from "../src/ctl/daemon-file.ts";
+import { claimDaemonFile, daemonFile, readDaemonFile, removeDaemonFile, writeDaemonFile } from "../src/ctl/daemon-file.ts";
 import { resolvePort } from "../src/ctl/connect.ts";
-import { runClient, type ClientIo } from "../src/ctl/commands.ts";
+import { runClient, runOpener, type ClientIo } from "../src/ctl/commands.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon } from "../src/server.ts";
 import { fakeQuery } from "./fake-query.ts";
@@ -153,6 +154,9 @@ describe("client against a real daemon", () => {
     expect(readdirSync(empty)).toEqual([]);
     const noFile = await run(["status", "--token-file", join(empty, "nope")]);
     expect(noFile.code).toBe(3);
+    expect(noFile.err).toContain(`token file not found: ${join(empty, "nope")}`);
+    const viaEnv = await run(["status"], { env: { PORT: String(port), CLAUDE_UI_TOKEN_FILE: join(empty, "envnope") } });
+    expect(viaEnv.err).toContain(`token file not found: ${join(empty, "envnope")}`);
   });
   it("no daemon: exit 3 not running; --json error on stderr", async () => {
     const r = await run(["status"], { env: { PORT: "1" } });
@@ -185,5 +189,45 @@ describe("workers grouping", () => {
     expect(j.map((w: SessionListItem) => w.workerName)).toEqual(["fix-a", "fix-b"]);
     const one = JSON.parse((await run(["workers", "--json"], { request: async () => ({ ...list, sessions: [item({ id: "w9", coordinatorId: "c9", workerName: "z" })] }) })).out);
     expect(one).toHaveLength(1);
+  });
+});
+
+describe("opener failure", () => {
+  it("runOpener rejects on a non-zero exit and on a missing command, resolves on 0", async () => {
+    await expect(runOpener(process.execPath, ["-e", "process.exit(3)"])).rejects.toThrow(/exited with code 3/);
+    await expect(runOpener("claude-ui-no-such-opener", [])).rejects.toThrow();
+    await expect(runOpener(process.execPath, ["-e", "0"])).resolves.toBeUndefined();
+  });
+  it("open prints an error and exits 1; nothing says Opened", async () => {
+    const r = await run(["open"], { openUrl: () => Promise.reject(new Error("xdg-open exited with code 3")) });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("cannot open a browser");
+    expect(r.out).not.toContain("Opened");
+    expect(r.out + r.err).not.toContain(token);
+  });
+});
+
+describe("daemon.json of two daemons on one config dir", () => {
+  it("the later writer wins; an earlier daemon's exit does not remove the later one's file", () => {
+    const d = tmp("cu-two-");
+    const releaseA = claimDaemonFile(d, { port: 5001, pid: 111, version: "x", startedAt: "a" });
+    const releaseB = claimDaemonFile(d, { port: 5002, pid: 222, version: "x", startedAt: "b" });
+    expect(readDaemonFile(d)?.pid).toBe(222);
+    releaseA();
+    expect(readDaemonFile(d)?.pid).toBe(222);
+    releaseB();
+    expect(existsSync(daemonFile(d))).toBe(false);
+  });
+});
+
+describe("usage error of the real entry point", () => {
+  it("short hint, exit 2, no daemon exit line", async () => {
+    const main = join(import.meta.dirname, "../src/main.ts");
+    const r = await new Promise<{ code: number; err: string }>((done) => execFile(process.execPath, ["--import", "tsx", main, "bogus"], { env: { ...process.env, XDG_CONFIG_HOME: tmp("cu-xdg-") } }, (e, _o, err) => done({ code: (e as { code?: number } | null)?.code ?? 0, err })));
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("unknown command 'bogus'");
+    expect(r.err).toContain("claude-ui --help");
+    expect(r.err).not.toContain("exit, code");
+    expect(r.err).not.toContain("Commands:");
   });
 });

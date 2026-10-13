@@ -38,17 +38,22 @@ export function resolvePort(o: { flag?: number; env: NodeJS.ProcessEnv; dir: str
 }
 
 /** Reads the token file; never creates it. */
-export function readToken(file: string): string {
+export function readToken(file: string, explicit = false): string {
   try {
     const t = readFileSync(file, "utf8").trim();
     if (t) return t;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw new CtlError(3, "no_token", `cannot read ${file}: ${(e as Error).message}`);
   }
+  if (explicit) throw new CtlError(3, "no_token", `token file not found: ${file}`);
   throw new CtlError(3, "no_token", `no token at ${file}: the daemon never started on this machine (start it with claude-ui, or pass --token-file)`);
 }
 
-export const tokenPath = (o: { tokenFile?: string; env: NodeJS.ProcessEnv; dir: string }) => o.tokenFile ?? o.env.CLAUDE_UI_TOKEN_FILE ?? join(o.dir, "token");
+/** The token file: `--token-file`, `CLAUDE_UI_TOKEN_FILE` or the config dir's; `explicit`: the user named it. */
+export const tokenPath = (o: { tokenFile?: string; env: NodeJS.ProcessEnv; dir: string }) => {
+  const file = o.tokenFile ?? o.env.CLAUDE_UI_TOKEN_FILE;
+  return { file: file ?? join(o.dir, "token"), explicit: file !== undefined };
+};
 
 const inWsl = () => process.platform === "linux" && /microsoft/i.test(release());
 const notRunning = (port: number) =>

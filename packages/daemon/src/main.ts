@@ -6,7 +6,7 @@ import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
-import { HELP, PHONE_HINT, parseCli } from "./cli.ts";
+import { HELP, PHONE_HINT, USAGE_HINT, parseCli } from "./cli.ts";
 import { createSettings } from "./settings.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
@@ -18,15 +18,15 @@ import { exitOnSignal, logExit } from "./exit-log.ts";
 import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
 import { startServe, tailscalePreflight } from "./tailscale.ts";
 import { openInBrowser, runClient } from "./ctl/commands.ts";
-import { removeDaemonFile, writeDaemonFile } from "./ctl/daemon-file.ts";
+import { claimDaemonFile } from "./ctl/daemon-file.ts";
 import { configDir, loadToken, pairingUrl } from "./token.ts";
 import { defaultUploadsDir } from "./uploads.ts";
 import { installVersion, latestNewer, parseRegistry, pruneVersions, versionsDir } from "./update.ts";
 import { createBuildInfo } from "./build-info.ts";
 
 const cli = parseCli(process.argv.slice(2), process.env, homedir());
-// The exit line is for a daemon's log; a client command prints only its own output.
-logExit(process, (line) => cli.kind !== "client" && console.error(line));
+// The exit line is for a daemon's log; a client command, update, help or a usage error prints only its own output.
+logExit(process, (line) => cli.kind === "run" && console.error(line));
 let cleanup = () => {};
 exitOnSignal(process, () => cleanup());
 
@@ -41,7 +41,7 @@ if (cli.kind === "help") (console.log(HELP), process.exit(0));
 // The package.json next to dist/ (installed) or src/ (source checkout, no version: "dev").
 const version: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version ?? "dev";
 if (cli.kind === "version") (console.log(version), process.exit(0));
-if (cli.kind === "error") (console.error(`claude-ui: ${cli.message}\n\n${HELP}`), process.exit(2));
+if (cli.kind === "error") (console.error(`claude-ui: ${cli.message}\n${USAGE_HINT}`), process.exit(2));
 if (cli.kind === "client") {
   // A client command only talks to a running daemon: no token creation, sides or update check. Never exits 75.
   process.exit(await runClient(cli, { env: process.env, dir: configDir(), stdout: (s) => process.stdout.write(s), stderr: (s) => process.stderr.write(s), openUrl: openInBrowser }));
@@ -149,8 +149,7 @@ if (side) {
     // Where this daemon listens, for the client commands (no token in it); gone with the process.
     const dir = configDir();
     try {
-      writeDaemonFile(dir, { port: (server.address() as AddressInfo).port, pid: process.pid, version, startedAt: new Date().toISOString() });
-      process.on("exit", () => removeDaemonFile(dir, process.pid));
+      process.on("exit", claimDaemonFile(dir, { port: (server.address() as AddressInfo).port, pid: process.pid, version, startedAt: new Date().toISOString() }));
     } catch (e) {
       console.error(`claude-ui: cannot write daemon.json: ${(e as Error).message}`);
     }

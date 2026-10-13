@@ -22,3 +22,9 @@ export function readDaemonFile(dir: string): DaemonInfo | undefined {
 export function removeDaemonFile(dir: string, pid: number) {
   if (readDaemonFile(dir)?.pid === pid) rmSync(daemonFile(dir), { force: true });
 }
+
+/** Writes this daemon's file (last writer wins) and returns the release for its exit: it removes the file only while it is still this pid's. */
+export function claimDaemonFile(dir: string, info: DaemonInfo): () => void {
+  writeDaemonFile(dir, info);
+  return () => removeDaemonFile(dir, info.pid);
+}

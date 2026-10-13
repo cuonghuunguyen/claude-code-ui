@@ -1,6 +1,6 @@
 import { delimiter } from "node:path";
 import { describe, expect, it } from "vitest";
-import { HELP, PHONE_HINT, isDaemonRun, parseCli } from "../src/cli.ts";
+import { HELP, PHONE_HINT, USAGE_HINT, isDaemonRun, parseCli } from "../src/cli.ts";
 
 describe("parseCli", () => {
   it("defaults: port 4280, home root, no hostname, bypass off", () => {
@@ -87,6 +87,10 @@ describe("parseCli", () => {
       expect(isDaemonRun([])).toBe(true);
       expect(isDaemonRun(["--port", "5000", "--lan"])).toBe(true);
       for (const a of [["status"], ["update"], ["-h"], ["-v"], ["bogus"], ["--port", "x"]]) expect(isDaemonRun(a), a.join(" ")).toBe(false);
+    });
+    it("USAGE_HINT is short and points to --help", () => {
+      expect(USAGE_HINT.split("\n").length).toBeLessThanOrEqual(2);
+      expect(USAGE_HINT).toContain("--help");
     });
     it("HELP lists the commands", () => {
       for (const c of ["status", "open", "sessions", "projects", "workers", "--token-file", "--json"]) expect(HELP).toContain(c);
