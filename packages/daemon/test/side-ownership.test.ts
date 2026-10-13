@@ -1,4 +1,7 @@
 // GH-279: a side owns a session only when the hub put it there; its own claims never move local or foreign sessions.
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -8,6 +11,7 @@ import { createRouter, createSides, dockerSide, type SideProcess } from "../src/
 const LOCAL = "11111111-1111-4111-8111-111111111111";
 const A1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const B1 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const Z = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const HEIR = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
 /** A side the test drives by hand: `out(m)` writes a message frame, `got` holds what the hub sent it. */
@@ -42,7 +46,7 @@ function fakeSide(reply: (m: any) => unknown = (m) => (m.type === "session.list"
 type SetupOpts = { sides?: Partial<Parameters<typeof createSides>[0]>; router?: Partial<Parameters<typeof createRouter>[0]> };
 async function setup(sideA: ReturnType<typeof fakeSide>, sideB?: ReturnType<typeof fakeSide>, onPush?: (p: any) => void, o: SetupOpts = {}) {
   const procs = [sideA, ...(sideB ? [sideB] : [])].map((s) => s.proc);
-  const sides = createSides({ targets: [], localLabel: "Linux", posixLocal: true, ...(onPush && { onPush }), discoverMs: 0, discover: async () => [dockerSide("a"), ...(sideB ? [dockerSide("b")] : [])], spawn: (id) => procs[id === "docker:a" ? 0 : 1]!, ...o.sides });
+  const sides = createSides({ targets: [], localLabel: "Linux", posixLocal: true, localPathExists: () => false, ...(onPush && { onPush }), discoverMs: 0, discover: async () => [dockerSide("a"), ...(sideB ? [dockerSide("b")] : [])], spawn: (id) => procs[id === "docker:a" ? 0 : 1]!, ...o.sides });
   await sides.refresh();
   const sent: ServerMessage[] = [];
   const localSeen: ClientMessage[] = [];
@@ -244,7 +248,7 @@ describe("side session ownership (GH-279)", () => {
 
   it("a hub request is answered by the side it was sent to only", async () => {
     // Side a never answers its list; side b answers with a's hub reqId.
-    const a = fakeSide((m) => (m.type === "session.list" ? undefined : null));
+    const a = fakeSide((m) => (m.type === "session.list" || m.type === "session.ids" ? undefined : null));
     const b = fakeSide((m) => (m.type === "session.list" ? undefined : null));
     const t = await setup(a, b);
     const done = t.router.handle({ type: "session.list", reqId: "L" } as never);
@@ -331,12 +335,13 @@ describe("side session ownership (GH-279)", () => {
       expect(t.sent.filter((m) => m.type === "event")).toHaveLength(1);
     });
 
-    it("a link to an unlisted side session: the subscribe probe claims it", async () => {
-      const a = fakeSide((m) => (m.type === "session.subscribe" ? { session: { id: A1, cwd: "/a" } } : null));
+    it("a link to an unlisted side session: the lookup claims it", async () => {
+      const a = fakeSide((m) => (m.type === "session.subscribe" ? { session: { id: A1, cwd: "/a" } } : lists(A1)(m)));
       const t = await setup(a);
       await t.req({ type: "session.subscribe", sessionId: A1, sinceSeq: 0 });
       expect(t.sides.sessionSide.get(A1)).toBe("docker:a");
-      expect(frames(a, "session.subscribe").length).toBeGreaterThan(0);
+      expect(frames(a, "session.ids")).toHaveLength(1);
+      expect(frames(a, "session.subscribe")).toHaveLength(1);
     });
 
     it("/clear on a side: the heir announced on the owned session joins that side", async () => {
@@ -459,18 +464,60 @@ describe("cwd claims (GH-320)", () => {
   });
 });
 
-describe("subscribe lookup (GH-321)", () => {
-  const said = (id: string) => (m: any) => (m.type === "session.subscribe" ? { session: { id, cwd: "/ct" } } : null);
-  const unknown = (m: any) => (m.type === "session.subscribe" ? undefined : null);
+/** Hostile side: answers every lookup "mine" and lists every id it was ever sent (rv-attack.test.ts GH-320). */
+function hostile() {
+  const seen = new Set<string>();
+  return fakeSide((m) => {
+    if (typeof m.sessionId === "string") seen.add(m.sessionId);
+    if (m.type === "session.subscribe") return { session: { id: m.sessionId, cwd: "/ct" } };
+    if (m.type === "session.ids") return { ids: [...seen] };
+    if (m.type === "session.list") return { sessions: [...seen].map((id) => ({ id, cwd: "/ct", lastActivity: 9 })), projects: [], recentProjects: [] };
+    return null;
+  });
+}
+const seenId = (s: ReturnType<typeof fakeSide>, id: string) => s.got.some((m) => JSON.stringify(m).includes(id));
+const lists = (...ids: string[]) => (m: any) => (m.type === "session.ids" ? { ids } : m.type === "session.list" ? { sessions: ids.map((id) => ({ id, cwd: "/ct", lastActivity: 1 })), projects: [], recentProjects: [] } : null);
+
+describe("session lookup (GH-321, GH-328)", () => {
   const contested = async () => {
-    const a = fakeSide(said(B1));
-    const b = fakeSide(said(B1));
+    const a = fakeSide(lists(B1));
+    const b = fakeSide(lists(B1));
     const t = await setup(a, b);
     const r = await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
     return { a, b, t, r };
   };
 
-  it("an unlisted id that two sides answer goes to neither; the browser gets side_conflict", async () => {
+  it("a link to an unlisted id sends it to no side; the side that lists it gets it", async () => {
+    const a = hostile();
+    const b = fakeSide(lists(B1));
+    const t = await setup(a, b);
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
+    expect(seenId(a, B1)).toBe(false);
+    expect(frames(b, "session.subscribe").filter((m) => m.sessionId === B1)).toHaveLength(1);
+    expect(t.sides.cwdSide.get("/ct")).toBeUndefined();
+  });
+
+  it("owner side not running: no side is sent the id and none gets it", async () => {
+    const a = hostile();
+    const t = await setup(a);
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(seenId(a, B1)).toBe(false);
+    expect(t.sides.sessionSide.get(B1)).toBeUndefined();
+    expect(t.localSeen.some((m) => m.type === "session.subscribe")).toBe(true);
+  });
+
+  it("owner side slower than the lookup timeout: no side is sent the id and none gets it", async () => {
+    const a = hostile();
+    const b = fakeSide(() => undefined);
+    const t = await setup(a, b, undefined, { router: { lookupTimeoutMs: 50 } as never });
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(seenId(a, B1)).toBe(false);
+    expect(t.sides.sessionSide.get(B1)).toBeUndefined();
+  });
+
+  it("an unlisted id that two sides list goes to neither; the browser gets side_conflict", async () => {
     const { a, b, t, r } = await contested();
     expect(r).toMatchObject([{ type: "error", code: "side_conflict" }]);
     expect(t.sides.sessionSide.get(B1)).toBeUndefined();
@@ -484,8 +531,8 @@ describe("subscribe lookup (GH-321)", () => {
   });
 
   it("a contested id cannot be claimed later by a reply or a list", async () => {
-    const a = fakeSide((m) => (m.type === "session.subscribe" || m.type === "session.create" ? { session: { id: B1, cwd: "/ct" } } : m.type === "session.list" ? { sessions: [{ id: B1, cwd: "/ct", lastActivity: 1 }], projects: [], recentProjects: [] } : null));
-    const b = fakeSide(said(B1));
+    const a = fakeSide((m) => (m.type === "session.create" ? { session: { id: B1, cwd: "/ct" } } : lists(B1)(m)));
+    const b = fakeSide(lists(B1));
     const t = await setup(a, b);
     await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
     const r = await t.req({ type: "session.create", cwd: "/ct", side: "docker:a" });
@@ -495,34 +542,27 @@ describe("subscribe lookup (GH-321)", () => {
     expect(t.sides.sessionSide.get(B1)).toBeUndefined();
   });
 
-  it("the lookup asks every side at once; the only one naming the id gets it", async () => {
-    const a = fakeSide((m) => (m.type === "session.subscribe" ? { type: "error" } : null));
-    const b = fakeSide(said(B1));
-    const t = await setup(a, b);
-    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
-    expect(frames(a, "session.subscribe").length).toBeGreaterThanOrEqual(1);
-    expect(frames(b, "session.subscribe").length).toBeGreaterThanOrEqual(1);
-    expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
-    await t.req({ type: "session.prompt", sessionId: B1, text: "hi" });
-    expect(frames(b, "session.prompt")).toHaveLength(1);
-    expect(frames(a, "session.prompt")).toEqual([]);
-  });
-
-  it("a side that never answers the lookup does not hold the link", async () => {
-    const a = fakeSide(unknown);
-    const b = fakeSide(said(B1));
-    const t = await setup(a, b, undefined, { router: { probeTimeoutMs: 50 } });
+  it("a side whose list never answers does not hold the link", async () => {
+    const a = fakeSide((m) => (m.type === "session.list" || m.type === "session.ids" ? undefined : null));
+    const b = fakeSide(lists(B1));
+    const t = await setup(a, b, undefined, { router: { lookupTimeoutMs: 50 } });
     const r = await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
     expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
     expect(r.some((m) => m.type === "reply")).toBe(true);
   });
 
+  it("concurrent lookups share one session.ids round per side", async () => {
+    const a = fakeSide(lists(A1, B1));
+    const t = await setup(a);
+    await Promise.all([t.req({ type: "session.subscribe", sessionId: A1, sinceSeq: 0 }), t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 })]);
+    expect(frames(a, "session.ids")).toHaveLength(1);
+  });
+
   it("two sides listing the same unowned id in one list: neither gets it, with one notice per side", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const lst = (m: any) => (m.type === "session.list" ? { sessions: [{ id: B1, cwd: "/ct", lastActivity: 1 }], projects: [], recentProjects: [] } : null);
-      const a = fakeSide(lst);
-      const b = fakeSide(lst);
+      const a = fakeSide(lists(B1));
+      const b = fakeSide(lists(B1));
       const t = await setup(a, b);
       const [r] = (await t.req({ type: "session.list" })) as any[];
       await t.req({ type: "session.list" });
@@ -536,11 +576,237 @@ describe("subscribe lookup (GH-321)", () => {
     }
   });
 
-  it("a contested id is free again when one of its sides exits", async () => {
-    const { a, t } = await contested();
-    a.proc.kill();
+  it("a side with a local-id clash also shows the other-side notice", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const a = fakeSide(lists(LOCAL, B1));
+      const b = fakeSide(lists(B1));
+      const t = await setup(a, b);
+      await t.req({ type: "session.list" });
+      const ofA = err.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("docker:a"));
+      expect(ofA.some((l) => l.includes("exists on this computer"))).toBe(true);
+      expect(ofA.some((l) => l.includes("another side"))).toBe(true);
+      const msg = t.sides.list().find((x) => x.id === "docker:a")?.message;
+      expect(msg).toMatch(/this computer/);
+      expect(msg).toMatch(/another side/);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("two sides list a local id (shared ~/.claude): a lookup of another id does not lock the local user out of it", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const a = fakeSide(lists(LOCAL));
+      const b = fakeSide(lists(LOCAL));
+      const t = await setup(a, b);
+      await t.req({ type: "session.subscribe", sessionId: Z, sinceSeq: 0 });
+      const r = await t.req({ type: "session.subscribe", sessionId: LOCAL, sinceSeq: 0 });
+      expect(t.sides.contested.has(LOCAL)).toBe(false);
+      expect(r).not.toMatchObject([{ type: "error", code: "side_conflict" }]);
+      expect(t.localSeen.filter((m: any) => m.type === "session.subscribe" && m.sessionId === LOCAL)).toHaveLength(1);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("an id the owner side claimed stays its after the owner exits: another side listing it does not get it", async () => {
+    const b = fakeSide(lists(B1));
+    let aLists = false;
+    const a = fakeSide((m) => (m.type === "session.list" && aLists ? lists(B1)(m) : m.type === "session.list" ? EMPTY : null));
+    const t = await setup(a, b);
+    await t.req({ type: "session.list" });
+    expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
+    b.proc.kill();
     await t.settle();
+    aLists = true;
+    await t.req({ type: "session.list" });
     await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
     expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
+    expect(frames(a, "session.subscribe")).toEqual([]);
+  });
+
+  it("a contest entry for a local id never blocks the local user", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const a = fakeSide();
+      const b = fakeSide();
+      const t = await setup(a, b);
+      t.sides.contest(LOCAL, ["docker:a", "docker:b"]);
+      const r = await t.req({ type: "session.delete", sessionId: LOCAL });
+      expect(r).not.toMatchObject([{ type: "error", code: "side_conflict" }]);
+      expect(t.localSeen.some((m: any) => m.type === "session.delete")).toBe(true);
+      expect(seenId(a, LOCAL) || seenId(b, LOCAL)).toBe(false);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("a contest stays when one contender exits; the remaining side never gets the id", async () => {
+    const a = fakeSide(lists(B1));
+    const b = fakeSide(lists(B1));
+    const t = await setup(a, b);
+    await t.req({ type: "session.list" });
+    b.proc.kill();
+    await t.settle();
+    const [l] = (await t.req({ type: "session.list" })) as any[];
+    expect(l.result.sessions.map((s: any) => s.id)).not.toContain(B1);
+    const r = await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(r).toMatchObject([{ type: "error", code: "side_conflict" }]);
+    expect(t.sides.sessionSide.get(B1)).toBeUndefined();
+    expect(frames(a, "session.subscribe")).toEqual([]);
+  });
+
+  it("the owner side exits after the lookup: the other side still never gets the id", async () => {
+    const a = hostile();
+    const b = fakeSide((m) => (m.type === "session.subscribe" ? { session: { id: B1, cwd: "/b" } } : lists(B1)(m)));
+    const t = await setup(a, b);
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    b.proc.kill();
+    await t.settle();
+    await t.req({ type: "session.list" });
+    expect(t.sides.sessionSide.get(B1)).not.toBe("docker:a");
+  });
+});
+
+describe("existing sub-folders of a local dir (GH-328)", () => {
+  it("a side cannot claim a folder under home that exists on the hub; a container-only one stays the side's", async () => {
+    const a = fakeSide((m) => (m.type === "session.list" ? { sessions: [], projects: ["/home/hub/notes", "/home/hub/ctonly"], recentProjects: [] } : null));
+    const t = await setup(a, undefined, undefined, { sides: { localDirs: ["/home/hub"], localPathExists: (p: string) => p === "/home/hub" || p === "/home/hub/notes" } });
+    await t.req({ type: "session.list" });
+    await t.req({ type: "fs.write", path: "/home/hub/notes/todo.md", content: "secret" });
+    expect(frames(a, "fs.write")).toEqual([]);
+    expect(t.localSeen.some((m) => m.type === "fs.write")).toBe(true);
+    expect(t.sides.pathSide("/home/hub/ctonly/x")).toBe("docker:a");
+  });
+});
+
+describe("existing sub-folders: the default file system check (GH-328)", () => {
+  /** A real host folder `home` with `notes/` in it; `localPathExists` is left to its default. */
+  async function withHome(run: (home: string) => Promise<void>) {
+    const root = mkdtempSync(join(tmpdir(), "gh328-"));
+    const home = join(root, "home");
+    mkdirSync(join(home, "notes"), { recursive: true });
+    try {
+      await run(home);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+  const projectsOf = (...p: string[]) => (m: any) => (m.type === "session.list" ? { sessions: [], projects: p, recentProjects: [] } : null);
+  const real = (home: string, extra: object = {}) => ({ sides: { localDirs: [home], localPathExists: undefined, ...extra } as never });
+
+  it("POSIX hub: an existing sub-folder of a local dir is refused, a container-only one is claimed", async () => {
+    await withHome(async (home) => {
+      const a = fakeSide(projectsOf(join(home, "notes"), join(home, "ctonly")));
+      const t = await setup(a, undefined, undefined, real(home));
+      await t.req({ type: "session.list" });
+      expect(t.sides.cwdSide.get(join(home, "notes"))).toBeUndefined();
+      expect(t.sides.pathSide(join(home, "ctonly", "x"))).toBe("docker:a");
+      await t.req({ type: "fs.write", path: join(home, "notes", "todo.md"), content: "secret" });
+      expect(frames(a, "fs.write")).toEqual([]);
+    });
+  });
+
+  it("not a POSIX hub: the file system is not checked, an existing sub-folder stays claimable", async () => {
+    await withHome(async (home) => {
+      const a = fakeSide(projectsOf(join(home, "notes")));
+      const t = await setup(a, undefined, undefined, real(home, { posixLocal: false, localLabel: "Windows" }));
+      await t.req({ type: "session.list" });
+      expect(t.sides.cwdSide.get(join(home, "notes"))).toBe("docker:a");
+    });
+  });
+});
+
+/** A side with B1 on disk in a project that is not added: its list does not name B1, `session.ids` does. `old`: a build without `session.ids`. */
+function unadded(old = false) {
+  const s: ReturnType<typeof fakeSide> = fakeSide((m) => {
+    if (m.type === "session.list") return EMPTY;
+    if (m.type === "session.ids") return old ? (setTimeout(() => s.out({ type: "error", reqId: m.reqId, code: "unknown_type", message: "unknown message type session.ids" })), undefined) : { ids: [B1] };
+    return null;
+  });
+  return s;
+}
+
+describe("lookup of a session in a project not added on its side (GH-328 F1)", () => {
+  it("a link to a side session of a non-added project reaches that side; no other side sees the id", async () => {
+    const a = hostile();
+    const b = unadded();
+    const t = await setup(a, b);
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0, addProject: true });
+    expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
+    expect(frames(b, "session.subscribe").filter((m) => m.sessionId === B1 && m.addProject === true)).toHaveLength(1);
+    expect(frames(b, "session.ids")).toHaveLength(1);
+    expect(seenId(a, B1)).toBe(false);
+    expect(t.localSeen.some((m) => m.type === "session.subscribe")).toBe(false);
+  });
+
+  it("two sides having the id on disk: neither gets it (side_conflict)", async () => {
+    const a = unadded();
+    const b = unadded();
+    const t = await setup(a, b);
+    const r = await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(r).toMatchObject([{ type: "error", code: "side_conflict" }]);
+    expect(t.sides.sessionSide.get(B1)).toBeUndefined();
+  });
+
+  it("an older side without session.ids falls back to its list; the id is still sent to no side", async () => {
+    const a = unadded(true);
+    const b = fakeSide(lists(B1));
+    const t = await setup(a, b);
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
+    expect(seenId(a, B1)).toBe(false);
+  });
+
+  it("an older side without session.ids that lists the id gets the link through its list", async () => {
+    const a = fakeSide((m) => {
+      if (m.type === "session.ids") return void setTimeout(() => a.out({ type: "error", reqId: m.reqId, code: "unknown_type", message: "unknown message type session.ids" }));
+      return lists(B1)(m);
+    });
+    const t = await setup(a);
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(t.sides.sessionSide.get(B1)).toBe("docker:a");
+    expect(frames(a, "session.list").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("the lookup claims only the id looked up, not every id a side has on disk", async () => {
+    const b = fakeSide((m) => (m.type === "session.ids" ? { ids: [B1, A1] } : m.type === "session.list" ? EMPTY : null));
+    const t = await setup(b);
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    expect(t.sides.sessionSide.get(B1)).toBe("docker:a");
+    expect(t.sides.sessionSide.get(A1)).toBeUndefined();
+  });
+});
+
+describe("session.ids fallback and malformed answers (GH-328 F1)", () => {
+  const owner = () => fakeSide((m) => (m.type === "session.ids" ? { ids: [B1] } : m.type === "session.list" ? EMPTY : null));
+  /** A side that claims not to know session.ids and answers session.list with `list` (raw result). */
+  const oldSide = (list: unknown) => {
+    const s: ReturnType<typeof fakeSide> = fakeSide((m) => {
+      if (m.type === "session.ids") return void setTimeout(() => s.out({ type: "error", reqId: m.reqId, code: "unknown_type", message: "x" }));
+      if (m.type === "session.list") return void setTimeout(() => s.out({ type: "reply", reqId: m.reqId, result: list }));
+      return null;
+    });
+    return s;
+  };
+  for (const [name, list] of [["null result", null], ["sessions not an array", { sessions: "x" }], ["sessions [null]", { sessions: [null] }], ["sessions [1]", { sessions: [1] }]] as const) {
+    it(`a malformed fallback list (${name}) is no error; the owner still gets the link`, async () => {
+      const a = oldSide(list);
+      const b = owner();
+      const t = await setup(a, b);
+      const r = await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+      expect(r.filter((m) => m.type === "error")).toEqual([]);
+      expect(t.sides.sessionSide.get(B1)).toBe("docker:b");
+    });
+  }
+
+  it("a session.ids that times out does not fall back to the list", async () => {
+    const a = fakeSide((m) => (m.type === "session.ids" ? undefined : lists(B1)(m)));
+    const t = await setup(a, undefined, undefined, { router: { lookupTimeoutMs: 50 } });
+    await t.req({ type: "session.subscribe", sessionId: B1, sinceSeq: 0 });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(frames(a, "session.list")).toEqual([]);
+    expect(t.sides.sessionSide.get(B1)).toBeUndefined();
   });
 });

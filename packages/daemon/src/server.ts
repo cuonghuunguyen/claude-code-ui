@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { searchFiles } from "./search.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
@@ -807,6 +807,16 @@ export function createDaemon(opts: {
     return (nextListing ??= listing.catch(() => {}).then(() => ((nextListing = undefined), list())));
   }
 
+  /** session.ids: what findSession could restore, without reading any transcript (the cached scan, one realpath per cwd). */
+  async function sessionIds(): Promise<string[]> {
+    const ok = new Map<string, boolean>();
+    const inRootsCwd = (cwd: string) => (ok.has(cwd) ? ok.get(cwd)! : (ok.set(cwd, !!allowed(cwd)), ok.get(cwd)!));
+    const ids = new Set((await transcripts()).filter((t) => t.cwd && inRootsCwd(t.cwd)).map((t) => t.sessionId));
+    for (const id of sessions.keys()) ids.add(id);
+    for (const id of deleting) ids.delete(id);
+    return [...ids];
+  }
+
   async function listNow(): Promise<ListResult> {
     // The model list starts a CLI: not waiting longer than this offers no auto mode until it is there.
     await new Promise<void>((done) => {
@@ -1503,6 +1513,8 @@ export function createDaemon(opts: {
         }
         case "session.list":
           return reply(await list());
+        case "session.ids":
+          return reply({ ids: await sessionIds() } satisfies SessionIdsResult);
         case "project.open": {
           const cwd = allowed(msg.cwd);
           if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);

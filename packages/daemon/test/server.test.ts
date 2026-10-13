@@ -2110,6 +2110,37 @@ describe("daemon", () => {
       }
     });
 
+    it("session.ids names every session inside the roots, of added projects or not, and none outside", async () => {
+      const [a, b] = [cwdOf("a"), cwdOf("b")];
+      const x = await start(
+        [
+          { sessionId: sid(1), summary: "a1", lastModified: 10, cwd: a },
+          { sessionId: sid(2), summary: "b1", lastModified: 30, cwd: b },
+          { sessionId: sid(3), summary: "a2", lastModified: 20, cwd: a },
+          { sessionId: sid(4), summary: "outside", lastModified: 40, cwd: "/etc" },
+        ],
+        createProjects(),
+      );
+      try {
+        const r = (await x.c.request({ type: "session.ids" })) as { result: { ids: string[] } };
+        expect([...r.result.ids].sort()).toEqual([sid(1), sid(2), sid(3)]);
+        expect((await list(x.c)).sessions).toEqual([]);
+      } finally {
+        x.d.close();
+      }
+    });
+
+    it("session.ids names a live session that has no transcript yet", async () => {
+      const x = await start([], createProjects());
+      try {
+        const created = (await x.c.request({ type: "session.create", cwd: cwdOf("live") })) as { result: { session: { id: string } } };
+        const r = (await x.c.request({ type: "session.ids" })) as { result: { ids: string[] } };
+        expect(r.result.ids).toEqual([created.result.session.id]);
+      } finally {
+        x.d.close();
+      }
+    });
+
     it("project.open keeps a project across a restart and moves it from recent to the list with its sessions; project.remove hides it again", async () => {
       const cwd = cwdOf("proj");
       const empty = cwdOf("empty");
@@ -2309,6 +2340,44 @@ describe("daemon", () => {
       await b.waitFor((m) => m.type === "sessions.changed" && m.deleted === id);
       expect((await listed()).map((s) => s.id)).toEqual([live]);
       expect(await a.request({ type: "session.delete", sessionId: id })).toMatchObject({ code: "unknown_session" });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.ids leaves out a session whose delete is in progress", async () => {
+    const id = "5c2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5c";
+    const cwd = join(webRoot, "proj");
+    mkdirSync(cwd, { recursive: true });
+    let transcripts = [{ sessionId: id, summary: "fix the bug", lastModified: 1000, cwd }];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: permissionQuery as never,
+      history: {
+        listSessions: (async () => transcripts) as never,
+        getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,
+        getSessionMessages: (async () => history) as never,
+        deleteSession: (async () => {
+          await gate;
+          transcripts = [];
+        }) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const p = (d.address() as AddressInfo).port;
+    try {
+      const [a, b] = await Promise.all([client(p), client(p)]);
+      const ids = async () => ((await b.request({ type: "session.ids" })) as { result: { ids: string[] } }).result.ids;
+      expect(await ids()).toEqual([id]);
+      const deleted = a.request({ type: "session.delete", sessionId: id });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(await ids()).toEqual([]);
+      release();
+      await deleted;
     } finally {
       d.close();
     }
