@@ -1,5 +1,5 @@
 // Per-session client store keyed by part id; events apply idempotently by seq (docs/spec.md "Client state").
-import { isAttention, type ContextUsage, type Cursor, type Effort, type Event, type Part, type PermissionMode, type PosPart, type SearchHit, type SessionState, type SlashCommand, type SubscribeResult, type TimelinePage, type TodoItem } from "@claude-ui/protocol";
+import { isAttention, type ContextUsage, type Cursor, type Effort, type Event, type Part, type PermissionMode, type PosPart, type QueuedPrompt, type SearchHit, type SessionState, type SlashCommand, type SubscribeResult, type TimelinePage, type TodoItem } from "@claude-ui/protocol";
 import { CONTEXT_TOOLS } from "./tools.ts";
 
 export type ToolCall = Extract<Part, { type: "tool_call" }>;
@@ -27,6 +27,8 @@ export type SessionView = {
   externalTurn?: boolean;
   /** A continue is scheduled at this time (ms) after a usage limit (auto_continue); undefined = none. */
   continueAt?: number;
+  /** Queued messages (prompt_queue) the daemon sends when the session is idle; undefined = none. */
+  queue?: { items: QueuedPrompt[]; held?: { reason: "usage_limit" | "not_live"; until?: number } };
   /** Idle, but a background task of the session's own query still runs (session_state `working`). */
   working?: boolean;
   /** Latest todo list (todo_update) of the live turn; cleared on idle, error and rewind. */
@@ -84,6 +86,7 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
     return { ...s, lastSeq: e.seq, order: s.order.filter((id) => !gone.has(id)), parts, aux: s.aux.filter((a) => !gone.has(a.part.id)) };
   }
   if (part.type === "external_turn") return { ...s, lastSeq: e.seq, externalTurn: part.running };
+  if (part.type === "prompt_queue") return { ...s, lastSeq: e.seq, queue: part.items.length ? { items: part.items, ...(part.held && { held: part.held }) } : undefined };
   if (part.type === "auto_continue") return { ...s, lastSeq: e.seq, continueAt: part.at ?? undefined };
   // Not rendered: App moves a tab that shows the session live.
   if (part.type === "session_cleared") return { ...s, lastSeq: e.seq };

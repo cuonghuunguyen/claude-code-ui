@@ -188,3 +188,13 @@ describe("PartIndex", () => {
     expect(index.pageFrom("nope", 3000)).toBeUndefined();
   });
 });
+
+describe("prompt_queue part", () => {
+  it("is a head (latest wins) and not a timeline part", () => {
+    const q = (n: number): Part => ({ type: "prompt_queue", id: "prompt_queue", items: n ? [{ id: "i", text: "t", imageCount: 0 }] : [] });
+    const { index, log } = build([user(1), q(1), q(0)]);
+    expect(TIMELINE_EXCLUDED.has("prompt_queue")).toBe(true);
+    expect(index.heads().filter((e) => e.part.type === "prompt_queue").map((e) => (e.part as { items: unknown[] }).items.length)).toEqual([0]);
+    expect(fold(log).order).toEqual(["u1"]);
+  });
+});

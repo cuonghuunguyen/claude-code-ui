@@ -787,6 +787,20 @@ export class Session {
     this.emit({ type: "auto_continue", id: "auto_continue", at });
   }
 
+  /** Shows the queued messages and why they are paused (prompt-queue.ts). */
+  setQueue(items: { id: string; text: string; images: string[] }[], held: { reason: "usage_limit" | "not_live"; until?: number } | undefined) {
+    const next = { items: items.map((i) => ({ id: i.id, text: i.text, imageCount: i.images.length })), ...(held && { held }) };
+    if (JSON.stringify(next) === JSON.stringify(this.queueShown)) return;
+    this.queueShown = next;
+    this.emit({ type: "prompt_queue", id: "prompt_queue", ...next });
+  }
+  private queueShown: { items: unknown[]; held?: unknown } = { items: [] };
+
+  /** The session takes a queued message as a new turn now: idle and nothing else going on. A background task alone does not count as busy. */
+  takesQueued() {
+    return this.isLive() && this.state === "idle" && !this.pending.size && !this.rewinding && !this.bashRun && !this.externalTurn && !this.cliTurn;
+  }
+
   private setExternalTurn(running: boolean) {
     clearTimeout(this.externalQuiet);
     // A CLI that died mid-turn leaves no end in the transcript; the quiet time ends the turn unless the CLI still reports it.
