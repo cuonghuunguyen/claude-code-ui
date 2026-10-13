@@ -1156,7 +1156,7 @@ export function runSide(opts: { input: Readable; output: Writable; accept: (ws: 
       const g = f.g;
       const answer = (a: object) => write(JSON.stringify({ g, ...a }));
       if (!opts.git) return answer({ out: "", err: "", error: { message: "no git" } });
-      opts.git({ ...f.git, env: { ...process.env, ...f.git.env } }).then(
+      opts.git({ ...f.git, env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_"))), ...f.git.env } }).then(
         (r) => answer({ out: r.stdout.toString("base64"), err: r.stderr }),
         (e: Error & { stdout?: Buffer; stderr?: string; code?: string | number; killed?: boolean; signal?: string }) => answer({ out: (e.stdout ?? Buffer.alloc(0)).toString("base64"), err: e.stderr ?? "", error: { message: e.message, code: e.code, killed: !!e.killed, signal: e.signal } }),
       );
