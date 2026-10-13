@@ -1,5 +1,6 @@
 // A live session: one long-lived streaming-input query() whose SDK messages become logged events.
 import { randomUUID } from "node:crypto";
+import { artifactFileOf, type ArtifactFile } from "./artifact-preview.ts";
 import {
   query as sdkQuery,
   type CanUseTool,
@@ -367,6 +368,11 @@ export class Session {
       return src?.type === "base64" && typeof src.data === "string" ? `data:${String(src.media_type)};base64,${src.data}` : undefined;
     }
     return undefined;
+  }
+
+  /** The file an Artifact publish part of this session names (artifact.preview, GH-175). */
+  artifactFile(partId: string): ArtifactFile {
+    return artifactFileOf(this.index.get(partId), this.cwd);
   }
 
   /** Edit/Write parts older than the part `before`; undefined = unknown cursor. */

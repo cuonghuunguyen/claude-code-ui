@@ -8,7 +8,7 @@ import { gzip } from "node:zlib";
 
 /**
  * Content-Security-Policy of the web app (GH-280). One directive per line, each with its reason: relax here only.
- * Not applied to /media (own sandbox CSP, media.ts). Remote images are blocked on purpose (image-exfil hardening).
+ * Not applied to /media and /artifact (own sandbox CSPs, media.ts, artifact-preview.ts). Remote images are blocked on purpose (image-exfil hardening).
  */
 export const APP_CSP = [
   "default-src 'self'", // everything not listed below: own origin only
@@ -20,7 +20,7 @@ export const APP_CSP = [
   "connect-src 'self'", // fetch + WebSocket to the own origin (ws/wss on the same host are covered by 'self')
   "worker-src 'self'", // service worker (/sw.js); the app starts no Worker
   "manifest-src 'self'", // /manifest.webmanifest
-  "frame-src 'none'", // the app embeds no frames
+  "frame-src 'self'", // the Artifact preview iframe (/artifact, own sandbox CSP); also confines that frame's navigations to the own origin (GH-175)
   "object-src 'none'", // no plugins
   "base-uri 'none'", // no <base> rewriting
   "form-action 'none'", // no form posts

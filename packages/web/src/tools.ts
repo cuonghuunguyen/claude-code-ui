@@ -1,6 +1,7 @@
 // Tool knowledge for tool cards (docs/spec.md "Session view UX").
 import type { TodoItem } from "@claude-ui/protocol";
 import { parseDiffFromFile } from "@pierre/diffs";
+import type { ToolCall } from "./store.ts";
 import { isWinPath, relPath } from "./paths.ts";
 
 /** Read/search tools; consecutive calls merge into one context group. */
@@ -111,4 +112,21 @@ export function artifactSummary(tool: string, input: unknown): string {
   }
   if (tool === "Artifact" && action === "quickstart") return str("intent") ? `${verb}: ${str("intent")}` : verb;
   return [verb, str("url")].filter(Boolean).join(" ");
+}
+
+/** True for a done Artifact publish of an HTML file: its card can show the local preview (GH-175). Mirrors the daemon's artifactFileOf. */
+export function artifactPreviewable(call: Pick<ToolCall, "tool" | "input" | "status">): boolean {
+  if (call.tool !== "Artifact" || call.status !== "done") return false;
+  const i = call.input as { action?: unknown; asset?: unknown; file_path?: unknown } | null;
+  if (typeof i !== "object" || i === null) return false;
+  if ((i.action !== undefined && i.action !== "publish") || i.asset === true) return false;
+  return typeof i.file_path === "string" && /\.html?$/i.test(i.file_path);
+}
+
+/** Count of supporting files of a publish (`files` map or list); 0 without. */
+export function supportingFiles(input: unknown): number {
+  const files = (input as { files?: unknown } | null)?.files;
+  if (Array.isArray(files)) return files.length;
+  if (typeof files === "object" && files !== null) return Object.values(files).filter((v) => v !== null).length;
+  return 0;
 }

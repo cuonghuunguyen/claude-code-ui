@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Part } from "@claude-ui/protocol";
 import { applyEvent, emptySession, timeline } from "./store.ts";
-import { artifactSummary, claudeUrl, editFiles, filePath, isClaudeUrl, todoItems, todoSummary, toolSummary } from "./tools.ts";
+import { artifactPreviewable, artifactSummary, claudeUrl, editFiles, filePath, isClaudeUrl, supportingFiles, todoItems, todoSummary, toolSummary } from "./tools.ts";
 
 const call = (id: string, tool: string, input: unknown = {}): Part => ({
   type: "tool_call",
@@ -186,5 +186,28 @@ describe("todoItems / todoSummary", () => {
   it("is empty while the input is not a list", () => {
     expect(todoItems({})).toEqual([]);
     expect(todoItems(null)).toEqual([]);
+  });
+});
+
+describe("artifact preview", () => {
+  const c = (input: unknown, status = "done", tool = "Artifact") => ({ tool, input, status }) as never;
+  it("artifactPreviewable only for a done publish of an .html/.htm file", () => {
+    expect(artifactPreviewable(c({ file_path: "/t/a.html" }))).toBe(true);
+    expect(artifactPreviewable(c({ file_path: "/t/a.HTM" }))).toBe(true);
+    expect(artifactPreviewable(c({ action: "publish", file_path: "/t/a.html" }))).toBe(true);
+    for (const s of ["running", "error", "denied", "pending"]) expect(artifactPreviewable(c({ file_path: "/t/a.html" }, s)), s).toBe(false);
+    expect(artifactPreviewable(c({ action: "read", file_path: "/t/a.html" }))).toBe(false);
+    expect(artifactPreviewable(c({ asset: true, file_path: "/t/a.html" }))).toBe(false);
+    expect(artifactPreviewable(c({ file_path: "/t/a.txt" }))).toBe(false);
+    expect(artifactPreviewable(c({}))).toBe(false);
+    expect(artifactPreviewable(c({ file_path: "/t/a.html" }, "done", "ArtifactData"))).toBe(false);
+  });
+  it("supportingFiles counts the files map or list", () => {
+    expect(supportingFiles({ files: { "a.css": "/x", "b.js": null } })).toBe(1);
+    expect(supportingFiles({ files: { "a.css": "/x", "b.js": "/y" } })).toBe(2);
+    expect(supportingFiles({ files: ["a", "b", "c"] })).toBe(3);
+    expect(supportingFiles({})).toBe(0);
+    expect(supportingFiles({ files: "x" })).toBe(0);
+    expect(supportingFiles("x")).toBe(0);
   });
 });
