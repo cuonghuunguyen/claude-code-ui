@@ -27,15 +27,21 @@ const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
  * `children`: the element that gets the context menu (the commit list or the details refs). The target is the chip under the
  * pointer, else the local branches of the row under it, else `fallback()` (keyboard: the selected commit's).
  */
-export function BranchMenu({ client, cwd, busy, onRun, fallback, children }: { client: Client; cwd: string; busy: boolean; onRun: (msg: RemoteRequest, done: string, running: string) => void; fallback: () => string[]; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void }> }) {
+export function BranchMenu({ client, cwd, busy, onRun, fallback, children }: { client: Client; cwd: string; busy: boolean; onRun: (msg: RemoteRequest, done: string, running: string) => void; fallback: () => string[]; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void }> }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [dialog, setDialog] = useState<{ kind: Kind; info: GitBranchInfo }>();
   const gen = useRef(0);
-  const open = (e: React.MouseEvent) => {
-    const t = e.target as Element;
+  // What a press (mouse, pen or touch) landed on, kept until the menu closes. A long press on touch opens the menu from
+  // `touchstart` + a timer (Base UI) and fires no `contextmenu` event, so the target cannot be taken from that event only.
+  const pressed = useRef<string[] | undefined>(undefined);
+  const loaded = useRef(false);
+  const targetsOf = (t: Element): string[] | undefined => {
     const chip = t.closest<HTMLElement>("[data-ref]");
     const row = t.closest<HTMLElement>("[data-local-refs]");
-    const refs = chip ? [chip.dataset.ref!] : row ? (row.dataset.localRefs ?? "").split("\n") : fallback();
+    return chip ? [chip.dataset.ref!] : row ? (row.dataset.localRefs ?? "").split("\n") : undefined;
+  };
+  const load = (refs: string[]) => {
+    loaded.current = true;
     const targets = [...new Set(refs.filter((r) => r.startsWith("refs/heads/")))].slice(0, MAX_TARGETS);
     const id = ++gen.current;
     setEntries(targets.map((ref) => ({ ref })));
@@ -44,6 +50,20 @@ export function BranchMenu({ client, cwd, busy, onRun, fallback, children }: { c
         (r) => id === gen.current && setEntries((p) => p.map((x) => (x.ref === ref ? { ref, info: r.branch ?? undefined, error: r.branch ? undefined : "Not a git repository" } : x))),
         (err: RequestError) => id === gen.current && setEntries((p) => p.map((x) => (x.ref === ref ? { ref, error: err.message || "git failed" } : x))),
       );
+    }
+  };
+  const press = (e: React.SyntheticEvent) => void (pressed.current = targetsOf(e.target as Element));
+  // The `contextmenu` event (right click, Shift+F10) knows its target best: chip, row, else the keyboard's selection.
+  const open = (e: React.MouseEvent) => {
+    const refs = targetsOf(e.target as Element) ?? fallback();
+    pressed.current = refs;
+    load(refs);
+  };
+  const onOpenChange = (o: boolean) => {
+    if (o && !loaded.current) load(pressed.current ?? fallback());
+    if (!o) {
+      loaded.current = false;
+      pressed.current = undefined;
     }
   };
   const run = () => {
@@ -69,16 +89,16 @@ export function BranchMenu({ client, cwd, busy, onRun, fallback, children }: { c
   const many = entries.length > 1;
   return (
     <>
-      <ContextMenu.Root>
-        <ContextMenu.Trigger render={cloneElement(children, { onContextMenuCapture: open })} />
+      <ContextMenu.Root onOpenChange={onOpenChange}>
+        <ContextMenu.Trigger render={cloneElement(children, { onContextMenuCapture: open, onPointerDownCapture: press, onTouchStartCapture: press })} />
         <ContextMenu.Portal>
           <ContextMenu.Positioner className="z-50">
             <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-1rem)]")} data-testid="branch-menu">
               {entries.map((en) => (
                 <div key={en.ref} role="group" aria-label={name(en.ref)}>
-                  <div className="px-2 pt-1 text-muted-foreground text-xs">
-                    {many || en.info?.checkedOut !== "here" ? name(en.ref) : null}
-                    {en.info && note(en.info) && <span>{many ? " · " : ""}{note(en.info)}</span>}
+                  <div className="px-2 pt-1 text-muted-foreground text-xs" data-testid="branch-menu-head">
+                    {(many || (en.info && note(en.info))) && <div className="truncate font-medium">{name(en.ref)}</div>}
+                    {en.info && note(en.info) && <div>{note(en.info)}</div>}
                   </div>
                   {!en.info && (
                     <ContextMenu.Item className={ITEM} disabled>
@@ -88,7 +108,12 @@ export function BranchMenu({ client, cwd, busy, onRun, fallback, children }: { c
                   {en.info && <Actions info={en.info} busy={busy} onPick={(kind) => setDialog({ kind, info: en.info! })} />}
                 </div>
               ))}
-              {entries.length > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
+              {entries.length === 0 && (
+                <ContextMenu.Item className={ITEM} disabled data-testid="branch-none">
+                  No local branch here
+                </ContextMenu.Item>
+              )}
+              <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
               <ContextMenu.Item className={ITEM} disabled={busy} onClick={() => onRun({ type: "git.fetch", cwd }, "Fetched all remotes", "Fetching all remotes…")} data-testid="branch-fetch">
                 Fetch all remotes
               </ContextMenu.Item>

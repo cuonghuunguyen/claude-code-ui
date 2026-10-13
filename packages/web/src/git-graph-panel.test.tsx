@@ -555,7 +555,50 @@ it("right click on a local branch chip offers Push, Force push and Pull; a remot
   await menuAt(chip("refs/remotes/origin/main"));
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
   expect(byId("branch-push")).toBeNull();
-  expect(itemTexts()).toContain("Fetch all remotes");
+  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
+  expect(byId("branch-none").hasAttribute("data-disabled")).toBe(true);
+});
+
+/** A touch held on `target`: pointerdown and touchstart, then the 500 ms long press timer of the menu; no `contextmenu` event (emulated and some real long presses fire none). */
+const longPress = async (target: Element) => {
+  const touch = { identifier: 1, target, clientX: 5, clientY: 5 };
+  await act(async () => {
+    target.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+    const ev = new Event("touchstart", { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, "touches", { value: [touch] });
+    target.dispatchEvent(ev);
+    await new Promise((r) => setTimeout(r, 650));
+  });
+  await flush();
+};
+
+it("a long press on a branch chip with touch (no contextmenu event) opens the full menu for that chip", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await longPress(chip("refs/heads/main"));
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([{ type: "git.branch", cwd: "/p", ref: "refs/heads/main" }]);
+  expect(itemTexts()).toEqual(expect.arrayContaining(["Push", "Force push…", "Pull", "Fetch all remotes"]));
+});
+
+it("a long press on a row with touch targets the row's local branches; on a remote chip only Fetch", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await longPress(rowEls()[1]!);
+  expect(c.sent.filter((m) => m.type === "git.branch").map((m) => m.ref)).toEqual(["refs/heads/feat"]);
+  await closeMenu();
+  c.sent.length = 0;
+  await longPress(chip("refs/remotes/origin/main"));
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
+  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
+});
+
+it("the group header keeps the branch name and the ownership note on separate lines", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  branchInfo = () => infoMain({ checkedOut: undefined });
+  await menuAt(chip("refs/heads/main"));
+  const head = byId("branch-menu-head");
+  expect([...head.children].map((x) => x.textContent)).toEqual(["main", "not checked out here"]);
 });
 
 it("a row right click targets its local branches; Shift+F10 on the list targets the selected row", async () => {

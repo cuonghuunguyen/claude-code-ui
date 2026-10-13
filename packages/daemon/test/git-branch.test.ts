@@ -115,8 +115,8 @@ describe("gitPush", () => {
     commit(b, "b3");
     run(b, "push", "-q", "origin", "main");
     const e = await gitPush(a, { ref: MAIN, local: i.local, lease: i.trackingHash, allowed: inside }).then(() => undefined, (x: Error) => x);
-    expect(e).toMatchObject({ code: "git_failed" });
-    expect(e!.message).toMatch(/stale info/);
+    expect(e).toMatchObject({ code: "stale", message: "The remote branch changed since the menu opened; fetch and retry" });
+    expect(e!.message).not.toMatch(/stale info/);
     await gitFetch(a, { allowed: inside });
     const j = (await gitBranch(a, MAIN, { allowed: inside }))!;
     await gitPush(a, { ref: MAIN, local: j.local, lease: j.trackingHash, allowed: inside });

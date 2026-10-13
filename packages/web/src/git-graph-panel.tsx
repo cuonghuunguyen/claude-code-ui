@@ -393,7 +393,7 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
 const INPUT =
   "h-8 w-full rounded-md bg-secondary/60 pr-2 pl-2 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11";
 
-function Details({ detail: d, refs, loaded, onSelect, onFile, wrap }: { wrap: (el: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void }>, refs: string[]) => ReactElement; detail: GitCommitDetail; refs: string[]; loaded: GitCommit[]; onSelect: (h: string) => void; onFile: (f: GitFileChange) => void }) {
+function Details({ detail: d, refs, loaded, onSelect, onFile, wrap }: { wrap: (el: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void }>, refs: string[]) => ReactElement; detail: GitCommitDetail; refs: string[]; loaded: GitCommit[]; onSelect: (h: string) => void; onFile: (f: GitFileChange) => void }) {
   const body = d.message.split("\n").slice(1).join("\n").trim();
   return (
     <div className="flex flex-col gap-2 p-3 text-sm">

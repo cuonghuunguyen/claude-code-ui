@@ -267,7 +267,11 @@ async function writeOp(cwd: string, o: Write, verb: "push" | "pull"): Promise<Re
       remote = argv[argv[0] === "pull" ? 3 : 1];
     }
     await checkRemotes(top, remote ? [remote] : [], verb === "push", env, o.allowed, o.platform ?? process.platform);
-    const output = await remoteOp(top, verb, argv, env);
+    const output = await remoteOp(top, verb, argv, env).catch((e: unknown) => {
+      // The lease failed on the remote: say it plainly instead of git's "(stale info)".
+      if (o.lease !== undefined && e instanceof WorktreeError && /stale info/.test(e.message)) throw new WorktreeError("stale", "The remote branch changed since the menu opened; fetch and retry");
+      throw e;
+    });
     return { output, refs: gitRefs(top, o.allowed) };
   });
 }
