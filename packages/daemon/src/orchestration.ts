@@ -92,7 +92,7 @@ export type OrchestrationDeps = {
   /** A new session in `cwd` (tracked, its project added). */
   create: (cwd: string, s: Partial<SessionSettings>) => Session;
   /** Sends a prompt as session.prompt does (Steering while a turn runs); the reason when it cannot. */
-  prompt: (s: Session, text: string) => Promise<string | undefined>;
+  prompt: (s: Session, text: string, stillWanted?: () => boolean) => Promise<string | undefined>;
   /** The canonical path when it is an existing path inside the daemon's roots. */
   allowed: (path: string) => string | undefined;
   /** Label of the other side (WSL distro, Docker container) a path belongs to; undefined for this daemon's own paths. */
@@ -152,6 +152,14 @@ export function createOrchestration(deps: OrchestrationDeps) {
   const served = new Set<string>();
   /** The session each live server is bound to, by session ID: a /clear hands the query to a new session and rebinds it (handOver). */
   const bindings = new Map<string, { id: string }>();
+  /** /clear hand-overs, old session ID -> new one: an approval that names the old ID resolves to the current session (the card's onAllow). Bounded. */
+  const aliases = new Map<string, string>();
+  const resolve = (id: string) => {
+    for (let i = 0; i < 20 && aliases.has(id); i++) id = aliases.get(id)!;
+    return id;
+  };
+  /** Per session ID: counts its hand-overs, so a notice that started before a /clear is not sent to the old session after it. */
+  const epochs = new Map<string, number>();
 
   const linkOf = (id: string): Link | undefined => deps.links.get(id);
   const modelRow = (m = "default") => deps.models().find((r) => r.value === m || r.resolvedModel === m);
@@ -218,12 +226,14 @@ export function createOrchestration(deps: OrchestrationDeps) {
     notified.add(coordinator);
     // Push: Steering while the coordinator's turn runs, a new turn when it is idle. Names and event type only, no worker text:
     // the notice arrives as a user message, so nothing from the worker rides on it.
+    const epoch = epochs.get(coordinator) ?? 0;
     void deps
-      .prompt(c, `${ORCHESTRATION_NOTICE} Worker ${e.name}: ${e.type.replace("_", " ")}. Call worker_wait to read the events.`)
+      .prompt(c, `${ORCHESTRATION_NOTICE} Worker ${e.name}: ${e.type.replace("_", " ")}. Call worker_wait to read the events.`, () => (epochs.get(coordinator) ?? 0) === epoch)
       .then((err) => {
         if (!err) return;
         // The next event tries again.
-        notified.delete(coordinator);
+        if ((epochs.get(coordinator) ?? 0) === epoch) notified.delete(coordinator);
+        else return; // a /clear handed the conversation over meanwhile: handOver notified the new session
         console.warn(`orchestration: notice to coordinator ${coordinator} not sent: ${err}`);
       });
   }
@@ -262,21 +272,22 @@ export function createOrchestration(deps: OrchestrationDeps) {
       e.requestId = p.requestId;
       e.tool = p.tool;
       e.input = cut(JSON.stringify(p.input) ?? "");
-      const coordinator = l.coordinatorId;
+      const captured = l.coordinatorId;
       // The tier is read off the event loop (git child processes): this worker's later events wait behind it, in order.
       return inOrder(s.id, async () => {
         e.tier = await s.permissionTier(p.requestId);
         e.mayAnswer = e.tier === "low" && deps.settings().coordinatorPermissions;
-        deliver(coordinator, e);
+        // A /clear of the coordinator during the read moved the link: deliver to the current coordinator.
+        deliver(linkOf(s.id)?.coordinatorId ?? captured, e);
       });
     } else if (p.type === "tool_call") {
       e.toolUseId = p.toolUseId;
       e.tool = p.tool;
       e.input = cut(JSON.stringify(p.input) ?? "");
     }
-    const coordinator = l.coordinatorId;
-    if (ordered.has(s.id)) inOrder(s.id, async () => deliver(coordinator, e));
-    else deliver(coordinator, e);
+    const captured = l.coordinatorId;
+    if (ordered.has(s.id)) inOrder(s.id, async () => deliver(linkOf(s.id)?.coordinatorId ?? captured, e));
+    else deliver(captured, e);
   }
 
   /** Request IDs already turned into an event; false for one seen before. Bounded: the oldest are forgotten. */
@@ -617,6 +628,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
     /** The orchestration MCP server for a new query of any session but a worker: only while orchestration is on (read at each query start). */
     mcpServers(id: string): Record<string, McpSdkServerConfigWithInstance> | undefined {
       served.delete(id);
+      // A session that once handed its query over and now starts one of its own is a coordinator of its own again.
+      aliases.delete(id);
       if (!deps.settings().enabled || linkOf(id)?.coordinatorId) return undefined;
       served.add(id);
       const binding = { id };
@@ -629,7 +642,18 @@ export function createOrchestration(deps: OrchestrationDeps) {
      * worker_start cards. A worker keeps its link and name under the new ID; `from` becomes a plain session.
      */
     handOver(from: string, to: string) {
-      for (const [id, l] of deps.links.entries()) if (l.coordinatorId === from) deps.links.set(id, { coordinatorId: to }, ["coordinatorId"]);
+      // A failed save keeps the change in memory (session-settings.ts) and must not end the live query: log it, go on.
+      const save = (change: () => void) => {
+        try {
+          change();
+        } catch (err) {
+          console.error("orchestration: saving the /clear link move failed:", err);
+        }
+      };
+      aliases.set(from, to);
+      if (aliases.size > 1000) aliases.delete(aliases.keys().next().value!);
+      epochs.set(from, (epochs.get(from) ?? 0) + 1);
+      for (const [id, l] of deps.links.entries()) if (l.coordinatorId === from) save(() => deps.links.set(id, { coordinatorId: to }, ["coordinatorId"]));
       const binding = bindings.get(from);
       if (binding) {
         binding.id = to;
@@ -642,7 +666,9 @@ export function createOrchestration(deps: OrchestrationDeps) {
         queues.delete(from);
         queues.set(to, [...q, ...(queues.get(to) ?? [])].slice(-MAX_QUEUE));
       }
-      if (notified.delete(from)) notified.add(to);
+      // The notice that set the flag went into the conversation /clear removed: reset, do not move.
+      notified.delete(from);
+      notified.delete(to);
       for (const w of waiters) if (w.coordinator === from) w.coordinator = to;
       for (const set of [carded, reserved])
         for (const key of [...set]) {
@@ -654,9 +680,9 @@ export function createOrchestration(deps: OrchestrationDeps) {
       if (moved?.length) notify(to, moved.at(-1)!);
       const l = linkOf(from);
       if (l?.coordinatorId) {
-        deps.links.set(to, { coordinatorId: l.coordinatorId, name: l.name, cwd: l.cwd, port: l.port });
+        save(() => deps.links.set(to, { coordinatorId: l.coordinatorId, name: l.name, cwd: l.cwd, port: l.port }));
         // Not delete: the old session keeps its model, mode and effort.
-        deps.links.set(from, { coordinatorId: undefined, name: undefined, cwd: undefined, port: undefined });
+        save(() => deps.links.set(from, { coordinatorId: undefined, name: undefined, cwd: undefined, port: undefined }));
         for (const m of [lastText, lastActivity] as Map<string, unknown>[]) {
           if (m.has(from)) m.set(to, m.get(from));
         }
@@ -683,9 +709,14 @@ export function createOrchestration(deps: OrchestrationDeps) {
       if (unknownModel(model)) return { input, title: `Start worker ${name}: unknown model ${model}, the call will fail` };
       const { mode, wanted, note } = workerMode(cm, req.mode, !!modelRow(model)?.supportsAutoMode, deps.models().length > 0, req.fromSetting);
       const title = `Start worker ${name} in ${mode} mode${note ? ` (${note})` : ""}`;
-      return { input: (MODES as readonly string[]).includes(wanted) ? { ...input, mode: wanted } : input, title, onAllow: () => void carded.add(`${sessionId}\0${name}\0${mode}`) };
+      return { input: (MODES as readonly string[]).includes(wanted) ? { ...input, mode: wanted } : input, title, onAllow: () => void carded.add(`${resolve(sessionId)}\0${name}\0${mode}`) };
     },
     tools,
+    /** A deleted session leaves no state behind. */
+    forget(id: string) {
+      for (const m of [bindings, queues, aliases, epochs, lastText, lastActivity] as Map<string, unknown>[]) m.delete(id);
+      for (const set of [served, notified]) set.delete(id);
+    },
     /** Daemon stop: every blocked worker_wait ends with a tool error. */
     shutdown() {
       for (const w of [...waiters]) w.done(new ToolError("The claude-ui daemon stopped while waiting. After it is back, call worker_list, then worker_send to resume workers."));

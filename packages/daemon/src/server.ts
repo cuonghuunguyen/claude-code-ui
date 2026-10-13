@@ -720,7 +720,7 @@ export function createDaemon(opts: {
       queueMicrotask(() => broadcast({ type: "sessions.changed" }));
       return s;
     },
-    prompt: async (s, text) => (autoContinue.cancel(s.id), (await sendPrompt(s, text))?.message),
+    prompt: async (s, text, stillWanted) => (autoContinue.cancel(s.id), (await sendPrompt(s, text, [], stillWanted))?.message),
     allowed: (path) => allowed(path),
     sideOf: (path) => {
       const id = opts.sides?.pathSide(path);
@@ -958,6 +958,7 @@ export function createDaemon(opts: {
     autoContinue.cancel(id);
     deleting.add(id);
     sessions.delete(id);
+    orchestration.forget(id);
     touched.delete(id);
     try {
       await at.live?.close();

@@ -63,7 +63,7 @@ export type SessionSettings = Pick<SessionInfo, "model" | "permissionMode" | "ef
 /**
  * `onSettings`: called after model, permission mode or effort changed (the daemon persists them for a restore). `fields`: the
  * settings this change set; none when the first query starts or a /clear heir begins (saved only if the session has no entry).
- * `onCleared`: a /clear handed the live query to `heir`, a new session (the daemon lists it).
+ * `onCleared`: a /clear handed the live query of `from` (the session that was cleared) to `heir`, a new session (the daemon lists it).
  */
 type SessionOpts = Partial<SessionSettings> & {
   allowBypass?: boolean;
