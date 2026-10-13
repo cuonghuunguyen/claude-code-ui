@@ -1685,9 +1685,9 @@ export function createDaemon(opts: {
           const inside = (p: string) => inRoots(real(p) ?? p);
           try {
             if (msg.type === "git.branch") return reply({ branch: await gitBranch(cwd, msg.ref, { allowed: inside }) });
-            if (typeof msg.ref !== "string" || !isHash(msg.local) || (msg.type === "git.push" && msg.lease !== undefined && !isHash(msg.lease))) return fail("bad_request", "ref, local and lease must be a branch and full commit hashes");
+            if (typeof msg.ref !== "string" || !isHash(msg.local) || !Array.isArray(msg.argv) || !msg.argv.every((a) => typeof a === "string") || (msg.type === "git.push" && msg.lease !== undefined && !isHash(msg.lease))) return fail("bad_request", "ref, local, lease and argv must be a branch, full commit hashes and the shown command");
             // Output and URLs are never logged.
-            const remote = msg.type === "git.push" ? await gitPush(cwd, { ref: msg.ref, local: msg.local, lease: msg.lease, allowed: inside }) : await gitPull(cwd, { ref: msg.ref, local: msg.local, allowed: inside });
+            const remote = msg.type === "git.push" ? await gitPush(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, lease: msg.lease, allowed: inside }) : await gitPull(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, allowed: inside });
             return reply({ remote });
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);

@@ -8,7 +8,7 @@ import type { connect, RequestError } from "./client.ts";
 import { ConfirmDialog, ITEM, POPUP } from "./session-actions.tsx";
 
 type Client = ReturnType<typeof connect>;
-export type RemoteRequest = { type: "git.fetch"; cwd: string } | { type: "git.push"; cwd: string; ref: string; local: string; lease?: string } | { type: "git.pull"; cwd: string; ref: string; local: string };
+export type RemoteRequest = { type: "git.fetch"; cwd: string } | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string } | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[] };
 type Kind = "push" | "force" | "pull";
 type Entry = { ref: string; info?: GitBranchInfo; error?: string };
 
@@ -27,7 +27,7 @@ const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
  * `children`: the element that gets the context menu (the commit list or the details refs). The target is the chip under the
  * pointer, else the local branches of the row under it, else `fallback()` (keyboard: the selected commit's).
  */
-export function BranchMenu({ client, cwd, busy, onRun, fallback, children }: { client: Client; cwd: string; busy: boolean; onRun: (msg: RemoteRequest, done: string, running: string) => void; fallback: () => string[]; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void }> }) {
+export function BranchMenu({ client, cwd, busy, onRun, fallback, children }: { client: Client; cwd: string; busy: boolean; onRun: (msg: RemoteRequest, done: string, running: string) => void; fallback: () => string[]; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }> }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [dialog, setDialog] = useState<{ kind: Kind; info: GitBranchInfo }>();
   const gen = useRef(0);
@@ -52,10 +52,13 @@ export function BranchMenu({ client, cwd, busy, onRun, fallback, children }: { c
       );
     }
   };
-  const press = (e: React.SyntheticEvent) => void (pressed.current = targetsOf(e.target as Element));
+  // A press on no chip and no row (empty list space) is a press with no target: not the selected row.
+  const press = (e: React.SyntheticEvent) => void (pressed.current = targetsOf(e.target as Element) ?? []);
+  // The keyboard (Shift+F10, the menu key) has no pointer target: the selected row's branches.
+  const key = () => void (pressed.current = undefined);
   // The `contextmenu` event (right click, Shift+F10) knows its target best: chip, row, else the keyboard's selection.
   const open = (e: React.MouseEvent) => {
-    const refs = targetsOf(e.target as Element) ?? fallback();
+    const refs = targetsOf(e.target as Element) ?? pressed.current ?? fallback();
     pressed.current = refs;
     load(refs);
   };
@@ -72,9 +75,10 @@ export function BranchMenu({ client, cwd, busy, onRun, fallback, children }: { c
     if (!d) return;
     const { info } = d;
     const x = name(info.ref);
-    if (d.kind === "pull") return onRun({ type: "git.pull", cwd, ref: info.ref, local: info.local }, `Pulled ${x}`, `Pulling ${x}…`);
+    // The command the dialog showed goes with the confirm: the daemon runs it only when it computes the same.
+    if (d.kind === "pull") return onRun({ type: "git.pull", cwd, ref: info.ref, local: info.local, argv: info.pull ?? [] }, `Pulled ${x}`, `Pulling ${x}…`);
     const force = d.kind === "force";
-    onRun({ type: "git.push", cwd, ref: info.ref, local: info.local, ...(force && { lease: info.trackingHash }) }, `Pushed ${x} to ${info.remote}${force ? " (forced)" : ""}`, `Pushing ${x}…`);
+    onRun({ type: "git.push", cwd, ref: info.ref, local: info.local, argv: (force ? info.forcePush : info.push) ?? [], ...(force && { lease: info.trackingHash }) }, `Pushed ${x} to ${info.remote}${force ? " (forced)" : ""}`, `Pushing ${x}…`);
   };
   const argv = dialog && (dialog.kind === "push" ? dialog.info.push : dialog.kind === "force" ? dialog.info.forcePush : dialog.info.pull);
   const i = dialog?.info;
@@ -90,7 +94,7 @@ export function BranchMenu({ client, cwd, busy, onRun, fallback, children }: { c
   return (
     <>
       <ContextMenu.Root onOpenChange={onOpenChange}>
-        <ContextMenu.Trigger render={cloneElement(children, { onContextMenuCapture: open, onPointerDownCapture: press, onTouchStartCapture: press })} />
+        <ContextMenu.Trigger render={cloneElement(children, { onContextMenuCapture: open, onPointerDownCapture: press, onTouchStartCapture: press, onKeyDownCapture: key })} />
         <ContextMenu.Portal>
           <ContextMenu.Positioner className="z-50">
             <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-1rem)]")} data-testid="branch-menu">

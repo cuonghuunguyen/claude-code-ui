@@ -182,10 +182,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.fetch"; cwd: string }
   /** Branch menu data (docs/spec.md "Layout", Graph tab): where push/pull go and the exact git argv of each; `ref` a full refs/heads/ name. Reply GitBranchResult. */
   | { type: "git.branch"; cwd: string; ref: string }
-  /** Push `ref` as `git.branch` showed it; `local`: the sha shown; `lease`: force push with --force-with-lease=<remoteRef>:<lease>. Reply GitRemoteResult. */
-  | { type: "git.push"; cwd: string; ref: string; local: string; lease?: string }
-  /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown. Reply GitRemoteResult. */
-  | { type: "git.pull"; cwd: string; ref: string; local: string }
+  /** Push `ref` as `git.branch` showed it; `local`: the sha shown; `argv`: the git command shown in the dialog (the daemon runs it only when it computes the same, else `stale`); `lease`: force push with --force-with-lease=<remoteRef>:<lease>. Reply GitRemoteResult. */
+  | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string }
+  /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */
+  | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[] }
   /** Creates `<repo>/.claude/worktrees/<name>` on branch `worktree-<name>` (docs/spec.md "Worktrees"); no `name`: a generated one. Reply WorktreeCreateResult. Broadcasts `sessions.changed`. */
   | { type: "worktree.create"; cwd: string; name?: string }
   /** What removing `path` loses; reply WorktreeStatusResult. */

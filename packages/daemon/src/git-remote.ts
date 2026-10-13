@@ -14,7 +14,11 @@ export const REMOTE_TIMEOUT = 120_000;
 export const remoteConfig = { timeout: REMOTE_TIMEOUT };
 const MAX_REMOTES = 20;
 /** Fetch needs no fsmonitor program and no `ext::` transport; submodules stay as they are. */
-export const FETCH_ARGS = ["-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never", "fetch", "--all", "--no-recurse-submodules"];
+/** Every remote operation: no fsmonitor program and no `ext::` transport. */
+export const HARDEN = ["-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never"];
+export const FETCH_ARGS = [...HARDEN, "fetch", "--all", "--no-recurse-submodules"];
+/** Push, pull and fetch never follow submodules (their remotes are not checked against the roots) and push sends no tags the dialog does not show. */
+const PUSH = [...HARDEN, "push", "--no-recurse-submodules", "--no-follow-tags"];
 const MAX_OUTPUT = 8000;
 const MAX_ERROR = 4000;
 const AUTH_FAILURE = /terminal prompts disabled|could not read (Username|Password)|Permission denied \(publickey|Host key verification failed|Authentication failed|BatchMode/i;
@@ -183,7 +187,6 @@ async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remo
     remoteRefs.set(r[0]!, r[1]!);
     if (r[2]) symrefs.set(r[0]!, r[2]);
   }
-  const name = ref.slice(11);
   const info: GitBranchInfo = { ref, local: localHash };
   if (worktree) info.checkedOut = sameDir(worktree, top) ? "here" : worktree;
   if (upstream) info.upstream = upstream.replace(/^refs\/(heads|remotes)\//, "");
@@ -211,17 +214,16 @@ async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remo
       }
     }
     const spec = `${ref}:${remoteRef}`;
-    info.push = ["push", ...(upstream ? [] : ["--set-upstream"]), remote, spec];
-    if (trackingHash) info.forcePush = ["push", `--force-with-lease=${remoteRef}:${trackingHash}`, remote, spec];
+    info.push = [...PUSH, ...(upstream ? [] : ["--set-upstream"]), remote, spec];
+    if (trackingHash) info.forcePush = [...PUSH, `--force-with-lease=${remoteRef}:${trackingHash}`, remote, spec];
     else why.forcePush = `No ${remote}/${remoteRef.replace(/^refs\/heads\//, "")} yet: fetch first`;
   }
   if (!upstream) why.pull = "No upstream branch";
   else if (upRemote === "." || !upRemote || !upRef) why.pull = "The upstream is a local branch: pull in a terminal";
-  else if (info.checkedOut === "here") info.pull = ["pull", "--no-rebase", "--ff-only", upRemote, upRef];
+  else if (info.checkedOut === "here") info.pull = [...HARDEN, "pull", "--no-recurse-submodules", "--no-rebase", "--ff-only", upRemote, upRef];
   else if (info.checkedOut) why.pull = `Checked out in ${info.checkedOut}: pull there`;
-  else info.pull = ["fetch", upRemote, `${upRef}:${ref}`];
+  else info.pull = [...HARDEN, "fetch", "--no-recurse-submodules", upRemote, `${upRef}:${ref}`];
   if (why.push || why.forcePush || why.pull) info.why = why;
-  void name;
   return info;
 }
 
@@ -235,12 +237,14 @@ export async function gitBranch(cwd: string, ref: string, o: RemoteOptions): Pro
   return branchInfo(top, r, { ...process.env, ...ceilingEnv(top), GIT_TERMINAL_PROMPT: "0" }, names);
 }
 
-type Write = { ref: string; local: string; lease?: string } & RemoteOptions;
+/** `argv`: the command the dialog showed; the daemon runs only what it computes again to the same words. */
+type Write = { ref: string; local: string; argv: string[]; lease?: string } & RemoteOptions;
 async function writeOp(cwd: string, o: Write, verb: "push" | "pull"): Promise<RemoteResult | null> {
   if (wslPathOf(cwd)) throw new WorktreeError("bad_request", WSL_REFUSED);
   const ref = branchRef(o.ref);
   if (!hex(o.local)) throw new WorktreeError("bad_request", "Bad commit");
   if (o.lease !== undefined && !hex(o.lease)) throw new WorktreeError("bad_request", "Bad lease");
+  if (!Array.isArray(o.argv) || o.argv.length > 64 || !o.argv.every((a) => typeof a === "string")) throw new WorktreeError("bad_request", "Missing command");
   const top = topIn(cwd, o.allowed);
   if (!top) return null;
   return exclusive(top, async () => {
@@ -264,8 +268,10 @@ async function writeOp(cwd: string, o: Write, verb: "push" | "pull"): Promise<Re
     } else {
       if (!info.pull) throw new WorktreeError("bad_request", info.why?.pull ?? "Pull is not available");
       argv = info.pull;
-      remote = argv[argv[0] === "pull" ? 3 : 1];
+      // Both variants end with `<remote> <ref>`.
+      remote = argv.at(-2);
     }
+    if (o.argv.length !== argv.length || o.argv.some((a, i) => a !== argv[i])) throw new WorktreeError("stale", "The command changed since the menu opened");
     await checkRemotes(top, remote ? [remote] : [], verb === "push", env, o.allowed, o.platform ?? process.platform);
     const output = await remoteOp(top, verb, argv, env).catch((e: unknown) => {
       // The lease failed on the remote: say it plainly instead of git's "(stale info)".

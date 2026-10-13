@@ -1050,14 +1050,16 @@ describe("daemon", () => {
     const ref = "refs/heads/main";
     const local = "a".repeat(40);
     const outside = join(webRoot, "..");
-    for (const m of [{ type: "git.branch", ref }, { type: "git.push", ref, local }, { type: "git.pull", ref, local }]) {
+    for (const m of [{ type: "git.branch", ref }, { type: "git.push", ref, local, argv: [] }, { type: "git.pull", ref, local, argv: [] }]) {
       expect(await c.request({ ...m, cwd: outside })).toMatchObject({ code: "cwd_not_allowed" });
     }
     expect(await c.request({ type: "git.branch", cwd: webRoot, ref })).toMatchObject({ result: { branch: null } });
-    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local })).toMatchObject({ result: { remote: null } });
-    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local })).toMatchObject({ result: { remote: null } });
-    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local: "nope" })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local: 5 })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local, argv: [] })).toMatchObject({ result: { remote: null } });
+    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [] })).toMatchObject({ result: { remote: null } });
+    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local: "nope", argv: [] })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local: 5, argv: [] })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [1] })).toMatchObject({ code: "bad_request" });
     expect(await c.request({ type: "git.branch", cwd: webRoot, ref: 7 })).toMatchObject({ code: "bad_request" });
     expect(await c.request({ type: "git.branch", cwd: webRoot, ref: "HEAD" })).toMatchObject({ code: "bad_request" });
   });

@@ -609,8 +609,24 @@ it("a row right click targets its local branches; Shift+F10 on the list targets 
   await closeMenu();
   c.sent.length = 0;
   await select(0);
+  await act(async () => void list().dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
   await menuAt(list());
   expect(c.sent.filter((m) => m.type === "git.branch").map((m) => m.ref)).toEqual(["refs/heads/main"]);
+});
+
+it("a right click or long press on empty list space does not target the selected row", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await select(0);
+  c.sent.length = 0;
+  await act(async () => void list().dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true })));
+  await menuAt(list());
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
+  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
+  await closeMenu();
+  await longPress(list());
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
+  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
 });
 
 it("Force push asks first: the dialog shows the exact command; Cancel runs nothing; Confirm sends git.push with the lease and reloads fresh", async () => {
@@ -629,7 +645,7 @@ it("Force push asks first: the dialog shows the exact command; Cancel runs nothi
   c.sent.length = 0;
   await act(async () => byId("git-force-push-confirm").click());
   await flush();
-  expect(c.sent.filter((m) => m.type === "git.push")).toEqual([{ type: "git.push", cwd: "/p", ref: "refs/heads/main", local: hash(3), lease: hash(2) }]);
+  expect(c.sent.filter((m) => m.type === "git.push")).toEqual([{ type: "git.push", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().forcePush, lease: hash(2) }]);
   expect(c.sent.at(-1)).toMatchObject({ type: "git.log", skip: 0, fresh: true });
   expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Pushed main");
 });
@@ -647,7 +663,7 @@ it("Push and Pull confirm with the exact command too; Pull sends git.pull", asyn
   expect(byId("git-command").textContent).toBe("git pull --no-rebase --ff-only origin refs/heads/main");
   await act(async () => byId("git-pull-confirm").click());
   await flush();
-  expect(c.sent.filter((m) => m.type === "git.pull")).toEqual([{ type: "git.pull", cwd: "/p", ref: "refs/heads/main", local: hash(3) }]);
+  expect(c.sent.filter((m) => m.type === "git.pull")).toEqual([{ type: "git.pull", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().pull }]);
   expect(c.sent.filter((m) => m.type === "git.push")).toEqual([]);
 });
 
