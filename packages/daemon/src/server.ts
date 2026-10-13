@@ -1449,9 +1449,10 @@ export function createDaemon(opts: {
         case "session.sendQueued": {
           const s = sessions.get(msg.sessionId);
           if (!s || !queue.items(s.id).some((i) => i.id === msg.itemId)) return fail("unknown_item", "queued message not found (already sent?)");
-          autoContinue.cancel(s.id);
           const err = await queue.sendNow(s.id, msg.itemId);
+          // A refused Send now (any reason) leaves a scheduled auto-continue alone.
           if (err) return fail(err.code, err.message);
+          autoContinue.cancel(s.id);
           queue.release(s.id);
           return reply({});
         }

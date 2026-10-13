@@ -15,7 +15,7 @@ const servers: { close(): unknown }[] = [];
 afterAll(() => servers.forEach((s) => s.close()));
 vi.spyOn(console, "log").mockImplementation(() => {});
 
-async function harness(query: unknown, extra: { idleCloseMs?: number } = {}) {
+async function harness(query: unknown, extra: Partial<Parameters<typeof createDaemon>[0]> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pq-"));
   const http = createDaemon({ webRoot: dir, roots: [dir], query: query as never, token, appSettings: createSettings({ file: join(dir, "settings.json") }), ...extra });
   servers.push(http);
@@ -245,6 +245,54 @@ describe("queued messages in the daemon", { timeout: 20_000 }, () => {
     await c.request({ type: "session.enqueue", sessionId: id, text: "later" });
     await vi.waitFor(() => expect(h.parts(c, id).some((p) => p.type === "session_state" && p.state === "error")).toBe(true), { timeout: 5000 });
     await vi.waitFor(() => expect(h.lastQueue(c, id)?.held).toMatchObject({ reason: "not_live" }), { timeout: 2000 });
+    expect(h.lastQueue(c, id)?.items.map((i) => i.text)).toEqual(["later"]);
+    c.ws.close();
+  });
+
+  it("dequeue and Send now do not load a session that exists only on disk", async () => {
+    const id = "11111111-2222-3333-4444-555555555555";
+    const getSessionInfo = vi.fn(async (sid: string) => (sid === id ? { sessionId: id, cwd: "", summary: "on disk" } : undefined));
+    const h = await harness(fakeQuery, { history: { getSessionInfo } as never });
+    // The cwd must be an allowed root for a restore to succeed.
+    getSessionInfo.mockImplementation(async (sid: string) => (sid === id ? { sessionId: id, cwd: h.dir, summary: "on disk" } : undefined));
+    const c = await h.client();
+    expect((await c.request({ type: "session.dequeue", sessionId: id, itemId: "x" })).code).toBe("unknown_item");
+    expect((await c.request({ type: "session.sendQueued", sessionId: id, itemId: "x" })).code).toBe("unknown_item");
+    expect(getSessionInfo.mock.calls.filter((a) => a[0] === id)).toEqual([]);
+    c.ws.close();
+  });
+
+  it("Send now refused because the session is not live does not cancel a scheduled auto-continue", async () => {
+    limitState.repeatEvent = true; limitState.continueHits = false; limitState.inSeconds = 30; limitState.resetsAt = 0;
+    const crashAfterLimit = (args: any) => {
+      const base = limitQuery(args) as any;
+      const it = (async function* () {
+        for await (const m of base) {
+          yield m;
+          if (m.type === "result") {
+            await sleep(300);
+            throw new Error("crash");
+          }
+        }
+      })();
+      for (const k of Object.keys(base)) if (!["next", "return", "throw"].includes(k)) (it as any)[k] = base[k];
+      (it as any).close = () => void it.return(undefined);
+      return it;
+    };
+    const h = await harness(crashAfterLimit, { autoContinue: { graceMs: 0, gapMs: 300, retryMs: 500 } });
+    const c = await h.client();
+    await c.request({ type: "settings.set", patch: { usageLimit: { autoContinue: true } } });
+    const id = await h.session(c);
+    await c.request({ type: "session.prompt", sessionId: id, text: "limit" });
+    await c.request({ type: "session.enqueue", sessionId: id, text: "later" });
+    const at = () => h.parts(c, id).filter((p) => p.type === "auto_continue").map((p: any) => p.at).at(-1);
+    await vi.waitFor(() => expect(at()).toEqual(expect.any(Number)), { timeout: 5000 });
+    await vi.waitFor(() => expect(h.parts(c, id).some((p) => p.type === "session_state" && p.state === "error")).toBe(true), { timeout: 5000 });
+    const item = h.lastQueue(c, id)!.items[0]!;
+    const r = await c.request({ type: "session.sendQueued", sessionId: id, itemId: item.id });
+    expect(r.code).toBe("session_not_live");
+    await sleep(200);
+    expect(at()).toEqual(expect.any(Number));
     expect(h.lastQueue(c, id)?.items.map((i) => i.text)).toEqual(["later"]);
     c.ws.close();
   });

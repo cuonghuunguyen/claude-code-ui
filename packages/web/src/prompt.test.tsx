@@ -1074,3 +1074,14 @@ it("GH-77: after a choice in the send menu focus is in the prompt box", async ()
   await act(async () => new Promise((r) => setTimeout(r, 50)));
   expect(document.activeElement).toBe(box);
 });
+
+it("GH-77: Escape closes the send menu and focus is in the prompt box", async () => {
+  const { box, el } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  await type(box, "hello");
+  await act(async () => el.querySelector<HTMLElement>('[aria-label="More send options"]')!.click());
+  expect(document.querySelector('[role="menuitem"]')).not.toBeNull();
+  await act(async () => void document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => new Promise((r) => setTimeout(r, 100)));
+  expect(document.querySelector('[role="menuitem"]')).toBeNull();
+  expect(document.activeElement).toBe(box);
+});
