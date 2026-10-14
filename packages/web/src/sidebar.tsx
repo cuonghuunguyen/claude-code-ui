@@ -126,6 +126,7 @@ export function SessionList({
   onRemoveWorktree,
   onOpenProject,
   renaming,
+  renamingFromMenu,
   onAction,
   onRenamed,
   search,
@@ -157,6 +158,8 @@ export function SessionList({
   onOpenProject: () => void;
   /** Session whose row shows the title editor. */
   renaming?: string;
+  /** The editor was opened from a menu (RenameInput `fromMenu`). */
+  renamingFromMenu?: boolean;
   onAction: (id: string, a: SessionAction) => void;
   /** New title, or undefined when the edit was cancelled. */
   onRenamed: (id: string, title: string | undefined) => void;
@@ -357,6 +360,7 @@ export function SessionList({
                   unread={unread.has(x.id)}
                   active={x.id === activeId}
                   renaming={renaming === x.id}
+                  menuRename={!!renamingFromMenu}
                   depth={d}
                   classic={classic}
                   branch={branches.get(x.id)}
@@ -634,6 +638,7 @@ const SessionRow = memo(function SessionRow({
   unread,
   active,
   renaming,
+  menuRename,
   depth,
   classic,
   branch,
@@ -656,6 +661,7 @@ const SessionRow = memo(function SessionRow({
   unread: boolean;
   active: boolean;
   renaming: boolean;
+  menuRename: boolean;
   /** Indent level (PAD). */
   depth: Depth;
   /** Classic layout: the row says its state as text and, in a linked worktree, its branch. */
@@ -691,7 +697,7 @@ const SessionRow = memo(function SessionRow({
   if (renaming)
     return (
       <li className={cn("flex h-8 items-center pr-1.5 max-md:h-11", PAD[depth])}>
-        <RenameInput title={s.title} onDone={(t) => onRenamed(s.id, t)} />
+        <RenameInput title={s.title} onDone={(t) => onRenamed(s.id, t)} fromMenu={menuRename} />
       </li>
     );
   return (

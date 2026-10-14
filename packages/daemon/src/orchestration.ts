@@ -85,7 +85,6 @@ class ToolError extends Error {
 /** The web app's text for errors whose tool text names tools. */
 const USER_TEXT: Record<string, string> = {
   session_running: "The worker is running or waiting for input: close it first",
-  stop_timeout: "The worker did not stop within 10 s; try again",
 };
 const ok = (v: unknown): Result => ({ content: [{ type: "text", text: JSON.stringify(v, null, 1) }] });
 const fail = (message: string): Result => ({ content: [{ type: "text", text: message }], isError: true });
@@ -343,7 +342,6 @@ export function createOrchestration(deps: OrchestrationDeps) {
       }
     });
 
-  /** The coordinator's tools, bound to its session ID, or to a binding a /clear moves to the new session (handOver). */
   /** worker_close and the web app's Close worker. */
   async function closeWorker(coordinator: string, n: string) {
     const s = await worker(coordinator, n);
@@ -365,6 +363,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (err) throw new ToolError(err.code === "session_running" ? busy : `Worker ${n} was not removed: ${err.message}`, err.code);
   }
 
+  /** The coordinator's tools, bound to its session ID, or to a binding a /clear moves to the new session (handOver). */
   function tools(binding: string | { id: string }) {
     const cur = () => (typeof binding === "string" ? binding : binding.id);
     return [
@@ -655,7 +654,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
         await (op === "close" ? closeWorker : removeWorker)(l.coordinatorId, l.name);
       } catch (e) {
         if (!(e instanceof ToolError)) throw e;
-        return { code: e.code, message: USER_TEXT[e.code] ?? e.message };
+        return { code: e.code, message: e.code === "stop_timeout" ? `The worker did not stop within ${stopWait / 1000} s; try again` : (USER_TEXT[e.code] ?? e.message) };
       }
       return undefined;
     },

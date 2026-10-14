@@ -64,8 +64,6 @@ export function confirmNames(names: string[], max = 10) {
   return names.length > max ? `${names.slice(0, max).join(", ")}, +${names.length - max} more` : names.join(", ");
 }
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-export { plural };
 
 /** Menu of a project or worktree row (also the kebab below md). `prefix`: test id prefix, e.g. "group-menu-". */
 export function groupEntries(o: {

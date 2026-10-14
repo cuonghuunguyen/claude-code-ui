@@ -110,6 +110,7 @@ export function TabsBar({
   home,
   onHome,
   renaming,
+  renamingFromMenu,
   onAction,
   onRenamed,
   grouping = "project",
@@ -151,6 +152,8 @@ export function TabsBar({
   onHome?: () => void;
   /** Session tab that shows the title editor. */
   renaming?: string;
+  /** The editor was opened from a menu (RenameInput `fromMenu`). */
+  renamingFromMenu?: boolean;
   onAction: (id: string, a: SessionAction) => void;
   onRenamed: (id: string, title: string | undefined) => void;
 }) {
@@ -348,6 +351,7 @@ export function TabsBar({
                     canReopen={!!canReopen}
                     onCommand={onTabCommand ? (c) => tabCommand(id, c) : undefined}
                     renaming={renaming === id}
+                    menuRename={!!renamingFromMenu}
                     onAction={(a) => onAction(id, a)}
                     onRenamed={(title) => onRenamed(id, title)}
                   />
@@ -874,6 +878,7 @@ function Tab({
   canReopen,
   onCommand,
   renaming,
+  menuRename,
   onAction,
   onRenamed,
 }: {
@@ -900,6 +905,7 @@ function Tab({
   /** The menu's commands beyond Move and Close tab; absent: those items are not shown. */
   onCommand?: (c: TabCommand) => void;
   renaming: boolean;
+  menuRename: boolean;
   onAction: (a: SessionAction) => void;
   onRenamed: (title: string | undefined) => void;
 }) {
@@ -959,7 +965,7 @@ function Tab({
         {renaming ? (
           <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
             <TabIcon s={s} cwd={t.cwd} />
-            <RenameInput title={t.title} onDone={onRenamed} />
+            <RenameInput title={t.title} onDone={onRenamed} fromMenu={menuRename} />
           </div>
         ) : (
           <button
@@ -976,7 +982,7 @@ function Tab({
             onClick={() => onSelect(id)}
             onKeyDown={(e) => openContextMenuFromKey(e, e.currentTarget) && (keyOpenedAt.current = performance.now())}
             // OpenCode: double click on the title renames.
-            onDoubleClick={() => session && t.transcript !== false && onAction("rename")}
+            onDoubleClick={() => session && t.transcript !== false && onAction("rename-inline")}
           >
             <TabIcon s={s} cwd={t.cwd} />
             {!pinned && (t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate leading-4">{t.title}</span>)}

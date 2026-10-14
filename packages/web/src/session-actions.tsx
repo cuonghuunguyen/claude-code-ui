@@ -10,7 +10,7 @@ import { useKeyContextMenu } from "./context-menu-key.ts";
 import { trapTab } from "./focus-trap.ts";
 import { isImeKey } from "./ime.ts";
 
-export type SessionAction = "rename" | "archive" | "unarchive" | "delete" | "copy-id" | "close-tab" | "close-worker" | "remove-worker" | "close-finished" | "remove-closed";
+export type SessionAction = "rename" | "rename-inline" | "archive" | "unarchive" | "delete" | "copy-id" | "close-tab" | "close-worker" | "remove-worker" | "close-finished" | "remove-closed";
 
 /**
  * `busy`: running or needs input; it must be stopped before it can be deleted. `transcript`: false before the first prompt, nothing to rename or archive.
@@ -123,7 +123,8 @@ export function SessionContextMenu({ target, onAction, children }: { target: Act
 const RENAME_GRACE_MS = 500;
 
 /** Inline title editor: Enter or blur saves, Escape cancels (`undefined`). An empty or unchanged title is a cancel. */
-export function RenameInput({ title, onDone, className }: { title: string; onDone: (title: string | undefined) => void; className?: string }) {
+/** `fromMenu`: opened by a menu item, whose closing returns the focus (a blur right away is that, not the user); a double-click edit ends on any blur. */
+export function RenameInput({ title, onDone, className, fromMenu }: { title: string; onDone: (title: string | undefined) => void; className?: string; fromMenu?: boolean }) {
   const [value, setValue] = useState(title);
   // Enter unmounts the input, whose blur would then save a second time.
   const done = useRef(false);
@@ -148,7 +149,7 @@ export function RenameInput({ title, onDone, className }: { title: string; onDon
       }}
       onBlur={(e) => {
         // The menu that opened this editor returns focus to its trigger while it closes (a context menu, GH-358): that is no wish to leave.
-        if (performance.now() - mountedAt.current < RENAME_GRACE_MS && !done.current) {
+        if (fromMenu && performance.now() - mountedAt.current < RENAME_GRACE_MS && !done.current) {
           const input = e.currentTarget;
           return void setTimeout(() => input.isConnected && !done.current && input.focus(), 0);
         }

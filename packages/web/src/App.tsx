@@ -379,7 +379,7 @@ export function App() {
   useEffect(() => setViewer(undefined), [activeId]);
   const quickOpener = useRef<Element>(null);
   // Title editor: in the sidebar row or in the tab the Rename action came from.
-  const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab" }>();
+  const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab"; menu: boolean }>();
   // Session waiting for the delete confirmation.
   const [deleting, setDeleting] = useState<string>();
   // Project cwd whose Remove waits for the confirmation.
@@ -1173,7 +1173,7 @@ export function App() {
   function sessionAction(where: "list" | "tab") {
     return (sessionId: string, a: SessionAction) => {
       setError(undefined);
-      if (a === "rename") return setRenaming({ id: sessionId, in: where });
+      if (a === "rename" || a === "rename-inline") return setRenaming({ id: sessionId, in: where, menu: a === "rename" });
       if (a === "delete") return setDeleting(sessionId);
       if (a === "copy-id") return copyText(sessionId, "session ID");
       if (a === "close-tab") return close(sessionId);
@@ -1671,6 +1671,7 @@ export function App() {
               return { title, titleLoading: titleLoading(title, prompted.has(id)), cwd: s?.cwd, ...(keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" }), worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, state: shownState(views[id]) ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
             }}
             renaming={renaming?.in === "tab" ? renaming.id : undefined}
+            renamingFromMenu={renaming?.menu}
             onAction={sessionAction("tab")}
             onRenamed={renamed}
             onSelect={open}
@@ -1899,6 +1900,7 @@ export function App() {
               onRemoveWorktree={askRemoveWorktree}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}
               renaming={renaming?.in === "list" ? renaming.id : undefined}
+              renamingFromMenu={renaming?.menu}
               onAction={sessionAction("list")}
               onRenamed={renamed}
               search={resumeSearch}

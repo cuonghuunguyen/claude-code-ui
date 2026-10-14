@@ -316,7 +316,7 @@ it("right click on a session tab opens the session menu; Delete is disabled whil
 it("double click on a tab title asks to rename; the renaming tab edits its title in place", async () => {
   const { tab, onAction, onRenamed } = await render({ renaming: "d" });
   await act(async () => void tab("c").querySelector('[role="tab"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
-  expect(onAction).toHaveBeenLastCalledWith("c", "rename");
+  expect(onAction).toHaveBeenLastCalledWith("c", "rename-inline");
   const input = tab("d").querySelector<HTMLInputElement>('[data-testid="rename-input"]')!;
   expect(input.value).toBe("Old");
   const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
