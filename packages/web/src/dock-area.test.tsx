@@ -141,3 +141,22 @@ it("DropStrip names its area and takes the dropped pane", async () => {
   await act(async () => void fire(el.firstElementChild!, "drop", [PANE_DRAG_TYPE], data));
   expect(onDrop).toHaveBeenCalledWith("files");
 });
+
+it("a menu opened from the keyboard focuses its first item; a pointer-opened one does not", async () => {
+  const { render } = h("side");
+  await render();
+  // click() has detail 0, like Enter or Space on the focused trigger.
+  await act(async () => doc("dock-menu-side").click());
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(doc("dock-move"));
+});
+
+it("a tab's context menu opened from the keyboard (Shift+F10: button 0) focuses its first item", async () => {
+  const { fns, render } = h("side");
+  await render();
+  await act(async () => void el.querySelector('[data-pane-tab="graph"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 0, clientX: 4, clientY: 4 })));
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(doc("pane-move"));
+  await act(async () => void doc("pane-move").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  expect(fns.onMove).toHaveBeenCalledWith("graph", "bottom");
+});

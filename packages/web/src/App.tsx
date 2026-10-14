@@ -128,7 +128,7 @@ import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany,
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, movePane, resetLayout, saveLayout, useLayout, useMinWidth } from "./layout.ts";
-import { DockHeader, DropStrip, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
+import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -1563,14 +1563,14 @@ export function App() {
   const dragProps = { drag, dropAt, onDrag: setDrag, onDropAt: setDropAt };
   /** Drop on an area (header or body): append at its end. */
   const dropHandlers = (a: DockArea) => ({
-    onDragOver: (e: DragEvent) => {
+    over: (e: globalThis.DragEvent) => {
       if (!isPaneDrag(e)) return;
       e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
+      e.dataTransfer!.dropEffect = "move";
       if (dropAt?.area !== a || dropAt.before) setDropAt({ area: a });
     },
-    onDragLeave: (e: DragEvent) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setDropAt(undefined),
-    onDrop: (e: DragEvent) => {
+    leave: (e: globalThis.DragEvent) => !(e.currentTarget as Node).contains(e.relatedTarget as Node | null) && setDropAt(undefined),
+    drop: (e: globalThis.DragEvent) => {
       const p = droppedPane(e);
       if (!p) return;
       e.preventDefault();
@@ -1581,6 +1581,8 @@ export function App() {
   });
   /** While dragging every area is outlined; the one under the pointer is filled. */
   const dropCls = (a: DockArea) => (drag ? (dropAt?.area === a && !dropAt.before ? "outline-2 outline-primary -outline-offset-2 bg-primary/5" : "outline-1 outline-dashed outline-primary/40 -outline-offset-2") : "");
+  const sideDropRef = useAreaDrop(dropHandlers("side"));
+  const bottomDropRef = useAreaDrop(dropHandlers("bottom"));
   const dropPane = (a: DockArea) => (p: PaneId) => (setDrag(undefined), setDropAt(undefined), move(p, a));
   const terminalToggle = areaOf(layout, "terminal") !== "side" && (
     <IconButton label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={shows("terminal")} onClick={toggleTerminal} testId="terminal-toggle" command="terminal.toggle">
@@ -1597,7 +1599,7 @@ export function App() {
       className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${sideShown ? "" : "lg:hidden"}`}
       style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
     >
-      <section className={`${card} flex-1 ${dropCls("side")}`} id="side-panel" data-testid="side-panel" aria-label="Side panel" data-drop-target={drag && dropAt?.area === "side" ? "" : undefined} {...dropHandlers("side")}>
+      <section className={`${card} flex-1 ${dropCls("side")}`} id="side-panel" data-testid="side-panel" aria-label="Side panel" data-drop-target={drag && dropAt?.area === "side" ? "" : undefined} ref={sideDropRef}>
         <DockHeader
           area="side"
           panes={areaPanes("side")}
@@ -2064,7 +2066,7 @@ export function App() {
               data-testid="bottom-panel"
               data-dock="bottom"
               data-drop-target={drag && dropAt?.area === "bottom" ? "" : undefined}
-              {...dropHandlers("bottom")}
+              ref={bottomDropRef}
             >
               <DockHeader
                 area="bottom"

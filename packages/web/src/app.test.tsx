@@ -942,6 +942,19 @@ it("dropping a pane on the area body appends it; a session tab drag is not a tar
   expect(q("side-panel")!.className).not.toContain("outline-primary");
 });
 
+it("dropping a pane on an area's content (inside a pane host) moves it and fills the area", async () => {
+  await clickId("terminal-toggle");
+  const data = new Map<string, string>();
+  await dnd(paneTab("bottom-panel", "terminal"), "dragstart", data);
+  // The pane content is portaled: its React events do not reach the section, so the section listens natively.
+  const body = q("side-panel")!.querySelector('[data-pane-host="files"]')!.firstElementChild!;
+  await dnd(body, "dragover", data);
+  expect(q("side-panel")!.className).toContain("outline-primary");
+  expect(q("side-panel")!.hasAttribute("data-drop-target")).toBe(true);
+  await dnd(body, "drop", data);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "terminal"]);
+});
+
 it("the sessions sidebar resizes with the arrow keys (200px to half the window) and keeps its width across a reload", async () => {
   const handle = () => el.querySelector<HTMLElement>('[data-testid="sidebar-resizer"]')!;
   const width = () => el.querySelector<HTMLElement>('[data-testid="sidebar"]')!.style.getPropertyValue("--sidebar-w");

@@ -2,7 +2,7 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
 import { EllipsisIcon } from "lucide-react";
-import { type ReactNode, useRef, useState } from "react";
+import { type ReactNode, useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AREA_LABEL, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, type PaneId } from "./layout.ts";
 import { ITEM, POPUP } from "./session-actions.tsx";
@@ -17,6 +17,44 @@ export const droppedPane = (e: { dataTransfer: DataTransfer | null }): PaneId | 
   const p = e.dataTransfer?.getData(PANE_DRAG_TYPE) as PaneId;
   return PANE_IDS.includes(p) ? p : undefined;
 };
+
+type DropHandlers = { over: (e: DragEvent) => void; leave: (e: DragEvent) => void; drop: (e: DragEvent) => void };
+/**
+ * Ref callback for an area section: native listeners, because React events from the pane contents (portaled into a host
+ * that sits in this section's DOM) bubble to the portal's React parent, not to the section. Drags over a pane tab are the tab's.
+ */
+export function useAreaDrop(on: DropHandlers) {
+  const latest = useRef(on);
+  latest.current = on;
+  return useCallback((n: HTMLElement | null) => {
+    if (!n) return;
+    const f = (k: keyof DropHandlers) => (e: Event) => !(e.target as Element).closest?.("[data-pane-tab]") && latest.current[k](e as DragEvent);
+    const fs = { dragover: f("over"), dragleave: f("leave"), drop: f("drop") };
+    for (const [t, h] of Object.entries(fs)) n.addEventListener(t, h);
+    return () => {
+      for (const [t, h] of Object.entries(fs)) n.removeEventListener(t, h);
+    };
+  }, []);
+}
+
+/** Menus opened from the keyboard (Enter, Space, Shift+F10) put the focus on the first item, so Enter works at once. */
+function useKeyboardOpen() {
+  const kb = useRef(false);
+  const popup = useRef<HTMLDivElement | null>(null);
+  return {
+    popup,
+    root: {
+      onOpenChange: (open: boolean, details: { event: Event }) => {
+        const e = details.event as MouseEvent;
+        kb.current = open && (e.type === "keydown" || (e.type === "click" && e.detail === 0) || (e.type === "contextmenu" && e.button === 0));
+      },
+      onOpenChangeComplete: (open: boolean) => {
+        if (open && kb.current) popup.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+        kb.current = false;
+      },
+    },
+  };
+}
 
 /** One stable element per pane: its content is portaled into it once and the element moves between slots, so a move never remounts the pane. */
 export function usePaneHosts(): Record<PaneId, HTMLDivElement> {
@@ -79,11 +117,13 @@ export function DockHeader({
   const moved = useRef<PaneId>(undefined);
   const finalFocus = () => (moved.current && document.querySelector<HTMLElement>(`[data-pane-tab="${moved.current}"]`)) || true;
   const move = (p: PaneId) => (moved.current = p, onMove(p, other));
+  const ctxKb = useKeyboardOpen();
+  const menuKb = useKeyboardOpen();
   return (
     <div className="hidden items-center gap-1 border-b px-2 py-1 lg:flex">
       <div role="tablist" aria-label={AREA_LABEL[area]} className="flex min-w-0 gap-1 overflow-x-auto">
         {panes.map((p) => (
-          <ContextMenu.Root key={p}>
+          <ContextMenu.Root key={p} {...ctxKb.root}>
             <ContextMenu.Trigger className="contents">
               <Button
                 size="sm"
@@ -127,7 +167,7 @@ export function DockHeader({
             </ContextMenu.Trigger>
             <ContextMenu.Portal>
               <ContextMenu.Positioner className="z-50">
-                <ContextMenu.Popup className={POPUP} finalFocus={finalFocus}>
+                <ContextMenu.Popup ref={ctxKb.popup} className={POPUP} finalFocus={finalFocus}>
                   <ContextMenu.Item className={ITEM} onClick={() => move(p)} data-testid="pane-move">
                     Move to {AREA_LABEL[other].toLowerCase()}
                   </ContextMenu.Item>
@@ -142,13 +182,13 @@ export function DockHeader({
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {extra}
-        <Menu.Root>
+        <Menu.Root {...menuKb.root}>
           <Menu.Trigger aria-label={`${AREA_LABEL[area]} actions`} title={`${AREA_LABEL[area]} actions`} className={MENU_BUTTON} data-testid={`dock-menu-${area}`}>
             <EllipsisIcon aria-hidden />
           </Menu.Trigger>
           <Menu.Portal>
             <Menu.Positioner align="end" sideOffset={4} className="z-50">
-              <Menu.Popup className={POPUP} finalFocus={finalFocus}>
+              <Menu.Popup ref={menuKb.popup} className={POPUP} finalFocus={finalFocus}>
                 {active && (
                   <Menu.Item className={ITEM} onClick={() => move(active)} data-testid="dock-move">
                     Move {PANE_LABEL[active]} to {AREA_LABEL[other].toLowerCase()}
