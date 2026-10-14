@@ -1,5 +1,6 @@
+import { createPortal } from "react-dom";
 import { Activity, lazy, memo, Suspense, use, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { CheckIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelBottomIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelBottomIcon, PanelLeftIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon, XIcon } from "lucide-react";
 import type {
   ContextUsage,
   CreateResult,
@@ -126,8 +127,8 @@ import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
 import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
-import { useMinWidth, useTerminalDock, saveTerminalDock } from "./layout.ts";
-import { TerminalDockActions } from "./terminal-dock-actions.tsx";
+import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, movePane, resetLayout, saveLayout, useLayout, useMinWidth } from "./layout.ts";
+import { DockHeader, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -337,9 +338,11 @@ export function App() {
   const focused = usePageFocused();
   // Narrow screens show one pane; wide screens show the session plus a side panel with changes or files.
   // Per session tab, so switching tabs keeps each one's pane.
-  const [panes, setPanes] = useState<Record<string, Pane>>({});
-  const pane = (activeId && panes[activeId]) || "session";
-  const setPane = (p: Pane) => activeId && setPanes((x) => ({ ...x, [activeId]: p }));
+  // GH-355: newest first per session tab. The narrow pane is the first entry; each dock area shows its newest pane.
+  const [paneHist, setPaneHist] = useState<Record<string, Pane[]>>({});
+  const hist = (activeId && paneHist[activeId]) || [];
+  const pane: Pane = hist[0] ?? "session";
+  const setPane = (p: Pane) => activeId && setPaneHist((x) => ({ ...x, [activeId]: [p, ...(x[activeId] ?? []).filter((q) => q !== p)] }));
   const [panelWidth, setPanelWidth] = useState(480);
   // Wide screens: the side panel can be hidden (Toggle side panel).
   const [panel, setPanel] = useState(() => !loadFlag(PANEL_HIDDEN_KEY));
@@ -352,10 +355,10 @@ export function App() {
   const [rewindTo, setRewindTo] = useState<string>();
   // A content search hit (palette Messages) the opened session scrolls to once its message is loaded.
   const [revealHit, setRevealHit] = useState<{ sessionId: string; hit: SearchHit; query: string }>();
-  // Wide screens: the terminal panel below the side panel (Toggle terminal); narrow screens show it as the "terminal" pane.
+  // Wide screens: the bottom panel shown (GH-354 terminal, GH-355 any pane; the key keeps its name so saved state carries over).
   // Kept per browser across reloads; the daemon's shells outlive the page.
-  const [terminalOpen, setTerminalOpen] = useState(() => loadFlag(TERMINAL_KEY));
-  useEffect(() => saveFlag(TERMINAL_KEY, terminalOpen), [terminalOpen]);
+  const [bottomOpen, setBottomOpen] = useState(() => loadFlag(TERMINAL_KEY));
+  useEffect(() => saveFlag(TERMINAL_KEY, bottomOpen), [bottomOpen]);
   // OpenCode: 280px by default, resizable when stacked below the side panel.
   const [terminalHeight, setTerminalHeight] = useState(() => loadNumber(TERMINAL_HEIGHT_KEY, 280));
   useEffect(() => {
@@ -365,15 +368,9 @@ export function App() {
       // Storage blocked: the height lasts until the page reloads.
     }
   }, [terminalHeight]);
-  // GH-354: wide screens dock the terminal at the bottom (default) or below the side panel; narrow screens keep the "terminal" pane.
-  const terminalDock = useTerminalDock();
+  // GH-355: wide screens place each pane in the side or the bottom panel; narrow screens keep the pane switcher.
+  const layout = useLayout();
   const lg = useMinWidth(1024);
-  const dockBottom = terminalDock === "bottom" && lg;
-  // Bottom dock only, this page only: the terminal takes the whole work area.
-  const [terminalMax, setTerminalMax] = useState(false);
-  useEffect(() => void (!(terminalOpen && dockBottom) && setTerminalMax(false)), [terminalOpen, dockBottom]);
-  /** The terminal shown below the side panel (wide screens, position Side panel). */
-  const sideTerminal = terminalOpen && !dockBottom;
   // A mention from "Send selection to Claude", a quote (`>`) or a command, waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
@@ -1186,10 +1183,38 @@ export function App() {
   }, [panelCwd, status, knownGit]);
   // The Graph panel stays mounted (hidden) after its first visit, so coming back shows the loaded list at once.
   const [graphCwd, setGraphCwd] = useState<string>();
+  const available = (p: PaneId) => p !== "graph" || isGit;
+  /** Narrow: the side column holds every pane. */
+  const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? PANE_IDS : []).filter(available);
+  const activeOf = (a: DockArea) => activePane(areaPanes(a), hist);
+  const sideShown = lg && panel && areaPanes("side").length > 0;
+  const bottomShown = lg && bottomOpen && areaPanes("bottom").length > 0;
+  /** The pane shows: wide = its area shows it; narrow = it is the pane. */
+  const shows = (p: PaneId) => (lg ? (areaOf(layout, p) === "side" ? sideShown : bottomShown) && activeOf(areaOf(layout, p)) === p : p === "files" ? pane === "files" || (pane === "graph" && !isGit) : pane === p && available(p));
+  // Bottom panel only, this page only: it takes the whole work area.
+  const [bottomMax, setBottomMax] = useState(false);
+  useEffect(() => void (!bottomShown && setBottomMax(false)), [bottomShown]);
+  const openArea = (a: DockArea, v = true) => (a === "side" ? setPanel(v) : setBottomOpen(v));
+  /** Selects the pane and, on wide screens, opens its area. */
+  const reveal = (p: Pane) => (setPane(p), lg && p !== "session" && openArea(areaOf(layout, p)));
+  const move = (p: PaneId, to: DockArea) => {
+    const n = movePane(layout, p, to);
+    if (n !== layout) saveLayout(n);
+    openArea(to);
+    setPane(p);
+    focusTab.current = p;
+  };
+  // A moved pane's DOM moves with it: focus its tab in the new area once rendered (menus return focus there too).
+  const focusTab = useRef<PaneId>(undefined);
   useEffect(() => {
-    if (pane === "graph" && panelSession) setGraphCwd(panelSession.cwd);
-  }, [pane, panelSession?.cwd]);
-  const sidePane = pane === "graph" && !isGit ? "files" : pane;
+    if (!focusTab.current) return;
+    document.querySelector<HTMLElement>(`[data-pane-tab="${focusTab.current}"]`)?.focus();
+    focusTab.current = undefined;
+  });
+  const hosts = usePaneHosts();
+  useEffect(() => {
+    if (shows("graph") && panelSession) setGraphCwd(panelSession.cwd);
+  }, [shows("graph"), panelSession?.cwd]);
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
   const upload = (owner: () => UploadOwner, uploadCwd?: string, rotate: () => void = () => {}) => async (file: File) => {
@@ -1217,18 +1242,15 @@ export function App() {
   /** Opens a file of the shown session (path relative to its cwd) in the files panel. */
   const openInPanel = (p: string) => {
     setOpenFile(joinPath(shown!.cwd, p));
-    setPane("files");
-    setPanel(true);
+    reveal("files");
   };
   const openViewer = useOpenViewer(shown, setViewer);
   const latest = useMemo(() => (view ? latestPlan(view) : undefined), [view?.parts, view?.aux]);
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
-    const seen = fileTree && (wide(1024) ? panel && sidePane !== "changes" && sidePane !== "graph" : sidePane === "files");
-    if (seen) return setFileTree(false);
+    if (fileTree && shows("files")) return setFileTree(false);
     setFileTree(true);
-    setPane("files");
-    setPanel(true);
+    reveal("files");
   };
   const draftShown = activeId === NEW_TAB && tabs.includes(NEW_TAB);
   const draftModes = permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === pick.model && m.supportsAutoMode) });
@@ -1307,6 +1329,13 @@ export function App() {
     };
     requestAnimationFrame(() => focus(60));
   };
+  // Wide: the terminal pane wherever it lives (VS Code: Ctrl+` reveals the view); it shows -> its area hides. Narrow: the terminal pane.
+  const toggleTerminal = () => {
+    if (!wide(1024)) return setPane(pane === "terminal" ? "session" : "terminal");
+    if (!shows("terminal")) return reveal("terminal");
+    openArea(areaOf(layout, "terminal"), false);
+    focusShownPrompt();
+  };
   const reopen = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs).tab;
   const commands = appCommands({
     newWorktree: canWorktree ? () => (setWtName(""), setNaming(gitProject)) : undefined,
@@ -1336,18 +1365,19 @@ export function App() {
     // lg: the side panel breakpoint; below it the session and the files share one pane.
     toggleFileTree,
     toggleSidePanel: () => (wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
-    toggleTerminal: () => (wide(1024) ? setTerminalOpen((v) => !v) : setPane(pane === "terminal" ? "session" : "terminal")),
+    toggleTerminal,
     // The pane that shows already: focus goes back to the prompt (VS Code's Explorer key does the same).
     showPane: (p) => {
-      const side = sidePane === "changes" || sidePane === "graph" ? sidePane : "files";
-      if (wide(1024) ? panel && side === p : sidePane === p) return focusShownPrompt();
-      setPane(p);
-      setPanel(true);
+      if (shows(p)) return focusShownPrompt();
+      reveal(p);
     },
     newTerminal: () => {
-      if (wide(1024) ? terminalOpen : pane === "terminal") return setTerminalTick((n) => n + 1);
-      wide(1024) ? setTerminalOpen(true) : setPane("terminal");
+      if (shows("terminal")) return setTerminalTick((n) => n + 1);
+      reveal("terminal");
     },
+    resetLayout,
+    flipSide: () => saveLayout(flipSide(layout)),
+    side: layout.side,
     canReopen: !!reopen,
     reopenTab: () => {
       const r = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs);
@@ -1500,20 +1530,57 @@ export function App() {
   const prompted = useMemo(() => promptedIds(optimistic, views), [optimistic, views]);
 
 
-  // The terminal panel, rendered in one place only: the bottom dock or below the side panel.
-  const terminalPanel = (actions: ReactNode) =>
+  // The terminal panel, rendered in one place only: inside the terminal pane's host.
+  const terminalPanel = () =>
     panelSession && (
       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading terminal…</p>}>
         <TerminalPanel
           client={client.current!}
           status={status}
           cwd={panelSession.cwd}
-          onEmpty={() => (setTerminalOpen(false), pane === "terminal" && setPane("session"))}
+          onEmpty={() => {
+            if (!lg) return setPane("session");
+            // The last terminal closed: the area hides, or shows its other pane.
+            const a = areaOf(layout, "terminal");
+            const rest = areaPanes(a).filter((p) => p !== "terminal");
+            if (rest.length) setPane(rest[0]!);
+            else openArea(a, false);
+          }}
           newTick={terminalTick}
-          actions={actions}
         />
       </Suspense>
     );
+  const terminalToggle = areaOf(layout, "terminal") !== "side" && (
+    <IconButton label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={shows("terminal")} onClick={toggleTerminal} testId="terminal-toggle" command="terminal.toggle">
+      <SquareTerminalIcon />
+    </IconButton>
+  );
+  const resizer = shown && sideShown && <PanelResizer width={panelWidth} onResize={setPanelWidth} side={layout.side} />;
+  // The side panel (GH-355): its tabs, then the pane hosts it holds; the hosts move between areas without remounting.
+  const sideCol = panelSession && (
+    <div
+      className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${sideShown ? "" : "lg:hidden"}`}
+      style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
+    >
+      <section className={`${card} flex-1`} id="side-panel" data-testid="side-panel" aria-label="Side panel">
+        <DockHeader
+          area="side"
+          panes={areaPanes("side")}
+          active={activeOf("side")}
+          changes={changeCount}
+          side={layout.side}
+          onSelect={setPane}
+          onMove={move}
+          onFlipSide={() => saveLayout(flipSide(layout))}
+          onReset={resetLayout}
+          extra={terminalToggle}
+        />
+        {areaPanes("side").map((p) => (
+          <PaneSlot key={p} host={hosts[p]} />
+        ))}
+      </section>
+    </div>
+  );
   return (
     <AvatarColors value={colors}>
     <SideLabel value={sideOf.badge}>
@@ -1565,11 +1632,11 @@ export function App() {
           </IconButton>
           {shown && (
             <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={withKey("Toggle side panel", specOf("panel.toggle"))} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle" command="panel.toggle">
-              <PanelRightIcon />
+              {layout.side === "left" ? <PanelLeftIcon /> : <PanelRightIcon />}
             </IconButton>
           )}
           {shown && (
-            <IconButton className="max-lg:hidden" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle-titlebar">
+            <IconButton className="max-lg:hidden" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={shows("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar">
               <PanelBottomIcon />
             </IconButton>
           )}
@@ -1725,7 +1792,7 @@ export function App() {
         </aside>
         {sidebar && <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ "--terminal-h": `${terminalHeight}px` } as CSSProperties} data-testid="work-area">
-        <main className={`flex min-h-0 min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-0 ${terminalMax && shown ? "hidden" : ""}`}>
+        <main className={`flex min-h-0 min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-0 ${bottomMax && shown ? "hidden" : ""}`}>
           {status === "unauthorized" ? (
             // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
             <div className={`${card} flex-1`}>
@@ -1735,8 +1802,14 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal"]} value={sidePane} onChange={setPane} changes={changeCount} />
+                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal"]} value={pane === "graph" && !isGit ? "files" : pane} onChange={setPane} changes={changeCount} />
                 </div>
+              )}
+              {layout.side === "left" && lg && (
+                <>
+                  {sideCol}
+                  {resizer}
+                </>
               )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
               <div className={`${card} flex-1 ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}>
@@ -1824,63 +1897,11 @@ export function App() {
                 </QuoteContext>
                 </ViewerContext>
               </div>
-              {shown && (panel || sideTerminal) && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
-              {panelSession && (
-                <div
-                  className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${panel || sideTerminal ? "" : "lg:hidden"}`}
-                  style={{ "--panel-w": `${panelWidth}px`, "--terminal-h": `${terminalHeight}px` } as CSSProperties}
-                >
-                <section className={`${card} flex-1 ${pane === "terminal" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`} id="side-panel" data-testid="side-panel">
-                  <div className="hidden items-center border-b px-2 py-1 lg:flex">
-                    <PaneTabs panes={["changes", "files", ...(isGit ? (["graph"] as const) : [])]} value={sidePane === "changes" || sidePane === "graph" ? sidePane : "files"} onChange={setPane} changes={changeCount} />
-                    <IconButton className="ml-auto" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle" command="terminal.toggle">
-                      <SquareTerminalIcon />
-                    </IconButton>
-                  </div>
-                  <div className={`min-h-0 flex-1 flex-col ${sidePane === "changes" || sidePane === "graph" ? "hidden" : "flex"}`}>
-                    <FilesPanel
-                      client={client.current!}
-                      status={status}
-                      cwd={panelSession.cwd}
-                      onSend={(mention) => (setInsert(mention), setPane("session"))}
-                      openPath={openFile}
-                      onOpened={() => setOpenFile(undefined)}
-                      watch={changedPaths}
-                      showTree={fileTree}
-                      onToggleTree={() => setFileTree((v) => !v)}
-                    />
-                  </div>
-                  {views[panelSession.id] && (
-                    <ChangesPanel
-                      key={panelSession.id}
-                      hidden={pane !== "changes"}
-                      onCount={(n) => setListedChanges({ id: panelSession.id, n })}
-                      client={client.current!}
-                      view={views[panelSession.id]!}
-                      cwd={panelSession.cwd}
-                      onOpen={(path) => (setOpenFile(path), setPane("files"))}
-                      sessionId={panelSession.id}
-                      onPopOut={() => openViewer({ kind: "changes" })}
-                    />
-                  )}
-                  {isGit && (sidePane === "graph" || graphCwd === panelSession.cwd) && (
-                    <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
-                      <GraphPanel key={panelSession.cwd} hidden={sidePane !== "graph"} client={client.current!} cwd={panelSession.cwd} />
-                    </Suspense>
-                  )}
-                </section>
-                {panel && sideTerminal && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
-                {!dockBottom && (terminalOpen || pane === "terminal") && (
-                  // OpenCode: below the side panel, 100px to 60% of the window high (CSS keeps it there when the window shrinks).
-                  <section
-                    className={`${card} ${pane === "terminal" ? "flex-1" : "max-lg:hidden"} ${!terminalOpen ? "lg:hidden" : panel ? "lg:h-(--terminal-h) lg:max-h-[60vh] lg:min-h-25 lg:flex-none" : "lg:flex-1"}`}
-                    data-testid="terminal-panel"
-                    data-dock="side"
-                  >
-                    {terminalPanel(<TerminalDockActions dock="side" onMove={saveTerminalDock} />)}
-                  </section>
-                )}
-                </div>
+              {!(layout.side === "left" && lg) && (
+                <>
+                  {resizer}
+                  {sideCol}
+                </>
               )}
               {/* Mounted while the tab is open: hidden, it keeps its draft; replaced by the created session, it starts empty next time. */}
               {tabs.includes(NEW_TAB) && (
@@ -1911,9 +1932,10 @@ export function App() {
                 <>
                   {/* The height of the pane tabs row the session card has below lg (28px + the main gap): the prompt does not move when the session shows. */}
                   <div className="h-7 shrink-0 lg:hidden" aria-hidden />
-                  <StartingSession cwd={draftProject} place={worktreeName(draftProject, worktrees)} pending={optimistic[NEW_TAB]} />
                   {/* The side panel's footprint (resizer 6px + panel) on wide screens, empty: the prompt does not shift when the session shows it. */}
-                  {(panel || sideTerminal) && <div className={`${card} ml-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
+                  {layout.side === "left" && sideShown && <div className={`${card} mr-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
+                  <StartingSession cwd={draftProject} place={worktreeName(draftProject, worktrees)} pending={optimistic[NEW_TAB]} />
+                  {layout.side === "right" && sideShown && <div className={`${card} ml-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
                 </>
               )}
               {activeId === FOCUS_TAB && (
@@ -1937,27 +1959,95 @@ export function App() {
                   <div className="m-auto text-muted-foreground">Open or create a session to start.</div>
                 </div>
               )}
+              {panelSession && (
+                <>
+                  {/* The pane contents render here once; each host sits in the slot of the area that holds the pane. */}
+                  {createPortal(
+                    <div className={shows("files") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+                      <FilesPanel
+                        client={client.current!}
+                        status={status}
+                        cwd={panelSession.cwd}
+                        onSend={(mention) => (setInsert(mention), setPane("session"))}
+                        openPath={openFile}
+                        onOpened={() => setOpenFile(undefined)}
+                        watch={changedPaths}
+                        showTree={fileTree}
+                        onToggleTree={() => setFileTree((v) => !v)}
+                      />
+                    </div>,
+                    hosts.files,
+                  )}
+                  {createPortal(
+                    views[panelSession.id] && (
+                      <ChangesPanel
+                        key={panelSession.id}
+                        hidden={!shows("changes")}
+                        onCount={(n) => setListedChanges({ id: panelSession.id, n })}
+                        client={client.current!}
+                        view={views[panelSession.id]!}
+                        cwd={panelSession.cwd}
+                        onOpen={(path) => (setOpenFile(path), reveal("files"))}
+                        sessionId={panelSession.id}
+                        onPopOut={() => openViewer({ kind: "changes" })}
+                      />
+                    ),
+                    hosts.changes,
+                  )}
+                  {createPortal(
+                    isGit && (shows("graph") || graphCwd === panelSession.cwd) && (
+                      <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
+                        <GraphPanel key={panelSession.cwd} hidden={!shows("graph")} client={client.current!} cwd={panelSession.cwd} />
+                      </Suspense>
+                    ),
+                    hosts.graph,
+                  )}
+                  {createPortal(
+                    // Mounted only while it shows: the terminal chunk and the shell focus load on show (GH-354).
+                    shows("terminal") && (
+                      <section className="flex min-h-0 flex-1 flex-col" data-testid="terminal-panel" data-dock={lg ? areaOf(layout, "terminal") : "side"}>
+                        {terminalPanel()}
+                      </section>
+                    ),
+                    hosts.terminal,
+                  )}
+                </>
+              )}
             </>
           )}
         </main>
-        {status !== "unauthorized" && dockBottom && terminalOpen && panelSession && (
+        {status !== "unauthorized" && panelSession && bottomShown && (
           <>
-            {shown && !terminalMax && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
+            {shown && !bottomMax && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
             <section
-              className={`${card} ${!shown ? "hidden" : terminalMax ? "flex-1" : "h-(--terminal-h) max-h-[60vh] min-h-25 flex-none"}`}
-              data-testid="terminal-panel"
+              id="bottom-panel"
+              aria-label="Bottom panel"
+              className={`${card} ${!shown ? "hidden" : bottomMax ? "flex-1" : "h-(--terminal-h) max-h-[60vh] min-h-25 flex-none"}`}
+              data-testid="bottom-panel"
               data-dock="bottom"
             >
-              {terminalPanel(
-                <TerminalDockActions
-                  dock="bottom"
-                  onMove={saveTerminalDock}
-                  maximized={terminalMax}
-                  onMaximize={() => setTerminalMax((m) => !m)}
-                  onHide={() => (setTerminalOpen(false), focusShownPrompt())}
-                  hideLabel={withKey("Hide terminal", specOf("terminal.toggle"))}
-                />,
-              )}
+              <DockHeader
+                area="bottom"
+                panes={areaPanes("bottom")}
+                active={activeOf("bottom")}
+                changes={changeCount}
+                onSelect={setPane}
+                onMove={move}
+                onReset={resetLayout}
+                extra={
+                  <>
+                    <IconButton label={bottomMax ? "Restore panel" : "Maximize panel"} pressed={bottomMax} onClick={() => setBottomMax((m) => !m)} testId="dock-maximize">
+                      {bottomMax ? <ChevronDownIcon /> : <ChevronUpIcon />}
+                    </IconButton>
+                    <IconButton label="Hide bottom panel" onClick={() => (setBottomOpen(false), focusShownPrompt())} testId="dock-hide">
+                      <XIcon />
+                    </IconButton>
+                  </>
+                }
+              />
+              {areaPanes("bottom").map((p) => (
+                <PaneSlot key={p} host={hosts[p]} />
+              ))}
             </section>
           </>
         )}
@@ -2137,7 +2227,7 @@ export function App() {
   );
 }
 
-type Pane = "session" | "changes" | "files" | "terminal" | "graph";
+type Pane = "session" | PaneId;
 
 /** `changes`: the changed file count, shown on the changes tab like OpenCode's "Files Changed N". */
 export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[]; value: Pane; onChange: (p: Pane) => void; changes?: number }) {
@@ -2164,7 +2254,7 @@ export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[
 }
 
 /** Drag handle (or arrow keys) between the session and the side panel on wide screens. */
-function PanelResizer({ width, onResize }: { width: number; onResize: (w: number) => void }) {
+function PanelResizer({ width, onResize, side }: { width: number; onResize: (w: number) => void; side: DockSide }) {
   const clamp = (w: number) => Math.round(Math.max(280, Math.min(w, window.innerWidth - 480)));
   return (
     <div
@@ -2173,11 +2263,12 @@ function PanelResizer({ width, onResize }: { width: number; onResize: (w: number
       aria-label="Resize side panel"
       aria-valuenow={width}
       tabIndex={0}
-      className="hidden w-1.5 shrink-0 cursor-col-resize touch-none border-l bg-border/40 hover:bg-primary/30 focus-visible:bg-primary/30 lg:block"
+      className={`hidden w-1.5 shrink-0 cursor-col-resize touch-none ${side === "left" ? "border-r" : "border-l"} bg-border/40 hover:bg-primary/30 focus-visible:bg-primary/30 lg:block`}
       onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
-      onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && onResize(clamp(window.innerWidth - e.clientX))}
+      // Right: the panel ends at the window edge; left: it starts at its own left edge (the element before the resizer).
+      onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && onResize(clamp(side === "left" ? e.clientX - e.currentTarget.previousElementSibling!.getBoundingClientRect().left : window.innerWidth - e.clientX))}
       onKeyDown={(e) => {
-        const d = { ArrowLeft: 32, ArrowRight: -32 }[e.key];
+        const d = (side === "left" ? { ArrowLeft: -32, ArrowRight: 32 } : { ArrowLeft: 32, ArrowRight: -32 })[e.key];
         if (d) onResize(clamp(width + d));
       }}
     />
@@ -2209,7 +2300,7 @@ function SidebarResizer({ width, onResize }: { width: number; onResize: (w: numb
   );
 }
 
-/** Drag handle (or arrow keys) between the side panel and the terminal panel below it on wide screens (OpenCode: 100px to 60% of the window). */
+/** Drag handle (or arrow keys) between the work area and the bottom panel on wide screens (OpenCode: 100px to 60% of the window). */
 function TerminalResizer({ height, onResize }: { height: number; onResize: (h: number) => void }) {
   const clamp = (h: number) => Math.round(Math.max(100, Math.min(h, window.innerHeight * 0.6)));
   return (

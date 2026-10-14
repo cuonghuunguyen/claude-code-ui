@@ -41,6 +41,10 @@ export type CommandContext = {
   showPane: (pane: "files" | "changes" | "graph") => void;
   /** Adds a terminal to the terminal panel (opens the panel first). */
   newTerminal: () => void;
+  resetLayout: () => void;
+  /** Moves the side panel to the other side of the session view. */
+  flipSide: () => void;
+  side: "left" | "right";
   /** Reopens the tab closed last that still exists; false when there is none. */
   reopenTab: () => void;
   canReopen: boolean;
@@ -125,6 +129,8 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
     cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
     s && !s.draft && cmd("terminal.new", "New terminal", c.newTerminal),
+    cmd("layout.reset", "Reset layout", c.resetLayout),
+    s && !s.draft && cmd("panel.flip", c.side === "left" ? "Move side panel to right" : "Move side panel to left", c.flipSide),
     s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
     s &&
       c.models.length > 0 &&

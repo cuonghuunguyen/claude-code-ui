@@ -7,7 +7,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import "./terminal-font.css";
 import { PlusIcon, XIcon } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { connect, ConnectionStatus } from "./client.ts";
 import { TERMINAL_FONT, loadTerminalFont, terminalFontSettled } from "./terminal-font.ts";
 import { leavesTerminal, specOf } from "./keymap.ts";
@@ -40,21 +40,19 @@ const storage = {
  * Mounted when the user opens the panel: then, with none running, it starts one. A project switch (`cwd`) or a reconnect
  * to an empty list starts none. `onEmpty`: the last terminal was closed or its shell exited; the panel should hide.
  */
-/** `newTick`: bumped by the New terminal shortcut; each bump adds a terminal. `actions`: controls at the right end of the tabs bar (dock menu, maximize, hide). */
+/** `newTick`: bumped by the New terminal shortcut; each bump adds a terminal. */
 export function TerminalPanel({
   client,
   status,
   cwd,
   onEmpty,
   newTick = 0,
-  actions,
 }: {
   client: Client;
   status: ConnectionStatus;
   cwd: string;
   onEmpty: () => void;
   newTick?: number;
-  actions?: ReactNode;
 }) {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [activeId, setActiveId] = useState<string>();
@@ -177,7 +175,6 @@ export function TerminalPanel({
         <IconButton label={withKey("New terminal", specOf("terminal.new"))} onClick={() => void create()} testId="terminal-new">
           <PlusIcon />
         </IconButton>
-        {actions}
       </div>
       {error && (
         <p role="alert" className="shrink-0 border-b px-3.5 py-1 text-destructive text-xs">

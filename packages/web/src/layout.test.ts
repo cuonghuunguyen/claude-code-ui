@@ -2,27 +2,67 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { loadTerminalDock, saveTerminalDock, useMinWidth, useTerminalDock } from "./layout.ts";
+import { DEFAULT_LAYOUT, activePane, areaOf, loadLayout, loadTerminalDock, movePane, parseLayout, resetLayout, saveLayout, saveTerminalDock, useLayout, useMinWidth, useTerminalDock } from "./layout.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-afterEach(() => (vi.restoreAllMocks(), saveTerminalDock("bottom"), localStorage.clear()));
+afterEach(() => (vi.restoreAllMocks(), resetLayout(), localStorage.clear()));
 
-it("terminal dock defaults to bottom and keeps side per browser", () => {
+it("parseLayout: bad input reads as the default", () => {
+  expect(parseLayout(null)).toEqual(DEFAULT_LAYOUT);
+  expect(parseLayout("{nope")).toEqual(DEFAULT_LAYOUT);
+  expect(parseLayout('{"side":"left"}')).toEqual(DEFAULT_LAYOUT);
+});
+
+it("parseLayout: appends missing panes, drops unknown and duplicate ones", () => {
+  const l = parseLayout('{"side":"left","areas":{"side":["files","zzz","files"],"bottom":["terminal","changes"]}}');
+  expect(l).toEqual({ side: "left", areas: { side: ["files", "graph"], bottom: ["terminal", "changes"] } });
+  expect(parseLayout('{"side":"top","areas":{}}').side).toBe("right");
+});
+
+it("parseLayout: GH-354 terminalDock=side migrates when no layout is stored", () => {
+  expect(parseLayout(null, "side").areas).toEqual({ side: ["changes", "files", "graph", "terminal"], bottom: [] });
+  expect(parseLayout(null, "bottom")).toEqual(DEFAULT_LAYOUT);
+});
+
+it("movePane: other area end, reorder before, no-op returns the same object", () => {
+  const l = DEFAULT_LAYOUT;
+  expect(movePane(l, "files", "bottom").areas).toEqual({ side: ["changes", "graph"], bottom: ["terminal", "files"] });
+  expect(movePane(l, "files", "bottom", "terminal").areas.bottom).toEqual(["files", "terminal"]);
+  expect(movePane(l, "graph", "side", "changes").areas.side).toEqual(["graph", "changes", "files"]);
+  expect(movePane(l, "files", "side", "graph")).toBe(l);
+  expect(movePane(l, "terminal", "bottom")).toBe(l);
+  expect(movePane(l, "files", "bottom", "changes").areas.bottom).toEqual(["terminal", "files"]);
+});
+
+it("activePane: newest history entry in the area, else files, else first", () => {
+  expect(activePane(["changes", "files"], ["terminal", "changes", "files"])).toBe("changes");
+  expect(activePane(["changes", "files"], [])).toBe("files");
+  expect(activePane(["changes", "graph"], ["terminal"])).toBe("changes");
+  expect(activePane([], ["files"])).toBeUndefined();
+});
+
+it("saveLayout keeps non-default layouts, removes the key for the default and the GH-354 key", () => {
+  localStorage.setItem("claude-ui.terminalDock", "side");
+  saveLayout(movePane(DEFAULT_LAYOUT, "files", "bottom"));
+  expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.bottom).toEqual(["terminal", "files"]);
+  expect(localStorage.getItem("claude-ui.terminalDock")).toBeNull();
+  const a = loadLayout();
+  expect(loadLayout()).toBe(a);
+  resetLayout();
+  expect(localStorage.getItem("claude-ui.layout")).toBeNull();
+  expect(loadLayout()).toEqual(DEFAULT_LAYOUT);
+});
+
+it("terminal dock = area of the terminal pane", () => {
   expect(loadTerminalDock()).toBe("bottom");
   saveTerminalDock("side");
-  expect(localStorage.getItem("claude-ui.terminalDock")).toBe("side");
+  expect(areaOf(loadLayout(), "terminal")).toBe("side");
   expect(loadTerminalDock()).toBe("side");
   saveTerminalDock("bottom");
-  expect(localStorage.getItem("claude-ui.terminalDock")).toBeNull();
-  expect(loadTerminalDock()).toBe("bottom");
+  expect(localStorage.getItem("claude-ui.layout")).toBeNull();
 });
 
-it("an unknown stored value reads as bottom", () => {
-  localStorage.setItem("claude-ui.terminalDock", "left");
-  expect(loadTerminalDock()).toBe("bottom");
-});
-
-it("blocked storage keeps the choice in memory", () => {
+it("blocked storage keeps the layout in memory", () => {
   vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
     throw new Error("blocked");
   });
@@ -33,17 +73,17 @@ it("blocked storage keeps the choice in memory", () => {
   expect(loadTerminalDock()).toBe("side");
 });
 
-it("useTerminalDock re-renders on save and on another tab's storage event", async () => {
+it("useLayout / useTerminalDock re-render on save and on another tab's storage event", async () => {
   const el = document.body.appendChild(document.createElement("div"));
   const root = createRoot(el);
-  const Probe = () => createElement("span", null, useTerminalDock());
+  const Probe = () => createElement("span", null, `${useTerminalDock()} ${useLayout().side}`);
   await act(async () => root.render(createElement(Probe)));
-  expect(el.textContent).toBe("bottom");
+  expect(el.textContent).toBe("bottom right");
   await act(async () => saveTerminalDock("side"));
-  expect(el.textContent).toBe("side");
-  localStorage.removeItem("claude-ui.terminalDock");
-  await act(async () => void window.dispatchEvent(new StorageEvent("storage", { key: "claude-ui.terminalDock" })));
-  expect(el.textContent).toBe("bottom");
+  expect(el.textContent).toBe("side right");
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ ...DEFAULT_LAYOUT, side: "left" }));
+  await act(async () => void window.dispatchEvent(new StorageEvent("storage", { key: "claude-ui.layout" })));
+  expect(el.textContent).toBe("bottom left");
   act(() => root.unmount());
   el.remove();
 });

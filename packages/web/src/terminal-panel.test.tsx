@@ -424,12 +424,3 @@ it("with its binding removed the New terminal button has no empty key hint", asy
     resetAll();
   }
 });
-
-it("renders the actions at the end of the tabs bar, after the New terminal button", async () => {
-  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
-  await act(async () => root.render(<TerminalPanel client={client} status="connected" cwd="/p" onEmpty={() => {}} actions={<button data-testid="x" />} />));
-  await flush();
-  const x = el.querySelector('[data-testid="terminal"] [data-testid="x"]')!;
-  expect(x).not.toBeNull();
-  expect(el.querySelector("[data-testid=terminal-new]")!.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-});

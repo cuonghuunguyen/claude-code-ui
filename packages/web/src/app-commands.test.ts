@@ -26,6 +26,9 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   toggleSignalOnly: vi.fn(),
   showPane: vi.fn(),
   newTerminal: vi.fn(),
+  resetLayout: vi.fn(),
+  flipSide: vi.fn(),
+  side: "right",
   reopenTab: vi.fn(),
   canReopen: false,
   openShortcuts: vi.fn(),
@@ -72,6 +75,8 @@ it("lists the issue's commands with shortcuts, then the sessions", () => {
     ["terminal.toggle", "ctrl+`"],
     ["signal.toggle", "mod+alt+s"],
     ["terminal.new", "ctrl+shift+`"],
+    ["layout.reset", undefined],
+    ["panel.flip", undefined],
     ["prompt.focus", "ctrl+l"],
     ["model.choose", "mod+'"],
     ["effort.choose", undefined],
@@ -141,7 +146,7 @@ it("rewind lists prompts newest first; hidden while a turn runs, when Stop shows
 
 it("without a shown session only the app-level commands remain", () => {
   const items = appCommands(ctx({ session: undefined, canQuickOpen: false, tabs: ["new"], activeId: "new", sessions: [] }));
-  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "guide.start", "tips.reset", "sidebar.toggle", "signal.toggle"]);
+  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "guide.start", "tips.reset", "sidebar.toggle", "signal.toggle", "layout.reset"]);
 });
 
 it("a shortcut finds its command; Esc, Shift+Tab and plain keys run nothing from here", () => {
@@ -343,4 +348,12 @@ it("viewer commands show only with their callbacks and a session", () => {
   const ids = (x: CommandContext) => appCommands(x).map((i) => i.id);
   expect(ids(ctx())).not.toContain("viewer.changes");
   expect(ids(ctx({ viewChanges, viewPlan, session: { ...ctx().session!, draft: true } }))).not.toContain("viewer.plan");
+});
+
+it("Reset layout is always listed; the side flip names the other side and needs a session", () => {
+  const title = (c: CommandContext, id: string) => appCommands(c).find((x) => x.id === id)?.title;
+  expect(title(ctx({ session: undefined, activeId: undefined, tabs: [] }), "layout.reset")).toBe("Reset layout");
+  expect(title(ctx(), "panel.flip")).toBe("Move side panel to left");
+  expect(title(ctx({ side: "left" }), "panel.flip")).toBe("Move side panel to right");
+  expect(title(ctx({ session: undefined, activeId: undefined, tabs: [] }), "panel.flip")).toBeUndefined();
 });

@@ -198,15 +198,15 @@ it("Default diff view is a per-browser choice: picking Uncommitted saves it and 
 });
 
 it("Terminal position: Bottom by default, Side panel saved per browser", async () => {
-  localStorage.removeItem("claude-ui.terminalDock");
+  localStorage.removeItem("claude-ui.layout");
   const { q, pick } = await render();
   await pick("terminal");
   expect(q("settings-terminal-position")?.textContent).toContain("Bottom");
   await act(async () => q("settings-terminal-position")!.click());
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-side]")!.click());
-  expect(localStorage.getItem("claude-ui.terminalDock")).toBe("side");
+  expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.side).toContain("terminal");
   expect(q("settings-terminal-position")?.textContent).toContain("Side panel");
-  localStorage.removeItem("claude-ui.terminalDock");
+  localStorage.removeItem("claude-ui.layout");
 });
 
 it("Sidebar section: Show only active sessions is the sidebar's own per-browser setting, off by default (GH-159)", async () => {

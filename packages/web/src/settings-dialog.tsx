@@ -390,7 +390,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
         <div className="min-w-0 flex-1">
           <span id="settings-terminal-position-label" className="block text-sm">Terminal position</span>
-          <span id="settings-terminal-position-hint" className="block text-muted-foreground text-xs">Where the terminal panel opens on wide screens: docked at the bottom under the session and side panel, or below the side panel. Narrow screens show it as the terminal pane. Kept in this browser.</span>
+          <span id="settings-terminal-position-hint" className="block text-muted-foreground text-xs">Where the terminal opens on wide screens: a tab of the bottom panel, under the session and side panel, or a tab of the side panel. Narrow screens show it as the terminal pane. Kept in this browser.</span>
         </div>
         <Select value={terminalDock} onValueChange={(v) => v && saveTerminalDock(v as DockArea)}>
           <SelectTrigger aria-labelledby="settings-terminal-position-label" aria-describedby="settings-terminal-position-hint" data-testid="settings-terminal-position" className="w-40 max-md:data-[size=default]:h-11">
