@@ -989,6 +989,15 @@ it("moving a pane from a maximized bottom panel to the side panel restores it", 
   expect(q("side-panel")!.contains(paneTab("side-panel", "files"))).toBe(true);
 });
 
+it("reordering tabs inside a maximized bottom panel keeps it maximized", async () => {
+  await maximizedBottomWithSideTerminal();
+  const data = new Map<string, string>();
+  await dnd(paneTab("bottom-panel", "changes"), "dragstart", data);
+  await dnd(paneTab("bottom-panel", "files"), "drop", data);
+  expect(layoutKey()!.areas.bottom).toEqual(["changes", "files"]);
+  expect(mainHidden()).toBe(true);
+});
+
 it("with no pane in the side panel the toggle is disabled with the reason, and Ctrl+Shift+R does nothing", async () => {
   localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: [], bottom: ["changes", "files", "graph", "terminal"] } }));
   await rerender();

@@ -1202,9 +1202,11 @@ export function App() {
   const sideEmpty = lg && areaPanes("side").length === 0;
   // The terminal stays mounted (hidden) while another pane of its open area is selected, so switching tabs keeps it as it was.
   const termAreaOpen = lg && (areaOf(layout, "terminal") === "side" ? sideShown : bottomShown);
+  // `termKeep`: it has shown and its area has stayed open since; it resets when the area hides, so hiding unmounts it.
+  const termShows = shows("terminal");
   const [termKeep, setTermKeep] = useState(false);
-  useEffect(() => setTermKeep(shows("terminal") || (termKeep && termAreaOpen)));
-  const termMounted = shows("terminal") || (termKeep && termAreaOpen);
+  useEffect(() => setTermKeep((k) => termShows || (k && termAreaOpen)), [termShows, termAreaOpen]);
+  const termMounted = termShows || (termKeep && termAreaOpen);
   useEffect(() => void (!bottomShown && setBottomMax(false)), [bottomShown]);
   const openArea = (a: DockArea, v = true) => (a === "side" ? setPanel(v) : setBottomOpen(v));
   /** Selects the pane and, on wide screens, opens its area. */
@@ -1221,7 +1223,8 @@ export function App() {
   const move = (p: PaneId, to: DockArea, before?: PaneId) => {
     const n = movePane(layout, p, to, before);
     if (n !== layout) saveLayout(n);
-    setBottomMax(false);
+    // Only a move out of the bottom panel needs the session view and side panel back; a reorder inside it keeps the maximize.
+    if (to !== "bottom") setBottomMax(false);
     openArea(to);
     setPane(p);
     focusTab.current = p;
@@ -1571,6 +1574,7 @@ export function App() {
             else openArea(a, false);
           }}
           newTick={terminalTick}
+          shown={shows("terminal")}
         />
       </Suspense>
     );

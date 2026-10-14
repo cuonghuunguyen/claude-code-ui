@@ -47,12 +47,15 @@ export function TerminalPanel({
   cwd,
   onEmpty,
   newTick = 0,
+  shown = true,
 }: {
   client: Client;
   status: ConnectionStatus;
   cwd: string;
   onEmpty: () => void;
   newTick?: number;
+  /** False while the panel stays mounted but hidden (another pane of its area is selected); showing it again focuses the shell. */
+  shown?: boolean;
 }) {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [activeId, setActiveId] = useState<string>();
@@ -81,6 +84,15 @@ export function TerminalPanel({
       setError((e as Error).message);
     }
   };
+
+  const wasShown = useRef(shown);
+  useEffect(() => {
+    if (shown && !wasShown.current) {
+      focusShell.current = true;
+      setFocusTick((n) => n + 1);
+    }
+    wasShown.current = shown;
+  }, [shown]);
 
   const seenTick = useRef(newTick);
   useEffect(() => {
