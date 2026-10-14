@@ -175,3 +175,15 @@ it("a right click on a pane tab does not take the focus into the menu", async ()
   await act(async () => new Promise((r) => setTimeout(r, 80)));
   expect(document.activeElement).not.toBe(doc("pane-move"));
 });
+
+it("a menu closed without a move does not send the focus to the tab of an earlier move", async () => {
+  const { render } = h("side");
+  await render();
+  await act(async () => void el.querySelector('[data-pane-tab="graph"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 4, clientY: 4 })));
+  await act(async () => doc("pane-move").click()); // a move: the ref now names graph
+  const trigger = doc("dock-menu-side");
+  trigger.focus();
+  await act(async () => trigger.click());
+  await act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+});

@@ -132,11 +132,13 @@ export function DockHeader({
   const move = (p: PaneId) => (moved.current = p, onMove(p, other));
   const ctxKb = useKeyboardOpen();
   const menuKb = useKeyboardOpen();
+  // A menu that closes without a move returns the focus to its trigger: forget the previous move when one opens.
+  const opening = (root: ReturnType<typeof useKeyboardOpen>["root"]) => ({ ...root, onOpenChange: (o: boolean, d: { event: Event }) => (o && (moved.current = undefined), root.onOpenChange(o, d)) });
   return (
     <div className="hidden items-center gap-1 border-b px-2 py-1 lg:flex">
       <div role="tablist" aria-label={AREA_LABEL[area]} className="flex min-w-0 gap-1 overflow-x-auto">
         {panes.map((p) => (
-          <ContextMenu.Root key={p} {...ctxKb.root}>
+          <ContextMenu.Root key={p} {...opening(ctxKb.root)}>
             <ContextMenu.Trigger className="contents">
               <Button
                 size="sm"
@@ -196,7 +198,7 @@ export function DockHeader({
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {extra}
-        <Menu.Root {...menuKb.root}>
+        <Menu.Root {...opening(menuKb.root)}>
           <Menu.Trigger aria-label={`${AREA_LABEL[area]} actions`} title={`${AREA_LABEL[area]} actions`} className={MENU_BUTTON} data-testid={`dock-menu-${area}`}>
             <EllipsisIcon aria-hidden />
           </Menu.Trigger>
