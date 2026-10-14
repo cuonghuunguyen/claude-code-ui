@@ -873,6 +873,49 @@ it("a pane's context menu moves it and focus lands on its tab in the new area", 
   expect(document.activeElement).toBe(paneTab("bottom-panel", "changes"));
 });
 
+const dnd = (target: Element | null, type: string, data: Map<string, string>, types = ["application/x-claude-ui-pane"]) => {
+  const e = new Event(type, { bubbles: true, cancelable: true });
+  Object.assign(e, { dataTransfer: { setData: (k: string, v: string) => data.set(k, v), getData: (k: string) => data.get(k) ?? "", types, dropEffect: "", effectAllowed: "" } });
+  return act(async () => void target!.dispatchEvent(e));
+};
+
+it("dragging a pane tab outlines the areas, shows the bottom drop strip when hidden; drop moves; dragend (Esc) changes nothing", async () => {
+  const data = new Map<string, string>();
+  expect(q("bottom-panel")).toBeNull();
+  await dnd(paneTab("side-panel", "files"), "dragstart", data);
+  expect(q("side-panel")!.className).toContain("outline-dashed");
+  expect(q("drop-bottom")!.textContent).toBe("Bottom panel");
+  // Esc: the browser fires dragend without drop.
+  await dnd(paneTab("side-panel", "files"), "dragend", data);
+  expect(q("drop-bottom")).toBeNull();
+  expect(q("side-panel")!.className).not.toContain("outline");
+  expect(localStorage.getItem("claude-ui.layout")).toBeNull();
+  await dnd(paneTab("side-panel", "files"), "dragstart", data);
+  await dnd(q("drop-bottom"), "dragover", data);
+  expect(q("drop-bottom")!.className).toContain("border-primary bg-primary/5");
+  await dnd(q("drop-bottom"), "drop", data);
+  expect(q("bottom-panel")!.contains(paneTab("bottom-panel", "files"))).toBe(true);
+  expect(paneTab("bottom-panel", "files")!.getAttribute("aria-selected")).toBe("true");
+  expect(layoutKey()!.areas.bottom).toEqual(["terminal", "files"]);
+  // Drop on a tab inserts before it.
+  await dnd(paneTab("bottom-panel", "files"), "dragstart", data);
+  await dnd(paneTab("bottom-panel", "terminal"), "drop", data);
+  expect(layoutKey()!.areas.bottom).toEqual(["files", "terminal"]);
+});
+
+it("dropping a pane on the area body appends it; a session tab drag is not a target", async () => {
+  await clickId("terminal-toggle");
+  const data = new Map<string, string>();
+  await dnd(paneTab("bottom-panel", "terminal"), "dragstart", data);
+  await dnd(q("side-panel"), "dragover", data);
+  expect(q("side-panel")!.className).toContain("outline-primary");
+  await dnd(q("side-panel"), "drop", data);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "terminal"]);
+  const other = new Map<string, string>();
+  await dnd(q("side-panel"), "dragover", other, ["application/x-claude-ui-tab"]);
+  expect(q("side-panel")!.className).not.toContain("outline-primary");
+});
+
 it("the sessions sidebar resizes with the arrow keys (200px to half the window) and keeps its width across a reload", async () => {
   const handle = () => el.querySelector<HTMLElement>('[data-testid="sidebar-resizer"]')!;
   const width = () => el.querySelector<HTMLElement>('[data-testid="sidebar"]')!.style.getPropertyValue("--sidebar-w");

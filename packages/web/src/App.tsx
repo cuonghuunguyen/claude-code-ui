@@ -128,7 +128,7 @@ import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany,
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, movePane, resetLayout, saveLayout, useLayout, useMinWidth } from "./layout.ts";
-import { DockHeader, PaneSlot, usePaneHosts } from "./dock-area.tsx";
+import { DockHeader, DropStrip, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -1197,8 +1197,11 @@ export function App() {
   const openArea = (a: DockArea, v = true) => (a === "side" ? setPanel(v) : setBottomOpen(v));
   /** Selects the pane and, on wide screens, opens its area. */
   const reveal = (p: Pane) => (setPane(p), lg && p !== "session" && openArea(areaOf(layout, p)));
-  const move = (p: PaneId, to: DockArea) => {
-    const n = movePane(layout, p, to);
+  // GH-355 drag and drop: the pane being dragged and the target it is over (Esc cancels a native drag: dragend without drop).
+  const [drag, setDrag] = useState<PaneId>();
+  const [dropAt, setDropAt] = useState<DropAt>();
+  const move = (p: PaneId, to: DockArea, before?: PaneId) => {
+    const n = movePane(layout, p, to, before);
     if (n !== layout) saveLayout(n);
     openArea(to);
     setPane(p);
@@ -1550,19 +1553,44 @@ export function App() {
         />
       </Suspense>
     );
+  const dragProps = { drag, dropAt, onDrag: setDrag, onDropAt: setDropAt };
+  /** Drop on an area (header or body): append at its end. */
+  const dropHandlers = (a: DockArea) => ({
+    onDragOver: (e: DragEvent) => {
+      if (!isPaneDrag(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (dropAt?.area !== a || dropAt.before) setDropAt({ area: a });
+    },
+    onDragLeave: (e: DragEvent) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setDropAt(undefined),
+    onDrop: (e: DragEvent) => {
+      const p = droppedPane(e);
+      if (!p) return;
+      e.preventDefault();
+      setDrag(undefined);
+      setDropAt(undefined);
+      move(p, a);
+    },
+  });
+  /** While dragging every area is outlined; the one under the pointer is filled. */
+  const dropCls = (a: DockArea) => (drag ? (dropAt?.area === a && !dropAt.before ? "outline-2 outline-primary -outline-offset-2 bg-primary/5" : "outline-1 outline-dashed outline-primary/40 -outline-offset-2") : "");
+  const dropPane = (a: DockArea) => (p: PaneId) => (setDrag(undefined), setDropAt(undefined), move(p, a));
   const terminalToggle = areaOf(layout, "terminal") !== "side" && (
     <IconButton label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={shows("terminal")} onClick={toggleTerminal} testId="terminal-toggle" command="terminal.toggle">
       <SquareTerminalIcon />
     </IconButton>
   );
   const resizer = shown && sideShown && <PanelResizer width={panelWidth} onResize={setPanelWidth} side={layout.side} />;
+  const sideStrip = panelSession && lg && drag && shown && !sideShown && (
+    <DropStrip area="side" over={dropAt?.area === "side"} onOver={() => setDropAt({ area: "side" })} onLeave={() => setDropAt(undefined)} onDrop={dropPane("side")} />
+  );
   // The side panel (GH-355): its tabs, then the pane hosts it holds; the hosts move between areas without remounting.
   const sideCol = panelSession && (
     <div
       className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${sideShown ? "" : "lg:hidden"}`}
       style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
     >
-      <section className={`${card} flex-1`} id="side-panel" data-testid="side-panel" aria-label="Side panel">
+      <section className={`${card} flex-1 ${dropCls("side")}`} id="side-panel" data-testid="side-panel" aria-label="Side panel" data-drop-target={drag && dropAt?.area === "side" ? "" : undefined} {...dropHandlers("side")}>
         <DockHeader
           area="side"
           panes={areaPanes("side")}
@@ -1574,6 +1602,7 @@ export function App() {
           onFlipSide={() => saveLayout(flipSide(layout))}
           onReset={resetLayout}
           extra={terminalToggle}
+          {...dragProps}
         />
         {areaPanes("side").map((p) => (
           <PaneSlot key={p} host={hosts[p]} />
@@ -1807,6 +1836,7 @@ export function App() {
               )}
               {layout.side === "left" && lg && (
                 <>
+                  {sideStrip}
                   {sideCol}
                   {resizer}
                 </>
@@ -1901,6 +1931,7 @@ export function App() {
                 <>
                   {resizer}
                   {sideCol}
+                  {sideStrip}
                 </>
               )}
               {/* Mounted while the tab is open: hidden, it keeps its draft; replaced by the created session, it starts empty next time. */}
@@ -2022,9 +2053,11 @@ export function App() {
             <section
               id="bottom-panel"
               aria-label="Bottom panel"
-              className={`${card} ${!shown ? "hidden" : bottomMax ? "flex-1" : "h-(--terminal-h) max-h-[60vh] min-h-25 flex-none"}`}
+              className={`${card} ${!shown ? "hidden" : bottomMax ? "flex-1" : "h-(--terminal-h) max-h-[60vh] min-h-25 flex-none"} ${dropCls("bottom")}`}
               data-testid="bottom-panel"
               data-dock="bottom"
+              data-drop-target={drag && dropAt?.area === "bottom" ? "" : undefined}
+              {...dropHandlers("bottom")}
             >
               <DockHeader
                 area="bottom"
@@ -2034,6 +2067,7 @@ export function App() {
                 onSelect={setPane}
                 onMove={move}
                 onReset={resetLayout}
+                {...dragProps}
                 extra={
                   <>
                     <IconButton label={bottomMax ? "Restore panel" : "Maximize panel"} pressed={bottomMax} onClick={() => setBottomMax((m) => !m)} testId="dock-maximize">
@@ -2050,6 +2084,9 @@ export function App() {
               ))}
             </section>
           </>
+        )}
+        {status !== "unauthorized" && panelSession && lg && drag && shown && !bottomShown && (
+          <DropStrip area="bottom" over={dropAt?.area === "bottom"} onOver={() => setDropAt({ area: "bottom" })} onLeave={() => setDropAt(undefined)} onDrop={dropPane("bottom")} />
         )}
         </div>
       </div>

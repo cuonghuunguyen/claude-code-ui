@@ -3,7 +3,7 @@ import { act, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { DockHeader, PaneSlot, usePaneHosts } from "./dock-area.tsx";
+import { DockHeader, DropStrip, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { DockArea, PaneId } from "./layout.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -16,7 +16,7 @@ beforeEach(() => {
 afterEach(() => (act(() => root.unmount()), el.remove()));
 
 const h = (area: DockArea, over: Partial<Parameters<typeof DockHeader>[0]> = {}) => {
-  const fns = { onSelect: vi.fn(), onMove: vi.fn(), onFlipSide: vi.fn(), onReset: vi.fn() };
+  const fns = { onSelect: vi.fn(), onMove: vi.fn(), onFlipSide: vi.fn(), onReset: vi.fn(), onDrag: vi.fn(), onDropAt: vi.fn() };
   const props = { area, panes: (area === "side" ? ["changes", "files", "graph"] : ["terminal"]) as PaneId[], active: (area === "side" ? "files" : "terminal") as PaneId, changes: 3, side: "right" as const, ...fns, ...over };
   return { fns, render: () => act(async () => root.render(<DockHeader {...props} />)) };
 };
@@ -93,4 +93,51 @@ it("a pane host moves between slots without remounting its content", async () =>
   await act(async () => setSlot(1));
   expect(el.querySelector('[data-testid="b"] [data-testid="c"]')).toBe(span);
   expect(mounts).toBe(1);
+});
+
+const fire = (target: Element, type: string, types: string[] = [PANE_DRAG_TYPE], data = new Map<string, string>()) => {
+  const e = new Event(type, { bubbles: true, cancelable: true });
+  Object.assign(e, { dataTransfer: { setData: (k: string, v: string) => data.set(k, v), getData: (k: string) => data.get(k) ?? "", types, dropEffect: "", effectAllowed: "" } });
+  target.dispatchEvent(e);
+  return e;
+};
+
+it("dragging a tab carries the pane; dropping on another tab inserts before it; dragend clears", async () => {
+  const { fns, render } = h("side");
+  await render();
+  const data = new Map<string, string>();
+  await act(async () => void fire(el.querySelector('[data-pane-tab="files"]')!, "dragstart", [], data));
+  expect(data.get(PANE_DRAG_TYPE)).toBe("files");
+  expect(fns.onDrag).toHaveBeenCalledWith("files");
+  const over = fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover");
+  expect(over.defaultPrevented).toBe(true);
+  expect(fns.onDropAt).toHaveBeenCalledWith({ area: "side", before: "changes" });
+  await act(async () => void fire(el.querySelector('[data-pane-tab="changes"]')!, "drop", [PANE_DRAG_TYPE], data));
+  expect(fns.onMove).toHaveBeenCalledWith("files", "side", "changes");
+  await act(async () => void fire(el.querySelector('[data-pane-tab="files"]')!, "dragend"));
+  expect(fns.onDrag).toHaveBeenLastCalledWith(undefined);
+});
+
+it("a drag of something else (a session tab) is ignored", async () => {
+  const { fns, render } = h("side");
+  await render();
+  const e = fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", ["application/x-claude-ui-tab"]);
+  expect(e.defaultPrevented).toBe(false);
+  expect(fns.onDropAt).not.toHaveBeenCalled();
+});
+
+it("the drop tab shows the insertion bar while it is the target", async () => {
+  const { render } = h("side", { drag: "files", dropAt: { area: "side", before: "graph" } });
+  await render();
+  expect(el.querySelector('[data-pane-tab="graph"]')!.hasAttribute("data-drop-before")).toBe(true);
+  expect(el.querySelector('[data-pane-tab="files"]')!.hasAttribute("data-drop-before")).toBe(false);
+});
+
+it("DropStrip names its area and takes the dropped pane", async () => {
+  const onDrop = vi.fn();
+  await act(async () => root.render(<DropStrip area="bottom" over={false} onOver={() => {}} onLeave={() => {}} onDrop={onDrop} />));
+  expect(el.textContent).toBe("Bottom panel");
+  const data = new Map([[PANE_DRAG_TYPE, "files"]]);
+  await act(async () => void fire(el.firstElementChild!, "drop", [PANE_DRAG_TYPE], data));
+  expect(onDrop).toHaveBeenCalledWith("files");
 });
