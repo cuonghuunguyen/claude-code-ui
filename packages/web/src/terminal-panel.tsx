@@ -48,6 +48,7 @@ export function TerminalPanel({
   onEmpty,
   newTick = 0,
   shown = true,
+  focusReq = 0,
 }: {
   client: Client;
   status: ConnectionStatus;
@@ -56,6 +57,8 @@ export function TerminalPanel({
   newTick?: number;
   /** False while the panel stays mounted but hidden (another pane of its area is selected); showing it again focuses the shell. */
   shown?: boolean;
+  /** Bumped when a command wants the shell focused (Toggle terminal on a terminal that shows behind a maximized panel). */
+  focusReq?: number;
 }) {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [activeId, setActiveId] = useState<string>();
@@ -93,6 +96,14 @@ export function TerminalPanel({
     }
     wasShown.current = shown;
   }, [shown]);
+
+  const seenFocusReq = useRef(focusReq);
+  useEffect(() => {
+    if (focusReq === seenFocusReq.current) return;
+    seenFocusReq.current = focusReq;
+    focusShell.current = true;
+    setFocusTick((n) => n + 1);
+  }, [focusReq]);
 
   const seenTick = useRef(newTick);
   useEffect(() => {
