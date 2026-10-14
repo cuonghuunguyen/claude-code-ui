@@ -72,7 +72,8 @@ import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath
 import { SessionList } from "./sidebar.tsx";
 import { noteRefs } from "./git-refs.ts";
 import { agentLinks, NO_LINKS, sameLinks, workerState, type AgentLinks } from "./workers.ts";
-import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
+import { confirmNames, daysLabel } from "./sidebar-menus.ts";
+import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removableWorktree, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
@@ -378,7 +379,7 @@ export function App() {
   useEffect(() => setViewer(undefined), [activeId]);
   const quickOpener = useRef<Element>(null);
   // Title editor: in the sidebar row or in the tab the Rename action came from.
-  const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab" }>();
+  const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab"; menu: boolean }>();
   // Session waiting for the delete confirmation.
   const [deleting, setDeleting] = useState<string>();
   // Project cwd whose Remove waits for the confirmation.
@@ -399,6 +400,18 @@ export function App() {
   const [removingWt, setRemovingWt] = useState<{ project: string; path: string; branch: string; text: string }>();
   const lastRemovingWt = useRef(removingWt);
   if (removingWt) lastRemovingWt.current = removingWt;
+  // Remove worker dialog (GH-358): `project`/`path`: the worker's own worktree when the app may remove it; `text`: its status; `others`: other listed sessions in it.
+  const [removingWorker, setRemovingWorker] = useState<{ id: string; name: string; project?: string; path?: string; branch?: string; text?: string; others: number; loading: boolean; error?: string }>();
+  const lastRemovingWorker = useRef(removingWorker);
+  if (removingWorker) lastRemovingWorker.current = removingWorker;
+  const [alsoWorktree, setAlsoWorktree] = useState(false);
+  // Remove closed workers and Archive idle sessions confirmations; kept while the dialogs fade out.
+  const [removingWorkers, setRemovingWorkers] = useState<{ ids: string[]; names: string; title: string }>();
+  const lastRemovingWorkers = useRef(removingWorkers);
+  if (removingWorkers) lastRemovingWorkers.current = removingWorkers;
+  const [archiving, setArchiving] = useState<{ ids: string[]; where: string; days: number }>();
+  const lastArchiving = useRef(archiving);
+  if (archiving) lastArchiving.current = archiving;
   // Set on Remove worktree confirm: the project whose group toggle takes the focus.
   const removedWt = useRef<string>(undefined);
   if (removing) lastRemoving.current = removing;
@@ -1160,8 +1173,14 @@ export function App() {
   function sessionAction(where: "list" | "tab") {
     return (sessionId: string, a: SessionAction) => {
       setError(undefined);
-      if (a === "rename") return setRenaming({ id: sessionId, in: where });
+      if (a === "rename" || a === "rename-inline") return setRenaming({ id: sessionId, in: where, menu: a === "rename" });
       if (a === "delete") return setDeleting(sessionId);
+      if (a === "copy-id") return copyText(sessionId, "session ID");
+      if (a === "close-tab") return close(sessionId);
+      if (a === "close-worker") return void runWorkers([sessionId], "close");
+      if (a === "remove-worker") return void askRemoveWorker(sessionId);
+      // The sidebar resolves the bulk actions to worker ids (onWorkers).
+      if (a === "close-finished" || a === "remove-closed") return;
       // Shown at once like a rename; a failed archive restores the list.
       setList((l) => patchSession(l, sessionId, { archived: a === "archive" }));
       client.current!.request({ type: "session.archive", sessionId, archived: a === "archive" }).catch((e: Error) => (setError(e.message), void refreshList()));
@@ -1174,6 +1193,62 @@ export function App() {
     // Shown at once; a failed rename restores the list title.
     setList((l) => patchSession(l, sessionId, { title }));
     client.current!.request({ type: "session.rename", sessionId, title }).catch((e: Error) => (setError(e.message), void refreshList()));
+  }
+
+  /** worker.close / worker.remove per worker (GH-358): a toast when all went through, else the first error and a list refresh. */
+  async function runWorkers(ids: string[], a: "close" | "remove") {
+    if (!ids.length) return;
+    setError(undefined);
+    const results = await Promise.allSettled(ids.map((sessionId) => client.current!.request({ type: a === "close" ? "worker.close" : "worker.remove", sessionId })));
+    const bad = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    const verb = a === "close" ? "closed" : "removed";
+    if (bad.length) {
+      setError(`${ids.length - bad.length} of ${ids.length} ${ids.length === 1 ? "worker" : "workers"} ${verb}: ${(bad[0]!.reason as Error).message}`);
+      void refreshList();
+    } else setToast(`${verb[0]!.toUpperCase()}${verb.slice(1)} ${ids.length === 1 ? "1 worker" : `${ids.length} workers`}`);
+  }
+
+  /** Remove worker: asks first; offers the worker's own worktree too when the app may remove it. */
+  async function askRemoveWorker(id: string) {
+    const w = list.find((s) => s.id === id);
+    if (!w) return;
+    setError(undefined);
+    setAlsoWorktree(false);
+    const hit = Object.entries(worktrees).flatMap(([project, rows]) => rows.filter((r) => r.path === w.cwd && rows.find((x) => x.main)?.path === project && removableWorktree(rows, r)).map((r) => ({ project, path: r.path })))[0];
+    const others = hit ? list.filter((s) => s.id !== id && s.cwd === hit.path).length : 0;
+    setRemovingWorker({ id, name: w.workerName ?? w.title, ...hit, others, loading: !!hit });
+    if (!hit) return;
+    try {
+      const st = await client.current!.request<WorktreeStatusResult>({ type: "worktree.status", cwd: hit.project, path: hit.path });
+      setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, branch: st.branch, text: removeWorktreeText(st) } : c));
+    } catch (e) {
+      setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, error: (e as Error).message } : c));
+    }
+  }
+  async function removeWorker(w: NonNullable<typeof removingWorker>, withWorktree: boolean) {
+    setError(undefined);
+    try {
+      await client.current!.request({ type: "worker.remove", sessionId: w.id });
+    } catch (e) {
+      return setError((e as Error).message);
+    }
+    setToast(`Removed worker ${w.name}`);
+    if (withWorktree && w.project && w.path) await removeWorktree({ project: w.project, path: w.path });
+  }
+
+  /** Archive idle sessions older than N days: shown at once; a failed request restores the list. At most 8 requests at a time. */
+  async function archiveIdle(ids: string[]) {
+    setError(undefined);
+    setList((l) => ids.reduce((x, id) => patchSession(x, id, { archived: true }), l));
+    const failed: Error[] = [];
+    for (let i = 0; i < ids.length; i += 8) {
+      const rs = await Promise.allSettled(ids.slice(i, i + 8).map((sessionId) => client.current!.request({ type: "session.archive", sessionId, archived: true })));
+      for (const r of rs) if (r.status === "rejected") failed.push(r.reason as Error);
+    }
+    if (failed.length) {
+      setError(`${ids.length - failed.length} of ${ids.length} sessions archived: ${failed[0]!.message}`);
+      void refreshList();
+    } else setToast(`Archived ${ids.length} ${ids.length === 1 ? "session" : "sessions"}`);
   }
 
   function deleteSession(sessionId: string) {
@@ -1189,6 +1264,7 @@ export function App() {
     linksCache.current.set(id, l);
     return l;
   };
+  const openTabIds = useMemo(() => new Set(tabs), [tabs]);
   const isCoordinator = (id: string) => !!list.find((s) => s.id === id)?.coordinator;
   const sessionOf = (id: string): SessionInfo | undefined => infos[id] ?? list.find((s) => s.id === id);
   const groupOfTab = (id: string) => (id === NEW_TAB ? "" : tabGroup(sessionOf(id)?.cwd, grouping, worktrees).key);
@@ -1595,6 +1671,7 @@ export function App() {
               return { title, titleLoading: titleLoading(title, prompted.has(id)), cwd: s?.cwd, ...(keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" }), worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, state: shownState(views[id]) ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
             }}
             renaming={renaming?.in === "tab" ? renaming.id : undefined}
+            renamingFromMenu={renaming?.menu}
             onAction={sessionAction("tab")}
             onRenamed={renamed}
             onSelect={open}
@@ -1709,6 +1786,63 @@ export function App() {
         </label>
       </ConfirmDialog>
       <ConfirmDialog
+        open={removingWorker !== undefined}
+        title={`Remove worker ${lastRemovingWorker.current?.name ?? ""}?`}
+        description="Its session and transcript are removed for good; the name is free again. The terminal CLI loses it too."
+        confirm="Remove"
+        destructive
+        confirmDisabled={!!removingWorker?.loading && alsoWorktree}
+        onConfirm={() => {
+          const w = removingWorker!;
+          setRemovingWorker(undefined);
+          void removeWorker(w, alsoWorktree && !w.loading && !w.error);
+        }}
+        onCancel={() => setRemovingWorker(undefined)}
+        testId="remove-worker"
+      >
+        {lastRemovingWorker.current?.path && (
+          <div className="flex flex-col gap-1 text-sm">
+            {!lastRemovingWorker.current.error && (
+              <label className="flex min-h-8 cursor-pointer items-center gap-2 max-md:min-h-11">
+                <input type="checkbox" className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring" checked={alsoWorktree} disabled={lastRemovingWorker.current.loading} onChange={(e) => setAlsoWorktree(e.target.checked)} data-testid="remove-worker-worktree" />
+                <span>Also remove worktree {lastRemovingWorker.current.branch ?? ""}</span>
+              </label>
+            )}
+            <p className="text-muted-foreground" data-testid="remove-worker-worktree-text">
+              {lastRemovingWorker.current.error ?? (lastRemovingWorker.current.loading ? "Checking the worktree…" : lastRemovingWorker.current.text)}
+              {!lastRemovingWorker.current.error && lastRemovingWorker.current.others > 0 && ` ${lastRemovingWorker.current.others} other ${lastRemovingWorker.current.others === 1 ? "session" : "sessions"} there; their transcripts stay.`}
+            </p>
+          </div>
+        )}
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={removingWorkers !== undefined}
+        title={`Remove ${lastRemovingWorkers.current?.ids.length === 1 ? "1 closed worker" : `${lastRemovingWorkers.current?.ids.length ?? 0} closed workers`}?`}
+        description={`Workers of “${lastRemovingWorkers.current?.title ?? ""}”: ${lastRemovingWorkers.current?.names ?? ""}. Their sessions and transcripts are removed for good. Worktrees stay.`}
+        confirm="Remove"
+        destructive
+        onConfirm={() => {
+          const ids = removingWorkers!.ids;
+          setRemovingWorkers(undefined);
+          void runWorkers(ids, "remove");
+        }}
+        onCancel={() => setRemovingWorkers(undefined)}
+        testId="remove-workers"
+      />
+      <ConfirmDialog
+        open={archiving !== undefined}
+        title={`Archive ${lastArchiving.current?.ids.length === 1 ? "1 session" : `${lastArchiving.current?.ids.length ?? 0} sessions`}?`}
+        description={`Sessions in ${lastArchiving.current?.where ?? ""} idle for more than ${daysLabel(lastArchiving.current?.days ?? 1)}. They move to Archived sessions; Unarchive brings one back.`}
+        confirm="Archive"
+        onConfirm={() => {
+          const ids = archiving!.ids;
+          setArchiving(undefined);
+          void archiveIdle(ids);
+        }}
+        onCancel={() => setArchiving(undefined)}
+        testId="archive-idle"
+      />
+      <ConfirmDialog
         open={removingWt !== undefined}
         title={`Remove worktree ${lastRemovingWt.current?.branch ?? ""}?`}
         description={lastRemovingWt.current?.text ?? ""}
@@ -1766,10 +1900,18 @@ export function App() {
               onRemoveWorktree={askRemoveWorktree}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}
               renaming={renaming?.in === "list" ? renaming.id : undefined}
+              renamingFromMenu={renaming?.menu}
               onAction={sessionAction("list")}
               onRenamed={renamed}
               search={resumeSearch}
               reveal={revealSeq}
+              openTabs={openTabIds}
+              onWorkers={(ids, a, c) => {
+                if (!ids.length) return;
+                if (a === "close") return void runWorkers(ids, "close");
+                setRemovingWorkers({ ids, title: c.title, names: confirmNames(ids.map((id) => list.find((s) => s.id === id)?.workerName ?? id)) });
+              }}
+              onArchiveIdle={(ids, where, days) => ids.length && setArchiving({ ids, where, days })}
             />
           )}
           <button

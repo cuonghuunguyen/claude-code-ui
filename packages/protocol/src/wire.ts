@@ -126,6 +126,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.archive"; sessionId: string; archived: boolean }
   /** Removes the transcript. Refused while a turn runs or input is pending: stop it first. */
   | { type: "session.delete"; sessionId: string }
+  /** Web app Close worker (docs/spec.md "Orchestration"): as `worker_close` for the worker's own coordinator. Reply `{}`; errors not_worker, unknown_worker, unknown_session, held_elsewhere, stop_timeout. */
+  | { type: "worker.close"; sessionId: string }
+  /** Web app Remove worker: as `worker_remove` (session and transcript deleted, link dropped, worktree kept). Reply `{}`; errors not_worker, unknown_worker, held_elsewhere, session_running, delete_failed. Broadcasts `sessions.changed`. */
+  | { type: "worker.remove"; sessionId: string }
   /** Without `path`: the allowlisted roots (of `side`). */
   | { type: "fs.list"; path?: string }
   /**

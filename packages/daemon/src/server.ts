@@ -1715,6 +1715,12 @@ export function createDaemon(opts: {
           const err = await deleteSessionById(msg.sessionId);
           return err ? fail(err.code, err.message) : reply({});
         }
+        case "worker.close":
+        case "worker.remove": {
+          if (typeof msg.sessionId !== "string") return fail("bad_request", "sessionId must be a string");
+          const err = await orchestration.userOp(msg.type === "worker.close" ? "close" : "remove", msg.sessionId);
+          return err ? fail(err.code, err.message) : reply({});
+        }
         case "fs.list": {
           if (msg.path === undefined)
             return reply({ entries: roots.map((r): FsEntry => ({ name: r, path: r, isDir: true })) });

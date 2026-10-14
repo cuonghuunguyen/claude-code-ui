@@ -6,13 +6,18 @@ import { Menu } from "@base-ui/react/menu";
 import { EllipsisIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useKeyContextMenu } from "./context-menu-key.ts";
 import { trapTab } from "./focus-trap.ts";
 import { isImeKey } from "./ime.ts";
 
-export type SessionAction = "rename" | "archive" | "unarchive" | "delete";
+export type SessionAction = "rename" | "rename-inline" | "archive" | "unarchive" | "delete" | "copy-id" | "close-tab" | "close-worker" | "remove-worker" | "close-finished" | "remove-closed";
 
-/** `busy`: running or needs input; it must be stopped before it can be deleted. `transcript`: false before the first prompt, nothing to rename or archive. */
-export type ActionTarget = { title: string; archived: boolean; busy: boolean; transcript: boolean };
+/**
+ * `busy`: running or needs input; it must be stopped before it can be deleted. `transcript`: false before the first prompt, nothing to rename or archive.
+ * `copyId`: offers Copy session ID (the tab menu has its own). `tab`: the session has an open tab. `worker`: a worker row (Close worker / Remove worker… instead of Delete…); `closed`: it has no CLI process.
+ * `coordinator`: a session with listed workers; counts of the bulk actions.
+ */
+export type ActionTarget = { title: string; archived: boolean; busy: boolean; transcript: boolean; copyId?: boolean; tab?: boolean; worker?: { closed: boolean }; coordinator?: { finished: number; closed: number } };
 
 export const POPUP =
   "z-50 min-w-40 rounded-lg bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none origin-(--transform-origin) transition-[scale,opacity] duration-100 data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0 motion-reduce:transition-none";
@@ -30,10 +35,43 @@ export function Items({ kind, target, onAction }: { kind: "menu" | "context"; ta
       <Item className={ITEM} disabled={!target.transcript} onClick={() => onAction(target.archived ? "unarchive" : "archive")} data-testid="action-archive">
         {target.archived ? "Unarchive" : "Archive"}
       </Item>
+      {(target.copyId || target.tab) && <Separator className="-mx-1 my-1 h-px bg-border" />}
+      {target.copyId && (
+        <Item className={ITEM} onClick={() => onAction("copy-id")} data-testid="action-copy-id">
+          Copy session ID
+        </Item>
+      )}
+      {target.tab && (
+        <Item className={ITEM} onClick={() => onAction("close-tab")} data-testid="action-close-tab">
+          Close tab
+        </Item>
+      )}
+      {target.coordinator && (
+        <>
+          <Separator className="-mx-1 my-1 h-px bg-border" />
+          <Item className={ITEM} disabled={!target.coordinator.finished} onClick={() => onAction("close-finished")} data-testid="action-close-finished">
+            Close finished workers ({target.coordinator.finished})
+          </Item>
+          <Item className={cn(ITEM, "text-destructive")} disabled={!target.coordinator.closed} onClick={() => onAction("remove-closed")} data-testid="action-remove-closed">
+            Remove closed workers… ({target.coordinator.closed})
+          </Item>
+        </>
+      )}
       <Separator className="-mx-1 my-1 h-px bg-border" />
-      <Item className={cn(ITEM, "text-destructive")} disabled={target.busy} onClick={() => onAction("delete")} data-testid="action-delete">
-        {target.busy ? "Delete… (stop it first)" : "Delete…"}
-      </Item>
+      {target.worker ? (
+        <>
+          <Item className={ITEM} disabled={target.worker.closed} onClick={() => onAction("close-worker")} data-testid="action-close-worker">
+            {target.worker.closed ? "Close worker (closed)" : "Close worker"}
+          </Item>
+          <Item className={cn(ITEM, "text-destructive")} disabled={target.busy} onClick={() => onAction("remove-worker")} data-testid="action-remove-worker">
+            {target.busy ? "Remove worker… (close it first)" : "Remove worker…"}
+          </Item>
+        </>
+      ) : (
+        <Item className={cn(ITEM, "text-destructive")} disabled={target.busy} onClick={() => onAction("delete")} data-testid="action-delete">
+          {target.busy ? "Delete… (stop it first)" : "Delete…"}
+        </Item>
+      )}
     </>
   );
 }
@@ -55,7 +93,7 @@ export function SessionMenu({ target, onAction, className }: { target: ActionTar
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner align="end" sideOffset={4} className="z-50">
-          <Menu.Popup className={POPUP}>
+          <Menu.Popup className={cn(POPUP, "max-w-[calc(100vw-2rem)]")}>
             <Items kind="menu" target={target} onAction={onAction} />
           </Menu.Popup>
         </Menu.Positioner>
@@ -66,12 +104,13 @@ export function SessionMenu({ target, onAction, className }: { target: ActionTar
 
 /** Right click (or long press) on `children` opens the session menu. `children` becomes the trigger element. */
 export function SessionContextMenu({ target, onAction, children }: { target: ActionTarget; onAction: (a: SessionAction) => void; children: ReactElement }) {
+  const key = useKeyContextMenu();
   return (
     <ContextMenu.Root>
-      <ContextMenu.Trigger render={children} />
+      <ContextMenu.Trigger render={children} {...key} />
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
-          <ContextMenu.Popup className={POPUP}>
+          <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-2rem)]")}>
             <Items kind="context" target={target} onAction={onAction} />
           </ContextMenu.Popup>
         </ContextMenu.Positioner>
@@ -80,11 +119,16 @@ export function SessionContextMenu({ target, onAction, children }: { target: Act
   );
 }
 
+/** A blur this soon after the editor opened is the closing menu's focus return, not the user. */
+const RENAME_GRACE_MS = 500;
+
 /** Inline title editor: Enter or blur saves, Escape cancels (`undefined`). An empty or unchanged title is a cancel. */
-export function RenameInput({ title, onDone, className }: { title: string; onDone: (title: string | undefined) => void; className?: string }) {
+/** `fromMenu`: opened by a menu item, whose closing returns the focus (a blur right away is that, not the user); a double-click edit ends on any blur. */
+export function RenameInput({ title, onDone, className, fromMenu }: { title: string; onDone: (title: string | undefined) => void; className?: string; fromMenu?: boolean }) {
   const [value, setValue] = useState(title);
   // Enter unmounts the input, whose blur would then save a second time.
   const done = useRef(false);
+  const mountedAt = useRef(performance.now());
   const finish = (t: string | undefined) => {
     if (done.current) return;
     done.current = true;
@@ -103,7 +147,14 @@ export function RenameInput({ title, onDone, className }: { title: string; onDon
         if (e.key === "Enter" && !isImeKey(e.nativeEvent)) finish(value);
         if (e.key === "Escape" && !isImeKey(e.nativeEvent)) finish(undefined);
       }}
-      onBlur={() => finish(value)}
+      onBlur={(e) => {
+        // The menu that opened this editor returns focus to its trigger while it closes (a context menu, GH-358): that is no wish to leave.
+        if (fromMenu && performance.now() - mountedAt.current < RENAME_GRACE_MS && !done.current) {
+          const input = e.currentTarget;
+          return void setTimeout(() => input.isConnected && !done.current && input.focus(), 0);
+        }
+        finish(value);
+      }}
       aria-label="Session title"
       maxLength={200}
       className={cn("h-6 min-w-0 flex-1 rounded-sm bg-background px-1 text-foreground text-sm outline-none ring-2 ring-ring max-md:h-9", className)}
