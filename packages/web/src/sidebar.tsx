@@ -281,8 +281,11 @@ export function SessionList({
     });
     setReveal({ id: activeSession.id, focus });
   };
+  const servedReveal = useRef(revealSeq);
   useEffect(() => {
-    if (revealSeq) revealActive(true);
+    // One-shot: a value present at mount (the list remounts after a re-pair) was served already.
+    if (revealSeq && revealSeq !== servedReveal.current) revealActive(true);
+    servedReveal.current = revealSeq;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealSeq]);
   const known = !!activeKeys;

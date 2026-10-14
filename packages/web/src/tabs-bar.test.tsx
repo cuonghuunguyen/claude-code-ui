@@ -1073,3 +1073,33 @@ it("GH-359 on a touch screen (coarse primary pointer) tabs are not draggable, so
     window.matchMedia = mm;
   }
 });
+
+it("GH-359 Close others focuses the kept (clicked) tab even when a pinned tab of another group would take over", async () => {
+  function Host() {
+    const [tabs, setTabs] = useState(["a", "b", "c"]);
+    return <TabsBar tabs={tabs} activeId="a" pinned={new Set(["b"])} info={(id) => ({ ...INFO[id]!, cwd: id === "a" ? "/home/u/web" : "/home/u/api" })} onSelect={() => {}} onClose={() => {}} onMove={() => {}} onMoveGroup={() => {}} onMoveGroupTo={() => {}} onNew={() => {}} onAction={() => {}} onRenamed={() => {}} onTabCommand={(id, c) => c === "closeOthers" && setTabs(tabs.filter((t) => t === id || t === "b"))} />;
+  }
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root!.render(<SideLabel value={() => undefined}><Host /></SideLabel>));
+  await ctxMenu(el, "c");
+  await act(async () => itemOf("Close others").click());
+  await vi.waitFor(() => expect(document.activeElement).toBe(el.querySelector('[data-tab-id="c"] [role="tab"]')));
+});
+
+it("GH-359 the touch drag switch follows the (pointer: coarse) media query", async () => {
+  let coarse = false;
+  const listeners = new Set<() => void>();
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ get matches() { return coarse && q === "(pointer: coarse)"; }, media: q, addEventListener: (_: string, f: () => void) => listeners.add(f), removeEventListener: (_: string, f: () => void) => listeners.delete(f) })) as never;
+  try {
+    const { tab } = await render();
+    expect(tab("a").getAttribute("draggable")).toBe("true");
+    coarse = true;
+    await act(async () => listeners.forEach((f) => f()));
+    expect(tab("a").getAttribute("draggable")).toBe("false");
+  } finally {
+    window.matchMedia = mm;
+  }
+});

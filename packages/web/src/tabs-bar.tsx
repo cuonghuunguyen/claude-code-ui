@@ -3,7 +3,7 @@
 // Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
 // Pinned tabs (GH-359): icon only, first in their group. Tab context menu: Close others / to the right / all, Reopen closed tab, Copy session ID / cwd path, Reveal in sidebar (GH-359); Shift+F10 or the ContextMenu key opens it.
-import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
 import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
@@ -228,7 +228,8 @@ export function TabsBar({
   const tabCommand = (id: string, c: TabCommand) => {
     // Bulk closes: focus goes to the tab that takes over.
     const kind = c === "closeOthers" ? "others" : c === "closeRight" ? "right" : c === "closeAll" ? "all" : undefined;
-    if (kind) refocus.current = { id: closeMany(tabs, closeTargets(tabs, pins, id, kind), activeId ?? id).active };
+    // Close others keeps the clicked tab (the owner shows it): focus it, not a pinned neighbour.
+    if (kind) refocus.current = { id: kind === "others" ? id : closeMany(tabs, closeTargets(tabs, pins, id, kind), activeId ?? id).active };
     onTabCommand?.(id, c);
   };
   const moveBy = (id: string, by: -1 | 1) => {
@@ -422,6 +423,18 @@ const SWIPE_CLICK_MS = 400;
 const justSwiped = (at: RefObject<number>) => performance.now() - at.current < SWIPE_CLICK_MS;
 /** A touch screen is the main input: a long press must open the context menu, not start a native drag (Chrome on Android drags a draggable element instead). Reorder there: Move left / right in the menu. */
 const touchPrimary = () => !!window.matchMedia?.("(pointer: coarse)").matches;
+/** `touchPrimary` that follows the media query (a 2-in-1 switching between touch and mouse). */
+function useTouchPrimary() {
+  return useSyncExternalStore(
+    (on) => {
+      const mq = window.matchMedia?.("(pointer: coarse)");
+      mq?.addEventListener?.("change", on);
+      return () => mq?.removeEventListener?.("change", on);
+    },
+    touchPrimary,
+    () => false,
+  );
+}
 const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 type RowView = { stage: "idle" | "drag" | "settle" | "out" | "collapse"; offset: number; width: number; height: number; sign: -1 | 1 };
@@ -712,6 +725,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   const shown = collapsed || compact;
   const [open, setOpen] = useState(false);
   const keyOpenedAt = useRef(-Infinity);
+  const coarse = useTouchPrimary();
   const props = {
     "aria-describedby": pathId,
     "aria-label": `${name}${sub ? ` (${sub})` : ""}, ${ids.length} ${ids.length === 1 ? "tab" : "tabs"}${urgent ? `, ${STATUS_LABEL[urgent]}` : ""}`,
@@ -719,7 +733,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
     "data-testid": "tab-group-chip",
     className: "flex h-6 max-w-40 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-[color-mix(in_oklab,var(--av)_18%,var(--background))] px-1.5 font-medium text-foreground text-xs shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--av)_60%,transparent)] outline-none focus-visible:ring-2 focus-visible:ring-ring",
     style: { "--av": `var(--avatar-${c})` } as CSSProperties,
-    draggable: !touchPrimary(),
+    draggable: !coarse,
     // Middle click closes the group; its mousedown would start autoscroll (and must not open the compact menu).
     onMouseDown: (e: ReactMouseEvent) => e.button === 1 && e.preventDefault(),
     onAuxClick: (e: ReactMouseEvent) => {
@@ -904,6 +918,7 @@ function Tab({
   };
   const button = useRef<HTMLButtonElement>(null);
   const keyOpenedAt = useRef(-Infinity);
+  const coarse = useTouchPrimary();
   // A pinned tab is its icon; the title editor needs the room.
   const narrow = pinned && !renaming;
   const popup = useRef<HTMLDivElement>(null);
@@ -926,7 +941,7 @@ function Tab({
         data-active={active || undefined}
         data-pinned={pinned || undefined}
         data-first={first || undefined}
-        draggable={!renaming && !touchPrimary()}
+        draggable={!renaming && !coarse}
         onDragStart={(e) => {
           e.dataTransfer.setData(DRAG_TYPE, id);
           e.dataTransfer.effectAllowed = "move";

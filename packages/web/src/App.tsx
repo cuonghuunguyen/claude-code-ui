@@ -594,6 +594,8 @@ export function App() {
       setTitles((t) => (t[to] ? t : { ...t, [to]: "New session" }));
     }
     flushClearQueue(from, to);
+    // A pinned tab stays pinned on the session it goes on in.
+    setPinnedState((p) => (p.includes(from) && !p.includes(to) ? p.map((x) => (x === from ? to : x)) : p));
     setTabs((t) => (t.includes(from) ? replaceTab(t, from, to) : t));
     if (hashId() !== from) return;
     if (document.activeElement && document.activeElement === shownPrompt()) refocus.current = to;

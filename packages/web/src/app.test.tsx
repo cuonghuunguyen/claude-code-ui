@@ -297,6 +297,7 @@ it("/clear: a live session_cleared moves the open tab to the session the CLI goe
   const NEXT = "99999999-2222-3333-4444-555555555555";
   replies["session.subscribe"] = { logEpoch: "e1", seq: 1, session };
   await act(async () => root.unmount());
+  localStorage.setItem("claude-ui.pinned-tabs", JSON.stringify([ID]));
   root = createRoot(el);
   await act(async () => root.render(<App />));
   await act(async () => {});
@@ -309,6 +310,9 @@ it("/clear: a live session_cleared moves the open tab to the session the CLI goe
   expect(sent).toContainEqual(expect.objectContaining({ type: "session.subscribe", sessionId: NEXT }));
   const tabs: string[] = JSON.parse(localStorage.getItem("claude-ui.tabs")!);
   expect([tabs.includes(NEXT), tabs.includes(ID)]).toEqual([true, false]);
+  // GH-359: the pin goes with the tab.
+  await act(async () => {});
+  expect(JSON.parse(localStorage.getItem("claude-ui.pinned-tabs")!)).toEqual([NEXT]);
   expect(el.querySelector('[data-testid="raw-part"]')).toBeNull();
   replies["session.subscribe"] = { logEpoch: "e1", session };
 });
