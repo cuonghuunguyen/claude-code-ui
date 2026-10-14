@@ -18,13 +18,28 @@ export function tabMenuSections(s: { session: boolean; /** Absent: pinning is no
   return [...sections, ...pin, [entry("copyId", "Copy session ID"), entry("copyCwd", "Copy cwd path", !s.hasCwd), entry("reveal", "Reveal in sidebar")], ...split];
 }
 
-/** Shift+F10 / the ContextMenu key: opens the element's context menu at its bottom-left (Base UI opens one only on a contextmenu event). True when handled. */
+/** The first item of the newest open menu that is not disabled. */
+const firstItem = () => [...document.querySelectorAll<HTMLElement>('[role="menu"]')].at(-1)?.querySelector<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"]):not([data-disabled])');
+
+/** After a keyboard open the popup mounts a frame or two later and takes the focus itself: focus its first enabled item (Enter works at once), then once more after the focus manager ran. */
+function focusFirstItem(frames = 12) {
+  const item = firstItem();
+  if (!item) return frames > 0 ? void requestAnimationFrame(() => focusFirstItem(frames - 1)) : undefined;
+  item.focus();
+  requestAnimationFrame(() => {
+    const now = firstItem();
+    if (now && document.activeElement !== now && (document.activeElement === document.body || now.closest('[role="menu"]')?.contains(document.activeElement))) now.focus();
+  });
+}
+
+/** Shift+F10 / the ContextMenu key: opens the element's context menu at its bottom-left (Base UI opens one only on a contextmenu event) and focuses its first enabled item. True when handled. */
 export function openContextMenuFromKey(e: KeyboardEvent<HTMLElement>, target: HTMLElement): boolean {
   if (!(e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey))) return false;
   e.preventDefault();
   e.stopPropagation();
   const r = target.getBoundingClientRect();
   target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: r.left, clientY: r.bottom }));
+  focusFirstItem();
   return true;
 }
 

@@ -1125,3 +1125,38 @@ it("GH-356 without canSplit (narrow screen) the menu has no split items", async 
   await act(async () => void tab("b").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   expect(document.querySelector('[data-testid="tab-menu-splitRight"]')).toBeNull();
 });
+
+it.each([
+  ["Shift+F10", { key: "F10", shiftKey: true }],
+  ["the ContextMenu key", { key: "ContextMenu" }],
+])("GH-359 %s on a focused tab opens the menu with its first enabled item focused", async (_n, key) => {
+  const onTabCommand = vi.fn();
+  const { tab } = await render({ onTabCommand, activeId: "a" });
+  const btn = tab("d").querySelector<HTMLElement>('[role="tab"]')!;
+  btn.focus();
+  // The browser's sequence: keydown, then (Firefox, Chrome) a trusted-looking contextmenu is swallowed by the app's guard; the app's own event opens the menu.
+  await act(async () => void btn.dispatchEvent(new KeyboardEvent("keydown", { ...key, bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(itemOf("Move left")));
+  expect(onTabCommand).not.toHaveBeenCalled();
+  await closeMenu();
+});
+
+it("GH-359 the keyboard-opened menu focuses the first ENABLED item", async () => {
+  const { tab } = await render({ onTabCommand: vi.fn(), tabs: ["a", "b", "c", "d"], activeId: "a" });
+  // a is alone in its group: Move left and Move right are disabled.
+  const btn = tab("a").querySelector<HTMLElement>('[role="tab"]')!;
+  btn.focus();
+  await act(async () => void btn.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(itemOf("Close tab")));
+  await closeMenu();
+});
+
+it("GH-359 a mouse right click does not move the focus into the menu", async () => {
+  const { el, btn } = await renderLive();
+  btn("b").focus();
+  await ctxMenu(el, "c");
+  await act(async () => new Promise((r) => setTimeout(r, 120)));
+  expect(document.querySelector('[role="menu"]')).not.toBeNull();
+  expect(document.activeElement).not.toBe(itemOf("Move left"));
+  await closeMenu();
+});
