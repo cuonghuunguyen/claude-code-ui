@@ -166,10 +166,10 @@ async function client(p = port) {
   const inbox: ServerMessage[] = [];
   ws.on("message", (d) => inbox.push(JSON.parse(String(d))));
   await new Promise((r) => ws.once("open", r));
-  const request = (msg: object) => {
+  const request = (msg: object, ms?: number) => {
     const reqId = randomUUID();
     ws.send(JSON.stringify({ ...msg, reqId }));
-    return until(() => inbox.find((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId)) as Promise<{ type: string; result?: any; code?: string; message?: string }>;
+    return until(() => inbox.find((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId), ms) as Promise<{ type: string; result?: any; code?: string; message?: string }>;
   };
   return { ws, inbox, request };
 }
@@ -891,6 +891,92 @@ describe("orchestration", () => {
       rmSync(held, { force: true });
       other.close();
     }
+  });
+
+  describe("web app worker.close / worker.remove", () => {
+    it("worker.close stops a running worker first, then closes it", async () => {
+      enable();
+      const coord = await coordinator();
+      const w = await call(coord, "worker_start", { name: "u1", cwd: dirB, prompt: "hold" });
+      await until(() => runsOf(w.sessionId)[0]?.texts.length);
+      expect(await c.request({ type: "worker.close", sessionId: w.sessionId })).toMatchObject({ type: "reply", result: {} });
+      expect((await call(coord, "worker_list")).workers.find((x: { name: string }) => x.name === "u1")).toMatchObject({ live: false });
+      expect(runsOf(w.sessionId)[0]!.closed).toBe(true);
+    });
+
+    it("worker.close of an idle worker without a CLI is ok", async () => {
+      enable();
+      const coord = await coordinator();
+      const w = await call(coord, "worker_start", { name: "u2", cwd: dirB, prompt: "x" });
+      await until(async () => (await state(w.sessionId)) === "idle");
+      await call(coord, "worker_close", { name: "u2" });
+      expect(await c.request({ type: "worker.close", sessionId: w.sessionId })).toMatchObject({ type: "reply" });
+    });
+
+    it("worker.remove deletes an idle worker, frees the name, keeps the worktree folder, broadcasts the removal", async () => {
+      enable();
+      const coord = await coordinator();
+      const w = await call(coord, "worker_start", { name: "u3", cwd: dirB, prompt: "x" });
+      await until(async () => (await state(w.sessionId)) === "idle");
+      const seen = c.inbox.length;
+      expect(await c.request({ type: "worker.remove", sessionId: w.sessionId }, 15000)).toMatchObject({ type: "reply", result: {} });
+      await until(() => c.inbox.slice(seen).some((m: any) => m.type === "sessions.changed" && m.deleted === w.sessionId));
+      expect((await call(coord, "worker_list")).workers.find((x: { name: string }) => x.name === "u3")).toBeUndefined();
+      expect(existsSync(dirB)).toBe(true);
+      expect((await call(coord, "worker_start", { name: "u3", cwd: dirB, prompt: "again" })).name).toBe("u3");
+    });
+
+    it("worker.remove refuses a running and a waiting worker with text that names no tool", async () => {
+      enable();
+      const coord = await coordinator();
+      const a = await call(coord, "worker_start", { name: "u4", cwd: dirB, prompt: "hold" });
+      await until(() => runsOf(a.sessionId)[0]?.texts.length);
+      const r = await c.request({ type: "worker.remove", sessionId: a.sessionId });
+      expect(r).toMatchObject({ type: "error", code: "session_running" });
+      expect(r.message).not.toMatch(/worker_/);
+      const b = await call(coord, "worker_start", { name: "u5", cwd: dirB, prompt: "ask" });
+      await pendingQ(b.sessionId);
+      expect(await c.request({ type: "worker.remove", sessionId: b.sessionId })).toMatchObject({ type: "error", code: "session_running" });
+    });
+
+    it("a session that is no worker, and an unknown id, are not_worker", async () => {
+      enable();
+      const coord = await coordinator();
+      expect(await c.request({ type: "worker.close", sessionId: coord })).toMatchObject({ type: "error", code: "not_worker" });
+      expect(await c.request({ type: "worker.remove", sessionId: "nope" })).toMatchObject({ type: "error", code: "not_worker" });
+      expect(await c.request({ type: "worker.remove", sessionId: 5 as unknown as string })).toMatchObject({ type: "error", code: "bad_request" });
+    });
+
+    it("works with orchestration turned off", async () => {
+      enable();
+      const coord = await coordinator();
+      const w = await call(coord, "worker_start", { name: "u6", cwd: dirB, prompt: "x" });
+      await until(async () => (await state(w.sessionId)) === "idle");
+      appSettings.set({ orchestration: { enabled: false, workerCap: 20, coordinatorPermissions: true } });
+      expect(await c.request({ type: "worker.remove", sessionId: w.sessionId })).toMatchObject({ type: "reply" });
+    });
+
+    it("refuses a worker another process runs", async () => {
+      enable();
+      const coord = await coordinator();
+      const w = await call(coord, "worker_start", { name: "u7", cwd: dirB, prompt: "x" });
+      await until(async () => (await state(w.sessionId)) === "idle");
+      await call(coord, "worker_close", { name: "u7" });
+      const stored = JSON.parse(readFileSync(settingsFile, "utf8"));
+      stored[w.sessionId].port = 1;
+      writeFileSync(settingsFile, JSON.stringify(stored));
+      const other = await start();
+      const oc = await client((other.address() as AddressInfo).port);
+      const held = join(claudeDir, "sessions", `${process.pid}.json`);
+      writeFileSync(held, JSON.stringify({ pid: process.pid, sessionId: w.sessionId, status: "idle" }));
+      try {
+        expect(await oc.request({ type: "worker.remove", sessionId: w.sessionId })).toMatchObject({ type: "error", code: "held_elsewhere" });
+      } finally {
+        rmSync(held, { force: true });
+        oc.ws.close();
+        other.close();
+      }
+    });
   });
 
   it("worker_close is a tool error when the worker does not stop in time", async () => {
