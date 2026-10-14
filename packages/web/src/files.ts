@@ -186,3 +186,29 @@ export function readFailure(e: RequestError): { text: string; notice: boolean; h
       return { text: e.message, notice: false };
   }
 }
+
+const below = (p: string, dir: string) => {
+  if (isWinPath(dir)) {
+    const [k, d] = [p.replace(/\//g, "\\").toLowerCase(), dir.replace(/\//g, "\\").toLowerCase()];
+    return k === d || k.startsWith(d + "\\");
+  }
+  return p === dir || p.startsWith(dir + "/");
+};
+
+/** The tabs after `from` was renamed to `to` (a file, or a folder: every tab below it): keys and paths change, drafts and order stay. */
+export function moveTabs(tabs: Record<string, Tab>, from: string, to: string): Record<string, Tab> {
+  const out: Record<string, Tab> = {};
+  for (const [k, t] of Object.entries(tabs)) {
+    const p = below(k, from) ? to + k.slice(from.length) : k;
+    out[p] = p === k ? t : { ...t, path: p };
+  }
+  return out;
+}
+
+/** The tab key `path` has after `from` became `to`. */
+export const movedPath = (path: string, from: string, to: string) => (below(path, from) ? to + path.slice(from.length) : path);
+
+/** The tabs after `path` was deleted: the clean tabs below it close, tabs with unsaved edits stay. */
+export function dropTabs(tabs: Record<string, Tab>, path: string): Record<string, Tab> {
+  return Object.fromEntries(Object.entries(tabs).filter(([k, t]) => !below(k, path) || isDirty(t)));
+}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { inDir } from "./paths.ts";
-import { mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, fileMention } from "./files.ts";
+import { mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, fileMention, moveTabs, dropTabs, movedPath } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -174,5 +174,26 @@ describe("fileMention (GH-360)", () => {
     expect(fileMention("/p/src/a.ts", "/p")).toBe("@src/a.ts");
     expect(fileMention("C:\\p\\src\\a.ts", "C:\\p")).toBe("@src/a.ts");
     expect(fileMention("/p/my file.ts", "/p")).toBe('@"my file.ts"');
+  });
+});
+
+describe("moveTabs and dropTabs (GH-360)", () => {
+  const t = (path: string, draft?: string): Tab => ({ ...opened(path, { content: "one", mtime: 1 }), ...(draft !== undefined && { draft }) });
+  const tabs = { "/p/a.ts": t("/p/a.ts", "edited"), "/p/src/b.ts": t("/p/src/b.ts"), "/p/src2/c.ts": t("/p/src2/c.ts") };
+  it("moveTabs renames a file tab keeping its draft and order", () => {
+    const m = moveTabs(tabs, "/p/a.ts", "/p/z.ts");
+    expect(Object.keys(m)).toEqual(["/p/z.ts", "/p/src/b.ts", "/p/src2/c.ts"]);
+    expect(m["/p/z.ts"]).toMatchObject({ path: "/p/z.ts", draft: "edited" });
+  });
+  it("moveTabs moves every tab below a renamed folder, not a sibling with the same prefix", () => {
+    const m = moveTabs(tabs, "/p/src", "/p/lib");
+    expect(Object.keys(m)).toEqual(["/p/a.ts", "/p/lib/b.ts", "/p/src2/c.ts"]);
+    expect(m["/p/lib/b.ts"]!.path).toBe("/p/lib/b.ts");
+    expect(movedPath("/p/src/b.ts", "/p/src", "/p/lib")).toBe("/p/lib/b.ts");
+    expect(movedPath("/p/src2/c.ts", "/p/src", "/p/lib")).toBe("/p/src2/c.ts");
+  });
+  it("dropTabs closes clean tabs below the path and keeps a tab with unsaved edits", () => {
+    expect(Object.keys(dropTabs(tabs, "/p/src"))).toEqual(["/p/a.ts", "/p/src2/c.ts"]);
+    expect(Object.keys(dropTabs(tabs, "/p/a.ts"))).toEqual(["/p/a.ts", "/p/src/b.ts", "/p/src2/c.ts"]);
   });
 });

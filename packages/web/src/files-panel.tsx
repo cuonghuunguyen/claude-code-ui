@@ -21,7 +21,7 @@ import { MediaView } from "./media-view.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { FILE_LINK_PROPS, FileBaseContext, FileImageContext, FileLinkContext } from "./file-links.tsx";
 import { FileTree, type FileTreeHandle, type OpenOptions } from "./file-tree.tsx";
-import { diskChanged, docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, opened, openedMedia, pin, placeTab, reload, readFailure, fileMention, replaceDoc, saveBase, saved, saveMdView, selectionMention, type MdView, type Tab } from "./files.ts";
+import { diskChanged, docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, opened, openedMedia, pin, placeTab, reload, readFailure, dropTabs, fileMention, movedPath, moveTabs, replaceDoc, saveBase, saved, saveMdView, selectionMention, type MdView, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -309,6 +309,10 @@ export function FilesPanel({
             onShowChanges={onShowChanges}
             onMention={(p) => onSend(fileMention(p, cwd))}
             onReload={() => setTreeKey((k) => k + 1)}
+            onChanged={() => setGitNudge((n) => n + 1)}
+            onMoved={(from, to) => (setTabs((ts) => moveTabs(ts, from, to)), setActivePath((p) => p && movedPath(p, from, to)), setGoto((g) => g && { ...g, path: movedPath(g.path, from, to) }))}
+            onDeleted={(path) => setTabs((ts) => dropTabs(ts, path))}
+            dirtyUnder={(path) => Object.values(tabsRef.current).filter((t) => isDirty(t) && inDir(t.path, path)).length}
             onOpen={(path, o) => void open(path, { preview: !o.pinned, focusEditor: o.focusEditor })}
           />
         </nav>

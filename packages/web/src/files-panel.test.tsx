@@ -648,3 +648,45 @@ it("a markdown file opened at a line shows its source only for that open", async
   act(() => t.root.render(null));
   localStorage.clear();
 });
+
+it("GH-360 renaming an open file moves its tab; deleting an open clean file closes its tab", async () => {
+  const lists: Record<string, { name: string; path: string; isDir: boolean }[]> = { "/p": [{ name: "a.ts", path: "/p/a.ts", isDir: false }, { name: "b.ts", path: "/p/b.ts", isDir: false }] };
+  const request = vi.fn(async (m: { type: string; path?: string; name?: string }) => {
+    if (m.type === "fs.list") return { entries: lists[m.path!] ?? [] };
+    if (m.type === "fs.read") return { content: "ok", mtime: 1 };
+    if (m.type === "fs.rename") return (lists["/p"] = lists["/p"]!.map((e) => (e.path === m.path ? { name: m.name!, path: `/p/${m.name}`, isDir: false } : e))), { path: `/p/${m.name}` };
+    if (m.type === "fs.delete") return (lists["/p"] = lists["/p"]!.filter((e) => e.path !== m.path)), { files: 0, folders: 0 };
+    return {};
+  });
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const show = (openPath?: string) => act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} openPath={openPath} />));
+  await show("/p/a.ts");
+  await show("/p/b.ts");
+  const titles = () => [...el.querySelectorAll("[data-testid=editor-tab]")].map((t) => t.textContent);
+  expect(titles().join()).toContain("b.ts");
+  const row = (p: string) => el.querySelector<HTMLElement>(`[data-testid=tree-entry][data-path="${p}"]`)!;
+  const type = (v: string) => {
+    const input = document.querySelector<HTMLInputElement>('[data-testid="tree-name-input"]')!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, v);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return input;
+  };
+  await act(async () => void row("/p/b.ts").dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true, cancelable: true })));
+  await act(async () => {});
+  await act(async () => void type("c.ts").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+  await act(async () => {});
+  await act(async () => {});
+  expect(request.mock.calls.some(([m]) => m.type === "fs.rename")).toBe(true);
+  expect(titles().join()).toContain("c.ts");
+  expect(titles().join()).not.toContain("b.ts");
+  await act(async () => void row("/p/c.ts").dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true })));
+  await act(async () => {});
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="tree-delete-confirm"]')!.click());
+  await act(async () => {});
+  await act(async () => {});
+  expect(titles().join()).not.toContain("c.ts");
+  act(() => root.render(null));
+});
