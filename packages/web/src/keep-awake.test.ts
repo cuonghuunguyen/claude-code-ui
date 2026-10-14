@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createKeepAwake, loadKeepAwake, saveKeepAwake, subscribeKeepAwake, wakeLockSupported, type KeepAwakeStatus } from "./keep-awake.ts";
+import { createKeepAwake, loadKeepAwake, wakeLockReason, saveKeepAwake, subscribeKeepAwake, wakeLockSupported, type KeepAwakeStatus } from "./keep-awake.ts";
 
 class Sentinel extends EventTarget {
   released = false;
@@ -58,9 +58,17 @@ describe("keep awake setting", () => {
 
 describe("wakeLockSupported", () => {
   it("needs a secure context and the API", () => {
-    expect(wakeLockSupported({ wakeLock: {} } as never, { isSecureContext: true } as never)).toBe(true);
-    expect(wakeLockSupported({ wakeLock: {} } as never, { isSecureContext: false } as never)).toBe(false);
+    expect(wakeLockSupported({ wakeLock: { request() {} } } as never, { isSecureContext: true } as never)).toBe(true);
+    expect(wakeLockSupported({ wakeLock: { request() {} } } as never, { isSecureContext: false } as never)).toBe(false);
     expect(wakeLockSupported({} as never, { isSecureContext: true } as never)).toBe(false);
+  });
+  it("a present but undefined or incomplete wakeLock is unsupported, not a TypeError", () => {
+    expect(wakeLockSupported({ wakeLock: undefined } as never, { isSecureContext: true } as never)).toBe(false);
+    expect(wakeLockSupported({ wakeLock: {} } as never, { isSecureContext: true } as never)).toBe(false);
+  });
+  it("the reason follows the secure context", () => {
+    expect(wakeLockReason({ isSecureContext: false } as never)).toBe("needs HTTPS or localhost");
+    expect(wakeLockReason({ isSecureContext: true } as never)).toBe("not supported by this browser");
   });
 });
 
@@ -88,7 +96,7 @@ describe("keep awake controller", () => {
     await flush();
     t.hide("hidden");
     await flush();
-    expect(t.statuses.at(-1)).toBe("idle");
+    expect(t.statuses.at(-1)).toBe("hidden");
     t.hide("visible");
     await flush();
     expect(t.request).toHaveBeenCalledTimes(2);
@@ -100,7 +108,7 @@ describe("keep awake controller", () => {
     t.ctl.update(true);
     await flush();
     expect(t.request).not.toHaveBeenCalled();
-    expect(t.statuses.at(-1)).toBe("idle");
+    expect(t.statuses.at(-1)).toBe("hidden");
   });
   it("reports a refusal without console noise or a retry loop", async () => {
     const t = setup({ reject: "NotAllowedError" });

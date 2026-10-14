@@ -23,6 +23,7 @@ it("keeps a fixed name; aria-pressed and the tooltip carry the state", () => {
     ["off", "false", "Screen may sleep"],
     ["held", "true", "Keep screen awake"],
     ["idle", "true", "Keep screen awake (waits for a running session)"],
+    ["hidden", "true", "Keep screen awake (resumes when the page is visible)"],
   ];
   for (const [status, pressed, title] of rows) {
     const { b } = show(status);
@@ -47,6 +48,13 @@ it("unsupported: aria-disabled, focusable, a click does not toggle", () => {
   expect(b.disabled).toBe(false);
   expect(b.getAttribute("aria-pressed")).toBe("false");
   expect(b.title).toContain("HTTPS or localhost");
+  Object.defineProperty(window, "isSecureContext", { value: true, configurable: true });
+  try {
+    expect(keepAwakeTitle("unsupported")).toContain("not supported by this browser");
+    expect(keepAwakeTitle("unsupported")).not.toContain("HTTPS");
+  } finally {
+    Object.defineProperty(window, "isSecureContext", { value: undefined, configurable: true });
+  }
   act(() => b.click());
   expect(onToggle).not.toHaveBeenCalled();
 });

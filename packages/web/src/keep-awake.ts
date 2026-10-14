@@ -2,8 +2,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 export type KeepAwakeSetting = { on: boolean; onlyRunning: boolean };
-/** off: setting off · held: lock held · idle: on but not wanted now (hidden page, nothing running) · refused: the browser rejected the request · unsupported: no API here. */
-export type KeepAwakeStatus = "off" | "held" | "idle" | "refused" | "unsupported";
+/** off: setting off · held: lock held · idle: on, "only while running" is set and nothing runs · hidden: on, the page is not visible · refused: the browser rejected the request · unsupported: no API here. */
+export type KeepAwakeStatus = "off" | "held" | "idle" | "hidden" | "refused" | "unsupported";
 
 const KEY = "claude-ui.keepAwake";
 const OFF: KeepAwakeSetting = { on: false, onlyRunning: false };
@@ -56,7 +56,10 @@ export function subscribeKeepAwake(l: () => void) {
 export const useKeepAwakeSetting = (): KeepAwakeSetting => useSyncExternalStore(subscribeKeepAwake, loadKeepAwake, () => OFF);
 
 /** The API exists only in a secure context (HTTPS or localhost). */
-export const wakeLockSupported = (nav: Navigator = navigator, win: Window = window): boolean => !!win.isSecureContext && "wakeLock" in nav;
+export const wakeLockSupported = (nav: Navigator = navigator, win: Window = window): boolean => !!win.isSecureContext && typeof nav.wakeLock?.request === "function";
+
+/** Why the feature is missing here: an insecure page (plain http on a LAN address) or a browser without the API. */
+export const wakeLockReason = (win: Window = window): string => (win.isSecureContext ? "not supported by this browser" : "needs HTTPS or localhost");
 
 type Doc = Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener">;
 
@@ -70,7 +73,7 @@ export function createKeepAwake({ wakeLock, doc, onStatus }: { wakeLock: Pick<Wa
   let disposed = false;
   const visible = () => doc.visibilityState === "visible";
   const wanted = () => on && active && visible();
-  const status = (): KeepAwakeStatus => (!on ? "off" : sentinel ? "held" : refused ? "refused" : "idle");
+  const status = (): KeepAwakeStatus => (!on ? "off" : sentinel ? "held" : refused ? "refused" : !visible() ? "hidden" : "idle");
   const emit = () => onStatus(status());
   const drop = () => {
     const s = sentinel;

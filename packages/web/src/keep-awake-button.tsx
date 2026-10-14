@@ -1,6 +1,6 @@
 import { CoffeeIcon } from "lucide-react";
 import { IconButton } from "./tabs-bar.tsx";
-import type { KeepAwakeStatus } from "./keep-awake.ts";
+import { wakeLockReason, type KeepAwakeStatus } from "./keep-awake.ts";
 
 /** The tooltip for each state; the accessible name stays fixed and `aria-pressed` carries the state. */
 export function keepAwakeTitle(status: KeepAwakeStatus, error?: string): string {
@@ -11,10 +11,12 @@ export function keepAwakeTitle(status: KeepAwakeStatus, error?: string): string 
       return "Keep screen awake";
     case "idle":
       return "Keep screen awake (waits for a running session)";
+    case "hidden":
+      return "Keep screen awake (resumes when the page is visible)";
     case "refused":
       return `Keep screen awake: the browser refused (${error ?? "error"}), e.g. battery saver. Retries when you return to the page.`;
     case "unsupported":
-      return "Keep screen awake is not available here: it needs HTTPS or localhost";
+      return `Keep screen awake is not available here: ${wakeLockReason()}`;
   }
 }
 

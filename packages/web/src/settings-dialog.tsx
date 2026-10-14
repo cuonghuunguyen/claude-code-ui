@@ -8,7 +8,7 @@ import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { Switch } from "./plugins-dialog.tsx";
-import { saveKeepAwake, useKeepAwakeSetting, wakeLockSupported } from "./keep-awake.ts";
+import { saveKeepAwake, useKeepAwakeSetting, wakeLockReason, wakeLockSupported } from "./keep-awake.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
 import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
@@ -106,7 +106,7 @@ function ScreenSection() {
           <span id="settings-awake-hint" className="block text-muted-foreground text-xs">
             {supported
               ? "Keeps this device's screen on while this page is visible. The browser lets it sleep when you switch away and it turns back on when you return. Kept in this browser."
-              : "Not available in this browser here: it needs HTTPS or localhost. The choice is kept and applies when this browser opens the app over HTTPS or localhost."}
+              : `Not available here: ${wakeLockReason()}. The choice is kept and applies when this browser opens the app over HTTPS or localhost.`}
           </span>
         </div>
         <Switch on={s.on} label="Keep screen awake" held={!supported} onToggle={(on) => saveKeepAwake({ ...s, on })} title="Keep screen awake" describedBy="settings-awake-hint" testId="settings-keep-awake" />

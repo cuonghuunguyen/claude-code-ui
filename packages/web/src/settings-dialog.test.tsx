@@ -492,7 +492,7 @@ it("Settings > Screen has the Keep screen awake switches; unsupported here: held
 
 it("Screen switches write the store; the sub-switch is held while the main one is off (GH-361)", async () => {
   Object.defineProperty(window, "isSecureContext", { value: true, configurable: true });
-  Object.defineProperty(navigator, "wakeLock", { value: {}, configurable: true });
+  Object.defineProperty(navigator, "wakeLock", { value: { request: async () => ({}) }, configurable: true });
   try {
     saveKeepAwake({ on: false, onlyRunning: false });
     const { q, pick } = await render();
