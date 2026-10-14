@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { fileRef } from "./file-links.tsx";
+import { fileRef, resolveIn } from "./file-links.tsx";
 
 it("fileRef accepts relative and absolute paths inside the base, with a line from :N, :N:M, :N-M, #LN and #LN-M", () => {
   expect(fileRef("src/a.ts", "/w")).toEqual({ path: "/w/src/a.ts" });
@@ -26,4 +26,14 @@ it("fileRef resolves against a base but stays inside the root (markdown preview)
   expect(fileRef("./b.md", "/w/docs", "/w")).toEqual({ path: "/w/docs/b.md" });
   expect(fileRef("/w/src/a.ts", "/w/docs", "/w")).toEqual({ path: "/w/src/a.ts" });
   expect(fileRef("/x/a.ts", "/w/docs", "/w")).toBeUndefined();
+});
+
+it("resolveIn resolves ./ and .. against the base and refuses what leaves the root", () => {
+  expect(resolveIn("img/a.png", "/w/docs", "/w")).toBe("/w/docs/img/a.png");
+  expect(resolveIn("./a%20b.png?x=1", "/w/docs", "/w")).toBe("/w/docs/a b.png");
+  expect(resolveIn("../a.png", "/w/docs", "/w")).toBe("/w/a.png");
+  expect(resolveIn("../../a.png", "/w/docs", "/w")).toBeUndefined();
+  expect(resolveIn("/w/x/a.png", "/w/docs", "/w")).toBe("/w/x/a.png");
+  expect(resolveIn("/etc/a.png", "/w/docs", "/w")).toBeUndefined();
+  expect(resolveIn("..\\a.png", "C:\\w\\docs", "C:\\w")).toBe("C:\\w\\a.png");
 });

@@ -19,7 +19,7 @@ import { useDark } from "./theme.ts";
 import { baseName, inDir, relPath } from "./paths.ts";
 import { MediaView } from "./media-view.tsx";
 import { FileIcon } from "./file-icon.tsx";
-import { FILE_LINK_PROPS, FileBaseContext, FileLinkContext } from "./file-links.tsx";
+import { FILE_LINK_PROPS, FileBaseContext, FileImageContext, FileLinkContext } from "./file-links.tsx";
 import { FileTree, type FileTreeHandle, type OpenOptions } from "./file-tree.tsx";
 import { diskChanged, docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, opened, openedMedia, pin, placeTab, reload, readFailure, replaceDoc, saveBase, saved, saveMdView, selectionMention, type MdView, type Tab } from "./files.ts";
 
@@ -73,8 +73,6 @@ export function FilesPanel({
   const [sourceOnly, setSourceOnly] = useState<string>();
   const narrow = useNarrow();
   const [error, setError] = useState<string>();
-  /** The last opened file that cannot be shown (binary, too large, not UTF-8); it replaces the editor until a tab is chosen. */
-  const [notice, setNotice] = useState<{ path: string; text: string; hint?: string }>();
   /** The file being read for longer than 150 ms. */
   const [loading, setLoading] = useState<string>();
   /** A line to go to in `path`'s editor once it shows (`key` tells a repeat of the same line apart). */
@@ -118,7 +116,6 @@ export function FilesPanel({
     const preview = opts.preview ?? true;
     const scope = (p: string) => inDir(p, cwd);
     setError(undefined);
-    setNotice(undefined);
     if (tabsRef.current[path]) setTabs((ts) => (ts[path] ? placeTab(ts, ts[path], preview, scope) : ts));
     else {
       const timer = setTimeout(() => setLoading(path), 150);
@@ -127,7 +124,10 @@ export function FilesPanel({
         setTabs((ts) => placeTab(ts, ts[path] ?? tab, preview, scope));
       } catch (e) {
         const f = readFailure(e as RequestError);
-        return f.notice ? setNotice({ path, text: f.text, hint: f.hint }) : setError(f.text);
+        if (!f.notice) return setError(f.text);
+        // A file that cannot be shown still gets a tab (closable, with its breadcrumb) that says why.
+        setTabs((ts) => placeTab(ts, ts[path] ?? { path, disk: "", draft: "", mtime: 0, notice: f.text, noticeHint: f.hint }, preview, scope));
+        return void setActivePath(path);
       } finally {
         clearTimeout(timer);
         setLoading((l) => (l === path ? undefined : l));
@@ -201,6 +201,7 @@ export function FilesPanel({
   const openRef = useRef(open);
   openRef.current = open;
   const openLink = useCallback((path: string, line?: number) => void openRef.current(path, { line }), []);
+  const imageUrl = useCallback((path: string) => client.request<FsMediaResult>({ type: "fs.media", path }).then((m) => m.url), [client]);
   const shown = paths.filter((p) => inDir(p, cwd));
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
   const md = !!active && !active.media && isMarkdown(active.path);
@@ -209,7 +210,7 @@ export function FilesPanel({
   const previewDoc = useDeferredValue(active?.draft ?? "");
   const previewBase = useMemo(() => ({ base: active ? active.path.slice(0, Math.max(active.path.length - baseName(active.path).length - 1, 1)) : cwd, root: cwd }), [active?.path, cwd]);
   useEffect(() => editor.current?.requestMeasure(), [view]);
-  const refused = notice ?? (active?.notice ? { path: active.path, text: active.notice, hint: active.noticeHint } : undefined);
+  const refused = active?.notice ? { path: active.path, text: active.notice, hint: active.noticeHint } : undefined;
 
   /** Breadcrumb folder: show the tree, then reveal the folder in it. */
   function revealFolder(dir: string) {
@@ -301,15 +302,15 @@ export function FilesPanel({
               <div
                 key={p}
                 role="tab"
-                aria-selected={t === active && !notice}
+                aria-selected={t === active}
                 data-testid="editor-tab"
-                className={`flex shrink-0 items-center gap-1 border-r pl-2 ${t === active && !notice ? "bg-muted" : ""}`}
+                className={`flex shrink-0 items-center gap-1 border-r pl-2 ${t === active ? "bg-muted" : ""}`}
                 title={p}
               >
                 <button
                   className={`py-1.5 max-md:min-h-11 ${t.preview ? "italic" : ""}`}
                   aria-label={t.preview ? `${baseName(p)}, preview` : undefined}
-                  onClick={() => (setNotice(undefined), setActivePath(p))}
+                  onClick={() => setActivePath(p)}
                   onDoubleClick={() => update(p, pin)}
                   onAuxClick={(e) => e.button === 1 && (e.preventDefault(), close(p))}
                 >
@@ -336,9 +337,9 @@ export function FilesPanel({
       ) : refused ? (
         <div className="m-auto flex max-w-full flex-col items-center gap-1 p-4 text-center" data-testid="file-notice" role="status">
           <FileIcon path={refused.path} className="mb-1 size-8" />
-          <span className="max-w-full truncate font-mono text-muted-foreground text-xs" title={refused.path}>
-            {relPath(refused.path, cwd)}
-          </span>
+          <div className="w-full max-w-full text-xs">
+            <Breadcrumb path={refused.path} cwd={cwd} onFolder={revealFolder} />
+          </div>
           <span className="text-foreground text-sm">{refused.text}</span>
           {refused.hint && <span className="text-muted-foreground text-xs">{refused.hint}</span>}
         </div>
@@ -432,9 +433,11 @@ export function FilesPanel({
               >
                 <FileBaseContext value={previewBase}>
                   <FileLinkContext value={openLink}>
-                    <MessageResponse mode="static" {...FILE_LINK_PROPS}>
-                      {previewDoc}
-                    </MessageResponse>
+                    <FileImageContext value={imageUrl}>
+                      <MessageResponse mode="static" {...FILE_LINK_PROPS}>
+                        {previewDoc}
+                      </MessageResponse>
+                    </FileImageContext>
                   </FileLinkContext>
                 </FileBaseContext>
               </div>
@@ -456,13 +459,22 @@ function Breadcrumb({ path, cwd, onFolder }: { path: string; cwd: string; onFold
   const parts = rel.split(/[\\/]/).filter(Boolean);
   const base = rel === path ? "" : path.slice(0, path.length - rel.length);
   const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  const collapse = useNarrow() && parts.length > 4;
   return (
     <nav aria-label="Breadcrumb" className="min-w-0 max-md:basis-full md:flex-1" title={path}>
       <ol className="flex min-w-0 items-center font-mono text-muted-foreground">
         {parts.map((part, i) => {
           const last = i === parts.length - 1;
+          // A narrow screen keeps the first and last folder and the file; the folders between become one "…".
+          if (collapse && i > 0 && i < parts.length - 2)
+            return i === 1 ? (
+              <li key={i} className="flex shrink-0 items-center" title={parts.slice(1, -2).join(sep)}>
+                <span aria-hidden>…</span>
+                <ChevronRightIcon className="mx-0.5 size-3 shrink-0 text-faint" aria-hidden />
+              </li>
+            ) : null;
           return (
-            <li key={i} className={`flex items-center ${last ? "min-w-0 shrink" : "shrink-[1000]"}`}>
+            <li key={i} className={`flex items-center ${last ? "min-w-[6ch] shrink" : "min-w-0 shrink-[1000] overflow-hidden"}`}>
               {last ? (
                 <span className="flex min-w-0 items-center gap-1 text-foreground" aria-current="page">
                   <FileIcon path={path} className="size-4 shrink-0" />
@@ -472,7 +484,7 @@ function Breadcrumb({ path, cwd, onFolder }: { path: string; cwd: string; onFold
                 <>
                   <button
                     type="button"
-                    className="max-w-[16ch] truncate rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring max-md:min-h-11"
+                    className="min-w-0 max-w-[16ch] truncate rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring max-md:min-h-11"
                     onClick={() => onFolder(base + parts.slice(0, i + 1).join(sep))}
                   >
                     {part}

@@ -1,13 +1,37 @@
 // File references in markdown (docs/spec.md "Session view UX", "Editor"): inline code like `src/a.ts:12` and relative links open the Files tab.
-import { createContext, createElement, use, type ComponentProps } from "react";
+import { createContext, createElement, use, useEffect, useState, type ComponentProps } from "react";
 import { defaultComponents, defaultRemarkPlugins, type Components } from "streamdown";
-import { inDir, isWinPath, joinPath } from "./paths.ts";
+import { inDir, isWinPath, joinPath, sepOf, withSep } from "./paths.ts";
 import { CwdContext } from "./tool-card.tsx";
 
 /** Opens `path` in the Files tab, at `line` when given. Without a provider, file references stay plain text. */
 export const FileLinkContext = createContext<((path: string, line?: number) => void) | undefined>(undefined);
 /** Where relative references resolve (`base`) and what they must stay inside (`root`); the session cwd when absent. */
 export const FileBaseContext = createContext<{ base: string; root: string } | undefined>(undefined);
+
+/** Gives the URL of an image file (an `fs.media` answer): the markdown preview provides it; without one a relative image shows its alt text. */
+export const FileImageContext = createContext<((path: string) => Promise<string>) | undefined>(undefined);
+
+/** A relative (or absolute) target as a path inside `root`, "." and ".." resolved; undefined when it leaves `root`. */
+export function resolveIn(target: string, base: string, root: string): string | undefined {
+  let t = target.split(/[?#]/)[0]!;
+  try {
+    t = decodeURIComponent(t);
+  } catch {
+    // keep the raw text
+  }
+  if (!t) return;
+  const full = t.startsWith("/") || isWinPath(t) ? t : withSep(base) + t;
+  const parts = full.split(/[\\/]/);
+  const out: string[] = [parts[0]!];
+  for (const p of parts.slice(1)) {
+    if (p === "..") {
+      if (out.length > 1) out.pop();
+    } else if (p && p !== ".") out.push(p);
+  }
+  const path = out.join(sepOf(root));
+  return inDir(path, root) && path.length > root.replace(/[\\/]$/, "").length ? path : undefined;
+}
 
 /** Extensions that make a bare word a file ("process.env", "JSON.parse" and "e.g" stay text); a name with a path separator needs none of these. */
 export const SOURCE_EXT = new Set(
@@ -45,11 +69,32 @@ const FILE_LINK = "streamdown:file/";
  */
 function fileLinks() {
   const walk = (node: { type?: string; url?: unknown; children?: unknown[] }) => {
-    if (node.type === "link" && typeof node.url === "string" && node.url && !node.url.startsWith("#") && !node.url.startsWith("//") && !/^[a-z][a-z\d+.-]+:/i.test(node.url))
+    if ((node.type === "link" || node.type === "image") && typeof node.url === "string" && node.url && !node.url.startsWith("#") && !node.url.startsWith("//") && !/^[a-z][a-z\d+.-]+:/i.test(node.url))
       node.url = FILE_LINK + encodeURIComponent(node.url);
     for (const c of node.children ?? []) walk(c as typeof node);
   };
   return walk;
+}
+
+function LoadedImage({ path, alt }: { path: string; alt?: string }) {
+  const load = use(FileImageContext);
+  const [url, setUrl] = useState<string>();
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true;
+    load?.(path).then((u) => live && setUrl(u), () => live && setFailed(true));
+    return () => void (live = false);
+  }, [path, load]);
+  if (!url || failed) return <span className="text-muted-foreground">{alt || (failed ? "Image not available" : "")}</span>;
+  return <img src={url} alt={alt} loading="lazy" className="h-auto max-w-full rounded" onError={() => setFailed(true)} />;
+}
+
+function FileImage(props: ComponentProps<"img">) {
+  const { base, root } = useTarget();
+  const src = typeof props.src === "string" ? props.src : undefined;
+  if (!src?.startsWith(FILE_LINK)) return createElement(defaultComponents.img as never, props as never);
+  const path = base ? resolveIn(decodeURIComponent(src.slice(FILE_LINK.length)), base, root) : undefined;
+  return path ? <LoadedImage path={path} alt={props.alt} /> : <span className="text-muted-foreground">{props.alt}</span>;
 }
 
 const REMARK = [...Object.values(defaultRemarkPlugins), fileLinks];
@@ -89,4 +134,4 @@ function FileAnchor(props: ComponentProps<"a">) {
 }
 
 /** Stable constants: MessageResponse re-renders on a new `children` only, and Streamdown compares these by identity. */
-export const FILE_LINK_PROPS: { components: Components; remarkPlugins: typeof REMARK } = { components: { inlineCode: FileCode, a: FileAnchor } as Components, remarkPlugins: REMARK };
+export const FILE_LINK_PROPS: { components: Components; remarkPlugins: typeof REMARK } = { components: { inlineCode: FileCode, a: FileAnchor, img: FileImage } as Components, remarkPlugins: REMARK };

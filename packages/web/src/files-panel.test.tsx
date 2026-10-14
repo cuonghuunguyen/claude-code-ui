@@ -42,7 +42,7 @@ it("editor keys: Ctrl+L selects the line and stays with the editor; Ctrl+S saves
   view.destroy();
 });
 
-it("opening a binary, too large or not UTF-8 file shows its state in the viewer, no raw error, and keeps the open tabs", async () => {
+it("opening a binary, too large or not UTF-8 file gets a tab that shows its state, no raw error", async () => {
   const states: Record<string, [string, number]> = { "/p/a.bin": ["binary", 2048], "/p/big.log": ["too_large", 5 * 1024 ** 2], "/p/u16.txt": ["not_utf8", 10] };
   const request = vi.fn(async (m: { type: string; path?: string }) => {
     if (m.type === "fs.list") return { entries: [] };
@@ -60,16 +60,19 @@ it("opening a binary, too large or not UTF-8 file shows its state in the viewer,
     await show(path!);
     const notice = el.querySelector("[data-testid=file-notice]")!;
     expect(notice.textContent).toContain(text);
-    expect(notice.textContent).toContain(path!.slice(3));
+    expect(notice.querySelector("nav[aria-label=Breadcrumb] [aria-current=page]")!.textContent).toBe(path!.slice(3));
     expect(el.textContent).not.toMatch(/raw:|too_large|not_utf8/);
+    // It is a tab like any file (here a preview tab replacing the previous one), and the active one.
+    const tabs = [...el.querySelectorAll("[data-testid=editor-tab]")];
+    expect(tabs).toHaveLength(1);
+    expect(tabs.at(-1)!.getAttribute("aria-selected")).toBe("true");
+    expect(tabs.at(-1)!.textContent).toContain(path!.slice(3));
   }
-  expect(el.querySelectorAll("[data-testid=editor-tab]")).toHaveLength(1);
   expect(el.querySelector("[data-testid=file-notice]")!.getAttribute("role")).toBe("status");
-  // The notice is the current view: the tab strip does not mark the previous tab as selected.
-  expect(el.querySelector("[data-testid=editor-tab]")!.getAttribute("aria-selected")).toBe("false");
-  // Choosing the open tab again replaces the notice with its editor.
-  await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=editor-tab] button")!.click(), undefined));
+  // The notice tab closes like any tab.
+  await act(async () => el.querySelector<HTMLButtonElement>("[aria-label='Close u16.txt']")!.click());
   expect(el.querySelector("[data-testid=file-notice]")).toBeNull();
+  expect(el.querySelectorAll("[data-testid=editor-tab]")).toHaveLength(0);
   act(() => root.render(null));
 });
 
@@ -562,4 +565,47 @@ it("a link and a path in the markdown preview open that file in a tab, resolved 
   expect(localStorage.getItem("claude-ui.markdown-view")).toBe("preview");
   act(() => t.root.render(null));
   localStorage.clear();
+});
+
+it("a relative image in the markdown preview loads through fs.media from the file's folder; an image outside the root and a failing one show the alt text", async () => {
+  const request = vi.fn(async (m: { type: string; path?: string }) => {
+    if (m.type === "fs.list") return { entries: [] };
+    if (m.type === "fs.read") return { content: "![pic](img/pic.png) ![up](../up.png) ![out](../../../etc/x.png) ![gone](missing.png)", mtime: 1 };
+    if (m.type === "fs.media") {
+      if (m.path!.endsWith("missing.png")) throw new Error("nope");
+      return { url: `/media/k${m.path}?v=1`, mime: "image/png", size: 1, mtime: 1 };
+    }
+    return {};
+  });
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  const root = createRoot(el);
+  localStorage.setItem("claude-ui.markdown-view", "preview");
+  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} openPath="/p/docs/guide.md" />));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 80))));
+  const pane = el.querySelector("[data-testid=md-preview]")!;
+  expect([...pane.querySelectorAll("img")].map((i) => [i.getAttribute("src"), i.alt])).toEqual([["/media/k/p/docs/img/pic.png?v=1", "pic"], ["/media/k/p/up.png?v=1", "up"]]);
+  expect(request).toHaveBeenCalledWith({ type: "fs.media", path: "/p/docs/img/pic.png" });
+  expect(request.mock.calls.some(([m]) => (m as { path?: string }).path?.includes("etc"))).toBe(false);
+  expect(pane.textContent).toContain("out");
+  expect(pane.textContent).toContain("gone");
+  expect(pane.textContent).not.toContain("blocked");
+  act(() => root.render(null));
+  localStorage.clear();
+});
+
+it("the breadcrumb keeps the file name when the pane is narrow: folders shrink first, middle folders collapse to … below md", async () => {
+  const original = window.matchMedia;
+  window.matchMedia = ((query: string) => ({ matches: true, media: query, addEventListener() {}, removeEventListener() {} })) as never;
+  const t = treePanel();
+  await t.show({ openPath: "/p/a/b/c/d/long-file-name.ts" });
+  const nav = t.el.querySelector("nav[aria-label=Breadcrumb]")!;
+  expect([...nav.querySelectorAll("li")].map((l) => l.textContent)).toEqual(["a", "…", "d", "long-file-name.ts"]);
+  const lis = [...nav.querySelectorAll("li")];
+  expect(lis.at(-1)!.className).toContain("shrink");
+  expect(lis.at(-1)!.className).not.toContain("shrink-[1000]");
+  expect(lis[0]!.className).toContain("shrink-[1000]");
+  expect(lis[0]!.className).toContain("min-w-0");
+  window.matchMedia = original;
+  act(() => t.root.render(null));
 });
