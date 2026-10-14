@@ -130,7 +130,8 @@ import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGr
 import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, movePane, resetLayout, saveLayout, useLayout, useMinWidth } from "./layout.ts";
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
-import { type Split, type SplitDir, canSplit as canSplitTabs, followSplit, isSession, loadSplit, nextAfterClose, nextSplit, ratioFor, saveSplit, splitTo } from "./split.ts";
+import { useSplitDrop } from "./split-drop.ts";
+import { type Split, type SplitDir, canSplit as canSplitTabs, followSplit, isSession, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -759,6 +760,25 @@ export function App() {
     focusShownPrompt(t);
   }
 
+  /** A tab dropped on the middle of a split: it shows there; the tab that was there goes to the other split when it is the dropped tab's, else it leaves the screen. */
+  function showInSplit(t: string, i: number) {
+    const s = splitRef.current;
+    if (!s) return open(t);
+    const cur = activeRef.current;
+    const next = placeIn(s, t, i);
+    const runs: Record<string, string> = { ...s.runs };
+    const target = runs[t];
+    delete runs[t];
+    if (cur && cur !== t) delete runs[cur];
+    if (cur && cur !== t && runRef.current) runs[cur] = runRef.current;
+    setSplitRaw({ ...next, runs: Object.keys(runs).length ? runs : undefined });
+    setError(undefined);
+    setActiveId(t);
+    setRun(cur === t ? runRef.current : target);
+    history.replaceState(null, "", target && cur !== t ? runHash(t, target) : tabHash(t));
+    focusShownPrompt(t);
+  }
+
   /** Join splits: one session shows again, the active one. */
   function joinSplits() {
     saveSplit(undefined);
@@ -1295,6 +1315,17 @@ export function App() {
   const view = activeId ? viewOf(activeId) : undefined;
   const shown = active && view ? active : undefined;
   /** Both splits render (a loading session shows alone until its view is there). */
+  // Drag a tab onto the session area (GH-356): an edge splits there, the middle of a split shows the tab in it.
+  const splitDrop = useSplitDrop({
+    enabled: () => lg && isSession(activeRef.current),
+    onDrop: (id, t) => {
+      if (!isSession(id) || !tabsRef.current.includes(id)) return;
+      if (t.zone !== "center") return splitTab(id, t.zone === "left" || t.zone === "right" ? "row" : "col", t.zone === "left" || t.zone === "top");
+      if (splitRef.current && splitOnRef.current && t.over >= 0) return showInSplit(id, t.over);
+      open(id);
+      focusShownPrompt(id);
+    },
+  });
   const splitShown = splitOn && split.ids.every((id) => !!viewOf(id) && !!sessionOf(id));
   // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
   useEffect(() => {
@@ -2031,7 +2062,8 @@ export function App() {
               )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
               <div
-                className={`${splitShown ? `flex min-h-0 min-w-0 flex-1 ${split!.dir === "row" ? "flex-row" : "flex-col"}` : `${card} flex-1`} ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}
+                ref={splitDrop.ref}
+                className={`relative ${splitShown ? `flex min-h-0 min-w-0 flex-1 ${split!.dir === "row" ? "flex-row" : "flex-col"}` : `${card} flex-1`} ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}
                 data-testid="session-area"
                 data-split={splitShown ? split!.dir : undefined}
               >
@@ -2133,6 +2165,15 @@ export function App() {
                 })}
                 </QuoteContext>
                 </ViewerContext>
+                {splitDrop.state && (
+                  <div
+                    aria-hidden
+                    data-testid="split-drop"
+                    data-zone={splitDrop.state.zone}
+                    className="pointer-events-none absolute z-10 rounded-xl bg-ring/15 outline-2 -outline-offset-2 outline-ring"
+                    style={splitDrop.state.box}
+                  />
+                )}
                 {splitShown && <SplitResizer split={split!} onResize={(ratio) => setSplitRaw({ ...split!, ratio })} />}
               </div>
               {!(layout.side === "left" && lg) && (

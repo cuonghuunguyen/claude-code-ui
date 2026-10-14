@@ -72,7 +72,8 @@ function TabIcon({ s, cwd }: { s: TabStatus; cwd?: string }) {
   return <ProjectAvatar cwd={cwd} unread={s === "unread"} />;
 }
 
-const DRAG_TYPE = "application/x-claude-ui-tab";
+export const TAB_DRAG_TYPE = "application/x-claude-ui-tab";
+const DRAG_TYPE = TAB_DRAG_TYPE;
 const GROUP_DRAG_TYPE = "application/x-claude-ui-tab-group";
 // Hover time before a compact chip opens its menu: none. Base UI's `delay` on a menu trigger is a rest time (the pointer must stop moving that long), so any value above 0 shows up as waiting; with 0 the menu opens on mouseenter. Mouse only (touch opens by tap); a drag fires no mouseenter, and the drag start closes the menu.
 export const CHIP_HOVER_DELAY_MS = 0;

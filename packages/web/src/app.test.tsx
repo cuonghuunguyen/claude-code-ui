@@ -1867,7 +1867,7 @@ describe("GH-356 split view", () => {
   const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetParent")!;
   const splits = () => [...el.querySelectorAll<HTMLElement>('[data-testid="split"]')];
   const activeSplit = () => el.querySelector<HTMLElement>('[data-testid="split"][data-active]');
-  const labels = () => splits().map((s) => s.getAttribute("aria-label"));
+  const labels = () => splits().sort((a, b) => +a.style.order - +b.style.order).map((s) => s.getAttribute("aria-label"));
   const menu = async (id: string) => {
     await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
     return (label: string) => act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === label)!.click());
@@ -2044,6 +2044,69 @@ describe("GH-356 split view", () => {
     await remount(ID, [ID]);
     await menu(ID);
     expect(document.querySelector<HTMLElement>('[data-testid="tab-menu-splitRight"]')!.hasAttribute("data-disabled")).toBe(true);
+  });
+
+  // Slice 2: dragging a tab onto the session area.
+  const drag = (area: HTMLElement, type: string, x: number, y: number, id = S3) => {
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(e, { clientX: x, clientY: y, dataTransfer: { types: ["application/x-claude-ui-tab"], getData: () => id, dropEffect: "none" } });
+    return act(async () => void area.dispatchEvent(e));
+  };
+  const area = () => {
+    const a = el.querySelector<HTMLElement>('[data-testid="session-area"]')!;
+    a.getBoundingClientRect = () => ({ left: 0, top: 0, width: 900, height: 600, right: 900, bottom: 600, x: 0, y: 0, toJSON() {} });
+    return a;
+  };
+
+  it("dragging a tab over the right edge shows the overlay on the right half; dropping splits right with that tab; dragleave clears", async () => {
+    await remount(ID);
+    await drag(area(), "dragover", 880, 300);
+    const o = () => el.querySelector<HTMLElement>('[data-testid="split-drop"]');
+    expect(o()?.dataset.zone).toBe("right");
+    expect(o()!.style.left).toBe("450px");
+    expect(o()!.style.width).toBe("450px");
+    await drag(area(), "dragleave", 880, 300);
+    expect(o()).toBeNull();
+    await drag(area(), "dragover", 880, 300);
+    await drag(area(), "drop", 880, 300);
+    expect(o()).toBeNull();
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Third, split 2 of 2, active"]);
+  });
+
+  it("dropping on the left edge puts the tab left; on the bottom edge it stacks", async () => {
+    await remount(ID);
+    await drag(area(), "drop", 10, 300);
+    expect(labels()).toEqual(["Third, split 1 of 2, active", "Demo, split 2 of 2"]);
+    await drag(area(), "drop", 450, 590, S2);
+    expect(el.querySelector('[data-testid="session-area"]')!.getAttribute("data-split")).toBe("col");
+  });
+
+  it("dropping on the middle of a split shows the tab there; with no split it just shows the tab", async () => {
+    await remount(ID);
+    await drag(area(), "drop", 450, 300, S2);
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${S2}`);
+    await splitRight(S2);
+    for (const s of splits()) s.getBoundingClientRect = () => ({ left: s === splits()[0] ? 0 : 450, top: 0, width: 440, height: 600, right: s === splits()[0] ? 440 : 890, bottom: 600, x: 0, y: 0, toJSON() {} });
+    await drag(area(), "dragover", 350, 300);
+    expect(el.querySelector<HTMLElement>('[data-testid="split-drop"]')!.style.width).toBe("440px");
+    await drag(area(), "drop", 350, 300, S3);
+    expect(labels()).toEqual(["Third, split 1 of 2, active", "Second, split 2 of 2"]);
+  });
+
+  it("a drag that is no tab, or on a narrow screen, shows no overlay", async () => {
+    await remount(ID);
+    const e = new Event("dragover", { bubbles: true, cancelable: true });
+    Object.assign(e, { clientX: 880, clientY: 300, dataTransfer: { types: ["Files"], getData: () => "" } });
+    await act(async () => void area().dispatchEvent(e));
+    expect(el.querySelector('[data-testid="split-drop"]')).toBeNull();
+    width = 800;
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    await drag(area(), "dragover", 880, 300);
+    expect(el.querySelector('[data-testid="split-drop"]')).toBeNull();
   });
 
   it("Split right from the palette splits the active tab", async () => {

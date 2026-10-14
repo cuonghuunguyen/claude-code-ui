@@ -88,7 +88,8 @@ export function nextAfterClose(tabs: readonly string[], id: string, s: Split): s
 }
 
 /** Which part of a rect a dragged tab is over: the outer third next to an edge splits there, the middle replaces. */
-export function dropZone(r: { left: number; top: number; width: number; height: number }, x: number, y: number): "left" | "right" | "top" | "bottom" | "center" {
+export type DropZone = "left" | "right" | "top" | "bottom" | "center";
+export function dropZone(r: { left: number; top: number; width: number; height: number }, x: number, y: number): DropZone {
   const fx = (x - r.left) / r.width;
   const fy = (y - r.top) / r.height;
   const edge = Math.min(fx, 1 - fx, fy, 1 - fy);
