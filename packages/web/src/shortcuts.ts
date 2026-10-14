@@ -20,6 +20,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "notifications.focus", title: "Go to notifications", group: "General", key: "mod+alt+n" },
   // No default key: listed in Keyboard shortcuts as "Not set" so the user can bind them (the key promoter offers it).
   { id: "focus.open", title: "Open Focus", group: "General" },
+  { id: "awake.toggle", title: "Toggle keep screen awake", group: "General" },
   { id: "guide.start", title: "Show guide", group: "General" },
   { id: "mcp.open", title: "MCP servers", group: "General" },
   { id: "skills.open", title: "Slash commands", group: "General" },

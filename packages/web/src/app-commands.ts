@@ -67,6 +67,8 @@ export type CommandContext = {
   focusNotifications?: () => void;
   /** Toggles Signal only, the browser-wide setting (GH-205). */
   toggleSignalOnly: () => void;
+  /** Set only where the Screen Wake Lock API works (HTTPS or localhost). */
+  toggleKeepAwake?: () => void;
   /** Opens the Settings dialog. */
   openSettings: () => void;
   /** Restarts the guided tour from its first step. */
@@ -124,6 +126,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s && !s.draft && c.viewPlan && cmd("viewer.plan", "View plan", c.viewPlan),
     s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
     cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
+    c.toggleKeepAwake && cmd("awake.toggle", "Toggle keep screen awake", c.toggleKeepAwake),
     s && !s.draft && cmd("terminal.new", "New terminal", c.newTerminal),
     s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
     s &&

@@ -97,6 +97,7 @@ it("phone: the titlebar keeps the sessions menu, tab switcher with the session n
   const phoneHidden = (id: string) => bar.querySelector(`[data-testid="${id}"]`)!.className.includes("max-sm:hidden");
   expect(phoneHidden("quick-open-button")).toBe(true);
   expect(phoneHidden("theme-toggle")).toBe(true);
+  expect(phoneHidden("keep-awake")).toBe(true);
   for (const id of ["open-drawer", "tab-switcher", "tab-new", "tab-close-active"]) expect(bar.querySelector(`[data-testid="${id}"]`)!.className).not.toContain("max-sm:hidden");
   expect(bar.querySelector('[data-testid="tab-switcher"]')!.textContent).toContain("Demo");
   // The drawer has the same two tools, for sm and up hidden.
@@ -105,6 +106,7 @@ it("phone: the titlebar keeps the sessions menu, tab switcher with the session n
   const tools = el.querySelector('[data-testid="drawer-tools"]')!;
   expect(tools.className).toContain("sm:hidden");
   expect(tools.querySelector('[data-testid="drawer-theme"]')).not.toBeNull();
+  expect(tools.querySelector('[data-testid="drawer-keep-awake"]')).not.toBeNull();
   expect(tools.querySelector('[data-testid="drawer-quick-open"]')).not.toBeNull();
 });
 

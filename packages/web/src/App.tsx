@@ -128,6 +128,8 @@ import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenR
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
+import { useKeepAwake } from "./keep-awake.ts";
+import { KeepAwakeButton } from "./keep-awake-button.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
@@ -260,6 +262,9 @@ export function App() {
   const liveAt = useRef(new Map<string, number>());
   // Signal only (GH-159, one setting for the browser since GH-205), set in Settings.
   const signalOnly = useSignalOnly();
+  // Keep screen awake (GH-361): "running" = a listed, unarchived session that works or waits for the user.
+  const anyRunning = useMemo(() => list.some((s) => !s.archived && ["running", "needs_input"].includes(shownState(views[s.id]) ?? s.state)), [list, views]);
+  const awake = useKeepAwake(anyRunning);
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
   const changeGrouping = (g: TabGrouping) => {
     setGrouping(g);
@@ -1361,6 +1366,7 @@ export function App() {
     focusNotifications: notify.cards.length ? () => setCardFocus((n) => n + 1) : undefined,
     nextWaiting: waiting.length ? () => (open(FOCUS_TAB), setFocusSel(nextWaiting(waiting, activeId === FOCUS_TAB ? focusSel ?? waiting[0]?.part.id : undefined)?.part.id)) : undefined,
     toggleSignalOnly: () => saveSignalOnly(!loadSignalOnly()),
+    toggleKeepAwake: awake.supported ? awake.toggle : undefined,
     openSettings: () => setSettingsOpen(true),
     startGuide: () => startGuide("palette"),
     resetKeyTips: () => (resetAllKeyTips(), setToast("Shortcut tips reset.")),
@@ -1534,6 +1540,7 @@ export function App() {
               <SearchIcon />
             </IconButton>
           )}
+          <KeepAwakeButton className="max-sm:hidden" status={awake.status} error={awake.error} onToggle={awake.toggle} testId="keep-awake" />
           <IconButton className="max-sm:hidden" label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
             <ThemeIcon />
           </IconButton>
@@ -1654,6 +1661,7 @@ export function App() {
                 <SearchIcon />
               </IconButton>
             )}
+            <KeepAwakeButton status={awake.status} error={awake.error} onToggle={awake.toggle} testId="drawer-keep-awake" />
             <IconButton label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="drawer-theme">
               <ThemeIcon />
             </IconButton>

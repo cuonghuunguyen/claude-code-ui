@@ -226,6 +226,13 @@ it("Toggle signal only runs from the palette and Mod+Alt+S, with or without a se
   expect(appCommands(ctx({ toggleSignalOnly, session: undefined })).some((i) => i.id === "signal.toggle")).toBe(true);
 });
 
+it("Toggle keep screen awake is listed only where App offers it, and runs it", () => {
+  const toggleKeepAwake = vi.fn();
+  expect(appCommands(ctx()).some((i) => i.id === "awake.toggle")).toBe(false);
+  run(ctx({ toggleKeepAwake }), "awake.toggle");
+  expect(toggleKeepAwake).toHaveBeenCalledOnce();
+});
+
 it("Open Focus is always listed when App offers it; Next waiting request only while something waits, on Ctrl+Alt+Down", () => {
   const openFocus = vi.fn();
   const nextWaiting = vi.fn();

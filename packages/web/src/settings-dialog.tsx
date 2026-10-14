@@ -8,6 +8,7 @@ import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { Switch } from "./plugins-dialog.tsx";
+import { saveKeepAwake, useKeepAwakeSetting, wakeLockSupported } from "./keep-awake.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
 import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
@@ -85,6 +86,39 @@ function TimelineSection() {
           </span>
         </div>
         <Switch on={on} label="Signal only" held={false} onToggle={saveSignalOnly} title={on ? "Show every tool call" : "Fold tool calls into one line"} describedBy="settings-timeline-signal-hint" testId="settings-signal-only" />
+      </div>
+    </section>
+  );
+}
+
+/** The Keep screen awake rows (GH-361): this browser only; the titlebar button and the palette command change the same setting. */
+function ScreenSection() {
+  const s = useKeepAwakeSetting();
+  const supported = wakeLockSupported();
+  return (
+    <section aria-labelledby="settings-screen" className="flex flex-col" data-testid="settings-screen">
+      <h3 id="settings-screen" className="pb-1 font-medium text-[13px] text-muted-foreground">
+        Screen
+      </h3>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span className="block text-sm">Keep screen awake</span>
+          <span id="settings-awake-hint" className="block text-muted-foreground text-xs">
+            {supported
+              ? "Keeps this device's screen on while this page is visible. The browser lets it sleep when you switch away and it turns back on when you return. Kept in this browser."
+              : "Not available in this browser here: it needs HTTPS or localhost. The choice is kept and applies when this browser opens the app over HTTPS or localhost."}
+          </span>
+        </div>
+        <Switch on={s.on} label="Keep screen awake" held={!supported} onToggle={(on) => saveKeepAwake({ ...s, on })} title="Keep screen awake" describedBy="settings-awake-hint" testId="settings-keep-awake" />
+      </div>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span className="block text-sm">Only while a session is running</span>
+          <span id="settings-awake-running-hint" className="block text-muted-foreground text-xs">
+            Holds the screen on only while a session is running or waits for you.
+          </span>
+        </div>
+        <Switch on={s.onlyRunning} label="Only while a session is running" held={!s.on || !supported} onToggle={(onlyRunning) => saveKeepAwake({ ...s, onlyRunning })} title="Only while a session is running" describedBy="settings-awake-running-hint" testId="settings-keep-awake-running" />
       </div>
     </section>
   );
@@ -315,6 +349,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         </section>
       ),
     },
+    { id: "screen", title: "Screen", body: <ScreenSection /> },
     {
       id: "changes",
       title: "Changes",
