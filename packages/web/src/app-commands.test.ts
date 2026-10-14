@@ -381,3 +381,14 @@ it("GH-359 tab.pin is listed only for a session tab, reads Pin or Unpin tab, has
   run(ctx({ togglePin }), "tab.pin");
   expect(togglePin).toHaveBeenCalled();
 });
+
+it("GH-356 split commands are listed only when given, run their handler; Focus next split shows its default key and the others have none", () => {
+  const ids = ["split.right", "split.down", "split.next", "split.prev", "split.join"];
+  expect(appCommands(ctx()).some((i) => ids.includes(i.id))).toBe(false);
+  const over = { splitRight: vi.fn(), splitDown: vi.fn(), splitNext: vi.fn(), splitPrev: vi.fn(), joinSplits: vi.fn() };
+  const items = appCommands(ctx(over));
+  expect(ids.map((id) => items.find((i) => i.id === id)?.title)).toEqual(["Split right", "Split down", "Focus next split", "Focus previous split", "Join splits"]);
+  expect(ids.map((id) => items.find((i) => i.id === id)?.keys)).toEqual([undefined, undefined, "mod+alt+arrowup", undefined, undefined]);
+  ids.forEach((id) => run(ctx(over), id));
+  expect(Object.values(over).map((f) => f.mock.calls.length)).toEqual([1, 1, 1, 1, 1]);
+});

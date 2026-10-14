@@ -130,6 +130,7 @@ import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGr
 import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, movePane, resetLayout, saveLayout, useLayout, useMinWidth } from "./layout.ts";
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
+import { type Split, type SplitDir, canSplit as canSplitTabs, followSplit, isSession, loadSplit, nextAfterClose, nextSplit, ratioFor, saveSplit, splitTo } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -376,6 +377,18 @@ export function App() {
   // GH-355: wide screens place each pane in the side or the bottom panel; narrow screens keep the pane switcher.
   const layout = useLayout();
   const lg = useMinWidth(1024);
+  // Split view (GH-356): two session tabs side by side or stacked; `activeId` stays the current session and the active split shows it.
+  const [splitRaw, setSplitRaw] = useState(loadSplit);
+  const split = followSplit(splitRaw, activeId, tabs);
+  useEffect(() => {
+    if (split !== splitRaw) setSplitRaw(split);
+    saveSplit(split);
+  }, [split]);
+  const splitRef = useRef(split);
+  splitRef.current = split;
+  /** Wide, a split exists and a session shows (the New session tab and Focus page suspend it). Both splits are on screen: they count as shown. */
+  const splitOn = lg && !!split && isSession(activeId);
+  const visibleIds = splitOn ? split.ids : [activeId];
   // A mention from "Send selection to Claude", a quote (`>`) or a command, waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
@@ -420,6 +433,10 @@ export function App() {
   tabsRef.current = tabs;
   const activeRef = useRef(activeId);
   activeRef.current = activeId;
+  const runRef = useRef(run);
+  runRef.current = run;
+  const splitOnRef = useRef(false);
+  splitOnRef.current = splitOn;
   const listRef = useRef(list);
   listRef.current = list;
   /** Prompts sent while a session's /clear runs: they go to the session the tab follows to (or back to this one when the /clear ends without), keyed by the session they were typed in. */
@@ -679,6 +696,12 @@ export function App() {
   /** Opens or focuses a tab; `undefined` shows no tab. Only a session tab goes into the URL hash. */
   function open(id: string | undefined, keepHash = false) {
     setError(undefined);
+    // A tab shown in the other split is revealed there (VS Code), with its subagent view.
+    const sp = splitRef.current;
+    if (id && sp && splitOnRef.current && id !== activeRef.current && sp.ids.includes(id)) {
+      setDrawer(false);
+      return focusSplit(id, keepHash);
+    }
     setActiveId(id);
     setDrawer(false);
     if (!keepHash) setRun(undefined);
@@ -695,6 +718,51 @@ export function App() {
     // A session the list only follows in the background is held now (a tab shows it).
     const add = !viewsRef.current[id] || !listRef.current.some((s) => s.id === id);
     if (id !== NEW_TAB && (add || !held.current.has(id))) void subscribe(id, add);
+  }
+
+  /** Makes the split showing `id` the active one; each split keeps its own subagent view. Not `open()`: the tab is open already. */
+  function focusSplit(id: string, keepHash = false) {
+    const s = splitRef.current;
+    if (!s || !s.ids.includes(id) || id === activeRef.current) return;
+    setError(undefined);
+    const cur = activeRef.current;
+    const runs: Record<string, string> = { ...s.runs };
+    const target = runs[id];
+    delete runs[id];
+    if (cur) delete runs[cur];
+    if (cur && runRef.current) runs[cur] = runRef.current;
+    setSplitRaw({ ...s, at: s.ids.indexOf(id), runs: Object.keys(runs).length ? runs : undefined });
+    setActiveId(id);
+    setRun(target);
+    if (!keepHash) history.replaceState(null, "", target ? runHash(id, target) : tabHash(id));
+  }
+
+  /** Split right / Split down: `t` goes to a new split in the direction, focus moves there. */
+  function splitTab(t: string, dir: SplitDir, before = false) {
+    const r = splitTo(splitRef.current, tabsRef.current, activeRef.current, t, dir, before);
+    if (!r) return;
+    const cur = activeRef.current;
+    const runs: Record<string, string> = { ...r.split.runs };
+    let target: string | undefined = runRef.current;
+    if (cur !== t) {
+      target = runs[t];
+      delete runs[t];
+      if (cur) delete runs[cur];
+      if (cur && runRef.current) runs[cur] = runRef.current;
+    }
+    setSplitRaw({ ...r.split, runs: Object.keys(runs).length ? runs : undefined });
+    setError(undefined);
+    setDrawer(false);
+    setActiveId(r.active);
+    setRun(target);
+    history.replaceState(null, "", target ? runHash(t, target) : tabHash(t));
+    focusShownPrompt(t);
+  }
+
+  /** Join splits: one session shows again, the active one. */
+  function joinSplits() {
+    saveSplit(undefined);
+    setSplitRaw(undefined);
   }
 
   /** Opens the subagent view of `id` in the active session tab, or its session view; a history entry each, so browser Back returns. */
@@ -725,9 +793,12 @@ export function App() {
   // These read the latest tabs and active tab (refs): a close can run from a timer of an earlier render (a swipe's slide-out), after another close.
   function close(id: string) {
     const r = closeTab(tabsRef.current, id, activeRef.current);
+    // Closing the active split's tab: the next tab is one outside the splits, else the other split's tab (the split ends).
+    const sp = splitRef.current;
+    const next = sp && splitOnRef.current && id === activeRef.current ? nextAfterClose(tabsRef.current, id, sp) : r.active;
     setTabs(r.tabs);
     release(id);
-    activate(r.active);
+    activate(next);
   }
 
   /** A close from the phone switcher (swipe or Delete on a row): the toast offers Undo for that exact tab; the New session tab has nothing to reopen. */
@@ -825,6 +896,7 @@ export function App() {
     else if (c === "copyId") copyText(id, "session ID");
     else if (c === "copyCwd") copyText(sessionOf(id)?.cwd, "cwd path");
     else if (c === "reveal") revealTab(id);
+    else if (c === "splitRight" || c === "splitDown") splitTab(id, c === "splitRight" ? "row" : "col");
   }
 
   /** Pin or unpin a session tab: it moves to the end of its group's pinned block, or right after the block. */
@@ -935,12 +1007,19 @@ export function App() {
   }, [status, focused, activeId, coveredKey]);
 
   const activeView = activeId ? views[activeId] : undefined;
+  // Every session on screen (both splits) counts as seen.
+  const seenKey = visibleIds.map((id) => `${id}:${id ? views[id]?.lastSeq : ""}`).join();
   useEffect(() => {
-    if (!focused || !activeId || !activeView || !isUnread(activeView, seen[activeId])) return;
-    const next = { ...seen, [activeId]: seenNow(activeView) };
+    if (!focused) return;
+    let next = seen;
+    for (const id of visibleIds) {
+      const v = id ? views[id] : undefined;
+      if (id && v && isUnread(v, next[id])) next = { ...next, [id]: seenNow(v) };
+    }
+    if (next === seen) return;
     setSeen(next);
     saveSeen(next);
-  }, [focused, activeId, activeView?.lastSeq]);
+  }, [focused, seenKey]);
 
   useEffect(() => saveTabs(tabs), [tabs]);
   useEffect(() => savePinned(pinned), [pinned]);
@@ -962,7 +1041,7 @@ export function App() {
   }, [list, views]);
   const waitingN = waitingCount(waiting);
   /** A permission request or question of the shown session, or a file opened from search, needs the session view or side panel: restore. */
-  const needKey = waiting.filter((x) => x.sessionId === activeId).map((x) => x.part.id).join();
+  const needKey = waiting.filter((x) => visibleIds.includes(x.sessionId)).map((x) => x.part.id).join();
   useEffect(() => void (needKey && setBottomMax(false)), [needKey]);
   useEffect(() => void (openFile && setBottomMax(false)), [openFile]);
   const everWaiting = useRef(false);
@@ -977,7 +1056,7 @@ export function App() {
   const [cardNote, setCardNote] = useState<{ card: Card; hint: boolean; at?: number }>();
   const hinted = useRef(false);
   const notify = useNotifications(
-    { enabled: inApp, focused, focusPage: activeId === FOCUS_TAB, shown: (id) => id === activeId, list, views },
+    { enabled: inApp, focused, focusPage: activeId === FOCUS_TAB, shown: (id) => visibleIds.includes(id), list, views },
     (card: Card) => {
       // Said once per page load: how to reach the cards without the mouse. The text itself is made at render, with the session's title as the card shows it.
       const hint = !hinted.current && !!specOf("notifications.focus");
@@ -1215,6 +1294,8 @@ export function App() {
   const viewOf = (id: string) => views[id] ?? heirViews[id] ?? (optimistic[id]?.length ? EMPTY_VIEW : undefined);
   const view = activeId ? viewOf(activeId) : undefined;
   const shown = active && view ? active : undefined;
+  /** Both splits render (a loading session shows alone until its view is there). */
+  const splitShown = splitOn && split.ids.every((id) => !!viewOf(id) && !!sessionOf(id));
   // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
   useEffect(() => {
     if (!shown || refocus.current !== shown.id) return;
@@ -1407,7 +1488,7 @@ export function App() {
   const focusShownPrompt = (id = activeId) => {
     if (id !== NEW_TAB) showSession();
     // After the render: only the shown tab's prompt box has a layout box.
-    const prompts = () => [...document.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"], textarea[aria-label="First prompt"]')];
+    const prompts = () => [...(document.querySelector('[data-testid="split"][data-active]') ?? document).querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"], textarea[aria-label="First prompt"]')];
     // A session that just opened (Reopen closed tab, Go to tab N after a reload) has its prompt box once its view loaded: wait for it, up to 1 s.
     const focus = (frames: number) => {
       const el = id === NEW_TAB ? newPrompt.current : prompts().find((el) => el.offsetParent);
@@ -1438,6 +1519,11 @@ export function App() {
     newWorktree: canWorktree ? () => (setWtName(""), setNaming(gitProject)) : undefined,
     tabs,
     activeId,
+    splitRight: lg && isSession(activeId) && canSplitTabs(tabs) ? () => splitTab(activeId!, "row") : undefined,
+    splitDown: lg && isSession(activeId) && canSplitTabs(tabs) ? () => splitTab(activeId!, "col") : undefined,
+    splitNext: splitShown ? () => (focusSplit(nextSplit(split!, 1)), focusShownPrompt()) : undefined,
+    splitPrev: splitShown ? () => (focusSplit(nextSplit(split!, -1)), focusShownPrompt()) : undefined,
+    joinSplits: split ? joinSplits : undefined,
     sessions: list,
     session: draftShown
       ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: draftModes, running: false, prompts: [], draft: true }
@@ -1741,6 +1827,8 @@ export function App() {
             onTabCommand={tabCommand}
             canReopen={!!reopen}
             pinned={pinnedSet}
+            canSplit={lg ? canSplitTabs(tabs) : undefined}
+            splitShown={splitShown ? { id: split!.ids[1 - split!.at]!, dir: split!.dir } : undefined}
             onNew={() => newSession()}
             home={sidebar}
             onHome={() => setSidebar((v) => !v)}
@@ -1942,7 +2030,11 @@ export function App() {
                 </>
               )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
-              <div className={`${card} flex-1 ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}>
+              <div
+                className={`${splitShown ? `flex min-h-0 min-w-0 flex-1 ${split!.dir === "row" ? "flex-row" : "flex-col"}` : `${card} flex-1`} ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}
+                data-testid="session-area"
+                data-split={splitShown ? split!.dir : undefined}
+              >
                 <ViewerContext value={openViewer}>
                 <QuoteContext value={setInsert}>
                 {tabs.map((id) => {
@@ -1952,15 +2044,29 @@ export function App() {
                   const v = viewOf(id);
                   if (!s || !v) return null;
                   return (
-                    <Activity key={tabKeys[id] ?? id} mode={id === activeId ? "visible" : "hidden"}>
+                    <Activity key={tabKeys[id] ?? id} mode={(splitShown ? split!.ids.includes(id) : id === activeId) ? "visible" : "hidden"}>
+                      <div
+                        className={splitShown && split!.ids.includes(id) ? `${card} ${id === activeId ? "outline outline-1 -outline-offset-1 outline-ring" : ""}` : "flex min-h-0 min-w-0 flex-1 flex-col"}
+                        style={splitShown && split!.ids.includes(id) ? { order: split!.ids[0] === id ? 0 : 2, flex: `${split!.ids[0] === id ? split!.ratio : 1 - split!.ratio} 1 0%` } : undefined}
+                        {...(splitShown && split!.ids.includes(id) && {
+                          role: "group",
+                          "aria-label": `${list.find((l) => l.id === id)?.title || titles[id] || "Untitled"}, split ${split!.ids.indexOf(id) + 1} of 2${id === activeId ? ", active" : ""}`,
+                          "data-testid": "split",
+                          "data-active": id === activeId ? "" : undefined,
+                          onPointerDownCapture: () => focusSplit(id),
+                          onFocusCapture: () => focusSplit(id),
+                        })}
+                      >
                       <SessionTab
+                        // Outside a split every pane is "active": a tab switch re-renders no pane (GH-51).
+                        active={splitShown ? id === activeId : true}
                         scrollKey={scrollKeys[id] ?? 0}
                         insert={id === activeId ? insert : undefined}
                         onInserted={() => setInsert(undefined)}
                         rewindTo={id === activeId ? rewindTo : undefined}
                         revealHit={id === revealHit?.sessionId ? revealHit : undefined}
                         onRevealShown={() => setRevealHit(undefined)}
-                        run={id === activeId ? run : undefined}
+                        run={id === activeId ? run : splitShown ? split!.runs?.[id] : undefined}
                         onOpenRun={(r) => openRun(s.id, r)}
                         links={linksOf(id)}
                         onOpenSession={(sid) => open(sid)}
@@ -2021,11 +2127,13 @@ export function App() {
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
                       />
+                      </div>
                     </Activity>
                   );
                 })}
                 </QuoteContext>
                 </ViewerContext>
+                {splitShown && <SplitResizer split={split!} onResize={(ratio) => setSplitRaw({ ...split!, ratio })} />}
               </div>
               {!(layout.side === "left" && lg) && (
                 <>
@@ -2412,6 +2520,46 @@ function PanelResizer({ width, onResize, side }: { width: number; onResize: (w: 
   );
 }
 
+/** Drag handle (or arrow keys) between the two splits; it takes the gap between them. */
+function SplitResizer({ split, onResize }: { split: Split; onResize: (ratio: number) => void }) {
+  const row = split.dir === "row";
+  const min = row ? 320 : 200;
+  const GAP = 8;
+  const at = (e: { clientX: number; clientY: number }, el: HTMLElement) => {
+    const r = el.parentElement!.getBoundingClientRect();
+    return row ? ratioFor(e.clientX - r.left - GAP / 2, r.width - GAP, min) : ratioFor(e.clientY - r.top - GAP / 2, r.height - GAP, min);
+  };
+  const step = (el: HTMLElement, px: number) => {
+    const r = el.parentElement!.getBoundingClientRect();
+    onResize(ratioFor(split.ratio * ((row ? r.width : r.height) - GAP) + px, (row ? r.width : r.height) - GAP, min));
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation={row ? "vertical" : "horizontal"}
+      aria-label="Resize split"
+      aria-valuenow={Math.round(split.ratio * 100)}
+      aria-valuemin={15}
+      aria-valuemax={85}
+      aria-controls={split.ids[0]}
+      tabIndex={0}
+      className={`shrink-0 touch-none rounded-full hover:bg-primary/30 focus-visible:bg-primary/30 focus-visible:outline-2 focus-visible:outline-ring ${row ? "w-2 cursor-col-resize" : "h-2 cursor-row-resize"}`}
+      style={{ order: 1 }}
+      data-testid="split-resizer"
+      onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
+      onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && onResize(at(e, e.currentTarget))}
+      onDoubleClick={() => onResize(0.5)}
+      onKeyDown={(e) => {
+        const d = (row ? { ArrowLeft: -32, ArrowRight: 32 } : { ArrowUp: -32, ArrowDown: 32 })[e.key as "ArrowLeft"];
+        if (d) return (e.preventDefault(), step(e.currentTarget, d));
+        if (e.key === "Home") (e.preventDefault(), onResize(0.15));
+        else if (e.key === "End") (e.preventDefault(), onResize(0.85));
+        else if (e.key === "Enter") (e.preventDefault(), onResize(0.5));
+      }}
+    />
+  );
+}
+
 /** Drag handle (or arrow keys) on the sessions sidebar's right edge on md and up; it sits in the gap beside the sidebar. */
 function SidebarResizer({ width, onResize }: { width: number; onResize: (w: number) => void }) {
   const clamp = (w: number) => Math.round(Math.max(200, Math.min(w, 560, window.innerWidth / 2)));
@@ -2768,6 +2916,7 @@ function SessionTab(props: ComponentProps<typeof SessionPane>) {
 }
 
 export function SessionPane({
+  active = true,
   place,
   coordinator,
   scrollKey,
@@ -2811,6 +2960,8 @@ export function SessionPane({
   onDialog,
   signalOnly = false,
 }: {
+  /** Split view: only the active split stops its turn on Esc. */
+  active?: boolean;
   scrollKey: number;
   /** Signal only: runs of tool cards fold into one line (GH-159). The browser-wide setting. */
   signalOnly?: boolean;
@@ -2900,11 +3051,11 @@ export function SessionPane({
   const escStops = current ? isRunning(current) && !(stopOf && !stopOf.error) : turnRunning || shellRunning;
   const onEscape = useEffectEvent(() => (current ? stopRun(current.id) : onInterrupt()));
   useEffect(() => {
-    if (!escStops) return;
+    if (!escStops || !active) return;
     const onEsc = (e: globalThis.KeyboardEvent) => e.key === "Escape" && !isImeKey(e) && !e.defaultPrevented && !document.querySelector('[aria-modal="true"]') && onEscape();
     window.addEventListener("keydown", onEsc);
     return () => window.removeEventListener("keydown", onEsc);
-  }, [escStops]);
+  }, [escStops, active]);
   const [rewinding, setRewinding] = useState<string>();
   // Palette Rewind: the timeline scrolls to the message first (it can be outside the rendered window), then its panel opens.
   const [reveal, setReveal] = useState<{ key: string }>();

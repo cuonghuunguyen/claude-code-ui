@@ -43,3 +43,14 @@ it("GH-359 Shift+F10 and the ContextMenu key dispatch contextmenu at the bottom-
   expect(openContextMenuFromKey(key({ key: "F10", shiftKey: true, ctrlKey: true }), el)).toBe(false);
   expect(seen).toHaveBeenCalledTimes(2);
 });
+
+it("GH-356 the split section is last, disabled without a second session, and absent without the split flag or on the New session tab", () => {
+  const last = (x: Parameters<typeof tabMenuSections>[0]) => tabMenuSections(x).at(-1)!;
+  expect(last({ ...all, split: { can: true } }).map((x) => [x.label, x.testId, x.disabled])).toEqual([
+    ["Split right", "tab-menu-splitRight", false],
+    ["Split down", "tab-menu-splitDown", false],
+  ]);
+  expect(last({ ...all, split: { can: false } }).map((x) => x.disabled)).toEqual([true, true]);
+  expect(last(all).map((x) => x.id)).toEqual(["copyId", "copyCwd", "reveal"]);
+  expect(tabMenuSections({ ...all, session: false, split: { can: true } })).toHaveLength(2);
+});

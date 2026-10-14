@@ -40,6 +40,12 @@ export type CommandContext = {
   togglePin?: () => void;
   /** The active tab is pinned: the command reads "Unpin tab". */
   pinned?: boolean;
+  /** Split view (GH-356): each is absent while it does not apply (narrow screen, fewer than two sessions, no split). */
+  splitRight?: () => void;
+  splitDown?: () => void;
+  splitNext?: () => void;
+  splitPrev?: () => void;
+  joinSplits?: () => void;
   quickOpen: () => void;
   toggleSidebar: () => void;
   toggleSidePanel: () => void;
@@ -119,6 +125,11 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.closeRight && cmd("tab.closeRight", "Close tabs to the right", c.closeRight),
     c.closeAll && cmd("tab.closeAll", "Close all tabs", c.closeAll),
     c.togglePin && cmd("tab.pin", c.pinned ? "Unpin tab" : "Pin tab", c.togglePin),
+    c.splitRight && cmd("split.right", "Split right", c.splitRight),
+    c.splitDown && cmd("split.down", "Split down", c.splitDown),
+    c.splitNext && cmd("split.next", "Focus next split", c.splitNext),
+    c.splitPrev && cmd("split.prev", "Focus previous split", c.splitPrev),
+    c.joinSplits && cmd("split.join", "Join splits", c.joinSplits),
     c.canReopen && cmd("tab.reopen", "Reopen closed tab", c.reopenTab),
     // Tab N: only for tabs that exist; found by typing "go to tab".
     ...Array.from({ length: Math.min(8, c.tabs.length) }, (_, i) => cmd(`tab.goto${i + 1}`, `Go to tab ${i + 1}`, () => go(c.tabs[i]!), true)),

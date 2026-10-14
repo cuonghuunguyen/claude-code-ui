@@ -1859,3 +1859,198 @@ describe("GH-359 tab menu commands", () => {
     expect(toast()?.textContent).toContain("Copy failed");
   });
 });
+
+describe("GH-356 split view", () => {
+  const S2 = "22222222-2222-3333-4444-555555555555";
+  const S3 = "33333333-2222-3333-4444-555555555555";
+  const sessions = [session, { ...session, id: S2, title: "Second", cwd: "/p/other" }, { ...session, id: S3, title: "Third" }];
+  const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetParent")!;
+  const splits = () => [...el.querySelectorAll<HTMLElement>('[data-testid="split"]')];
+  const activeSplit = () => el.querySelector<HTMLElement>('[data-testid="split"][data-active]');
+  const labels = () => splits().map((s) => s.getAttribute("aria-label"));
+  const menu = async (id: string) => {
+    await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    return (label: string) => act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === label)!.click());
+  };
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
+  async function remount(hash = S2, tabs = [ID, S2, S3]) {
+    act(() => root.unmount());
+    replies["session.list"] = { sessions, projects: ["/p/demo", "/p/other"] };
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e1", session: sessions.find((s) => s.id === m.sessionId) ?? session });
+    localStorage.setItem("claude-ui.tabs", JSON.stringify(tabs));
+    location.hash = `#${hash}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+  }
+  const splitRight = async (id = S2) => (await menu(id))("Split right");
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get(this: HTMLElement) { return this.closest('[style*="display: none"]') ? null : document.body; } });
+  });
+  afterEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", offsetParent);
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    replies["session.subscribe"] = { logEpoch: "e1", session };
+    sent.length = 0;
+  });
+
+  it("Split right from the tab menu shows both sessions side by side, focuses the new split's prompt and puts it in the hash", async () => {
+    await remount(ID);
+    expect(splits()).toHaveLength(0);
+    await splitRight(S2);
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Second, split 2 of 2, active"]);
+    expect(el.querySelector('[data-testid="session-area"]')!.getAttribute("data-split")).toBe("row");
+    expect(activeSplit()).toBe(splits()[1]);
+    expect(location.hash).toBe(`#${S2}`);
+    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    expect(document.activeElement).toBe(activeSplit()!.querySelector('textarea[aria-label="Prompt"]'));
+    expect(splits().map((s) => s.style.order)).toEqual(["0", "2"]);
+  });
+
+  it("the tab shown in the other split is marked with an icon and text, not by color", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    const mark = el.querySelector(`[data-tab-id="${ID}"] [data-testid="tab-split-mark"]`);
+    expect(mark).not.toBeNull();
+    expect(el.querySelector(`[data-tab-id="${ID}"] [role="tab"]`)!.getAttribute("aria-label")).toContain("shown in split 2");
+    expect(el.querySelector(`[data-tab-id="${S2}"] [data-testid="tab-split-mark"]`)).toBeNull();
+  });
+
+  it("Split down stacks the sessions with a horizontal resizer", async () => {
+    await remount(ID);
+    await (await menu(S2))("Split down");
+    expect(el.querySelector('[data-testid="session-area"]')!.className).toContain("flex-col");
+    expect(el.querySelector('[data-testid="split-resizer"]')!.getAttribute("aria-orientation")).toBe("horizontal");
+  });
+
+  it("clicking the other split makes it active: hash, side panel and tab follow", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await act(async () => void splits()[0]!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    expect(activeSplit()).toBe(splits()[0]);
+    expect(location.hash).toBe(`#${ID}`);
+    expect(el.querySelector(`[data-tab-id="${ID}"]`)!.getAttribute("data-active")).not.toBeNull();
+    expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
+  });
+
+  it("Esc stops only the active split's turn", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    for (const [i, id] of [ID, S2].entries()) await act(async () => emit({ type: "event", sessionId: id, seq: 1 + i, part: { type: "session_state", id: "session_state", state: "running" } }));
+    sent.length = 0;
+    await press({ key: "Escape" });
+    const stops = sent.filter((m) => m.type === "session.interrupt") as unknown as { sessionId: string }[];
+    expect(stops.map((m) => m.sessionId)).toEqual([S2]);
+  });
+
+  it("Focus next split (Ctrl+Alt+ArrowUp) and the prefix key o move the focus between the splits' prompts", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await press({ key: "ArrowUp", code: "ArrowUp", ctrlKey: true, altKey: true });
+    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    expect(activeSplit()).toBe(splits()[0]);
+    expect(document.activeElement).toBe(splits()[0]!.querySelector('textarea[aria-label="Prompt"]'));
+    await press({ key: "a", code: "KeyA", altKey: true });
+    await press({ key: "o", code: "KeyO" });
+    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    expect(activeSplit()).toBe(splits()[1]);
+    expect(document.activeElement).toBe(splits()[1]!.querySelector('textarea[aria-label="Prompt"]'));
+  });
+
+  it("closing the other split's tab ends the split; closing the active split's tab shows the next tab outside the splits", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] button[aria-label^="Close"]`)!.click());
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${S2}`);
+    await splitRight(S2);
+    expect(splits()).toHaveLength(2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] button[aria-label^="Close"]`)!.click());
+    expect(splits()).toHaveLength(0);
+    expect(tabIds()).toEqual([S3]);
+    expect(location.hash).toBe(`#${S3}`);
+  });
+
+  it("closing the active split's tab with no tab outside the splits leaves the other split's tab", async () => {
+    await remount(ID, [ID, S2]);
+    await splitRight(S2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] button[aria-label^="Close"]`)!.click());
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${ID}`);
+  });
+
+  it("the split survives a remount", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Second, split 2 of 2, active"]);
+  });
+
+  it("narrow screens show one session; the split comes back on a wide screen", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    width = 800;
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    expect(splits()).toHaveLength(0);
+    expect(el.querySelector(`[data-tab-id="${S2}"]`)).not.toBeNull();
+    expect(localStorage.getItem("claude-ui.split")).not.toBeNull();
+    await act(async () => void el.querySelector(`[data-tab-id="${ID}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 })));
+    expect([...document.querySelectorAll('[role="menuitem"]')].some((i) => i.textContent === "Split right")).toBe(false);
+  });
+
+  it("the resizer: arrow keys change the ratio, Home and End stop at the limits, Enter resets, and it persists", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    const bar = () => el.querySelector<HTMLElement>('[data-testid="split-resizer"]')!;
+    expect(bar().getAttribute("aria-valuenow")).toBe("50");
+    expect(splits()[0]!.style.flex).toBe("0.5 1 0%");
+    await press({ key: "Home" }, bar());
+    expect(bar().getAttribute("aria-valuenow")).toBe("15");
+    await press({ key: "End" }, bar());
+    expect(bar().getAttribute("aria-valuenow")).toBe("85");
+    expect(JSON.parse(localStorage.getItem("claude-ui.split")!).ratio).toBe(0.85);
+    await press({ key: "Enter" }, bar());
+    expect(bar().getAttribute("aria-valuenow")).toBe("50");
+  });
+
+  it("the New session tab suspends the split; the next session tab brings it back", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-new"]')!.click());
+    expect(location.hash).toBe("#new");
+    expect(splits()).toHaveLength(0);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
+    expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
+  });
+
+  it("Join splits (palette) shows the active session alone", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Join splits"))!.click());
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${S2}`);
+    expect(localStorage.getItem("claude-ui.split")).toBeNull();
+  });
+
+  it("Split right is disabled with one session tab and the palette does not list it", async () => {
+    await remount(ID, [ID]);
+    await menu(ID);
+    expect(document.querySelector<HTMLElement>('[data-testid="tab-menu-splitRight"]')!.hasAttribute("data-disabled")).toBe(true);
+  });
+
+  it("Split right from the palette splits the active tab", async () => {
+    await remount(S2);
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Split right"))!.click());
+    expect(labels()).toHaveLength(2);
+    expect(activeSplit()!.getAttribute("aria-label")).toContain("Second");
+  });
+});

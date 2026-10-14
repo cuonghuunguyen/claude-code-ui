@@ -6,7 +6,7 @@
 import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
-import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
@@ -105,6 +105,8 @@ export function TabsBar({
   onTabCommand,
   canReopen,
   pinned,
+  canSplit,
+  splitShown,
   onNew,
   home,
   onHome,
@@ -143,6 +145,10 @@ export function TabsBar({
   canReopen?: boolean;
   /** Pinned session tabs (GH-359): first in their group, icon only, no close button, skipped by the bulk closes; they never cross the unpinned ones. */
   pinned?: ReadonlySet<string>;
+  /** Split view (GH-356): the tab menu offers Split right / down (disabled while `canSplit` is false); absent (narrow screen): it does not. */
+  canSplit?: boolean;
+  /** The tab shown in the split that is not active: marked with the split's icon. */
+  splitShown?: { id: string; dir: "row" | "col" };
   onNew: () => void;
   /** Sidebar toggle (md and up), OpenCode's legacy-layout `sidebar` icon: aria-pressed while the sessions sidebar shows, no pressed fill.
    * Not OpenCode's `grid-plus`: that one opens its Home page, this one only shows and hides the sidebar. */
@@ -345,6 +351,8 @@ export function TabsBar({
                     canRight={tabs.slice(i + 1).some((x) => !pins.has(x))}
                     canAll={tabs.some((x) => !pins.has(x))}
                     canReopen={!!canReopen}
+                    canSplit={canSplit}
+                    splitDir={splitShown?.id === id ? splitShown.dir : undefined}
                     onCommand={onTabCommand ? (c) => tabCommand(id, c) : undefined}
                     renaming={renaming === id}
                     onAction={(a) => onAction(id, a)}
@@ -878,6 +886,8 @@ function Tab({
   canRight,
   canAll,
   canReopen,
+  canSplit,
+  splitDir,
   onCommand,
   renaming,
   onAction,
@@ -903,6 +913,9 @@ function Tab({
   canRight: boolean;
   canAll: boolean;
   canReopen: boolean;
+  canSplit?: boolean;
+  /** This tab is the non-active split's: row = side by side, col = stacked. */
+  splitDir?: "row" | "col";
   /** The menu's commands beyond Move and Close tab; absent: those items are not shown. */
   onCommand?: (c: TabCommand) => void;
   renaming: boolean;
@@ -973,7 +986,7 @@ function Tab({
             role="tab"
             aria-selected={active}
             tabIndex={focusable ? 0 : -1}
-            aria-label={pinned || STATUS_LABEL[s] ? [t.title, pinned && "pinned", STATUS_LABEL[s]].filter(Boolean).join(", ") : undefined}
+            aria-label={pinned || splitDir || STATUS_LABEL[s] ? [t.title, pinned && "pinned", splitDir && "shown in split 2", STATUS_LABEL[s]].filter(Boolean).join(", ") : undefined}
             className={cn(
               "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               pinned ? "justify-center px-0" : "pr-7 pl-1.5",
@@ -985,6 +998,7 @@ function Tab({
             onDoubleClick={() => session && t.transcript !== false && onAction("rename")}
           >
             <TabIcon s={s} cwd={t.cwd} />
+            {splitDir && !pinned && (splitDir === "row" ? <Columns2Icon aria-hidden className="size-3 shrink-0 text-muted-foreground" data-testid="tab-split-mark" /> : <Rows2Icon aria-hidden className="size-3 shrink-0 text-muted-foreground" data-testid="tab-split-mark" />)}
             {!pinned && (t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate leading-4">{t.title}</span>)}
           </button>
         )}
@@ -1007,7 +1021,7 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            {tabMenuSections({ session, pinned: session ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd })
+            {tabMenuSections({ session, pinned: session ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit } })
               // Without onCommand: Move and Close tab only.
               .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
               .filter((sec) => sec.length)
