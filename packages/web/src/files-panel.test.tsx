@@ -493,3 +493,73 @@ it("a slow fs.read shows Loading file… until it answers", async () => {
   vi.useRealTimers();
   act(() => t.root.render(null));
 });
+
+const MD_DOC = "# Title\n\nsee [next](./next.md) and `src/c.ts:2`\n";
+const mdPanel = () => treePanel({ read: (path) => ({ content: path.endsWith(".md") ? MD_DOC : "const a = 1;", mtime: 1 }) });
+
+it("markdown tab: Source / Preview / Split (aria-pressed), the preview renders the draft live, the choice is kept in localStorage; a non-markdown file has no control", async () => {
+  localStorage.clear();
+  const t = mdPanel();
+  await t.show({ openPath: "/p/docs/guide.md" });
+  const btn = (m: string) => t.el.querySelector<HTMLElement>(`[data-testid=md-view-${m}]`)!;
+  expect(t.el.querySelector("[role=group][aria-label='Markdown view']")).not.toBeNull();
+  expect(btn("source").getAttribute("aria-pressed")).toBe("true");
+  expect(t.el.querySelector("[data-testid=md-preview]")).toBeNull();
+  await t.click(btn("preview"));
+  expect(btn("preview").getAttribute("aria-pressed")).toBe("true");
+  expect(localStorage.getItem("claude-ui.markdown-view")).toBe("preview");
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  const pane = t.el.querySelector<HTMLElement>("[data-testid=md-preview]")!;
+  expect(pane.getAttribute("aria-label")).toBe("Markdown preview");
+  expect(pane.tabIndex).toBe(0);
+  expect(pane.querySelector("h1")!.textContent).toBe("Title");
+  // The source stays mounted (undo history, selection), hidden.
+  expect(t.el.querySelector("[data-testid=code-editor]")!.parentElement!.className).toContain("hidden");
+  await t.click(btn("split"));
+  expect(t.el.querySelector("[data-testid=code-editor]")!.parentElement!.className).not.toContain("hidden");
+  const v = await t.view();
+  await act(async () => v.dispatch({ changes: { from: 0, to: 7, insert: "# Changed" } }));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  expect(t.el.querySelector("[data-testid=md-preview] h1")!.textContent).toBe("Changed");
+  await t.show({ openPath: undefined });
+  await t.show({ openPath: "/p/a.ts" });
+  expect(t.el.querySelector("[aria-label='Markdown view']")).toBeNull();
+  expect(t.el.querySelector("[data-testid=md-preview]")).toBeNull();
+  act(() => t.root.render(null));
+  localStorage.clear();
+});
+
+it("markdown tab below md: no Split button, a stored Split shows the Preview", async () => {
+  localStorage.setItem("claude-ui.markdown-view", "split");
+  const original = window.matchMedia;
+  window.matchMedia = ((query: string) => ({ matches: true, media: query, addEventListener() {}, removeEventListener() {} })) as never;
+  const t = mdPanel();
+  await t.show({ openPath: "/p/docs/guide.md" });
+  expect(t.el.querySelector("[data-testid=md-view-split]")).toBeNull();
+  expect(t.el.querySelector("[data-testid=md-view-preview]")!.getAttribute("aria-pressed")).toBe("true");
+  expect(t.el.querySelector("[data-testid=md-view-preview]")!.className).toContain("max-md:h-11");
+  expect(t.el.querySelector("[data-testid=md-preview]")).not.toBeNull();
+  window.matchMedia = original;
+  act(() => t.root.render(null));
+  localStorage.clear();
+});
+
+it("a link and a path in the markdown preview open that file in a tab, resolved from the markdown file's folder; an open at a line shows the source", async () => {
+  localStorage.setItem("claude-ui.markdown-view", "preview");
+  const t = mdPanel();
+  await t.show({ openPath: "/p/docs/guide.md" });
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  const buttons = [...t.el.querySelectorAll<HTMLButtonElement>("[data-testid=md-preview] button[title='Open in Files tab']")];
+  expect(buttons.map((b) => b.textContent)).toEqual(["next", "src/c.ts:2"]);
+  await act(async () => buttons[0]!.click());
+  expect(t.request).toHaveBeenCalledWith({ type: "fs.read", path: "/p/docs/next.md" });
+  expect(t.tabs().map((x) => x.textContent)).toEqual(["next.md×"]);
+  // A chat link with a line shows the source of a markdown file, although Preview is chosen.
+  await t.show({ openPath: undefined });
+  await t.show({ openPath: "/p/docs/guide.md", openLine: 3 });
+  expect(t.el.querySelector("[data-testid=md-view-source]")!.getAttribute("aria-pressed")).toBe("true");
+  expect(t.el.querySelector("[data-testid=md-preview]")).toBeNull();
+  expect(localStorage.getItem("claude-ui.markdown-view")).toBe("preview");
+  act(() => t.root.render(null));
+  localStorage.clear();
+});

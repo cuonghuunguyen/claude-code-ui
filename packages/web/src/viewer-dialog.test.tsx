@@ -44,8 +44,8 @@ function fakeClient(handler: (m: Req) => unknown = (m) => (m.type === "fs.read" 
 }
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 const call = (tool: string, input: unknown): ToolCall => ({ type: "tool_call", id: "t1", toolUseId: "t1", tool, input, status: "done" });
-const dialog = (p: { target?: ViewerTarget; client?: ReturnType<typeof fakeClient>; onClose?: () => void; opener?: HTMLElement | null; sessionId?: string; view?: ReturnType<typeof emptySession> }) => (
-  <ViewerDialog target={p.target} client={p.client ?? fakeClient()} cwd="/w" view={p.view} sessionId={p.sessionId} opener={p.opener} onClose={p.onClose ?? (() => {})} onOpenInEditor={() => {}} />
+const dialog = (p: { target?: ViewerTarget; client?: ReturnType<typeof fakeClient>; onClose?: () => void; opener?: HTMLElement | null; sessionId?: string; view?: ReturnType<typeof emptySession>; onOpenInEditor?: (path: string, line?: number) => void }) => (
+  <ViewerDialog target={p.target} client={p.client ?? fakeClient()} cwd="/w" view={p.view} sessionId={p.sessionId} opener={p.opener} onClose={p.onClose ?? (() => {})} onOpenInEditor={p.onOpenInEditor ?? (() => {})} />
 );
 const open = async (p: Parameters<typeof dialog>[0]) => {
   await act(async () => root.render(dialog(p)));
@@ -224,4 +224,16 @@ it("useOpenViewer keeps one identity across renders and opens for the latest sho
   const btn = document.createElement("button");
   seen[0]!({ kind: "changes" }, btn);
   expect(set).toHaveBeenCalledWith({ target: { kind: "changes" }, sessionId: "b", cwd: "/b", opener: btn });
+});
+
+it("Open in Files tab on a file target calls onOpenInEditor with the path and the line; on a diff target with the edited file", async () => {
+  const onOpenInEditor = vi.fn();
+  await open({ target: { kind: "file", path: "/w/a.ts", line: 40 }, onOpenInEditor });
+  expect(q("[data-testid=viewer-open-editor]")!.getAttribute("aria-label")).toBe("Open in Files tab");
+  expect(q("[data-testid=viewer-open-editor]")!.className).toContain("max-md:size-11");
+  await click("[data-testid=viewer-open-editor]");
+  expect(onOpenInEditor).toHaveBeenLastCalledWith("/w/a.ts", 40);
+  await open({ target: { kind: "diff", call: call("Edit", { file_path: "/w/b.ts", old_string: "a", new_string: "b" }) }, onOpenInEditor });
+  await click("[data-testid=viewer-open-editor]");
+  expect(onOpenInEditor).toHaveBeenLastCalledWith("/w/b.ts", undefined);
 });

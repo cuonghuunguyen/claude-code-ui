@@ -1,5 +1,5 @@
 // File tree and CodeMirror editor tabs (docs/spec.md "Layout", "Editor"). Files are read and saved through the daemon.
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { basicSetup, EditorView } from "codemirror";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { gotoLine } from "@codemirror/search";
@@ -11,14 +11,17 @@ import { languages } from "@codemirror/language-data";
 import type { FsMediaResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
 import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, LocateFixedIcon, RotateCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { MessageResponse } from "@/components/ai-elements/message";
+import { useNarrow } from "@/lib/use-narrow.ts";
 import type { connect, ConnectionStatus, RequestError } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
 import { baseName, inDir, relPath } from "./paths.ts";
 import { MediaView } from "./media-view.tsx";
 import { FileIcon } from "./file-icon.tsx";
+import { FILE_LINK_PROPS, FileBaseContext, FileLinkContext } from "./file-links.tsx";
 import { FileTree, type FileTreeHandle, type OpenOptions } from "./file-tree.tsx";
-import { diskChanged, docText, isDirty, lineBreaks, mediaKind, opened, openedMedia, pin, placeTab, reload, readFailure, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
+import { diskChanged, docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, opened, openedMedia, pin, placeTab, reload, readFailure, replaceDoc, saveBase, saved, saveMdView, selectionMention, type MdView, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -65,6 +68,10 @@ export function FilesPanel({
   const [gitNudge, setGitNudge] = useState(0);
   const [filtering, setFiltering] = useState(false);
   const tree = useRef<FileTreeHandle>(undefined);
+  const [mdView, setMdView] = useState<MdView>(loadMdView);
+  /** A markdown file opened at a line shows its source for that open, whatever view is chosen (not stored). */
+  const [sourceOnly, setSourceOnly] = useState<string>();
+  const narrow = useNarrow();
   const [error, setError] = useState<string>();
   /** The last opened file that cannot be shown (binary, too large, not UTF-8); it replaces the editor until a tab is chosen. */
   const [notice, setNotice] = useState<{ path: string; text: string; hint?: string }>();
@@ -127,6 +134,7 @@ export function FilesPanel({
       }
     }
     setActivePath(path);
+    if (opts.line && isMarkdown(path)) setSourceOnly(path);
     if (opts.line) setGoto((g) => ({ path, line: opts.line!, key: (g?.key ?? 0) + 1 }));
     if (opts.focusEditor) requestAnimationFrame(() => editor.current?.focus());
   }
@@ -190,8 +198,17 @@ export function FilesPanel({
     [client],
   );
 
+  const openRef = useRef(open);
+  openRef.current = open;
+  const openLink = useCallback((path: string, line?: number) => void openRef.current(path, { line }), []);
   const shown = paths.filter((p) => inDir(p, cwd));
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
+  const md = !!active && !active.media && isMarkdown(active.path);
+  /** Split needs room: below md it shows Preview. */
+  const view: MdView = !md ? "source" : sourceOnly === active!.path ? "source" : mdView === "split" && narrow ? "preview" : mdView;
+  const previewDoc = useDeferredValue(active?.draft ?? "");
+  const previewBase = useMemo(() => ({ base: active ? active.path.slice(0, Math.max(active.path.length - baseName(active.path).length - 1, 1)) : cwd, root: cwd }), [active?.path, cwd]);
+  useEffect(() => editor.current?.requestMeasure(), [view]);
   const refused = notice ?? (active?.notice ? { path: active.path, text: active.notice, hint: active.noticeHint } : undefined);
 
   /** Breadcrumb folder: show the tree, then reveal the folder in it. */
@@ -354,6 +371,23 @@ export function FilesPanel({
             <>
           <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1 text-xs">
             <Breadcrumb path={active.path} cwd={cwd} onFolder={revealFolder} />
+            {md && (
+              <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Markdown view">
+                {(narrow ? (["source", "preview"] as const) : (["source", "preview", "split"] as const)).map((m) => (
+                  <Button
+                    key={m}
+                    size="sm"
+                    variant="ghost"
+                    aria-pressed={view === m}
+                    className={`max-md:h-11 pointer-coarse:h-11 ${view === m ? "bg-card shadow-xs hover:bg-card" : ""}`}
+                    onClick={() => (setSourceOnly(undefined), setMdView(m), saveMdView(m))}
+                    data-testid={`md-view-${m}`}
+                  >
+                    {m === "source" ? "Source" : m === "preview" ? "Preview" : "Split"}
+                  </Button>
+                ))}
+              </div>
+            )}
             {mediaKind(active.path) === "svg" && (
               <Button size="xs" variant="outline" disabled={isDirty(active)} onClick={() => void switchView(active.path, false)} className="max-md:h-11 pointer-coarse:h-11">
                 Show preview
@@ -375,6 +409,8 @@ export function FilesPanel({
               Save
             </Button>
           </div>
+          <div className="flex min-h-0 flex-1">
+            <div className={`min-h-0 min-w-0 flex-1 flex-col ${view === "preview" ? "hidden" : "flex"}`}>
           <CodeEditor
             key={active.path}
             path={active.path}
@@ -386,6 +422,24 @@ export function FilesPanel({
             onGoto={() => setGoto(undefined)}
             onSave={() => void save(active.path)}
           />
+            </div>
+            {md && view !== "source" && (
+              <div
+                tabIndex={0}
+                aria-label="Markdown preview"
+                data-testid="md-preview"
+                className={`min-h-0 min-w-0 flex-1 overflow-auto px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${view === "split" ? "border-l" : ""}`}
+              >
+                <FileBaseContext value={previewBase}>
+                  <FileLinkContext value={openLink}>
+                    <MessageResponse mode="static" {...FILE_LINK_PROPS}>
+                      {previewDoc}
+                    </MessageResponse>
+                  </FileLinkContext>
+                </FileBaseContext>
+              </div>
+            )}
+          </div>
             </>
           )}
         </div>

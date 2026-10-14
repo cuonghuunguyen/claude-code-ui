@@ -41,6 +41,28 @@ export function mediaKind(path: string): "image" | "svg" | "video" | "audio" | u
 
 export const opened = (path: string, r: FsReadResult): Tab => ({ path, disk: r.content, mtime: r.mtime, draft: r.content });
 
+/** Markdown files get the Source / Preview / Split control. */
+export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
+
+export type MdView = "source" | "preview" | "split";
+const MD_VIEW_KEY = "claude-ui.markdown-view";
+/** The markdown view, one choice per browser; Source by default (VS Code). */
+export function loadMdView(): MdView {
+  try {
+    const v = localStorage.getItem(MD_VIEW_KEY);
+    return v === "preview" || v === "split" ? v : "source";
+  } catch {
+    return "source";
+  }
+}
+export function saveMdView(v: MdView) {
+  try {
+    localStorage.setItem(MD_VIEW_KEY, v);
+  } catch {
+    // Storage unavailable: the choice lasts until the page reloads.
+  }
+}
+
 export const isDirty = (t: Tab) => t.draft !== t.disk;
 
 /** The tab as a regular one. */
