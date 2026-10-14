@@ -25,6 +25,15 @@ export function closeMany(tabs: string[], ids: string[], active?: string) {
   return { tabs: rest, active: tabs.slice(at + 1).find((t) => !gone.has(t)) ?? tabs.slice(0, at).reverse().find((t) => !gone.has(t)) };
 }
 
+/** Bulk close targets (tab menu: Close others / to the right / all) in strip order; pinned tabs never. */
+export function closeTargets(tabs: string[], pinned: ReadonlySet<string>, id: string, kind: "others" | "right" | "all") {
+  const from = kind === "right" ? tabs.slice(tabs.indexOf(id) + 1) : tabs;
+  return from.filter((t) => !pinned.has(t) && (kind !== "others" || t !== id));
+}
+
+/** Tabs of every group but `key` (chip menu: Close other groups), pinned ones excluded. */
+export const otherGroupTargets = (tabs: string[], pinned: ReadonlySet<string>, cwdOf: CwdOf, key: string) => tabs.filter((t) => (cwdOf(t) ?? "") !== key && !pinned.has(t));
+
 /** The tab one step from `active` in `order` (by +1 or -1); none past either end (no wrap) or when `active` is not in the order. */
 export const stepNoWrap = (order: string[], active: string | undefined, by: 1 | -1) => {
   const at = active === undefined ? -1 : order.indexOf(active);

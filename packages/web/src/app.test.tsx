@@ -1488,3 +1488,61 @@ describe("key promoter (GH-234)", () => {
     expect(tipToast()?.textContent).toContain("Shortcut tips reset.");
   });
 });
+
+describe("GH-359 tab menu commands", () => {
+  const S2 = "22222222-2222-3333-4444-555555555555";
+  const S3 = "33333333-2222-3333-4444-555555555555";
+  const sessions = [session, { ...session, id: S2, title: "Second" }, { ...session, id: S3, title: "Third" }];
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const menu = async (id: string) => {
+    await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    return (label: string) => act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === label)!.click());
+  };
+  const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  async function remount() {
+    act(() => root.unmount());
+    replies["session.list"] = { sessions, projects: ["/p/demo"] };
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([ID, S2, S3]));
+    location.hash = `#${S2}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+  }
+  afterEach(() => void (replies["session.list"] = { sessions: [session], projects: ["/p/demo"] }));
+
+  it("Close others closes the other tabs without a dialog, toasts 'Closed 2 tabs'; Undo puts them back in place", async () => {
+    await remount();
+    expect(tabIds()).toEqual([ID, S2, S3]);
+    const click = await menu(S2);
+    await click("Close others");
+    expect(document.querySelector('[role="dialog"], [role="alertdialog"]')).toBeNull();
+    expect(tabIds()).toEqual([S2]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+    await act(async () => [...toast()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+    expect(tabIds()).toEqual([ID, S2, S3]);
+  });
+
+  it("Close to the right closes the tabs after it and Reopen closed tab brings the last one back", async () => {
+    await remount();
+    const click = await menu(ID);
+    await click("Close to the right");
+    expect(tabIds()).toEqual([ID]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+    const again = await menu(ID);
+    await again("Reopen closed tab");
+    expect(tabIds()).toHaveLength(2);
+  });
+
+  it("Copy session ID writes the id to the clipboard and toasts; without a clipboard the toast says why", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const click = await menu(ID);
+    await click("Copy session ID");
+    expect(writeText).toHaveBeenCalledWith(ID);
+    expect(toast()?.textContent).toBe("Copied session ID");
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    const again = await menu(ID);
+    await again("Copy session ID");
+    expect(toast()?.textContent).toContain("Copy failed");
+  });
+});

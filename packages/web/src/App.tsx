@@ -117,15 +117,16 @@ import { specOf, useKeymap } from "./keymap.ts";
 import { LEADER_MS, PREFIX_KEYS, leaderStep } from "./leader.ts";
 import { KeyTips } from "./key-tip.tsx";
 import { markKeyUsed, resetAllKeyTips } from "./key-tips.ts";
-import { loadClosed, popClosed, pushClosed, restoreClosed, saveClosed } from "./closed-tabs.ts";
+import { loadClosed, popClosed, pushClosed, restoreClosed, restoreMany, saveClosed } from "./closed-tabs.ts";
 import { ShortcutsDialog } from "./shortcuts-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
-import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
+import type { TabCommand } from "./tab-menu.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -297,6 +298,7 @@ export function App() {
   useEffect(() => void (status === "unauthorized" && clearDrafts()), [status]);
   const [drawer, setDrawer] = useState(false);
   /** A `/resume` request for the sidebar search (SessionList `search`). */
+  const [revealSeq, setRevealSeq] = useState(0);
   const [resumeSearch, setResumeSearch] = useState<{ text: string; seq: number }>();
   // Wide screens: the Home button shows or hides the sessions sidebar.
   const [sidebar, setSidebar] = useState(true);
@@ -768,6 +770,62 @@ export function App() {
     if (own.length < 2) return closeGroup(own);
     const g = tabGroup(sessionOf(own[0]!)?.cwd, grouping, worktrees);
     setClosingGroup({ ids: own, name: `${g.label || projectName(key)}${g.sub ? ` (${g.sub})` : ""}` });
+  }
+
+  /** Close others / to the right / all / other groups (GH-359): no question (the sessions keep running), one toast with Undo for all of them. */
+  function closeSeveral(ids: string[]) {
+    // Before closeGroup: release() reads the old tab list for each index.
+    const now = tabsRef.current;
+    const entries = ids.filter((id) => now.includes(id)).map((id) => ({ id, at: now.indexOf(id) }));
+    if (!entries.length) return;
+    const wasActive = activeRef.current;
+    const one = entries.length === 1 ? entries[0]!.id : undefined;
+    const title = one && (one === NEW_TAB ? "New session" : listRef.current.find((s) => s.id === one)?.title || titles[one] || "Untitled");
+    closeGroup(entries.map((e) => e.id));
+    setToast({
+      message: one ? `Closed ${title}` : `Closed ${entries.length} tabs`,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          const r = restoreMany(closedRef.current, tabsRef.current, entries, (id) => id === NEW_TAB || listRef.current.some((s) => s.id === id));
+          setClosedTabs(r.stack);
+          setTabs(r.tabs);
+          for (const id of r.restored) if (id !== NEW_TAB && id !== wasActive) void subscribe(id);
+          // The tab that was shown comes back shown; the others are held again like any open tab.
+          if (wasActive && r.restored.includes(wasActive)) open(wasActive);
+        },
+      },
+    });
+  }
+
+  /** Tab menu commands (GH-359) of tab `id`. */
+  function tabCommand(id: string, c: TabCommand) {
+    const kind = c === "closeOthers" ? "others" : c === "closeRight" ? "right" : c === "closeAll" ? "all" : undefined;
+    if (kind) {
+      const targets = closeTargets(tabsRef.current, pinnedSet, id, kind);
+      const activeGone = !!activeRef.current && targets.includes(activeRef.current);
+      closeSeveral(targets);
+      // Close others keeps the clicked tab: it takes over (VS Code), not a pinned neighbour.
+      if (kind === "others" && activeGone) open(id);
+    } else if (c === "reopen") reopenClosed();
+    else if (c === "copyId") copyText(id, "session ID");
+    else if (c === "copyCwd") copyText(sessionOf(id)?.cwd, "cwd path");
+    else if (c === "reveal") revealTab(id);
+  }
+
+  /** Copies to the clipboard, which the browser offers on HTTPS and localhost only. */
+  function copyText(text: string | undefined, what: string) {
+    const fail = () => setToast("Copy failed: the browser allows the clipboard only on HTTPS or localhost");
+    if (!text || !navigator.clipboard) return fail();
+    navigator.clipboard.writeText(text).then(() => setToast(`Copied ${what}`), fail);
+  }
+
+  /** Reveal in sidebar: shows the tab's session, shows the sidebar (the drawer below md), then the sidebar runs Select active session with focus. */
+  function revealTab(id: string) {
+    if (id !== activeRef.current) open(id);
+    if (wide(768)) setSidebar(true);
+    else setDrawer(true);
+    setRevealSeq((n) => n + 1);
   }
 
   useEffect(() => {
@@ -1296,6 +1354,17 @@ export function App() {
     };
     requestAnimationFrame(() => focus(60));
   };
+  const pinnedSet = NO_PINS;
+  /** Reopen closed tab (palette, tab menu): the newest closed session that still exists, back in its place. */
+  const reopenClosed = () => {
+    const r = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs);
+    setClosedTabs(r.rest);
+    if (!r.tab) return;
+    const { id, at } = r.tab;
+    setTabs((t) => (t.includes(id) ? t : [...t.slice(0, at), id, ...t.slice(at)]));
+    open(id);
+    focusShownPrompt(id);
+  };
   const reopen = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs).tab;
   const commands = appCommands({
     newWorktree: canWorktree ? () => (setWtName(""), setNaming(gitProject)) : undefined,
@@ -1319,6 +1388,10 @@ export function App() {
     closeTab: close,
     // Only while a chip shows for the group (2 or more groups, or compact tabs), like the chip menu.
     closeGroup: grouping !== "none" && activeId && groupOfTab(activeId) && (compact || new Set(tabs.map(groupOfTab).filter(Boolean)).size > 1) ? () => requestCloseGroup(groupOfTab(activeId), tabs.filter((id) => groupOfTab(id) === groupOfTab(activeId))) : undefined,
+    // Like the tab menu's items: only while something would close (not pinned ones).
+    closeOthers: activeId && closeTargets(tabs, pinnedSet, activeId, "others").length && tabs.includes(activeId) ? () => tabCommand(activeId, "closeOthers") : undefined,
+    closeRight: activeId && closeTargets(tabs, pinnedSet, activeId, "right").length && tabs.includes(activeId) ? () => tabCommand(activeId, "closeRight") : undefined,
+    closeAll: closeTargets(tabs, pinnedSet, activeId ?? "", "all").length ? () => tabCommand(activeId ?? tabs[0]!, "closeAll") : undefined,
     quickOpen: showQuickOpen,
     // md: the sidebar breakpoint; below it the sidebar is a drawer.
     toggleSidebar: () => (wide(768) ? setSidebar((v) => !v) : setDrawer((v) => !v)),
@@ -1338,15 +1411,7 @@ export function App() {
       wide(1024) ? setTerminalOpen(true) : setPane("terminal");
     },
     canReopen: !!reopen,
-    reopenTab: () => {
-      const r = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs);
-      setClosedTabs(r.rest);
-      if (!r.tab) return;
-      const { id, at } = r.tab;
-      setTabs((t) => (t.includes(id) ? t : [...t.slice(0, at), id, ...t.slice(at)]));
-      open(id);
-      focusShownPrompt(id);
-    },
+    reopenTab: reopenClosed,
     openShortcuts: () => setShortcutsOpen(true),
     isGit,
     viewChanges: shown && !draftShown ? () => openViewer({ kind: "changes" }) : undefined,
@@ -1520,6 +1585,9 @@ export function App() {
             onMoveGroup={(cwd, by) => setTabs((t) => moveGroup(t, groupOfTab, cwd, by))}
             onMoveGroupTo={(from, to) => setTabs((t) => moveGroupTo(t, groupOfTab, from, to))}
             onCloseGroup={requestCloseGroup}
+            onCloseOtherGroups={(key) => closeSeveral(otherGroupTargets(tabs, pinnedSet, groupOfTab, key))}
+            onTabCommand={tabCommand}
+            canReopen={!!reopen}
             onNew={() => newSession()}
             home={sidebar}
             onHome={() => setSidebar((v) => !v)}
@@ -1679,6 +1747,7 @@ export function App() {
               onAction={sessionAction("list")}
               onRenamed={renamed}
               search={resumeSearch}
+              reveal={revealSeq}
             />
           )}
           <button
@@ -3397,6 +3466,9 @@ function Timeline({ view, parentId, items = timeline(view, parentId) }: { view: 
     ),
   );
 }
+
+/** No tab is pinned yet. */
+const NO_PINS: ReadonlySet<string> = new Set();
 
 function CopyAction({ text, label = "Copy message", className = "" }: { text: string; label?: string; className?: string }) {
   const [copied, setCopied] = useState(false);

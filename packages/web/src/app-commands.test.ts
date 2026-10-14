@@ -344,3 +344,17 @@ it("viewer commands show only with their callbacks and a session", () => {
   expect(ids(ctx())).not.toContain("viewer.changes");
   expect(ids(ctx({ viewChanges, viewPlan, session: { ...ctx().session!, draft: true } }))).not.toContain("viewer.plan");
 });
+
+it("GH-359 tab.closeOthers / closeRight / closeAll are listed only when given, have no default key, run their handler and take a user binding", () => {
+  const ids = ["tab.closeOthers", "tab.closeRight", "tab.closeAll"];
+  expect(appCommands(ctx()).some((i) => ids.includes(i.id))).toBe(false);
+  const over = { closeOthers: vi.fn(), closeRight: vi.fn(), closeAll: vi.fn() };
+  const items = appCommands(ctx(over));
+  expect(ids.map((id) => items.find((i) => i.id === id)?.title)).toEqual(["Close other tabs", "Close tabs to the right", "Close all tabs"]);
+  expect(ids.map((id) => items.find((i) => i.id === id)?.keys)).toEqual([undefined, undefined, undefined]);
+  ids.forEach((id) => run(ctx(over), id));
+  expect(Object.values(over).map((f) => f.mock.calls.length)).toEqual([1, 1, 1]);
+  bind("tab.closeOthers", "mod+alt+o");
+  expect(shortcutFor(appCommands(ctx(over)), ev("o", { ctrlKey: true, altKey: true, code: "KeyO" }))?.id).toBe("tab.closeOthers");
+  resetAll();
+});

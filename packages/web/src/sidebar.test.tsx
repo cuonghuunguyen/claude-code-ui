@@ -43,7 +43,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-async function render(props: { activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined } = {}) {
+async function render(props: { reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined } = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -74,6 +74,7 @@ async function render(props: { activeId?: string | null; list?: SessionListItem[
         renaming={props.renaming}
         onAction={onAction}
         onRenamed={onRenamed}
+        reveal={props.reveal}
       />
       </SideLabel>,
     ),
@@ -1007,4 +1008,15 @@ describe("sidebar header actions (GH-152)", () => {
     expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toContain("coordinator:co");
   });
 
+});
+
+it("GH-359 a reveal value expands the active session's group and focuses its row", async () => {
+  let r = await render({ activeId: "c" });
+  await act(async () => r.toggle("/home/u/web").click());
+  expect(r.rows()).toHaveLength(2);
+  root!.unmount();
+  r = await render({ activeId: "c", reveal: 1 });
+  await act(async () => {});
+  expect(r.rows()).toHaveLength(4);
+  await vi.waitFor(() => expect(document.activeElement).toBe(r.rows().find((x) => x.dataset.sessionId === "c")));
 });

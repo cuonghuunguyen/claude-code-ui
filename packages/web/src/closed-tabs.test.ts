@@ -27,3 +27,14 @@ it("restore puts that exact entry back at its place (clamped), drops it from the
   expect(restoreClosed(s, ["b"], "b")).toEqual({ tabs: ["b"], stack: s });
   expect(restoreClosed(s, ["x"], "zz")).toEqual({ tabs: ["x"], stack: s });
 });
+
+it("GH-359 restoreMany puts entries back at their indexes in ascending order, skips open and gone ids, drops restored from the stack", async () => {
+  const { restoreMany } = await import("./closed-tabs.ts");
+  const stack = [{ id: "x", at: 9 }, { id: "b", at: 1 }, { id: "d", at: 3 }];
+  const entries = [{ id: "d", at: 3 }, { id: "b", at: 1 }, { id: "gone", at: 2 }, { id: "open", at: 0 }];
+  const r = restoreMany(stack, ["a", "c", "e", "open"], entries, (id) => id !== "gone");
+  expect(r.tabs).toEqual(["a", "b", "c", "d", "e", "open"]);
+  expect(r.restored).toEqual(["b", "d"]);
+  expect(r.stack).toEqual([{ id: "x", at: 9 }]);
+  expect(restoreMany([], ["a"], [{ id: "z", at: 40 }], () => true).tabs).toEqual(["a", "z"]);
+});

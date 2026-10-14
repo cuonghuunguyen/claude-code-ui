@@ -2,19 +2,21 @@
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
 // Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
-import { createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+// Tab context menu: Close others / to the right / all, Reopen closed tab, Copy session ID / cwd path, Reveal in sidebar (GH-359); Shift+F10 or the ContextMenu key opens it.
+import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
 import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
-import { FOCUS_TAB, NEW_TAB, avatarColor, closeMany, closeTab, groupTabs, loadCollapsed, projectName, saveCollapsed, stepNoWrap, type AvatarColor } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColor, closeMany, closeTab, closeTargets, groupTabs, loadCollapsed, projectName, saveCollapsed, stepNoWrap, type AvatarColor } from "./tabs.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { GHOST, ROW } from "./toolbar.tsx";
 import { SideLabel } from "./sides.tsx";
 import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
+import { KEY_FOLLOWUP_MS, openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
 export type TabInfo = {
@@ -96,6 +98,9 @@ export function TabsBar({
   onMoveGroup,
   onMoveGroupTo,
   onCloseGroup,
+  onCloseOtherGroups,
+  onTabCommand,
+  canReopen,
   onNew,
   home,
   onHome,
@@ -126,6 +131,12 @@ export function TabsBar({
   onMoveGroupTo: (from: string, to: string) => void;
   /** Closes a group's tabs (chip menu, middle click, Delete on the chip): `key` is the group key, `ids` its tabs in strip order. The owner asks first for 2 or more. */
   onCloseGroup?: (key: string, ids: string[]) => void;
+  /** Close other groups (chip menu): closes the tabs of every group but `key`, no question asked (the owner offers Undo). */
+  onCloseOtherGroups?: (key: string) => void;
+  /** The tab menu's commands for tab `id` (close others / right / all, reopen, pin, copy, reveal); absent: the menu has Move and Close tab only. */
+  onTabCommand?: (id: string, c: TabCommand) => void;
+  /** A closed tab can be reopened. */
+  canReopen?: boolean;
   onNew: () => void;
   /** Sidebar toggle (md and up), OpenCode's legacy-layout `sidebar` icon: aria-pressed while the sessions sidebar shows, no pressed fill.
    * Not OpenCode's `grid-plus`: that one opens its Home page, this one only shows and hides the sidebar. */
@@ -205,6 +216,12 @@ export function TabsBar({
     // One tab closes at once (no dialog): focus the tab that takes over.
     if (ids.length === 1) refocus.current = { id: closeMany(tabs, ids, activeId ?? ids[0]).active };
     onCloseGroup?.(key, ids);
+  };
+  const tabCommand = (id: string, c: TabCommand) => {
+    // Bulk closes: focus goes to the tab that takes over.
+    const kind = c === "closeOthers" ? "others" : c === "closeRight" ? "right" : c === "closeAll" ? "all" : undefined;
+    if (kind) refocus.current = { id: closeMany(tabs, closeTargets(tabs, new Set(), id, kind), activeId ?? id).active };
+    onTabCommand?.(id, c);
   };
   const moveBy = (id: string, by: -1 | 1) => {
     const to = tabs[tabs.indexOf(id) + by];
@@ -293,7 +310,7 @@ export function TabsBar({
         {groups.map(([cwd, ids]) => (
           // `contents`: groups are no boxes, tabs shrink in the strip as before. The chip is a button inside the tablist (a11y trade-off, no group role).
           <div key={cwd} role="none" className="contents" data-testid="tab-group">
-            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} onCloseGroup={() => closeGroup(cwd)} move={{ left: groups.findIndex(([k]) => k === cwd) > 0, right: groups.findIndex(([k]) => k === cwd) < groups.length - 1, by: (by) => ((refocus.current = { group: cwd }), onMoveGroup(cwd, by)) }} compact={!!compact} rows={{ activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) }} />}
+            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} onCloseGroup={() => closeGroup(cwd)} onCloseOthers={onCloseOtherGroups && (() => onCloseOtherGroups(cwd))} canCloseOthers={groups.some(([k, g]) => k !== cwd && g.length > 0)} move={{ left: groups.findIndex(([k]) => k === cwd) > 0, right: groups.findIndex(([k]) => k === cwd) < groups.length - 1, by: (by) => ((refocus.current = { group: cwd }), onMoveGroup(cwd, by)) }} compact={!!compact} rows={{ activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) }} />}
             {ids
               .filter((id) => !hidden(id))
               .map((id) => {
@@ -312,6 +329,11 @@ export function TabsBar({
                     onMove={onMove}
                     onMenuMove={(by) => moveBy(id, by)}
                     onMenuClose={() => closeKeepFocus(id)}
+                    canOthers={tabs.length > 1}
+                    canRight={i < tabs.length - 1}
+                    canAll={tabs.length > 0}
+                    canReopen={!!canReopen}
+                    onCommand={onTabCommand ? (c) => tabCommand(id, c) : undefined}
                     renaming={renaming === id}
                     onAction={(a) => onAction(id, a)}
                     onRenamed={(title) => onRenamed(id, title)}
@@ -666,7 +688,7 @@ function GroupTabRows({ ids, info, rows }: { ids: string[]; info: (id: string) =
 }
 
 /** Group header: project color, name, tab count; a collapsed group shows its most urgent tab state. */
-function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, onCloseGroup, move, rows, compact }: { onCloseGroup: () => void; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void }; rows: TabRowsProps; compact: boolean; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
+function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, onCloseGroup, onCloseOthers, canCloseOthers, move, rows, compact }: { onCloseGroup: () => void; onCloseOthers?: () => void; canCloseOthers: boolean; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void }; rows: TabRowsProps; compact: boolean; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
   const first = info(ids[0]!);
   const c = avatarColor(first.groupColor ?? cwd, use(AvatarColors));
   const states = hiddenIds.map((id) => status(id, info(id)));
@@ -676,6 +698,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   const pathId = useId();
   const shown = collapsed || compact;
   const [open, setOpen] = useState(false);
+  const keyOpenedAt = useRef(-Infinity);
   const props = {
     "aria-describedby": pathId,
     "aria-label": `${name}${sub ? ` (${sub})` : ""}, ${ids.length} ${ids.length === 1 ? "tab" : "tabs"}${urgent ? `, ${STATUS_LABEL[urgent]}` : ""}`,
@@ -736,6 +759,11 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
               </div>
               <GroupTabRows ids={ids} info={info} rows={rows} />
               <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
+              {onCloseOthers && (
+                <Menu.Item className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
+                  Close other groups
+                </Menu.Item>
+              )}
               <Menu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
                 Close group
               </Menu.Item>
@@ -747,9 +775,9 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   return (
     // Right click (long press on touch): the menu the compact chip has, for a chip whose click collapses.
     <ContextMenu.Root>
-      <ContextMenu.Trigger className="contents">
+      <ContextMenu.Trigger className="contents" onContextMenu={(e) => swallowKeyFollowup(e, keyOpenedAt)}>
         <Tooltip>
-          <TooltipTrigger aria-expanded={!collapsed} {...props} onClick={onToggle}>
+          <TooltipTrigger aria-expanded={!collapsed} {...props} onClick={onToggle} onKeyDown={(e) => openContextMenuFromKey(e, e.currentTarget) && (keyOpenedAt.current = performance.now())}>
             {body}
           </TooltipTrigger>
           <span id={pathId} hidden>{cwd}</span>
@@ -774,6 +802,11 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
             <GroupTabRows ids={ids} info={info} rows={rows} />
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+            {onCloseOthers && (
+              <ContextMenu.Item className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
+                Close other groups
+              </ContextMenu.Item>
+            )}
             <ContextMenu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
               Close group
             </ContextMenu.Item>
@@ -782,6 +815,13 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
       </ContextMenu.Portal>
     </ContextMenu.Root>
   );
+}
+
+/** The browser's own contextmenu right after Shift+F10 / the ContextMenu key (Firefox fires one on key release, at another place) must not reopen the menu elsewhere. A synthetic event is untrusted and passes. */
+function swallowKeyFollowup(e: ReactMouseEvent, keyOpenedAt: RefObject<number>) {
+  if (!e.nativeEvent.isTrusted || performance.now() - keyOpenedAt.current > KEY_FOLLOWUP_MS) return;
+  e.preventDefault();
+  (e as typeof e & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
 }
 
 // A tab re-renders only when what it shows changes (info by value), not for App's new closures and info objects on every render.
@@ -804,6 +844,11 @@ function Tab({
   onMove,
   onMenuMove,
   onMenuClose,
+  canOthers,
+  canRight,
+  canAll,
+  canReopen,
+  onCommand,
   renaming,
   onAction,
   onRenamed,
@@ -819,6 +864,12 @@ function Tab({
   onMove: (from: string, to: string) => void;
   onMenuMove: (by: -1 | 1) => void;
   onMenuClose: () => void;
+  canOthers: boolean;
+  canRight: boolean;
+  canAll: boolean;
+  canReopen: boolean;
+  /** The menu's commands beyond Move and Close tab; absent: those items are not shown. */
+  onCommand?: (c: TabCommand) => void;
   renaming: boolean;
   onAction: (a: SessionAction) => void;
   onRenamed: (title: string | undefined) => void;
@@ -831,6 +882,7 @@ function Tab({
     e.dataTransfer.dropEffect = "move";
   };
   const button = useRef<HTMLButtonElement>(null);
+  const keyOpenedAt = useRef(-Infinity);
   const popup = useRef<HTMLDivElement>(null);
   // Dismissed (Escape, outside click): back to this tab; the trigger div is not focusable. Move and Close tab already focused a tab (refocus),
   // Rename and Delete… focused the title editor or the dialog: leave those. A closed tab has no button: nothing to do.
@@ -864,6 +916,7 @@ function Tab({
         // Middle click closes; its mousedown would start autoscroll.
         onMouseDown={(e) => e.button === 1 && e.preventDefault()}
         onAuxClick={(e) => e.button === 1 && onClose(id)}
+        onContextMenu={(e) => swallowKeyFollowup(e, keyOpenedAt)}
         data-testid="tab"
         data-tab-id={id}
         data-state={s}
@@ -886,6 +939,7 @@ function Tab({
               active ? "text-foreground" : "text-muted-foreground",
             )}
             onClick={() => onSelect(id)}
+            onKeyDown={(e) => openContextMenuFromKey(e, e.currentTarget) && (keyOpenedAt.current = performance.now())}
             // OpenCode: double click on the title renames.
             onDoubleClick={() => session && t.transcript !== false && onAction("rename")}
           >
@@ -912,15 +966,26 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            <ContextMenu.Item className={ITEM} disabled={first} onClick={() => onMenuMove(-1)}>
-              Move left
-            </ContextMenu.Item>
-            <ContextMenu.Item className={ITEM} disabled={last} onClick={() => onMenuMove(1)}>
-              Move right
-            </ContextMenu.Item>
-            <ContextMenu.Item className={ITEM} onClick={onMenuClose}>
-              Close tab
-            </ContextMenu.Item>
+            {tabMenuSections({ session, first, last, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd })
+              // Without onCommand: Move and Close tab only.
+              .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
+              .filter((sec) => sec.length)
+              .map((sec, i) => (
+                <Fragment key={sec[0]!.id}>
+                  {i > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
+                  {sec.map((x) => (
+                    <ContextMenu.Item
+                      key={x.id}
+                      className={ITEM}
+                      disabled={x.disabled}
+                      data-testid={x.testId}
+                      onClick={() => (x.id === "moveLeft" ? onMenuMove(-1) : x.id === "moveRight" ? onMenuMove(1) : x.id === "close" ? onMenuClose() : onCommand?.(x.id))}
+                    >
+                      {x.label}
+                    </ContextMenu.Item>
+                  ))}
+                </Fragment>
+              ))}
             {session && (
               <>
                 <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />

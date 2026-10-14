@@ -919,3 +919,75 @@ it("Delete on the chip of a one-tab group leaves the focus on a control", async 
   expect(el.querySelector('[data-group-chip="/home/u/docs"]')).toBeNull();
   expect(document.activeElement).not.toBe(document.body);
 });
+
+// GH-359: tab context menu commands.
+const ctxMenu = async (el: ParentNode, id: string) => {
+  await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  return document.querySelector<HTMLElement>('[role="menu"]')!;
+};
+const itemOf = (label: string) => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === label)!;
+const closeMenu = () => act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+
+it("GH-359 the tab menu lists the close block, reopen, pin, copy and reveal, in sections", async () => {
+  const { el } = await render({ onTabCommand: vi.fn(), canReopen: true });
+  const m = await ctxMenu(el, "c");
+  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Move left", "Move right", "Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab", "Copy session ID", "Copy cwd path", "Reveal in sidebar", "Rename", "Archive", "Delete…"]);
+  expect(m.querySelectorAll('[role="separator"]')).toHaveLength(4);
+  await closeMenu();
+});
+
+it("GH-359 each new item calls onTabCommand with the tab id and command", async () => {
+  const onTabCommand = vi.fn();
+  const { el } = await render({ onTabCommand, canReopen: true });
+  for (const [label, cmd] of [["Close others", "closeOthers"], ["Close to the right", "closeRight"], ["Close all", "closeAll"], ["Reopen closed tab", "reopen"], ["Copy session ID", "copyId"], ["Copy cwd path", "copyCwd"], ["Reveal in sidebar", "reveal"]] as const) {
+    await ctxMenu(el, "b");
+    await act(async () => itemOf(label).click());
+    expect(onTabCommand).toHaveBeenLastCalledWith("b", cmd);
+  }
+});
+
+it("GH-359 Close to the right is disabled on the last tab, Reopen without canReopen, Copy cwd without a cwd", async () => {
+  const { el } = await render({ tabs: ["a", NEW_TAB], onTabCommand: vi.fn(), info: (id) => (id === "a" ? { ...INFO.a!, cwd: undefined } : INFO[id]!) });
+  await ctxMenu(el, NEW_TAB);
+  expect(itemOf("Close to the right").getAttribute("aria-disabled")).toBe("true");
+  expect(itemOf("Close others").getAttribute("aria-disabled")).not.toBe("true");
+  expect(itemOf("Reopen closed tab").getAttribute("aria-disabled")).toBe("true");
+  await closeMenu();
+  await ctxMenu(el, "a");
+  expect(itemOf("Copy cwd path").getAttribute("aria-disabled")).toBe("true");
+  expect(itemOf("Close to the right").getAttribute("aria-disabled")).not.toBe("true");
+  await closeMenu();
+});
+
+it("GH-359 the New session tab has the move and close items only", async () => {
+  const { el } = await render({ onTabCommand: vi.fn() });
+  const m = await ctxMenu(el, NEW_TAB);
+  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Move left", "Move right", "Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab"]);
+  await closeMenu();
+});
+
+it("GH-359 without onTabCommand the menu has Move and Close tab only", async () => {
+  const { el } = await render();
+  const m = await ctxMenu(el, "b");
+  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent).slice(0, 4)).toEqual(["Move left", "Move right", "Close tab", "Rename"]);
+  await closeMenu();
+});
+
+it("GH-359 Shift+F10 and the ContextMenu key on a focused tab open its menu; Escape returns focus to the tab", async () => {
+  const { btn } = await renderLive();
+  for (const init of [{ key: "F10", shiftKey: true }, { key: "ContextMenu" }]) {
+    btn("c").focus();
+    await act(async () => void btn("c").dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
+    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull());
+    await act(async () => void (document.activeElement ?? document).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(btn("c")));
+  }
+});
+
+it("GH-359 F10 alone does not open the menu", async () => {
+  const { btn } = await renderLive();
+  btn("c").focus();
+  await act(async () => void btn("c").dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "F10" })));
+  expect(document.querySelector('[role="menu"]')).toBeNull();
+});

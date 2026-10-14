@@ -195,3 +195,25 @@ describe("tab groups by project", () => {
     expect(stepNoWrap(order, undefined, 1)).toBeUndefined();
   });
 });
+
+describe("GH-359 bulk close targets", () => {
+  const tabs = ["a", "b", "c", "d"];
+  const none = new Set<string>();
+  it("others / right / all keep strip order and skip pinned tabs", async () => {
+    const { closeTargets } = await import("./tabs.ts");
+    expect(closeTargets(tabs, none, "b", "others")).toEqual(["a", "c", "d"]);
+    expect(closeTargets(tabs, none, "b", "right")).toEqual(["c", "d"]);
+    expect(closeTargets(tabs, none, "b", "all")).toEqual(tabs);
+    expect(closeTargets(tabs, new Set(["c", "a"]), "b", "others")).toEqual(["d"]);
+    expect(closeTargets(tabs, new Set(["d"]), "b", "right")).toEqual(["c"]);
+    expect(closeTargets(tabs, new Set(["a"]), "b", "all")).toEqual(["b", "c", "d"]);
+    expect(closeTargets(tabs, none, "d", "right")).toEqual([]);
+  });
+  it("otherGroupTargets skips the group and pinned tabs", async () => {
+    const { otherGroupTargets } = await import("./tabs.ts");
+    const cwd = (id: string) => ({ a: "/x", b: "/y", c: "/x", d: undefined }[id]);
+    expect(otherGroupTargets(tabs, none, cwd, "/x")).toEqual(["b", "d"]);
+    expect(otherGroupTargets(tabs, new Set(["b"]), cwd, "/x")).toEqual(["d"]);
+    expect(otherGroupTargets(tabs, none, cwd, "")).toEqual(["a", "b", "c"]);
+  });
+});
