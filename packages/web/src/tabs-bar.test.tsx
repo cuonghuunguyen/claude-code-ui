@@ -931,8 +931,8 @@ const closeMenu = () => act(async () => void document.dispatchEvent(new Keyboard
 it("GH-359 the tab menu lists the close block, reopen, pin, copy and reveal, in sections", async () => {
   const { el } = await render({ onTabCommand: vi.fn(), canReopen: true });
   const m = await ctxMenu(el, "c");
-  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Move left", "Move right", "Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab", "Copy session ID", "Copy cwd path", "Reveal in sidebar", "Rename", "Archive", "Delete…"]);
-  expect(m.querySelectorAll('[role="separator"]')).toHaveLength(4);
+  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Move left", "Move right", "Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab", "Pin tab", "Copy session ID", "Copy cwd path", "Reveal in sidebar", "Rename", "Archive", "Delete…"]);
+  expect(m.querySelectorAll('[role="separator"]')).toHaveLength(5);
   await closeMenu();
 });
 
@@ -990,4 +990,86 @@ it("GH-359 F10 alone does not open the menu", async () => {
   btn("c").focus();
   await act(async () => void btn("c").dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "F10" })));
   expect(document.querySelector('[role="menu"]')).toBeNull();
+});
+
+it("GH-359 a pinned tab is icon only, has no close button, is labelled '<title>, pinned' and comes first in its group", async () => {
+  const { el, tab } = await render({ pinned: new Set(["b"]), tabs: ["a", "b", "c"], info: (id) => ({ ...INFO[id]!, cwd: "/home/u/web" }) });
+  const ids = [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
+  expect(ids).toEqual(["b", "a", "c"]);
+  const b = tab("b");
+  expect(b.dataset.pinned).toBe("true");
+  expect(b.querySelector('[data-testid="tab-close"]')).toBeNull();
+  expect(b.textContent).toBe("");
+  expect(b.querySelector('[role="tab"]')!.getAttribute("aria-label")).toBe("Docs, pinned, needs input");
+  expect(b.className).toMatch(/\bw-9\b/);
+  expect(tab("a").querySelector('[data-testid="tab-close"]')).not.toBeNull();
+  expect(tab("a").dataset.pinned).toBeUndefined();
+});
+
+it("GH-359 a pinned tab's menu offers Unpin tab, an unpinned one Pin tab; each calls onTabCommand", async () => {
+  const onTabCommand = vi.fn();
+  const { el } = await render({ onTabCommand, pinned: new Set(["a"]) });
+  await ctxMenu(el, "a");
+  expect(itemOf("Pin tab")).toBeUndefined();
+  await act(async () => itemOf("Unpin tab").click());
+  expect(onTabCommand).toHaveBeenLastCalledWith("a", "unpin");
+  await ctxMenu(el, "b");
+  await act(async () => itemOf("Pin tab").click());
+  expect(onTabCommand).toHaveBeenLastCalledWith("b", "pin");
+});
+
+it("GH-359 Close all is disabled when every tab is pinned; Close others and to the right skip pinned tabs", async () => {
+  const { el } = await render({ onTabCommand: vi.fn(), tabs: ["a", "b", "c"], info: (id) => ({ ...INFO[id]!, cwd: "/home/u/web" }), pinned: new Set(["a", "b", "c"]) });
+  await ctxMenu(el, "a");
+  expect(["Close all", "Close others", "Close to the right"].map((l) => itemOf(l).getAttribute("aria-disabled"))).toEqual(["true", "true", "true"]);
+  await closeMenu();
+  await root!.unmount();
+  const r = await render({ onTabCommand: vi.fn(), tabs: ["a", "b", "c"], info: (id) => ({ ...INFO[id]!, cwd: "/home/u/web" }), pinned: new Set(["c"]) });
+  await ctxMenu(r.el, "b");
+  expect(itemOf("Close to the right").getAttribute("aria-disabled")).toBe("true");
+  expect(itemOf("Close others").getAttribute("aria-disabled")).not.toBe("true");
+  await closeMenu();
+});
+
+it("GH-359 Move left / right and Alt+Shift+Arrow do not cross the pin boundary", async () => {
+  const onMove = vi.fn();
+  const { el, tab } = await render({ onMove, onTabCommand: vi.fn(), tabs: ["a", "b", "c"], activeId: "c", info: (id) => ({ ...INFO[id]!, cwd: "/home/u/web" }), pinned: new Set(["a"]) });
+  // Strip order: a (pinned), b, c.
+  await ctxMenu(el, "b");
+  expect(itemOf("Move left").getAttribute("aria-disabled")).toBe("true");
+  expect(itemOf("Move right").getAttribute("aria-disabled")).not.toBe("true");
+  await closeMenu();
+  await ctxMenu(el, "a");
+  expect(itemOf("Move right").getAttribute("aria-disabled")).toBe("true");
+  await closeMenu();
+  const btn = tab("b").querySelector<HTMLElement>('[role="tab"]')!;
+  await act(async () => void btn.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, shiftKey: true, bubbles: true, cancelable: true })));
+  expect(onMove).not.toHaveBeenCalled();
+  await act(async () => void btn.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, shiftKey: true, bubbles: true, cancelable: true })));
+  expect(onMove).toHaveBeenCalledWith("b", "c");
+});
+
+it("GH-359 Close group skips pinned tabs", async () => {
+  const onCloseGroup = vi.fn();
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  const info = (id: string) => ({ ...INFO[id]!, cwd: id === "a" || id === "b" ? "/home/u/web" : "/home/u/api" });
+  await act(async () => root!.render(<SideLabel value={() => undefined}><TabsBar tabs={["a", "b", "c"]} activeId="c" info={info} pinned={new Set(["a"])} onCloseGroup={onCloseGroup} onSelect={() => {}} onClose={() => {}} onMove={() => {}} onMoveGroup={() => {}} onMoveGroupTo={() => {}} onNew={() => {}} onAction={() => {}} onRenamed={() => {}} /></SideLabel>));
+  await act(async () => void el.querySelector('[data-group-chip="/home/u/web"]')!.dispatchEvent(new MouseEvent("auxclick", { bubbles: true, button: 1 })));
+  expect(onCloseGroup).toHaveBeenCalledWith("/home/u/web", ["b"]);
+});
+
+it("GH-359 on a touch screen (coarse primary pointer) tabs are not draggable, so a long press opens the menu instead of a native drag", async () => {
+  const { tab } = await render();
+  expect(tab("a").getAttribute("draggable")).toBe("true");
+  root!.unmount();
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ matches: q === "(pointer: coarse)", media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  try {
+    const r = await render();
+    expect(r.tab("a").getAttribute("draggable")).toBe("false");
+  } finally {
+    window.matchMedia = mm;
+  }
 });

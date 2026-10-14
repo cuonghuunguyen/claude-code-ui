@@ -2,7 +2,7 @@
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
 // Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
-// Tab context menu: Close others / to the right / all, Reopen closed tab, Copy session ID / cwd path, Reveal in sidebar (GH-359); Shift+F10 or the ContextMenu key opens it.
+// Pinned tabs (GH-359): icon only, first in their group. Tab context menu: Close others / to the right / all, Reopen closed tab, Copy session ID / cwd path, Reveal in sidebar (GH-359); Shift+F10 or the ContextMenu key opens it.
 import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
@@ -10,7 +10,7 @@ import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, Pane
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
-import { FOCUS_TAB, NEW_TAB, avatarColor, closeMany, closeTab, closeTargets, groupTabs, loadCollapsed, projectName, saveCollapsed, stepNoWrap, type AvatarColor } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColor, closeMany, closeTab, closeTargets, groupTabs, pinOrder, loadCollapsed, projectName, saveCollapsed, stepNoWrap, type AvatarColor } from "./tabs.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { GHOST, ROW } from "./toolbar.tsx";
@@ -18,6 +18,9 @@ import { SideLabel } from "./sides.tsx";
 import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
 import { KEY_FOLLOWUP_MS, openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
+
+/** No tab is pinned. */
+const NO_PINS: ReadonlySet<string> = new Set();
 
 export type TabInfo = {
   title: string;
@@ -80,8 +83,8 @@ export const CHIP_POPUP = cn(POPUP, "max-w-80 data-starting-style:scale-100 data
  * Keeps the stored tab list grouped by project, also once the session cwds arrive (the strip draws groups; close, next tab and moves use this order).
  * It regroups only when `ready` (every tab's group key is final): on partial keys, unknown tabs of different projects form one group and the damaged order is persisted (GH-196).
  */
-export function useGroupedTabs(tabs: string[], setTabs: (t: string[]) => void, cwdOf: (id: string) => string | undefined, ready = true) {
-  const grouped = [...groupTabs(tabs, cwdOf).values()].flat();
+export function useGroupedTabs(tabs: string[], setTabs: (t: string[]) => void, cwdOf: (id: string) => string | undefined, ready = true, pinned: ReadonlySet<string> = NO_PINS) {
+  const grouped = pinOrder(tabs, pinned, cwdOf);
   useEffect(() => {
     if (ready && grouped.some((id, i) => id !== tabs[i])) setTabs(grouped);
   });
@@ -101,6 +104,7 @@ export function TabsBar({
   onCloseOtherGroups,
   onTabCommand,
   canReopen,
+  pinned,
   onNew,
   home,
   onHome,
@@ -137,6 +141,8 @@ export function TabsBar({
   onTabCommand?: (id: string, c: TabCommand) => void;
   /** A closed tab can be reopened. */
   canReopen?: boolean;
+  /** Pinned session tabs (GH-359): first in their group, icon only, no close button, skipped by the bulk closes; they never cross the unpinned ones. */
+  pinned?: ReadonlySet<string>;
   onNew: () => void;
   /** Sidebar toggle (md and up), OpenCode's legacy-layout `sidebar` icon: aria-pressed while the sessions sidebar shows, no pressed fill.
    * Not OpenCode's `grid-plus`: that one opens its Home page, this one only shows and hides the sidebar. */
@@ -151,7 +157,8 @@ export function TabsBar({
     const t = info(id);
     return t.group ?? t.cwd ?? "";
   };
-  const groups = [...groupTabs(given, keyOf)];
+  const pins = pinned ?? NO_PINS;
+  const groups = [...groupTabs(given, keyOf)].map(([k, ids]): [string, string[]] => [k, [...ids.filter((t) => pins.has(t)), ...ids.filter((t) => !pins.has(t))]]);
   const tabs = groups.flatMap(([, ids]) => ids);
   const named = groups.filter(([k]) => k).length;
   const chips = named > 1 || (compact && named > 0);
@@ -211,7 +218,8 @@ export function TabsBar({
     onClose(id);
   };
   const closeGroup = (key: string) => {
-    const ids = groups.find(([k]) => k === key)?.[1];
+    // Pinned tabs stay.
+    const ids = groups.find(([k]) => k === key)?.[1].filter((t) => !pins.has(t));
     if (!ids?.length) return;
     // One tab closes at once (no dialog): focus the tab that takes over.
     if (ids.length === 1) refocus.current = { id: closeMany(tabs, ids, activeId ?? ids[0]).active };
@@ -220,12 +228,12 @@ export function TabsBar({
   const tabCommand = (id: string, c: TabCommand) => {
     // Bulk closes: focus goes to the tab that takes over.
     const kind = c === "closeOthers" ? "others" : c === "closeRight" ? "right" : c === "closeAll" ? "all" : undefined;
-    if (kind) refocus.current = { id: closeMany(tabs, closeTargets(tabs, new Set(), id, kind), activeId ?? id).active };
+    if (kind) refocus.current = { id: closeMany(tabs, closeTargets(tabs, pins, id, kind), activeId ?? id).active };
     onTabCommand?.(id, c);
   };
   const moveBy = (id: string, by: -1 | 1) => {
     const to = tabs[tabs.indexOf(id) + by];
-    if (!to || keyOf(to) !== keyOf(id)) return;
+    if (!to || keyOf(to) !== keyOf(id) || pins.has(to) !== pins.has(id)) return;
     refocus.current = { id };
     onMove(id, to);
   };
@@ -310,7 +318,7 @@ export function TabsBar({
         {groups.map(([cwd, ids]) => (
           // `contents`: groups are no boxes, tabs shrink in the strip as before. The chip is a button inside the tablist (a11y trade-off, no group role).
           <div key={cwd} role="none" className="contents" data-testid="tab-group">
-            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} onCloseGroup={() => closeGroup(cwd)} onCloseOthers={onCloseOtherGroups && (() => onCloseOtherGroups(cwd))} canCloseOthers={groups.some(([k, g]) => k !== cwd && g.length > 0)} move={{ left: groups.findIndex(([k]) => k === cwd) > 0, right: groups.findIndex(([k]) => k === cwd) < groups.length - 1, by: (by) => ((refocus.current = { group: cwd }), onMoveGroup(cwd, by)) }} compact={!!compact} rows={{ activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) }} />}
+            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} onCloseGroup={() => closeGroup(cwd)} onCloseOthers={onCloseOtherGroups && (() => onCloseOtherGroups(cwd))} canCloseOthers={groups.some(([k, g]) => k !== cwd && g.some((t) => !pins.has(t)))} move={{ left: groups.findIndex(([k]) => k === cwd) > 0, right: groups.findIndex(([k]) => k === cwd) < groups.length - 1, by: (by) => ((refocus.current = { group: cwd }), onMoveGroup(cwd, by)) }} compact={!!compact} rows={{ activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) }} />}
             {ids
               .filter((id) => !hidden(id))
               .map((id) => {
@@ -329,9 +337,12 @@ export function TabsBar({
                     onMove={onMove}
                     onMenuMove={(by) => moveBy(id, by)}
                     onMenuClose={() => closeKeepFocus(id)}
-                    canOthers={tabs.length > 1}
-                    canRight={i < tabs.length - 1}
-                    canAll={tabs.length > 0}
+                    pinned={pins.has(id)}
+                    moveFirst={keyOf(tabs[i - 1] ?? NEW_TAB) !== keyOf(id) || i === 0 || pins.has(tabs[i - 1]!) !== pins.has(id)}
+                    moveLast={keyOf(tabs[i + 1] ?? NEW_TAB) !== keyOf(id) || i === tabs.length - 1 || pins.has(tabs[i + 1]!) !== pins.has(id)}
+                    canOthers={tabs.some((x) => x !== id && !pins.has(x))}
+                    canRight={tabs.slice(i + 1).some((x) => !pins.has(x))}
+                    canAll={tabs.some((x) => !pins.has(x))}
                     canReopen={!!canReopen}
                     onCommand={onTabCommand ? (c) => tabCommand(id, c) : undefined}
                     renaming={renaming === id}
@@ -409,6 +420,8 @@ export function TabsBar({
 
 const SWIPE_CLICK_MS = 400;
 const justSwiped = (at: RefObject<number>) => performance.now() - at.current < SWIPE_CLICK_MS;
+/** A touch screen is the main input: a long press must open the context menu, not start a native drag (Chrome on Android drags a draggable element instead). Reorder there: Move left / right in the menu. */
+const touchPrimary = () => !!window.matchMedia?.("(pointer: coarse)").matches;
 const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 type RowView = { stage: "idle" | "drag" | "settle" | "out" | "collapse"; offset: number; width: number; height: number; sign: -1 | 1 };
@@ -706,7 +719,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
     "data-testid": "tab-group-chip",
     className: "flex h-6 max-w-40 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-[color-mix(in_oklab,var(--av)_18%,var(--background))] px-1.5 font-medium text-foreground text-xs shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--av)_60%,transparent)] outline-none focus-visible:ring-2 focus-visible:ring-ring",
     style: { "--av": `var(--avatar-${c})` } as CSSProperties,
-    draggable: true,
+    draggable: !touchPrimary(),
     // Middle click closes the group; its mousedown would start autoscroll (and must not open the compact menu).
     onMouseDown: (e: ReactMouseEvent) => e.button === 1 && e.preventDefault(),
     onAuxClick: (e: ReactMouseEvent) => {
@@ -839,6 +852,9 @@ function Tab({
   focusable,
   first,
   last,
+  pinned,
+  moveFirst,
+  moveLast,
   onSelect,
   onClose,
   onMove,
@@ -859,6 +875,11 @@ function Tab({
   focusable: boolean;
   first: boolean;
   last: boolean;
+  /** Pinned: icon only, no close button. */
+  pinned: boolean;
+  /** No move left / right: at the end of the group or of the pinned block. */
+  moveFirst: boolean;
+  moveLast: boolean;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onMove: (from: string, to: string) => void;
@@ -883,6 +904,8 @@ function Tab({
   };
   const button = useRef<HTMLButtonElement>(null);
   const keyOpenedAt = useRef(-Infinity);
+  // A pinned tab is its icon; the title editor needs the room.
+  const narrow = pinned && !renaming;
   const popup = useRef<HTMLDivElement>(null);
   // Dismissed (Escape, outside click): back to this tab; the trigger div is not focusable. Move and Close tab already focused a tab (refocus),
   // Rename and Delete… focused the title editor or the dialog: leave those. A closed tab has no button: nothing to do.
@@ -894,14 +917,16 @@ function Tab({
     <ContextMenu.Root>
       <ContextMenu.Trigger
         className={cn(
-          "group relative flex h-7 w-56 min-w-24 max-w-56 shrink items-center rounded-md transition-colors",
+          "group relative flex h-7 items-center rounded-md transition-colors",
+          narrow ? "w-9 min-w-9 max-w-9 shrink-0" : "w-56 min-w-24 max-w-56 shrink",
           // OpenCode separator: 1.5×12px bar 3.75px left of each tab, hidden at the first tab and beside the active or hovered one.
           "before:-left-[3.75px] before:absolute before:top-2 before:h-3 before:w-[1.5px] before:rounded-full before:bg-tab-separator data-first:before:hidden hover:before:hidden data-active:before:hidden [:hover+&]:before:hidden [[data-active]+&]:before:hidden",
           active ? "bg-secondary" : "hover:bg-secondary/70",
         )}
         data-active={active || undefined}
+        data-pinned={pinned || undefined}
         data-first={first || undefined}
-        draggable={!renaming}
+        draggable={!renaming && !touchPrimary()}
         onDragStart={(e) => {
           e.dataTransfer.setData(DRAG_TYPE, id);
           e.dataTransfer.effectAllowed = "move";
@@ -933,9 +958,10 @@ function Tab({
             role="tab"
             aria-selected={active}
             tabIndex={focusable ? 0 : -1}
-            aria-label={STATUS_LABEL[s] ? `${t.title}, ${STATUS_LABEL[s]}` : undefined}
+            aria-label={pinned || STATUS_LABEL[s] ? [t.title, pinned && "pinned", STATUS_LABEL[s]].filter(Boolean).join(", ") : undefined}
             className={cn(
-              "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md pr-7 pl-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              pinned ? "justify-center px-0" : "pr-7 pl-1.5",
               active ? "text-foreground" : "text-muted-foreground",
             )}
             onClick={() => onSelect(id)}
@@ -944,10 +970,10 @@ function Tab({
             onDoubleClick={() => session && t.transcript !== false && onAction("rename")}
           >
             <TabIcon s={s} cwd={t.cwd} />
-            {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate leading-4">{t.title}</span>}
+            {!pinned && (t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate leading-4">{t.title}</span>)}
           </button>
         )}
-        {!renaming && (
+        {!renaming && !pinned && (
           <button
             aria-label={`Close ${t.title}`}
             // Out of the Tab order (roving tabindex); Delete on the tab closes it.
@@ -966,7 +992,7 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            {tabMenuSections({ session, first, last, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd })
+            {tabMenuSections({ session, pinned: session ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd })
               // Without onCommand: Move and Close tab only.
               .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
               .filter((sec) => sec.length)

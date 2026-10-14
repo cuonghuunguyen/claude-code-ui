@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { FOCUS_TAB, NEW_TAB, keysFinal, avatarColor, avatarColors, closeMany, closeTab, stepNoWrap, groupTabs, loadCollapsed, loadTabs, moveGroup, moveGroupTo, moveTab, moveTabIn, openTab, saveCollapsed, staleTabs, replaceTab, saveTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, keysFinal, avatarColor, avatarColors, closeMany, closeTab, stepNoWrap, groupTabs, loadCollapsed, loadPinned, savePinned, loadTabs, moveGroup, moveGroupTo, moveTab, moveTabIn, openTab, saveCollapsed, staleTabs, replaceTab, saveTabs, tabFromHash, tabHash } from "./tabs.ts";
 
 describe("tabs", () => {
   it("restored tabs the daemon does not list are stale; the new-session tab always stays", () => {
@@ -73,6 +73,16 @@ describe("tabs storage", () => {
       getItem: (k: string) => store.get(k) ?? null,
       setItem: (k: string, v: string) => void store.set(k, v),
     } as Storage;
+  });
+
+  it("GH-359 pinned tabs survive a reload; garbage gives none", () => {
+    expect(loadPinned()).toEqual([]);
+    savePinned(["x", "y"]);
+    expect(loadPinned()).toEqual(["x", "y"]);
+    store.set("claude-ui.pinned-tabs", "{oops");
+    expect(loadPinned()).toEqual([]);
+    store.set("claude-ui.pinned-tabs", JSON.stringify(["x", 3, "x"]));
+    expect(loadPinned()).toEqual(["x"]);
   });
 
   it("open tabs and their order survive a reload", () => {
@@ -215,5 +225,35 @@ describe("GH-359 bulk close targets", () => {
     expect(otherGroupTargets(tabs, none, cwd, "/x")).toEqual(["b", "d"]);
     expect(otherGroupTargets(tabs, new Set(["b"]), cwd, "/x")).toEqual(["d"]);
     expect(otherGroupTargets(tabs, none, cwd, "")).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("GH-359 pinned tabs", () => {
+  const cwd = (id: string) => ({ a: "/web", b: "/api", c: "/web", d: "/api", e: "/web" })[id];
+  it("pinOrder puts pinned tabs first inside each group, stable", async () => {
+    const { pinOrder } = await import("./tabs.ts");
+    expect(pinOrder(["a", "b", "c", "d"], new Set(["c", "d"]), cwd)).toEqual(["c", "a", "d", "b"]);
+    expect(pinOrder(["a", "b", "c", "d"], new Set(), cwd)).toEqual(["a", "c", "b", "d"]);
+  });
+  it("setPinned: pin goes to the end of the group's pinned block, unpin right after it", async () => {
+    const { setPinned } = await import("./tabs.ts");
+    let r = setPinned(["a", "c", "e"], [], "e", true, cwd);
+    expect(r).toEqual({ tabs: ["e", "a", "c"], pinned: ["e"] });
+    r = setPinned(r.tabs, r.pinned, "c", true, cwd);
+    expect(r).toEqual({ tabs: ["e", "c", "a"], pinned: ["e", "c"] });
+    r = setPinned(r.tabs, r.pinned, "e", false, cwd);
+    expect(r).toEqual({ tabs: ["c", "e", "a"], pinned: ["c"] });
+    r = setPinned(r.tabs, r.pinned, "c", false, cwd);
+    expect(r).toEqual({ tabs: ["c", "e", "a"], pinned: [] });
+  });
+  it("setPinned keeps other groups where they are", async () => {
+    const { setPinned } = await import("./tabs.ts");
+    expect(setPinned(["a", "c", "b", "d"], [], "d", true, cwd).tabs).toEqual(["a", "c", "d", "b"]);
+  });
+  it("moveTabIn refuses a move across the pin boundary", () => {
+    const pin = new Set(["a"]);
+    expect(moveTabIn(["a", "c", "e"], cwd, "c", "a", pin)).toEqual(["a", "c", "e"]);
+    expect(moveTabIn(["a", "c", "e"], cwd, "e", "c", pin)).toEqual(["a", "e", "c"]);
+    expect(moveTabIn(["a", "c", "e"], cwd, "c", "a")).toEqual(["c", "a", "e"]);
   });
 });

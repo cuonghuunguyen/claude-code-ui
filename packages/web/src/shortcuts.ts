@@ -34,6 +34,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "tab.closeOthers", title: "Close other tabs", group: "Tabs" },
   { id: "tab.closeRight", title: "Close tabs to the right", group: "Tabs" },
   { id: "tab.closeAll", title: "Close all tabs", group: "Tabs" },
+  { id: "tab.pin", title: "Pin or unpin tab", group: "Tabs" },
   { id: "tab.reopen", title: "Reopen closed tab", group: "Tabs", key: "alt+shift+t", mac: "ctrl+shift+t" },
   // Ctrl/Cmd+1..9 belong to the browser's tabs; Alt+digit is free on Windows and Linux, Ctrl+digit on macOS.
   ...[1, 2, 3, 4, 5, 6, 7, 8].map(gotoTab),

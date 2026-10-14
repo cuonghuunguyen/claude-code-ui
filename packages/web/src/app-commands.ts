@@ -36,6 +36,10 @@ export type CommandContext = {
   closeOthers?: () => void;
   closeRight?: () => void;
   closeAll?: () => void;
+  /** Pins or unpins the active session tab (GH-359); none on the New session tab. */
+  togglePin?: () => void;
+  /** The active tab is pinned: the command reads "Unpin tab". */
+  pinned?: boolean;
   quickOpen: () => void;
   toggleSidebar: () => void;
   toggleSidePanel: () => void;
@@ -110,6 +114,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.closeOthers && cmd("tab.closeOthers", "Close other tabs", c.closeOthers),
     c.closeRight && cmd("tab.closeRight", "Close tabs to the right", c.closeRight),
     c.closeAll && cmd("tab.closeAll", "Close all tabs", c.closeAll),
+    c.togglePin && cmd("tab.pin", c.pinned ? "Unpin tab" : "Pin tab", c.togglePin),
     c.canReopen && cmd("tab.reopen", "Reopen closed tab", c.reopenTab),
     // Tab N: only for tabs that exist; found by typing "go to tab".
     ...Array.from({ length: Math.min(8, c.tabs.length) }, (_, i) => cmd(`tab.goto${i + 1}`, `Go to tab ${i + 1}`, () => go(c.tabs[i]!), true)),

@@ -1533,6 +1533,28 @@ describe("GH-359 tab menu commands", () => {
     expect(tabIds()).toHaveLength(2);
   });
 
+  it("Pin tab pins it first in the strip; Close all keeps pinned tabs; the pin survives a reload; Close tab drops it", async () => {
+    await remount();
+    const click = await menu(S3);
+    await click("Pin tab");
+    expect(tabIds()).toEqual([S3, ID, S2]);
+    expect(JSON.parse(localStorage.getItem("claude-ui.pinned-tabs")!)).toEqual([S3]);
+    const all = await menu(S2);
+    await all("Close all");
+    expect(tabIds()).toEqual([S3]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    expect(tabIds()).toEqual([S3]);
+    expect(el.querySelector<HTMLElement>(`[data-tab-id="${S3}"]`)!.dataset.pinned).toBe("true");
+    const close = await menu(S3);
+    await close("Close tab");
+    await act(async () => {});
+    expect(JSON.parse(localStorage.getItem("claude-ui.pinned-tabs")!)).toEqual([]);
+  });
+
   it("Copy session ID writes the id to the clipboard and toasts; without a clipboard the toast says why", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
