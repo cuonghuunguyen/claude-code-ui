@@ -1737,4 +1737,46 @@ describe("GH-358 sidebar menus", () => {
     expect(rowOf(O1)).toBeNull();
     expect(toast()?.textContent).toBe("Archived 1 session");
   });
+
+  it("Rename from the row context menu opens the title editor with the title selected and keeps it: Enter saves, Escape cancels", async () => {
+    const input = () => el.querySelector<HTMLInputElement>('[data-testid="rename-input"]');
+    await ctx(rowOf(ID));
+    await click("action-rename");
+    await new Promise((r) => setTimeout(r, 400));
+    await flush();
+    expect(input()).not.toBeNull();
+    expect(document.activeElement).toBe(input());
+    expect(input()!.selectionStart).toBe(0);
+    expect(input()!.selectionEnd).toBe(input()!.value.length);
+    const from = sent.length;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input()!, "Renamed");
+      input()!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => void input()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(bodies("session.rename", from)).toEqual([{ type: "session.rename", sessionId: ID, title: "Renamed" }]);
+    await ctx(rowOf(ID));
+    await click("action-rename");
+    await new Promise((r) => setTimeout(r, 400));
+    await flush();
+    expect(input()).not.toBeNull();
+    await act(async () => void input()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(input()).toBeNull();
+  });
+
+  it("Rename from the row context menu survives the closing menu taking the focus back", async () => {
+    await ctx(rowOf(ID));
+    await click("action-rename");
+    const input = () => el.querySelector<HTMLInputElement>('[data-testid="rename-input"]');
+    // The menu's focus return, as a real browser does it while the popup fades out.
+    await act(async () => void input()!.blur());
+    await new Promise((r) => setTimeout(r, 50));
+    await flush();
+    expect(input()).not.toBeNull();
+    expect(document.activeElement).toBe(input());
+    // A blur after the grace period still ends the edit.
+    await new Promise((r) => setTimeout(r, 600));
+    await act(async () => void input()!.blur());
+    expect(input()).toBeNull();
+  });
 });

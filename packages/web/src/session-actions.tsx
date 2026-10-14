@@ -119,11 +119,15 @@ export function SessionContextMenu({ target, onAction, children }: { target: Act
   );
 }
 
+/** A blur this soon after the editor opened is the closing menu's focus return, not the user. */
+const RENAME_GRACE_MS = 500;
+
 /** Inline title editor: Enter or blur saves, Escape cancels (`undefined`). An empty or unchanged title is a cancel. */
 export function RenameInput({ title, onDone, className }: { title: string; onDone: (title: string | undefined) => void; className?: string }) {
   const [value, setValue] = useState(title);
   // Enter unmounts the input, whose blur would then save a second time.
   const done = useRef(false);
+  const mountedAt = useRef(performance.now());
   const finish = (t: string | undefined) => {
     if (done.current) return;
     done.current = true;
@@ -142,7 +146,14 @@ export function RenameInput({ title, onDone, className }: { title: string; onDon
         if (e.key === "Enter" && !isImeKey(e.nativeEvent)) finish(value);
         if (e.key === "Escape" && !isImeKey(e.nativeEvent)) finish(undefined);
       }}
-      onBlur={() => finish(value)}
+      onBlur={(e) => {
+        // The menu that opened this editor returns focus to its trigger while it closes (a context menu, GH-358): that is no wish to leave.
+        if (performance.now() - mountedAt.current < RENAME_GRACE_MS && !done.current) {
+          const input = e.currentTarget;
+          return void setTimeout(() => input.isConnected && !done.current && input.focus(), 0);
+        }
+        finish(value);
+      }}
       aria-label="Session title"
       maxLength={200}
       className={cn("h-6 min-w-0 flex-1 rounded-sm bg-background px-1 text-foreground text-sm outline-none ring-2 ring-ring max-md:h-9", className)}
