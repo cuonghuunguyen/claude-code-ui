@@ -567,3 +567,14 @@ it("GH-360 file menu has Rename F2, Duplicate and Delete with the shortcut hints
   await closeMenu();
   t.unmount();
 });
+
+it("GH-360 Shift+F10 on a focused row moves focus to the menu's first enabled item", async () => {
+  const t = setup();
+  await t.render();
+  t.row("/p/src").focus();
+  await t.key(t.row("/p/src"), "F10", { shiftKey: true });
+  await vi.waitFor(() => expect(document.activeElement).toBe(menuItem("newFile")));
+  expect(document.activeElement!.getAttribute("role")).toBe("menuitem");
+  await closeMenu();
+  t.unmount();
+});
