@@ -14,7 +14,10 @@ globalThis.ResizeObserver ??= class {
 Element.prototype.scrollIntoView ??= () => {};
 let width = 1440;
 window.matchMedia = ((query: string) => ({
-  matches: /min-width: (\d+)px/.test(query) ? width >= +/min-width: (\d+)px/.exec(query)![1]! : false,
+  // Live like a real MediaQueryList.
+  get matches() {
+    return /min-width: (\d+)px/.test(query) ? width >= +/min-width: (\d+)px/.exec(query)![1]! : false;
+  },
   media: query,
   addEventListener() {},
   removeEventListener() {},
@@ -737,6 +740,29 @@ it("maximize hides the session view and side panel; restore and hide give them b
   expect(q("terminal-panel")).toBeNull();
   expect(main().className).not.toMatch(/(^| )hidden( |$)/);
   expect(q("terminal-toggle")!.getAttribute("aria-pressed")).toBe("false");
+});
+
+const mainHidden = () => /(^| )hidden( |$)/.test(el.querySelector("main")!.className);
+
+it("a maximized terminal restores for Focus prompt, the side panel toggle and the show-pane commands", async () => {
+  await clickId("terminal-toggle");
+  for (const key of [{ key: "l", code: "KeyL", ctrlKey: true }, { key: "r", code: "KeyR", ctrlKey: true, shiftKey: true }]) {
+    await clickId("dock-maximize");
+    expect(mainHidden()).toBe(true);
+    await press(key);
+    expect(mainHidden()).toBe(false);
+    expect(q("dock-maximize")!.getAttribute("aria-label")).toBe("Maximize panel");
+  }
+});
+
+it("a maximized terminal restores when the shown session asks for permission", async () => {
+  await clickId("terminal-toggle");
+  await clickId("dock-maximize");
+  expect(mainHidden()).toBe(true);
+  await act(async () =>
+    emit({ type: "event", sessionId: ID, seq: 1, part: { type: "permission_request", id: "p1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "touch x" }, suggestions: [], settled: false } }),
+  );
+  expect(mainHidden()).toBe(false);
 });
 
 it("hiding the side panel keeps the bottom terminal", async () => {

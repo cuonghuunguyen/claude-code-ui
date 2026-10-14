@@ -1,5 +1,5 @@
 // Pane layout per browser (docs/spec.md "Layout"): which dock area holds each pane on wide screens, their order and the side panel's side.
-import { useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 export type PaneId = "changes" | "files" | "graph" | "terminal";
 export type DockArea = "side" | "bottom";
@@ -118,14 +118,17 @@ export const useTerminalDock = (): DockArea => areaOf(useLayout(), "terminal");
 /** True while the viewport is at least `px` wide; follows resizes. */
 export function useMinWidth(px: number): boolean {
   const query = `(min-width: ${px}px)`;
+  // One MediaQueryList per query, not one per render (`subscribe` is stable while `query` is).
+  const mql = useMemo(() => (typeof matchMedia === "function" ? matchMedia(query) : undefined), [query]);
   return useSyncExternalStore(
-    (l) => {
-      if (typeof matchMedia !== "function") return () => {};
-      const m = matchMedia(query);
-      m.addEventListener("change", l);
-      return () => m.removeEventListener("change", l);
-    },
-    () => typeof matchMedia === "function" && matchMedia(query).matches,
+    useCallback(
+      (l: () => void) => {
+        mql?.addEventListener("change", l);
+        return () => mql?.removeEventListener("change", l);
+      },
+      [mql],
+    ),
+    () => mql?.matches ?? false,
     () => false,
   );
 }

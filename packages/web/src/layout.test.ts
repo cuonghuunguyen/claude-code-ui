@@ -93,7 +93,9 @@ it("useMinWidth follows matchMedia change events", async () => {
   const ls = new Set<() => void>();
   const original = window.matchMedia;
   window.matchMedia = ((q: string) => ({
-    matches: wide,
+    get matches() {
+      return wide;
+    },
     media: q,
     addEventListener: (_: string, l: () => void) => ls.add(l),
     removeEventListener: (_: string, l: () => void) => ls.delete(l),

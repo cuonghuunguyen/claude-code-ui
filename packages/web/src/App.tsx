@@ -883,6 +883,10 @@ export function App() {
     return w;
   }, [list, views]);
   const waitingN = waitingCount(waiting);
+  /** A permission request or question of the shown session, or a file opened from search, needs the session view or side panel: restore. */
+  const needKey = waiting.filter((x) => x.sessionId === activeId).map((x) => x.part.id).join();
+  useEffect(() => void (needKey && setBottomMax(false)), [needKey]);
+  useEffect(() => void (openFile && setBottomMax(false)), [openFile]);
   const everWaiting = useRef(false);
   if (waitingN > 0) everWaiting.current = true;
   useEffect(() => {
@@ -1241,7 +1245,8 @@ export function App() {
   };
   const wide = (px: number) => window.matchMedia(`(min-width: ${px}px)`).matches;
   // Below lg the session and the side panel share one pane; from lg on the session always shows and "pane" picks the side panel tab.
-  const showSession = () => !wide(1024) && setPane("session");
+  // A maximized terminal hides the session view: whatever brings the session or the side panel forward restores it.
+  const showSession = () => (setBottomMax(false), !wide(1024) && setPane("session"));
   /** Opens a file of the shown session (path relative to its cwd) in the files panel. */
   const openInPanel = (p: string) => {
     setOpenFile(joinPath(shown!.cwd, p));
@@ -1251,6 +1256,7 @@ export function App() {
   const latest = useMemo(() => (view ? latestPlan(view) : undefined), [view?.parts, view?.aux]);
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
+    setBottomMax(false);
     if (fileTree && shows("files")) return setFileTree(false);
     setFileTree(true);
     reveal("files");
@@ -1367,11 +1373,12 @@ export function App() {
     toggleSidebar: () => (wide(768) ? setSidebar((v) => !v) : setDrawer((v) => !v)),
     // lg: the side panel breakpoint; below it the session and the files share one pane.
     toggleFileTree,
-    toggleSidePanel: () => (wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
+    toggleSidePanel: () => (setBottomMax(false), wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
     toggleTerminal,
     // The pane that shows already: focus goes back to the prompt (VS Code's Explorer key does the same).
     showPane: (p) => {
       if (shows(p)) return focusShownPrompt();
+      setBottomMax(false);
       reveal(p);
     },
     newTerminal: () => {
@@ -1665,7 +1672,7 @@ export function App() {
             </IconButton>
           )}
           {shown && (
-            <IconButton className="max-lg:hidden" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={shows("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar">
+            <IconButton className="max-lg:hidden" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={shows("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar" command="terminal.toggle">
               <PanelBottomIcon />
             </IconButton>
           )}
@@ -2073,7 +2080,7 @@ export function App() {
                     <IconButton label={bottomMax ? "Restore panel" : "Maximize panel"} pressed={bottomMax} onClick={() => setBottomMax((m) => !m)} testId="dock-maximize">
                       {bottomMax ? <ChevronDownIcon /> : <ChevronUpIcon />}
                     </IconButton>
-                    <IconButton label="Hide bottom panel" onClick={() => (setBottomOpen(false), focusShownPrompt())} testId="dock-hide">
+                    <IconButton label="Hide bottom panel" onClick={() => (setBottomOpen(false), focusShownPrompt())} testId="dock-hide" command="terminal.toggle">
                       <XIcon />
                     </IconButton>
                   </>
