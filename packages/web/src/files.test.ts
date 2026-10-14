@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { inDir } from "./paths.ts";
-import { mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention } from "./files.ts";
+import { mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, fileMention } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -166,5 +166,13 @@ describe("placeTab", () => {
     const next = placeTab(tabs, tab("/p/d.ts"), true, scope);
     expect(Object.keys(next)).toEqual(["/q/b.ts", "/p/d.ts"]);
     expect(next["/q/b.ts"]!.preview).toBe(true);
+  });
+});
+
+describe("fileMention (GH-360)", () => {
+  it("is the path relative to cwd as an @-mention; a Windows path with /; a space is quoted", () => {
+    expect(fileMention("/p/src/a.ts", "/p")).toBe("@src/a.ts");
+    expect(fileMention("C:\\p\\src\\a.ts", "C:\\p")).toBe("@src/a.ts");
+    expect(fileMention("/p/my file.ts", "/p")).toBe('@"my file.ts"');
   });
 });

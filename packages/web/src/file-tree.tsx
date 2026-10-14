@@ -1,12 +1,18 @@
 // The Files tab's file tree (docs/spec.md "Layout", Side panel): a flat ARIA tree with file-type icons, git marks, a filter field and keyboard navigation.
-import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type MouseEvent, type RefObject } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { ContextMenu } from "@base-ui/react/context-menu";
 import type { FsEntry, FsListResult, FsSearchResult, GitDiffResult } from "@claude-ui/protocol";
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon } from "lucide-react";
 import type { connect } from "./client.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { ancestors, gitMarks, moveFocus, pathKey, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Mark, type Row } from "./file-tree-model.ts";
+import { treeMenuSections, type TreeCommand, type TreeTarget } from "./file-tree-menu.ts";
 import { gitRows } from "./git-changes.ts";
-import { joinPath } from "./paths.ts";
+import { joinPath, relPath } from "./paths.ts";
+import { ITEM, POPUP } from "./session-actions.tsx";
+import { openContextMenuFromKey } from "./tab-menu.ts";
+import { swallowKeyFollowup } from "./tabs-bar.tsx";
+import { cn } from "@/lib/utils";
 
 type Client = ReturnType<typeof connect>;
 
@@ -29,6 +35,10 @@ const MARK_STYLE: Record<Mark, { text: string; label: string }> = {
 };
 const DIR_STYLE: Record<DirMark, string> = { D: "text-destructive", M: "text-info", A: "text-success" };
 
+const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+/** Commands whose operation is not wired yet. */
+const WRITE = new Set<TreeCommand>(["rename", "duplicate", "delete", "newFile", "newFolder"]);
+
 const rowEl = (root: HTMLElement | null, path: string) => [...(root?.querySelectorAll<HTMLElement>("[data-path]") ?? [])].find((e) => e.dataset.path === path);
 
 export function FileTree({
@@ -40,7 +50,11 @@ export function FileTree({
   visible = true,
   gitNudge = 0,
   onOpen,
-  onRowContextMenu,
+  onCopy,
+  onViewer,
+  onShowChanges,
+  onMention,
+  onReload,
   handleRef,
   onFilter,
 }: {
@@ -56,8 +70,16 @@ export function FileTree({
   /** Bumped after a save or a change of an open file: reads the git marks again. */
   gitNudge?: number;
   onOpen: (path: string, opts: OpenOptions) => void;
-  /** For a context menu (not built yet): the row's entry. */
-  onRowContextMenu?: (e: MouseEvent, entry: FsEntry) => void;
+  /** Copy path / Copy relative path: the text and what it is (for the toast). */
+  onCopy?: (text: string, what: string) => void;
+  /** Open in popup viewer. */
+  onViewer?: (path: string) => void;
+  /** Show changes (a file with a git mark). */
+  onShowChanges?: (path: string) => void;
+  /** Add to prompt. */
+  onMention?: (path: string) => void;
+  /** Refresh (the header's reload). */
+  onReload?: () => void;
   handleRef?: RefObject<FileTreeHandle | undefined>;
   /** Told whether the filter field has a query (the tree then shows results). */
   onFilter?: (active: boolean) => void;
@@ -74,6 +96,12 @@ export function FileTree({
   const pending = useRef<{ path: string; focus: boolean }>(undefined);
   const buffer = useRef({ text: "", timer: 0 });
   const q = query.trim();
+  // The context menu: one for the whole tree, its target is the row under the right click or long press (captured before Base UI opens the menu).
+  const [menuTarget, setMenuTarget] = useState<TreeTarget>({ kind: "root" });
+  const pendingTarget = useRef<string>(undefined);
+  const keyOpenedAt = useRef(-Infinity);
+  /** The chosen command moved focus (editor, prompt): the menu does not return it to the row. */
+  const movedFocus = useRef(false);
 
   async function list(dir: string) {
     setModel((m) => ({ ...m, dirs: { ...m.dirs, [dir]: Array.isArray(m.dirs[dir]) ? m.dirs[dir]! : "loading" } }));
@@ -169,6 +197,42 @@ export function FileTree({
     if (activePath && !q) void reveal(activePath, false);
   }, [activePath, cwd]);
 
+  const targetOf = (path: string | undefined): TreeTarget => {
+    const r = path === undefined ? undefined : rows.find((x) => x.kind === "entry" && x.entry.path === path);
+    if (!r || r.kind !== "entry") return { kind: "root" };
+    return r.entry.isDir ? { kind: "dir", entry: r.entry, expanded: !!r.expanded } : { kind: "file", entry: r.entry, changed: !!marks?.files.get(pathKey(r.entry.path)) };
+  };
+  const captureTarget = (target: EventTarget) => {
+    const path = (target as HTMLElement).closest<HTMLElement>("[role=treeitem]")?.dataset.path;
+    pendingTarget.current = path;
+    // Right click and long press focus the row (VS Code).
+    if (path !== undefined) setFocused(path);
+  };
+  function run(id: TreeCommand, t: TreeTarget) {
+    const path = t.kind === "root" ? cwd : t.entry.path;
+    switch (id) {
+      case "open":
+        movedFocus.current = true;
+        return onOpen(path, { pinned: true, focusEditor: true });
+      case "viewer":
+        movedFocus.current = true;
+        return onViewer?.(path);
+      case "changes":
+        movedFocus.current = true;
+        return onShowChanges?.(path);
+      case "mention":
+        movedFocus.current = true;
+        return onMention?.(path);
+      case "copyPath":
+        return onCopy?.(path, "path");
+      case "copyRel":
+        return onCopy?.(relPath(path, cwd), "relative path");
+      case "collapse":
+        return collapse(path);
+      case "refresh":
+        return onReload?.();
+    }
+  }
   const toggle = (e: FsEntry) => (modelRef.current.expanded.has(e.path) ? collapse(e.path) : expand(e.path));
   const rowOf = (target: EventTarget) => {
     const path = (target as HTMLElement).closest<HTMLElement>("[role=treeitem]")?.dataset.path;
@@ -178,7 +242,10 @@ export function FileTree({
   function onKeyDown(e: KeyboardEvent) {
     const i = rowOf(e.target);
     const row = rows[i];
-    if (!row || row.kind !== "entry" || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (!row || row.kind !== "entry") return;
+    const el = (e.target as HTMLElement).closest<HTMLElement>("[role=treeitem]");
+    if (el && openContextMenuFromKey(e as KeyboardEvent<HTMLElement>, el)) return void (keyOpenedAt.current = performance.now());
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       return row.entry.isDir ? toggle(row.entry) : onOpen(row.entry.path, e.key === "Enter" ? { focusEditor: true } : {});
@@ -221,6 +288,13 @@ export function FileTree({
           }}
         />
       </div>
+      <ContextMenu.Root onOpenChange={(open) => open && ((movedFocus.current = false), setMenuTarget(targetOf(pendingTarget.current)))}>
+      <ContextMenu.Trigger
+        render={<div className="flex flex-1 flex-col" />}
+        onContextMenuCapture={(e) => captureTarget(e.target)}
+        onTouchStartCapture={(e) => captureTarget(e.target)}
+        onContextMenu={(e) => swallowKeyFollowup(e, keyOpenedAt)}
+      >
       <div role="tree" id="file-tree-rows" aria-label="Files" ref={root} onKeyDown={onKeyDown}>
         {rows.map((r, i) => {
           const pad = { paddingLeft: `${8 + r.depth * 12}px` };
@@ -252,8 +326,7 @@ export function FileTree({
               onFocus={() => setFocused(entry.path)}
               onClick={() => (entry.isDir ? toggle(entry) : onOpen(entry.path, {}))}
               onDoubleClick={() => !entry.isDir && onOpen(entry.path, { pinned: true })}
-              onContextMenu={(e) => onRowContextMenu?.(e, entry)}
-            >
+                          >
               {entry.isDir ? (
                 <ChevronRightIcon className={`size-3.5 shrink-0 text-faint transition-transform motion-reduce:transition-none ${r.expanded ? "rotate-90" : ""}`} aria-hidden />
               ) : (
@@ -289,6 +362,44 @@ export function FileTree({
         </p>
       )}
       {q && found?.query === q && found.paths.length >= 50 && <p className="px-2 py-1 text-muted-foreground">First 50 matches.</p>}
+      <div className="min-h-6 flex-1" data-testid="tree-empty-space" />
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Positioner className="z-50">
+          <ContextMenu.Popup
+            className={cn(POPUP, "max-w-[calc(100vw-2rem)]")}
+            data-testid="tree-menu"
+            finalFocus={() => (movedFocus.current ? false : (rowEl(root.current, menuTarget.kind === "root" ? tabPath : menuTarget.entry.path) ?? true))}
+          >
+            {treeMenuSections(menuTarget, MAC)
+              .map((section) => section.filter((x) => !WRITE.has(x.id)))
+              .filter((section) => section.length)
+              .map((section, i) => (
+                <div key={i} role="none">
+                  {i > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
+                  {section.map((x) => (
+                    <ContextMenu.Item
+                      key={x.id}
+                      className={cn(ITEM, x.destructive && "text-destructive")}
+                      disabled={x.disabled}
+                      aria-keyshortcuts={x.keys}
+                      data-testid={x.testId}
+                      onClick={() => run(x.id, menuTarget)}
+                    >
+                      <span className="truncate">{x.label}</span>
+                      {x.shortcut && (
+                        <kbd className="ml-auto pl-4 font-sans text-muted-foreground text-xs" aria-hidden>
+                          {x.shortcut}
+                        </kbd>
+                      )}
+                    </ContextMenu.Item>
+                  ))}
+                </div>
+              ))}
+          </ContextMenu.Popup>
+        </ContextMenu.Positioner>
+      </ContextMenu.Portal>
+      </ContextMenu.Root>
     </>
   );
 }

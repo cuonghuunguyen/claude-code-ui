@@ -374,6 +374,8 @@ export function App() {
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
   const [openFile, setOpenFile] = useState<{ path: string; line?: number }>();
+  /** File tree "Show changes": the Changes tab selects this path (`seq` tells a repeat apart). */
+  const [changesReveal, setChangesReveal] = useState<{ path: string; seq: number }>();
   // Popup viewer (GH-238): what shows, for which session; `opener` takes the focus back on close.
   const [viewer, setViewer] = useState<ViewerState>();
   useEffect(() => setViewer(undefined), [activeId]);
@@ -1911,6 +1913,9 @@ export function App() {
                       status={status}
                       cwd={panelSession.cwd}
                       onSend={(mention) => (setInsert(mention), setPane("session"))}
+                      onCopy={copyText}
+                      onViewer={(path) => openViewer({ kind: "file", path })}
+                      onShowChanges={(path) => (setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), setPane("changes"))}
                       openPath={openFile?.path}
                       openLine={openFile?.line}
                       onOpened={() => setOpenFile(undefined)}
@@ -1932,6 +1937,7 @@ export function App() {
                       onOpen={(path) => (setOpenFile({ path }), setPane("files"))}
                       sessionId={panelSession.id}
                       onPopOut={() => openViewer({ kind: "changes" })}
+                      reveal={changesReveal}
                     />
                   )}
                   {isGit && (sidePane === "graph" || graphCwd === panelSession.cwd) && (

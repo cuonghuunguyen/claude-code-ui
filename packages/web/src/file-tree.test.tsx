@@ -205,3 +205,109 @@ it("rows are 28px, 44px below md and on touch; the filter field is 44px there an
   expect(f).toContain("text-base");
   t.unmount();
 });
+
+// --- GH-360: context menu ---
+const ctxMenu = (target: Element, init: MouseEventInit = {}) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5, ...init })));
+const menuIds = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].map((i) => i.dataset.testid!.replace("tree-menu-", ""));
+const menuItem = (id: string) => document.querySelector<HTMLElement>(`[data-testid="tree-menu-${id}"]`)!;
+const closeMenu = async () => {
+  await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => {});
+};
+
+it("GH-360 right click opens the menu of the row under it: file, folder, empty space", async () => {
+  const t = setup();
+  await t.render();
+  await ctxMenu(t.row("/p/README.md"));
+  expect(menuIds()).toEqual(["open", "viewer", "mention", "copyPath", "copyRel"]);
+  await closeMenu();
+  await ctxMenu(t.row("/p/src"));
+  expect(menuIds()).toEqual(["copyPath", "copyRel", "collapse"]);
+  await closeMenu();
+  await ctxMenu(t.el.querySelector('[data-testid="tree-empty-space"]')!);
+  expect(menuIds()).toEqual(["refresh"]);
+  await closeMenu();
+  t.unmount();
+});
+
+it("GH-360 Show changes only for a file with a git mark", async () => {
+  const t = setup({ gitStamp: "s" }, { "git.diff": diff });
+  await t.render();
+  await act(async () => void (await new Promise((r) => setTimeout(r, 350))));
+  await ctxMenu(t.row("/p/new.ts"));
+  expect(menuIds()).toContain("changes");
+  await closeMenu();
+  await ctxMenu(t.row("/p/README.md"));
+  expect(menuIds()).not.toContain("changes");
+  await closeMenu();
+  t.unmount();
+});
+
+it("GH-360 menu commands: Open pins and focuses the editor, copy, mention, viewer, collapse, refresh", async () => {
+  const onCopy = vi.fn();
+  const onMention = vi.fn();
+  const onViewer = vi.fn();
+  const onReload = vi.fn();
+  const t = setup({ onCopy, onMention, onViewer, onReload });
+  await t.render();
+  await act(async () => t.row("/p/src").click());
+  const run = async (path: string, id: string) => {
+    await ctxMenu(t.row(path));
+    await act(async () => menuItem(id).click());
+    await act(async () => {});
+  };
+  await run("/p/src/app.ts", "open");
+  expect(t.onOpen).toHaveBeenLastCalledWith("/p/src/app.ts", { pinned: true, focusEditor: true });
+  await run("/p/src/app.ts", "copyPath");
+  expect(onCopy).toHaveBeenLastCalledWith("/p/src/app.ts", "path");
+  await run("/p/src/app.ts", "copyRel");
+  expect(onCopy).toHaveBeenLastCalledWith("src/app.ts", "relative path");
+  await run("/p/src/app.ts", "mention");
+  expect(onMention).toHaveBeenLastCalledWith("/p/src/app.ts");
+  await run("/p/src/app.ts", "viewer");
+  expect(onViewer).toHaveBeenLastCalledWith("/p/src/app.ts");
+  await run("/p/src", "collapse");
+  expect(t.row("/p/src").getAttribute("aria-expanded")).toBe("false");
+  await ctxMenu(t.el.querySelector('[data-testid="tree-empty-space"]')!);
+  await act(async () => menuItem("refresh").click());
+  expect(onReload).toHaveBeenCalled();
+  t.unmount();
+});
+
+it("GH-360 Shift+F10 and the ContextMenu key open the focused row's menu; F10 alone does not; Escape returns focus to the row", async () => {
+  const t = setup();
+  await t.render();
+  t.row("/p/README.md").focus();
+  await t.key(t.row("/p/README.md"), "F10");
+  expect(document.querySelector('[role="menu"]')).toBeNull();
+  for (const init of [{ key: "F10", shiftKey: true }, { key: "ContextMenu" }]) {
+    await t.key(t.row("/p/README.md"), init.key, init);
+    expect(menuIds()).toContain("open");
+    await closeMenu();
+    expect(document.activeElement).toBe(t.row("/p/README.md"));
+  }
+  t.unmount();
+});
+
+it("GH-360 long press: touchstart on a row, 500 ms later the menu of that row opens", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = setup();
+    await t.render();
+    await act(async () => void t.row("/p/src").dispatchEvent(Object.assign(new Event("touchstart", { bubbles: true, cancelable: true }), { touches: [{ clientX: 10, clientY: 10 }] })));
+    await act(async () => void vi.advanceTimersByTime(600));
+    expect(menuIds()).toEqual(["copyPath", "copyRel", "collapse"]);
+    t.unmount();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("GH-360 menu items are 44 px high below md", async () => {
+  const t = setup();
+  await t.render();
+  await ctxMenu(t.row("/p/README.md"));
+  expect(menuItem("open").className).toContain("max-md:h-11");
+  await closeMenu();
+  t.unmount();
+});

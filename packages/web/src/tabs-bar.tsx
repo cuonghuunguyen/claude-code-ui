@@ -845,7 +845,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
 }
 
 /** The browser's own contextmenu right after Shift+F10 / the ContextMenu key (Firefox fires one on key release, at another place) must not reopen the menu elsewhere. A synthetic event is untrusted and passes. */
-function swallowKeyFollowup(e: ReactMouseEvent, keyOpenedAt: RefObject<number>) {
+export function swallowKeyFollowup(e: ReactMouseEvent, keyOpenedAt: RefObject<number>) {
   if (!e.nativeEvent.isTrusted || performance.now() - keyOpenedAt.current > KEY_FOLLOWUP_MS) return;
   e.preventDefault();
   (e as typeof e & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();

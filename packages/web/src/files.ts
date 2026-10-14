@@ -133,13 +133,18 @@ export function replaceDoc(state: EditorState, text: string): TransactionSpec {
 /** The document joined with its own line breaks (`doc.toString()` always joins with "\n"). */
 export const docText = (state: EditorState) => state.sliceDoc();
 
+/** A Windows path in "/": the CLI resolves either, and "\" would read as an escape in a quoted mention. */
+const mentionRel = (path: string, cwd: string) => (isWinPath(path) ? relPath(path, cwd).replace(/\\/g, "/") : relPath(path, cwd));
+
+/** "Add to prompt" from the file tree: `@path` of the file, relative to `cwd`. */
+export const fileMention = (path: string, cwd: string) => mentionPath(mentionRel(path, cwd));
+
 /**
  * "Send selection to Claude": `@path#Lstart-end` of the main selection, path relative to `cwd`; the file alone when nothing is selected.
  * The SDK attaches only the range for `#L…` (`#start-end` attaches the whole file), and a quoted path needs the range inside the quotes.
  */
 export function selectionMention(state: EditorState, path: string, cwd: string) {
-  // A Windows path in "/": the CLI resolves either, and "\" would read as an escape in a quoted mention.
-  const rel = isWinPath(path) ? relPath(path, cwd).replace(/\\/g, "/") : relPath(path, cwd);
+  const rel = mentionRel(path, cwd);
   const { from, to, empty } = state.selection.main;
   if (empty) return mentionPath(rel);
   const start = state.doc.lineAt(from);
