@@ -424,3 +424,16 @@ it("with its binding removed the New terminal button has no empty key hint", asy
     resetAll();
   }
 });
+
+it("showing a panel that stayed mounted hidden gives its shell the focus (Ctrl+`, the terminal tab)", async () => {
+  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+  const draw = (shown: boolean) => act(async () => root.render(<TerminalPanel client={client} status="connected" cwd="/p" onEmpty={() => {}} shown={shown} />));
+  await draw(true);
+  await flush();
+  await draw(false);
+  const before = xterm.all[0]!.focused;
+  await draw(false);
+  expect(xterm.all[0]!.focused).toBe(before);
+  await draw(true);
+  expect(xterm.all[0]!.focused).toBe(before + 1);
+});
