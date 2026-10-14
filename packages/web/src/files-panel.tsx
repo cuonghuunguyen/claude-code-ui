@@ -1,7 +1,8 @@
 // File tree and CodeMirror editor tabs (docs/spec.md "Layout", "Editor"). Files are read and saved through the daemon.
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { basicSetup, EditorView } from "codemirror";
-import { Compartment, EditorState } from "@codemirror/state";
+import { Compartment, EditorState, Prec } from "@codemirror/state";
+import { gotoLine } from "@codemirror/search";
 import { keymap, type KeyBinding } from "@codemirror/view";
 import { selectLine } from "@codemirror/commands";
 import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
@@ -13,10 +14,11 @@ import { Button } from "@/components/ui/button";
 import type { connect, ConnectionStatus, RequestError } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
-import { baseName, inDir } from "./paths.ts";
+import { baseName, inDir, relPath } from "./paths.ts";
 import { MediaView } from "./media-view.tsx";
+import { FileIcon } from "./file-icon.tsx";
 import { FileTree, type FileTreeHandle, type OpenOptions } from "./file-tree.tsx";
-import { diskChanged, docText, isDirty, lineBreaks, mediaKind, opened, openedMedia, reload, readFailure, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
+import { diskChanged, docText, isDirty, lineBreaks, mediaKind, opened, openedMedia, pin, placeTab, reload, readFailure, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -32,6 +34,7 @@ export function FilesPanel({
   cwd,
   onSend,
   openPath,
+  openLine,
   onOpened,
   watch = [],
   showTree,
@@ -44,6 +47,8 @@ export function FilesPanel({
   cwd: string;
   onSend: (mention: string) => void;
   openPath?: string;
+  /** With `openPath`: the line to put the cursor on. */
+  openLine?: number;
   onOpened?: () => void;
   watch?: string[];
   /** The file tree's open state is the app's (Toggle file tree, kept per browser). */
@@ -62,7 +67,11 @@ export function FilesPanel({
   const tree = useRef<FileTreeHandle>(undefined);
   const [error, setError] = useState<string>();
   /** The last opened file that cannot be shown (binary, too large, not UTF-8); it replaces the editor until a tab is chosen. */
-  const [notice, setNotice] = useState<{ path: string; text: string }>();
+  const [notice, setNotice] = useState<{ path: string; text: string; hint?: string }>();
+  /** The file being read for longer than 150 ms. */
+  const [loading, setLoading] = useState<string>();
+  /** A line to go to in `path`'s editor once it shows (`key` tells a repeat of the same line apart). */
+  const [goto, setGoto] = useState<{ path: string; line: number; key: number }>();
   const editor = useRef<EditorView>(undefined);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
@@ -93,29 +102,38 @@ export function FilesPanel({
       if ((e as Error).message === "disconnected") return;
       const f = readFailure(e as RequestError);
       // A clean tab shows the state instead of its stale text; a dirty one keeps its edits and shows the line.
-      update(path, (t) => (f.notice && !isDirty(t) ? { ...t, error: undefined, notice: f.text } : { ...t, error: f.text }));
+      update(path, (t) => (f.notice && !isDirty(t) ? { ...t, error: undefined, notice: f.text, noticeHint: f.hint } : { ...t, error: f.text }));
     }
   }
 
-  async function open(path: string, opts: Pick<OpenOptions, "focusEditor"> = {}) {
+  /** Opens `path` as a preview tab (italic, replaced by the next single-click open) unless `preview` is false. */
+  async function open(path: string, opts: { preview?: boolean; line?: number; focusEditor?: boolean } = {}) {
+    const preview = opts.preview ?? true;
+    const scope = (p: string) => inDir(p, cwd);
     setError(undefined);
     setNotice(undefined);
-    if (!tabsRef.current[path]) {
+    if (tabsRef.current[path]) setTabs((ts) => (ts[path] ? placeTab(ts, ts[path], preview, scope) : ts));
+    else {
+      const timer = setTimeout(() => setLoading(path), 150);
       try {
         const tab = await readTab(path);
-        setTabs((ts) => ({ ...ts, [path]: ts[path] ?? tab }));
+        setTabs((ts) => placeTab(ts, ts[path] ?? tab, preview, scope));
       } catch (e) {
         const f = readFailure(e as RequestError);
-        return f.notice ? setNotice({ path, text: f.text }) : setError(f.text);
+        return f.notice ? setNotice({ path, text: f.text, hint: f.hint }) : setError(f.text);
+      } finally {
+        clearTimeout(timer);
+        setLoading((l) => (l === path ? undefined : l));
       }
     }
     setActivePath(path);
+    if (opts.line) setGoto((g) => ({ path, line: opts.line!, key: (g?.key ?? 0) + 1 }));
     if (opts.focusEditor) requestAnimationFrame(() => editor.current?.focus());
   }
 
   useEffect(() => {
     if (!openPath) return;
-    void open(openPath);
+    void open(openPath, { line: openLine });
     onOpened?.();
   }, [openPath]);
 
@@ -125,7 +143,7 @@ export function FilesPanel({
     const content = t.draft;
     try {
       const r = await client.request<FsWriteResult>({ type: "fs.write", path, content, baseMtime: saveBase(t, overwrite) });
-      update(path, (t) => saved(t, content, r.mtime));
+      update(path, (t) => pin(saved(t, content, r.mtime)));
       setGitNudge((n) => n + 1);
     } catch (e) {
       update(path, (t) => ({ ...t, error: (e as Error).message }));
@@ -174,7 +192,13 @@ export function FilesPanel({
 
   const shown = paths.filter((p) => inDir(p, cwd));
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
-  const refused = notice ?? (active?.notice ? { path: active.path, text: active.notice } : undefined);
+  const refused = notice ?? (active?.notice ? { path: active.path, text: active.notice, hint: active.noticeHint } : undefined);
+
+  /** Breadcrumb folder: show the tree, then reveal the folder in it. */
+  function revealFolder(dir: string) {
+    if (!showTree) onToggleTree();
+    requestAnimationFrame(() => void tree.current?.reveal(dir, true, true));
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="files-panel">
@@ -247,7 +271,7 @@ export function FilesPanel({
             gitNudge={gitNudge}
             handleRef={tree}
             onFilter={setFiltering}
-            onOpen={(path, o) => void open(path, o)}
+            onOpen={(path, o) => void open(path, { preview: !o.pinned, focusEditor: o.focusEditor })}
           />
         </nav>
       )}
@@ -265,13 +289,19 @@ export function FilesPanel({
                 className={`flex shrink-0 items-center gap-1 border-r pl-2 ${t === active && !notice ? "bg-muted" : ""}`}
                 title={p}
               >
-                <button className="py-1.5" onClick={() => (setNotice(undefined), setActivePath(p))}>
+                <button
+                  className={`py-1.5 max-md:min-h-11 ${t.preview ? "italic" : ""}`}
+                  aria-label={t.preview ? `${baseName(p)}, preview` : undefined}
+                  onClick={() => (setNotice(undefined), setActivePath(p))}
+                  onDoubleClick={() => update(p, pin)}
+                  onAuxClick={(e) => e.button === 1 && (e.preventDefault(), close(p))}
+                >
                   {baseName(p)}
                   {isDirty(t) && <span aria-label="unsaved"> ●</span>}
                   {t.conflict && <span className="text-warning"> !</span>}
                 </button>
                 <button
-                  className="px-1.5 py-1.5 text-muted-foreground hover:text-foreground"
+                  className="px-1.5 py-1.5 text-muted-foreground hover:text-foreground max-md:min-w-11 max-md:min-h-11"
                   onClick={() => close(p)}
                   aria-label={`Close ${baseName(p)}`}
                 >
@@ -282,13 +312,19 @@ export function FilesPanel({
           })}
         </div>
       )}
-      {refused ? (
-        <p className="m-auto max-w-full p-4 text-center text-muted-foreground text-sm" data-testid="file-notice" role="status">
-          <span className="block truncate font-mono text-xs" title={refused.path}>
-            {refused.path.slice(cwd.length + 1) || refused.path}
-          </span>
-          {refused.text}
+      {loading ? (
+        <p className="m-auto p-4 text-muted-foreground text-sm" role="status" data-testid="file-loading">
+          Loading file…
         </p>
+      ) : refused ? (
+        <div className="m-auto flex max-w-full flex-col items-center gap-1 p-4 text-center" data-testid="file-notice" role="status">
+          <FileIcon path={refused.path} className="mb-1 size-8" />
+          <span className="max-w-full truncate font-mono text-muted-foreground text-xs" title={refused.path}>
+            {relPath(refused.path, cwd)}
+          </span>
+          <span className="text-foreground text-sm">{refused.text}</span>
+          {refused.hint && <span className="text-muted-foreground text-xs">{refused.hint}</span>}
+        </div>
       ) : active ? (
         <div className="flex min-h-0 flex-1 flex-col">
           {active.conflict && (
@@ -316,10 +352,8 @@ export function FilesPanel({
             />
           ) : (
             <>
-          <div className="flex items-center gap-2 border-b px-2 py-1 text-xs">
-            <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground" title={active.path}>
-              {active.path.slice(cwd.length + 1) || active.path}
-            </span>
+          <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1 text-xs">
+            <Breadcrumb path={active.path} cwd={cwd} onFolder={revealFolder} />
             {mediaKind(active.path) === "svg" && (
               <Button size="xs" variant="outline" disabled={isDirty(active)} onClick={() => void switchView(active.path, false)} className="max-md:h-11 pointer-coarse:h-11">
                 Show preview
@@ -331,12 +365,13 @@ export function FilesPanel({
               variant="outline"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => editor.current && onSend(selectionMention(editor.current.state, active.path, cwd))}
+              className="max-md:h-11 pointer-coarse:h-11"
               title="Insert the file and selected lines into the prompt box (Alt+K, Option+K on macOS)"
               data-testid="send-selection"
             >
               Send selection to Claude
             </Button>
-            <Button size="xs" disabled={!isDirty(active) || !!active.conflict} onClick={() => void save(active.path)} data-testid="editor-save">
+            <Button size="xs" className="max-md:h-11 pointer-coarse:h-11" disabled={!isDirty(active) || !!active.conflict} onClick={() => void save(active.path)} data-testid="editor-save">
               Save
             </Button>
           </div>
@@ -346,7 +381,9 @@ export function FilesPanel({
             doc={active.draft}
             viewRef={editor}
             onSend={(state) => onSend(selectionMention(state, active.path, cwd))}
-            onChange={(draft) => update(active.path, (t) => ({ ...t, draft }))}
+            onChange={(draft) => update(active.path, (t) => ({ ...pin(t), draft }))}
+            goto={goto?.path === active.path ? goto : undefined}
+            onGoto={() => setGoto(undefined)}
             onSave={() => void save(active.path)}
           />
             </>
@@ -359,6 +396,44 @@ export function FilesPanel({
   );
 }
 
+/** The file's path below `cwd` as folders (a click reveals one in the tree) and the file name. */
+function Breadcrumb({ path, cwd, onFolder }: { path: string; cwd: string; onFolder: (dir: string) => void }) {
+  const rel = relPath(path, cwd);
+  const parts = rel.split(/[\\/]/).filter(Boolean);
+  const base = rel === path ? "" : path.slice(0, path.length - rel.length);
+  const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  return (
+    <nav aria-label="Breadcrumb" className="min-w-0 max-md:basis-full md:flex-1" title={path}>
+      <ol className="flex min-w-0 items-center font-mono text-muted-foreground">
+        {parts.map((part, i) => {
+          const last = i === parts.length - 1;
+          return (
+            <li key={i} className={`flex items-center ${last ? "min-w-0 shrink" : "shrink-[1000]"}`}>
+              {last ? (
+                <span className="flex min-w-0 items-center gap-1 text-foreground" aria-current="page">
+                  <FileIcon path={path} className="size-4 shrink-0" />
+                  <span className="truncate">{part}</span>
+                </span>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="max-w-[16ch] truncate rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring max-md:min-h-11"
+                    onClick={() => onFolder(base + parts.slice(0, i + 1).join(sep))}
+                  >
+                    {part}
+                  </button>
+                  <ChevronRightIcon className="mx-0.5 size-3 shrink-0 text-faint" aria-hidden />
+                </>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
+  );
+}
+
 /** Keys the editor owns: handled here, so the app's shortcuts (defaultPrevented) leave them alone. */
 export const editorKeys = ({ onSave, onSend }: { onSave: () => void; onSend: (state: EditorState) => void }): KeyBinding[] => [
   // Not key: "Mod-s": CodeMirror drops Shift for a letter key, so Ctrl+Shift+S typed as "s" (Caps Lock) would save instead of New session.
@@ -367,6 +442,8 @@ export const editorKeys = ({ onSave, onSend }: { onSave: () => void; onSend: (st
   { key: "Mod-l", preventDefault: true, run: selectLine },
   // Claude Code's shortcut for inserting an @-mention of the selection.
   { key: "Alt-k", preventDefault: true, run: (v) => (onSend(v.state), true) },
+  // VS Code's Go to Line, also on Linux and Windows where basicSetup's Ctrl+G is find next (still F3); on macOS Cmd+G stays find next.
+  { key: "Ctrl-g", preventDefault: true, run: gotoLine },
 ];
 
 /** Uncontrolled CodeMirror view: `doc` replaces the content only when it is not what the editor itself reported. */
@@ -428,6 +505,8 @@ export const chromeTheme = {
   },
   ".cm-textfield": { backgroundColor: "transparent", color: "inherit", border: "1px solid var(--input)", borderRadius: "4px" },
   ".cm-button": { backgroundImage: "none", backgroundColor: "var(--secondary)", color: "var(--secondary-foreground)", border: "1px solid var(--border)", borderRadius: "4px" },
+  // Go to line (Ctrl+G) dialog.
+  ".cm-dialog": { backgroundColor: "var(--card)", color: "var(--foreground)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px" },
   // Touch: 44px targets (the repo's pointer-coarse rule). The close button joins the options row instead of narrowing the search field.
   "@media (pointer: coarse)": {
     ".cm-tooltip.cm-tooltip-autocomplete > ul": { maxHeight: "calc(5 * 44px + 8px)" },
@@ -436,6 +515,8 @@ export const chromeTheme = {
     ".cm-panel.cm-search": { paddingRight: "6px" },
     ".cm-panel.cm-search .cm-textfield": { minHeight: "44px", fontSize: "16px", flexBasis: "4em" },
     ".cm-panel.cm-search label": { minHeight: "44px", display: "inline-flex", alignItems: "center" },
+    ".cm-dialog .cm-textfield": { minHeight: "44px", fontSize: "16px" },
+    ".cm-dialog .cm-button, .cm-dialog-close": { minHeight: "44px", minWidth: "44px" },
     ".cm-panel.cm-search [name=close]": { position: "static", order: "2", marginLeft: "auto", minWidth: "44px", minHeight: "44px" },
   },
 };
@@ -465,6 +546,8 @@ export function CodeEditor({
   readOnly,
   tabbable,
   line,
+  goto,
+  onGoto,
 }: {
   path: string;
   doc: string;
@@ -475,6 +558,9 @@ export function CodeEditor({
   readOnly?: boolean;
   tabbable?: boolean;
   line?: number;
+  /** The cursor goes to this line when `key` changes (or on mount); `onGoto` then clears it. */
+  goto?: { line: number; key: number };
+  onGoto?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>(undefined);
@@ -493,7 +579,7 @@ export function CodeEditor({
       extensions: [
         basicSetup,
         lineBreaks(doc),
-        keymap.of(editorKeys({ onSave: () => cb.current.onSave(), onSend: (s) => cb.current.onSend(s) })),
+        Prec.high(keymap.of(editorKeys({ onSave: () => cb.current.onSave(), onSend: (s) => cb.current.onSend(s) }))),
         language.of([]),
         chrome,
         darkTheme.of(EditorView.darkTheme.of(dark)),
@@ -519,6 +605,15 @@ export function CodeEditor({
       if (viewRef.current === v) viewRef.current = undefined;
     };
   }, [path]);
+
+  useEffect(() => {
+    const v = view.current;
+    if (!v || !goto) return;
+    const l = v.state.doc.line(Math.max(1, Math.min(goto.line, v.state.doc.lines)));
+    v.dispatch({ selection: { anchor: l.from }, effects: EditorView.scrollIntoView(l.from, { y: "center" }) });
+    v.focus();
+    onGoto?.();
+  }, [goto?.key]);
 
   useEffect(() => view.current?.dispatch({ effects: darkTheme.reconfigure(EditorView.darkTheme.of(dark)) }), [dark]);
 

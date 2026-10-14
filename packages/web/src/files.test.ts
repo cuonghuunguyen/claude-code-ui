@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { inDir } from "./paths.ts";
-import { mediaKind, readFailure, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention } from "./files.ts";
+import { mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -115,10 +115,10 @@ describe("selectionMention", () => {
 describe("readFailure", () => {
   const fail = (code: string, size?: number) => readFailure(Object.assign(new Error(`${code}: /p/x raw`), { code, size }));
   it("words each unshowable file, with its size, without the raw code", () => {
-    expect(fail("binary", 1536)).toEqual({ text: "Binary file, not shown (1.5 KB)", notice: true });
-    expect(fail("too_large", 3 * 1024 ** 2)).toEqual({ text: "File too large to show (3 MB)", notice: true });
-    expect(fail("not_utf8", 6)).toEqual({ text: "File is not UTF-8 text, not shown (6 B)", notice: true });
-    expect(fail("binary")).toEqual({ text: "Binary file, not shown", notice: true });
+    expect(fail("binary", 1536)).toEqual({ text: "Binary file, not shown (1.5 KB)", notice: true, hint: "Only text files open in the editor." });
+    expect(fail("too_large", 3 * 1024 ** 2)).toEqual({ text: "File too large to show (3 MB)", notice: true, hint: "The editor opens text files up to 2 MB." });
+    expect(fail("not_utf8", 6)).toEqual({ text: "File is not UTF-8 text, not shown (6 B)", notice: true, hint: "The editor opens UTF-8 text only." });
+    expect(fail("binary")).toEqual({ text: "Binary file, not shown", notice: true, hint: "Only text files open in the editor." });
   });
   it("passes a real error through", () => {
     expect(fail("fs_error")).toEqual({ text: "fs_error: /p/x raw", notice: false });
@@ -135,5 +135,36 @@ describe("media", () => {
     expect(mediaKind("/p/a.ogg")).toBe("audio");
     expect(mediaKind("C:\\p\\a.MP3")).toBe("audio");
     for (const p of ["/p/a.ts", "/p/a.html", "/p/noext", "/p.png/file", "/p/a.constructor"]) expect(mediaKind(p)).toBeUndefined();
+  });
+});
+
+describe("placeTab", () => {
+  const tab = (path: string, preview?: boolean): Tab => ({ path, disk: "", draft: "", mtime: 1, ...(preview && { preview }) });
+  const scope = (p: string) => inDir(p, "/p");
+  const set = (...ts: Tab[]) => Object.fromEntries(ts.map((t) => [t.path, t]));
+
+  it("a preview open replaces the previous preview tab at its position", () => {
+    const tabs = set(tab("/p/a.ts"), tab("/p/b.ts", true), tab("/p/c.ts"));
+    const next = placeTab(tabs, tab("/p/d.ts"), true, scope);
+    expect(Object.keys(next)).toEqual(["/p/a.ts", "/p/d.ts", "/p/c.ts"]);
+    expect(next["/p/d.ts"]!.preview).toBe(true);
+    expect(Object.keys(placeTab(set(tab("/p/a.ts")), tab("/p/d.ts"), true, scope))).toEqual(["/p/a.ts", "/p/d.ts"]);
+  });
+
+  it("a pinned open adds a regular tab and keeps the preview; on an open preview tab it pins it; a preview open of an open tab changes nothing", () => {
+    const tabs = set(tab("/p/b.ts", true));
+    const added = placeTab(tabs, tab("/p/d.ts"), false, scope);
+    expect(added["/p/d.ts"]!.preview).toBeUndefined();
+    expect(added["/p/b.ts"]!.preview).toBe(true);
+    expect(placeTab(tabs, tab("/p/b.ts"), false, scope)["/p/b.ts"]!.preview).toBeUndefined();
+    expect(placeTab(tabs, tab("/p/b.ts"), true, scope)).toBe(tabs);
+    expect(pin(tab("/p/x.ts"))).toEqual(tab("/p/x.ts"));
+  });
+
+  it("a preview tab outside the scope is left alone", () => {
+    const tabs = set(tab("/q/b.ts", true));
+    const next = placeTab(tabs, tab("/p/d.ts"), true, scope);
+    expect(Object.keys(next)).toEqual(["/q/b.ts", "/p/d.ts"]);
+    expect(next["/q/b.ts"]!.preview).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
@@ -36,6 +36,9 @@ it("editor keys: Ctrl+L selects the line and stays with the editor; Ctrl+S saves
   expect(key("S", { shiftKey: true })).toBe(false);
   expect(key("s", { shiftKey: true })).toBe(false);
   expect(onSave).toHaveBeenCalledTimes(1);
+  // Go to line is the literal Ctrl+G; Cmd+G stays CodeMirror's find next.
+  expect(key("g")).toBe(true);
+  expect(key("g", { ctrlKey: false, metaKey: true })).toBe(false);
   view.destroy();
 });
 
@@ -343,4 +346,150 @@ it("the editable editor is unchanged: not read-only, no tabindex", async () => {
   expect(view.state.readOnly).toBe(false);
   expect(el.querySelector(".cm-content")!.hasAttribute("tabindex")).toBe(false);
   act(() => root.render(null));
+});
+
+// jsdom has no layout: CodeMirror's selection layer measures text ranges once the editor is focused.
+const rangeProto = Range.prototype as { getClientRects?: () => unknown; getBoundingClientRect?: () => unknown };
+rangeProto.getClientRects ??= () => Object.assign([], { item: () => null });
+rangeProto.getBoundingClientRect ??= () => new DOMRect();
+
+/** A panel over /p with a.ts, b.ts and src/c.ts; fs.read answers a 5-line text, fs.write is recorded. */
+function treePanel(opts: { read?: (path: string) => Promise<unknown> | unknown } = {}) {
+  const request = vi.fn(async (m: { type: string; path?: string }) => {
+    if (m.type === "fs.list")
+      return {
+        entries: m.path === "/p/src" ? [{ name: "c.ts", path: "/p/src/c.ts", isDir: false }] : [{ name: "src", path: "/p/src", isDir: true }, { name: "a.ts", path: "/p/a.ts", isDir: false }, { name: "b.ts", path: "/p/b.ts", isDir: false }],
+      };
+    if (m.type === "fs.read") return opts.read ? opts.read(m.path!) : { content: "one\ntwo\nthree\nfour\nfive", mtime: 1 };
+    if (m.type === "fs.write") return { mtime: 2 };
+    return {};
+  });
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const show = (props: Partial<ComponentProps<typeof FilesPanel>> = {}) =>
+    act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} {...props} />));
+  const row = (path: string) => [...el.querySelectorAll<HTMLElement>("[role=treeitem]")].find((r) => r.dataset.path === path)!;
+  const tabs = () => [...el.querySelectorAll<HTMLElement>("[data-testid=editor-tab]")];
+  const tabButton = (name: string) => tabs().map((t) => t.querySelector("button")!).find((b) => b.textContent!.startsWith(name))!;
+  const view = async () => {
+    const { EditorView } = await import("@codemirror/view");
+    return EditorView.findFromDOM(el.querySelector<HTMLElement>("[data-testid=code-editor] .cm-editor")!)!;
+  };
+  return { request, el, root, show, row, tabs, tabButton, view, click: (e: HTMLElement) => act(async () => e.click()), dbl: (e: HTMLElement) => act(async () => void e.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }))) };
+}
+
+it("a single click on a tree file opens an italic preview tab; another single click replaces it; a double click pins; editing pins", async () => {
+  const t = treePanel();
+  await t.show();
+  await t.click(t.row("/p/a.ts"));
+  expect(t.tabs()).toHaveLength(1);
+  expect(t.tabs()[0]!.querySelector("button")!.className).toContain("italic");
+  expect(t.tabs()[0]!.querySelector("button")!.getAttribute("aria-label")).toBe("a.ts, preview");
+  await t.click(t.row("/p/b.ts"));
+  expect(t.tabs().map((x) => x.textContent)).toEqual(["b.ts×"]);
+  await t.dbl(t.row("/p/b.ts"));
+  expect(t.tabButton("b.ts").className).not.toContain("italic");
+  await t.click(t.row("/p/a.ts"));
+  expect(t.tabs()).toHaveLength(2);
+  expect(t.tabButton("a.ts").className).toContain("italic");
+  // Editing the preview tab pins it, so the next single click opens a third tab.
+  const v = await t.view();
+  await act(async () => v.dispatch({ changes: { from: 0, insert: "x" } }));
+  expect(t.tabButton("a.ts").className).not.toContain("italic");
+  await t.click(t.row("/p/src"));
+  await t.click(t.row("/p/src/c.ts"));
+  expect(t.tabs()).toHaveLength(3);
+  // Double click on the tab pins it; middle click closes it.
+  await t.dbl(t.tabButton("c.ts"));
+  expect(t.tabButton("c.ts").className).not.toContain("italic");
+  await act(async () => void t.tabButton("c.ts").dispatchEvent(new MouseEvent("auxclick", { bubbles: true, button: 1, cancelable: true })));
+  expect(t.tabs()).toHaveLength(2);
+  act(() => t.root.render(null));
+});
+
+it("dirty marker: editing a tab shows ● (aria-label unsaved); saving removes it and pins the tab", async () => {
+  const t = treePanel();
+  await t.show({ openPath: "/p/a.ts" });
+  expect(t.el.querySelector("[aria-label=unsaved]")).toBeNull();
+  const v = await t.view();
+  await act(async () => v.dispatch({ changes: { from: 0, insert: "x" } }));
+  expect(t.el.querySelector("[aria-label=unsaved]")!.textContent).toContain("●");
+  await t.click(t.el.querySelector<HTMLElement>("[data-testid=editor-save]")!);
+  expect(t.request).toHaveBeenCalledWith(expect.objectContaining({ type: "fs.write", path: "/p/a.ts" }));
+  expect(t.el.querySelector("[aria-label=unsaved]")).toBeNull();
+  act(() => t.root.render(null));
+});
+
+it("breadcrumb: the folders of the path below cwd, the file last with aria-current=page; a folder click shows the tree and reveals it", async () => {
+  const t = treePanel();
+  const onToggleTree = vi.fn();
+  await t.show({ openPath: "/p/src/c.ts", showTree: false, onToggleTree });
+  const nav = t.el.querySelector("nav[aria-label=Breadcrumb]")!;
+  expect([...nav.querySelectorAll("li")].map((l) => l.textContent)).toEqual(["src", "c.ts"]);
+  expect(nav.querySelector("[aria-current=page]")!.textContent).toBe("c.ts");
+  await act(async () => nav.querySelector("button")!.click());
+  expect(onToggleTree).toHaveBeenCalledOnce();
+  await t.show({ showTree: true });
+  await act(async () => void (await new Promise((r) => requestAnimationFrame(r))));
+  expect(t.row("/p/src").getAttribute("aria-expanded")).toBe("true");
+  expect(document.activeElement).toBe(t.row("/p/src"));
+  act(() => t.root.render(null));
+});
+
+it("Ctrl+G opens the go-to-line dialog and a line number moves the cursor; Ctrl+F opens the search panel", async () => {
+  const t = treePanel();
+  await t.show({ openPath: "/p/a.ts" });
+  const v = await t.view();
+  const press = (key: string, init: KeyboardEventInit = {}) => act(async () => void v.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key, code: `Key${key.toUpperCase()}`, bubbles: true, cancelable: true, ...init })));
+  await press("g", { ctrlKey: true });
+  const dialog = t.el.querySelector(".cm-goto-line")!;
+  expect(dialog).not.toBeNull();
+  const input = dialog.querySelector<HTMLInputElement>("input[name=line]")!;
+  const form = input.form!;
+  await act(async () => {
+    input.value = "3";
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  expect(v.state.doc.lineAt(v.state.selection.main.head).number).toBe(3);
+  expect(t.el.querySelector(".cm-search")).toBeNull();
+  await press("f", { ctrlKey: true });
+  expect(t.el.querySelector(".cm-search")).not.toBeNull();
+  act(() => t.root.render(null));
+});
+
+it("openLine puts the cursor on that line, also in an already open tab", async () => {
+  const t = treePanel();
+  await t.show({ openPath: "/p/a.ts", openLine: 4 });
+  expect((await t.view()).state.doc.lineAt((await t.view()).state.selection.main.head).number).toBe(4);
+  await t.show({ openPath: undefined });
+  await t.show({ openPath: "/p/a.ts", openLine: 2 });
+  expect((await t.view()).state.doc.lineAt((await t.view()).state.selection.main.head).number).toBe(2);
+  act(() => t.root.render(null));
+});
+
+it("an unshowable file shows its title and a hint line", async () => {
+  const t = treePanel({ read: () => Promise.reject(Object.assign(new Error("raw"), { code: "binary", size: 2048 })) });
+  await t.show({ openPath: "/p/a.ts" });
+  const n = t.el.querySelector("[data-testid=file-notice]")!;
+  expect(n.textContent).toContain("Binary file, not shown (2 KB)");
+  expect(n.textContent).toContain("Only text files open in the editor.");
+  expect(n.querySelector("svg[data-icon]")).not.toBeNull();
+  act(() => t.root.render(null));
+});
+
+it("a slow fs.read shows Loading file… until it answers", async () => {
+  vi.useFakeTimers();
+  let done = (_: unknown) => {};
+  const t = treePanel({ read: () => new Promise((r) => (done = r)) });
+  await t.show({ openPath: "/p/a.ts" });
+  expect(t.el.querySelector("[data-testid=file-loading]")).toBeNull();
+  await act(async () => void (await vi.advanceTimersByTimeAsync(200)));
+  expect(t.el.querySelector("[data-testid=file-loading]")!.textContent).toBe("Loading file…");
+  await act(async () => (done({ content: "x", mtime: 1 }), void (await vi.advanceTimersByTimeAsync(10))));
+  expect(t.el.querySelector("[data-testid=file-loading]")).toBeNull();
+  expect(t.el.querySelector("[data-testid=code-editor]")).not.toBeNull();
+  vi.useRealTimers();
+  act(() => t.root.render(null));
 });

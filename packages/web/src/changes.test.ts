@@ -102,7 +102,7 @@ describe("textFailure", () => {
     // 2 MiB = 2,097,152 bytes. Chinese characters are 3 bytes each in UTF-8.
     // 699,051 characters * 3 bytes = 2,097,153 bytes (1 byte over limit)
     const tooLarge = "中".repeat(699_051);
-    expect(textFailure(tooLarge)).toEqual({ text: expect.stringContaining("too large"), notice: true });
+    expect(textFailure(tooLarge)).toEqual({ text: expect.stringContaining("too large"), notice: true, hint: expect.any(String) });
     // Just under the limit: 699,050 * 3 = 2,097,150 bytes
     const ok = "中".repeat(699_050);
     expect(textFailure(ok)).toBeUndefined();

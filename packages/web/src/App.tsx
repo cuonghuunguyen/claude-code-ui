@@ -367,7 +367,7 @@ export function App() {
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
-  const [openFile, setOpenFile] = useState<string>();
+  const [openFile, setOpenFile] = useState<{ path: string; line?: number }>();
   // Popup viewer (GH-238): what shows, for which session; `opener` takes the focus back on close.
   const [viewer, setViewer] = useState<ViewerState>();
   useEffect(() => setViewer(undefined), [activeId]);
@@ -1204,8 +1204,8 @@ export function App() {
   // Below lg the session and the side panel share one pane; from lg on the session always shows and "pane" picks the side panel tab.
   const showSession = () => !wide(1024) && setPane("session");
   /** Opens a file of the shown session (path relative to its cwd) in the files panel. */
-  const openInPanel = (p: string) => {
-    setOpenFile(joinPath(shown!.cwd, p));
+  const openInPanel = (p: string, line?: number) => {
+    setOpenFile({ path: joinPath(shown!.cwd, p), line });
     setPane("files");
     setPanel(true);
   };
@@ -1811,7 +1811,8 @@ export function App() {
                       status={status}
                       cwd={panelSession.cwd}
                       onSend={(mention) => (setInsert(mention), setPane("session"))}
-                      openPath={openFile}
+                      openPath={openFile?.path}
+                      openLine={openFile?.line}
                       onOpened={() => setOpenFile(undefined)}
                       watch={changedPaths}
                       showTree={fileTree}
@@ -1828,7 +1829,7 @@ export function App() {
                       client={client.current!}
                       view={views[panelSession.id]!}
                       cwd={panelSession.cwd}
-                      onOpen={(path) => (setOpenFile(path), setPane("files"))}
+                      onOpen={(path) => (setOpenFile({ path }), setPane("files"))}
                       sessionId={panelSession.id}
                       onPopOut={() => openViewer({ kind: "changes" })}
                     />
@@ -2036,7 +2037,7 @@ export function App() {
           view={viewer ? views[viewer.sessionId] : undefined}
           sessionId={viewer?.sessionId}
           onClose={() => setViewer(undefined)}
-          onOpenInEditor={(p) => (setViewer(undefined), setOpenFile(p), setPane("files"), setPanel(true))}
+          onOpenInEditor={(p) => (setViewer(undefined), setOpenFile({ path: p }), setPane("files"), setPanel(true))}
         />
       )}
       <ShortcutsDialog open={shortcutsOpen} edit={shortcutsEdit} onClose={() => (setShortcutsOpen(false), setShortcutsEdit(undefined))} />
