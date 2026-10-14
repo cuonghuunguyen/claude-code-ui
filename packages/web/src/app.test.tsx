@@ -1980,7 +1980,7 @@ describe("GH-356 split view", () => {
     await splitRight(S2);
     const mark = el.querySelector(`[data-tab-id="${ID}"] [data-testid="tab-split-mark"]`);
     expect(mark).not.toBeNull();
-    expect(el.querySelector(`[data-tab-id="${ID}"] [role="tab"]`)!.getAttribute("aria-label")).toContain("shown in split 2");
+    expect(el.querySelector(`[data-tab-id="${ID}"] [role="tab"]`)!.getAttribute("aria-label")).toContain("shown in split 1");
     expect(el.querySelector(`[data-tab-id="${S2}"] [data-testid="tab-split-mark"]`)).toBeNull();
   });
 
@@ -2079,11 +2079,13 @@ describe("GH-356 split view", () => {
     const bar = () => el.querySelector<HTMLElement>('[data-testid="split-resizer"]')!;
     expect(bar().getAttribute("aria-valuenow")).toBe("50");
     expect(splits()[0]!.style.flex).toBe("0.5 1 0%");
+    // 1000px area, 8px gap: each split keeps 320px.
+    bar().parentElement!.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 600, right: 1000, bottom: 600, x: 0, y: 0, toJSON() {} });
     await press({ key: "Home" }, bar());
-    expect(bar().getAttribute("aria-valuenow")).toBe("15");
+    expect(bar().getAttribute("aria-valuenow")).toBe("32");
     await press({ key: "End" }, bar());
-    expect(bar().getAttribute("aria-valuenow")).toBe("85");
-    expect(JSON.parse(localStorage.getItem("claude-ui.split")!).ratio).toBe(0.85);
+    expect(bar().getAttribute("aria-valuenow")).toBe("68");
+    expect(JSON.parse(localStorage.getItem("claude-ui.split")!).ratio).toBeCloseTo(0.677, 2);
     await press({ key: "Enter" }, bar());
     expect(bar().getAttribute("aria-valuenow")).toBe("50");
   });
@@ -2160,6 +2162,54 @@ describe("GH-356 split view", () => {
     expect(el.querySelector<HTMLElement>('[data-testid="split-drop"]')!.style.width).toBe("440px");
     await drag(area(), "drop", 350, 300, S3);
     expect(labels()).toEqual(["Third, split 1 of 2, active", "Second, split 2 of 2"]);
+  });
+
+  it("a centre drop overlay matches the target split when the ratio is not 50%, in screen order", async () => {
+    await remount(ID);
+    await splitRight(S2); // ids [ID, S2]
+    await act(async () => void el.querySelector<HTMLElement>('[data-testid="split-resizer"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
+    const r = (left: number, width: number) => () => ({ left, top: 0, width, height: 600, right: left + width, bottom: 600, x: 0, y: 0, toJSON() {} });
+    const [a, b] = [...splits()].sort((x, y) => +x.style.order - +y.style.order);
+    a!.getBoundingClientRect = r(0, 300);
+    b!.getBoundingClientRect = r(308, 592);
+    await drag(area(), "dragover", 500, 300);
+    const o = el.querySelector<HTMLElement>('[data-testid="split-drop"]')!;
+    expect([o.style.left, o.style.width]).toEqual(["308px", "592px"]);
+    await drag(area(), "drop", 500, 300, S3);
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Third, split 2 of 2, active"]);
+  });
+
+  it("a session area narrower than two minimum splits shows the active split alone; the split returns with the space", async () => {
+    const callbacks: { cb: ResizeObserverCallback; target?: Element }[] = [];
+    const RO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      rec: { cb: ResizeObserverCallback; target?: Element };
+      constructor(cb: ResizeObserverCallback) {
+        this.rec = { cb };
+        callbacks.push(this.rec);
+      }
+      observe(t: Element) {
+        this.rec.target = t;
+      }
+      unobserve() {}
+      disconnect() {}
+    } as never;
+    try {
+      await remount(ID);
+      await splitRight(S2);
+      const size = (w: number, h = 800) =>
+        act(async () => callbacks.filter((c) => (c.target as HTMLElement | undefined)?.dataset?.testid === "session-area").forEach((c) => c.cb([{ contentRect: { width: w, height: h } } as ResizeObserverEntry], {} as ResizeObserver)));
+      await size(1000);
+      expect(splits()).toHaveLength(2);
+      await size(600);
+      expect(splits()).toHaveLength(0);
+      expect(localStorage.getItem("claude-ui.split")).not.toBeNull();
+      expect(el.querySelector(`[data-tab-id="${ID}"] [data-testid="tab-split-mark"]`)).toBeNull();
+      await size(900);
+      expect(labels()).toEqual(["Demo, split 1 of 2", "Second, split 2 of 2, active"]);
+    } finally {
+      globalThis.ResizeObserver = RO;
+    }
   });
 
   it("a drag that is no tab, or on a narrow screen, shows no overlay", async () => {

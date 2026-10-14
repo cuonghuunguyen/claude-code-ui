@@ -1106,9 +1106,9 @@ it("GH-359 the touch drag switch follows the (pointer: coarse) media query", asy
 
 it("GH-356 the tab of the other split has the split icon and 'shown in split 2'; the menu Split right / Split down call onTabCommand", async () => {
   const onTabCommand = vi.fn();
-  const { el, tab } = await render({ onTabCommand, canSplit: true, splitShown: { id: "a", dir: "row" } });
+  const { el, tab } = await render({ onTabCommand, canSplit: true, splitShown: { id: "a", dir: "row", n: 1 } });
   expect(tab("a").querySelector('[data-testid="tab-split-mark"]')).not.toBeNull();
-  expect(tab("a").querySelector("[role=tab]")!.getAttribute("aria-label")).toContain("shown in split 2");
+  expect(tab("a").querySelector("[role=tab]")!.getAttribute("aria-label")).toContain("shown in split 1");
   expect(tab("b").querySelector('[data-testid="tab-split-mark"]')).toBeNull();
   const open = (id: string) => act(async () => void tab(id).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   await open("b");

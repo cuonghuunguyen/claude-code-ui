@@ -12,7 +12,8 @@ const rel = (r: DOMRect, a: DOMRect) => ({ left: r.left - a.left, top: r.top - a
 export function dropTarget(area: HTMLElement, x: number, y: number): DropState {
   const a = area.getBoundingClientRect();
   const zone = dropZone(a, x, y);
-  const splits = [...area.querySelectorAll<HTMLElement>('[data-testid="split"]')];
+  // Screen order (the `order` style), the order of `Split.ids`.
+  const splits = [...area.querySelectorAll<HTMLElement>('[data-testid="split"]')].sort((x, y) => +x.style.order - +y.style.order);
   const over = zone === "center" ? splits.findIndex((s) => { const r = s.getBoundingClientRect(); return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; }) : -1;
   const full = { left: 0, top: 0, width: a.width, height: a.height };
   const box =
@@ -39,7 +40,7 @@ export function useSplitDrop(on: { enabled: () => boolean; onDrop: (id: string, 
       e.preventDefault();
       e.dataTransfer!.dropEffect = "move";
       const t = dropTarget(n, e.clientX, e.clientY);
-      setState((s) => (s && s.zone === t.zone && s.over === t.over && s.box.width === t.box.width && s.box.height === t.box.height ? s : t));
+      setState((s) => (s && s.zone === t.zone && s.over === t.over && s.box.width === t.box.width && s.box.height === t.box.height && s.box.left === t.box.left && s.box.top === t.box.top ? s : t));
     };
     const leave = (e: DragEvent) => !(e.relatedTarget instanceof Node && n.contains(e.relatedTarget)) && clear();
     const drop = (e: DragEvent) => {

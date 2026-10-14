@@ -131,7 +131,7 @@ import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
-import { type Split, type SplitDir, canSplit as canSplitTabs, followSplit, isSession, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
+import { SPLIT_MIN_H, SPLIT_MIN_W, type Split, type SplitDir, canSplit as canSplitTabs, followSplit, isSession, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -385,10 +385,13 @@ export function App() {
     if (split !== splitRaw) setSplitRaw(split);
     saveSplit(split);
   }, [split]);
+  // The session area's size: two splits need room for both minimum sizes, else the active one shows alone (the split returns with the space).
+  const [area, setArea] = useState<{ w: number; h: number }>();
+  const splitFits = !split || !area || !area.w || (split.dir === "row" ? area.w >= 2 * SPLIT_MIN_W + 8 : area.h >= 2 * SPLIT_MIN_H + 8);
   const splitRef = useRef(split);
   splitRef.current = split;
-  /** Wide, a split exists and a session shows (the New session tab and Focus page suspend it). Both splits are on screen: they count as shown. */
-  const splitOn = lg && !!split && isSession(activeId);
+  /** Wide, roomy enough, a split exists and a session shows (the New session tab and Focus page suspend it). Both splits are on screen: they count as shown. */
+  const splitOn = lg && !!split && isSession(activeId) && splitFits;
   const visibleIds = splitOn ? split.ids : [activeId];
   // A mention from "Send selection to Claude", a quote (`>`) or a command, waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
@@ -1326,6 +1329,16 @@ export function App() {
       focusShownPrompt(id);
     },
   });
+  const areaRef = useCallback((n: HTMLElement | null) => {
+    const off = splitDrop.ref(n);
+    if (!n || typeof ResizeObserver === "undefined") return off;
+    const ro = new ResizeObserver((es) => {
+      const r = es[0]?.contentRect;
+      if (r) setArea((a) => (a && a.w === Math.round(r.width) && a.h === Math.round(r.height) ? a : { w: Math.round(r.width), h: Math.round(r.height) }));
+    });
+    ro.observe(n);
+    return () => (off?.(), ro.disconnect());
+  }, []);
   const splitShown = splitOn && split.ids.every((id) => !!viewOf(id) && !!sessionOf(id));
   // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
   useEffect(() => {
@@ -1873,7 +1886,7 @@ export function App() {
             canReopen={!!reopen}
             pinned={pinnedSet}
             canSplit={lg ? canSplitTabs(tabs) : undefined}
-            splitShown={splitShown ? { id: split!.ids[1 - split!.at]!, dir: split!.dir } : undefined}
+            splitShown={splitShown ? { id: split!.ids[1 - split!.at]!, dir: split!.dir, n: 2 - split!.at } : undefined}
             onNew={() => newSession()}
             home={sidebar}
             onHome={() => setSidebar((v) => !v)}
@@ -2076,7 +2089,7 @@ export function App() {
               )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
               <div
-                ref={splitDrop.ref}
+                ref={areaRef}
                 className={`relative ${splitShown ? `flex min-h-0 min-w-0 flex-1 ${split!.dir === "row" ? "flex-row" : "flex-col"}` : `${card} flex-1`} ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}
                 data-testid="session-area"
                 data-split={splitShown ? split!.dir : undefined}
@@ -2578,16 +2591,17 @@ function PanelResizer({ width, onResize, side }: { width: number; onResize: (w: 
 /** Drag handle (or arrow keys) between the two splits; it takes the gap between them. */
 function SplitResizer({ split, onResize }: { split: Split; onResize: (ratio: number) => void }) {
   const row = split.dir === "row";
-  const min = row ? 320 : 200;
+  const min = row ? SPLIT_MIN_W : SPLIT_MIN_H;
   const GAP = 8;
   const at = (e: { clientX: number; clientY: number }, el: HTMLElement) => {
     const r = el.parentElement!.getBoundingClientRect();
     return row ? ratioFor(e.clientX - r.left - GAP / 2, r.width - GAP, min) : ratioFor(e.clientY - r.top - GAP / 2, r.height - GAP, min);
   };
-  const step = (el: HTMLElement, px: number) => {
+  const total = (el: HTMLElement) => {
     const r = el.parentElement!.getBoundingClientRect();
-    onResize(ratioFor(split.ratio * ((row ? r.width : r.height) - GAP) + px, (row ? r.width : r.height) - GAP, min));
+    return (row ? r.width : r.height) - GAP;
   };
+  const step = (el: HTMLElement, px: number) => onResize(ratioFor(split.ratio * total(el) + px, total(el), min));
   return (
     <div
       role="separator"
@@ -2607,8 +2621,8 @@ function SplitResizer({ split, onResize }: { split: Split; onResize: (ratio: num
       onKeyDown={(e) => {
         const d = (row ? { ArrowLeft: -32, ArrowRight: 32 } : { ArrowUp: -32, ArrowDown: 32 })[e.key as "ArrowLeft"];
         if (d) return (e.preventDefault(), step(e.currentTarget, d));
-        if (e.key === "Home") (e.preventDefault(), onResize(0.15));
-        else if (e.key === "End") (e.preventDefault(), onResize(0.85));
+        if (e.key === "Home") (e.preventDefault(), onResize(ratioFor(0, total(e.currentTarget), min)));
+        else if (e.key === "End") (e.preventDefault(), onResize(ratioFor(total(e.currentTarget), total(e.currentTarget), min)));
         else if (e.key === "Enter") (e.preventDefault(), onResize(0.5));
       }}
     />

@@ -149,7 +149,7 @@ export function TabsBar({
   /** Split view (GH-356): the tab menu offers Split right / down (disabled while `canSplit` is false); absent (narrow screen): it does not. */
   canSplit?: boolean;
   /** The tab shown in the split that is not active: marked with the split's icon. */
-  splitShown?: { id: string; dir: "row" | "col" };
+  splitShown?: { id: string; dir: "row" | "col"; /** Its split, 1 = left or top. */ n: number };
   onNew: () => void;
   /** Sidebar toggle (md and up), OpenCode's legacy-layout `sidebar` icon: aria-pressed while the sessions sidebar shows, no pressed fill.
    * Not OpenCode's `grid-plus`: that one opens its Home page, this one only shows and hides the sidebar. */
@@ -354,6 +354,7 @@ export function TabsBar({
                     canReopen={!!canReopen}
                     canSplit={canSplit}
                     splitDir={splitShown?.id === id ? splitShown.dir : undefined}
+                    splitN={splitShown?.id === id ? splitShown.n : undefined}
                     onCommand={onTabCommand ? (c) => tabCommand(id, c) : undefined}
                     renaming={renaming === id}
                     onAction={(a) => onAction(id, a)}
@@ -889,6 +890,7 @@ function Tab({
   canReopen,
   canSplit,
   splitDir,
+  splitN,
   onCommand,
   renaming,
   onAction,
@@ -917,6 +919,7 @@ function Tab({
   canSplit?: boolean;
   /** This tab is the non-active split's: row = side by side, col = stacked. */
   splitDir?: "row" | "col";
+  splitN?: number;
   /** The menu's commands beyond Move and Close tab; absent: those items are not shown. */
   onCommand?: (c: TabCommand) => void;
   renaming: boolean;
@@ -987,7 +990,7 @@ function Tab({
             role="tab"
             aria-selected={active}
             tabIndex={focusable ? 0 : -1}
-            aria-label={pinned || splitDir || STATUS_LABEL[s] ? [t.title, pinned && "pinned", splitDir && "shown in split 2", STATUS_LABEL[s]].filter(Boolean).join(", ") : undefined}
+            aria-label={pinned || splitDir || STATUS_LABEL[s] ? [t.title, pinned && "pinned", splitDir && `shown in split ${splitN ?? 2}`, STATUS_LABEL[s]].filter(Boolean).join(", ") : undefined}
             className={cn(
               "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               pinned ? "justify-center px-0" : "pr-7 pl-1.5",

@@ -6,6 +6,9 @@ export type SplitDir = "row" | "col";
 export type Split = { dir: SplitDir; ids: string[]; at: number; ratio: number; runs?: Record<string, string> };
 
 export const MAX_SPLITS = 2;
+/** Smallest split in px (side by side: width, stacked: height). */
+export const SPLIT_MIN_W = 320;
+export const SPLIT_MIN_H = 200;
 export const MIN_RATIO = 0.15;
 export const MAX_RATIO = 0.85;
 
