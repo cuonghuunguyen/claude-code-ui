@@ -1816,6 +1816,8 @@ export function App() {
                       watch={changedPaths}
                       showTree={fileTree}
                       onToggleTree={() => setFileTree((v) => !v)}
+                      gitStamp={isGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
+                      visible={wide(1024) ? panel && sidePane !== "changes" && sidePane !== "graph" : sidePane === "files"}
                     />
                   </div>
                   {views[panelSession.id] && (

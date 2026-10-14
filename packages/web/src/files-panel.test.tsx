@@ -217,6 +217,21 @@ it("the tree follows showTree; the Files button asks to toggle it", async () => 
   act(() => root.render(null));
 });
 
+it("the header shows Collapse all and Reveal buttons only while the tree shows; Reveal needs an open file", async () => {
+  const client = { request: vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : {})), onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  const root = createRoot(el);
+  const show = (showTree: boolean) => act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree={showTree} onToggleTree={() => {}} />));
+  await show(false);
+  expect(el.querySelector("[aria-label='Collapse all folders']")).toBeNull();
+  expect(el.querySelector("[aria-label='Reveal active file in tree']")).toBeNull();
+  await show(true);
+  expect(el.querySelector("[aria-label='Collapse all folders']")).not.toBeNull();
+  expect(el.querySelector<HTMLButtonElement>("[aria-label='Reveal active file in tree']")!.disabled).toBe(true);
+  expect(el.querySelector("[aria-label='Reload the file tree']")!.className).toContain("max-md:size-11");
+  act(() => root.render(null));
+});
+
 /** A panel whose fs.media answers per path; fs.read answers text. */
 function mediaPanel(opts: { media?: (path: string) => unknown; read?: string } = {}) {
   let changed = (_: { path: string }) => {};

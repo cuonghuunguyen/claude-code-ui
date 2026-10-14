@@ -7,14 +7,15 @@ import { selectLine } from "@codemirror/commands";
 import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { styleTags, tags as t } from "@lezer/highlight";
 import { languages } from "@codemirror/language-data";
-import type { FsEntry, FsListResult, FsMediaResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
-import { ChevronDownIcon, ChevronRightIcon, RotateCwIcon } from "lucide-react";
+import type { FsMediaResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
+import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, LocateFixedIcon, RotateCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { connect, ConnectionStatus, RequestError } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
 import { baseName, inDir } from "./paths.ts";
 import { MediaView } from "./media-view.tsx";
+import { FileTree, type FileTreeHandle, type OpenOptions } from "./file-tree.tsx";
 import { diskChanged, docText, isDirty, lineBreaks, mediaKind, opened, openedMedia, reload, readFailure, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -35,6 +36,8 @@ export function FilesPanel({
   watch = [],
   showTree,
   onToggleTree,
+  gitStamp,
+  visible = true,
 }: {
   client: Client;
   status: ConnectionStatus;
@@ -46,10 +49,17 @@ export function FilesPanel({
   /** The file tree's open state is the app's (Toggle file tree, kept per browser). */
   showTree: boolean;
   onToggleTree: () => void;
+  /** Defined in a git work tree: a new value reads the tree's git marks again. */
+  gitStamp?: string;
+  /** The panel is on screen (the tree reads git marks only then). */
+  visible?: boolean;
 }) {
   const [tabs, setTabs] = useState<Record<string, Tab>>({});
   const [activePath, setActivePath] = useState<string>();
   const [treeKey, setTreeKey] = useState(0);
+  const [gitNudge, setGitNudge] = useState(0);
+  const [filtering, setFiltering] = useState(false);
+  const tree = useRef<FileTreeHandle>(undefined);
   const [error, setError] = useState<string>();
   /** The last opened file that cannot be shown (binary, too large, not UTF-8); it replaces the editor until a tab is chosen. */
   const [notice, setNotice] = useState<{ path: string; text: string }>();
@@ -87,7 +97,7 @@ export function FilesPanel({
     }
   }
 
-  async function open(path: string) {
+  async function open(path: string, opts: Pick<OpenOptions, "focusEditor"> = {}) {
     setError(undefined);
     setNotice(undefined);
     if (!tabsRef.current[path]) {
@@ -100,6 +110,7 @@ export function FilesPanel({
       }
     }
     setActivePath(path);
+    if (opts.focusEditor) requestAnimationFrame(() => editor.current?.focus());
   }
 
   useEffect(() => {
@@ -115,6 +126,7 @@ export function FilesPanel({
     try {
       const r = await client.request<FsWriteResult>({ type: "fs.write", path, content, baseMtime: saveBase(t, overwrite) });
       update(path, (t) => saved(t, content, r.mtime));
+      setGitNudge((n) => n + 1);
     } catch (e) {
       update(path, (t) => ({ ...t, error: (e as Error).message }));
       void refresh(path); // a conflict error means a newer disk version; this shows it as a conflict
@@ -150,7 +162,15 @@ export function FilesPanel({
       .then(() => added.forEach((p) => void refresh(p)))
       .catch(() => {});
   }, [status, watchKey]);
-  useEffect(() => client.onFsChanged((m) => void (tabsRef.current[m.path] && refresh(m.path))), [client]);
+  useEffect(
+    () =>
+      client.onFsChanged((m) => {
+        if (!tabsRef.current[m.path]) return;
+        void refresh(m.path);
+        setGitNudge((n) => n + 1);
+      }),
+    [client],
+  );
 
   const shown = paths.filter((p) => inDir(p, cwd));
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
@@ -163,16 +183,45 @@ export function FilesPanel({
           size="xs"
           variant="ghost"
           onClick={onToggleTree}
+          className="max-md:h-11 pointer-coarse:h-11"
           aria-expanded={showTree}
           aria-controls="file-tree"
           data-testid="toggle-tree"
         >
           {showTree ? <ChevronDownIcon /> : <ChevronRightIcon />} Files
         </Button>
+        {showTree && (
+          <>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="ml-auto max-md:size-11 pointer-coarse:size-11"
+              onClick={() => tree.current?.collapseAll()}
+              disabled={filtering}
+              title="Collapse all folders"
+              aria-label="Collapse all folders"
+              data-testid="tree-collapse-all"
+            >
+              <ChevronsDownUpIcon />
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="max-md:size-11 pointer-coarse:size-11"
+              onClick={() => active && void tree.current?.reveal(active.path, true)}
+              disabled={!active}
+              title="Reveal active file in tree"
+              aria-label="Reveal active file in tree"
+              data-testid="tree-reveal"
+            >
+              <LocateFixedIcon />
+            </Button>
+          </>
+        )}
         <Button
           size="xs"
           variant="ghost"
-          className="ml-auto"
+          className={`${showTree ? "" : "ml-auto "}max-md:size-11 pointer-coarse:size-11`}
           onClick={() => setTreeKey((k) => k + 1)}
           title="Reload the file tree"
           aria-label="Reload the file tree"
@@ -187,7 +236,19 @@ export function FilesPanel({
           data-testid="file-tree"
           aria-label="File tree"
         >
-          <TreeDir key={`${cwd}:${treeKey}`} client={client} path={cwd} depth={0} activePath={active?.path} onOpen={open} />
+          <FileTree
+            key={cwd}
+            client={client}
+            cwd={cwd}
+            activePath={active?.path}
+            reloadKey={treeKey}
+            gitStamp={gitStamp}
+            visible={visible}
+            gitNudge={gitNudge}
+            handleRef={tree}
+            onFilter={setFiltering}
+            onOpen={(path, o) => void open(path, o)}
+          />
         </nav>
       )}
       {error && <p className="px-2 py-1 text-destructive text-xs">{error}</p>}
@@ -295,71 +356,6 @@ export function FilesPanel({
         <p className="m-auto p-4 text-muted-foreground text-sm">Open a file from the tree.</p>
       )}
     </div>
-  );
-}
-
-/** One directory level, listed when first expanded. */
-function TreeDir({
-  client,
-  path,
-  depth,
-  activePath,
-  onOpen,
-}: {
-  client: Client;
-  path: string;
-  depth: number;
-  activePath?: string;
-  onOpen: (path: string) => void;
-}) {
-  const [entries, setEntries] = useState<FsEntry[]>();
-  const [error, setError] = useState<string>();
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    client
-      .request<FsListResult>({ type: "fs.list", path })
-      .then((r) => setEntries(r.entries.filter((e) => e.name !== ".git").sort((a, b) => Number(b.isDir) - Number(a.isDir))))
-      .catch((e: Error) => setError(e.message));
-  }, [path]);
-
-  const pad = { paddingLeft: `${depth * 12 + 8}px` };
-  if (error)
-    return (
-      <p className="text-destructive" style={pad}>
-        {error}
-      </p>
-    );
-  if (!entries)
-    return (
-      <p className="text-muted-foreground" style={pad}>
-        …
-      </p>
-    );
-  return (
-    <ul>
-      {entries.map((e) => (
-        <li key={e.path}>
-          <button
-            className={`flex w-full items-center gap-1 py-1 pr-2 text-left hover:bg-muted ${e.path === activePath ? "bg-muted" : ""}`}
-            style={pad}
-            data-testid="tree-entry"
-            aria-expanded={e.isDir ? !!expanded[e.path] : undefined}
-            onClick={() => (e.isDir ? setExpanded((x) => ({ ...x, [e.path]: !x[e.path] })) : onOpen(e.path))}
-          >
-            {e.isDir ? (
-              expanded[e.path] ? <ChevronDownIcon className="size-3.5 shrink-0 text-faint" /> : <ChevronRightIcon className="size-3.5 shrink-0 text-faint" />
-            ) : (
-              <span className="size-3.5 shrink-0" />
-            )}
-            <span className="truncate">{e.name}</span>
-          </button>
-          {e.isDir && expanded[e.path] && (
-            <TreeDir client={client} path={e.path} depth={depth + 1} activePath={activePath} onOpen={onOpen} />
-          )}
-        </li>
-      ))}
-    </ul>
   );
 }
 
