@@ -646,9 +646,21 @@ it("the terminal panel stays open across a reload", async () => {
   localStorage.clear();
 });
 
-it("the terminal below the side panel resizes with the arrow keys (100px to 60% of the window) and keeps its height across a reload", async () => {
+const rerender = async () => {
+  act(() => root.unmount());
+  root = createRoot(el);
+  await act(async () => root.render(<App />));
+  await act(async () => {});
+};
+const q = (id: string) => el.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+const clickId = (id: string) => act(async () => q(id)!.click());
+
+it("the terminal below the side panel (position Side panel) resizes with the arrow keys (100px to 60% of the window) and keeps its height across a reload", async () => {
+  localStorage.setItem("claude-ui.terminalDock", "side");
+  await rerender();
   await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
   const handle = () => el.querySelector<HTMLElement>('[role="separator"][aria-label="Resize terminal"]')!;
+  expect(q("terminal-panel")!.dataset.dock).toBe("side");
   expect(handle().getAttribute("aria-orientation")).toBe("horizontal");
   expect(handle().getAttribute("aria-valuenow")).toBe("280");
   await press({ key: "ArrowUp" }, handle());
@@ -666,6 +678,96 @@ it("the terminal below the side panel resizes with the arrow keys (100px to 60% 
   expect(el.querySelector<HTMLElement>('[data-testid="terminal-panel"]')!.parentElement!.style.getPropertyValue("--terminal-h")).toBe("132px");
   await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
   localStorage.clear();
+});
+
+it("wide screens dock the terminal at the bottom by default, spanning the session and side panel", async () => {
+  await clickId("terminal-toggle");
+  const t = q("terminal-panel")!;
+  expect(t.dataset.dock).toBe("bottom");
+  expect(t.parentElement).toBe(q("work-area"));
+  expect(t.closest("main")).toBeNull();
+  expect(q("work-area")!.querySelector('[data-testid="side-panel"]')).not.toBeNull();
+  expect(q("work-area")!.contains(q("sidebar"))).toBe(false);
+});
+
+it("the titlebar terminal button opens and hides the terminal, pressed while shown", async () => {
+  const b = () => q("terminal-toggle-titlebar")!;
+  expect(b().getAttribute("aria-pressed")).toBe("false");
+  expect(b().className).toContain("max-lg:hidden");
+  expect(b().getAttribute("aria-label")).toBe("Toggle terminal (Ctrl+`)");
+  await clickId("terminal-toggle-titlebar");
+  expect(b().getAttribute("aria-pressed")).toBe("true");
+  expect(q("terminal-panel")).not.toBeNull();
+  await clickId("terminal-toggle-titlebar");
+  expect(b().getAttribute("aria-pressed")).toBe("false");
+  expect(q("terminal-panel")).toBeNull();
+});
+
+it("the bottom terminal resizes with the arrow keys (100px to 60%) and keeps its height across a reload", async () => {
+  await clickId("terminal-toggle");
+  const handle = () => el.querySelector<HTMLElement>('[role="separator"][aria-label="Resize terminal"]')!;
+  expect(handle().getAttribute("aria-valuenow")).toBe("280");
+  await press({ key: "ArrowUp" }, handle());
+  expect(handle().getAttribute("aria-valuenow")).toBe("312");
+  for (let i = 0; i < 30; i++) await press({ key: "ArrowUp" }, handle());
+  expect(handle().getAttribute("aria-valuenow")).toBe(String(Math.round(window.innerHeight * 0.6)));
+  for (let i = 0; i < 30; i++) await press({ key: "ArrowDown" }, handle());
+  expect(handle().getAttribute("aria-valuenow")).toBe("100");
+  await press({ key: "ArrowUp" }, handle());
+  await rerender();
+  expect(handle().getAttribute("aria-valuenow")).toBe("132");
+  expect(q("work-area")!.style.getPropertyValue("--terminal-h")).toBe("132px");
+});
+
+it("the terminal moves between bottom and side panel from its menu, kept across a reload", async () => {
+  await clickId("terminal-toggle");
+  await clickId("terminal-menu");
+  expect(document.querySelector<HTMLElement>('[data-testid="terminal-move"]')!.textContent).toBe("Move terminal to side panel");
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="terminal-move"]')!.click());
+  expect(q("terminal-panel")!.dataset.dock).toBe("side");
+  expect(localStorage.getItem("claude-ui.terminalDock")).toBe("side");
+  await rerender();
+  expect(q("terminal-panel")!.dataset.dock).toBe("side");
+  await clickId("terminal-menu");
+  expect(document.querySelector<HTMLElement>('[data-testid="terminal-move"]')!.textContent).toBe("Move terminal to bottom");
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="terminal-move"]')!.click());
+  expect(q("terminal-panel")!.dataset.dock).toBe("bottom");
+  expect(localStorage.getItem("claude-ui.terminalDock")).toBeNull();
+});
+
+it("maximize hides the session view and side panel; restore and hide give them back", async () => {
+  await clickId("terminal-toggle");
+  const main = () => el.querySelector("main")!;
+  await clickId("terminal-maximize");
+  expect(main().className).toContain("hidden");
+  expect(el.querySelector('[aria-label="Resize terminal"]')).toBeNull();
+  expect(q("terminal-panel")!.className).toContain("flex-1");
+  expect(q("terminal-maximize")!.getAttribute("aria-label")).toBe("Restore terminal");
+  await clickId("terminal-maximize");
+  expect(main().className).not.toMatch(/(^| )hidden( |$)/);
+  expect(el.querySelector('[aria-label="Resize terminal"]')).not.toBeNull();
+  await clickId("terminal-maximize");
+  await clickId("terminal-hide");
+  expect(q("terminal-panel")).toBeNull();
+  expect(main().className).not.toMatch(/(^| )hidden( |$)/);
+  expect(q("terminal-toggle")!.getAttribute("aria-pressed")).toBe("false");
+});
+
+it("hiding the side panel keeps the bottom terminal", async () => {
+  await clickId("terminal-toggle");
+  await clickId("panel-toggle");
+  expect(q("side-panel")!.parentElement!.className).toContain("lg:hidden");
+  expect(q("terminal-panel")!.dataset.dock).toBe("bottom");
+  expect(el.querySelector('[aria-label="Resize side panel"]')).toBeNull();
+});
+
+it("narrow screens keep the terminal pane whatever the position", async () => {
+  width = 800;
+  await rerender();
+  await clickId("pane-terminal");
+  const t = q("terminal-panel")!;
+  expect(t.dataset.dock).toBe("side");
+  expect(q("work-area")!.querySelector(':scope > [data-dock="bottom"]')).toBeNull();
 });
 
 it("the sessions sidebar resizes with the arrow keys (200px to half the window) and keeps its width across a reload", async () => {

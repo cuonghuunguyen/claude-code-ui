@@ -9,6 +9,7 @@ import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { Switch } from "./plugins-dialog.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TERMINAL_DOCKS, saveTerminalDock, useTerminalDock, type DockArea } from "./layout.ts";
 import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
 import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
 import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
@@ -161,6 +162,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   // The number field's text while typing; committed on Enter or blur.
   const [draft, setDraft] = useState<Record<string, string>>({});
   const diffMode = useDefaultDiffMode();
+  const terminalDock = useTerminalDock();
   const ask = useRef(request);
   ask.current = request;
 
@@ -371,6 +373,35 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           <SelectContent>
             <SelectItem value="default" data-testid="settings-sidebar-layout-default">Worktree</SelectItem>
             <SelectItem value="classic" data-testid="settings-sidebar-layout-classic">Project</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    </section>
+      ),
+    },
+    {
+      id: "terminal",
+      title: "Terminal",
+      body: (
+    <section aria-labelledby="settings-terminal" className="flex flex-col" data-testid="settings-terminal">
+      <h3 id="settings-terminal" className="pb-1 font-medium text-[13px] text-muted-foreground">
+        Terminal
+      </h3>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-terminal-position-label" className="block text-sm">Terminal position</span>
+          <span id="settings-terminal-position-hint" className="block text-muted-foreground text-xs">Where the terminal panel opens on wide screens: docked at the bottom under the session and side panel, or below the side panel. Narrow screens show it as the terminal pane. Kept in this browser.</span>
+        </div>
+        <Select value={terminalDock} onValueChange={(v) => v && saveTerminalDock(v as DockArea)}>
+          <SelectTrigger aria-labelledby="settings-terminal-position-label" aria-describedby="settings-terminal-position-hint" data-testid="settings-terminal-position" className="w-40 max-md:data-[size=default]:h-11">
+            <SelectValue>{(v: DockArea) => TERMINAL_DOCKS.find((d) => d.value === v)?.label ?? v}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {TERMINAL_DOCKS.map((d) => (
+              <SelectItem key={d.value} value={d.value} data-testid={`settings-terminal-position-${d.value}`}>
+                {d.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>

@@ -1,5 +1,5 @@
 import { Activity, lazy, memo, Suspense, use, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { CheckIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelBottomIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon } from "lucide-react";
 import type {
   ContextUsage,
   CreateResult,
@@ -126,6 +126,8 @@ import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
 import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, saveTabs, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
+import { useMinWidth, useTerminalDock, saveTerminalDock } from "./layout.ts";
+import { TerminalDockActions } from "./terminal-dock-actions.tsx";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -363,6 +365,15 @@ export function App() {
       // Storage blocked: the height lasts until the page reloads.
     }
   }, [terminalHeight]);
+  // GH-354: wide screens dock the terminal at the bottom (default) or below the side panel; narrow screens keep the "terminal" pane.
+  const terminalDock = useTerminalDock();
+  const lg = useMinWidth(1024);
+  const dockBottom = terminalDock === "bottom" && lg;
+  // Bottom dock only, this page only: the terminal takes the whole work area.
+  const [terminalMax, setTerminalMax] = useState(false);
+  useEffect(() => void (!(terminalOpen && dockBottom) && setTerminalMax(false)), [terminalOpen, dockBottom]);
+  /** The terminal shown below the side panel (wide screens, position Side panel). */
+  const sideTerminal = terminalOpen && !dockBottom;
   // A mention from "Send selection to Claude", a quote (`>`) or a command, waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
@@ -1488,6 +1499,21 @@ export function App() {
 
   const prompted = useMemo(() => promptedIds(optimistic, views), [optimistic, views]);
 
+
+  // The terminal panel, rendered in one place only: the bottom dock or below the side panel.
+  const terminalPanel = (actions: ReactNode) =>
+    panelSession && (
+      <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading terminal…</p>}>
+        <TerminalPanel
+          client={client.current!}
+          status={status}
+          cwd={panelSession.cwd}
+          onEmpty={() => (setTerminalOpen(false), pane === "terminal" && setPane("session"))}
+          newTick={terminalTick}
+          actions={actions}
+        />
+      </Suspense>
+    );
   return (
     <AvatarColors value={colors}>
     <SideLabel value={sideOf.badge}>
@@ -1540,6 +1566,11 @@ export function App() {
           {shown && (
             <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={withKey("Toggle side panel", specOf("panel.toggle"))} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle" command="panel.toggle">
               <PanelRightIcon />
+            </IconButton>
+          )}
+          {shown && (
+            <IconButton className="max-lg:hidden" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle-titlebar">
+              <PanelBottomIcon />
             </IconButton>
           )}
         </div>
@@ -1693,7 +1724,8 @@ export function App() {
           </button>
         </aside>
         {sidebar && <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />}
-        <main className="flex min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-0">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ "--terminal-h": `${terminalHeight}px` } as CSSProperties} data-testid="work-area">
+        <main className={`flex min-h-0 min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-0 ${terminalMax && shown ? "hidden" : ""}`}>
           {status === "unauthorized" ? (
             // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
             <div className={`${card} flex-1`}>
@@ -1792,10 +1824,10 @@ export function App() {
                 </QuoteContext>
                 </ViewerContext>
               </div>
-              {shown && (panel || terminalOpen) && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
+              {shown && (panel || sideTerminal) && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
               {panelSession && (
                 <div
-                  className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${panel || terminalOpen ? "" : "lg:hidden"}`}
+                  className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${panel || sideTerminal ? "" : "lg:hidden"}`}
                   style={{ "--panel-w": `${panelWidth}px`, "--terminal-h": `${terminalHeight}px` } as CSSProperties}
                 >
                 <section className={`${card} flex-1 ${pane === "terminal" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`} id="side-panel" data-testid="side-panel">
@@ -1837,22 +1869,15 @@ export function App() {
                     </Suspense>
                   )}
                 </section>
-                {panel && terminalOpen && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
-                {(terminalOpen || pane === "terminal") && (
+                {panel && sideTerminal && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
+                {!dockBottom && (terminalOpen || pane === "terminal") && (
                   // OpenCode: below the side panel, 100px to 60% of the window high (CSS keeps it there when the window shrinks).
                   <section
                     className={`${card} ${pane === "terminal" ? "flex-1" : "max-lg:hidden"} ${!terminalOpen ? "lg:hidden" : panel ? "lg:h-(--terminal-h) lg:max-h-[60vh] lg:min-h-25 lg:flex-none" : "lg:flex-1"}`}
                     data-testid="terminal-panel"
+                    data-dock="side"
                   >
-                    <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading terminal…</p>}>
-                      <TerminalPanel
-                        client={client.current!}
-                        status={status}
-                        cwd={panelSession.cwd}
-                        onEmpty={() => (setTerminalOpen(false), pane === "terminal" && setPane("session"))}
-                        newTick={terminalTick}
-                      />
-                    </Suspense>
+                    {terminalPanel(<TerminalDockActions dock="side" onMove={saveTerminalDock} />)}
                   </section>
                 )}
                 </div>
@@ -1888,7 +1913,7 @@ export function App() {
                   <div className="h-7 shrink-0 lg:hidden" aria-hidden />
                   <StartingSession cwd={draftProject} place={worktreeName(draftProject, worktrees)} pending={optimistic[NEW_TAB]} />
                   {/* The side panel's footprint (resizer 6px + panel) on wide screens, empty: the prompt does not shift when the session shows it. */}
-                  {(panel || terminalOpen) && <div className={`${card} ml-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
+                  {(panel || sideTerminal) && <div className={`${card} ml-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
                 </>
               )}
               {activeId === FOCUS_TAB && (
@@ -1915,6 +1940,28 @@ export function App() {
             </>
           )}
         </main>
+        {status !== "unauthorized" && dockBottom && terminalOpen && panelSession && (
+          <>
+            {shown && !terminalMax && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
+            <section
+              className={`${card} ${!shown ? "hidden" : terminalMax ? "flex-1" : "h-(--terminal-h) max-h-[60vh] min-h-25 flex-none"}`}
+              data-testid="terminal-panel"
+              data-dock="bottom"
+            >
+              {terminalPanel(
+                <TerminalDockActions
+                  dock="bottom"
+                  onMove={saveTerminalDock}
+                  maximized={terminalMax}
+                  onMaximize={() => setTerminalMax((m) => !m)}
+                  onHide={() => (setTerminalOpen(false), focusShownPrompt())}
+                  hideLabel={withKey("Hide terminal", specOf("terminal.toggle"))}
+                />,
+              )}
+            </section>
+          </>
+        )}
+        </div>
       </div>
       <div role="status" aria-live="polite" className="sr-only" data-testid="attention-status">
         {noteText !== undefined ? noteText + (waitingN ? ` ${waitingStatus(waitingN)}.` : "") : announcement(waitingN, everWaiting.current)}
