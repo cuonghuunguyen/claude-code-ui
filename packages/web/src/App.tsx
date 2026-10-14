@@ -128,7 +128,7 @@ import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenR
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
-import { useKeepAwake } from "./keep-awake.ts";
+import { anySessionRunning, useKeepAwake } from "./keep-awake.ts";
 import { KeepAwakeButton } from "./keep-awake-button.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
@@ -263,7 +263,7 @@ export function App() {
   // Signal only (GH-159, one setting for the browser since GH-205), set in Settings.
   const signalOnly = useSignalOnly();
   // Keep screen awake (GH-361): "running" = a listed, unarchived session that works or waits for the user.
-  const anyRunning = useMemo(() => list.some((s) => !s.archived && ["running", "needs_input"].includes(shownState(views[s.id]) ?? s.state)), [list, views]);
+  const anyRunning = useMemo(() => anySessionRunning(list, views), [list, views]);
   const awake = useKeepAwake(anyRunning);
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
   const changeGrouping = (g: TabGrouping) => {

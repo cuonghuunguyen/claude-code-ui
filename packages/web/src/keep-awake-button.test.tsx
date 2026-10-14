@@ -23,6 +23,7 @@ it("keeps a fixed name; aria-pressed and the tooltip carry the state", () => {
     ["off", "false", "Screen may sleep"],
     ["held", "true", "Keep screen awake"],
     ["idle", "true", "Keep screen awake (waits for a running session)"],
+    ["pending", "true", "Keep screen awake"],
     ["hidden", "true", "Keep screen awake (resumes when the page is visible)"],
   ];
   for (const [status, pressed, title] of rows) {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createKeepAwake, loadKeepAwake, wakeLockReason, saveKeepAwake, subscribeKeepAwake, wakeLockSupported, type KeepAwakeStatus } from "./keep-awake.ts";
+import { anySessionRunning, createKeepAwake, loadKeepAwake, wakeLockReason, saveKeepAwake, subscribeKeepAwake, wakeLockSupported, type KeepAwakeStatus } from "./keep-awake.ts";
 
 class Sentinel extends EventTarget {
   released = false;
@@ -53,6 +53,17 @@ describe("keep awake setting", () => {
     });
     saveKeepAwake({ on: true, onlyRunning: false });
     expect(loadKeepAwake().on).toBe(true);
+  });
+});
+
+describe("anySessionRunning", () => {
+  const item = (id: string, state: string, archived = false) => ({ id, state, archived }) as never;
+  it("counts running and needs_input, not idle or archived", () => {
+    expect(anySessionRunning([item("a", "idle")], {})).toBe(false);
+    expect(anySessionRunning([item("a", "running")], {})).toBe(true);
+    expect(anySessionRunning([item("a", "needs_input")], {})).toBe(true);
+    expect(anySessionRunning([item("a", "running", true)], {})).toBe(false);
+    expect(anySessionRunning([item("a", "idle")], { a: { state: "needs_input" } as never })).toBe(true);
   });
 });
 
@@ -109,6 +120,26 @@ describe("keep awake controller", () => {
     await flush();
     expect(t.request).not.toHaveBeenCalled();
     expect(t.statuses.at(-1)).toBe("hidden");
+  });
+  it("asks again when the browser drops the lock while the page is visible", async () => {
+    const t = setup();
+    t.ctl.update(true);
+    await flush();
+    t.sentinels[0]!.dispatchEvent(new Event("release"));
+    await flush();
+    expect(t.request).toHaveBeenCalledTimes(2);
+    expect(t.statuses.at(-1)).toBe("held");
+  });
+  it("does not retry in a loop when the re-request after a drop is refused", async () => {
+    const t = setup();
+    t.ctl.update(true);
+    await flush();
+    t.request.mockRejectedValueOnce(Object.assign(new Error("no"), { name: "NotAllowedError" }));
+    t.sentinels[0]!.dispatchEvent(new Event("release"));
+    await flush();
+    await flush();
+    expect(t.request).toHaveBeenCalledTimes(2);
+    expect(t.statuses.at(-1)).toBe("refused");
   });
   it("reports a refusal without console noise or a retry loop", async () => {
     const t = setup({ reject: "NotAllowedError" });

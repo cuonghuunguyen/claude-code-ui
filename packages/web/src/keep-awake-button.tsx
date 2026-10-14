@@ -9,6 +9,8 @@ export function keepAwakeTitle(status: KeepAwakeStatus, error?: string): string 
       return "Screen may sleep";
     case "held":
       return "Keep screen awake";
+    case "pending":
+      return "Keep screen awake";
     case "idle":
       return "Keep screen awake (waits for a running session)";
     case "hidden":

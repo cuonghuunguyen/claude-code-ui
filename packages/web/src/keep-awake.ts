@@ -1,9 +1,11 @@
 // Keep screen awake (GH-361): a Screen Wake Lock held while this page is visible. Per-browser setting, no daemon involved.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { SessionListItem } from "@claude-ui/protocol";
+import { shownState, type SessionView } from "./store.ts";
 
 export type KeepAwakeSetting = { on: boolean; onlyRunning: boolean };
-/** off: setting off · held: lock held · idle: on, "only while running" is set and nothing runs · hidden: on, the page is not visible · refused: the browser rejected the request · unsupported: no API here. */
-export type KeepAwakeStatus = "off" | "held" | "idle" | "hidden" | "refused" | "unsupported";
+/** off: setting off · held: lock held · idle: on, "only while running" is set and nothing runs · hidden: on, the page is not visible · pending: on and wanted, the lock is on its way or was dropped and is asked for again · refused: the browser rejected the request · unsupported: no API here. */
+export type KeepAwakeStatus = "off" | "held" | "idle" | "hidden" | "pending" | "refused" | "unsupported";
 
 const KEY = "claude-ui.keepAwake";
 const OFF: KeepAwakeSetting = { on: false, onlyRunning: false };
@@ -73,7 +75,7 @@ export function createKeepAwake({ wakeLock, doc, onStatus }: { wakeLock: Pick<Wa
   let disposed = false;
   const visible = () => doc.visibilityState === "visible";
   const wanted = () => on && active && visible();
-  const status = (): KeepAwakeStatus => (!on ? "off" : sentinel ? "held" : refused ? "refused" : !visible() ? "hidden" : "idle");
+  const status = (): KeepAwakeStatus => (!on ? "off" : sentinel ? "held" : refused ? "refused" : !visible() ? "hidden" : !active ? "idle" : "pending");
   const emit = () => onStatus(status());
   const drop = () => {
     const s = sentinel;
@@ -100,7 +102,8 @@ export function createKeepAwake({ wakeLock, doc, onStatus }: { wakeLock: Pick<Wa
           sentinel = s;
           s.addEventListener("release", () => {
             if (sentinel === s) sentinel = undefined;
-            emit();
+            // The browser may drop the lock at any time (e.g. low battery): ask again while still wanted and visible. A refusal stops the retry.
+            sync();
           });
           emit();
         },
@@ -134,6 +137,9 @@ export function createKeepAwake({ wakeLock, doc, onStatus }: { wakeLock: Pick<Wa
     },
   };
 }
+
+/** "Running" for "Only while a session is running": a listed, unarchived session that works or waits for the user (permission or question). */
+export const anySessionRunning = (list: SessionListItem[], views: Record<string, SessionView>): boolean => list.some((s) => !s.archived && ["running", "needs_input"].includes(shownState(views[s.id]) ?? s.state));
 
 /** Setting + controller for App: `anyRunning` gates the lock when "only while running" is set. */
 export function useKeepAwake(anyRunning: boolean) {
