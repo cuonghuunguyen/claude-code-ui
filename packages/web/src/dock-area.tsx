@@ -41,16 +41,29 @@ export function useAreaDrop(on: DropHandlers) {
 function useKeyboardOpen() {
   const kb = useRef(false);
   const popup = useRef<HTMLDivElement | null>(null);
+  // Shift+F10 / the Menu key: browsers differ in the contextmenu event they send after it (button, coordinates), so the key itself is the sign.
+  const hint = useRef(false);
   return {
     popup,
+    /** Spread on the element the menu opens from. */
+    trigger: {
+      onKeyDown: (e: { key: string; shiftKey: boolean }) => void (hint.current = e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)),
+      onPointerDown: () => void (hint.current = false),
+    },
     root: {
       onOpenChange: (open: boolean, details: { event: Event }) => {
         const e = details.event as MouseEvent;
-        kb.current = open && (e.type === "keydown" || (e.type === "click" && e.detail === 0) || (e.type === "contextmenu" && e.button === 0));
+        kb.current = open && (hint.current || e.type === "keydown" || (e.type === "click" && e.detail === 0) || (e.type === "contextmenu" && e.button === 0));
       },
       onOpenChangeComplete: (open: boolean) => {
-        if (open && kb.current) popup.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+        const first = () => popup.current?.querySelector<HTMLElement>('[role="menuitem"]');
+        if (open && kb.current) {
+          first()?.focus();
+          // The focus manager may put the focus on the popup after this; take it back once.
+          requestAnimationFrame(() => document.activeElement !== first() && popup.current?.contains(document.activeElement) !== false && first()?.focus());
+        }
         kb.current = false;
+        hint.current = false;
       },
     },
   };
@@ -130,6 +143,7 @@ export function DockHeader({
                 variant={p === active ? "secondary" : "ghost"}
                 className="pointer-coarse:h-11 relative data-drop-before:before:absolute data-drop-before:before:inset-y-1 data-drop-before:before:-left-1 data-drop-before:before:w-0.5 data-drop-before:before:rounded-full data-drop-before:before:bg-primary"
                 draggable
+                {...ctxKb.trigger}
                 data-drop-before={drag && dropAt?.area === area && dropAt.before === p ? "" : undefined}
                 // Dragging a tab onto another inserts before it; the area section ignores it (stopPropagation).
                 onDragStart={(e) => {

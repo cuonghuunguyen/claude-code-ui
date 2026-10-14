@@ -151,12 +151,27 @@ it("a menu opened from the keyboard focuses its first item; a pointer-opened one
   expect(document.activeElement).toBe(doc("dock-move"));
 });
 
-it("a tab's context menu opened from the keyboard (Shift+F10: button 0) focuses its first item", async () => {
+it.each([
+  ["Shift+F10", { key: "F10", shiftKey: true }],
+  ["the Menu key", { key: "ContextMenu" }],
+])("%s on a focused pane tab opens its context menu with the first item focused, then Enter moves the pane", async (_n, key) => {
   const { fns, render } = h("side");
   await render();
-  await act(async () => void el.querySelector('[data-pane-tab="graph"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 0, clientX: 4, clientY: 4 })));
-  await act(async () => new Promise((r) => setTimeout(r, 50)));
-  expect(document.activeElement).toBe(doc("pane-move"));
+  const tab = el.querySelector<HTMLElement>('[data-pane-tab="graph"]')!;
+  tab.focus();
+  // The browser's sequence: keydown, then a contextmenu event at the element (Chrome sends button 2, others 0).
+  await act(async () => void tab.dispatchEvent(new KeyboardEvent("keydown", { ...key, bubbles: true, cancelable: true })));
+  await act(async () => void tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 0, clientY: 0 })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(doc("pane-move")));
   await act(async () => void doc("pane-move").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
   expect(fns.onMove).toHaveBeenCalledWith("graph", "bottom");
+});
+
+it("a right click on a pane tab does not take the focus into the menu", async () => {
+  const { render } = h("side");
+  await render();
+  const tab = el.querySelector<HTMLElement>('[data-pane-tab="graph"]')!;
+  await act(async () => void tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 4, clientY: 4 })));
+  await act(async () => new Promise((r) => setTimeout(r, 80)));
+  expect(document.activeElement).not.toBe(doc("pane-move"));
 });
