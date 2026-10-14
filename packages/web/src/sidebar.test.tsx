@@ -1189,3 +1189,14 @@ it("GH-358 below md the kebab of a project row lists the same entries; the old i
   await act(async () => tid("project-menu-remove").click());
   expect(onRemove).toHaveBeenCalled();
 });
+
+it("GH-358 Shift+F10 on a worker row focuses the menu's first enabled item", async () => {
+  const { el } = await render({ list: WORKERS, activeId: null });
+  // w2 is closed: Close worker is disabled, so the first enabled item is Rename.
+  const t = row(el, "w2");
+  t.focus();
+  await act(async () => void t.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "F10", shiftKey: true })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(menuItems().find((i) => !i.hasAttribute("data-disabled") && i.getAttribute("aria-disabled") !== "true")));
+  expect(document.activeElement?.textContent).toBe("Rename");
+  await closeMenu();
+});
