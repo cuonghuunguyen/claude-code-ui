@@ -955,6 +955,74 @@ it("dropping a pane on an area's content (inside a pane host) moves it and fills
   expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "terminal"]);
 });
 
+/** Terminal in the side panel, Files in a maximized bottom panel: the side panel is hidden behind the maximize. */
+const maximizedBottomWithSideTerminal = async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["graph", "terminal"], bottom: ["files", "changes"] } }));
+  await rerender();
+  await press({ key: "E", ctrlKey: true, shiftKey: true }); // shows Files: opens the bottom panel
+  await clickId("dock-maximize");
+  expect(mainHidden()).toBe(true);
+};
+
+it("Ctrl+` with the terminal in the side panel restores a maximized bottom panel", async () => {
+  await maximizedBottomWithSideTerminal();
+  await press({ key: "`", ctrlKey: true });
+  expect(mainHidden()).toBe(false);
+  expect(q("side-panel")!.contains(q("terminal-panel"))).toBe(true);
+});
+
+it("New terminal with the terminal in the side panel restores a maximized bottom panel, even when the terminal was the shown side pane", async () => {
+  await maximizedBottomWithSideTerminal();
+  await press({ key: "`", ctrlKey: true });
+  await clickId("dock-maximize");
+  expect(mainHidden()).toBe(true);
+  await press({ key: "`", ctrlKey: true, shiftKey: true });
+  expect(mainHidden()).toBe(false);
+});
+
+it("moving a pane from a maximized bottom panel to the side panel restores it", async () => {
+  await maximizedBottomWithSideTerminal();
+  await clickId("dock-menu-bottom");
+  expect(menuItem("dock-move").textContent).toBe("Move Files to side panel");
+  await act(async () => menuItem("dock-move").click());
+  expect(mainHidden()).toBe(false);
+  expect(q("side-panel")!.contains(paneTab("side-panel", "files"))).toBe(true);
+});
+
+it("with no pane in the side panel the toggle is disabled with the reason, and Ctrl+Shift+R does nothing", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: [], bottom: ["changes", "files", "graph", "terminal"] } }));
+  await rerender();
+  const b = q("panel-toggle")!;
+  expect(b.getAttribute("aria-label")).toBe("No panes in the side panel");
+  expect(b.getAttribute("aria-disabled")).toBe("true");
+  expect(b.getAttribute("aria-expanded")).toBe("true");
+  await act(async () => b.click());
+  await press({ key: "R", ctrlKey: true, shiftKey: true });
+  expect(q("panel-toggle")!.getAttribute("aria-expanded")).toBe("true");
+});
+
+it("the terminal stays mounted while another pane of its area is selected", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+  await rerender();
+  await press({ key: "`", ctrlKey: true });
+  const t = q("terminal-panel")!;
+  await clickId("pane-files");
+  expect(q("terminal-panel")).toBe(t);
+  expect(t.className).toContain("hidden");
+  await clickId("pane-terminal");
+  expect(q("terminal-panel")).toBe(t);
+  expect(t.className).not.toContain("hidden");
+  // Hiding the area unmounts it as before.
+  await press({ key: "`", ctrlKey: true });
+  expect(q("terminal-panel")).toBeNull();
+});
+
+it("Hide bottom panel is not the terminal's command (no Ctrl+` tip)", async () => {
+  await clickId("terminal-toggle");
+  expect(q("dock-hide")!.hasAttribute("data-command")).toBe(false);
+  expect(q("dock-hide")!.getAttribute("aria-label")).toBe("Hide bottom panel");
+});
+
 it("the sessions sidebar resizes with the arrow keys (200px to half the window) and keeps its width across a reload", async () => {
   const handle = () => el.querySelector<HTMLElement>('[data-testid="sidebar-resizer"]')!;
   const width = () => el.querySelector<HTMLElement>('[data-testid="sidebar"]')!.style.getPropertyValue("--sidebar-w");

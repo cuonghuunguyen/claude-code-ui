@@ -1197,16 +1197,31 @@ export function App() {
   const shows = (p: PaneId) => (lg ? (areaOf(layout, p) === "side" ? sideShown : bottomShown) && activeOf(areaOf(layout, p)) === p : p === "files" ? pane === "files" || (pane === "graph" && !isGit) : pane === p && available(p));
   // Bottom panel only, this page only: it takes the whole work area.
   const [bottomMax, setBottomMax] = useState(false);
+  /** Shown and in sight: a maximized bottom panel hides the side panel, so its panes are not seen. */
+  const inSight = (p: PaneId) => shows(p) && !(bottomMax && lg && areaOf(layout, p) === "side");
+  const sideEmpty = lg && areaPanes("side").length === 0;
+  // The terminal stays mounted (hidden) while another pane of its open area is selected, so switching tabs keeps it as it was.
+  const termAreaOpen = lg && (areaOf(layout, "terminal") === "side" ? sideShown : bottomShown);
+  const [termKeep, setTermKeep] = useState(false);
+  useEffect(() => setTermKeep(shows("terminal") || (termKeep && termAreaOpen)));
+  const termMounted = shows("terminal") || (termKeep && termAreaOpen);
   useEffect(() => void (!bottomShown && setBottomMax(false)), [bottomShown]);
   const openArea = (a: DockArea, v = true) => (a === "side" ? setPanel(v) : setBottomOpen(v));
   /** Selects the pane and, on wide screens, opens its area. */
-  const reveal = (p: Pane) => (setPane(p), lg && p !== "session" && openArea(areaOf(layout, p)));
+  const reveal = (p: Pane) => {
+    setPane(p);
+    if (!lg || p === "session") return;
+    // A maximized bottom panel hides everything else: a pane outside it needs the restore.
+    if (areaOf(layout, p) === "side") setBottomMax(false);
+    openArea(areaOf(layout, p));
+  };
   // GH-355 drag and drop: the pane being dragged and the target it is over (Esc cancels a native drag: dragend without drop).
   const [drag, setDrag] = useState<PaneId>();
   const [dropAt, setDropAt] = useState<DropAt>();
   const move = (p: PaneId, to: DockArea, before?: PaneId) => {
     const n = movePane(layout, p, to, before);
     if (n !== layout) saveLayout(n);
+    setBottomMax(false);
     openArea(to);
     setPane(p);
     focusTab.current = p;
@@ -1257,7 +1272,7 @@ export function App() {
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
     setBottomMax(false);
-    if (fileTree && shows("files")) return setFileTree(false);
+    if (fileTree && inSight("files")) return setFileTree(false);
     setFileTree(true);
     reveal("files");
   };
@@ -1341,7 +1356,7 @@ export function App() {
   // Wide: the terminal pane wherever it lives (VS Code: Ctrl+` reveals the view); it shows -> its area hides. Narrow: the terminal pane.
   const toggleTerminal = () => {
     if (!wide(1024)) return setPane(pane === "terminal" ? "session" : "terminal");
-    if (!shows("terminal")) return reveal("terminal");
+    if (!inSight("terminal")) return reveal("terminal");
     openArea(areaOf(layout, "terminal"), false);
     focusShownPrompt();
   };
@@ -1373,16 +1388,15 @@ export function App() {
     toggleSidebar: () => (wide(768) ? setSidebar((v) => !v) : setDrawer((v) => !v)),
     // lg: the side panel breakpoint; below it the session and the files share one pane.
     toggleFileTree,
-    toggleSidePanel: () => (setBottomMax(false), wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
+    toggleSidePanel: () => (sideEmpty ? undefined : (setBottomMax(false), wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session"))),
     toggleTerminal,
     // The pane that shows already: focus goes back to the prompt (VS Code's Explorer key does the same).
     showPane: (p) => {
-      if (shows(p)) return focusShownPrompt();
-      setBottomMax(false);
+      if (inSight(p)) return focusShownPrompt();
       reveal(p);
     },
     newTerminal: () => {
-      if (shows("terminal")) return setTerminalTick((n) => n + 1);
+      if (inSight("terminal")) return setTerminalTick((n) => n + 1);
       reveal("terminal");
     },
     resetLayout,
@@ -1585,7 +1599,7 @@ export function App() {
   const bottomDropRef = useAreaDrop(dropHandlers("bottom"));
   const dropPane = (a: DockArea) => (p: PaneId) => (setDrag(undefined), setDropAt(undefined), move(p, a));
   const terminalToggle = areaOf(layout, "terminal") !== "side" && (
-    <IconButton label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={shows("terminal")} onClick={toggleTerminal} testId="terminal-toggle" command="terminal.toggle">
+    <IconButton label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle" command="terminal.toggle">
       <SquareTerminalIcon />
     </IconButton>
   );
@@ -1669,12 +1683,12 @@ export function App() {
             <ThemeIcon />
           </IconButton>
           {shown && (
-            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={withKey("Toggle side panel", specOf("panel.toggle"))} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle" command="panel.toggle">
+            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={sideEmpty ? "No panes in the side panel" : withKey("Toggle side panel", specOf("panel.toggle"))} disabled={sideEmpty} expanded={panel} controls="side-panel" onClick={() => (setBottomMax(false), setPanel((v) => !v))} testId="panel-toggle" command="panel.toggle">
               {layout.side === "left" ? <PanelLeftIcon /> : <PanelRightIcon />}
             </IconButton>
           )}
           {shown && (
-            <IconButton className="max-lg:hidden" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={shows("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar" command="terminal.toggle">
+            <IconButton className="max-lg:hidden" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar" command="terminal.toggle">
               <PanelBottomIcon />
             </IconButton>
           )}
@@ -2044,8 +2058,8 @@ export function App() {
                   )}
                   {createPortal(
                     // Mounted only while it shows: the terminal chunk and the shell focus load on show (GH-354).
-                    shows("terminal") && (
-                      <section className="flex min-h-0 flex-1 flex-col" data-testid="terminal-panel" data-dock={lg ? areaOf(layout, "terminal") : "side"}>
+                    termMounted && (
+                      <section className={shows("terminal") ? "flex min-h-0 flex-1 flex-col" : "hidden"} data-testid="terminal-panel" data-dock={lg ? areaOf(layout, "terminal") : "side"}>
                         {terminalPanel()}
                       </section>
                     ),
@@ -2082,7 +2096,7 @@ export function App() {
                     <IconButton label={bottomMax ? "Restore panel" : "Maximize panel"} pressed={bottomMax} onClick={() => setBottomMax((m) => !m)} testId="dock-maximize">
                       {bottomMax ? <ChevronDownIcon /> : <ChevronUpIcon />}
                     </IconButton>
-                    <IconButton label="Hide bottom panel" onClick={() => (setBottomOpen(false), focusShownPrompt())} testId="dock-hide" command="terminal.toggle">
+                    <IconButton label="Hide bottom panel" onClick={() => (setBottomOpen(false), focusShownPrompt())} testId="dock-hide">
                       <XIcon />
                     </IconButton>
                   </>
