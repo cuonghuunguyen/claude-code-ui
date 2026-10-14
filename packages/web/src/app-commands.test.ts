@@ -357,3 +357,27 @@ it("Reset layout is always listed; the side flip names the other side and needs 
   expect(title(ctx({ side: "left" }), "panel.flip")).toBe("Move side panel to right");
   expect(title(ctx({ session: undefined, activeId: undefined, tabs: [] }), "panel.flip")).toBeUndefined();
 });
+
+it("GH-359 tab.closeOthers / closeRight / closeAll are listed only when given, have no default key, run their handler and take a user binding", () => {
+  const ids = ["tab.closeOthers", "tab.closeRight", "tab.closeAll"];
+  expect(appCommands(ctx()).some((i) => ids.includes(i.id))).toBe(false);
+  const over = { closeOthers: vi.fn(), closeRight: vi.fn(), closeAll: vi.fn() };
+  const items = appCommands(ctx(over));
+  expect(ids.map((id) => items.find((i) => i.id === id)?.title)).toEqual(["Close other tabs", "Close tabs to the right", "Close all tabs"]);
+  expect(ids.map((id) => items.find((i) => i.id === id)?.keys)).toEqual([undefined, undefined, undefined]);
+  ids.forEach((id) => run(ctx(over), id));
+  expect(Object.values(over).map((f) => f.mock.calls.length)).toEqual([1, 1, 1]);
+  bind("tab.closeOthers", "mod+alt+o");
+  expect(shortcutFor(appCommands(ctx(over)), ev("o", { ctrlKey: true, altKey: true, code: "KeyO" }))?.id).toBe("tab.closeOthers");
+  resetAll();
+});
+
+it("GH-359 tab.pin is listed only for a session tab, reads Pin or Unpin tab, has no default key and runs its handler", () => {
+  expect(appCommands(ctx()).some((i) => i.id === "tab.pin")).toBe(false);
+  const togglePin = vi.fn();
+  const pin = appCommands(ctx({ togglePin })).find((i) => i.id === "tab.pin")!;
+  expect([pin.title, pin.keys]).toEqual(["Pin tab", undefined]);
+  expect(appCommands(ctx({ togglePin, pinned: true })).find((i) => i.id === "tab.pin")!.title).toBe("Unpin tab");
+  run(ctx({ togglePin }), "tab.pin");
+  expect(togglePin).toHaveBeenCalled();
+});
