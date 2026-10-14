@@ -21,7 +21,9 @@ export function resolveIn(target: string, base: string, root: string): string | 
     // keep the raw text
   }
   if (!t) return;
-  const full = t.startsWith("/") || isWinPath(t) ? t : withSep(base) + t;
+  // A leading "/" outside the root is relative to the root, as on GitHub (`/docs/logo.png`).
+  const rootAbs = t.startsWith("/") && !isWinPath(root) && !inDir(t, root);
+  const full = rootAbs ? withSep(root) + t.slice(1) : t.startsWith("/") || isWinPath(t) ? t : withSep(base) + t;
   const parts = full.split(/[\\/]/);
   const out: string[] = [parts[0]!];
   for (const p of parts.slice(1)) {
@@ -31,6 +33,21 @@ export function resolveIn(target: string, base: string, root: string): string | 
   }
   const path = out.join(sepOf(root));
   return inDir(path, root) && path.length > root.replace(/[\\/]$/, "").length ? path : undefined;
+}
+
+const percentDecoded = (s: string) => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+};
+
+/** An explicit link target (not a guess from prose): `resolveIn`'s path, the line of a `#LN` suffix. */
+export function linkRef(target: string, base: string, root: string): { path: string; line?: number } | undefined {
+  const path = resolveIn(target, base, root);
+  const m = /#L(\d+)(?:-L?\d+)?$/.exec(target);
+  return path ? { path, ...(m && Number(m[1]) > 0 && { line: Number(m[1]) }) } : undefined;
 }
 
 /** Extensions that make a bare word a file ("process.env", "JSON.parse" and "e.g" stay text); a name with a path separator needs none of these. */
@@ -124,7 +141,8 @@ function FileAnchor(props: ComponentProps<"a">) {
   const { open, base, root } = useTarget();
   const href = props.href;
   if (!href?.startsWith(FILE_LINK)) return createElement(defaultComponents.a as never, props as never);
-  const ref = open && base ? fileRef(decodeURIComponent(href.slice(FILE_LINK.length)), base, root) : undefined;
+  const target = decodeURIComponent(href.slice(FILE_LINK.length));
+  const ref = open && base ? (fileRef(percentDecoded(target), base, root) ?? linkRef(target, base, root)) : undefined;
   if (!ref) return <span>{props.children}</span>;
   return (
     <button type="button" className={`text-primary ${refClass}`} title="Open in Files tab" onClick={() => open!(ref.path, ref.line)}>

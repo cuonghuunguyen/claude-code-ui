@@ -34,7 +34,7 @@ it("inline code and relative links that are file references become buttons that 
   const open = vi.fn();
   const { el, done } = await render(open);
   const buttons = [...el.querySelectorAll<HTMLButtonElement>("button[title='Open in Files tab']")];
-  expect(buttons.map((b) => b.textContent)).toEqual(["src/a.ts:12", "the doc", "up"]);
+  expect(buttons.map((b) => b.textContent)).toEqual(["src/a.ts:12", "the doc", "up", "none"]);
   buttons[0]!.click();
   expect(open).toHaveBeenLastCalledWith("/w/src/a.ts", 12);
   buttons[1]!.click();
@@ -59,7 +59,34 @@ it("without a provider the same markdown is plain code and no file buttons", asy
 it("a FileBaseContext resolves relative references from the markdown file's folder", async () => {
   const open = vi.fn();
   const { el, done } = await render(open, { base: "/w/docs", root: "/w" });
-  [...el.querySelectorAll<HTMLButtonElement>("button[title='Open in Files tab']")].at(-1)!.click();
+  [...el.querySelectorAll<HTMLButtonElement>("button[title='Open in Files tab']")].at(-2)!.click();
   expect(open).toHaveBeenLastCalledWith("/w/docs/y.md", undefined);
   await done();
+});
+
+it("explicit link targets in a markdown file all open: ../, a bare name, an image file, #heading, %20, a #LN line", async () => {
+  const open = vi.fn();
+  const el = document.createElement("div");
+  const root = createRoot(el);
+  const md = "[readme](../README.md) [license](LICENSE) [logo](logo.png) [setup](setup.md#install) [notes](my%20notes.md) [line](a.ts#L7) [out](../../x.md)";
+  await act(async () =>
+    root.render(
+      <CwdContext value="/w">
+        <FileLinkContext value={open}>
+          <FileBaseContext value={{ base: "/w/docs", root: "/w" }}>
+            <MessageResponse mode="static" {...FILE_LINK_PROPS}>
+              {md}
+            </MessageResponse>
+          </FileBaseContext>
+        </FileLinkContext>
+      </CwdContext>,
+    ),
+  );
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  const buttons = [...el.querySelectorAll<HTMLButtonElement>("button[title='Open in Files tab']")];
+  expect(buttons.map((b) => b.textContent)).toEqual(["readme", "license", "logo", "setup", "notes", "line"]);
+  buttons.forEach((b) => b.click());
+  expect(open.mock.calls).toEqual([["/w/README.md", undefined], ["/w/docs/LICENSE", undefined], ["/w/docs/logo.png", undefined], ["/w/docs/setup.md", undefined], ["/w/docs/my notes.md", undefined], ["/w/docs/a.ts", 7]]);
+  expect(el.textContent).toContain("out");
+  act(() => root.render(null));
 });

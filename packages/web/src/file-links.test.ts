@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { fileRef, resolveIn } from "./file-links.tsx";
+import { fileRef, linkRef, resolveIn } from "./file-links.tsx";
 
 it("fileRef accepts relative and absolute paths inside the base, with a line from :N, :N:M, :N-M, #LN and #LN-M", () => {
   expect(fileRef("src/a.ts", "/w")).toEqual({ path: "/w/src/a.ts" });
@@ -34,6 +34,17 @@ it("resolveIn resolves ./ and .. against the base and refuses what leaves the ro
   expect(resolveIn("../a.png", "/w/docs", "/w")).toBe("/w/a.png");
   expect(resolveIn("../../a.png", "/w/docs", "/w")).toBeUndefined();
   expect(resolveIn("/w/x/a.png", "/w/docs", "/w")).toBe("/w/x/a.png");
-  expect(resolveIn("/etc/a.png", "/w/docs", "/w")).toBeUndefined();
+  expect(resolveIn("/docs/a.png", "/w/sub", "/w")).toBe("/w/docs/a.png");
+  expect(resolveIn("/etc/../../a.png", "/w/docs", "/w")).toBeUndefined();
   expect(resolveIn("..\\a.png", "C:\\w\\docs", "C:\\w")).toBe("C:\\w\\a.png");
+});
+
+it("linkRef takes an explicit target as it is: .., a bare name, any extension, #heading, %20, a #LN line", () => {
+  expect(linkRef("../README.md", "/w/docs", "/w")).toEqual({ path: "/w/README.md" });
+  expect(linkRef("LICENSE", "/w/docs", "/w")).toEqual({ path: "/w/docs/LICENSE" });
+  expect(linkRef("logo.png", "/w/docs", "/w")).toEqual({ path: "/w/docs/logo.png" });
+  expect(linkRef("setup.md#install", "/w/docs", "/w")).toEqual({ path: "/w/docs/setup.md" });
+  expect(linkRef("my%20notes.md", "/w/docs", "/w")).toEqual({ path: "/w/docs/my notes.md" });
+  expect(linkRef("a.ts#L7-L9", "/w/docs", "/w")).toEqual({ path: "/w/docs/a.ts", line: 7 });
+  expect(linkRef("../../x.md", "/w/docs", "/w")).toBeUndefined();
 });

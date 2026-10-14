@@ -75,6 +75,7 @@ export function FilesPanel({
   const [error, setError] = useState<string>();
   /** The file being read for longer than 150 ms. */
   const [loading, setLoading] = useState<string>();
+  const openSeq = useRef(0);
   /** A line to go to in `path`'s editor once it shows (`key` tells a repeat of the same line apart). */
   const [goto, setGoto] = useState<{ path: string; line: number; key: number }>();
   const editor = useRef<EditorView>(undefined);
@@ -116,14 +117,19 @@ export function FilesPanel({
     const preview = opts.preview ?? true;
     const scope = (p: string) => inDir(p, cwd);
     setError(undefined);
+    // Answers come back in any order: only the latest open may take the preview slot and the focus.
+    const seq = ++openSeq.current;
+    if (!opts.line) setSourceOnly((p) => (p === path ? undefined : p));
     if (tabsRef.current[path]) setTabs((ts) => (ts[path] ? placeTab(ts, ts[path], preview, scope) : ts));
     else {
       const timer = setTimeout(() => setLoading(path), 150);
       try {
         const tab = await readTab(path);
+        if (seq !== openSeq.current && preview) return;
         setTabs((ts) => placeTab(ts, ts[path] ?? tab, preview, scope));
       } catch (e) {
         const f = readFailure(e as RequestError);
+        if (seq !== openSeq.current && preview) return;
         if (!f.notice) return setError(f.text);
         // A file that cannot be shown still gets a tab (closable, with its breadcrumb) that says why.
         setTabs((ts) => placeTab(ts, ts[path] ?? { path, disk: "", draft: "", mtime: 0, notice: f.text, noticeHint: f.hint }, preview, scope));
@@ -133,7 +139,7 @@ export function FilesPanel({
         setLoading((l) => (l === path ? undefined : l));
       }
     }
-    setActivePath(path);
+    if (seq === openSeq.current) setActivePath(path);
     if (opts.line && isMarkdown(path)) setSourceOnly(path);
     if (opts.line) setGoto((g) => ({ path, line: opts.line!, key: (g?.key ?? 0) + 1 }));
     if (opts.focusEditor) requestAnimationFrame(() => editor.current?.focus());
@@ -330,7 +336,13 @@ export function FilesPanel({
           })}
         </div>
       )}
-      {loading ? (
+      {loading && active && (
+        // The editor stays mounted (undo history, cursor, scroll) while another file loads.
+        <p className="shrink-0 border-b px-2 py-1 text-muted-foreground text-xs" role="status" data-testid="file-loading">
+          Loading file…
+        </p>
+      )}
+      {loading && !active ? (
         <p className="m-auto p-4 text-muted-foreground text-sm" role="status" data-testid="file-loading">
           Loading file…
         </p>

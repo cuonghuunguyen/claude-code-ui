@@ -609,3 +609,42 @@ it("the breadcrumb keeps the file name when the pane is narrow: folders shrink f
   window.matchMedia = original;
   act(() => t.root.render(null));
 });
+
+it("a slow open keeps the active editor mounted (undo history, draft) and shows Loading file… as a line", async () => {
+  const t = treePanel({ read: (path) => (path === "/p/b.ts" ? new Promise((r) => setTimeout(() => r({ content: "bee", mtime: 1 }), 400)) : { content: "one\ntwo", mtime: 1 }) });
+  await t.show({ openPath: "/p/a.ts" });
+  const v = await t.view();
+  await act(async () => v.dispatch({ changes: { from: 0, insert: "x" } }));
+  await t.click(t.row("/p/b.ts"));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 250))));
+  expect(t.el.querySelector("[data-testid=file-loading]")!.textContent).toBe("Loading file…");
+  expect(await t.view()).toBe(v);
+  expect(v.state.doc.toString()).toBe("xone\ntwo");
+  await act(async () => void (await new Promise((r) => setTimeout(r, 300))));
+  expect(t.el.querySelector("[data-testid=file-loading]")).toBeNull();
+  expect((await t.view()).state.doc.toString()).toBe("bee");
+  act(() => t.root.render(null));
+});
+
+it("two quick single clicks: an older, slower answer does not take the preview tab or the focus", async () => {
+  const t = treePanel({ read: (path) => (path === "/p/a.ts" ? new Promise((r) => setTimeout(() => r({ content: "aaa", mtime: 1 }), 300)) : { content: "bbb", mtime: 1 }) });
+  await t.show();
+  await t.click(t.row("/p/a.ts"));
+  await t.click(t.row("/p/b.ts"));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 450))));
+  expect(t.tabs().map((x) => x.textContent)).toEqual(["b.ts×"]);
+  expect((await t.view()).state.doc.toString()).toBe("bbb");
+  act(() => t.root.render(null));
+});
+
+it("a markdown file opened at a line shows its source only for that open", async () => {
+  localStorage.setItem("claude-ui.markdown-view", "preview");
+  const t = mdPanel();
+  await t.show({ openPath: "/p/docs/guide.md", openLine: 2 });
+  expect(t.el.querySelector("[data-testid=md-preview]")).toBeNull();
+  await t.show({ openPath: undefined });
+  await t.show({ openPath: "/p/docs/guide.md" });
+  expect(t.el.querySelector("[data-testid=md-preview]")).not.toBeNull();
+  act(() => t.root.render(null));
+  localStorage.clear();
+});
