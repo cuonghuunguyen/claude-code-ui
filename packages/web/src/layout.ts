@@ -1,5 +1,5 @@
 // Pane layout per browser (docs/spec.md "Layout"): where the terminal panel docks on wide screens. Movable panes (#355) extend this.
-import { useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 export type DockArea = "bottom" | "side";
 export const TERMINAL_DOCKS: { value: DockArea; label: string }[] = [
@@ -48,14 +48,17 @@ export const useTerminalDock = (): DockArea => useSyncExternalStore(subscribe, l
 /** True while the viewport is at least `px` wide; follows resizes. */
 export function useMinWidth(px: number): boolean {
   const query = `(min-width: ${px}px)`;
+  // One MediaQueryList per query, not one per render (`subscribe` is stable while `query` is).
+  const mql = useMemo(() => (typeof matchMedia === "function" ? matchMedia(query) : undefined), [query]);
   return useSyncExternalStore(
-    (l) => {
-      if (typeof matchMedia !== "function") return () => {};
-      const m = matchMedia(query);
-      m.addEventListener("change", l);
-      return () => m.removeEventListener("change", l);
-    },
-    () => typeof matchMedia === "function" && matchMedia(query).matches,
+    useCallback(
+      (l: () => void) => {
+        mql?.addEventListener("change", l);
+        return () => mql?.removeEventListener("change", l);
+      },
+      [mql],
+    ),
+    () => mql?.matches ?? false,
     () => false,
   );
 }

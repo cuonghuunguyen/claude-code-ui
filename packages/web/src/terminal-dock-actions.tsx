@@ -49,7 +49,7 @@ export function TerminalDockActions({
         </IconButton>
       )}
       {onHide && (
-        <IconButton label={hideLabel ?? "Hide terminal"} onClick={onHide} testId="terminal-hide">
+        <IconButton label={hideLabel ?? "Hide terminal"} onClick={onHide} testId="terminal-hide" command="terminal.toggle">
           <XIcon />
         </IconButton>
       )}
