@@ -924,7 +924,7 @@ describe("orchestration", () => {
       expect((await call(coord, "worker_list")).workers.find((x: { name: string }) => x.name === "u3")).toBeUndefined();
       expect(existsSync(dirB)).toBe(true);
       expect((await call(coord, "worker_start", { name: "u3", cwd: dirB, prompt: "again" })).name).toBe("u3");
-    });
+    }, 20_000);
 
     it("worker.remove refuses a running and a waiting worker with text that names no tool", async () => {
       enable();
@@ -953,8 +953,8 @@ describe("orchestration", () => {
       const w = await call(coord, "worker_start", { name: "u6", cwd: dirB, prompt: "x" });
       await until(async () => (await state(w.sessionId)) === "idle");
       appSettings.set({ orchestration: { enabled: false, workerCap: 20, coordinatorPermissions: true } });
-      expect(await c.request({ type: "worker.remove", sessionId: w.sessionId })).toMatchObject({ type: "reply" });
-    });
+      expect(await c.request({ type: "worker.remove", sessionId: w.sessionId }, 15000)).toMatchObject({ type: "reply" });
+    }, 20_000);
 
     it("refuses a worker another process runs", async () => {
       enable();

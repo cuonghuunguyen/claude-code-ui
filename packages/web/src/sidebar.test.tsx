@@ -43,7 +43,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-async function render(props: { reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined } = {}) {
+async function render(props: { reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState } = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -55,13 +55,18 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
   const onOpenProject = vi.fn();
   const onAction = vi.fn();
   const onRenamed = vi.fn();
+  const onWorkers = vi.fn();
+  const onArchiveIdle = vi.fn();
   const ui = (reveal = props.reveal) => (
       <SideLabel value={props.side ?? (() => undefined)}>
       <SessionList
         list={props.list ?? LIST}
         projects={props.projects ?? ["/home/u/web", "/home/u/api"]}
         worktrees={props.worktrees}
-        state={(s) => s.state}
+        state={props.state ?? ((s) => s.state)}
+        openTabs={props.openTabs}
+        onWorkers={onWorkers}
+        onArchiveIdle={onArchiveIdle}
         unread={new Set(["c"])}
         activeId={props.activeId === null ? undefined : (props.activeId ?? "a")}
         onOpen={onOpen}
@@ -90,7 +95,7 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
   };
-  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onOpenProject, onAction, onRenamed };
+  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onOpenProject, onAction, onRenamed, onWorkers, onArchiveIdle };
 }
 
 it("one group per working directory with the project name as header and the full path only as tooltip", async () => {
@@ -190,7 +195,7 @@ it("each row has an actions menu: Rename, Archive, Delete; Delete is disabled wh
   const { el, onAction } = await render();
   const menuOf = (title: string) => el.querySelector<HTMLElement>(`[data-testid="session-menu"][aria-label="Actions for ${title}"]`)!;
   await act(async () => menuOf("Old idea").click());
-  expect(document.querySelector('[role="menu"]')!.textContent).toBe("RenameArchiveDelete…");
+  expect(document.querySelector('[role="menu"]')!.textContent).toBe("RenameArchiveCopy session IDDelete…");
   await act(async () => document.querySelector<HTMLElement>('[data-testid="action-delete"]')!.click());
   expect(onAction).toHaveBeenLastCalledWith("c", "delete");
   for (const title of ["Fix login", "Docs pass"]) {
@@ -656,7 +661,7 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     expect(document.querySelector('[data-testid="project-menu-remove"]')).not.toBeNull();
   });
 
-  it("narrow: a removable worktree row keeps New session inline and Delete worktree moves into its menu; the others have no menu", async () => {
+  it("narrow: a removable worktree row keeps New session inline and Delete worktree moves into its menu; the main checkout menu has no Delete", async () => {
     narrow(true);
     const managed = "/home/u/web/.claude/worktrees/fix";
     const all: Worktree[] = [...wts, { path: managed, branch: "team/GH-1-fix", main: false }];
@@ -670,7 +675,7 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     expect(toggle.title).toContain("team/GH-1-fix");
     await act(async () => row(managed).querySelector<HTMLElement>('[data-testid="worktree-new-session"]')!.click());
     expect(onNew).toHaveBeenCalledWith(managed);
-    expect(row("/home/u/web").querySelector('[data-testid="worktree-menu"]')).toBeNull();
+    expect(row("/home/u/web").querySelector('[data-testid="worktree-menu"]')).not.toBeNull();
     const trigger = row(managed).querySelector<HTMLElement>('[data-testid="worktree-menu"]')!;
     expect(trigger.className).toContain("max-md:size-11");
     await act(async () => trigger.click());
@@ -1023,4 +1028,164 @@ it("GH-359 a new reveal value expands the active session's group and focuses its
   r = await render({ activeId: "c", reveal: 2 });
   await act(async () => {});
   expect(r.rows()).toHaveLength(2);
+});
+
+// ---- GH-358: context menus of the sidebar rows ----
+const ctx = async (target: Element, init: MouseEventInit = {}) => {
+  await act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5, ...init })));
+};
+const menuItems = () => [...document.querySelectorAll<HTMLElement>("[role=menuitem],[role=menuitemcheckbox]")];
+const texts = () => menuItems().map((i) => i.textContent);
+const tid = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+const row = (el: HTMLElement, id: string) => el.querySelector<HTMLElement>(`[data-session-id="${id}"]`)!;
+const longPress = async (target: Element) => {
+  const touch = { identifier: 1, target, clientX: 5, clientY: 5 };
+  await act(async () => {
+    target.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+    const ev = new Event("touchstart", { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, "touches", { value: [touch] });
+    target.dispatchEvent(ev);
+    await new Promise((r) => setTimeout(r, 650));
+  });
+};
+const closeMenu = () => act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+const DAY = 86_400_000;
+const MAIN: Worktree[] = [{ path: "/home/u/web", branch: "main", main: true }];
+const old = (id: string, cwd: string, title: string, days: number, o: Partial<SessionListItem> = {}): SessionListItem => ({ ...item(id, cwd, title, 0, "idle"), lastActivity: now - days * DAY, ...o });
+
+it("GH-358 a session row's menu has Copy session ID, and Close tab only while a tab is open; each calls onAction", async () => {
+  const { el, onAction } = await render({ openTabs: new Set(["c"]) });
+  await ctx(row(el, "d"));
+  expect(texts()).toEqual(["Rename", "Archive", "Copy session ID", "Delete…"]);
+  await act(async () => tid("action-copy-id").click());
+  expect(onAction).toHaveBeenLastCalledWith("d", "copy-id");
+  await ctx(row(el, "c"));
+  expect(texts()).toEqual(["Rename", "Archive", "Copy session ID", "Close tab", "Delete…"]);
+  await act(async () => tid("action-close-tab").click());
+  expect(onAction).toHaveBeenLastCalledWith("c", "close-tab");
+});
+
+const WORKERS: SessionListItem[] = [
+  { ...item("co", "/home/u/web", "Boss", 10, "idle"), coordinator: true },
+  { ...item("w1", "/home/u/web", "w1", 9, "idle"), coordinatorId: "co", workerName: "w-one" },
+  { ...item("w2", "/home/u/web", "w2", 8, "closed"), coordinatorId: "co", workerName: "w-two", live: false },
+  { ...item("w3", "/home/u/web", "w3", 7, "running"), coordinatorId: "co", workerName: "w-three" },
+];
+
+it("GH-358 a worker row offers Close worker and Remove worker… (no Delete…); disabled for a closed worker and while it runs", async () => {
+  const { el, onAction } = await render({ list: WORKERS, activeId: null });
+  await ctx(row(el, "w1"));
+  expect(texts()).toEqual(["Rename", "Archive", "Copy session ID", "Close worker", "Remove worker…"]);
+  await act(async () => tid("action-close-worker").click());
+  expect(onAction).toHaveBeenLastCalledWith("w1", "close-worker");
+  await ctx(row(el, "w2"));
+  expect(tid("action-close-worker").textContent).toBe("Close worker (closed)");
+  expect(tid("action-close-worker").getAttribute("aria-disabled")).toBe("true");
+  expect(tid("action-remove-worker").getAttribute("aria-disabled")).toBeNull();
+  await closeMenu();
+  await ctx(row(el, "w3"));
+  expect(tid("action-remove-worker").textContent).toBe("Remove worker… (close it first)");
+  expect(tid("action-remove-worker").getAttribute("aria-disabled")).toBe("true");
+});
+
+it("GH-358 the coordinator row and its N workers row carry Close finished / Remove closed workers with counts", async () => {
+  const { el, onWorkers } = await render({ list: WORKERS, activeId: null });
+  await ctx(row(el, "co"));
+  expect(tid("action-close-finished").textContent).toBe("Close finished workers (1)");
+  expect(tid("action-remove-closed").textContent).toBe("Remove closed workers… (1)");
+  await act(async () => tid("action-close-finished").click());
+  expect(onWorkers).toHaveBeenLastCalledWith(["w1"], "close", { id: "co", title: "Boss" });
+  await ctx(el.querySelector('[data-testid="worker-group-toggle"]')!);
+  expect(texts()).toEqual(["Close finished workers (1)", "Remove closed workers… (1)"]);
+  await act(async () => tid("workers-menu-remove-closed").click());
+  expect(onWorkers).toHaveBeenLastCalledWith(["w2"], "remove", { id: "co", title: "Boss" });
+});
+
+it("GH-358 bulk items are disabled at zero", async () => {
+  const { el } = await render({ list: [WORKERS[0]!, WORKERS[3]!], activeId: null });
+  await ctx(el.querySelector('[data-testid="worker-group-toggle"]')!);
+  expect(menuItems().map((i) => i.getAttribute("aria-disabled"))).toEqual(["true", "true"]);
+});
+
+it("GH-358 right click on a project row opens its menu: hide inactive, archive idle with counts of the whole project, remove", async () => {
+  const list = [old("o1", "/home/u/web", "Old one", 40), old("o2", "/home/u/web", "Old two", 10), item("n", "/home/u/web", "New", 1, "idle"), old("api", "/home/u/api", "Api old", 40)];
+  const { el, onArchiveIdle, onRemove } = await render({ list, activeId: null });
+  await ctx(el.querySelector('[data-cwd="/home/u/web"] [data-testid="group-toggle"]')!);
+  expect(texts()).toEqual(["New session", "Hide inactive sessions", "1 day (2)…", "7 days (2)…", "30 days (1)…", "Remove from list (files stay)"]);
+  await act(async () => tid("group-menu-archive-7").click());
+  expect(onArchiveIdle).toHaveBeenLastCalledWith(expect.arrayContaining(["o1", "o2"]), "web", 7);
+  await ctx(el.querySelector('[data-cwd="/home/u/web"] [data-testid="group-toggle"]')!);
+  await act(async () => tid("group-menu-remove").click());
+  expect(onRemove).toHaveBeenCalledWith("/home/u/web");
+});
+
+it("GH-358 the archive count ignores the search text; Hide inactive sessions flips and saves Only active sessions", async () => {
+  const list = [old("o1", "/home/u/web", "Old one", 40), old("o2", "/home/u/web", "Other", 40), { ...item("r", "/home/u/web", "Run", 1, "running") }];
+  const { el, search } = await render({ list, activeId: null });
+  await search("Old");
+  await ctx(el.querySelector('[data-testid="group-toggle"]')!);
+  expect(tid("group-menu-archive-30").textContent).toBe("30 days (2)…");
+  expect(tid("group-menu-hide-inactive").getAttribute("aria-checked")).toBe("false");
+  await act(async () => tid("group-menu-hide-inactive").click());
+  expect(loadSidebarView().onlyActive).toBe(true);
+  await search("");
+  expect(el.querySelector('[data-testid="active-only-chip"]')).not.toBeNull();
+});
+
+it("GH-358 the archived view has no Hide or Archive items", async () => {
+  const list = [old("o1", "/home/u/web", "Old one", 40, { archived: true })];
+  const { el } = await render({ list, activeId: null });
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="archived-filter"]')!.click());
+  await ctx(el.querySelector('[data-testid="group-toggle"]')!);
+  expect(texts()).toEqual(["New session", "Remove from list (files stay)"]);
+});
+
+it("GH-358 a worktree row's menu counts only its own sessions and offers Delete worktree… when removable", async () => {
+  const managed = "/home/u/web/.claude/worktrees/fix";
+  const all: Worktree[] = [...MAIN, { path: managed, branch: "fix", main: false }];
+  const list = [old("m", "/home/u/web", "In main", 40), old("w", managed, "In wt", 40), old("w2", managed, "In wt 2", 2)];
+  const { el, onArchiveIdle, onRemoveWorktree } = await render({ list, worktrees: { "/home/u/web": all }, activeId: null });
+  const toggle = el.querySelector(`[data-path="${managed}"] [data-testid="worktree-toggle"]`)!;
+  await ctx(toggle);
+  expect(tid("worktree-context-archive-7").textContent).toBe("7 days (1)…");
+  await act(async () => tid("worktree-context-archive-7").click());
+  expect(onArchiveIdle).toHaveBeenLastCalledWith(["w"], "worktree : fix", 7);
+  await ctx(toggle);
+  await act(async () => tid("worktree-context-remove").click());
+  expect(onRemoveWorktree).toHaveBeenCalledWith("/home/u/web", managed);
+  await closeMenu();
+  await ctx(el.querySelector('[data-path="/home/u/web"] [data-testid="worktree-toggle"]')!);
+  expect(document.querySelector('[data-testid="worktree-context-remove"]')).toBeNull();
+});
+
+it("GH-358 Shift+F10 and the ContextMenu key open the menu of a session row, a project row, a worktree row and the workers row", async () => {
+  const managed = "/home/u/web/.claude/worktrees/fix";
+  const list = [...WORKERS, old("x", managed, "In wt", 2)];
+  const { el } = await render({ list, worktrees: { "/home/u/web": [...MAIN, { path: managed, branch: "fix", main: false }] }, activeId: null });
+  const targets = [row(el, "co"), el.querySelector('[data-testid="group-toggle"]')!, el.querySelector(`[data-path="${managed}"] [data-testid="worktree-toggle"]`)!, el.querySelector('[data-testid="worker-group-toggle"]')!];
+  for (const t of targets)
+    for (const init of [{ key: "F10", shiftKey: true }, { key: "ContextMenu" }]) {
+      await act(async () => void t.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
+      expect(document.querySelector("[role=menu]"), `${(t as HTMLElement).dataset.testid} ${init.key}`).not.toBeNull();
+      await closeMenu();
+      expect(document.querySelector("[role=menu]")).toBeNull();
+    }
+});
+
+it("GH-358 a long press opens the project row's menu with touch", async () => {
+  const { el } = await render({ activeId: null });
+  await longPress(el.querySelector('[data-testid="group-toggle"]')!);
+  expect(tid("group-menu")).not.toBeNull();
+});
+
+it("GH-358 below md the kebab of a project row lists the same entries; the old ids stay", async () => {
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ matches: q.includes("48rem"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  const { el, onRemove } = await render({ activeId: null });
+  window.matchMedia = mm;
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
+  expect(texts()).toEqual(["New session", "Hide inactive sessions", "1 day (0)…", "7 days (0)…", "30 days (0)…", "Remove from list (files stay)"]);
+  expect(tid("project-menu-archive-1").getAttribute("aria-disabled")).toBe("true");
+  await act(async () => tid("project-menu-remove").click());
+  expect(onRemove).toHaveBeenCalled();
 });

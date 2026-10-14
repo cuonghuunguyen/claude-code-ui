@@ -1572,3 +1572,169 @@ describe("GH-359 tab menu commands", () => {
     expect(toast()?.textContent).toContain("Copy failed");
   });
 });
+
+describe("GH-358 sidebar menus", () => {
+  const DAY = 86_400_000;
+  const W1 = "aaaaaaaa-2222-3333-4444-555555555555";
+  const W2 = "bbbbbbbb-2222-3333-4444-555555555555";
+  const O1 = "cccccccc-2222-3333-4444-555555555555";
+  const O2 = "dddddddd-2222-3333-4444-555555555555";
+  const main = { path: "/p/demo", branch: "main", main: true };
+  const managed = "/p/demo/.claude/worktrees/x";
+  const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  const ctx = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  const rowOf = (id: string) => el.querySelector(`[data-session-id="${id}"]`)!;
+  const tid = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+  const click = (id: string) => act(async () => tid(id).click());
+  const flush = () => act(async () => {});
+  const coord = { ...session, coordinator: true as const };
+  const worker = (id: string, name: string, o: Partial<SessionListItem> = {}): SessionListItem => ({ ...session, id, title: name, workerName: name, coordinatorId: ID, lastActivity: Date.now() - DAY, ...o });
+  const saved = { list: replies["session.list"] };
+  afterEach(() => {
+    replies["session.list"] = saved.list;
+    delete replies["worker.close"];
+    delete replies["worker.remove"];
+    delete replies["worktree.status"];
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+  });
+  const mount = async (sessions: SessionListItem[], worktrees: Record<string, unknown[]> = {}) => {
+    replies["session.list"] = { sessions, projects: ["/p/demo"], worktrees };
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await flush();
+  };
+  const bodies = (type: string, from: number) => sent.slice(from).filter((m) => m.type === type);
+
+  it("Copy session ID from the sidebar writes the clipboard and toasts; without a clipboard the toast says why", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    await ctx(rowOf(ID));
+    await click("action-copy-id");
+    expect(writeText).toHaveBeenCalledWith(ID);
+    expect(toast()?.textContent).toBe("Copied session ID");
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    await ctx(rowOf(ID));
+    await click("action-copy-id");
+    expect(toast()?.textContent).toContain("Copy failed");
+  });
+
+  it("Close tab from the sidebar menu closes the tab; the session stays listed", async () => {
+    await ctx(rowOf(ID));
+    expect(tid("action-close-tab")).not.toBeNull();
+    await click("action-close-tab");
+    expect(el.querySelector(`[data-tab-id="${ID}"]`)).toBeNull();
+    expect(rowOf(ID)).not.toBeNull();
+    await ctx(rowOf(ID));
+    expect(document.querySelector('[data-testid="action-close-tab"]')).toBeNull();
+  });
+
+  it("Close finished workers sends one worker.close per idle worker, no dialog, then toasts", async () => {
+    await mount([coord, worker(W1, "one"), worker(W2, "two", { live: false })]);
+    const from = sent.length;
+    await ctx(el.querySelector('[data-testid="worker-group-toggle"]')!);
+    await click("workers-menu-close-finished");
+    expect(bodies("worker.close", from)).toEqual([{ type: "worker.close", sessionId: W1 }]);
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(toast()?.textContent).toBe("Closed 1 worker");
+  });
+
+  it("Remove closed workers confirms with the count and names, then one worker.remove each; a failure shows '1 of 2 …'", async () => {
+    await mount([coord, worker(W1, "one", { live: false }), worker(W2, "two", { live: false })]);
+    replies["worker.remove"] = (m: { sessionId: string }) => (m.sessionId === W2 ? Promise.reject(new Error("The worker is running or waiting for input: close it first")) : {});
+    const from = sent.length;
+    await ctx(rowOf(ID));
+    await click("action-remove-closed");
+    const dialog = tid("remove-workers-dialog");
+    expect(dialog.textContent).toContain("Remove 2 closed workers?");
+    expect(dialog.textContent).toContain("one, two");
+    expect(bodies("worker.remove", from)).toEqual([]);
+    await click("remove-workers-confirm");
+    await flush();
+    expect(bodies("worker.remove", from).map((m) => (m as unknown as { sessionId: string }).sessionId).sort()).toEqual([W1, W2]);
+    expect(el.textContent).toContain("1 of 2 workers removed: The worker is running or waiting for input: close it first");
+  });
+
+  it("Close worker from the row sends worker.close", async () => {
+    await mount([coord, worker(W1, "one")]);
+    const from = sent.length;
+    await ctx(rowOf(W1));
+    await click("action-close-worker");
+    expect(bodies("worker.close", from)).toEqual([{ type: "worker.close", sessionId: W1 }]);
+  });
+
+  it("Remove worker asks first and sends worker.remove; the worktree option is absent for a worker in a plain folder", async () => {
+    await mount([coord, worker(W1, "one", { live: false })]);
+    const from = sent.length;
+    await ctx(rowOf(W1));
+    await click("action-remove-worker");
+    expect(tid("remove-worker-dialog").textContent).toContain("Remove worker one?");
+    expect(document.querySelector('[data-testid="remove-worker-worktree"]')).toBeNull();
+    await click("remove-worker-confirm");
+    await flush();
+    expect(bodies("worker.remove", from)).toEqual([{ type: "worker.remove", sessionId: W1 }]);
+    expect(bodies("worktree.remove", from)).toEqual([]);
+    expect(toast()?.textContent).toBe("Removed worker one");
+  });
+
+  it("Remove worker with 'Also remove worktree' ticked fetches the worktree status on open, then removes the worker and the worktree", async () => {
+    replies["worktree.status"] = { uncommitted: 1, commits: 0, branch: "worktree-x" };
+    await mount([coord, worker(W1, "one", { live: false, cwd: managed }), { ...session, id: O1, title: "Other", cwd: managed }], { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] });
+    const from = sent.length;
+    await ctx(rowOf(W1));
+    await click("action-remove-worker");
+    await flush();
+    expect(bodies("worktree.status", from)).toEqual([{ type: "worktree.status", cwd: "/p/demo", path: managed }]);
+    expect(tid("remove-worker-worktree").textContent ?? "").toBe("");
+    expect(tid("remove-worker-dialog").textContent).toContain("Also remove worktree worktree-x");
+    expect(tid("remove-worker-worktree-text").textContent).toContain("1 uncommitted file");
+    expect(tid("remove-worker-worktree-text").textContent).toContain("1 other session there; their transcripts stay.");
+    await act(async () => tid("remove-worker-worktree").click());
+    await click("remove-worker-confirm");
+    await flush();
+    expect(bodies("worker.remove", from)).toEqual([{ type: "worker.remove", sessionId: W1 }]);
+    expect(bodies("worktree.remove", from)).toEqual([{ type: "worktree.remove", cwd: "/p/demo", path: managed }]);
+  });
+
+  it("unticked, Remove worker leaves the worktree alone", async () => {
+    replies["worktree.status"] = { uncommitted: 0, commits: 0, branch: "worktree-x" };
+    await mount([coord, worker(W1, "one", { live: false, cwd: managed })], { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] });
+    const from = sent.length;
+    await ctx(rowOf(W1));
+    await click("action-remove-worker");
+    await flush();
+    await click("remove-worker-confirm");
+    await flush();
+    expect(bodies("worker.remove", from)).toHaveLength(1);
+    expect(bodies("worktree.remove", from)).toEqual([]);
+  });
+
+  it("Archive idle sessions confirms with the count, archives each at once, and a failure refreshes with the error", async () => {
+    const old = (id: string, title: string, days: number): SessionListItem => ({ ...session, id, title, lastActivity: Date.now() - days * DAY });
+    await mount([old(O1, "Old one", 40), old(O2, "Old two", 20), { ...session, lastActivity: Date.now() }]);
+    replies["session.archive"] = (m: { sessionId: string }) => (m.sessionId === O2 ? Promise.reject(new Error("no transcript")) : {});
+    const from = sent.length;
+    await ctx(el.querySelector('[data-testid="group-toggle"]')!);
+    expect(tid("group-menu-archive-7").textContent).toBe("7 days (2)…");
+    await click("group-menu-archive-7");
+    expect(tid("archive-idle-dialog").textContent).toContain("Archive 2 sessions?");
+    expect(tid("archive-idle-dialog").textContent).toContain("idle for more than 7 days");
+    expect(bodies("session.archive", from)).toEqual([]);
+    await click("archive-idle-confirm");
+    await flush();
+    expect(bodies("session.archive", from).map((m) => (m as unknown as { sessionId: string; archived: boolean }).archived)).toEqual([true, true]);
+    expect(el.textContent).toContain("1 of 2 sessions archived: no transcript");
+    delete replies["session.archive"];
+  });
+
+  it("Archive idle sessions drops the rows from the list at once and toasts", async () => {
+    const old = (id: string, title: string, days: number): SessionListItem => ({ ...session, id, title, lastActivity: Date.now() - days * DAY });
+    await mount([old(O1, "Old one", 40), { ...session, lastActivity: Date.now() }]);
+    await ctx(el.querySelector('[data-testid="group-toggle"]')!);
+    await click("group-menu-archive-30");
+    await click("archive-idle-confirm");
+    await flush();
+    expect(rowOf(O1)).toBeNull();
+    expect(toast()?.textContent).toBe("Archived 1 session");
+  });
+});

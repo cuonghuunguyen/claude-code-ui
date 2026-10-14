@@ -16,7 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/u
 import { GHOST, ROW } from "./toolbar.tsx";
 import { SideLabel } from "./sides.tsx";
 import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
-import { KEY_FOLLOWUP_MS, openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
+import { openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
+import { swallowKeyFollowup } from "./context-menu-key.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
 /** No tab is pinned. */
@@ -842,13 +843,6 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
       </ContextMenu.Portal>
     </ContextMenu.Root>
   );
-}
-
-/** The browser's own contextmenu right after Shift+F10 / the ContextMenu key (Firefox fires one on key release, at another place) must not reopen the menu elsewhere. A synthetic event is untrusted and passes. */
-function swallowKeyFollowup(e: ReactMouseEvent, keyOpenedAt: RefObject<number>) {
-  if (!e.nativeEvent.isTrusted || performance.now() - keyOpenedAt.current > KEY_FOLLOWUP_MS) return;
-  e.preventDefault();
-  (e as typeof e & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
 }
 
 // A tab re-renders only when what it shows changes (info by value), not for App's new closures and info objects on every render.
