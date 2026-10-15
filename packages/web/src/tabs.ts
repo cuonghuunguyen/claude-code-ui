@@ -25,6 +25,15 @@ export function closeMany(tabs: string[], ids: string[], active?: string) {
   return { tabs: rest, active: tabs.slice(at + 1).find((t) => !gone.has(t)) ?? tabs.slice(0, at).reverse().find((t) => !gone.has(t)) };
 }
 
+/** Bulk close targets (tab menu: Close others / to the right / all) in strip order; pinned tabs never. */
+export function closeTargets(tabs: string[], pinned: ReadonlySet<string>, id: string, kind: "others" | "right" | "all") {
+  const from = kind === "right" ? tabs.slice(tabs.indexOf(id) + 1) : tabs;
+  return from.filter((t) => !pinned.has(t) && (kind !== "others" || t !== id));
+}
+
+/** Tabs of every group but `key` (chip menu: Close other groups), pinned ones excluded. */
+export const otherGroupTargets = (tabs: string[], pinned: ReadonlySet<string>, cwdOf: CwdOf, key: string) => tabs.filter((t) => (cwdOf(t) ?? "") !== key && !pinned.has(t));
+
 /** The tab one step from `active` in `order` (by +1 or -1); none past either end (no wrap) or when `active` is not in the order. */
 export const stepNoWrap = (order: string[], active: string | undefined, by: 1 | -1) => {
   const at = active === undefined ? -1 : order.indexOf(active);
@@ -59,8 +68,27 @@ export function keysFinal(tabs: string[], listLoaded: boolean, known: (id: strin
   return listLoaded && tabs.every((id) => id === NEW_TAB || known(id) || failed.has(id));
 }
 
-/** Drag/keyboard reorder inside a group: a tab does not leave its project. */
-export const moveTabIn = (tabs: string[], cwdOf: CwdOf, from: string, to: string) => ((cwdOf(from) ?? "") === (cwdOf(to) ?? "") ? moveTab(tabs, from, to) : tabs);
+/** Drag/keyboard reorder inside a group: a tab does not leave its project, and (with `pinned`) a pinned tab does not cross the unpinned ones. */
+export const moveTabIn = (tabs: string[], cwdOf: CwdOf, from: string, to: string, pinned?: ReadonlySet<string>) =>
+  (cwdOf(from) ?? "") === (cwdOf(to) ?? "") && !(pinned && pinned.has(from) !== pinned.has(to)) ? moveTab(tabs, from, to) : tabs;
+
+/** Pinned tabs first inside each group (GH-359), both parts in their own order. */
+export const pinOrder = (tabs: string[], pinned: ReadonlySet<string>, cwdOf: CwdOf) =>
+  [...groupTabs(tabs, cwdOf).values()].flatMap((ids) => [...ids.filter((t) => pinned.has(t)), ...ids.filter((t) => !pinned.has(t))]);
+
+/** Pin or unpin `id`: it goes to the end of its group's pinned block when pinned, right after the block when unpinned. */
+export function setPinned(tabs: string[], pinned: string[], id: string, on: boolean, cwdOf: CwdOf) {
+  const next = on ? [...pinned.filter((t) => t !== id), id] : pinned.filter((t) => t !== id);
+  if (!tabs.includes(id)) return { tabs, pinned: next };
+  const others = new Set(pinned.filter((t) => t !== id));
+  const key = cwdOf(id) ?? "";
+  const rest = tabs.filter((t) => t !== id);
+  const group = rest.map((t, i) => [t, i] as const).filter(([t]) => (cwdOf(t) ?? "") === key);
+  const lastPinned = group.filter(([t]) => others.has(t)).at(-1)?.[1];
+  const at = lastPinned !== undefined ? lastPinned + 1 : (group[0]?.[1] ?? tabs.indexOf(id));
+  rest.splice(at, 0, id);
+  return { tabs: pinOrder(rest, new Set(next), cwdOf), pinned: next };
+}
 
 /** Moves a whole group one place left (-1) or right (1). */
 export function moveGroup(tabs: string[], cwdOf: CwdOf, cwd: string, by: -1 | 1) {
@@ -146,6 +174,26 @@ export function saveTabs(tabs: string[]) {
     localStorage.setItem(KEY, JSON.stringify(tabs));
   } catch {
     // Storage blocked: tabs still work for this page.
+  }
+}
+
+const PINNED_KEY = "claude-ui.pinned-tabs";
+
+/** Pinned session tabs (GH-359), per browser. */
+export function loadPinned(): string[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(PINNED_KEY) ?? "[]");
+    return Array.isArray(v) ? [...new Set(v.filter((t): t is string => typeof t === "string"))] : [];
+  } catch {
+    return [];
+  }
+}
+
+export function savePinned(ids: string[]) {
+  try {
+    localStorage.setItem(PINNED_KEY, JSON.stringify(ids));
+  } catch {
+    // Storage blocked: the tabs stay pinned for this page.
   }
 }
 

@@ -250,3 +250,13 @@ it("a card that moves on to its session's next request puts focus on Open in Foc
   await act(async () => (document.activeElement as HTMLElement).click());
   expect(sent.some((m) => m.type === "permission.respond")).toBe(false);
 });
+
+it("GH-356 a session shown in the other split makes no card", async () => {
+  localStorage.setItem("claude-ui.tabs", JSON.stringify([A, B]));
+  localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [A, B], at: 0, ratio: 0.5 }));
+  await mount(`#${A}`);
+  expect(el.querySelectorAll('[data-testid="split"]')).toHaveLength(2);
+  await live(B, perm("r1"));
+  await settle();
+  expect(cards()).toHaveLength(0);
+});

@@ -156,6 +156,7 @@ export function SessionList({
   onAction,
   onRenamed,
   search,
+  reveal: revealSeq,
 }: {
   list: SessionListItem[];
   /** Known project cwds from the daemon, newest first; a project with no session still gets a group. */
@@ -185,6 +186,8 @@ export function SessionList({
   onRenamed: (id: string, title: string | undefined) => void;
   /** `/resume` (GH-100): each new `seq` puts `text` into the search box, focuses it and puts the caret at the end. */
   search?: { text: string; seq: number };
+  /** Reveal in sidebar (tab menu, GH-359): each new value runs Select active session with focus. */
+  reveal?: number;
 }) {
   const narrow = useNarrow();
   const sideOf = use(SideLabel);
@@ -278,6 +281,13 @@ export function SessionList({
     });
     setReveal({ id: activeSession.id, focus });
   };
+  const servedReveal = useRef(revealSeq);
+  useEffect(() => {
+    // One-shot: a value present at mount (the list remounts after a re-pair) was served already.
+    if (revealSeq && revealSeq !== servedReveal.current) revealActive(true);
+    servedReveal.current = revealSeq;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealSeq]);
   const known = !!activeKeys;
   useEffect(() => {
     if (view.alwaysSelect && known) revealActive(false);

@@ -43,7 +43,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-async function render(props: { activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined } = {}) {
+async function render(props: { reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined } = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -55,8 +55,7 @@ async function render(props: { activeId?: string | null; list?: SessionListItem[
   const onOpenProject = vi.fn();
   const onAction = vi.fn();
   const onRenamed = vi.fn();
-  await act(async () =>
-    root!.render(
+  const ui = (reveal = props.reveal) => (
       <SideLabel value={props.side ?? (() => undefined)}>
       <SessionList
         list={props.list ?? LIST}
@@ -74,10 +73,12 @@ async function render(props: { activeId?: string | null; list?: SessionListItem[
         renaming={props.renaming}
         onAction={onAction}
         onRenamed={onRenamed}
+        reveal={reveal}
       />
-      </SideLabel>,
-    ),
+      </SideLabel>
   );
+  await act(async () => root!.render(ui()));
+  const rerender = (reveal: number) => act(async () => root!.render(ui(reveal)));
   const groups = () => [...el.querySelectorAll<HTMLElement>('[data-testid="session-group"]')];
   const rows = () => [...el.querySelectorAll<HTMLElement>('[data-testid="session-item"]')];
   const toggle = (cwd: string) => el.querySelector<HTMLElement>(`[data-cwd="${cwd}"] [data-testid="group-toggle"]`)!;
@@ -89,7 +90,7 @@ async function render(props: { activeId?: string | null; list?: SessionListItem[
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
   };
-  return { el, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onOpenProject, onAction, onRenamed };
+  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onOpenProject, onAction, onRenamed };
 }
 
 it("one group per working directory with the project name as header and the full path only as tooltip", async () => {
@@ -1007,4 +1008,19 @@ describe("sidebar header actions (GH-152)", () => {
     expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toContain("coordinator:co");
   });
 
+});
+
+it("GH-359 a new reveal value expands the active session's group and focuses its row; once, not again on a remount", async () => {
+  let r = await render({ activeId: "c", reveal: 1 });
+  await act(async () => r.toggle("/home/u/web").click());
+  expect(r.rows()).toHaveLength(2);
+  await r.rerender(2);
+  expect(r.rows()).toHaveLength(4);
+  await vi.waitFor(() => expect(document.activeElement).toBe(r.rows().find((x) => x.dataset.sessionId === "c")));
+  // Remount (re-pair) with the same value: served already, nothing collapses open or takes focus.
+  await act(async () => r.toggle("/home/u/web").click());
+  root!.unmount();
+  r = await render({ activeId: "c", reveal: 2 });
+  await act(async () => {});
+  expect(r.rows()).toHaveLength(2);
 });

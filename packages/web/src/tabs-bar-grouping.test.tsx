@@ -268,3 +268,39 @@ it("GH-277 not compact: a collapsed group's context menu still lists its tabs", 
   await settle();
   expect(closers().length).toBe(2);
 });
+
+// GH-359: Close other groups in the chip menus.
+it("GH-359 not compact: the chip context menu has Close other groups before Close group and calls onCloseOtherGroups(key)", async () => {
+  const onCloseOtherGroups = vi.fn();
+  const el = await mount(<TabsBar {...noop} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} onCloseOtherGroups={onCloseOtherGroups} />);
+  await act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  await settle();
+  const labels = [...document.querySelectorAll('[data-testid="tab-group-menu"] [role="menuitem"]')].map((i) => i.textContent);
+  expect(labels.slice(-2)).toEqual(["Close other groups", "Close group"]);
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-group-close-others"]')!.click());
+  expect(onCloseOtherGroups).toHaveBeenCalledWith(A);
+});
+
+it("GH-359 compact: the chip menu has Close other groups", async () => {
+  const onCloseOtherGroups = vi.fn();
+  const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} onCloseOtherGroups={onCloseOtherGroups} />);
+  await act(async () => chip(el, A).click());
+  await settle();
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-group-close-others"]')!.click());
+  expect(onCloseOtherGroups).toHaveBeenCalledWith(A);
+});
+
+it("GH-359 Close other groups is disabled when there is no other group", async () => {
+  const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2"]} activeId="a1" info={(id) => INFO2[id]!} onCloseOtherGroups={() => {}} />);
+  await act(async () => chip(el, A).click());
+  await settle();
+  expect(document.querySelector('[data-testid="tab-group-close-others"]')!.getAttribute("aria-disabled")).toBe("true");
+});
+
+it("GH-359 Shift+F10 on a focused chip opens its context menu", async () => {
+  const el = await mount(<TabsBar {...noop} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} />);
+  chip(el, A).focus();
+  await act(async () => void chip(el, A).dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "F10", shiftKey: true })));
+  await settle();
+  expect(menu()).not.toBeNull();
+});

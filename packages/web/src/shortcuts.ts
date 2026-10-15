@@ -30,6 +30,17 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "tab.next", title: "Next tab", group: "Tabs", key: "mod+alt+arrowright" },
   { id: "tab.close", title: "Close tab", group: "Tabs", key: "mod+alt+w" },
   { id: "tab.closeGroup", title: "Close tab group", group: "Tabs", key: "mod+alt+shift+w" },
+  // No default key (VS Code's are chords, the free combos are taken here): "Not set" in Keyboard shortcuts, bindable (GH-359).
+  { id: "tab.closeOthers", title: "Close other tabs", group: "Tabs" },
+  { id: "tab.closeRight", title: "Close tabs to the right", group: "Tabs" },
+  { id: "tab.closeAll", title: "Close all tabs", group: "Tabs" },
+  { id: "tab.pin", title: "Pin or unpin tab", group: "Tabs" },
+  // Split view (GH-356): Ctrl+Alt+Arrow is layout-independent (Ctrl+Alt+\ and ] are AltGr characters on Czech and German keyboards).
+  { id: "split.right", title: "Split right", group: "Panels" },
+  { id: "split.down", title: "Split down", group: "Panels" },
+  { id: "split.next", title: "Focus next split", group: "Panels", key: "mod+alt+arrowup" },
+  { id: "split.prev", title: "Focus previous split", group: "Panels" },
+  { id: "split.join", title: "Join splits", group: "Panels" },
   { id: "tab.reopen", title: "Reopen closed tab", group: "Tabs", key: "alt+shift+t", mac: "ctrl+shift+t" },
   // Ctrl/Cmd+1..9 belong to the browser's tabs; Alt+digit is free on Windows and Linux, Ctrl+digit on macOS.
   ...[1, 2, 3, 4, 5, 6, 7, 8].map(gotoTab),

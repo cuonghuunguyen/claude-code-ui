@@ -119,6 +119,10 @@ A coordinator hands a worker's pending question or permission request to the use
 The app-level page (sidebar row, pinned tab, `#focus`) that lists every pending permission request and question, and every session that needs a look (error, usage limit, quiet, finished unread), across all projects; answers requests in place.
 _Avoid_: inbox, queue page
 
+**Split view**:
+The session area showing two session tabs at once, side by side or stacked; each region is a **split**. One split is active and shows the active tab (the current session for the side panel, terminal and commands). Not a tab group (the project chip).
+_Avoid_: group, pane (a pane is a side-panel view), editor group
+
 **In-app notification**:
 A notice card in the open page about another session that needs input or finished; one per session, acted on in place (Allow once or Deny for a low-tier read) or in Focus. Per browser, on by default (Settings › Notifications).
 _Avoid_: toast (the component), alert, banner
