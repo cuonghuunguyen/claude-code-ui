@@ -12,6 +12,12 @@ Most settings are **kept in this browser** only. Orchestration, Usage limits (ex
 | --- | --- |
 | Signal only | Folds each run of tool calls into one line, like "4 tool calls · Read 3 · Grep 1". Your prompts, Claude's text, errors and waiting requests stay. Also <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd>. |
 
+## Sending
+
+| Setting | Does |
+| --- | --- |
+| While Claude works, Enter | **Steers the turn** (default; <kbd>Alt</kbd>+<kbd>Enter</kbd> queues) or **queues the message** (<kbd>Alt</kbd>+<kbd>Enter</kbd> steers). A queued message waits and starts its own turn when Claude is idle. The send button follows the choice. |
+
 ## Notifications
 
 | Setting | Does |
