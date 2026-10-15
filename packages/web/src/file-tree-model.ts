@@ -7,9 +7,13 @@ export type DirState = FsEntry[] | { error: string } | "loading";
 export type TreeModel = { dirs: Record<string, DirState>; expanded: ReadonlySet<string> };
 export type Mark = "M" | "A" | "U" | "R" | "D";
 export type DirMark = "D" | "M" | "A";
-export type EntryRow = { kind: "entry"; entry: FsEntry; depth: number; expanded?: boolean; parent: string; posinset: number; setsize: number };
+export type EntryRow = { kind: "entry"; entry: FsEntry; depth: number; expanded?: boolean; /** Its name is the rename input. */ renaming?: boolean; parent: string; posinset: number; setsize: number };
 export type StatusRow = { kind: "status"; depth: number; text: string; error?: boolean; parent: string };
-export type Row = EntryRow | StatusRow;
+/** A name being typed: a rename of `path`, or a new file or folder in `dir`. */
+export type Editing = { kind: "rename"; path: string } | { kind: "new"; dir: string; isDir: boolean };
+/** The input row of a new file or folder: the first child of its folder. */
+export type InputRow = { kind: "input"; depth: number; parent: string; editing: Extract<Editing, { kind: "new" }> };
+export type Row = EntryRow | StatusRow | InputRow;
 
 /** Without ".git", directories first, otherwise in the listing's order. */
 export const sortEntries = (entries: FsEntry[]): FsEntry[] => entries.filter((e) => e.name !== ".git").sort((a, b) => Number(b.isDir) - Number(a.isDir));
@@ -35,13 +39,15 @@ function level(entries: FsEntry[], depth: number, parent: string, out: Row[], de
 }
 
 /** Depth-first rows of the listed, expanded part of the tree. An expanded directory without a listing shows "…", a failed one its error. */
-export function visibleRows(m: TreeModel, root: string): Row[] {
+export function visibleRows(m: TreeModel, root: string, editing?: Editing): Row[] {
   const out: Row[] = [];
   const walk = (dir: string, depth: number) => {
+    if (editing?.kind === "new" && editing.dir === dir) out.push({ kind: "input", depth, parent: dir, editing });
     const s = m.dirs[dir];
     if (!s || s === "loading") return void out.push({ kind: "status", depth, text: "…", parent: dir });
     if (!Array.isArray(s)) return void out.push({ kind: "status", depth, text: s.error, error: true, parent: dir });
     level(s, depth, dir, out, (e) => {
+      if (editing?.kind === "rename" && editing.path === e.path) (out.at(-1) as EntryRow).renaming = true;
       if (!e.isDir) return;
       const open = m.expanded.has(e.path);
       (out.at(-1) as EntryRow).expanded = open;
@@ -140,4 +146,28 @@ export function gitMarks(rows: GitRow[], cwd: string): { files: Map<string, Mark
     }
   }
   return { files, dirs };
+}
+
+/** `p` moved from `from` to `to`: `p` itself, or below `from`; else unchanged. */
+const swap = (p: string, from: string, to: string) => {
+  const [k, f] = [pathKey(p), pathKey(from)];
+  return k === f ? to : k.startsWith(f + (isWinPath(from) ? "\\" : "/")) ? to + p.slice(from.length) : p;
+};
+const under = (p: string, path: string) => {
+  const [k, f] = [pathKey(p), pathKey(path)];
+  return k === f || k.startsWith(f + (isWinPath(path) ? "\\" : "/"));
+};
+
+/** The model after `from` was renamed to `to`: open folders and listings below it follow (entries carry the new paths). */
+export function movePaths(m: TreeModel, from: string, to: string): TreeModel {
+  const dirs: Record<string, DirState> = {};
+  for (const [k, v] of Object.entries(m.dirs)) dirs[swap(k, from, to)] = Array.isArray(v) ? v.map((e) => ({ ...e, path: swap(e.path, from, to) })) : v;
+  return { dirs, expanded: new Set([...m.expanded].map((p) => swap(p, from, to))) };
+}
+
+/** The model after `path` was deleted: its open state and listings go. */
+export function dropPaths(m: TreeModel, path: string): TreeModel {
+  const dirs: Record<string, DirState> = {};
+  for (const [k, v] of Object.entries(m.dirs)) if (!under(k, path)) dirs[k] = v;
+  return { dirs, expanded: new Set([...m.expanded].filter((p) => !under(p, path))) };
 }

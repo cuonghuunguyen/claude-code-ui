@@ -297,6 +297,7 @@ it("/clear: a live session_cleared moves the open tab to the session the CLI goe
   const NEXT = "99999999-2222-3333-4444-555555555555";
   replies["session.subscribe"] = { logEpoch: "e1", seq: 1, session };
   await act(async () => root.unmount());
+  localStorage.setItem("claude-ui.pinned-tabs", JSON.stringify([ID]));
   root = createRoot(el);
   await act(async () => root.render(<App />));
   await act(async () => {});
@@ -309,6 +310,9 @@ it("/clear: a live session_cleared moves the open tab to the session the CLI goe
   expect(sent).toContainEqual(expect.objectContaining({ type: "session.subscribe", sessionId: NEXT }));
   const tabs: string[] = JSON.parse(localStorage.getItem("claude-ui.tabs")!);
   expect([tabs.includes(NEXT), tabs.includes(ID)]).toEqual([true, false]);
+  // GH-359: the pin goes with the tab.
+  await act(async () => {});
+  expect(JSON.parse(localStorage.getItem("claude-ui.pinned-tabs")!)).toEqual([NEXT]);
   expect(el.querySelector('[data-testid="raw-part"]')).toBeNull();
   replies["session.subscribe"] = { logEpoch: "e1", session };
 });
@@ -1486,5 +1490,85 @@ describe("key promoter (GH-234)", () => {
     await act(async () => document.querySelector<HTMLElement>('[data-id="tips.reset"]')!.click());
     expect(loadKeyTips()).toEqual({ v: 1, counts: {}, learned: [] });
     expect(tipToast()?.textContent).toContain("Shortcut tips reset.");
+  });
+});
+
+describe("GH-359 tab menu commands", () => {
+  const S2 = "22222222-2222-3333-4444-555555555555";
+  const S3 = "33333333-2222-3333-4444-555555555555";
+  const sessions = [session, { ...session, id: S2, title: "Second" }, { ...session, id: S3, title: "Third" }];
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const menu = async (id: string) => {
+    await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    return (label: string) => act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === label)!.click());
+  };
+  const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  async function remount() {
+    act(() => root.unmount());
+    replies["session.list"] = { sessions, projects: ["/p/demo"] };
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([ID, S2, S3]));
+    location.hash = `#${S2}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+  }
+  afterEach(() => void (replies["session.list"] = { sessions: [session], projects: ["/p/demo"] }));
+
+  it("Close others closes the other tabs without a dialog, toasts 'Closed 2 tabs'; Undo puts them back in place", async () => {
+    await remount();
+    expect(tabIds()).toEqual([ID, S2, S3]);
+    const click = await menu(S2);
+    await click("Close others");
+    expect(document.querySelector('[role="dialog"], [role="alertdialog"]')).toBeNull();
+    expect(tabIds()).toEqual([S2]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+    await act(async () => [...toast()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+    expect(tabIds()).toEqual([ID, S2, S3]);
+  });
+
+  it("Close to the right closes the tabs after it and Reopen closed tab brings the last one back", async () => {
+    await remount();
+    const click = await menu(ID);
+    await click("Close to the right");
+    expect(tabIds()).toEqual([ID]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+    const again = await menu(ID);
+    await again("Reopen closed tab");
+    expect(tabIds()).toHaveLength(2);
+  });
+
+  it("Pin tab pins it first in the strip; Close all keeps pinned tabs; the pin survives a reload; Close tab drops it", async () => {
+    await remount();
+    const click = await menu(S3);
+    await click("Pin tab");
+    expect(tabIds()).toEqual([S3, ID, S2]);
+    expect(JSON.parse(localStorage.getItem("claude-ui.pinned-tabs")!)).toEqual([S3]);
+    const all = await menu(S2);
+    await all("Close all");
+    expect(tabIds()).toEqual([S3]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    expect(tabIds()).toEqual([S3]);
+    expect(el.querySelector<HTMLElement>(`[data-tab-id="${S3}"]`)!.dataset.pinned).toBe("true");
+    const close = await menu(S3);
+    await close("Close tab");
+    await act(async () => {});
+    expect(JSON.parse(localStorage.getItem("claude-ui.pinned-tabs")!)).toEqual([]);
+  });
+
+  it("Copy session ID writes the id to the clipboard and toasts; without a clipboard the toast says why", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const click = await menu(ID);
+    await click("Copy session ID");
+    expect(writeText).toHaveBeenCalledWith(ID);
+    expect(toast()?.textContent).toBe("Copied session ID");
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    const again = await menu(ID);
+    await again("Copy session ID");
+    expect(toast()?.textContent).toContain("Copy failed");
   });
 });

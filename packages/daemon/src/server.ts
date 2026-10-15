@@ -11,6 +11,7 @@ import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages,
 import { ARTIFACT_HEADERS, ARTIFACT_PREVIEW_MAX } from "./artifact-preview.ts";
 import { searchFiles } from "./search.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
+import { createEntry, deleteEntry, duplicateFile, renameEntry, type FsOpsContext } from "./fs-ops.ts";
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
@@ -459,6 +460,21 @@ export function createDaemon(opts: {
     let dir = dirname(resolve(path));
     while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
     return !!allowed(dir);
+  };
+
+  /** A live session's cwd or a worktree being removed is this path or below it: the tree may not delete or rename it (GH-360). */
+  const fsOps: FsOpsContext = {
+    allowed,
+    refused,
+    missingInRoots: (p) => missingInRoots(p),
+    roots,
+    busy: (t) => {
+      const under = (cwd: string) => {
+        const rel = relative(t, real(cwd) ?? cwd);
+        return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+      };
+      return [...sessions.values()].some((s) => under(s.cwd)) || [...removing].some(under) || terminals.any(under);
+    },
   };
 
   /** Worktree paths inside the roots of the added projects, as of the last session.list: their sessions show under the project. */
@@ -1939,6 +1955,22 @@ export function createDaemon(opts: {
           } finally {
             if (fd !== undefined) closeSync(fd);
           }
+        }
+        case "fs.create": {
+          const r = createEntry(fsOps, msg.path, msg.dir === true);
+          return "code" in r ? fail(r.code, r.message) : reply(r);
+        }
+        case "fs.rename": {
+          const r = await renameEntry(fsOps, msg.path, msg.name);
+          return "code" in r ? fail(r.code, r.message) : reply(r);
+        }
+        case "fs.delete": {
+          const r = await deleteEntry(fsOps, msg.path, msg.dryRun === true);
+          return "code" in r ? fail(r.code, r.message) : reply(r);
+        }
+        case "fs.duplicate": {
+          const r = await duplicateFile(fsOps, msg.path);
+          return "code" in r ? fail(r.code, r.message) : reply(r);
         }
         case "fs.watch": {
           if (!Array.isArray(msg.paths)) return fail("bad_paths", "paths must be an array");

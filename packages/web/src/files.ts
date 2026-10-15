@@ -133,13 +133,18 @@ export function replaceDoc(state: EditorState, text: string): TransactionSpec {
 /** The document joined with its own line breaks (`doc.toString()` always joins with "\n"). */
 export const docText = (state: EditorState) => state.sliceDoc();
 
+/** A Windows path in "/": the CLI resolves either, and "\" would read as an escape in a quoted mention. */
+const mentionRel = (path: string, cwd: string) => (isWinPath(path) ? relPath(path, cwd).replace(/\\/g, "/") : relPath(path, cwd));
+
+/** "Add to prompt" from the file tree: `@path` of the file, relative to `cwd`. */
+export const fileMention = (path: string, cwd: string) => mentionPath(mentionRel(path, cwd));
+
 /**
  * "Send selection to Claude": `@path#Lstart-end` of the main selection, path relative to `cwd`; the file alone when nothing is selected.
  * The SDK attaches only the range for `#L…` (`#start-end` attaches the whole file), and a quoted path needs the range inside the quotes.
  */
 export function selectionMention(state: EditorState, path: string, cwd: string) {
-  // A Windows path in "/": the CLI resolves either, and "\" would read as an escape in a quoted mention.
-  const rel = isWinPath(path) ? relPath(path, cwd).replace(/\\/g, "/") : relPath(path, cwd);
+  const rel = mentionRel(path, cwd);
   const { from, to, empty } = state.selection.main;
   if (empty) return mentionPath(rel);
   const start = state.doc.lineAt(from);
@@ -180,4 +185,30 @@ export function readFailure(e: RequestError): { text: string; notice: boolean; h
     default:
       return { text: e.message, notice: false };
   }
+}
+
+const below = (p: string, dir: string) => {
+  if (isWinPath(dir)) {
+    const [k, d] = [p.replace(/\//g, "\\").toLowerCase(), dir.replace(/\//g, "\\").toLowerCase()];
+    return k === d || k.startsWith(d + "\\");
+  }
+  return p === dir || p.startsWith(dir + "/");
+};
+
+/** The tabs after `from` was renamed to `to` (a file, or a folder: every tab below it): keys and paths change, drafts and order stay. */
+export function moveTabs(tabs: Record<string, Tab>, from: string, to: string): Record<string, Tab> {
+  const out: Record<string, Tab> = {};
+  for (const [k, t] of Object.entries(tabs)) {
+    const p = below(k, from) ? to + k.slice(from.length) : k;
+    out[p] = p === k ? t : { ...t, path: p };
+  }
+  return out;
+}
+
+/** The tab key `path` has after `from` became `to`. */
+export const movedPath = (path: string, from: string, to: string) => (below(path, from) ? to + path.slice(from.length) : path);
+
+/** The tabs after `path` was deleted: the clean tabs below it close, tabs with unsaved edits stay. */
+export function dropTabs(tabs: Record<string, Tab>, path: string): Record<string, Tab> {
+  return Object.fromEntries(Object.entries(tabs).filter(([k, t]) => !below(k, path) || isDirty(t)));
 }
