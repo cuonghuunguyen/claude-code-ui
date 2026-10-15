@@ -115,8 +115,9 @@ export async function renameEntry(ctx: FsOpsContext, path: string, name: string)
   const to = join(r.parent, name);
   try {
     const other = lstatSync(to, { bigint: true });
-    // Same device and inode: a case-only rename on a case-insensitive file system.
-    if (other.dev !== from.dev || other.ino !== from.ino) return fail("exists", `already exists: ${to}`);
+    // Same device and inode and the same name up to case: a case-only rename on a case-insensitive file system.
+    // Another name with the same inode is a hard link: the rename would do nothing.
+    if (other.dev !== from.dev || other.ino !== from.ino || name.toLowerCase() !== r.name.toLowerCase()) return fail("exists", `already exists: ${to}`);
   } catch {
     // free
   }
@@ -200,6 +201,7 @@ export async function duplicateFile(ctx: FsOpsContext, path: string): Promise<Fs
   let dest: Awaited<ReturnType<typeof open>> | undefined;
   let made: string | undefined;
   try {
+    if (lstatSync(r.target).isSymbolicLink()) return fail("not_a_file", "Cannot duplicate a link.");
     src = openChecked(r.target, OPEN_READ);
     const st = fstatSync(src);
     if (!st.isFile()) return fail("not_a_file", `not a file: ${r.target}`);

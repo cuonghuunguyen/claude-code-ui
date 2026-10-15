@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, isAbsolute, sep } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -112,6 +112,15 @@ describe("file operations (GH-360)", () => {
     expect(await renameEntry(ctx(), join(d, "a.txt"), "A.txt")).toEqual({ path: join(d, "A.txt") });
   });
 
+  it("rename onto a hard link of the same file is refused as existing; a case-only name still passes", async () => {
+    const d = dir();
+    writeFileSync(join(d, "a.txt"), "a");
+    linkSync(join(d, "a.txt"), join(d, "b.txt"));
+    expect(await renameEntry(ctx(), join(d, "a.txt"), "b.txt")).toMatchObject({ code: "exists" });
+    expect(existsSync(join(d, "a.txt"))).toBe(true);
+    expect(await renameEntry(ctx(), join(d, "a.txt"), "A.txt")).toEqual({ path: join(d, "A.txt") });
+  });
+
   it.runIf(posix)("duplicate keeps the mode, picks the next free name, refuses a folder and a link", async () => {
     const d = dir();
     writeFileSync(join(d, "x.sh"), "echo");
@@ -123,7 +132,7 @@ describe("file operations (GH-360)", () => {
     mkdirSync(join(d, "sub"));
     expect(await duplicateFile(ctx(), join(d, "sub"))).toMatchObject({ code: "not_a_file" });
     symlinkSync(join(outside, "secret.txt"), join(d, "ln"));
-    expect(await duplicateFile(ctx(), join(d, "ln"))).toMatchObject({ code: "path_not_allowed" });
+    expect(await duplicateFile(ctx(), join(d, "ln"))).toMatchObject({ code: "not_a_file", message: "Cannot duplicate a link." });
     expect(existsSync(join(d, "ln copy"))).toBe(false);
   });
 });

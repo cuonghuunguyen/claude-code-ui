@@ -418,6 +418,8 @@ export function createTerminals(root = nodePtyRoot(), platform = process.platfor
     },
     list: (cwd: string): TerminalInfo[] => [...terminals.values()].filter((t) => t.cwd === cwd && open(t)).map(({ id, title }) => ({ id, title })),
     close: closeTerminal,
+    /** A running terminal started in a cwd `inside` accepts. */
+    any: (inside: (cwd: string) => boolean) => [...terminals.values()].some((t) => open(t) && inside(t.cwd)),
     /**
      * Closes every terminal started in a cwd `inside` accepts and waits (at most `timeoutMs`) for the shells to exit.
      * Removing a worktree needs it: on Windows a shell whose working directory is the worktree keeps the folder from being deleted.

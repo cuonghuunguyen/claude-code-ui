@@ -453,6 +453,8 @@ export function FileTree({
     setBusyPath(undefined);
     if (!r.ok) return setOpError(r.text);
     setModel((m) => ({ ...m, ...dropPaths(m, entry.path) }));
+    // A filter result list still holds the row.
+    setFound((f) => f && { ...f, paths: f.paths.filter((p) => !inside(joinPath(cwd, p))) });
     onDeleted?.(entry.path);
     await list(parent);
     onChanged?.();

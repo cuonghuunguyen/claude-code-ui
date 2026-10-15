@@ -578,3 +578,26 @@ it("GH-360 Shift+F10 on a focused row moves focus to the menu's first enabled it
   await closeMenu();
   t.unmount();
 });
+
+it("GH-360 deleting a row from the filter results removes it from the list", async () => {
+  const t = setup();
+  await t.render();
+  const lists: Record<string, ReturnType<typeof ent>[]> = { ...listings };
+  t.request.mockImplementation((async (m: { type: string; path?: string }) => {
+    if (m.type === "fs.list") return { entries: lists[m.path!] ?? [] };
+    if (m.type === "fs.search") return { paths: ["src/app.ts"] };
+    if (m.type === "fs.delete") return { files: 0, folders: 0 };
+    return {};
+  }) as never);
+  await typeInto(t.el.querySelector<HTMLInputElement>('[data-testid="tree-filter"]')!, "app");
+  await act(async () => void (await new Promise((r) => setTimeout(r, 200))));
+  expect(t.names()).toEqual(["src", "src/app.ts"]);
+  await ctxMenu(t.row("/p/src/app.ts"));
+  await act(async () => menuItem("delete").click());
+  await act(async () => {});
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="tree-delete-confirm"]')!.click());
+  await act(async () => {});
+  await act(async () => {});
+  expect(t.rows().some((r) => r.dataset.path === "/p/src/app.ts")).toBe(false);
+  t.unmount();
+});

@@ -473,7 +473,7 @@ export function createDaemon(opts: {
         const rel = relative(t, real(cwd) ?? cwd);
         return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
       };
-      return [...sessions.values()].some((s) => under(s.cwd)) || [...removing].some(under);
+      return [...sessions.values()].some((s) => under(s.cwd)) || [...removing].some(under) || terminals.any(under);
     },
   };
 

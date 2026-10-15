@@ -1336,6 +1336,16 @@ describe("daemon", () => {
       expect(existsSync(join(d, "work/deep"))).toBe(true);
     });
 
+    it.runIf(posix)("GH-360: a folder holding a running terminal's cwd cannot be deleted or renamed", async () => {
+      const d = fresh();
+      mkdirSync(join(d, "tw"));
+      const c = await client();
+      expect(await c.request({ type: "terminal.create", cwd: join(d, "tw"), cols: 80, rows: 24 })).toMatchObject({ type: "reply" });
+      for (const m of [{ type: "fs.delete", path: join(d, "tw") }, { type: "fs.rename", path: join(d, "tw"), name: "tw2" }])
+        expect(await c.request(m), m.type).toMatchObject({ code: "in_use" });
+      expect(existsSync(join(d, "tw"))).toBe(true);
+    });
+
     it.runIf(posix)("GH-360: deleting a link, or a folder holding a link, leaves the outside folder intact", async () => {
       const d = fresh();
       const o = outsideDir();
@@ -1380,7 +1390,7 @@ describe("daemon", () => {
       symlinkSync(join(o, "secret.txt"), join(d, "ln"));
       const c = await client();
       const reply = await c.request({ type: "fs.duplicate", path: join(d, "ln") });
-      expect(reply).toMatchObject({ code: "path_not_allowed" });
+      expect(reply).toMatchObject({ code: "not_a_file" });
       expect(readdirSync(d)).toEqual(["ln"]);
     });
 
