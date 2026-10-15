@@ -46,7 +46,9 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     loadAddon() {}
     open() {}
-    focus() {}
+    focus() {
+      (globalThis as { __termFocused?: number }).__termFocused = ((globalThis as { __termFocused?: number }).__termFocused ?? 0) + 1;
+    }
     write() {}
     reset() {}
     onData() {}
@@ -1002,16 +1004,39 @@ it("reordering tabs inside a maximized bottom panel keeps it maximized", async (
   expect(mainHidden()).toBe(true);
 });
 
+it("Ctrl+` with the terminal shown behind a maximized bottom panel restores it and focuses the shell", async () => {
+  await maximizedBottomWithSideTerminal();
+  await press({ key: "`", ctrlKey: true }); // terminal now the shown side pane
+  await clickId("dock-maximize");
+  q("dock-maximize")!.focus();
+  const g = globalThis as { __termFocused?: number };
+  const before = g.__termFocused ?? 0;
+  await press({ key: "`", ctrlKey: true });
+  expect(mainHidden()).toBe(false);
+  await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+});
+
+it("moving a pane from its tab's context menu opened from the keyboard (Shift+F10, Enter) leaves the focus on the moved tab", async () => {
+  const tab = paneTab("side-panel", "changes")!;
+  tab.focus();
+  await act(async () => void tab.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
+  await act(async () => void tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 0, clientY: 0 })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(menuItem("pane-move")));
+  await act(async () => void menuItem("pane-move").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  await vi.waitFor(() => expect(q("bottom-panel")!.contains(paneTab("bottom-panel", "changes"))).toBe(true));
+  await vi.waitFor(() => expect(document.activeElement).toBe(paneTab("bottom-panel", "changes")), { timeout: 2000 });
+});
+
 it("with no pane in the side panel the toggle is disabled with the reason, and Ctrl+Shift+R does nothing", async () => {
   localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: [], bottom: ["changes", "files", "graph", "terminal"] } }));
   await rerender();
   const b = q("panel-toggle")!;
   expect(b.getAttribute("aria-label")).toBe("No panes in the side panel");
   expect(b.getAttribute("aria-disabled")).toBe("true");
-  expect(b.getAttribute("aria-expanded")).toBe("true");
+  expect(b.getAttribute("aria-expanded")).toBe("false");
   await act(async () => b.click());
   await press({ key: "R", ctrlKey: true, shiftKey: true });
-  expect(q("panel-toggle")!.getAttribute("aria-expanded")).toBe("true");
+  expect(q("panel-toggle")!.getAttribute("aria-expanded")).toBe("false");
 });
 
 it("the terminal stays mounted while another pane of its area is selected", async () => {

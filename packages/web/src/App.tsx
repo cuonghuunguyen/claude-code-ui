@@ -1395,6 +1395,7 @@ export function App() {
   // `termKeep`: it has shown and its area has stayed open since; it resets when the area hides, so hiding unmounts it.
   const termShows = shows("terminal");
   const [termKeep, setTermKeep] = useState(false);
+  const [termFocusReq, setTermFocusReq] = useState(0);
   useEffect(() => setTermKeep((k) => termShows || (k && termAreaOpen)), [termShows, termAreaOpen]);
   const termMounted = termShows || (termKeep && termAreaOpen);
   useEffect(() => void (!bottomShown && setBottomMax(false)), [bottomShown]);
@@ -1422,9 +1423,18 @@ export function App() {
   // A moved pane's DOM moves with it: focus its tab in the new area once rendered (menus return focus there too).
   const focusTab = useRef<PaneId>(undefined);
   useEffect(() => {
-    if (!focusTab.current) return;
-    document.querySelector<HTMLElement>(`[data-pane-tab="${focusTab.current}"]`)?.focus();
+    const p = focusTab.current;
+    if (!p) return;
     focusTab.current = undefined;
+    const tab = () => document.querySelector<HTMLElement>(`[data-pane-tab="${p}"]`);
+    tab()?.focus();
+    // A menu opened from the keyboard returns the focus to its own trigger after it closes, later than this effect: take it back
+    // unless the user has put it somewhere else (the body, a menu or a dock button is not "somewhere else").
+    const again = () => {
+      const a = document.activeElement;
+      if (a !== tab() && (!a || a === document.body || a.closest('[role="menu"]') || a.matches('[data-testid^="dock-"]'))) tab()?.focus();
+    };
+    for (const ms of [0, 60, 200, 450]) setTimeout(again, ms);
   });
   const hosts = usePaneHosts();
   useEffect(() => {
@@ -1548,7 +1558,7 @@ export function App() {
   // Wide: the terminal pane wherever it lives (VS Code: Ctrl+` reveals the view); it shows -> its area hides. Narrow: the terminal pane.
   const toggleTerminal = () => {
     if (!wide(1024)) return setPane(pane === "terminal" ? "session" : "terminal");
-    if (!inSight("terminal")) return reveal("terminal");
+    if (!inSight("terminal")) return (shows("terminal") && setTermFocusReq((n) => n + 1), reveal("terminal"));
     openArea(areaOf(layout, "terminal"), false);
     focusShownPrompt();
   };
@@ -1610,6 +1620,8 @@ export function App() {
     },
     newTerminal: () => {
       if (inSight("terminal")) return setTerminalTick((n) => n + 1);
+      // It may be the shown pane already, behind a maximized bottom panel: the shell takes the focus once it is in sight.
+      if (shows("terminal")) setTermFocusReq((n) => n + 1);
       reveal("terminal");
     },
     resetLayout,
@@ -1777,6 +1789,7 @@ export function App() {
           }}
           newTick={terminalTick}
           shown={shows("terminal")}
+          focusReq={termFocusReq}
         />
       </Suspense>
     );
@@ -1895,7 +1908,7 @@ export function App() {
             <ThemeIcon />
           </IconButton>
           {shown && (
-            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={sideEmpty ? "No panes in the side panel" : withKey("Toggle side panel", specOf("panel.toggle"))} disabled={sideEmpty} expanded={panel} controls="side-panel" onClick={() => (setBottomMax(false), setPanel((v) => !v))} testId="panel-toggle" command="panel.toggle">
+            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={sideEmpty ? "No panes in the side panel" : withKey("Toggle side panel", specOf("panel.toggle"))} disabled={sideEmpty} expanded={panel && !sideEmpty} controls="side-panel" onClick={() => (setBottomMax(false), setPanel((v) => !v))} testId="panel-toggle" command="panel.toggle">
               {layout.side === "left" ? <PanelLeftIcon /> : <PanelRightIcon />}
             </IconButton>
           )}
