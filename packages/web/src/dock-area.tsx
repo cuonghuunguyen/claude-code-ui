@@ -126,14 +126,17 @@ export function DockHeader({
   onDropAt: (d?: DropAt) => void;
 }) {
   const other: DockArea = area === "side" ? "bottom" : "side";
-  // The tab to focus when a menu closes: the pane that was just moved (its tab is in the other area by then).
-  const moved = useRef<PaneId>(undefined);
-  const finalFocus = () => (moved.current && document.querySelector<HTMLElement>(`[data-pane-tab="${moved.current}"]`)) || true;
-  const move = (p: PaneId) => (moved.current = p, onMove(p, other));
+  // A menu that moved a pane does not return the focus (Base UI `finalFocus` false): App focuses the moved tab once the move is
+  // rendered. The menu's own return runs when its popup unmounts, which can be in the move's commit (the tab's context menu, or an
+  // area that empties), before the moved tab exists; its fallback (the trigger, else an earlier focused element such as the
+  // prompt box) would win over the moved tab.
+  const moved = useRef(false);
+  const finalFocus = () => !moved.current;
+  const move = (p: PaneId) => ((moved.current = true), onMove(p, other));
   const ctxKb = useKeyboardOpen();
   const menuKb = useKeyboardOpen();
   // A menu that closes without a move returns the focus to its trigger: forget the previous move when one opens.
-  const opening = (root: ReturnType<typeof useKeyboardOpen>["root"]) => ({ ...root, onOpenChange: (o: boolean, d: { event: Event }) => (o && (moved.current = undefined), root.onOpenChange(o, d)) });
+  const opening = (root: ReturnType<typeof useKeyboardOpen>["root"]) => ({ ...root, onOpenChange: (o: boolean, d: { event: Event }) => (o && (moved.current = false), root.onOpenChange(o, d)) });
   return (
     <div className="hidden items-center gap-1 border-b px-2 py-1 lg:flex">
       <div role="tablist" aria-label={AREA_LABEL[area]} className="flex min-w-0 gap-1 overflow-x-auto">

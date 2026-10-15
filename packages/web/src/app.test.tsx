@@ -1023,6 +1023,63 @@ it("moving a pane from its tab's context menu opened from the keyboard (Shift+F1
   await vi.waitFor(() => expect(document.activeElement).toBe(paneTab("bottom-panel", "changes")), { timeout: 2000 });
 });
 
+it("moving the last pane of the bottom panel from its ⋯ menu puts the focus on the moved tab, not on the prompt box", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "graph", "terminal"], bottom: ["files"] } }));
+  await rerender();
+  // The prompt box had the focus before: the menu's own focus return would fall back to it once the area unmounts.
+  await press({ key: "E", ctrlKey: true, shiftKey: true });
+  promptBox().focus();
+  await clickId("dock-menu-bottom");
+  expect(menuItem("dock-move").textContent).toBe("Move Files to side panel");
+  await act(async () => menuItem("dock-move").click());
+  await act(async () => new Promise((r) => setTimeout(r, 100)));
+  expect(q("bottom-panel")).toBeNull();
+  expect(document.activeElement).toBe(paneTab("side-panel", "files"));
+});
+
+it("moving a pane away from a terminal that then shows (or moving the terminal) keeps the focus on the moved tab, not the shell", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+  await rerender();
+  await press({ key: "`", ctrlKey: true });
+  await clickId("pane-files"); // the terminal stays mounted, hidden
+  const g = globalThis as { __termFocused?: number };
+  const before = g.__termFocused ?? 0;
+  const tab = paneTab("side-panel", "files")!;
+  await act(async () => void tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+  await act(async () => menuItem("pane-move").click());
+  await act(async () => new Promise((r) => setTimeout(r, 300)));
+  expect(q("terminal-panel")!.className).not.toContain("hidden");
+  expect(document.activeElement).toBe(paneTab("bottom-panel", "files"));
+  expect(g.__termFocused ?? 0).toBe(before);
+  // The terminal itself moved: it shows in the bottom panel, its tab keeps the focus.
+  const t = paneTab("side-panel", "terminal")!;
+  await act(async () => void t.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+  await act(async () => menuItem("pane-move").click());
+  await act(async () => new Promise((r) => setTimeout(r, 300)));
+  expect(q("bottom-panel")!.contains(q("terminal-panel"))).toBe(true);
+  expect(document.activeElement).toBe(paneTab("bottom-panel", "terminal"));
+  expect(g.__termFocused ?? 0).toBe(before);
+  // Revealing it on purpose still focuses the shell.
+  await clickId("pane-files");
+  await clickId("pane-terminal");
+  await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+});
+
+it("after a move the focus is not taken back: a button focused right after keeps it", async () => {
+  await clickId("terminal-toggle");
+  const tab = paneTab("side-panel", "changes")!;
+  tab.focus();
+  await act(async () => void tab.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
+  await act(async () => void tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 0, clientY: 0 })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(menuItem("pane-move")));
+  await act(async () => void menuItem("pane-move").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(paneTab("bottom-panel", "changes")));
+  // The user tabs on at once (Tab from the moved tab reaches the bottom panel's buttons).
+  q("dock-maximize")!.focus();
+  await act(async () => new Promise((r) => setTimeout(r, 600)));
+  expect(document.activeElement).toBe(q("dock-maximize"));
+});
+
 it("with no pane in the side panel the toggle is disabled with the reason, and Ctrl+Shift+R does nothing", async () => {
   localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: [], bottom: ["changes", "files", "graph", "terminal"] } }));
   await rerender();

@@ -1229,22 +1229,18 @@ export function App() {
     openArea(to);
     setPane(p);
     focusTab.current = p;
+    setMoving(true);
   };
-  // A moved pane's DOM moves with it: focus its tab in the new area once rendered (menus return focus there too).
+  // A moved pane's DOM moves with it: focus its tab in the new area once rendered, once (the menu that moved it returns no focus).
   const focusTab = useRef<PaneId>(undefined);
+  // True for the move's render: a terminal that shows because of it (moved, or next in the area the moved pane left) keeps off the focus.
+  const [moving, setMoving] = useState(false);
   useEffect(() => {
     const p = focusTab.current;
     if (!p) return;
     focusTab.current = undefined;
-    const tab = () => document.querySelector<HTMLElement>(`[data-pane-tab="${p}"]`);
-    tab()?.focus();
-    // A menu opened from the keyboard returns the focus to its own trigger after it closes, later than this effect: take it back
-    // unless the user has put it somewhere else (the body, a menu or a dock button is not "somewhere else").
-    const again = () => {
-      const a = document.activeElement;
-      if (a !== tab() && (!a || a === document.body || a.closest('[role="menu"]') || a.matches('[data-testid^="dock-"]'))) tab()?.focus();
-    };
-    for (const ms of [0, 60, 200, 450]) setTimeout(again, ms);
+    setMoving(false);
+    document.querySelector<HTMLElement>(`[data-pane-tab="${p}"]`)?.focus();
   });
   const hosts = usePaneHosts();
   useEffect(() => {
@@ -1588,6 +1584,7 @@ export function App() {
           newTick={terminalTick}
           shown={shows("terminal")}
           focusReq={termFocusReq}
+          quiet={moving}
         />
       </Suspense>
     );
