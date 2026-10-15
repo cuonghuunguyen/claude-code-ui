@@ -131,7 +131,7 @@ import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
-import { SPLIT_MIN_H, SPLIT_MIN_W, type Split, type SplitDir, canSplit as canSplitTabs, followSplit, isSession, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
+import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type Split, type SplitDir, canSplit as canSplitTabs, followSplit, isSession, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
@@ -388,6 +388,8 @@ export function App() {
   // The session area's size: two splits need room for both minimum sizes, else the active one shows alone (the split returns with the space).
   const [area, setArea] = useState<{ w: number; h: number }>();
   const splitFits = !split || !area || !area.w || (split.dir === "row" ? area.w >= 2 * SPLIT_MIN_W + 8 : area.h >= 2 * SPLIT_MIN_H + 8);
+  /** Wide with a split, but no room for both: the active split shows alone, with a hint. */
+  const splitCramped = lg && !!split && isSession(activeId) && !splitFits;
   const splitRef = useRef(split);
   splitRef.current = split;
   /** Wide, roomy enough, a split exists and a session shows (the New session tab and Focus page suspend it). Both splits are on screen: they count as shown. */
@@ -724,61 +726,38 @@ export function App() {
     if (id !== NEW_TAB && (add || !held.current.has(id))) void subscribe(id, add);
   }
 
-  /** Makes the split showing `id` the active one; each split keeps its own subagent view. Not `open()`: the tab is open already. */
+  /** Makes `t` the active tab of split `s` (already updated for it): the subagent view of each tab goes with it, the hash follows. Not `open()`: the tab is open already. */
+  function enter(s: Split, t: string, keepHash = false) {
+    const cur = activeRef.current;
+    const sw = cur === t ? { runs: s.runs, run: runRef.current } : switchRuns(s.runs, cur, runRef.current, t);
+    setSplitRaw({ ...s, runs: sw.runs });
+    setError(undefined);
+    setActiveId(t);
+    setRun(sw.run);
+    if (!keepHash) history.replaceState(null, "", sw.run ? runHash(t, sw.run) : tabHash(t));
+  }
+
+  /** Makes the split showing `id` the active one. */
   function focusSplit(id: string, keepHash = false) {
     const s = splitRef.current;
     if (!s || !s.ids.includes(id) || id === activeRef.current) return;
-    setError(undefined);
-    const cur = activeRef.current;
-    const runs: Record<string, string> = { ...s.runs };
-    const target = runs[id];
-    delete runs[id];
-    if (cur) delete runs[cur];
-    if (cur && runRef.current) runs[cur] = runRef.current;
-    setSplitRaw({ ...s, at: s.ids.indexOf(id), runs: Object.keys(runs).length ? runs : undefined });
-    setActiveId(id);
-    setRun(target);
-    if (!keepHash) history.replaceState(null, "", target ? runHash(id, target) : tabHash(id));
+    enter({ ...s, at: s.ids.indexOf(id) }, id, keepHash);
   }
 
   /** Split right / Split down: `t` goes to a new split in the direction, focus moves there. */
   function splitTab(t: string, dir: SplitDir, before = false) {
     const r = splitTo(splitRef.current, tabsRef.current, activeRef.current, t, dir, before);
     if (!r) return;
-    const cur = activeRef.current;
-    const runs: Record<string, string> = { ...r.split.runs };
-    let target: string | undefined = runRef.current;
-    if (cur !== t) {
-      target = runs[t];
-      delete runs[t];
-      if (cur) delete runs[cur];
-      if (cur && runRef.current) runs[cur] = runRef.current;
-    }
-    setSplitRaw({ ...r.split, runs: Object.keys(runs).length ? runs : undefined });
-    setError(undefined);
     setDrawer(false);
-    setActiveId(r.active);
-    setRun(target);
-    history.replaceState(null, "", target ? runHash(t, target) : tabHash(t));
+    enter(r.split, t);
     focusShownPrompt(t);
   }
 
-  /** A tab dropped on the middle of a split: it shows there; the tab that was there goes to the other split when it is the dropped tab's, else it leaves the screen. */
+  /** A tab dropped on the middle of a split: it shows there (a tab shown in the other split swaps with it). */
   function showInSplit(t: string, i: number) {
     const s = splitRef.current;
     if (!s) return open(t);
-    const cur = activeRef.current;
-    const next = placeIn(s, t, i);
-    const runs: Record<string, string> = { ...s.runs };
-    const target = runs[t];
-    delete runs[t];
-    if (cur && cur !== t) delete runs[cur];
-    if (cur && cur !== t && runRef.current) runs[cur] = runRef.current;
-    setSplitRaw({ ...next, runs: Object.keys(runs).length ? runs : undefined });
-    setError(undefined);
-    setActiveId(t);
-    setRun(cur === t ? runRef.current : target);
-    history.replaceState(null, "", target && cur !== t ? runHash(t, target) : tabHash(t));
+    enter(placeIn(s, t, i), t);
     focusShownPrompt(t);
   }
 
@@ -1339,6 +1318,14 @@ export function App() {
     ro.observe(n);
     return () => (off?.(), ro.disconnect());
   }, []);
+  // The saved ratio can leave a split under its minimum when the area shrinks (and on load): clamp it once the area is known.
+  useEffect(() => {
+    if (!split || !area || !area.w || !splitFits) return;
+    const row = split.dir === "row";
+    const total = (row ? area.w : area.h) - 8;
+    const r = ratioFor(split.ratio * total, total, row ? SPLIT_MIN_W : SPLIT_MIN_H);
+    if (Math.abs(r - split.ratio) > 1e-6) setSplitRaw({ ...split, ratio: r });
+  }, [area?.w, area?.h, split?.ratio, split?.dir, splitFits]);
   const splitShown = splitOn && split.ids.every((id) => !!viewOf(id) && !!sessionOf(id));
   // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
   useEffect(() => {
@@ -1549,11 +1536,10 @@ export function App() {
   // `id`: the tab just selected, which this render does not show yet.
   const focusShownPrompt = (id = activeId) => {
     if (id !== NEW_TAB) showSession();
-    // After the render: only the shown tab's prompt box has a layout box.
-    const prompts = () => [...(document.querySelector('[data-testid="split"][data-active]') ?? document).querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"], textarea[aria-label="First prompt"]')];
+    // After the render: only the shown tab's prompt box has a layout box; in a split only the active split's (never the other one's).
     // A session that just opened (Reopen closed tab, Go to tab N after a reload) has its prompt box once its view loaded: wait for it, up to 1 s.
     const focus = (frames: number) => {
-      const el = id === NEW_TAB ? newPrompt.current : prompts().find((el) => el.offsetParent);
+      const el = id === NEW_TAB ? newPrompt.current : shownPrompt();
       if (el) el.focus();
       else if (frames > 0) requestAnimationFrame(() => focus(frames - 1));
     };
@@ -1890,7 +1876,7 @@ export function App() {
             canReopen={!!reopen}
             pinned={pinnedSet}
             canSplit={lg ? canSplitTabs(tabs) : undefined}
-            splitShown={splitShown ? { id: split!.ids[1 - split!.at]!, dir: split!.dir, n: 2 - split!.at } : undefined}
+            splitShown={splitShown ? { id: split!.ids[1 - split!.at]!, dir: split!.dir, n: 2 - split!.at } : splitCramped ? { id: split!.ids[1 - split!.at]!, dir: split!.dir, n: 2 - split!.at, hidden: true } : undefined}
             onNew={() => newSession()}
             home={sidebar}
             onHome={() => setSidebar((v) => !v)}
@@ -2112,6 +2098,7 @@ export function App() {
                         className={splitShown && split!.ids.includes(id) ? `${card} ${id === activeId ? "outline outline-1 -outline-offset-1 outline-ring" : ""}` : "flex min-h-0 min-w-0 flex-1 flex-col"}
                         style={splitShown && split!.ids.includes(id) ? { order: split!.ids[0] === id ? 0 : 2, flex: `${split!.ids[0] === id ? split!.ratio : 1 - split!.ratio} 1 0%` } : undefined}
                         {...(splitShown && split!.ids.includes(id) && {
+                          id: `split-${id}`,
                           role: "group",
                           "aria-label": `${list.find((l) => l.id === id)?.title || titles[id] || "Untitled"}, split ${split!.ids.indexOf(id) + 1} of 2${id === activeId ? ", active" : ""}`,
                           "data-testid": "split",
@@ -2196,6 +2183,14 @@ export function App() {
                 })}
                 </QuoteContext>
                 </ViewerContext>
+                {splitCramped && (
+                  <div className="order-first flex shrink-0 items-center gap-2 border-b px-3 py-1 text-muted-foreground text-xs" data-testid="split-hint" role="status">
+                    <span className="min-w-0 truncate">Split hidden — widen the window or hide a panel</span>
+                    <button type="button" className="shrink-0 cursor-pointer rounded-sm px-1.5 py-0.5 text-foreground underline underline-offset-2 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={joinSplits}>
+                      Close split
+                    </button>
+                  </div>
+                )}
                 {splitDrop.state && (
                   <div
                     aria-hidden
@@ -2614,7 +2609,7 @@ function SplitResizer({ split, onResize }: { split: Split; onResize: (ratio: num
       aria-valuenow={Math.round(split.ratio * 100)}
       aria-valuemin={15}
       aria-valuemax={85}
-      aria-controls={split.ids[0]}
+      aria-controls={`split-${split.ids[0]}`}
       tabIndex={0}
       className={`shrink-0 touch-none rounded-full hover:bg-primary/30 focus-visible:bg-primary/30 focus-visible:outline-2 focus-visible:outline-ring ${row ? "w-2 cursor-col-resize" : "h-2 cursor-row-resize"}`}
       style={{ order: 1 }}

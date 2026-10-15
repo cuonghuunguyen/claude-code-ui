@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 import { FOCUS_TAB, NEW_TAB } from "./tabs.ts";
-import { type Split, canSplit, clampRatio, dropZone, followSplit, loadSplit, nextAfterClose, nextSplit, parseSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
+import { type Split, switchRuns, canSplit, clampRatio, dropZone, followSplit, loadSplit, nextAfterClose, nextSplit, parseSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 
 const sp = (o: Partial<Split> = {}): Split => ({ dir: "row", ids: ["a", "b"], at: 1, ratio: 0.5, ...o });
 afterEach(() => (saveSplit(undefined), vi.restoreAllMocks()));
@@ -95,4 +95,10 @@ it("saves and loads the split, and falls back to memory when storage is blocked"
   });
   saveSplit(sp({ at: 0 }));
   expect(loadSplit()).toEqual(sp({ at: 0 }));
+});
+
+it("switchRuns takes the target's view out and keeps the previous active tab's", () => {
+  expect(switchRuns({ b: "r1" }, "a", "r0", "b")).toEqual({ runs: { a: "r0" }, run: "r1" });
+  expect(switchRuns({ b: "r1" }, "a", undefined, "b")).toEqual({ runs: undefined, run: "r1" });
+  expect(switchRuns(undefined, "a", undefined, "b")).toEqual({ runs: undefined, run: undefined });
 });

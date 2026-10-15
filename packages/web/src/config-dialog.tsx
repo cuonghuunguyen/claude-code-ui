@@ -6,11 +6,14 @@ import { XIcon } from "lucide-react";
 import { trapTab } from "./focus-trap.ts";
 
 /** The prompt box of the shown tab (session or new-session tab); hidden tabs' boxes have no layout box. */
-// Split view (GH-356): the active split's box first.
+// Split view (GH-356): the prompt box of the active split only, never the other split's (focusing it would make that split active). The split has none (permission panel, subagent view): null.
 export const shownPrompt = () => {
-  const find = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"], textarea[aria-label="First prompt"]')].find((el) => el.offsetParent);
-  const split = document.querySelector('[data-testid="split"][data-active]');
-  return (split && find(split)) || find(document) || null;
+  const find = (root: ParentNode) => root.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"], textarea[aria-label="First prompt"]');
+  if (document.querySelector('[data-testid="split"]')) {
+    const active = document.querySelector('[data-testid="split"][data-active]');
+    return (active && find(active)[0]) || null;
+  }
+  return [...find(document)].find((el) => el.offsetParent) ?? null;
 };
 
 /** `busy`: a write runs, Esc and Close do nothing (the extension's dialog stays open while adding or removing). */

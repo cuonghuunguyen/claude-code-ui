@@ -72,6 +72,18 @@ export function splitTo(s: Split | undefined, tabs: readonly string[], activeId:
   return { split: { dir, ids: before ? [t, x] : [x, t], at: before ? 0 : 1, ratio: s?.ratio ?? 0.5, runs: s?.runs }, active: t };
 }
 
+/** The subagent views after `to` becomes the active tab: its own view is taken out (`run`), the previous active tab's (`curRun`) is kept. */
+export function switchRuns(runs: Record<string, string> | undefined, cur: string | undefined, curRun: string | undefined, to: string) {
+  const r = { ...runs };
+  const run = r[to];
+  delete r[to];
+  if (cur && cur !== to) {
+    delete r[cur];
+    if (curRun) r[cur] = curRun;
+  }
+  return { runs: Object.keys(r).length ? r : undefined, run };
+}
+
 /** Shows `t` in split `i`; `t` shown in the other split: the two swap. */
 export function placeIn(s: Split, t: string, i: number): Split {
   const j = s.ids.indexOf(t);

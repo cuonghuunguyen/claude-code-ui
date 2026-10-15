@@ -2188,6 +2188,40 @@ describe("GH-356 split view", () => {
     expect(labels()).toEqual(["Demo, split 1 of 2", "Third, split 2 of 2, active"]);
   });
 
+  it("a saved ratio under the minimum is clamped when the area is measured, and again when it shrinks", async () => {
+    const callbacks: { cb: ResizeObserverCallback; target?: Element }[] = [];
+    const RO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      rec: { cb: ResizeObserverCallback; target?: Element };
+      constructor(cb: ResizeObserverCallback) {
+        this.rec = { cb };
+        callbacks.push(this.rec);
+      }
+      observe(t: Element) {
+        this.rec.target = t;
+      }
+      unobserve() {}
+      disconnect() {}
+    } as never;
+    try {
+      localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, S2], at: 0, ratio: 0.15 }));
+      await remount(ID);
+      const size = (w: number) =>
+        act(async () => callbacks.filter((c) => (c.target as HTMLElement | undefined)?.dataset?.testid === "session-area").forEach((c) => c.cb([{ contentRect: { width: w, height: 800 } } as ResizeObserverEntry], {} as ResizeObserver)));
+      const ratio = () => JSON.parse(localStorage.getItem("claude-ui.split")!).ratio as number;
+      await size(1000);
+      expect(ratio()).toBeCloseTo(320 / 992, 3);
+      await act(async () => void el.querySelector<HTMLElement>('[data-testid="split-resizer"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+      expect(ratio()).toBe(0.5);
+      await size(700);
+      expect(ratio()).toBeCloseTo(0.5, 2);
+      await size(660);
+      expect(ratio()).toBeCloseTo(0.5, 2);
+    } finally {
+      globalThis.ResizeObserver = RO;
+    }
+  });
+
   it("a session area narrower than two minimum splits shows the active split alone; the split returns with the space", async () => {
     const callbacks: { cb: ResizeObserverCallback; target?: Element }[] = [];
     const RO = globalThis.ResizeObserver;
@@ -2213,9 +2247,17 @@ describe("GH-356 split view", () => {
       await size(600);
       expect(splits()).toHaveLength(0);
       expect(localStorage.getItem("claude-ui.split")).not.toBeNull();
-      expect(el.querySelector(`[data-tab-id="${ID}"] [data-testid="tab-split-mark"]`)).toBeNull();
+      expect(el.querySelector('[data-testid="split-hint"]')!.textContent).toContain("Split hidden — widen the window or hide a panel");
+      expect(el.querySelector(`[data-tab-id="${ID}"] [role="tab"]`)!.getAttribute("aria-label")).toBe("Demo (hidden: not enough room)");
       await size(900);
-      expect(labels()).toEqual(["Demo, split 1 of 2", "Second, split 2 of 2, active"]);
+      expect(el.querySelector('[data-testid="split-hint"]')).toBeNull();
+      await size(600);
+      await act(async () => [...el.querySelectorAll<HTMLElement>('[data-testid="split-hint"] button')].find((b) => b.textContent === "Close split")!.click());
+      expect(el.querySelector('[data-testid="split-hint"]')).toBeNull();
+      expect(localStorage.getItem("claude-ui.split")).toBeNull();
+      await splitRight(S2);
+      await size(900);
+      expect(labels()).toEqual(["Third, split 1 of 2", "Second, split 2 of 2, active"]);
     } finally {
       globalThis.ResizeObserver = RO;
     }
