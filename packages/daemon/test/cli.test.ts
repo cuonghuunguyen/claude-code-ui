@@ -1,6 +1,6 @@
 import { delimiter } from "node:path";
 import { describe, expect, it } from "vitest";
-import { HELP, PHONE_HINT, USAGE_HINT, isDaemonRun, parseCli } from "../src/cli.ts";
+import { HELP, PHONE_HINT, USAGE_HINT, isDaemonRun, parseCli, autoOpen, RESTARTED_ENV } from "../src/cli.ts";
 
 describe("parseCli", () => {
   it("defaults: port 4280, home root, no hostname, bypass off", () => {
@@ -45,6 +45,26 @@ describe("parseCli", () => {
   it("rejects an invalid port, an unknown flag and a stray argument", () => {
     for (const argv of [["--port", "abc"], ["--port", "70000"], ["--nope"], ["extra"]]) expect(parseCli(argv, {}, "/h").kind).toBe("error");
     expect(parseCli([], { PORT: "x" }, "/h").kind).toBe("error");
+  });
+
+  it("--no-open / CLAUDE_UI_OPEN=0 turn opening the browser at start off", () => {
+    expect(parseCli(["--no-open"], {}, "/h")).toMatchObject({ kind: "run", open: false });
+    expect(parseCli([], { CLAUDE_UI_OPEN: "0" }, "/h")).toMatchObject({ kind: "run", open: false });
+    expect(parseCli([], {}, "/h")).not.toHaveProperty("open");
+    expect(parseCli(["status", "--no-open"], {}, "/h")).toMatchObject({ kind: "error", message: expect.stringContaining("starts the daemon") });
+    expect(HELP).toContain("--no-open");
+  });
+
+  it("autoOpen: not after an update restart, over SSH or on a Linux without a display", () => {
+    expect(autoOpen({}, "win32", false)).toBe(true);
+    expect(autoOpen({}, "darwin", false)).toBe(true);
+    expect(autoOpen({ DISPLAY: ":0" }, "linux", false)).toBe(true);
+    expect(autoOpen({ WAYLAND_DISPLAY: "wayland-0" }, "linux", false)).toBe(true);
+    expect(autoOpen({}, "linux", true)).toBe(true);
+    expect(autoOpen({}, "linux", false)).toBe(false);
+    expect(autoOpen({ [RESTARTED_ENV]: "1" }, "win32", false)).toBe(false);
+    expect(autoOpen({ SSH_CONNECTION: "1.2.3.4 5 6.7.8.9 22", DISPLAY: ":0" }, "linux", false)).toBe(false);
+    expect(autoOpen({ SSH_TTY: "/dev/pts/0" }, "darwin", false)).toBe(false);
   });
 
   it("--no-os-notify / CLAUDE_UI_OS_NOTIFY=0 turn the desktop notification off", () => {
