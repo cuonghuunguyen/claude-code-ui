@@ -2004,8 +2004,7 @@ describe("GH-356 split view", () => {
     expect(el.querySelector('[data-testid="session-area"]')!.getAttribute("data-split")).toBe("row");
     expect(activeSplit()).toBe(splits()[1]);
     expect(location.hash).toBe(`#${S2}`);
-    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
-    expect(document.activeElement).toBe(activeSplit()!.querySelector('textarea[aria-label="Prompt"]'));
+    await vi.waitFor(() => expect(document.activeElement).toBe(activeSplit()!.querySelector('textarea[aria-label="Prompt"]')));
     expect(splits().map((s) => s.style.order)).toEqual(["0", "2"]);
   });
 
@@ -2048,15 +2047,14 @@ describe("GH-356 split view", () => {
   it("Focus next split (Ctrl+Alt+ArrowUp) and the prefix key o move the focus between the splits' prompts", async () => {
     await remount(ID);
     await splitRight(S2);
+    const focusIn = (i: number) => vi.waitFor(() => expect(document.activeElement).toBe(splits()[i]!.querySelector('textarea[aria-label="Prompt"]')));
     await press({ key: "ArrowUp", code: "ArrowUp", ctrlKey: true, altKey: true });
-    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    await focusIn(0);
     expect(activeSplit()).toBe(splits()[0]);
-    expect(document.activeElement).toBe(splits()[0]!.querySelector('textarea[aria-label="Prompt"]'));
     await press({ key: "a", code: "KeyA", altKey: true });
     await press({ key: "o", code: "KeyO" });
-    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    await focusIn(1);
     expect(activeSplit()).toBe(splits()[1]);
-    expect(document.activeElement).toBe(splits()[1]!.querySelector('textarea[aria-label="Prompt"]'));
   });
 
   it("closing the other split's tab ends the split; closing the active split's tab shows the next tab outside the splits", async () => {
@@ -2198,6 +2196,26 @@ describe("GH-356 split view", () => {
     expect(labels()).toEqual(["Third, split 1 of 2, active", "Second, split 2 of 2"]);
   });
 
+  it("Remove project returns the focus to the active split's prompt, not the other split's", async () => {
+    await remount(ID, [ID, S3]);
+    replies["session.list"] = { sessions: [session, sessions[2]!], projects: ["/p/other"] };
+    await act(async () => void sessionsChanged({}));
+    await splitRight(S3);
+    // The last project (no next row) has no tab open: the dialog hands the focus to the prompt box.
+    await act(async () => el.querySelector<HTMLElement>('[data-cwd="/p/other"] [data-testid="project-remove"]')!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-confirm"]')!.click());
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(document.activeElement).toBe(activeSplit()!.querySelector('textarea[aria-label="Prompt"]'));
+    expect(activeSplit()!.getAttribute("aria-label")).toContain("Third");
+  });
+
+  it("the resizer's aria-controls names the first split's element", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    const id = el.querySelector('[data-testid="split-resizer"]')!.getAttribute("aria-controls")!;
+    expect(document.getElementById(id)).toBe(splits().find((s) => s.getAttribute("aria-label")!.includes("split 1 of 2")));
+  });
+
   it("a centre drop overlay matches the target split when the ratio is not 50%, in screen order", async () => {
     await remount(ID);
     await splitRight(S2); // ids [ID, S2]
@@ -2213,7 +2231,7 @@ describe("GH-356 split view", () => {
     expect(labels()).toEqual(["Demo, split 1 of 2", "Third, split 2 of 2, active"]);
   });
 
-  it("a saved ratio under the minimum is clamped when the area is measured, and again when it shrinks", async () => {
+  it("a saved ratio that would leave a split under the minimum is clamped when drawn only; the saved ratio returns with the space", async () => {
     const callbacks: { cb: ResizeObserverCallback; target?: Element }[] = [];
     const RO = globalThis.ResizeObserver;
     globalThis.ResizeObserver = class {
@@ -2229,19 +2247,20 @@ describe("GH-356 split view", () => {
       disconnect() {}
     } as never;
     try {
-      localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, S2], at: 0, ratio: 0.15 }));
+      localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, S2], at: 0, ratio: 0.3 }));
       await remount(ID);
       const size = (w: number) =>
         act(async () => callbacks.filter((c) => (c.target as HTMLElement | undefined)?.dataset?.testid === "session-area").forEach((c) => c.cb([{ contentRect: { width: w, height: 800 } } as ResizeObserverEntry], {} as ResizeObserver)));
-      const ratio = () => JSON.parse(localStorage.getItem("claude-ui.split")!).ratio as number;
+      const saved = () => JSON.parse(localStorage.getItem("claude-ui.split")!).ratio as number;
+      const drawn = () => parseFloat(splits().sort((a, b) => +a.style.order - +b.style.order)[0]!.style.flex);
+      await size(3000);
+      expect(drawn()).toBeCloseTo(0.3, 3);
       await size(1000);
-      expect(ratio()).toBeCloseTo(320 / 992, 3);
-      await act(async () => void el.querySelector<HTMLElement>('[data-testid="split-resizer"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-      expect(ratio()).toBe(0.5);
-      await size(700);
-      expect(ratio()).toBeCloseTo(0.5, 2);
-      await size(660);
-      expect(ratio()).toBeCloseTo(0.5, 2);
+      expect(drawn()).toBeCloseTo(320 / 992, 3);
+      expect(saved()).toBe(0.3);
+      await size(3000);
+      expect(drawn()).toBeCloseTo(0.3, 3);
+      expect(saved()).toBe(0.3);
     } finally {
       globalThis.ResizeObserver = RO;
     }

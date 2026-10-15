@@ -1318,14 +1318,13 @@ export function App() {
     ro.observe(n);
     return () => (off?.(), ro.disconnect());
   }, []);
-  // The saved ratio can leave a split under its minimum when the area shrinks (and on load): clamp it once the area is known.
-  useEffect(() => {
-    if (!split || !area || !area.w || !splitFits) return;
+  // The saved ratio can leave a split under its minimum when the area is small: only the drawn ratio is clamped, the user's ratio returns with the space.
+  const drawnRatio = (() => {
+    if (!split || !area || !area.w || !splitFits) return split?.ratio ?? 0.5;
     const row = split.dir === "row";
     const total = (row ? area.w : area.h) - 8;
-    const r = ratioFor(split.ratio * total, total, row ? SPLIT_MIN_W : SPLIT_MIN_H);
-    if (Math.abs(r - split.ratio) > 1e-6) setSplitRaw({ ...split, ratio: r });
-  }, [area?.w, area?.h, split?.ratio, split?.dir, splitFits]);
+    return ratioFor(split.ratio * total, total, row ? SPLIT_MIN_W : SPLIT_MIN_H);
+  })();
   const splitShown = splitOn && split.ids.every((id) => !!viewOf(id) && !!sessionOf(id));
   // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
   useEffect(() => {
@@ -1959,7 +1958,7 @@ export function App() {
           removed.current = undefined;
           if (target === undefined) return true;
           const row = [...document.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].find((r) => target.next !== undefined && r.dataset.cwd === target.next);
-          const prompt = [...document.querySelectorAll<HTMLElement>("textarea")].find((t) => t.offsetParent && !t.closest(`[data-cwd]`));
+          const prompt = shownPrompt();
           return row?.querySelector<HTMLElement>('[data-testid="group-toggle"]') ?? prompt ?? document.querySelector<HTMLElement>('[data-testid="open-project"]');
         }}
         testId="remove-project"
@@ -2109,7 +2108,7 @@ export function App() {
                     <Activity key={tabKeys[id] ?? id} mode={(splitShown ? split!.ids.includes(id) : id === activeId) ? "visible" : "hidden"}>
                       <div
                         className={splitShown && split!.ids.includes(id) ? `${card} ${id === activeId ? "outline outline-1 -outline-offset-1 outline-ring" : ""}` : "flex min-h-0 min-w-0 flex-1 flex-col"}
-                        style={splitShown && split!.ids.includes(id) ? { order: split!.ids[0] === id ? 0 : 2, flex: `${split!.ids[0] === id ? split!.ratio : 1 - split!.ratio} 1 0%` } : undefined}
+                        style={splitShown && split!.ids.includes(id) ? { order: split!.ids[0] === id ? 0 : 2, flex: `${split!.ids[0] === id ? drawnRatio : 1 - drawnRatio} 1 0%` } : undefined}
                         {...(splitShown && split!.ids.includes(id) && {
                           id: `split-${id}`,
                           role: "group",
@@ -2213,7 +2212,7 @@ export function App() {
                     style={splitDrop.state.box}
                   />
                 )}
-                {splitShown && <SplitResizer split={split!} onResize={(ratio) => setSplitRaw({ ...split!, ratio })} />}
+                {splitShown && <SplitResizer split={{ ...split!, ratio: drawnRatio }} onResize={(ratio) => setSplitRaw({ ...split!, ratio })} />}
               </div>
               {!(layout.side === "left" && lg) && (
                 <>
