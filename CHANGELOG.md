@@ -22,7 +22,7 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 
 - `claude-ui update` that fails within 10 seconds no longer marks the running version as failed to start.
 - Windows: a terminal whose shell exits by itself (`exit`) no longer stays in the daemon's memory; an error in node-pty's output pipe, output worker or process-list helper ends only that terminal instead of the daemon; input typed before the shell's first output counts against the 1 MiB input cap ([#268](https://github.com/cuonghuunguyen/claude-code-ui/issues/268)).
-- WSL projects: the Git graph and git status run inside the distro ([#275](https://github.com/cuonghuunguyen/claude-code-ui/issues/275)); projects opened by their `\wsl$` path also search and run the safety scan inside the distro ([#298](https://github.com/cuonghuunguyen/claude-code-ui/issues/298)).
+- WSL projects: the Git graph and git status run inside the distro ([#275](https://github.com/cuonghuunguyen/claude-code-ui/issues/275)); projects opened by their `\\wsl$` path also search and run the safety scan inside the distro ([#298](https://github.com/cuonghuunguyen/claude-code-ui/issues/298)).
 - A WSL or Docker side builds node-pty against the side's own installed Node headers ([#260](https://github.com/cuonghuunguyen/claude-code-ui/issues/260)).
 
 ## 0.5.1 - 2026-10-10
