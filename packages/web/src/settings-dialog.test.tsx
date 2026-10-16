@@ -255,7 +255,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups: Timeline first, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Timeline", "Notifications", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "About"]);
+  expect(ids).toEqual(["Timeline", "Sending", "Notifications", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "About"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
 });
 
@@ -315,6 +315,8 @@ it("arrow keys move through the groups (roving tabindex), Home and End jump, and
   const { q } = await render();
   const key = (k: string) => act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
   await act(async () => q("settings-group-timeline")!.focus());
+  await key("ArrowDown");
+  expect(document.activeElement).toBe(q("settings-group-sending"));
   await key("ArrowDown");
   expect(document.activeElement).toBe(q("settings-group-notifications"));
   expect(q("settings-group-notifications")!.getAttribute("aria-selected")).toBe("true");
@@ -474,6 +476,23 @@ it("About omits the daemon version when an older daemon does not send it", async
   await pick("about");
   expect(q("settings-about-web")).not.toBeNull();
   expect(q("settings-about-daemon")).toBeNull();
+});
+
+it("Sending group follows Timeline and holds the per-browser send mode, steer by default, sending no settings.set", async () => {
+  localStorage.removeItem("claude-ui.sendMode");
+  const { q, calls, pick } = await render();
+  const ids = [...q("settings-groups")!.querySelectorAll("button")].map((b) => b.getAttribute("data-testid"));
+  expect(ids.indexOf("settings-group-sending")).toBe(ids.indexOf("settings-group-timeline") + 1);
+  await pick("sending");
+  expect(q("settings-sending")!.textContent).toContain("While Claude works, Enter");
+  expect(q("settings-sending")!.textContent).toContain("Kept in this browser.");
+  expect(q("settings-send-mode")?.textContent).toContain("Steers the turn");
+  await act(async () => q("settings-send-mode")!.click());
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-send-mode-queue]")!.click());
+  expect(localStorage.getItem("claude-ui.sendMode")).toBe("queue");
+  expect(q("settings-send-mode")?.textContent).toContain("Queues the message");
+  expect(calls.some((c) => c.type === "settings.set")).toBe(false);
+  localStorage.removeItem("claude-ui.sendMode");
 });
 
 it("Usage limits: Usage ring shows is a per-browser choice, Highest usage by default, and sends no settings.set", async () => {

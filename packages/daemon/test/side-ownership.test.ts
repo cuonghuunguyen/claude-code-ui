@@ -696,7 +696,7 @@ describe("existing sub-folders: the default file system check (GH-328)", () => {
   const projectsOf = (...p: string[]) => (m: any) => (m.type === "session.list" ? { sessions: [], projects: p, recentProjects: [] } : null);
   const real = (home: string, extra: object = {}) => ({ sides: { localDirs: [home], localPathExists: undefined, ...extra } as never });
 
-  it("POSIX hub: an existing sub-folder of a local dir is refused, a container-only one is claimed", async () => {
+  it.skipIf(process.platform === "win32")("POSIX hub: an existing sub-folder of a local dir is refused, a container-only one is claimed", async () => {
     await withHome(async (home) => {
       const a = fakeSide(projectsOf(join(home, "notes"), join(home, "ctonly")));
       const t = await setup(a, undefined, undefined, real(home));
@@ -708,7 +708,7 @@ describe("existing sub-folders: the default file system check (GH-328)", () => {
     });
   });
 
-  it("not a POSIX hub: the file system is not checked, an existing sub-folder stays claimable", async () => {
+  it.skipIf(process.platform === "win32")("not a POSIX hub: the file system is not checked, an existing sub-folder stays claimable", async () => {
     await withHome(async (home) => {
       const a = fakeSide(projectsOf(join(home, "notes")));
       const t = await setup(a, undefined, undefined, real(home, { posixLocal: false, localLabel: "Windows" }));

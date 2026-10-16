@@ -7,6 +7,7 @@ export default defineConfig({
     setupFiles: ["packages/web/src/vitest.setup.ts"],
     // Default workers = all cores; with a second suite or other agents running, jsdom files starve and hit the 5 s default.
     maxWorkers: "50%",
-    testTimeout: 15_000,
+    // Windows starts a process several times slower: tests that spawn many git processes need more under a full suite.
+    testTimeout: process.platform === "win32" ? 60_000 : 15_000,
   },
 });

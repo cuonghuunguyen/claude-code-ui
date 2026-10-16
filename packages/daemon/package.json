@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/main.ts",
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx watch src/main.ts --no-open",
     "record-fixture": "tsx scripts/record-fixture.ts",
     "typecheck": "tsc -p ."
   },

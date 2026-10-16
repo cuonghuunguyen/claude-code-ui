@@ -308,10 +308,10 @@ it("Run session in lists the chosen project's worktrees inside the roots; a pick
   const onStart = vi.fn(async () => {});
   const { el, box, rerender } = await render({ projects: ["/p/a"], worktrees, onCwd, onStart });
   const chip = () => el.querySelector<HTMLElement>('[data-testid="worktree-chip"]')!;
-  expect(chip().getAttribute("aria-label")).toBe("Local, Run session in");
-  expect(chip().textContent).toContain("Local");
+  expect(chip().getAttribute("aria-label")).toBe("Primary worktree, Run session in");
+  expect(chip().textContent).toContain("Primary worktree");
   await act(async () => chip().click());
-  expect(options().map((o) => o.textContent)).toEqual(["Local repository", "feature-x"]);
+  expect(options().map((o) => o.textContent)).toEqual(["Primary worktree", "feature-x"]);
   expect(options()[1]!.title).toBe("/p/a-wt");
   expect(document.querySelector('[data-slot="select-label"]')?.textContent).toBe("Run session in");
   await act(async () => options()[1]!.click());
@@ -355,9 +355,9 @@ it("Run session in offers New worktree, also for a repository with only its main
   const onCwd = vi.fn();
   const { el } = await render({ projects: ["/p/a"], worktrees: { "/p/a": [{ path: "/p/a", branch: "main", main: true }] }, onNewWorktree, onCwd });
   const chip = el.querySelector<HTMLElement>('[data-testid="worktree-chip"]')!;
-  expect(chip.textContent).toContain("Local");
+  expect(chip.textContent).toContain("Primary worktree");
   await act(async () => chip.click());
-  expect(options().map((o) => o.textContent)).toEqual(["Local repository", "New worktree"]);
+  expect(options().map((o) => o.textContent)).toEqual(["Primary worktree", "New worktree"]);
   await act(async () => document.querySelector<HTMLElement>('[data-testid="new-worktree-item"]')!.click());
   expect(onNewWorktree).toHaveBeenCalledWith("/p/a");
   expect(onCwd).not.toHaveBeenCalled();

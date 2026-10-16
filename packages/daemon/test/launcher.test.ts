@@ -15,10 +15,10 @@ const own = { cli: "/own/dist/cli.js", version: "0.2.0" };
 
 /** Fake daemon children that exit with the next code of `codes` (a code or a signal). */
 function fakeSpawn(codes: (number | NodeJS.Signals)[], onSpawn?: () => void) {
-  const runs: { cli: string; args: string[]; killed?: string }[] = [];
-  const spawn = (cli: string, args: string[]) => {
+  const runs: { cli: string; args: string[]; restarted: boolean; killed?: string }[] = [];
+  const spawn = (cli: string, args: string[], restarted: boolean) => {
     const child = Object.assign(new EventEmitter(), { kill: (s: string) => ((run.killed = s), child.emit("exit", null, s)) });
-    const run: (typeof runs)[number] = { cli, args };
+    const run: (typeof runs)[number] = { cli, args, restarted };
     runs.push(run);
     const next = codes.shift();
     onSpawn?.();
@@ -47,6 +47,8 @@ describe("launcher", () => {
     expect(await launch({ args: ["--port", "5000"], own, dir, spawn, signals: signals as never })).toBe(0);
     expect(runs.map((r) => r.cli)).toEqual([own.cli, versionCli(dir, "0.2.1")]);
     expect(runs[1]!.args).toEqual(["--port", "5000"]);
+    // The restarted daemon opens no second browser tab.
+    expect(runs.map((r) => r.restarted)).toEqual([false, true]);
     expect(await launch({ args: [], own, dir: mkdtempSync(join(tmpdir(), "cu-launch-")), spawn: fakeSpawn([1]).spawn, signals: signals as never })).toBe(1);
     expect(signals.listenerCount("SIGINT")).toBe(0);
   });
@@ -106,8 +108,8 @@ describe("launcher", () => {
 
     const s2 = new EventEmitter();
     const f = fakeSpawn([]);
-    const p = launch({ args: [], own, dir, spawn: (cli, args) => {
-      const c = f.spawn(cli, args);
+    const p = launch({ args: [], own, dir, spawn: (cli, args, restarted) => {
+      const c = f.spawn(cli, args, restarted);
       (c as unknown as { kill: (s: string) => void }).kill = () => c.emit("exit", 75, null);
       return c;
     }, signals: s2 as never });

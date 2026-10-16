@@ -803,7 +803,8 @@ describe("gitLog / gitShow / gitFileAt", () => {
     await expect(gitShow(r.dir, tree, all)).rejects.toMatchObject({ code: "not_found" });
   });
 
-  it("gitFileAt reads a file name with a line break", async () => {
+  // Windows file names cannot hold a line break.
+  it.skipIf(process.platform === "win32")("gitFileAt reads a file name with a line break", async () => {
     const r = graphRepo();
     const name = "we\nird.txt";
     writeFileSync(join(r.dir, name), "odd\n");
@@ -1212,7 +1213,8 @@ describe("WSL projects opened by their UNC path", () => {
     ]);
   });
 
-  it("gitStatus of a UNC WSL cwd reads through the WSL runner", async () => {
+  // Fakes the distro with a local POSIX folder and bash; on Windows the UNC path names the real \\wsl.localhost share and `bash` may be WSL's own.
+  it.skipIf(process.platform === "win32")("gitStatus of a UNC WSL cwd reads through the WSL runner", async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "wslst-")));
     run(dir, "init", "-q", "-b", "main");
     writeFileSync(join(dir, "a.txt"), "1\n");
