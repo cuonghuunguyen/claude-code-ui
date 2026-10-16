@@ -9,9 +9,12 @@ The box at the bottom of a session. You type prompts here, and pick the model, m
 | <kbd>Enter</kbd> | Send |
 | <kbd>Shift</kbd>+<kbd>Enter</kbd> | New line |
 | <kbd>Enter</kbd> while Claude works | **Steer**: your message joins the running turn right away |
+| <kbd>Alt</kbd>+<kbd>Enter</kbd> while Claude works (<kbd>Option</kbd>+<kbd>Enter</kbd> on a Mac) | **Queue**: your message waits and starts its own turn when Claude is idle |
 | <kbd>Esc</kbd> | Stop the running turn (same as the **Stop** button) |
 | <kbd>Shift</kbd>+<kbd>Tab</kbd> | Next [permission mode](permissions) |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | Jump to the prompt box from anywhere |
+
+In **Settings > Sending** you can swap the two: <kbd>Enter</kbd> queues and <kbd>Alt</kbd>+<kbd>Enter</kbd> steers. The send button follows the same choice, and a hint above it shows the keys.
 
 ## Bash mode: `!`
 

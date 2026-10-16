@@ -62,7 +62,7 @@ try {
   step("start, GET /, WebSocket with token");
   const port = await freePort();
   const out = [];
-  child = spawn(q(bin), ["--port", String(port)], { cwd: app, env: { ...process.env, XDG_CONFIG_HOME: join(tmp, "config") }, shell });
+  child = spawn(q(bin), ["--port", String(port)], { cwd: app, env: { ...process.env, XDG_CONFIG_HOME: join(tmp, "config"), CLAUDE_UI_OPEN: "0" }, shell });
   child.stdout.on("data", (d) => out.push(String(d)));
   child.stderr.on("data", (d) => out.push(String(d)));
   const token = await new Promise((res, rej) => {

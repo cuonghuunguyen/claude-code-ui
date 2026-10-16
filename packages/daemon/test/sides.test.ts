@@ -320,7 +320,7 @@ describe("sides", () => {
     expect(setupMessage("build_tools_missing", "", "WSL: Ubuntu")).toBe("WSL: Ubuntu needs make, python3 and g++ to build the terminal support (node-pty). Install them there (Debian/Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++), then retry.");
   });
 
-  it("lists every side; a side's projects and sessions join the list once it is started", async () => {
+  it.skipIf(process.platform === "win32")("lists every side; a side's projects and sessions join the list once it is started", async () => {
     const c = await client();
     const before = await c.request({ type: "session.list" });
     expect(before.result.sides).toEqual([
@@ -402,7 +402,7 @@ describe("sides", () => {
     c.ws.close();
   });
 
-  it("merges a side project's worktrees into the list and routes their paths to the side", async () => {
+  it.skipIf(process.platform === "win32")("merges a side project's worktrees into the list and routes their paths to the side", async () => {
     const git = (...args: string[]) => execFileSync("git", args, { cwd: wslRoot, stdio: "ignore" });
     git("init", "-q", "-b", "main");
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init");

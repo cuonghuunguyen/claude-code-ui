@@ -152,7 +152,7 @@ it("the docs page generator lists bound shortcuts and skips unbound commands", (
   const out = fileURLToPath(new URL("../../../docs/site/reference/shortcuts.md", import.meta.url));
   const before = existsSync(out) ? readFileSync(out, "utf8") : undefined;
   try {
-    execFileSync("npx", ["tsx", fileURLToPath(new URL("../../../docs/site/scripts/gen-shortcuts.ts", import.meta.url))], { stdio: "pipe" });
+    execFileSync(process.execPath, [fileURLToPath(new URL("../../../node_modules/tsx/dist/cli.mjs", import.meta.url)), fileURLToPath(new URL("../../../docs/site/scripts/gen-shortcuts.ts", import.meta.url))], { stdio: "pipe" });
     const page = readFileSync(out, "utf8");
     expect(page).toContain("| Toggle sidebar |");
     expect(page).not.toContain("undefined");

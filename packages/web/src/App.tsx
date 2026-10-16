@@ -94,6 +94,7 @@ import { ViewerContext, latestPlan, useOpenViewer, type ViewerState } from "./vi
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
+import { useSendMode } from "./send-mode.ts";
 import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
 import { FoldRow } from "./signal-fold.tsx";
 import { FocusPage, FocusRow, useNow } from "./focus-page.tsx";
@@ -2610,6 +2611,7 @@ export function SessionPane({
   const modePicker = <ModePicker mode={view.permissionMode ?? session.permissionMode} modes={modesOf(session.permissionModes, view.model ?? session.model, models)} onMode={onMode} shortcut={false} />;
   // Waiting for a permission answer is part of the running turn.
   const turnRunning = view.state === "running" || view.state === "needs_input";
+  const sendModeSetting = useSendMode();
   const isClearing = clearing(view, pending);
   // A bash mode command runs: Stop and Esc kill it.
   const shellRunning = bashRunning(view);
@@ -2889,7 +2891,7 @@ export function SessionPane({
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
               inputRef={prompt}
-              placeholder={phone ? (turnRunning ? "Claude is working…" : "Ask Claude…") : turnRunning ? (onQueue ? "Claude is working… (Enter to steer, Alt+Enter to queue, Esc to stop)" : "Claude is working… (Enter to steer, Esc to stop)") : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
+              placeholder={phone ? (turnRunning ? "Claude is working…" : "Ask Claude…") : turnRunning ? (onQueue ? (sendModeSetting === "queue" ? "Claude is working… (Enter to queue, Alt+Enter to steer, Esc to stop)" : "Claude is working… (Enter to steer, Alt+Enter to queue, Esc to stop)") : "Claude is working… (Enter to steer, Esc to stop)") : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
             />
           </>
         )}
@@ -3109,7 +3111,12 @@ function PromptBox({
     errorCwd.current = cwd;
     setSendError(undefined);
   }, [cwd]);
-  const send = (t = text, how: "send" | "queue" = "send") => {
+  // While a turn runs and queueing is available, Enter and the send button follow the Sending setting and Alt+Enter does the other one.
+  const sendMode = useSendMode();
+  const running = state === "running" || state === "needs_input";
+  const enterHow: "send" | "queue" = running && onQueue && sendMode === "queue" ? "queue" : "send";
+  const altHow: "send" | "queue" = running && onQueue && sendMode === "queue" ? "send" : "queue";
+  const send = (t = text, how: "send" | "queue" = enterHow) => {
     if (bash) {
       const command = t.trim();
       if (!command || blocked) return;
@@ -3223,10 +3230,10 @@ function PromptBox({
       const next = nextMode(modes, mode);
       return next !== mode && onMode(next);
     }
-    // Alt+Enter queues the message, also with the picker open (the picker keeps plain Enter). Without a queue (new-session tab) it is Enter.
+    // Alt+Enter queues the message (while a turn runs: the mode Enter does not do), also with the picker open (the picker keeps plain Enter). Without a queue (new-session tab) it is Enter.
     if (e.key === "Enter" && e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
-      return send(text, "queue");
+      return send(text, altHow);
     }
     if (pickerOpen) {
       const n = rows;
@@ -3378,6 +3385,7 @@ function PromptBox({
         hasInput={!disabled && !blocked && (!!text.trim() || images.length > 0)}
         onSend={() => send()}
         onQueue={onQueue && (() => send(text, "queue"))}
+        sendMode={sendMode}
         onStop={() => onInterrupt?.()}
         // Not on touch screens: focusing the prompt box there opens the soft keyboard (OpenCode leaves focus on the page).
         onFocusLost={() => !window.matchMedia?.("(pointer: coarse)").matches && input.current?.focus()}

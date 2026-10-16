@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "../src/git-remote.ts";
 
@@ -46,6 +46,12 @@ const pushes = () => {
   return calls;
 };
 afterEach(() => setGitRunner(undefined));
+/**
+ * Every test here runs dozens of git processes (submodules spawn more): ~15 s on Windows under a full suite, where a process start
+ * is slow. A timed-out test also leaves its git calls running into the next test's `pushes()`, so the whole file gets the long timeout.
+ */
+const SPAWN_HEAVY = 120_000;
+vi.setConfig({ testTimeout: SPAWN_HEAVY });
 
 describe("gitBranch", () => {
   it("shows upstream, tracking, ahead/behind and the exact argv", async () => {
@@ -123,7 +129,7 @@ describe("gitPush", () => {
     const j = (await gitBranch(a, MAIN, { allowed: inside }))!;
     await gitPush(a, { ref: MAIN, local: j.local, argv: j.forcePush!, lease: j.trackingHash, allowed: inside });
     expect(sha(bare, "main")).toBe(sha(a));
-  });
+  }, SPAWN_HEAVY);
 
   it("refuses a push when the local branch moved since the menu opened", async () => {
     const { a, inside } = repos();
@@ -258,7 +264,7 @@ describe("remote operations never follow submodules (their remotes are outside t
     const i = (await gitBranch(a, MAIN, { allowed: inside }))!;
     await gitPush(a, { ref: MAIN, local: i.local, argv: i.push!, allowed: inside }).catch(() => undefined);
     expect(tryRun(o.subGit, "cat-file", "-t", s2)).toMatch(/^ERR/);
-  });
+  }, SPAWN_HEAVY);
 
   it("pull with submodule.recurse=true does not fetch a submodule from a folder outside the roots", async () => {
     const x = bumpedSubmodule();
@@ -266,7 +272,7 @@ describe("remote operations never follow submodules (their remotes are outside t
     const i = (await gitBranch(x.a, MAIN, { allowed: x.inside }))!;
     await gitPull(x.a, { ref: MAIN, local: i.local, argv: i.pull!, allowed: x.inside }).catch(() => undefined);
     expect(tryRun(join(x.a, "sub"), "cat-file", "-t", x.s2)).toMatch(/^ERR/);
-  });
+  }, SPAWN_HEAVY);
 
   it("the fetch variant of pull (branch checked out nowhere) does not fetch submodules either", async () => {
     const x = bumpedSubmodule();
@@ -278,7 +284,7 @@ describe("remote operations never follow submodules (their remotes are outside t
     expect(i.pull?.[4]).toBe("fetch");
     await gitPull(x.a, { ref: MAIN, local: i.local, argv: i.pull!, allowed: x.inside }).catch(() => undefined);
     expect(tryRun(join(x.a, "sub"), "cat-file", "-t", x.s2)).toMatch(/^ERR/);
-  });
+  }, SPAWN_HEAVY);
 });
 
 describe("the command run is the command shown", () => {

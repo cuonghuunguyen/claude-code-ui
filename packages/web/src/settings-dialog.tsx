@@ -1,6 +1,6 @@
 // Settings dialog (docs/spec.md "Settings"): two panes on the ConfigDialog shell, a list of groups on the left and the settings of the
 // selected group on the right (below md: the list first, a group drills in with a Back button). App-wide, daemon-side settings come from
-// SECTIONS, per-browser choices (Notifications, Timeline, Changes, Sidebar, Tabs, Keyboard, Guide) never reach the daemon.
+// SECTIONS, per-browser choices (Notifications, Timeline, Sending, Changes, Sidebar, Tabs, Keyboard, Guide) never reach the daemon.
 // A later setting is one more row in SECTIONS; a later group is one more entry in `groups`.
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Settings, SettingsPatch, SettingsResult } from "@claude-ui/protocol";
@@ -16,6 +16,7 @@ import { USAGE_RINGS, saveUsageRing, useUsageRing, type UsageRing } from "./usag
 import { GuideSection } from "./guide-settings.tsx";
 import { AboutSection } from "./about-settings.tsx";
 import { PerformanceSection } from "./perf-settings.tsx";
+import { SEND_MODES, saveSendMode, useSendMode, type SendMode } from "./send-mode.ts";
 import { saveSignalOnly, useSignalOnly } from "./signal.ts";
 import { IN_APP_EVENT, loadInApp, saveInApp } from "./notify.ts";
 import { useKeymap } from "./keymap.ts";
@@ -85,6 +86,36 @@ function TimelineSection() {
           </span>
         </div>
         <Switch on={on} label="Signal only" held={false} onToggle={saveSignalOnly} title={on ? "Show every tool call" : "Fold tool calls into one line"} describedBy="settings-timeline-signal-hint" testId="settings-signal-only" />
+      </div>
+    </section>
+  );
+}
+
+/** While Claude works, what Enter does: steer the turn or queue the message (per browser). */
+function SendingSection() {
+  const mode = useSendMode();
+  return (
+    <section aria-labelledby="settings-sending" className="flex flex-col" data-testid="settings-sending">
+      <h3 id="settings-sending" className="pb-1 font-medium text-[13px] text-muted-foreground">
+        Sending
+      </h3>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-send-mode-label" className="block text-sm">While Claude works, Enter</span>
+          <span id="settings-send-mode-hint" className="block text-muted-foreground text-xs">Steering adds your message to the running turn; a queued message waits and starts its own turn when Claude is idle. Alt+Enter does the other one. Kept in this browser.</span>
+        </div>
+        <Select value={mode} onValueChange={(v) => v && saveSendMode(v as SendMode)}>
+          <SelectTrigger aria-labelledby="settings-send-mode-label" aria-describedby="settings-send-mode-hint" data-testid="settings-send-mode" className="w-44 max-md:data-[size=default]:h-11">
+            <SelectValue>{(v: SendMode) => SEND_MODES.find((m) => m.value === v)?.label ?? v}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {SEND_MODES.map((m) => (
+              <SelectItem key={m.value} value={m.value} data-testid={`settings-send-mode-${m.value}`}>
+                {m.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     </section>
   );
@@ -255,6 +286,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   // One entry per group; a later group (e.g. Notifications) is one more line here.
   const groups: Group[] = [
     { id: "timeline", title: "Timeline", body: <TimelineSection /> },
+    { id: "sending", title: "Sending", body: <SendingSection /> },
     {
       id: "notifications",
       title: "Notifications",
