@@ -443,8 +443,72 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(existsSync(wt)).toBe(true);
   });
 
+  it("a worktree that contains another listed worktree is blocked contains_worktree and refused; the inner work stays", async () => {
+    const { main } = plain();
+    const outer = join(tmp(), "outer");
+    run(main, "worktree", "add", "-q", "-b", "outer", outer);
+    const inner = join(outer, "inner");
+    run(main, "worktree", "add", "-q", "-b", "inner", inner);
+    writeFileSync(join(inner, "work.txt"), "precious");
+    expect(await worktreeStatus(main, outer, () => true)).toMatchObject({ safety: "blocked", blocked: "contains_worktree" });
+    expect(await code(removeWorktree(main, outer, () => true))).toBe("not_removable");
+    expect(readFileSync(join(inner, "work.txt"), "utf8")).toBe("precious");
+    // The inner one is removable itself, then the outer one too.
+    await removeWorktree(main, inner, () => true);
+    expect(await worktreeStatus(main, outer, () => true)).toMatchObject({ safety: "safe" });
+  });
+
+  it("worktreeStatus ahead counts a local-only commit of a kept branch when there is no origin/HEAD, main, master or upstream", async () => {
+    const dir = tmp();
+    run(dir, "init", "-q", "-b", "trunk", "r");
+    const main = join(dir, "r");
+    commit(main, "a.txt");
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "feat", wt);
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ahead: 0, safety: "safe" });
+    commit(wt, "f.txt");
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ahead: 1, safety: "has_work" });
+  });
+
+  it("worktreeStatus counts ignored files but not ignored directories git reports whole", async () => {
+    const { main } = plain();
+    writeFileSync(join(main, ".gitignore"), "*.log\nbuild/\n");
+    run(main, "add", ".");
+    run(main, ...C, "commit", "-qm", "ignore");
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "ig", wt);
+    mkdirSync(join(wt, "build"));
+    writeFileSync(join(wt, "build", "o.js"), "x");
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ignored: 0, uncommitted: 0, safety: "safe" });
+    writeFileSync(join(wt, "a.log"), "x");
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ignored: 1, uncommitted: 0, safety: "safe" });
+  });
+
+  it("removeWorktree expect refuses stale when more work exists than listed, also after beforeRemove ran", async () => {
+    const { main } = plain();
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "ex", wt);
+    writeFileSync(join(wt, "u.txt"), "u");
+    const listed = { uncommitted: 1, ahead: 0, ignored: 0 };
+    // Unchanged since the list: removed.
+    const wt2 = join(tmp(), "wt2");
+    run(main, "worktree", "add", "-q", "-b", "ex2", wt2);
+    writeFileSync(join(wt2, "u.txt"), "u");
+    await removeWorktree(main, wt2, () => true, { expect: listed });
+    expect(existsSync(wt2)).toBe(false);
+    // More work than listed.
+    writeFileSync(join(wt, "v.txt"), "v");
+    const before = vi.fn(async () => {});
+    expect(await code(removeWorktree(main, wt, () => true, { expect: listed, beforeRemove: before }))).toBe("stale");
+    expect(before).not.toHaveBeenCalled();
+    rmSync(join(wt, "v.txt"));
+    // A shell writes while the sessions and terminals close.
+    expect(await code(removeWorktree(main, wt, () => true, { expect: listed, beforeRemove: async () => void writeFileSync(join(wt, "late.txt"), "l") }))).toBe("stale");
+    expect(existsSync(join(wt, "late.txt"))).toBe(true);
+  });
+
   it("classify: blocked beats has_work beats safe", () => {
-    const z = { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "b", branchMerged: false, running: 0 };
+    const z = { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0 };
     expect(classify(z).safety).toBe("safe");
     expect(classify({ ...z, ahead: 1 }).safety).toBe("has_work");
     expect(classify({ ...z, uncommitted: 1, blocked: "removing" }).safety).toBe("blocked");

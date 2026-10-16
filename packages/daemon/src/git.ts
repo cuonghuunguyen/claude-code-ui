@@ -505,12 +505,14 @@ function linked(list: Listed[], path: string): Listed {
 
 const isLink = (p: string) => lstat(p).then((s) => s.isSymbolicLink(), () => false);
 /** Why `w` cannot be removed, from git and the file system only (sessions and roots are added by callers). */
-async function blockOf(w: Listed, requested: string): Promise<"locked" | "symlink" | undefined> {
+async function blockOf(w: Listed, requested: string, list: Listed[]): Promise<"locked" | "symlink" | "contains_worktree" | undefined> {
   if (w.locked) return "locked";
   if ((await isLink(requested)) || (await isLink(w.raw))) return "symlink";
+  // Another linked worktree inside it: its files are untracked here (and `.claude/worktrees/` is excluded), removal would delete its work.
+  if (list.some((x) => x !== w && !x.main && x.path !== w.path && inside(w.path, x.path))) return "contains_worktree";
   return undefined;
 }
-const BLOCK_ERROR = { locked: "The worktree is locked (git worktree lock); unlock it first", symlink: "The worktree path is a symbolic link" };
+const BLOCK_ERROR = { locked: "The worktree is locked (git worktree lock); unlock it first", symlink: "The worktree path is a symbolic link", contains_worktree: "The worktree contains another worktree; remove that one first" };
 
 export type RemoveOptions = {
   /** Called once the worktree is validated, inside the repository lock, before any other await (the server's `removing` mark). */
@@ -518,6 +520,8 @@ export type RemoveOptions = {
   /** The caller's session cleanup (refuses with has_sessions_running), run after every check passed. */
   beforeRemove?: () => Promise<void>;
   expectSafe?: boolean;
+  /** Work listed: more uncommitted files, commits ahead or ignored files now is `stale`. */
+  expect?: { uncommitted: number; ahead: number; ignored: number };
   deleteBranch?: boolean;
 };
 
@@ -531,15 +535,21 @@ export async function removeWorktree(cwd: string, path: string, allowed: (path: 
     // Re-read inside the lock: a concurrent remove may have removed it.
     const { main, list } = await repoOf(cwd);
     const w = linked(list, path);
-    const block = await blockOf(w, path);
+    const block = await blockOf(w, path, list);
     if (block) throw new WorktreeError("not_removable", BLOCK_ERROR[block]);
     if (!allowed(w.path) || (await gitEscapes(w.path, allowed))) throw new WorktreeError("cwd_not_allowed", "The worktree is outside the allowed roots");
     o.mark?.(w);
-    if (o.expectSafe) {
-      const st = await statusOf(main, w, path, allowed);
-      if (st.safety !== "safe") throw new WorktreeError("stale", `Changed since the list: ${st.uncommitted} files, ${st.ahead} commits`);
-    }
+    // Checked before anything closes, and again once the sessions and terminals are gone (a shell could write in between).
+    const verify = async () => {
+      if (!o.expectSafe && !o.expect) return;
+      const st = await statusOf(main, w, path, allowed, list);
+      const e = o.expect;
+      if ((o.expectSafe && st.safety !== "safe") || st.blocked || (e && (st.uncommitted > e.uncommitted || st.ahead > e.ahead || st.ignored > e.ignored)))
+        throw new WorktreeError("stale", `Changed since the list: ${st.uncommitted} files, ${st.ahead} commits${st.ignored ? `, ${st.ignored} ignored files` : ""}`);
+    };
+    await verify();
     await o.beforeRemove?.();
+    await verify();
     const detached = !(await gok(w.path, "symbolic-ref", "-q", "HEAD"));
     await run(main, ["worktree", "remove", "--force", "--", w.path]);
     let branchKept: string | undefined;
@@ -558,13 +568,16 @@ export function classify(st: Omit<WorktreeStatusResult, "safety">): WorktreeStat
 const count = async (cwd: string, args: string[]) => Number(await g(cwd, ["rev-list", "--count", ...args])) || 0;
 
 /** What removing `w` loses and whether it may be removed (WorktreeStatusResult); `running` is the caller's to fill. */
-async function statusOf(main: string, w: Listed, requested: string, allowed: (p: string) => boolean): Promise<WorktreeStatusResult> {
+async function statusOf(main: string, w: Listed, requested: string, allowed: (p: string) => boolean, list: Listed[]): Promise<WorktreeStatusResult> {
   const name = w.branch ?? basename(w.path);
-  const zero = { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: name, branchMerged: false, running: 0 };
+  const zero = { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: name, branchMerged: false, running: 0 };
   // No git runs in a worktree whose git dirs are outside the roots.
   if (!allowed(w.path) || (await gitEscapes(w.path, allowed))) return classify({ ...zero, blocked: "outside_roots" });
-  const blocked = await blockOf(w, requested);
-  const lines = (await g(w.path, ["status", "--porcelain"])).split("\n").filter((l) => l.trim());
+  const blocked = await blockOf(w, requested, list);
+  const all = (await g(w.path, ["status", "--porcelain", "--ignored"])).split("\n").filter((l) => l.trim());
+  const lines = all.filter((l) => !l.startsWith("!! "));
+  // Ignored files only; an ignored directory git reports as a whole (node_modules/, build output) is not counted.
+  const ignored = all.filter((l) => l.startsWith("!! ") && !l.endsWith("/")).length;
   const detached = !(await gok(w.path, "symbolic-ref", "-q", "HEAD"));
   const keeps = !detached && !w.branch?.startsWith("worktree-");
   let commits = 0;
@@ -583,16 +596,16 @@ async function statusOf(main: string, w: Listed, requested: string, allowed: (p:
   let ahead: number;
   if (refs.length) ahead = await count(w.path, ["HEAD", "--not", ...refs]);
   else if (!keeps) ahead = commits;
-  else ahead = await count(w.path, ["HEAD", "--not", `--exclude=refs/heads/${w.branch}`, "--branches", "--remotes"]);
+  else ahead = await count(w.path, ["HEAD", "--not", `--exclude=${w.branch}`, "--branches", "--remotes"]);
   const branchMerged = keeps && refs.length > 0 && (await count(w.path, [`refs/heads/${w.branch}`, "--not", ...refs])) === 0;
   const t = Number(await g(w.path, ["log", "-1", "--format=%ct", "HEAD"]).catch(() => "")) * 1000;
-  return classify({ uncommitted: lines.length, untracked: lines.filter((l) => l.startsWith("?? ")).length, commits, ahead, branch: name, branchMerged, ...(t > 0 && { headTime: t }), running: 0, ...(blocked && { blocked }) });
+  return classify({ uncommitted: lines.length, untracked: lines.filter((l) => l.startsWith("?? ")).length, commits, ahead, ignored, branch: name, branchMerged, ...(t > 0 && { headTime: t }), running: 0, ...(blocked && { blocked }) });
 }
 
 /** What removing `path` loses and whether it may (WorktreeStatusResult). `allowed`: the roots check; sessions are the caller's. */
 export async function worktreeStatus(cwd: string, path: string, allowed: (p: string) => boolean): Promise<WorktreeStatusResult> {
   const { main, list } = await repoOf(cwd);
-  return statusOf(main, linked(list, path), path, allowed);
+  return statusOf(main, linked(list, path), path, allowed, list);
 }
 
 // ---- Commit graph (docs/spec.md "Layout") ----

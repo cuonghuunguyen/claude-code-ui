@@ -5,7 +5,7 @@ import { cleanupCandidates, cleanupItems, confirmLabel, defaultSelection, filter
 const DAY = 86_400_000;
 const NOW = 100 * DAY;
 const s = (id: string, cwd: string, o: Partial<SessionListItem> = {}): SessionListItem => ({ id, cwd, title: id, lastActivity: NOW, archived: false, transcript: true, state: "idle", ...o }) as SessionListItem;
-const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
+const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
 const wt = (path: string, o: Partial<Row & { kind: "worktree" }> = {}): Row => ({ kind: "worktree", key: `wt:${path}`, project: "/r", path, external: false, outsideRoots: false, locked: false, sessions: 0, ...o }) as Row;
 const wk = (id: string, state: SessionState, o: object = {}): Row => ({ kind: "worker", key: `wk:${id}`, id, name: id, cwd: "/r", state, lastActivity: NOW, ...o }) as Row;
 
@@ -37,6 +37,7 @@ describe("cleanup", () => {
     expect(rowSafety(wt("/a", { locked: true }))).toEqual({ safety: "blocked", reason: "Locked (git worktree lock)" });
     expect(rowSafety(wt("/a"))).toEqual({ safety: "checking" });
     expect(rowSafety(wt("/a", { error: "boom" } as never))).toEqual({ safety: "blocked", reason: "boom" });
+    expect(rowSafety(wt("/a", { status: st({ safety: "blocked", blocked: "contains_worktree" }) } as never)).reason).toBe("Contains another worktree");
     expect(rowSafety(wt("/a", { status: st({ safety: "blocked", blocked: "symlink" }) } as never))).toEqual({ safety: "blocked", reason: "The path is a symbolic link" });
     expect(rowSafety(wt("/a", { status: st({ safety: "blocked", blocked: "sessions_running" }) } as never)).reason).toBe("A session there is running or needs input");
     expect(rowSafety(wt("/a", { status: st({ safety: "has_work", uncommitted: 1, ahead: 2 }) } as never))).toEqual({ safety: "has_work", reason: "1 file, 2 commits" });
@@ -92,9 +93,9 @@ describe("cleanup", () => {
     for (const i of items) await i.run();
     expect(sent).toEqual([
       { type: "worker.remove", sessionId: "w" },
-      { type: "worktree.remove", cwd: "/r", path: "/safe", expectSafe: true, deleteBranch: true },
-      { type: "worktree.remove", cwd: "/r", path: "/work", expectSafe: false, deleteBranch: false },
-      { type: "worktree.remove", cwd: "/r", path: "/unmerged", expectSafe: true, deleteBranch: false },
+      { type: "worktree.remove", cwd: "/r", path: "/safe", expectSafe: true, expect: { uncommitted: 0, ahead: 0, ignored: 0 }, deleteBranch: true },
+      { type: "worktree.remove", cwd: "/r", path: "/work", expectSafe: false, expect: { uncommitted: 1, ahead: 0, ignored: 0 }, deleteBranch: false },
+      { type: "worktree.remove", cwd: "/r", path: "/unmerged", expectSafe: true, expect: { uncommitted: 0, ahead: 0, ignored: 0 }, deleteBranch: false },
     ]);
   });
 

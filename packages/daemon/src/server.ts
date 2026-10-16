@@ -529,7 +529,7 @@ export function createDaemon(opts: {
   const inDir = (cwd: string, p: string) => cwd === p || cwd.startsWith(p.endsWith(sep) ? p : p + sep);
   const isRemoving = (cwd: string) => [...removing].some((p) => inDir(cwd, p));
   /** Refused while a session in it runs or needs input; idle live sessions and its terminals close first (transcripts stay). */
-  const removeIn = async (cwd: string, path: string, o: { expectSafe?: boolean; deleteBranch?: boolean }) => {
+  const removeIn = async (cwd: string, path: string, o: { expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored: number }; deleteBranch?: boolean }) => {
     const marked: string[] = [];
     // Early block for a worktree this app made, so no session slips in during git's own checks; the lock's mark below covers any other path.
     if (path.includes(`${sep}.claude${sep}worktrees${sep}`)) {
@@ -1856,11 +1856,13 @@ export function createDaemon(opts: {
           if (msg.type === "worktree.create" && msg.name !== undefined && typeof msg.name !== "string") return fail("bad_name", "name must be a string");
           if (msg.type !== "worktree.remove" && (await gitOutside(cwd))) return fail("cwd_not_allowed", "The repository is outside the allowed roots");
           // A path that is itself a link is refused before `allowed` resolves it; git.ts checks the path git registers too.
-          if (msg.type !== "worktree.create" && typeof msg.path === "string" && isAbsolute(msg.path) && lstatSync(msg.path, { throwIfNoEntry: false })?.isSymbolicLink()) return fail("not_removable", "The worktree path is a symbolic link");
+          if (msg.type !== "worktree.create" && typeof msg.path === "string" && isAbsolute(msg.path) && !refused(msg.path) && lstatSync(msg.path, { throwIfNoEntry: false })?.isSymbolicLink()) return fail("not_removable", "The worktree path is a symbolic link");
           const path = msg.type === "worktree.create" ? undefined : allowed(msg.path);
           if (msg.type !== "worktree.create" && !path) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           if (msg.type === "worktree.remove") {
             for (const k of ["expectSafe", "deleteBranch"] as const) if (msg[k] !== undefined && typeof msg[k] !== "boolean") return fail("bad_request", "expectSafe and deleteBranch must be booleans");
+            const x = msg.expect as Record<string, unknown> | undefined;
+            if (x !== undefined && !(x && typeof x === "object" && ["uncommitted", "ahead", "ignored"].every((k) => Number.isInteger(x[k]) && (x[k] as number) >= 0))) return fail("bad_request", "expect must hold counts uncommitted, ahead and ignored");
           }
           try {
             if (msg.type === "worktree.create") return reply(await createIn(cwd, { name: msg.name || undefined }));
@@ -1869,7 +1871,7 @@ export function createDaemon(opts: {
               const running = [...sessions.values()].filter((s) => inDir(s.cwd, path!) && ["running", "needs_input"].includes(s.info().state)).length;
               return reply(classify({ ...st, running, blocked: st.blocked ?? (isRemoving(path!) ? "removing" : running ? "sessions_running" : undefined) }));
             }
-            return reply(await removeIn(cwd, msg.path, { expectSafe: msg.expectSafe === true, deleteBranch: msg.deleteBranch === true }));
+            return reply(await removeIn(cwd, msg.path, { expectSafe: msg.expectSafe === true, expect: msg.expect, deleteBranch: msg.deleteBranch === true }));
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }

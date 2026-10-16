@@ -14,6 +14,7 @@ export const BLOCK_TEXT: Record<WorktreeBlock, string> = {
   outside_roots: "Outside the allowed roots",
   sessions_running: "A session there is running or needs input",
   removing: "Removal in progress",
+  contains_worktree: "Contains another worktree",
 };
 
 export function cleanupCandidates(
@@ -133,12 +134,12 @@ export const summaryText = (r: CleanupResult) => `Removed ${r.removed.length}, s
 export const rowLabel = (r: Row) => (r.kind === "worker" ? r.name : (r.branch ?? r.path.split(/[\\/]/).filter(Boolean).at(-1) ?? r.path));
 
 /** Workers first (their sessions leave the worktree), then worktrees. */
-export function cleanupItems(rows: Row[], selected: Set<string>, opts: { deleteBranch: Set<string> }, request: <T>(m: { type: "worker.remove"; sessionId: string } | { type: "worktree.remove"; cwd: string; path: string; expectSafe: boolean; deleteBranch: boolean }) => Promise<T>): Item[] {
+export function cleanupItems(rows: Row[], selected: Set<string>, opts: { deleteBranch: Set<string> }, request: <T>(m: { type: "worker.remove"; sessionId: string } | { type: "worktree.remove"; cwd: string; path: string; expectSafe: boolean; expect: { uncommitted: number; ahead: number; ignored: number }; deleteBranch: boolean }) => Promise<T>): Item[] {
   const ticked = rows.filter((r) => selected.has(r.key));
   const workers = ticked.flatMap((r): Item[] => (r.kind === "worker" ? [{ key: r.key, label: r.name, run: () => request({ type: "worker.remove", sessionId: r.id }) }] : []));
   const wts = ticked.flatMap((r): Item[] =>
     r.kind === "worktree"
-      ? [{ key: r.key, label: rowLabel(r), run: () => request({ type: "worktree.remove", cwd: r.project, path: r.path, expectSafe: r.status?.safety === "safe", deleteBranch: opts.deleteBranch.has(r.key) && !!r.status?.branchMerged }) }]
+      ? [{ key: r.key, label: rowLabel(r), run: () => request({ type: "worktree.remove", cwd: r.project, path: r.path, expectSafe: r.status?.safety === "safe", expect: { uncommitted: r.status?.uncommitted ?? 0, ahead: r.status?.ahead ?? 0, ignored: r.status?.ignored ?? 0 }, deleteBranch: opts.deleteBranch.has(r.key) && !!r.status?.branchMerged }) }]
       : [],
   );
   return [...workers, ...wts];

@@ -106,6 +106,11 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
     setProgress(0);
     const items = cleanupItems(ticked, new Set(ticked.map((r) => r.key)), { deleteBranch }, request as never);
     const r = await runCleanup(items, setProgress);
+    // A worktree ticked (by "Also remove its worktree" or by default) that the filter hides is not removed: say so.
+    for (const w of ticked) {
+      const wt = w.kind === "worker" && w.worktree ? rows.find((x) => x.kind === "worktree" && x.path === w.worktree) : undefined;
+      if (wt && isOn(wt) && !visible.includes(wt)) r.notes.push(`Worktree ${rowLabel(wt)} kept: hidden by the filter`);
+    }
     running.current = false;
     setResult(r);
     setPhase("done");
@@ -202,7 +207,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
                             busy={busy}
                             rows={rows}
                             safetyOf={safetyOf}
-                            isOn={isOn}
+                            isOn={(x) => isOn(x) && visible.includes(x)}
                             set={set}
                             deleteBranch={deleteBranch.has(r.key)}
                             setDeleteBranch={(on) => setDeleteBranch((d) => (on ? new Set(d).add(r.key) : (d.delete(r.key), new Set(d))))}
@@ -271,6 +276,7 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, set, deleteBranc
   const meta = [
     r.kind === "worktree" ? `${r.sessions} ${r.sessions === 1 ? "session" : "sessions"}` : undefined,
     act ? timeAgo(act, now) : undefined,
+    r.kind === "worktree" && r.status?.ignored ? `${r.status.ignored} ignored ${r.status.ignored === 1 ? "file" : "files"} will be deleted` : undefined,
     r.kind === "worker" ? r.state : r.outsideRoots ? "outside roots" : r.locked ? "locked" : r.status ? (r.status.safety === "has_work" ? "has work" : "clean") : undefined,
   ].filter(Boolean);
   const wt = r.kind === "worker" && r.worktree ? rows.find((x) => x.kind === "worktree" && x.path === r.worktree) : undefined;

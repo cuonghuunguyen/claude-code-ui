@@ -15,7 +15,7 @@ globalThis.ResizeObserver ??= class {
 
 const NOW = Date.now();
 const item = (id: string, cwd: string, o: Partial<SessionListItem> = {}): SessionListItem => ({ id, cwd, title: id, lastActivity: NOW, archived: false, transcript: true, state: "idle", ...o }) as SessionListItem;
-const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
+const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
 const M = "/r";
 const P = (n: string) => `/r/.claude/worktrees/${n}`;
 const worktrees: Record<string, Worktree[]> = {
@@ -31,7 +31,7 @@ const STATUS: Record<string, WorktreeStatusResult> = {
   [P("safe")]: st(),
   [P("work")]: st({ safety: "has_work", uncommitted: 2, ahead: 1 }),
   [P("busy")]: st({ safety: "blocked", blocked: "sessions_running", running: 1 }),
-  "/x/ext": st({ branchMerged: true }),
+  "/x/ext": st({ branchMerged: true, ignored: 3 }),
 };
 const list = [
   item("co", M, { coordinator: true }),
@@ -138,8 +138,8 @@ it("Also delete branch shows only for a merged kept branch and sends deleteBranc
   await click(confirm());
   await act(async () => {});
   expect(sent.filter((m) => m.type === "worktree.remove")).toEqual([
-    { type: "worktree.remove", cwd: M, path: P("safe"), expectSafe: true, deleteBranch: false },
-    { type: "worktree.remove", cwd: M, path: "/x/ext", expectSafe: true, deleteBranch: true },
+    { type: "worktree.remove", cwd: M, path: P("safe"), expectSafe: true, expect: { uncommitted: 0, ahead: 0, ignored: 0 }, deleteBranch: false },
+    { type: "worktree.remove", cwd: M, path: "/x/ext", expectSafe: true, expect: { uncommitted: 0, ahead: 0, ignored: 3 }, deleteBranch: true },
   ]);
 });
 
@@ -229,4 +229,28 @@ it("Esc during a run does not close; the summary stays until Close", async () =>
   expect(q("[data-testid=cleanup-summary]")).not.toBeNull();
   await esc();
   expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it("a Safe row with ignored files says how many ignored files will be deleted", async () => {
+  await open();
+  expect(row("wt:/x/ext").textContent).toContain("3 ignored files will be deleted");
+  expect(row(`wt:${P("safe")}`).textContent).not.toContain("ignored");
+});
+
+it("'Also remove its worktree' ticked while a filter hides that worktree: not removed, the summary says so", async () => {
+  const w = { ...list.find((s) => s.id === "w-wt")!, lastActivity: NOW - 40 * 86_400_000 };
+  // The worktree row has a fresh session (activity now), so Older than hides it; the worker is old.
+  const fresh = item("p", P("safe"), { lastActivity: NOW });
+  const { sent } = await open({ scope: { kind: "coordinator", id: "co", title: "Boss" }, list: [list[0]!, w, fresh] });
+  const sel = q<HTMLSelectElement>("[data-testid=cleanup-older]");
+  await act(async () => {
+    sel.value = "7";
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(row(`wt:${P("safe")}`) ?? null).toBeNull();
+  await click(confirm());
+  await act(async () => {});
+  expect(sent.filter((m) => m.type === "worktree.remove")).toEqual([]);
+  expect(sent.filter((m) => m.type === "worker.remove")).toHaveLength(1);
+  expect(q("[data-testid=cleanup-summary]").textContent).toContain("hidden by the filter");
 });
