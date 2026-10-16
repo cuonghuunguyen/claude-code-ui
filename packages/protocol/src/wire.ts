@@ -165,6 +165,14 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number }
   /** Overwrites an existing file. Fails with `conflict` when `baseMtime` is given and the disk version differs. */
   | { type: "fs.write"; path: string; content: string; baseMtime?: number }
+  /** New empty file, or folder with `dir` (one level: the parent must exist). Fails `exists`, `bad_name`, `path_not_allowed`. Reply FsPathResult. */
+  | { type: "fs.create"; path: string; dir?: boolean }
+  /** New name in the same folder (`name`: one path segment). A link is renamed, never followed. Fails `exists`, `bad_name`, `not_found`, `root_protected`, `in_use`. Reply FsPathResult. */
+  | { type: "fs.rename"; path: string; name: string }
+  /** Deletes for good (no trash): a file, a link (never its target) or a folder with everything in it. `dryRun`: only counts. Fails `not_found`, `root_protected`, `in_use`. Reply FsDeleteResult. */
+  | { type: "fs.delete"; path: string; dryRun?: boolean }
+  /** Copy of a file next to it, named "<name> copy<.ext>", "<name> copy 2<.ext>", ... Files only (`not_a_file`), at most 512 MiB (`too_large`). Reply FsPathResult. */
+  | { type: "fs.duplicate"; path: string }
   /** Replaces this connection's watched files; each change on disk sends `fs.changed`. */
   | { type: "fs.watch"; paths: string[] }
   /** Starts the user's shell in a PTY in `cwd` (inside the roots). It runs until closed or its shell exits, across reconnects. */
@@ -478,6 +486,10 @@ export type FsMediaResult = { url: string; mime: string; size: number; mtime: nu
 /** `data`: base64 of the bytes at the offset (shorter at the end of the file); `size` of the whole file; `mtime` 0 for a file at a commit. */
 export type MediaReadResult = { data: string; size: number; mtime: number; mime: string };
 export type FsWriteResult = { mtime: number };
+/** The path an fs.create / fs.rename / fs.duplicate made (parent as fs.list gives it, plus the name). */
+export type FsPathResult = { path: string };
+/** Entries below the folder (none for a file or link); `more`: the count stopped at 10 000 entries or 2 s. */
+export type FsDeleteResult = { files: number; folders: number; more?: boolean };
 /** `title`: "Terminal N", the smallest N free in its cwd. */
 export type TerminalInfo = { id: string; title: string };
 export type TerminalCreateResult = { terminal: TerminalInfo };

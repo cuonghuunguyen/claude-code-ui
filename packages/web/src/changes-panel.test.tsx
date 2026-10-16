@@ -938,3 +938,23 @@ it("the popup button shows only with onPopOut and calls it", async () => {
   await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=changes-popout]")!.click(), undefined));
   expect(onPopOut).toHaveBeenCalledOnce();
 });
+
+it("GH-360 reveal switches to Uncommitted and selects the file (narrow: opens it); a repeated seq selects again", async () => {
+  saveDiffMode("session");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }, { status: "M", path: "src/b.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "a\n", [`${BASE}:src/b.ts`]: "b\n" } };
+  const client = fakeClient({ "/p/a.ts": "a\nx\n", "/p/src/b.ts": "b\ny\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(gitCalls(client, "git.diff")).toHaveLength(0);
+  await act(async () => root.render(panel(client, { reveal: { path: "/p/src/b.ts", seq: 1 } })));
+  await flush();
+  expect(gitCalls(client, "git.diff")[0]).toMatchObject({ base: "head" });
+  expect(mode().textContent).toContain("Uncommitted");
+  const current = () => el.querySelector("[data-testid=changed-file][aria-current=true]")?.getAttribute("data-path");
+  expect(current()).toBe("/p/src/b.ts");
+  await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=changed-file][data-path='/p/a.ts']")!.click(), undefined));
+  expect(current()).toBe("/p/a.ts");
+  await act(async () => root.render(panel(client, { reveal: { path: "/p/src/b.ts", seq: 2 } })));
+  await flush();
+  expect(current()).toBe("/p/src/b.ts");
+});

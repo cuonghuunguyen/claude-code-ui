@@ -175,6 +175,7 @@ export function ChangesPanel({
   sessionId,
   initialChoice,
   onPopOut,
+  reveal,
 }: {
   client: Client;
   view: SessionView;
@@ -188,6 +189,8 @@ export function ChangesPanel({
   initialChoice?: { mode: DiffMode; ref?: string };
   /** Shows the "Open in popup" button. */
   onPopOut?: () => void;
+  /** File tree "Show changes": switches to Uncommitted (the tree's git marks) and selects the file; a new `seq` repeats it. */
+  reveal?: { path: string; seq: number };
 }) {
   const fresh = useMemo(() => sessionChanges(view), [view.parts, view.aux]);
   // Same calls and results per path: the previous list, so streamed text does not re-parse every diff.
@@ -309,6 +312,25 @@ export function ChangesPanel({
   const shown = narrow ? [...matched].sort((a, b) => relPath(a.path, cwd).localeCompare(relPath(b.path, cwd))) : treeOrder(tree);
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // Show changes (file tree menu): Uncommitted mode, no filter hiding the file, its folders open, the file selected and scrolled to.
+  const scrollTo = useRef<string>(undefined);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!reveal) return;
+    if (git !== false) pick("uncommitted");
+    setFilter("");
+    setClosed((c) => Object.fromEntries(Object.entries(c).filter(([dir]) => !(reveal.path.startsWith(dir) && /[\\/]/.test(reveal.path[dir.length] ?? "")))));
+    setSelected(reveal.path);
+    setExpanded((e) => ({ ...e, [reveal.path]: true }));
+    scrollTo.current = reveal.path;
+  }, [reveal?.seq]);
+  useEffect(() => {
+    const p = scrollTo.current;
+    const el = p && [...(panelRef.current?.querySelectorAll<HTMLElement>("[data-path]") ?? [])].find((x) => x.dataset.path === p);
+    if (!el) return;
+    scrollTo.current = undefined;
+    el.scrollIntoView?.({ block: "nearest" });
+  });
   const allExpanded = shown.length > 0 && shown.every((r) => expanded[r.path]);
   const active = shown.find((r) => r.path === selected) ?? shown[0];
   const index = active ? shown.indexOf(active) : -1;
@@ -410,6 +432,7 @@ export function ChangesPanel({
             aria-label={label(r)}
             onClick={() => setSelected(r.path)}
             data-testid="changed-file"
+            data-path={r.path}
           >
             <FileIcon path={r.path} className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{filePath(r.path, cwd).name}</span>
@@ -524,7 +547,7 @@ export function ChangesPanel({
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" hidden={hidden} data-testid="changes-panel">
+    <div ref={panelRef} className="flex min-h-0 flex-1 flex-col" hidden={hidden} data-testid="changes-panel">
       {narrow ? (
         <div className="shrink-0 border-b">
           <div className="flex h-14 items-center gap-2 px-3">
@@ -623,6 +646,7 @@ export function ChangesPanel({
                     aria-label={label(r)}
                     onClick={() => setExpanded((x) => ({ ...x, [path]: !x[path] }))}
                     data-testid="changed-file"
+                    data-path={path}
                   >
                     <FileIcon path={path} className="size-4 shrink-0" />
                     <span className="min-w-0 flex-1 truncate">

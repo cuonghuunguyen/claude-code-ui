@@ -402,6 +402,18 @@ describe("cwd claims (GH-320)", () => {
     expect(frames(a, "fs.write")).toHaveLength(0);
   });
 
+  it("GH-360: file operations go to the side that owns the path; a host path stays local", async () => {
+    const a = fakeSide(list({ projects: ["/ct"] }));
+    const t = await setup(a, undefined, undefined, own);
+    await t.req({ type: "session.list" });
+    for (const m of [{ type: "fs.create", path: "/ct/x" }, { type: "fs.rename", path: "/ct/x", name: "y" }, { type: "fs.delete", path: "/ct/x" }, { type: "fs.duplicate", path: "/ct/x" }])
+      await t.req(m);
+    for (const type of ["fs.create", "fs.rename", "fs.delete", "fs.duplicate"]) expect(frames(a, type)).toHaveLength(1);
+    await t.req({ type: "fs.delete", path: "/host/sub/f" });
+    expect(t.localSeen.filter((m) => m.type === "fs.delete")).toHaveLength(1);
+    expect(frames(a, "fs.delete")).toHaveLength(1);
+  });
+
   it("a cwd in a reply counts only for project.open sent to that side or the side's own session", async () => {
     const a = fakeSide((m) => (m.type === "fs.list" ? { cwd: "/ct2" } : m.type === "session.open" ? { session: { cwd: "/ct3" } } : m.type === "project.open" ? { cwd: "/ct4" } : null));
     const t = await setup(a, undefined, undefined, own);

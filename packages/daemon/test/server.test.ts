@@ -1258,6 +1258,169 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.write", path: join(webRoot, "proj"), content: "x" })).toMatchObject({ code: "not_a_file" });
   });
 
+  describe("file tree operations (GH-360)", () => {
+    const base = join(webRoot, "ops");
+    mkdirSync(base, { recursive: true });
+    let k = 0;
+    const fresh = () => {
+      const d = join(base, `c${k++}`);
+      mkdirSync(d);
+      return realpathSync(d);
+    };
+    const outsideDir = () => {
+      const o = mkdtempSync(join(tmpdir(), "ops-outside-"));
+      writeFileSync(join(o, "secret.txt"), "outside secret");
+      return o;
+    };
+
+    it("GH-360: creates a file and a folder inside the roots, refuses an existing name", async () => {
+      const d = fresh();
+      const c = await client();
+      expect(await c.request({ type: "fs.create", path: join(d, "a.txt") })).toMatchObject({ result: { path: join(d, "a.txt") } });
+      expect(await c.request({ type: "fs.create", path: join(d, "sub"), dir: true })).toMatchObject({ result: { path: join(d, "sub") } });
+      expect(statSync(join(d, "a.txt")).size).toBe(0);
+      expect(statSync(join(d, "sub")).isDirectory()).toBe(true);
+      expect(await c.request({ type: "fs.create", path: join(d, "a.txt") })).toMatchObject({ code: "exists" });
+    });
+
+    it("GH-360: refuses a parent outside the roots and a bad name", async () => {
+      const d = fresh();
+      const o = outsideDir();
+      const c = await client();
+      for (const type of ["fs.create", "fs.delete", "fs.duplicate"] as const) {
+        expect(await c.request({ type, path: join(o, "secret.txt") }), type).toMatchObject({ code: "path_not_allowed" });
+      }
+      expect(await c.request({ type: "fs.rename", path: join(o, "secret.txt"), name: "x" })).toMatchObject({ code: "path_not_allowed" });
+      expect(readFileSync(join(o, "secret.txt"), "utf8")).toBe("outside secret");
+      expect(existsSync(join(o, "x"))).toBe(false);
+      expect(await c.request({ type: "fs.create", path: `${d}${sep}..` })).toMatchObject({ code: "bad_name" });
+      writeFileSync(join(d, "f"), "");
+      for (const name of ["a/b", "..", ".", "", "a\\b"]) expect(await c.request({ type: "fs.rename", path: join(d, "f"), name }), name).toMatchObject({ code: "bad_name" });
+      expect(await c.request({ type: "fs.rename", path: join(d, "f") })).toMatchObject({ code: "bad_name" });
+      expect(existsSync(join(d, "f"))).toBe(true);
+    });
+
+    it.runIf(posix)("GH-360: a dangling link to the outside counts as existing; nothing is created outside", async () => {
+      const d = fresh();
+      const o = outsideDir();
+      symlinkSync(join(o, "new.txt"), join(d, "ln"));
+      const c = await client();
+      expect(await c.request({ type: "fs.create", path: join(d, "ln") })).toMatchObject({ code: "exists" });
+      expect(existsSync(join(o, "new.txt"))).toBe(false);
+    });
+
+    it("GH-360: renames inside a folder; an existing name is refused and both stay", async () => {
+      const d = fresh();
+      writeFileSync(join(d, "a.txt"), "a");
+      writeFileSync(join(d, "b.txt"), "b");
+      const c = await client();
+      expect(await c.request({ type: "fs.rename", path: join(d, "a.txt"), name: "b.txt" })).toMatchObject({ code: "exists" });
+      expect(readFileSync(join(d, "a.txt"), "utf8") + readFileSync(join(d, "b.txt"), "utf8")).toBe("ab");
+      expect(await c.request({ type: "fs.rename", path: join(d, "a.txt"), name: "A.txt" })).toMatchObject({ result: { path: join(d, "A.txt") } });
+      expect(readdirSync(d).sort()).toEqual(["A.txt", "b.txt"]);
+      expect(await c.request({ type: "fs.rename", path: join(d, "gone.txt"), name: "z" })).toMatchObject({ code: "not_found" });
+    });
+
+    it("GH-360: a root cannot be renamed or deleted; a folder holding a live session cwd is in use", async () => {
+      const d = fresh();
+      mkdirSync(join(d, "work/deep"), { recursive: true });
+      const c = await client();
+      expect(await c.request({ type: "fs.rename", path: webRoot, name: "x" })).toMatchObject({ code: "root_protected" });
+      expect(await c.request({ type: "fs.delete", path: webRoot })).toMatchObject({ code: "root_protected" });
+      expect(await c.request({ type: "fs.delete", path: realpathSync(webRoot) })).toMatchObject({ code: "root_protected" });
+      const created = await c.request({ type: "session.create", cwd: join(d, "work/deep") });
+      expect(created).toMatchObject({ type: "reply" });
+      expect(await c.request({ type: "fs.delete", path: join(d, "work") })).toMatchObject({ code: "in_use" });
+      expect(await c.request({ type: "fs.rename", path: join(d, "work"), name: "w2" })).toMatchObject({ code: "in_use" });
+      expect(await c.request({ type: "fs.delete", path: join(d, "work"), dryRun: true })).toMatchObject({ code: "in_use" });
+      expect(existsSync(join(d, "work/deep"))).toBe(true);
+    });
+
+    it.runIf(posix)("GH-360: a folder holding a running terminal's cwd cannot be deleted or renamed", async () => {
+      const d = fresh();
+      mkdirSync(join(d, "tw"));
+      const c = await client();
+      expect(await c.request({ type: "terminal.create", cwd: join(d, "tw"), cols: 80, rows: 24 })).toMatchObject({ type: "reply" });
+      for (const m of [{ type: "fs.delete", path: join(d, "tw") }, { type: "fs.rename", path: join(d, "tw"), name: "tw2" }])
+        expect(await c.request(m), m.type).toMatchObject({ code: "in_use" });
+      expect(existsSync(join(d, "tw"))).toBe(true);
+    });
+
+    it.runIf(posix)("GH-360: deleting a link, or a folder holding a link, leaves the outside folder intact", async () => {
+      const d = fresh();
+      const o = outsideDir();
+      symlinkSync(o, join(d, "ln"));
+      mkdirSync(join(d, "sub"));
+      symlinkSync(o, join(d, "sub/ln2"));
+      const c = await client();
+      expect(await c.request({ type: "fs.delete", path: join(d, "ln") })).toMatchObject({ result: { files: 0, folders: 0 } });
+      expect(existsSync(join(d, "ln"))).toBe(false);
+      expect(await c.request({ type: "fs.delete", path: join(d, "sub") })).toMatchObject({ result: { files: 1, folders: 0 } });
+      expect(existsSync(join(d, "sub"))).toBe(false);
+      expect(readFileSync(join(o, "secret.txt"), "utf8")).toBe("outside secret");
+    });
+
+    it("GH-360: dryRun counts and removes nothing; the real delete returns the same count", async () => {
+      const d = fresh();
+      mkdirSync(join(d, "t/a"), { recursive: true });
+      writeFileSync(join(d, "t/f1"), "");
+      writeFileSync(join(d, "t/a/f2"), "");
+      const c = await client();
+      expect(await c.request({ type: "fs.delete", path: join(d, "t"), dryRun: true })).toMatchObject({ result: { files: 2, folders: 1 } });
+      expect(existsSync(join(d, "t/a/f2"))).toBe(true);
+      expect(await c.request({ type: "fs.delete", path: join(d, "t") })).toMatchObject({ result: { files: 2, folders: 1 } });
+      expect(existsSync(join(d, "t"))).toBe(false);
+      expect(await c.request({ type: "fs.delete", path: join(d, "t") })).toMatchObject({ code: "not_found" });
+    });
+
+    it("GH-360: duplicates a file as 'x copy.txt', then 'x copy 2.txt'; a folder is refused", async () => {
+      const d = fresh();
+      writeFileSync(join(d, "x.txt"), "content");
+      mkdirSync(join(d, "dir"));
+      const c = await client();
+      expect(await c.request({ type: "fs.duplicate", path: join(d, "x.txt") })).toMatchObject({ result: { path: join(d, "x copy.txt") } });
+      expect(await c.request({ type: "fs.duplicate", path: join(d, "x.txt") })).toMatchObject({ result: { path: join(d, "x copy 2.txt") } });
+      expect(readFileSync(join(d, "x copy 2.txt"), "utf8")).toBe("content");
+      expect(await c.request({ type: "fs.duplicate", path: join(d, "dir") })).toMatchObject({ code: "not_a_file" });
+    });
+
+    it.runIf(posix)("GH-360: duplicating a link to a file outside the roots is refused", async () => {
+      const d = fresh();
+      const o = outsideDir();
+      symlinkSync(join(o, "secret.txt"), join(d, "ln"));
+      const c = await client();
+      const reply = await c.request({ type: "fs.duplicate", path: join(d, "ln") });
+      expect(reply).toMatchObject({ code: "not_a_file" });
+      expect(readdirSync(d)).toEqual(["ln"]);
+    });
+
+    it("GH-360: refuses a UNC path on Windows with no file system call", async () => {
+      const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
+      const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
+      const native = vi.spyOn(fs.realpathSync, "native");
+      const exists = vi.spyOn(fs, "existsSync");
+      syncBuiltinESMExports();
+      const c = await client();
+      Object.defineProperty(process, "platform", { value: "win32" });
+      try {
+        for (const type of ["fs.create", "fs.rename", "fs.delete", "fs.duplicate"]) {
+          for (const path of ["\\\\evil\\s\\x", "//evil/s/x", "\\\\.host\\s\\x"]) {
+            native.mockClear();
+            exists.mockClear();
+            expect(await c.request({ type, path, name: "y" }), `${type} ${path}`).toMatchObject({ type: "error" });
+            expect(native, `${type} ${path}`).not.toHaveBeenCalled();
+            expect(exists, `${type} ${path}`).not.toHaveBeenCalled();
+          }
+        }
+      } finally {
+        Object.defineProperty(process, "platform", orig);
+        native.mockRestore();
+        exists.mockRestore();
+        syncBuiltinESMExports();
+      }
+    });
+  });
+
   it.skipIf(!posix)("fs.read and fs.write refuse a folder swapped for a symlink between the root check and the open (GH-282)", async () => {
     const outsideDir = mkdtempSync(join(tmpdir(), "outside-"));
     const outside = join(outsideDir, "f.txt");

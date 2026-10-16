@@ -21,7 +21,7 @@ import { MediaView } from "./media-view.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { FILE_LINK_PROPS, FileBaseContext, FileImageContext, FileLinkContext } from "./file-links.tsx";
 import { FileTree, type FileTreeHandle, type OpenOptions } from "./file-tree.tsx";
-import { diskChanged, docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, opened, openedMedia, pin, placeTab, reload, readFailure, replaceDoc, saveBase, saved, saveMdView, selectionMention, type MdView, type Tab } from "./files.ts";
+import { diskChanged, docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, opened, openedMedia, pin, placeTab, reload, readFailure, dropTabs, fileMention, movedPath, moveTabs, replaceDoc, saveBase, saved, saveMdView, selectionMention, type MdView, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -36,6 +36,9 @@ export function FilesPanel({
   status,
   cwd,
   onSend,
+  onCopy,
+  onViewer,
+  onShowChanges,
   openPath,
   openLine,
   onOpened,
@@ -49,6 +52,12 @@ export function FilesPanel({
   status: ConnectionStatus;
   cwd: string;
   onSend: (mention: string) => void;
+  /** File tree menu: Copy path / Copy relative path. */
+  onCopy?: (text: string, what: string) => void;
+  /** File tree menu: Open in popup viewer. */
+  onViewer?: (path: string) => void;
+  /** File tree menu: Show changes. */
+  onShowChanges?: (path: string) => void;
   openPath?: string;
   /** With `openPath`: the line to put the cursor on. */
   openLine?: number;
@@ -281,7 +290,7 @@ export function FilesPanel({
       </div>
       {showTree && (
         <nav
-          className={`overflow-auto py-1 font-mono text-xs ${empty ? "min-h-0 flex-1" : "max-h-[40%] shrink-0 border-b"}`}
+          className={`flex flex-col overflow-auto py-1 font-mono text-xs ${empty ? "min-h-0 flex-1" : "max-h-[40%] shrink-0 border-b"}`}
           id="file-tree"
           data-testid="file-tree"
           aria-label="File tree"
@@ -297,6 +306,15 @@ export function FilesPanel({
             gitNudge={gitNudge}
             handleRef={tree}
             onFilter={setFiltering}
+            onCopy={onCopy}
+            onViewer={onViewer}
+            onShowChanges={onShowChanges}
+            onMention={(p) => onSend(fileMention(p, cwd))}
+            onReload={() => setTreeKey((k) => k + 1)}
+            onChanged={() => setGitNudge((n) => n + 1)}
+            onMoved={(from, to) => (setTabs((ts) => moveTabs(ts, from, to)), setActivePath((p) => p && movedPath(p, from, to)), setGoto((g) => g && { ...g, path: movedPath(g.path, from, to) }))}
+            onDeleted={(path) => setTabs((ts) => dropTabs(ts, path))}
+            dirtyUnder={(path) => Object.values(tabsRef.current).filter((t) => isDirty(t) && inDir(t.path, path)).length}
             onOpen={(path, o) => void open(path, { preview: !o.pinned, focusEditor: o.focusEditor })}
           />
         </nav>

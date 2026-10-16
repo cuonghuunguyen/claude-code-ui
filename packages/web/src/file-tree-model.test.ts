@@ -1,11 +1,11 @@
 import { expect, it } from "vitest";
 import type { FsEntry } from "@claude-ui/protocol";
 import type { GitRow } from "./git-changes.ts";
-import { ancestors, gitMarks, moveFocus, pathKey, searchRows, sortEntries, typeAhead, visibleRows, type Row } from "./file-tree-model.ts";
+import { ancestors, dropPaths, gitMarks, movePaths, moveFocus, pathKey, searchRows, sortEntries, typeAhead, visibleRows, type Row } from "./file-tree-model.ts";
 
 const d = (path: string): FsEntry => ({ name: path.split("/").at(-1)!, path, isDir: true });
 const f = (path: string): FsEntry => ({ name: path.split("/").at(-1)!, path, isDir: false });
-const names = (rows: Row[]) => rows.map((r) => (r.kind === "entry" ? r.entry.name : `[${r.text}]`));
+const names = (rows: Row[]) => rows.map((r) => (r.kind === "entry" ? r.entry.name : r.kind === "input" ? "[input]" : `[${r.text}]`));
 
 it("visibleRows: dirs first, .git dropped, an expanded dir lists its children one level deeper, unlisted shows …, a failed one its error", () => {
   const dirs = {
@@ -90,4 +90,44 @@ it("gitMarks: M/R/A, untracked as U and D per file; a folder takes D over M over
   const win = gitMarks([row("c:\\P\\src\\a.ts", "M")], "C:\\p");
   expect(win.files.get(pathKey("C:\\p\\src\\a.ts"))).toBe("M");
   expect(win.dirs.get(pathKey("C:\\p\\SRC"))).toBe("M");
+});
+
+const model = () => ({
+  dirs: { "/p": sortEntries([d("/p/src"), d("/p/src2"), f("/p/a.ts")]), "/p/src": sortEntries([d("/p/src/lib"), f("/p/src/x.ts")]), "/p/src/lib": [f("/p/src/lib/u.ts")] },
+  expanded: new Set(["/p/src", "/p/src/lib"]),
+});
+
+it("GH-360 visibleRows puts the new-name input first in the root, in a nested folder, and marks the renamed row", () => {
+  const m = model();
+  expect(names(visibleRows(m, "/p", { kind: "new", dir: "/p", isDir: false }))).toEqual(["[input]", "src", "lib", "u.ts", "x.ts", "src2", "a.ts"]);
+  const nested = visibleRows(m, "/p", { kind: "new", dir: "/p/src", isDir: true });
+  expect(names(nested)).toEqual(["src", "[input]", "lib", "u.ts", "x.ts", "src2", "a.ts"]);
+  expect(nested[1]).toMatchObject({ kind: "input", depth: 1, parent: "/p/src" });
+  const renaming = visibleRows(m, "/p", { kind: "rename", path: "/p/a.ts" });
+  expect(renaming.filter((r) => r.kind === "entry" && r.renaming).map((r) => r.kind === "entry" && r.entry.name)).toEqual(["a.ts"]);
+});
+
+it("GH-360 arrow keys and type-ahead skip the input row", () => {
+  const rows = visibleRows(model(), "/p", { kind: "new", dir: "/p/src", isDir: false });
+  const src = rows.findIndex((r) => r.kind === "entry" && r.entry.name === "src");
+  expect(moveFocus(rows, src, "ArrowDown")).toEqual({ index: src + 2 });
+  expect(moveFocus(rows, src, "ArrowRight")).toEqual({});
+  expect(typeAhead(rows, 0, "[")).toBe(-1);
+});
+
+it("GH-360 movePaths moves open folders and listings below the renamed folder, not a sibling with the same prefix", () => {
+  const m = movePaths(model(), "/p/src", "/p/code");
+  expect([...m.expanded].sort()).toEqual(["/p/code", "/p/code/lib"]);
+  expect(Object.keys(m.dirs).sort()).toEqual(["/p", "/p/code", "/p/code/lib"]);
+  expect((m.dirs["/p/code"] as FsEntry[]).map((e) => e.path)).toEqual(["/p/code/lib", "/p/code/x.ts"]);
+  const sib = movePaths({ dirs: { "/p/src2": [f("/p/src2/y")] }, expanded: new Set(["/p/src2"]) }, "/p/src", "/p/z");
+  expect(Object.keys(sib.dirs)).toEqual(["/p/src2"]);
+});
+
+it("GH-360 dropPaths removes the path and below it (prefix with a separator)", () => {
+  const m = dropPaths(model(), "/p/src");
+  expect(Object.keys(m.dirs)).toEqual(["/p"]);
+  expect([...m.expanded]).toEqual([]);
+  const keep = dropPaths({ dirs: { "/p/src2": [] }, expanded: new Set(["/p/src2"]) }, "/p/src");
+  expect([...keep.expanded]).toEqual(["/p/src2"]);
 });
