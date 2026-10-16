@@ -2305,3 +2305,372 @@ describe("GH-358 sidebar menus", () => {
     expect(input()).toBeNull();
   });
 });
+
+describe("GH-356 split view", () => {
+  const S2 = "22222222-2222-3333-4444-555555555555";
+  const S3 = "33333333-2222-3333-4444-555555555555";
+  const sessions = [session, { ...session, id: S2, title: "Second", cwd: "/p/other" }, { ...session, id: S3, title: "Third" }];
+  const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetParent")!;
+  const splits = () => [...el.querySelectorAll<HTMLElement>('[data-testid="split"]')];
+  const activeSplit = () => el.querySelector<HTMLElement>('[data-testid="split"][data-active]');
+  const labels = () => splits().sort((a, b) => +a.style.order - +b.style.order).map((s) => s.getAttribute("aria-label"));
+  const menu = async (id: string) => {
+    await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    return (label: string) => act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === label)!.click());
+  };
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
+  async function remount(hash = S2, tabs = [ID, S2, S3]) {
+    act(() => root.unmount());
+    replies["session.list"] = { sessions, projects: ["/p/demo", "/p/other"] };
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e1", session: sessions.find((s) => s.id === m.sessionId) ?? session });
+    localStorage.setItem("claude-ui.tabs", JSON.stringify(tabs));
+    location.hash = `#${hash}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+  }
+  const splitRight = async (id = S2) => (await menu(id))("Split right");
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get(this: HTMLElement) { return this.closest('[style*="display: none"]') ? null : document.body; } });
+  });
+  afterEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", offsetParent);
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    replies["session.subscribe"] = { logEpoch: "e1", session };
+    sent.length = 0;
+  });
+
+  it("Split right from the tab menu shows both sessions side by side, focuses the new split's prompt and puts it in the hash", async () => {
+    await remount(ID);
+    expect(splits()).toHaveLength(0);
+    await splitRight(S2);
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Second, split 2 of 2, active"]);
+    expect(el.querySelector('[data-testid="session-area"]')!.getAttribute("data-split")).toBe("row");
+    expect(activeSplit()).toBe(splits()[1]);
+    expect(location.hash).toBe(`#${S2}`);
+    await vi.waitFor(() => expect(document.activeElement).toBe(activeSplit()!.querySelector('textarea[aria-label="Prompt"]')));
+    expect(splits().map((s) => s.style.order)).toEqual(["0", "2"]);
+  });
+
+  it("the tab shown in the other split is marked with an icon and text, not by color", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    const mark = el.querySelector(`[data-tab-id="${ID}"] [data-testid="tab-split-mark"]`);
+    expect(mark).not.toBeNull();
+    expect(el.querySelector(`[data-tab-id="${ID}"] [role="tab"]`)!.getAttribute("aria-label")).toContain("shown in split 1");
+    expect(el.querySelector(`[data-tab-id="${S2}"] [data-testid="tab-split-mark"]`)).toBeNull();
+  });
+
+  it("Split down stacks the sessions with a horizontal resizer", async () => {
+    await remount(ID);
+    await (await menu(S2))("Split down");
+    expect(el.querySelector('[data-testid="session-area"]')!.className).toContain("flex-col");
+    expect(el.querySelector('[data-testid="split-resizer"]')!.getAttribute("aria-orientation")).toBe("horizontal");
+  });
+
+  it("clicking the other split makes it active: hash, side panel and tab follow", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await act(async () => void splits()[0]!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    expect(activeSplit()).toBe(splits()[0]);
+    expect(location.hash).toBe(`#${ID}`);
+    expect(el.querySelector(`[data-tab-id="${ID}"]`)!.getAttribute("data-active")).not.toBeNull();
+    expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
+  });
+
+  it("Esc stops only the active split's turn", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    for (const [i, id] of [ID, S2].entries()) await act(async () => emit({ type: "event", sessionId: id, seq: 1 + i, part: { type: "session_state", id: "session_state", state: "running" } }));
+    sent.length = 0;
+    await press({ key: "Escape" });
+    const stops = sent.filter((m) => m.type === "session.interrupt") as unknown as { sessionId: string }[];
+    expect(stops.map((m) => m.sessionId)).toEqual([S2]);
+  });
+
+  it("Focus next split (Ctrl+Alt+ArrowUp) and the prefix key o move the focus between the splits' prompts", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    const focusIn = (i: number) => vi.waitFor(() => expect(document.activeElement).toBe(splits()[i]!.querySelector('textarea[aria-label="Prompt"]')));
+    await press({ key: "ArrowUp", code: "ArrowUp", ctrlKey: true, altKey: true });
+    await focusIn(0);
+    expect(activeSplit()).toBe(splits()[0]);
+    await press({ key: "a", code: "KeyA", altKey: true });
+    await press({ key: "o", code: "KeyO" });
+    await focusIn(1);
+    expect(activeSplit()).toBe(splits()[1]);
+  });
+
+  it("closing the other split's tab ends the split; closing the active split's tab shows the next tab outside the splits", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] button[aria-label^="Close"]`)!.click());
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${S2}`);
+    await splitRight(S2);
+    expect(splits()).toHaveLength(2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] button[aria-label^="Close"]`)!.click());
+    expect(splits()).toHaveLength(0);
+    expect(tabIds()).toEqual([S3]);
+    expect(location.hash).toBe(`#${S3}`);
+  });
+
+  it("closing the active split's tab with no tab outside the splits leaves the other split's tab", async () => {
+    await remount(ID, [ID, S2]);
+    await splitRight(S2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] button[aria-label^="Close"]`)!.click());
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${ID}`);
+  });
+
+  it("the split survives a remount", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Second, split 2 of 2, active"]);
+  });
+
+  it("narrow screens show one session; the split comes back on a wide screen", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    width = 800;
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    expect(splits()).toHaveLength(0);
+    expect(el.querySelector(`[data-tab-id="${S2}"]`)).not.toBeNull();
+    expect(localStorage.getItem("claude-ui.split")).not.toBeNull();
+    await act(async () => void el.querySelector(`[data-tab-id="${ID}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 })));
+    expect([...document.querySelectorAll('[role="menuitem"]')].some((i) => i.textContent === "Split right")).toBe(false);
+  });
+
+  it("the resizer: arrow keys change the ratio, Home and End stop at the limits, Enter resets, and it persists", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    const bar = () => el.querySelector<HTMLElement>('[data-testid="split-resizer"]')!;
+    expect(bar().getAttribute("aria-valuenow")).toBe("50");
+    expect(splits()[0]!.style.flex).toBe("0.5 1 0%");
+    // 1000px area, 8px gap: each split keeps 320px.
+    bar().parentElement!.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 600, right: 1000, bottom: 600, x: 0, y: 0, toJSON() {} });
+    await press({ key: "Home" }, bar());
+    expect(bar().getAttribute("aria-valuenow")).toBe("32");
+    await press({ key: "End" }, bar());
+    expect(bar().getAttribute("aria-valuenow")).toBe("68");
+    expect(JSON.parse(localStorage.getItem("claude-ui.split")!).ratio).toBeCloseTo(0.677, 2);
+    await press({ key: "Enter" }, bar());
+    expect(bar().getAttribute("aria-valuenow")).toBe("50");
+  });
+
+  it("the New session tab suspends the split; the next session tab brings it back", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-new"]')!.click());
+    expect(location.hash).toBe("#new");
+    expect(splits()).toHaveLength(0);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
+    expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
+  });
+
+  it("Join splits (palette) shows the active session alone", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Join splits"))!.click());
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${S2}`);
+    expect(localStorage.getItem("claude-ui.split")).toBeNull();
+  });
+
+  it("Split right is disabled with one session tab and the palette does not list it", async () => {
+    await remount(ID, [ID]);
+    await menu(ID);
+    expect(document.querySelector<HTMLElement>('[data-testid="tab-menu-splitRight"]')!.hasAttribute("data-disabled")).toBe(true);
+  });
+
+  // Slice 2: dragging a tab onto the session area.
+  const drag = (area: HTMLElement, type: string, x: number, y: number, id = S3) => {
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(e, { clientX: x, clientY: y, dataTransfer: { types: ["application/x-claude-ui-tab"], getData: () => id, dropEffect: "none" } });
+    return act(async () => void area.dispatchEvent(e));
+  };
+  const area = () => {
+    const a = el.querySelector<HTMLElement>('[data-testid="session-area"]')!;
+    a.getBoundingClientRect = () => ({ left: 0, top: 0, width: 900, height: 600, right: 900, bottom: 600, x: 0, y: 0, toJSON() {} });
+    return a;
+  };
+
+  it("dragging a tab over the right edge shows the overlay on the right half; dropping splits right with that tab; dragleave clears", async () => {
+    await remount(ID);
+    await drag(area(), "dragover", 880, 300);
+    const o = () => el.querySelector<HTMLElement>('[data-testid="split-drop"]');
+    expect(o()?.dataset.zone).toBe("right");
+    expect(o()!.style.left).toBe("450px");
+    expect(o()!.style.width).toBe("450px");
+    await drag(area(), "dragleave", 880, 300);
+    expect(o()).toBeNull();
+    await drag(area(), "dragover", 880, 300);
+    await drag(area(), "drop", 880, 300);
+    expect(o()).toBeNull();
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Third, split 2 of 2, active"]);
+  });
+
+  it("dropping on the left edge puts the tab left; on the bottom edge it stacks", async () => {
+    await remount(ID);
+    await drag(area(), "drop", 10, 300);
+    expect(labels()).toEqual(["Third, split 1 of 2, active", "Demo, split 2 of 2"]);
+    await drag(area(), "drop", 450, 590, S2);
+    expect(el.querySelector('[data-testid="session-area"]')!.getAttribute("data-split")).toBe("col");
+  });
+
+  it("dropping on the middle of a split shows the tab there; with no split it just shows the tab", async () => {
+    await remount(ID);
+    await drag(area(), "drop", 450, 300, S2);
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${S2}`);
+    await splitRight(S2);
+    for (const s of splits()) s.getBoundingClientRect = () => ({ left: s === splits()[0] ? 0 : 450, top: 0, width: 440, height: 600, right: s === splits()[0] ? 440 : 890, bottom: 600, x: 0, y: 0, toJSON() {} });
+    await drag(area(), "dragover", 350, 300);
+    expect(el.querySelector<HTMLElement>('[data-testid="split-drop"]')!.style.width).toBe("440px");
+    await drag(area(), "drop", 350, 300, S3);
+    expect(labels()).toEqual(["Third, split 1 of 2, active", "Second, split 2 of 2"]);
+  });
+
+  it("Remove project returns the focus to the active split's prompt, not the other split's", async () => {
+    await remount(ID, [ID, S3]);
+    replies["session.list"] = { sessions: [session, sessions[2]!], projects: ["/p/other"] };
+    await act(async () => void sessionsChanged({}));
+    await splitRight(S3);
+    // The last project (no next row) has no tab open: the dialog hands the focus to the prompt box.
+    await act(async () => el.querySelector<HTMLElement>('[data-cwd="/p/other"] [data-testid="project-remove"]')!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-confirm"]')!.click());
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(document.activeElement).toBe(activeSplit()!.querySelector('textarea[aria-label="Prompt"]'));
+    expect(activeSplit()!.getAttribute("aria-label")).toContain("Third");
+  });
+
+  it("the resizer's aria-controls names the first split's element", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    const id = el.querySelector('[data-testid="split-resizer"]')!.getAttribute("aria-controls")!;
+    expect(document.getElementById(id)).toBe(splits().find((s) => s.getAttribute("aria-label")!.includes("split 1 of 2")));
+  });
+
+  it("a centre drop overlay matches the target split when the ratio is not 50%, in screen order", async () => {
+    await remount(ID);
+    await splitRight(S2); // ids [ID, S2]
+    await act(async () => void el.querySelector<HTMLElement>('[data-testid="split-resizer"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
+    const r = (left: number, width: number) => () => ({ left, top: 0, width, height: 600, right: left + width, bottom: 600, x: 0, y: 0, toJSON() {} });
+    const [a, b] = [...splits()].sort((x, y) => +x.style.order - +y.style.order);
+    a!.getBoundingClientRect = r(0, 300);
+    b!.getBoundingClientRect = r(308, 592);
+    await drag(area(), "dragover", 500, 300);
+    const o = el.querySelector<HTMLElement>('[data-testid="split-drop"]')!;
+    expect([o.style.left, o.style.width]).toEqual(["308px", "592px"]);
+    await drag(area(), "drop", 500, 300, S3);
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Third, split 2 of 2, active"]);
+  });
+
+  it("a saved ratio that would leave a split under the minimum is clamped when drawn only; the saved ratio returns with the space", async () => {
+    const callbacks: { cb: ResizeObserverCallback; target?: Element }[] = [];
+    const RO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      rec: { cb: ResizeObserverCallback; target?: Element };
+      constructor(cb: ResizeObserverCallback) {
+        this.rec = { cb };
+        callbacks.push(this.rec);
+      }
+      observe(t: Element) {
+        this.rec.target = t;
+      }
+      unobserve() {}
+      disconnect() {}
+    } as never;
+    try {
+      localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, S2], at: 0, ratio: 0.3 }));
+      await remount(ID);
+      const size = (w: number) =>
+        act(async () => callbacks.filter((c) => (c.target as HTMLElement | undefined)?.dataset?.testid === "session-area").forEach((c) => c.cb([{ contentRect: { width: w, height: 800 } } as ResizeObserverEntry], {} as ResizeObserver)));
+      const saved = () => JSON.parse(localStorage.getItem("claude-ui.split")!).ratio as number;
+      const drawn = () => parseFloat(splits().sort((a, b) => +a.style.order - +b.style.order)[0]!.style.flex);
+      await size(3000);
+      expect(drawn()).toBeCloseTo(0.3, 3);
+      await size(1000);
+      expect(drawn()).toBeCloseTo(320 / 992, 3);
+      expect(saved()).toBe(0.3);
+      await size(3000);
+      expect(drawn()).toBeCloseTo(0.3, 3);
+      expect(saved()).toBe(0.3);
+    } finally {
+      globalThis.ResizeObserver = RO;
+    }
+  });
+
+  it("a session area narrower than two minimum splits shows the active split alone; the split returns with the space", async () => {
+    const callbacks: { cb: ResizeObserverCallback; target?: Element }[] = [];
+    const RO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      rec: { cb: ResizeObserverCallback; target?: Element };
+      constructor(cb: ResizeObserverCallback) {
+        this.rec = { cb };
+        callbacks.push(this.rec);
+      }
+      observe(t: Element) {
+        this.rec.target = t;
+      }
+      unobserve() {}
+      disconnect() {}
+    } as never;
+    try {
+      await remount(ID);
+      await splitRight(S2);
+      const size = (w: number, h = 800) =>
+        act(async () => callbacks.filter((c) => (c.target as HTMLElement | undefined)?.dataset?.testid === "session-area").forEach((c) => c.cb([{ contentRect: { width: w, height: h } } as ResizeObserverEntry], {} as ResizeObserver)));
+      await size(1000);
+      expect(splits()).toHaveLength(2);
+      await size(600);
+      expect(splits()).toHaveLength(0);
+      expect(localStorage.getItem("claude-ui.split")).not.toBeNull();
+      expect(el.querySelector('[data-testid="split-hint"]')!.textContent).toContain("Split hidden — widen the window or hide a panel");
+      expect(el.querySelector(`[data-tab-id="${ID}"] [role="tab"]`)!.getAttribute("aria-label")).toBe("Demo (hidden: not enough room)");
+      await size(900);
+      expect(el.querySelector('[data-testid="split-hint"]')).toBeNull();
+      await size(600);
+      await act(async () => [...el.querySelectorAll<HTMLElement>('[data-testid="split-hint"] button')].find((b) => b.textContent === "Close split")!.click());
+      expect(el.querySelector('[data-testid="split-hint"]')).toBeNull();
+      expect(localStorage.getItem("claude-ui.split")).toBeNull();
+      await splitRight(S2);
+      await size(900);
+      expect(labels()).toEqual(["Third, split 1 of 2", "Second, split 2 of 2, active"]);
+    } finally {
+      globalThis.ResizeObserver = RO;
+    }
+  });
+
+  it("a drag that is no tab, or on a narrow screen, shows no overlay", async () => {
+    await remount(ID);
+    const e = new Event("dragover", { bubbles: true, cancelable: true });
+    Object.assign(e, { clientX: 880, clientY: 300, dataTransfer: { types: ["Files"], getData: () => "" } });
+    await act(async () => void area().dispatchEvent(e));
+    expect(el.querySelector('[data-testid="split-drop"]')).toBeNull();
+    width = 800;
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    await drag(area(), "dragover", 880, 300);
+    expect(el.querySelector('[data-testid="split-drop"]')).toBeNull();
+  });
+
+  it("Split right from the palette splits the active tab", async () => {
+    await remount(S2);
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Split right"))!.click());
+    expect(labels()).toHaveLength(2);
+    expect(activeSplit()!.getAttribute("aria-label")).toContain("Second");
+  });
+});
