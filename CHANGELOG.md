@@ -7,6 +7,7 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 ### Added
 
 - Terminal docked at the bottom by default, under the session view and the side panel; Settings > Terminal or the terminal's menu moves it back into the side panel. The bottom terminal resizes, maximizes, and has a titlebar toggle ([#354](https://github.com/cuonghuunguyen/claude-code-ui/issues/354)).
+- Movable panes: Changes, Files, Git graph and Terminal are tabs of the side panel or the bottom panel. Move a pane with its tab's context menu (right click, Shift+F10, long press), the panel's ⋯ menu, or drag and drop; the side panel docks left or right; the layout is kept per browser and "Reset layout" restores the default. A moved pane keeps its state and its tab keeps the focus ([#355](https://github.com/cuonghuunguyen/claude-code-ui/issues/355), [#374](https://github.com/cuonghuunguyen/claude-code-ui/issues/374)).
 
 ### Changed
 
