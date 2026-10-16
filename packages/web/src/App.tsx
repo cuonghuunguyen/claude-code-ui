@@ -88,7 +88,7 @@ import { StatusBar, totals, type Totals } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
-import { closedUnread, isUnread, loadSeen, loadShownActivity, saveSeen, saveShownActivity, seenNow, tabTitle, type Seen } from "./unread.ts";
+import { isUnread, loadSeen, loadShownActivity, pruneShownActivity, saveSeen, saveShownActivity, seenNow, tabTitle, tabUnread, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
@@ -341,6 +341,8 @@ export function App() {
   /** Titles from subscribe replies: a tab of a session not (yet) in the list, e.g. the page-load hash session. */
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
+  const seenRef = useRef(seen);
+  seenRef.current = seen;
   const [shownActivity, setShownActivity] = useState(loadShownActivity);
   const shownActivityRef = useRef(shownActivity);
   shownActivityRef.current = shownActivity;
@@ -463,6 +465,8 @@ export function App() {
   const [failedTabs, setFailedTabs] = useState<ReadonlySet<string>>(new Set());
   const failedTabsRef = useRef(failedTabs);
   failedTabsRef.current = failedTabs;
+  /** Sessions whose subscribe is in flight while they have a view (a reconnect resubscribe): the view may be of an earlier daemon run (GH-378). */
+  const resubscribing = useRef(new Set<string>());
 
   async function refreshList() {
     try {
@@ -508,6 +512,7 @@ export function App() {
   /** `fresh`: a new snapshot (last page) whatever the view holds: a cursor or rewind the view cannot follow. `background`: follow only (no hold). */
   async function subscribe(sessionId: string, addProject = false, fresh = false, background = false) {
     const view = viewsRef.current[sessionId];
+    if (view) resubscribing.current.add(sessionId);
     // After a daemon restart the snapshot starts at the oldest turn this view holds (transcript uuids are stable), so the scroll position survives.
     const from = fresh ? undefined : view?.order.find((id) => {
       const p = view.parts.get(id);
@@ -546,6 +551,8 @@ export function App() {
         setError((e as Error).message);
         setFailedTabs((f) => (f.has(sessionId) ? f : new Set(f).add(sessionId)));
       } // else resubscribed on reconnect
+    } finally {
+      resubscribing.current.delete(sessionId);
     }
   }
 
@@ -864,9 +871,12 @@ export function App() {
       const busyList = item?.state === "running" || item?.state === "needs_input";
       // Not loaded in this daemon run: no queue, continue, request or attention seq exists; unread comes from the list's lastActivity.
       const closed = !v && item?.state === "closed";
-      const closedRead = closed ? closedUnread(item.lastActivity, shownAt(id)) : undefined;
-      const failed = !v && !closed && failedTabsRef.current.has(id);
-      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !!item && !v && !closed && !failed, unknown: failed || (closed && closedRead === undefined), unread: unreadRef.current.has(id) || closedRead === true, draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
+      // A failed subscribe: no view, or one that may be of an earlier daemon run.
+      const failed = failedTabsRef.current.has(id);
+      // Disconnected or resubscribing: the view may be of an earlier daemon run, the new one is on its way.
+      const stale = !!v && (statusRef.current !== "connected" || resubscribing.current.has(id));
+      const read = item && (v || closed) ? tabUnread(v, seenRef.current[id], item.lastActivity, shownAt(id)) : undefined;
+      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !!item && !failed && (stale || (!v && !closed)), unknown: failed || (!!item && (!!v || closed) && read === undefined), unread: unreadRef.current.has(id) || read === true, draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
     });
   }
   const cleanupCtx = (): CleanupContext => ({ activeId: activeRef.current, pinned: pinnedRef.current, listLoaded: listLoadedRef.current, now: Date.now() });
@@ -1024,7 +1034,11 @@ export function App() {
     setUsed((u) => stampUsed(u, [prevActive.current, activeId], Date.now()));
     prevActive.current = activeId;
   }, [activeId]);
-  useEffect(() => setUsed((u) => pruneUsed(seedUsed(u, tabs, Date.now()), new Set([...tabs, ...closedTabs.map((c) => c.id)]))), [tabs, closedTabs]);
+  useEffect(() => {
+    const keep = new Set([...tabs, ...closedTabs.map((c) => c.id)]);
+    setUsed((u) => pruneUsed(seedUsed(u, tabs, Date.now()), keep));
+    setShownActivity((a) => pruneShownActivity(a, keep));
+  }, [tabs, closedTabs]);
   useEffect(() => saveUsed(used), [used]);
   useEffect(() => {
     const onVis = () => document.visibilityState === "visible" && setUsed((u) => stampUsed(u, [activeRef.current], Date.now()));
@@ -1039,8 +1053,8 @@ export function App() {
   }, [tabs, pinned]);
   useEffect(() => applyTheme(theme), [theme]);
 
-  // A tab of a session not loaded in this daemon run (no view): its list lastActivity after the one this browser last showed (GH-378).
-  const unread = new Set(list.filter((s) => (views[s.id] ? isUnread(views[s.id]!, seen[s.id]) : s.state === "closed" && tabs.includes(s.id) && !!closedUnread(s.lastActivity, shownActivity[s.id]))).map((s) => s.id));
+  // GH-378: a view of another daemon run than the seen mark, and a tab of a session not loaded in this run (no view), also count output after the lastActivity this browser last showed.
+  const unread = new Set(list.filter((s) => (views[s.id] || (s.state === "closed" && tabs.includes(s.id))) && tabUnread(views[s.id], seen[s.id], s.lastActivity, shownActivity[s.id]) === true).map((s) => s.id));
   const unreadRef = useRef(unread);
   unreadRef.current = unread;
   // Focus (GH-159): every unanswered request; the sidebar row, the Focus tab, the browser tab and the status text all show the same number of sessions.

@@ -1604,6 +1604,8 @@ describe("GH-378 clean up tabs", () => {
     localStorage.setItem(`claude-ui.draft.${id}`, "unsent");
     localStorage.setItem("claude-ui.drafts", JSON.stringify({ ...JSON.parse(localStorage.getItem("claude-ui.drafts") ?? "{}"), [id]: Date.now() }));
   };
+  // This browser showed every session after its last output (tests that need otherwise set the record themselves).
+  beforeEach(() => localStorage.setItem("claude-ui.shown-activity", JSON.stringify(Object.fromEntries([ID, S2, S3, S4, S5, S(6)].map((id) => [id, 1e15])))));
   afterEach(() => {
     vi.useRealTimers();
     replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
@@ -1827,6 +1829,7 @@ describe("GH-378 clean up tabs", () => {
   });
 
   it("showing a tab records its session's list lastActivity, so a closed session read here is closable after the next reload", async () => {
+    localStorage.removeItem("claude-ui.shown-activity");
     await remount([mk(ID, "First", { lastActivity: 100 }), mk(S2, "Second", { lastActivity: 300 })], [ID, S2], S2);
     await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
     await act(async () => {});
@@ -1851,6 +1854,69 @@ describe("GH-378 clean up tabs", () => {
     await act(async () => void el.querySelector(`[data-tab-id="${S2}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
     await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
     expect(document.querySelector('[data-testid="tab-cleanup-menu"]')!.textContent).toContain("1 kept: unknown");
+  });
+
+  it("page open across a daemon restart: a background tab with output this browser never showed keeps its unread marker and is not closed", async () => {
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 100, [S2]: 100 }));
+    await remount([mk(ID, "First", { lastActivity: 100 }), mk(S2, "Second", { lastActivity: 100 })], [ID, S2], S2);
+    const st = (seq: number, state: string) => ({ type: "event", sessionId: ID, seq, part: { type: "session_state", id: "session_state", state } });
+    await act(async () => (emit(st(1, "running")), emit(st(2, "idle"))));
+    expect(el.querySelector(`[data-tab-id="${ID}"] [aria-label]`)?.getAttribute("aria-label")).toContain("unread");
+    // Daemon restart (new log epoch) while the page stays open: the replay has no attention, the list shows the new output time.
+    replies["session.list"] = { sessions: [mk(ID, "First", { lastActivity: 200 }), mk(S2, "Second", { lastActivity: 100 })], projects: ["/p/demo"] };
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e2", seq: 0, session: m.sessionId === ID ? mk(ID, "First", { lastActivity: 200 }) : mk(S2, "Second") });
+    await act(async () => reconnect());
+    await act(async () => {});
+    expect(el.querySelector(`[data-tab-id="${ID}"] [aria-label]`)?.getAttribute("aria-label")).toContain("unread");
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+  });
+
+  it("after a daemon restart, a tab with a replayed view and no shown record is kept as 'unknown'; with an older record it closes", async () => {
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [S2]: 100, [S3]: 100 }));
+    localStorage.setItem("claude-ui.seen", JSON.stringify({ [ID]: { epoch: "e0", seq: 4 }, [S3]: { epoch: "e0", seq: 4 } }));
+    await remount([mk(ID, "First", { lastActivity: 100 }), mk(S2, "Second", { lastActivity: 100 }), mk(S3, "Third", { lastActivity: 100 })], [ID, S2, S3], S2);
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+    await act(async () => void el.querySelector(`[data-tab-id="${S2}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+    expect(document.querySelector('[data-testid="tab-cleanup-menu"]')!.textContent).toContain("1 kept: unknown");
+  });
+
+  it("a tab whose resubscribe is in flight or failed after a reconnect is kept ('loading', then 'unknown'), its old view does not count as read", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third")], [ID, S2, S3], S2);
+    let fail: (e: Error) => void = () => {};
+    const slow = new Promise((_, r) => (fail = r));
+    replies["session.subscribe"] = (m: { sessionId: string }) => (m.sessionId === ID ? slow : { logEpoch: "e2", seq: 0, session: m.sessionId === S2 ? mk(S2, "Second") : mk(S3, "Third") });
+    await act(async () => reconnect());
+    await act(async () => {});
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+    await undo();
+    await act(async () => fail(new Error("boom")));
+    await act(async () => {});
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+  });
+
+  it("showing a tab while the page is not focused writes no shown record", async () => {
+    localStorage.setItem("claude-ui.shown-activity", "{}");
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      await remount([mk(ID, "First", { lastActivity: 100 }), mk(S2, "Second", { lastActivity: 300 })], [ID, S2], S2);
+      await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
+      await act(async () => {});
+      expect(JSON.parse(localStorage.getItem("claude-ui.shown-activity")!)).toEqual({});
+    } finally {
+      hasFocus.mockRestore();
+    }
+  });
+
+  it("claude-ui.shown-activity keeps only open tabs and the closed-tab stack", async () => {
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 1, [S2]: 1, [S3]: 1, [S4]: 1 }));
+    localStorage.setItem("claude-ui.closed-tabs", JSON.stringify([{ id: S3, at: 1 }]));
+    await remount([session, mk(S2, "Second")], [ID, S2], S2);
+    expect(Object.keys(JSON.parse(localStorage.getItem("claude-ui.shown-activity")!)).sort()).toEqual([ID, S2, S3].sort());
   });
 
   it("a cleanup right after Undo (toast still leaving) does not join the undone toast", async () => {

@@ -29,8 +29,9 @@ export function saveSeen(seen: Record<string, Seen>) {
 }
 
 /**
- * Clean up tabs (GH-378): per session, the list's `lastActivity` (daemon clock) when this browser last showed it. A session not loaded
- * in this daemon run (list state `closed`) has no view and no attention seq; its unread state is its lastActivity against this record.
+ * Clean up tabs (GH-378): per session, the list's `lastActivity` (timestamp of the last user or assistant transcript entry, else the
+ * transcript file's mtime) when this browser last showed it. Where the attention seq cannot tell (no view, or a view of another daemon
+ * run than this browser's seen mark), the unread state is lastActivity against this record.
  */
 export type ShownActivity = Record<string, number>;
 const SHOWN_KEY = "claude-ui.shown-activity";
@@ -64,5 +65,27 @@ export function saveShownActivity(a: ShownActivity): void {
   }
 }
 
+/** Drops the records of sessions not in `keep`, here and in storage (open tabs and the closed-tab stack, like `claude-ui.tab-used`). */
+export function pruneShownActivity(a: ShownActivity, keep: ReadonlySet<string>): ShownActivity {
+  try {
+    const stored = parseShown(localStorage.getItem(SHOWN_KEY));
+    if (Object.keys(stored).some((id) => !keep.has(id))) localStorage.setItem(SHOWN_KEY, JSON.stringify(Object.fromEntries(Object.entries(stored).filter(([id]) => keep.has(id)))));
+  } catch {
+    // Blocked storage: nothing stored to prune.
+  }
+  return Object.keys(a).some((id) => !keep.has(id)) ? Object.fromEntries(Object.entries(a).filter(([id]) => keep.has(id))) : a;
+}
+
 /** Unread state of a session without a view from its list lastActivity; undefined = unknown (this browser has no record of showing it). */
 export const closedUnread = (lastActivity: number, shown: number | undefined): boolean | undefined => (shown === undefined ? undefined : lastActivity > shown);
+
+/**
+ * Unread state of an open tab (GH-378); undefined = unknown. The view's attention seq covers only its daemon run (log epoch): it decides
+ * alone when this browser's seen mark is of that run. Otherwise (daemon restarted, session loaded by another client, no view) unseen
+ * attention of this run is unread, and earlier output is judged by `lastActivity` against the shown record.
+ */
+export function tabUnread(v: SessionView | undefined, seen: Seen | undefined, lastActivity: number | undefined, shown: number | undefined): boolean | undefined {
+  if (v && seen?.epoch !== undefined && seen.epoch === v.logEpoch) return isUnread(v, seen);
+  if (v && isUnread(v, seen)) return true;
+  return lastActivity === undefined ? undefined : closedUnread(lastActivity, shown);
+}
