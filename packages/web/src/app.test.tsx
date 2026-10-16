@@ -1588,7 +1588,12 @@ describe("GH-378 clean up tabs", () => {
   async function remount(list: SessionListItem[], tabs: string[], active: string) {
     act(() => root.unmount());
     replies["session.list"] = { sessions: list, projects: ["/p/demo"] };
-    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e1", seq: 0, session: list.find((s) => s.id === m.sessionId) ?? session });
+    // An error session's state comes from its snapshot heads, as from the daemon.
+    const errorSnapshot = (id: string) => ({ seq: 1, snapshot: { heads: [{ type: "event", sessionId: id, seq: 1, part: { type: "session_state", id: "session_state", state: "error" } }], attentionSeq: 0, page: { parts: [] }, aux: [] } });
+    replies["session.subscribe"] = (m: { sessionId: string }) => {
+      const s = list.find((x) => x.id === m.sessionId) ?? session;
+      return { logEpoch: "e1", seq: 0, session: s, ...(s.state === "error" && errorSnapshot(s.id)) };
+    };
     localStorage.setItem("claude-ui.tabs", JSON.stringify(tabs));
     location.hash = `#${active}`;
     root = createRoot(el);
@@ -1770,6 +1775,91 @@ describe("GH-378 clean up tabs", () => {
     localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: Date.now() }));
     await rule(S2, "unused1h");
     expect(tabIds()).toEqual([S2, S3]);
+  });
+
+  it("after a reload, tabs of closed sessions (not loaded in this daemon run) are counted and closed by rules without a subscribe; one with output after this browser last showed it stays unread", async () => {
+    const S6 = S(6);
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old, [S4]: old, [S5]: old, [S6]: old }));
+    // lastActivity of each session's list item when this browser last showed it; S5 ran a turn after that.
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 100, [S3]: 100, [S4]: 100, [S5]: 150, [S6]: 100 }));
+    const closed = { state: "closed" as const, lastActivity: 100 };
+    sent.length = 0;
+    await remount(
+      [mk(ID, "First", closed), mk(S2, "Second"), mk(S3, "Third", { ...closed, archived: true }), mk(S4, "Fourth", { ...closed, coordinatorId: S2 }), mk(S5, "Fifth", { ...closed, lastActivity: 200 }), mk(S6, "Sixth", { state: "error", lastActivity: 100 })],
+      [ID, S2, S3, S4, S5, S6],
+      S2,
+    );
+    await act(async () => void el.querySelector(`[data-tab-id="${S2}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+    expect(document.querySelector('[data-testid="tab-cleanup-menu"]')!.textContent).toContain("1 kept: unread");
+    expect(document.querySelector('[data-testid="tab-cleanup-idle"]')!.textContent).toContain("3");
+    // The error tab is followed in the background (not shown), so its unread state is known.
+    expect(document.querySelector('[data-testid="tab-cleanup-unused1h"]')!.textContent).toContain("4");
+    for (let i = 0; i < 2; i++) await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    // The unread one shows its marker in the strip.
+    expect(el.querySelector(`[data-tab-id="${S5}"] [aria-label]`)?.getAttribute("aria-label")).toContain("unread");
+    await rule(S2, "archived");
+    expect(tabIds()).toEqual([ID, S2, S4, S5, S6]);
+    await rule(S2, "workers");
+    expect(tabIds()).toEqual([ID, S2, S5, S6]);
+    await rule(S2, "unused1h");
+    expect(tabIds()).toEqual([S2, S5]);
+    // No transcript restore for the closed ones: only the shown tab and the error tab were subscribed.
+    const subscribed = sent.filter((m) => m.type === "session.subscribe").map((m) => (m as unknown as { sessionId: string }).sessionId);
+    for (const id of [ID, S3, S4, S5]) expect(subscribed).not.toContain(id);
+    expect(subscribed).toContain(S6);
+  });
+
+  it("auto-close 1 hour after a reload closes read tabs of closed sessions; keeps one with unseen output and one this browser has no record of", async () => {
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old, [S4]: old, [S5]: old }));
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 100, [S3]: 150, [S5]: 100 }));
+    localStorage.setItem("claude-ui.tabAutoClose", "1h");
+    const closed = { state: "closed" as const, lastActivity: 100 };
+    await remount([mk(ID, "First", closed), mk(S2, "Second"), mk(S3, "Third", { ...closed, lastActivity: 200 }), mk(S4, "Fourth", closed), mk(S5, "Fifth", closed)], [ID, S2, S3, S4, S5], S2);
+    await act(async () => {});
+    expect(tabIds()).toEqual([S2, S3, S4]);
+    expect(toast()?.textContent).toContain("Auto-closed 2 idle tabs");
+    await act(async () => void el.querySelector(`[data-tab-id="${S2}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+    expect(document.querySelector('[data-testid="tab-cleanup-menu"]')!.textContent).toContain("2 kept: unknown/unread");
+  });
+
+  it("showing a tab records its session's list lastActivity, so a closed session read here is closable after the next reload", async () => {
+    await remount([mk(ID, "First", { lastActivity: 100 }), mk(S2, "Second", { lastActivity: 300 })], [ID, S2], S2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
+    await act(async () => {});
+    expect(JSON.parse(localStorage.getItem("claude-ui.shown-activity")!)).toMatchObject({ [ID]: 100, [S2]: 300 });
+  });
+
+  it("a tab whose subscribe failed is kept as 'unknown' by every rule", async () => {
+    const list = [session, mk(S2, "Second"), mk(S3, "Third")];
+    act(() => root.unmount());
+    replies["session.list"] = { sessions: list, projects: ["/p/demo"] };
+    replies["session.subscribe"] = (m: { sessionId: string }) => {
+      if (m.sessionId === S3) throw new Error("boom");
+      return { logEpoch: "e1", seq: 0, session: list.find((x) => x.id === m.sessionId) };
+    };
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([ID, S2, S3]));
+    location.hash = `#${S2}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([S2, S3]);
+    await act(async () => void el.querySelector(`[data-tab-id="${S2}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+    expect(document.querySelector('[data-testid="tab-cleanup-menu"]')!.textContent).toContain("1 kept: unknown");
+  });
+
+  it("a cleanup right after Undo (toast still leaving) does not join the undone toast", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { archived: true }), mk(S4, "Fourth", { coordinatorId: ID })], [ID, S2, S3, S4], S2);
+    await rule(S2, "archived");
+    await undo();
+    await rule(S2, "workers");
+    expect(tabIds()).toEqual([ID, S2, S3]);
+    expect(toast()?.textContent).toContain("Closed Fourth");
   });
 
   it("auto-close off (default) closes nothing", async () => {

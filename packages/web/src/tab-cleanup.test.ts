@@ -69,11 +69,20 @@ describe("GH-378 tab cleanup rules", () => {
     expect(autoCloseTargets([f("l", { loading: true, lastUsed: 0 })], ctx(), "1h")).toEqual([]);
   });
 
-  it("GH-378 keepReason order: active > pinned > running > needs_input > unread > draft", () => {
+  it("GH-378 a tab whose data could not be loaded (failed subscribe, or no record of what this browser saw) is never a target and shows as 'unknown'", () => {
+    const everything = { archived: true, worker: true, lastUsed: 0, unknown: true };
+    for (const rule of CLEANUP_RULES) expect(cleanupTargets(rule, [f("u", everything)], ctx())).toEqual([]);
+    expect(autoCloseTargets([f("u", { unknown: true, lastUsed: 0 })], ctx(), "1h")).toEqual([]);
+    expect(cleanupMenu([f("act"), f("u", { unknown: true }), f("l", { loading: true }), f("r", { unread: true })], ctx()).kept.text).toBe("3 kept: loading/unknown/unread");
+  });
+
+  it("GH-378 keepReason order: active > pinned > loading > unknown > running > needs_input > unread > draft", () => {
     const c = ctx({ pinned: new Set(["p"]) });
     const all = { state: "running" as const, unread: true, draft: true };
     expect(keepReason(f("act", all), c)).toBe("active");
     expect(keepReason(f("p", all), c)).toBe("pinned");
+    expect(keepReason(f("a", { ...all, loading: true, unknown: true }), c)).toBe("loading");
+    expect(keepReason(f("a", { ...all, unknown: true }), c)).toBe("unknown");
     expect(keepReason(f("a", all), c)).toBe("running");
     expect(keepReason(f("a", { state: "needs_input", unread: true, draft: true }), c)).toBe("needs_input");
     expect(keepReason(f("a", { unread: true, draft: true }), c)).toBe("unread");

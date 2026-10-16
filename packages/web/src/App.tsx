@@ -88,7 +88,7 @@ import { StatusBar, totals, type Totals } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
-import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
+import { closedUnread, isUnread, loadSeen, loadShownActivity, saveSeen, saveShownActivity, seenNow, tabTitle, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
@@ -341,6 +341,9 @@ export function App() {
   /** Titles from subscribe replies: a tab of a session not (yet) in the list, e.g. the page-load hash session. */
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
+  const [shownActivity, setShownActivity] = useState(loadShownActivity);
+  const shownActivityRef = useRef(shownActivity);
+  shownActivityRef.current = shownActivity;
   // In-app notifications (GH-158): `notifyRef` takes every event; the choice is per browser and Settings tells this page by event.
   const notifyRef = useRef<(e: Event, live: boolean) => void>(undefined);
   const [inApp, setInApp] = useState(loadInApp);
@@ -458,6 +461,8 @@ export function App() {
   listLoadedRef.current = listLoaded;
   /** Tabs whose subscribe failed for a reason other than unknown_session: their session never arrives, so they must not keep the group keys from becoming final (GH-201). */
   const [failedTabs, setFailedTabs] = useState<ReadonlySet<string>>(new Set());
+  const failedTabsRef = useRef(failedTabs);
+  failedTabsRef.current = failedTabs;
 
   async function refreshList() {
     try {
@@ -816,6 +821,8 @@ export function App() {
       action: {
         label: "Undo",
         onClick: () => {
+          // A cleanup during the toast's exit must not join a set that is back already.
+          if (undoToast.current?.parts === parts) undoToast.current = undefined;
           // Latest set first, each on the list the previous step produced.
           let stack = closedRef.current;
           let tabs = tabsRef.current;
@@ -847,13 +854,19 @@ export function App() {
     // Another window of this browser may have shown a tab since: the newer stamp counts.
     const stored = loadUsed();
     const usedAt = (id: string) => Math.max(usedRef.current[id] ?? 0, stored[id] ?? 0) || undefined;
+    const shown = loadShownActivity();
+    const shownAt = (id: string) => (shownActivityRef.current[id] ?? shown[id]) === undefined ? undefined : Math.max(shownActivityRef.current[id] ?? 0, shown[id] ?? 0);
     return tabsRef.current.map((id) => {
       if (id === NEW_TAB) return { id, unread: false, draft: drafts.has(NEW_TAB_DRAFT), listed: true, archived: false, worker: false, transcript: false, busy: false, lastUsed: usedAt(id) };
       const item = listRef.current.find((s) => s.id === id);
       const v = viewsRef.current[id];
       // A view not replayed yet reads idle: the list state (running, needs input) still protects the tab.
       const busyList = item?.state === "running" || item?.state === "needs_input";
-      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !!item && !v, unread: unreadRef.current.has(id), draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
+      // Not loaded in this daemon run: no queue, continue, request or attention seq exists; unread comes from the list's lastActivity.
+      const closed = !v && item?.state === "closed";
+      const closedRead = closed ? closedUnread(item.lastActivity, shownAt(id)) : undefined;
+      const failed = !v && !closed && failedTabsRef.current.has(id);
+      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !!item && !v && !closed && !failed, unknown: failed || (closed && closedRead === undefined), unread: unreadRef.current.has(id) || closedRead === true, draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
     });
   }
   const cleanupCtx = (): CleanupContext => ({ activeId: activeRef.current, pinned: pinnedRef.current, listLoaded: listLoadedRef.current, now: Date.now() });
@@ -995,6 +1008,14 @@ export function App() {
     setSeen(next);
     saveSeen(next);
   }, [focused, activeId, activeView?.lastSeq]);
+  // Clean up tabs (GH-378): the list's lastActivity the shown session had, for its unread state once the daemon no longer holds it.
+  const activeActivity = activeId ? list.find((s) => s.id === activeId)?.lastActivity : undefined;
+  useEffect(() => {
+    if (!focused || !activeId || !activeView || activeActivity === undefined || (shownActivity[activeId] ?? -Infinity) >= activeActivity) return;
+    const next = { ...shownActivity, [activeId]: activeActivity };
+    setShownActivity(next);
+    saveShownActivity(next);
+  }, [focused, activeId, !!activeView, activeView?.lastSeq, activeActivity]);
 
   useEffect(() => saveTabs(tabs), [tabs]);
   // Clean up tabs (GH-378): stamp the tab that was shown and the one that is shown now; a tab without a stamp starts now; closed tabs keep theirs for Undo and Reopen.
@@ -1018,7 +1039,8 @@ export function App() {
   }, [tabs, pinned]);
   useEffect(() => applyTheme(theme), [theme]);
 
-  const unread = new Set(list.filter((s) => views[s.id] && isUnread(views[s.id]!, seen[s.id])).map((s) => s.id));
+  // A tab of a session not loaded in this daemon run (no view): its list lastActivity after the one this browser last showed (GH-378).
+  const unread = new Set(list.filter((s) => (views[s.id] ? isUnread(views[s.id]!, seen[s.id]) : s.state === "closed" && tabs.includes(s.id) && !!closedUnread(s.lastActivity, shownActivity[s.id]))).map((s) => s.id));
   const unreadRef = useRef(unread);
   unreadRef.current = unread;
   // Focus (GH-159): every unanswered request; the sidebar row, the Focus tab, the browser tab and the status text all show the same number of sessions.
