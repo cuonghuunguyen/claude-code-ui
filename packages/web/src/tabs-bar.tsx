@@ -16,7 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/u
 import { GHOST, ROW } from "./toolbar.tsx";
 import { SideLabel } from "./sides.tsx";
 import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
-import { KEY_FOLLOWUP_MS, openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
+import { openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
+import { swallowKeyFollowup } from "./context-menu-key.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
 /** No tab is pinned. */
@@ -109,6 +110,7 @@ export function TabsBar({
   home,
   onHome,
   renaming,
+  renamingFromMenu,
   onAction,
   onRenamed,
   grouping = "project",
@@ -150,6 +152,8 @@ export function TabsBar({
   onHome?: () => void;
   /** Session tab that shows the title editor. */
   renaming?: string;
+  /** The editor was opened from a menu (RenameInput `fromMenu`). */
+  renamingFromMenu?: boolean;
   onAction: (id: string, a: SessionAction) => void;
   onRenamed: (id: string, title: string | undefined) => void;
 }) {
@@ -347,6 +351,7 @@ export function TabsBar({
                     canReopen={!!canReopen}
                     onCommand={onTabCommand ? (c) => tabCommand(id, c) : undefined}
                     renaming={renaming === id}
+                    menuRename={!!renamingFromMenu}
                     onAction={(a) => onAction(id, a)}
                     onRenamed={(title) => onRenamed(id, title)}
                   />
@@ -844,13 +849,6 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   );
 }
 
-/** The browser's own contextmenu right after Shift+F10 / the ContextMenu key (Firefox fires one on key release, at another place) must not reopen the menu elsewhere. A synthetic event is untrusted and passes. */
-function swallowKeyFollowup(e: ReactMouseEvent, keyOpenedAt: RefObject<number>) {
-  if (!e.nativeEvent.isTrusted || performance.now() - keyOpenedAt.current > KEY_FOLLOWUP_MS) return;
-  e.preventDefault();
-  (e as typeof e & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
-}
-
 // A tab re-renders only when what it shows changes (info by value), not for App's new closures and info objects on every render.
 const MemoTab = memo(Tab, (a, b) =>
   (Object.keys(b) as (keyof typeof b)[]).every((k) => (k === "t" ? (Object.keys(b.t) as (keyof TabInfo)[]).every((f) => a.t[f] === b.t[f]) : a[k] === b[k])),
@@ -880,6 +878,7 @@ function Tab({
   canReopen,
   onCommand,
   renaming,
+  menuRename,
   onAction,
   onRenamed,
 }: {
@@ -906,6 +905,7 @@ function Tab({
   /** The menu's commands beyond Move and Close tab; absent: those items are not shown. */
   onCommand?: (c: TabCommand) => void;
   renaming: boolean;
+  menuRename: boolean;
   onAction: (a: SessionAction) => void;
   onRenamed: (title: string | undefined) => void;
 }) {
@@ -965,7 +965,7 @@ function Tab({
         {renaming ? (
           <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
             <TabIcon s={s} cwd={t.cwd} />
-            <RenameInput title={t.title} onDone={onRenamed} />
+            <RenameInput title={t.title} onDone={onRenamed} fromMenu={menuRename} />
           </div>
         ) : (
           <button
@@ -982,7 +982,7 @@ function Tab({
             onClick={() => onSelect(id)}
             onKeyDown={(e) => openContextMenuFromKey(e, e.currentTarget) && (keyOpenedAt.current = performance.now())}
             // OpenCode: double click on the title renames.
-            onDoubleClick={() => session && t.transcript !== false && onAction("rename")}
+            onDoubleClick={() => session && t.transcript !== false && onAction("rename-inline")}
           >
             <TabIcon s={s} cwd={t.cwd} />
             {!pinned && (t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate leading-4">{t.title}</span>)}

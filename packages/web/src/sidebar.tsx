@@ -3,46 +3,22 @@ import { SideBadge, SideLabel } from "./sides.tsx";
 import { Fragment, memo, use, useEffect, useRef, useState } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { Menu } from "@base-ui/react/menu";
-import { ArchiveIcon, CheckIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, CircleAlertIcon, EllipsisIcon, EllipsisVerticalIcon, LocateFixedIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, LockIcon, SearchIcon, SquarePenIcon, Trash2Icon, UsersIcon, XIcon } from "lucide-react";
+import { ArchiveIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, CircleAlertIcon, EllipsisVerticalIcon, LocateFixedIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, LockIcon, SearchIcon, SquarePenIcon, Trash2Icon, UsersIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
-import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, loadCollapsed, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SidebarView, type WorktreeRow } from "./sessions.ts";
+import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, loadCollapsed, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
 import { useNow } from "./plan-meter.tsx";
 import { projectName } from "./tabs.ts";
 import { ICON_BUTTON, IconButton, ProjectAvatar } from "./tabs-bar.tsx";
-import { ITEM, POPUP, RenameInput, SessionContextMenu, SessionMenu, type SessionAction } from "./session-actions.tsx";
+import { ITEM, POPUP, RenameInput, SessionContextMenu, SessionMenu, type ActionTarget, type SessionAction } from "./session-actions.tsx";
+import { CHECK_ITEM, RowContextMenu, RowMenu, Tick } from "./sidebar-menus.tsx";
+import { groupEntries, groupSessions, idleTargets, workerCounts, workerEntries } from "./sidebar-menus.ts";
+import { useKeyContextMenu } from "./context-menu-key.ts";
 
 /** What follows the last `/` or `\` (a branch tail, a folder name). */
 const lastSegment = (p: string) => p.split(/[\\/]/).pop()!;
-
-/** `...` menu of a project or worktree row below `md`: the secondary actions, so the label keeps the room. */
-function RowMenu({ label, testId, items }: { label: string; testId: string; items: { label: string; onClick: (e: React.MouseEvent) => void; testId: string; destructive?: boolean }[] }) {
-  return (
-    <Menu.Root>
-      <Menu.Trigger
-        aria-label={`Actions for ${label}`}
-        title="Actions"
-        className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11 [&_svg]:size-4"
-        data-testid={testId}
-      >
-        <EllipsisIcon aria-hidden />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner align="end" sideOffset={4} className="z-50">
-          <Menu.Popup className={POPUP}>
-            {items.map((i) => (
-              <Menu.Item key={i.testId} className={cn(ITEM, i.destructive && "text-destructive")} onClick={i.onClick} data-testid={i.testId}>
-                {i.label}
-              </Menu.Item>
-            ))}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
-  );
-}
 
 /** Only states that need attention get an indicator; idle, error and closed rows stay plain. */
 function StateIcon({ state }: { state: SessionState }) {
@@ -65,9 +41,6 @@ function emptySearch(query: string, archived: boolean, projects: string[]) {
   if (!projects.some((p) => projectName(p).toLowerCase() === project.toLowerCase())) return `No project named "${project}".`;
   return text ? `No ${kind} in ${project} matches "${text}".` : `No ${kind} in ${project}.`;
 }
-
-const CHECK_ITEM = cn(ITEM, "gap-2");
-const Tick = ({ on }: { on: boolean }) => <span className="grid size-4 shrink-0 place-items-center">{on && <CheckIcon className="size-4" aria-hidden />}</span>;
 
 /** IntelliJ-style options of the sidebar (kebab in the Projects header): behavior, what shows, grouping, project order; below md also Expand all / Collapse all. */
 function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollapse, treeHint, narrow }: { view: SidebarView; onView: (v: Partial<SidebarView>) => void; archived: boolean; onArchived: (on: boolean) => void; onExpand: () => void; onCollapse: () => void; treeHint: string; narrow: boolean }) {
@@ -153,10 +126,14 @@ export function SessionList({
   onRemoveWorktree,
   onOpenProject,
   renaming,
+  renamingFromMenu,
   onAction,
   onRenamed,
   search,
   reveal: revealSeq,
+  openTabs,
+  onWorkers,
+  onArchiveIdle,
 }: {
   list: SessionListItem[];
   /** Known project cwds from the daemon, newest first; a project with no session still gets a group. */
@@ -181,6 +158,8 @@ export function SessionList({
   onOpenProject: () => void;
   /** Session whose row shows the title editor. */
   renaming?: string;
+  /** The editor was opened from a menu (RenameInput `fromMenu`). */
+  renamingFromMenu?: boolean;
   onAction: (id: string, a: SessionAction) => void;
   /** New title, or undefined when the edit was cancelled. */
   onRenamed: (id: string, title: string | undefined) => void;
@@ -188,11 +167,16 @@ export function SessionList({
   search?: { text: string; seq: number };
   /** Reveal in sidebar (tab menu, GH-359): each new value runs Select active session with focus. */
   reveal?: number;
+  /** Sessions with an open tab (Close tab in the row menu). */
+  openTabs?: ReadonlySet<string>;
+  /** Close finished / Remove closed workers of a coordinator: the worker ids (the app confirms removals). */
+  onWorkers?: (ids: string[], action: "close" | "remove", coordinator: { id: string; title: string }) => void;
+  /** Archive idle sessions older than `days` in `where` (a project or worktree name); the app confirms first. */
+  onArchiveIdle?: (ids: string[], where: string, days: number) => void;
 }) {
   const narrow = useNarrow();
   const sideOf = use(SideLabel);
   // Stable for the memo rows: a tab switch re-renders only the two rows whose active mark changes.
-  const rowProps = useStableProps({ onOpen, onAction, onRenamed });
   // Relative times and day groups move on without a list refresh; a row re-renders only when its label changes.
   const now = useNow(60_000, true);
   const [query, setQuery] = useState("");
@@ -236,6 +220,12 @@ export function SessionList({
     focusId.current = undefined;
   });
   const nested = nestWorkers(list, archived);
+  const workersAction = (id: string, a: SessionAction) => {
+    if (a !== "close-finished" && a !== "remove-closed") return onAction(id, a);
+    const c = workerCounts(nested.workers.get(id) ?? [], state);
+    onWorkers?.(a === "close-finished" ? c.finished : c.closed, a === "close-finished" ? "close" : "remove", { id, title: list.find((x) => x.id === id)?.title ?? "" });
+  };
+  const rowProps = useStableProps({ onOpen, onAction: workersAction, onRenamed });
   const top = nested.top;
   const keepActive = (s: SessionListItem) => s.id === activeId || state(s) === "running" || state(s) === "needs_input";
   const shown = sortGroups(groupByCwd(top, query, projects, archived, worktrees, nested.workers), view.sort);
@@ -256,6 +246,33 @@ export function SessionList({
         return c.group;
       })
     : kept;
+  // Menu targets come from the unfiltered, unsearched groups: search and Only active never shrink what an action covers.
+  let unfiltered: SessionGroup[] | undefined;
+  const baseGroup = (cwd: string) => (unfiltered ??= groupByCwd(nested.top, "", projects, archived, worktrees, nested.workers)).find((g) => g.cwd === cwd);
+  const idle = (sessions: SessionListItem[], days: number) => idleTargets(sessions, nested.workers, { days, now: Date.now(), activeId, state });
+  const menuBase = (sessions: () => SessionListItem[], where: string, prefix: string) => ({
+    prefix,
+    archivedView: archived,
+    onlyActive: view.onlyActive,
+    setOnlyActive: (onlyActive: boolean) => setView({ onlyActive }),
+    archiveCount: (days: number) => idle(sessions(), days).length,
+    onArchive: (days: number) => onArchiveIdle?.(idle(sessions(), days), where, days),
+  });
+  /** Menu of a project row: context menu (prefix group-menu-) and kebab below md (project-menu-). */
+  const groupMenu = (g: SessionGroup, prefix: string) => () =>
+    groupEntries({
+      ...menuBase(() => groupSessions(baseGroup(g.cwd) ?? g), projectName(g.cwd), prefix),
+      newSession: () => onNew(g.cwd),
+      newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (named) => onNewWorktree(g.cwd, named) : undefined,
+      tail: { id: `${prefix}remove`, label: "Remove from list (files stay)", onSelect: () => onRemove(g.cwd) },
+    });
+  /** Menu of a worktree row. */
+  const rowMenu = (g: SessionGroup, r: WorktreeRow, label: string, prefix: string) => () =>
+    groupEntries({
+      ...menuBase(() => (baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path) ?? r).sessions, label, prefix),
+      newSession: r.outsideRoots ? undefined : () => onNew(r.path),
+      tail: onRemoveWorktree && removableWorktree(worktrees?.[g.cwd] ?? [], r) ? { id: `${prefix}remove`, label: "Delete worktree…", onSelect: () => onRemoveWorktree(g.cwd, r.path) } : undefined,
+    });
   const activeSession = list.find((s) => s.id === activeId);
   // Select active session: open what hides the row (clearing a search or switching to the row's archived view first), then scroll to it; `focus`: move the focus to it.
   const [reveal, setReveal] = useState<{ id: string; focus: boolean }>();
@@ -332,14 +349,41 @@ export function SessionList({
               const ws = workers.get(s.id) ?? [];
               const k = workerKey(s.id, archived);
               const needs = ws.some((w) => state(w) === "needs_input");
+              const counts = nested.workers.get(s.id) && workerCounts(nested.workers.get(s.id)!, state);
               const row = (x: SessionListItem, d: Depth, worker?: { workerName: string; place: string }) => (
-                <SessionRow key={x.id} s={x} ago={timeAgo(x.lastActivity, now)} st={state(x)} loading={!!titleLoading?.(x)} unread={unread.has(x.id)} active={x.id === activeId} renaming={renaming === x.id} depth={d} classic={classic} branch={branches.get(x.id)} {...worker} {...rowProps} />
+                <SessionRow
+                  key={x.id}
+                  s={x}
+                  ago={timeAgo(x.lastActivity, now)}
+                  st={state(x)}
+                  loading={!!titleLoading?.(x)}
+                  unread={unread.has(x.id)}
+                  active={x.id === activeId}
+                  renaming={renaming === x.id}
+                  menuRename={!!renamingFromMenu}
+                  depth={d}
+                  classic={classic}
+                  branch={branches.get(x.id)}
+                  tab={!!openTabs?.has(x.id)}
+                  coordinator={!worker && !!counts}
+                  finished={!worker && counts ? counts.finished.length : 0}
+                  closedN={!worker && counts ? counts.closed.length : 0}
+                  {...worker}
+                  {...rowProps}
+                />
               );
               return (
                 <Fragment key={s.id}>
                   {row(s, depth)}
                   {!!ws.length && (
                     <li>
+                      <RowContextMenu
+                        testId="workers-menu"
+                        entries={() => {
+                          const c = workerCounts(nested.workers.get(s.id) ?? [], state);
+                          return workerEntries("workers-menu-", c, { close: () => onWorkers?.(c.finished, "close", { id: s.id, title: s.title }), remove: () => onWorkers?.(c.closed, "remove", { id: s.id, title: s.title }) });
+                        }}
+                      >
                       <button
                         className={cn("flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left text-muted-foreground text-xs outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 pointer-coarse:h-11", PAD[depth + 1])}
                         aria-expanded={isOpen(k)}
@@ -358,6 +402,7 @@ export function SessionList({
                           </>
                         )}
                       </button>
+                      </RowContextMenu>
                       {isOpen(k) && <ul className="flex flex-col gap-0.5">{ws.map((w) => row(w, (depth + 1) as Depth, { workerName: w.workerName ?? w.title, place: worktreeName(w.cwd, worktrees) ?? projectName(w.cwd) }))}</ul>}
                     </li>
                   )}
@@ -480,6 +525,7 @@ export function SessionList({
           const open = isOpen(g.cwd);
           return (
             <section key={g.cwd} data-testid="session-group" data-cwd={g.cwd}>
+              <RowContextMenu testId="group-menu" entries={groupMenu(g, "group-menu-")}>
               <h3 className="group/project relative">
                 <button
                   className="flex h-7 w-full items-center gap-2 rounded-md pr-20 pl-1.5 text-left max-md:pr-26 pointer-coarse:pr-38 max-md:pointer-coarse:pr-26 text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
@@ -506,19 +552,7 @@ export function SessionList({
                     <SquarePenIcon />
                   </IconButton>
                   {narrow ? (
-                    <RowMenu
-                      label={projectName(g.cwd)}
-                      testId="project-menu"
-                      items={[
-                        ...(onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots)
-                          ? [
-                              { label: "New worktree", onClick: () => onNewWorktree(g.cwd, false), testId: "project-menu-new-worktree" },
-                              { label: "New worktree (named)…", onClick: () => onNewWorktree(g.cwd, true), testId: "project-menu-new-worktree-named" },
-                            ]
-                          : []),
-                        { label: "Remove from list (files stay)", onClick: () => onRemove(g.cwd), testId: "project-menu-remove", destructive: true },
-                      ]}
-                    />
+                    <RowMenu label={projectName(g.cwd)} testId="project-menu" entries={groupMenu(g, "project-menu-")} />
                   ) : (
                     <IconButton label={`Remove ${projectName(g.cwd)} from the list (files stay)`} onClick={() => onRemove(g.cwd)} testId="project-remove" className="size-6">
                       <XIcon />
@@ -526,6 +560,7 @@ export function SessionList({
                   )}
                 </span>
               </h3>
+              </RowContextMenu>
               {open && !g.sessions.length && !g.worktrees.length && <p className="py-1 pl-7 text-muted-foreground text-sm">{emptyText}</p>}
               {open && days(g.sessions, 0, g.cwd, projectName(g.cwd))}
               {open &&
@@ -541,6 +576,7 @@ export function SessionList({
                   return (
                     <div key={r.path} data-testid="worktree-row" data-path={r.path}>
                       {/* OpenCode WorkspaceHeader: branch icon, "local : <branch>" / "worktree : <branch>", chevron; New session on hover. */}
+                      <RowContextMenu testId="worktree-context-menu" entries={rowMenu(g, r, label, "worktree-context-")}>
                       <div className="group/worktree relative">
                         <button
                           className="flex h-7 w-full items-center gap-2 rounded-md pr-14 pl-6 text-left text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26"
@@ -567,18 +603,20 @@ export function SessionList({
                             <IconButton label={`New session in ${label}`} onClick={() => onNew(r.path)} testId="worktree-new-session" className="size-6">
                               <SquarePenIcon />
                             </IconButton>
-                            {onRemoveWorktree &&
-                              removableWorktree(worktrees?.[g.cwd] ?? [], r) &&
-                              (narrow ? (
-                                <RowMenu label={label} testId="worktree-menu" items={[{ label: "Delete worktree…", onClick: () => onRemoveWorktree(g.cwd, r.path), testId: "worktree-menu-remove", destructive: true }]} />
-                              ) : (
+                            {narrow ? (
+                              <RowMenu label={label} testId="worktree-menu" entries={rowMenu(g, r, label, "worktree-menu-")} />
+                            ) : (
+                              onRemoveWorktree &&
+                              removableWorktree(worktrees?.[g.cwd] ?? [], r) && (
                                 <IconButton label={`Remove ${label}`} onClick={() => onRemoveWorktree(g.cwd, r.path)} testId="worktree-remove" className="size-6">
                                   <Trash2Icon />
                                 </IconButton>
-                              ))}
+                              )
+                            )}
                           </span>
                         )}
                       </div>
+                      </RowContextMenu>
                       {rowOpen && !r.sessions.length && <p className="py-1 pl-12 text-muted-foreground text-sm">{emptyText}</p>}
                       {rowOpen && days(r.sessions, 1, rowKey(r.path), label)}
                     </div>
@@ -600,11 +638,16 @@ const SessionRow = memo(function SessionRow({
   unread,
   active,
   renaming,
+  menuRename,
   depth,
   classic,
   branch,
   workerName,
   place,
+  tab,
+  coordinator,
+  finished,
+  closedN,
   onOpen,
   onAction,
   onRenamed,
@@ -618,6 +661,7 @@ const SessionRow = memo(function SessionRow({
   unread: boolean;
   active: boolean;
   renaming: boolean;
+  menuRename: boolean;
   /** Indent level (PAD). */
   depth: Depth;
   /** Classic layout: the row says its state as text and, in a linked worktree, its branch. */
@@ -626,6 +670,12 @@ const SessionRow = memo(function SessionRow({
   /** A worker under its coordinator: the row shows its name, place and state as text. */
   workerName?: string;
   place?: string;
+  /** The session has an open tab. */
+  tab: boolean;
+  /** A coordinator with listed workers: how many Close finished / Remove closed would act on. */
+  coordinator: boolean;
+  finished: number;
+  closedN: number;
   onOpen: (id: string) => void;
   onAction: (id: string, a: SessionAction) => void;
   onRenamed: (id: string, title: string | undefined) => void;
@@ -633,12 +683,21 @@ const SessionRow = memo(function SessionRow({
   const label = STATE_LABEL[st];
   // Classic: every state reads as text (workers already do).
   const stateText = classic && !workerName ? WORKER_STATE[st] : undefined;
-  const target = { title: s.title, archived: s.archived, busy: st === "running" || st === "needs_input", transcript: s.transcript };
+  const target: ActionTarget = {
+    title: s.title,
+    archived: s.archived,
+    busy: st === "running" || st === "needs_input",
+    transcript: s.transcript,
+    copyId: true,
+    tab,
+    worker: workerName ? { closed: st === "closed" } : undefined,
+    coordinator: coordinator ? { finished, closed: closedN } : undefined,
+  };
   const act = (a: SessionAction) => onAction(s.id, a);
   if (renaming)
     return (
       <li className={cn("flex h-8 items-center pr-1.5 max-md:h-11", PAD[depth])}>
-        <RenameInput title={s.title} onDone={(t) => onRenamed(s.id, t)} />
+        <RenameInput title={s.title} onDone={(t) => onRenamed(s.id, t)} fromMenu={menuRename} />
       </li>
     );
   return (

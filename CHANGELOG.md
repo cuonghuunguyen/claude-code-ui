@@ -8,6 +8,7 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 
 - Terminal docked at the bottom by default, under the session view and the side panel; Settings > Terminal or a move of its pane tab puts it back into the side panel. The bottom terminal resizes, maximizes, and has a titlebar toggle ([#354](https://github.com/cuonghuunguyen/claude-code-ui/issues/354)).
 - Movable panes: Changes, Files, Git graph and Terminal are tabs of the side panel or the bottom panel. Move a pane with its tab's context menu (right click, Shift+F10, long press), the panel's ⋯ menu, or drag and drop; the side panel docks left or right; the layout is kept per browser and "Reset layout" restores the default. A moved pane keeps its state and its tab keeps the focus ([#355](https://github.com/cuonghuunguyen/claude-code-ui/issues/355), [#374](https://github.com/cuonghuunguyen/claude-code-ui/issues/374)).
+- Sidebar context menus: right click, long press or Shift+F10 on a project or worktree row (new session or worktree, Hide inactive sessions, Archive idle sessions older than 1, 7 or 30 days, remove), on a worker row (Close worker, Remove worker… with an option to remove its worktree), on a coordinator or its "N workers" row (Close finished workers, Remove closed workers…) and on any session row (Copy session ID, Close tab) ([#358](https://github.com/cuonghuunguyen/claude-code-ui/issues/358)).
 
 ### Changed
 

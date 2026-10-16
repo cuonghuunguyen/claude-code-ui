@@ -73,7 +73,19 @@ export type WorkerEvent = {
 };
 
 type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
-class ToolError extends Error {}
+class ToolError extends Error {
+  constructor(
+    message: string,
+    /** Reported to the web app (worker.close / worker.remove error code). */
+    readonly code = "worker_failed",
+  ) {
+    super(message);
+  }
+}
+/** The web app's text for errors whose tool text names tools. */
+const USER_TEXT: Record<string, string> = {
+  session_running: "The worker is running or waiting for input: close it first",
+};
 const ok = (v: unknown): Result => ({ content: [{ type: "text", text: JSON.stringify(v, null, 1) }] });
 const fail = (message: string): Result => ({ content: [{ type: "text", text: message }], isError: true });
 const cut = (s: string, max = MAX_TEXT) => (s.length > max ? `${s.slice(0, max)}… [${s.length - max} more characters]` : s);
@@ -187,17 +199,17 @@ export function createOrchestration(deps: OrchestrationDeps) {
     // Started by a daemon on another port (or this one before a restart on another port), and no live query here: refused only
     // while a CLI process of another daemon or a terminal runs it; otherwise this daemon takes it over.
     if (!deps.sessions.get(w.id)?.liveQuery() && w.port !== port && deps.heldElsewhere(w.id))
-      throw new ToolError(`Worker ${n} is running in another process (the claude-ui daemon on port ${w.port} or a terminal CLI), not in this daemon (port ${port}).`);
+      throw new ToolError(`Worker ${n} is running in another process (the claude-ui daemon on port ${w.port} or a terminal CLI), not in this daemon (port ${port}).`, "held_elsewhere");
   }
 
   async function worker(coordinator: string, n: string) {
     const w = workers(coordinator).find((x) => x.name === n);
-    if (!w) throw new ToolError(`No worker named ${n}. worker_list lists them.`);
+    if (!w) throw new ToolError(`No worker named ${n}. worker_list lists them.`, "unknown_worker");
     const port = deps.port();
     const loaded = deps.sessions.get(w.id);
     refuseHeldElsewhere(w, n);
     const s = loaded ?? (await deps.find(w.id));
-    if (!s) throw new ToolError(`Worker ${n} (session ${w.id}) was not found: its transcript is gone or outside the allowed roots.`);
+    if (!s) throw new ToolError(`Worker ${n} (session ${w.id}) was not found: its transcript is gone or outside the allowed roots.`, "unknown_session");
     if (port !== undefined && w.port !== port) deps.links.set(w.id, { port }, ["port"]);
     return s;
   }
@@ -329,6 +341,27 @@ export function createOrchestration(deps: OrchestrationDeps) {
         return fail(`${n} failed: ${(err as Error).message}`);
       }
     });
+
+  /** worker_close and the web app's Close worker. */
+  async function closeWorker(coordinator: string, n: string) {
+    const s = await worker(coordinator, n);
+    if (["running", "needs_input"].includes(s.info().state)) {
+      await s.interrupt();
+      if (!(await settled(s, stopWait))) throw new ToolError(`Worker ${n} did not stop within ${stopWait / 1000} s; try worker_close again.`, "stop_timeout");
+    }
+    if (s.liveQuery()) s.restartQuery();
+  }
+
+  /** worker_remove and the web app's Remove worker. */
+  async function removeWorker(coordinator: string, n: string) {
+    const w = workers(coordinator).find((x) => x.name === n);
+    if (!w) throw new ToolError(`No worker named ${n}. worker_list lists them.`, "unknown_worker");
+    refuseHeldElsewhere(w, n);
+    const busy = `Worker ${n} is still running or waiting for input. Close it with worker_close first, then call worker_remove.`;
+    if (["running", "needs_input"].includes(deps.sessions.get(w.id)?.info().state ?? "")) throw new ToolError(busy, "session_running");
+    const err = await deps.remove(w.id);
+    if (err) throw new ToolError(err.code === "session_running" ? busy : `Worker ${n} was not removed: ${err.message}`, err.code);
+  }
 
   /** The coordinator's tools, bound to its session ID, or to a binding a /clear moves to the new session (handOver). */
   function tools(binding: string | { id: string }) {
@@ -594,13 +627,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
         "Close a worker's CLI process; it stops counting toward the worker cap. A running or waiting worker is stopped first (as worker_stop: pending and escalated requests are cancelled). The session and its transcript stay: worker_send resumes it.",
         { name },
         async (a) => {
-          const coordinator = cur();
-          const s = await worker(coordinator, a.name);
-          if (["running", "needs_input"].includes(s.info().state)) {
-            await s.interrupt();
-            if (!(await settled(s, stopWait))) throw new ToolError(`Worker ${a.name} did not stop within ${stopWait / 1000} s; try worker_close again.`);
-          }
-          if (s.liveQuery()) s.restartQuery();
+          await closeWorker(cur(), a.name);
           return { name: a.name, closed: true };
         },
       ),
@@ -609,13 +636,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
         "Remove a worker you started from worker_list, like Remove in the web app: its session and transcript are deleted for good (cannot be undone), so do it only when the user is done with the worker. A worker that is not running or waiting is removed; an idle one with a live CLI is closed first. A running or waiting worker is refused: worker_close it first. A worker another process runs is refused. Its worktree and branch stay.",
         { name },
         async (a) => {
-          const coordinator = cur();
-          const w = workers(coordinator).find((x) => x.name === a.name);
-          if (!w) throw new ToolError(`No worker named ${a.name}. worker_list lists them.`);
-          refuseHeldElsewhere(w, a.name);
-          if (["running", "needs_input"].includes(deps.sessions.get(w.id)?.info().state ?? "")) throw new ToolError(`Worker ${a.name} is still running or waiting for input. Close it with worker_close first, then call worker_remove.`);
-          const err = await deps.remove(w.id);
-          if (err) throw new ToolError(err.code === "session_running" ? `Worker ${a.name} is still running or waiting for input. Close it with worker_close first, then call worker_remove.` : `Worker ${a.name} was not removed: ${err.message}`);
+          await removeWorker(cur(), a.name);
           return { name: a.name, removed: true };
         },
       ),
@@ -625,6 +646,18 @@ export function createOrchestration(deps: OrchestrationDeps) {
   return {
     observe,
     waitingOnWorkers,
+    /** Web app worker.close / worker.remove: the worker's link names its coordinator; same checks as the tools. The error to report, or undefined. */
+    async userOp(op: "close" | "remove", id: string): Promise<{ code: string; message: string } | undefined> {
+      const l = linkOf(id);
+      if (!l?.coordinatorId || !l.name) return { code: "not_worker", message: "This session is not a worker" };
+      try {
+        await (op === "close" ? closeWorker : removeWorker)(l.coordinatorId, l.name);
+      } catch (e) {
+        if (!(e instanceof ToolError)) throw e;
+        return { code: e.code, message: e.code === "stop_timeout" ? `The worker did not stop within ${stopWait / 1000} s; try again` : (USER_TEXT[e.code] ?? e.message) };
+      }
+      return undefined;
+    },
     /** The orchestration MCP server for a new query of any session but a worker: only while orchestration is on (read at each query start). */
     mcpServers(id: string): Record<string, McpSdkServerConfigWithInstance> | undefined {
       served.delete(id);
