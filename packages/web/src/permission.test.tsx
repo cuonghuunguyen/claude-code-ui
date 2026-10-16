@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Event, Part, PermissionUpdate } from "@claude-ui/protocol";
 import { editedInput, PermissionPanel, ruleLabel, type PermissionAnswer } from "./permission.tsx";
+import { ViewerContext, type ViewerTarget } from "./viewer.ts";
 import { applyEvent, emptySession, pendingPermission, type PermissionRequest } from "./store.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -56,6 +57,24 @@ describe("PermissionPanel", () => {
     expect(html).toContain("Yes, manually approve edits");
     expect(html).toContain("No, keep planning");
     expect(html).not.toContain("&quot;plan&quot;");
+  });
+
+  it("the plan has an Open in popup button inside a session tab (ViewerContext), none outside it", () => {
+    const part = request({ tool: "ExitPlanMode", input: { plan: "## Plan" }, suggestions: [] });
+    expect(renderToStaticMarkup(<PermissionPanel part={part} onRespond={() => {}} />)).not.toContain('data-testid="plan-open"');
+    const opened: ViewerTarget[] = [];
+    const el = document.createElement("div");
+    const root = createRoot(el);
+    act(() =>
+      root.render(
+        <ViewerContext value={(t) => opened.push(t)}>
+          <PermissionPanel part={part} onRespond={() => {}} />
+        </ViewerContext>,
+      ),
+    );
+    act(() => el.querySelector<HTMLButtonElement>('[data-testid="plan-open"]')!.click());
+    expect(opened).toEqual([{ kind: "plan", plan: "## Plan" }]);
+    act(() => root.unmount());
   });
 
   it("is an OpenCode dock: Permission required, the SDK title, rule patterns; tray Deny · Allow always · Allow once; No with feedback", () => {
