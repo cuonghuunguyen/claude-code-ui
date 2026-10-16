@@ -1076,6 +1076,21 @@ it("a click on the terminal's pane tab, the selected one too, focuses the shell 
   await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
 });
 
+it("narrow screens: a click on the selected terminal pane tab focuses the shell too (GH-374)", async () => {
+  width = 800;
+  await rerender();
+  const g = globalThis as { __termFocused?: number };
+  const start = g.__termFocused ?? 0;
+  await clickId("pane-terminal");
+  // The first reveal's own shell focus lands first, then the count settles.
+  await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(start));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  expect(q("pane-terminal")!.getAttribute("aria-selected")).toBe("true");
+  const before = g.__termFocused ?? 0;
+  await clickId("pane-terminal");
+  await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+});
+
 it("a kept-mounted terminal revealed by Ctrl+`, New terminal or its pane tab takes the shell focus; a move before does not keep it quiet", async () => {
   localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
   await rerender();
