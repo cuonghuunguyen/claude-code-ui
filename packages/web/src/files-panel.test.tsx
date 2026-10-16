@@ -211,8 +211,13 @@ it("the tree follows showTree; the Files button asks to toggle it", async () => 
   expect(btn().getAttribute("aria-controls")).toBe("file-tree");
   await act(async () => (btn() as HTMLElement).click());
   expect(onToggleTree).toHaveBeenCalledOnce();
+  // No file open: the hidden tree leaves the hint; a shown tree fills the panel instead of the hint.
+  expect(el.querySelector('[data-testid="files-empty"]')).not.toBeNull();
   await show(true);
   expect(el.querySelector("nav#file-tree")).not.toBeNull();
+  expect(el.querySelector("nav#file-tree")!.className).toContain("flex-1");
+  expect(el.querySelector("nav#file-tree")!.className).not.toContain("max-h-[40%]");
+  expect(el.querySelector('[data-testid="files-empty"]')).toBeNull();
   expect(btn().getAttribute("aria-expanded")).toBe("true");
   act(() => root.render(null));
 });
