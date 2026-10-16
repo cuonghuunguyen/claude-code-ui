@@ -1,5 +1,5 @@
 // Changes tab (docs/spec.md "Layout"): files changed in the session, or in the working tree against HEAD or a branch, each with its diff, like OpenCode's review panel.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitStatusResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
@@ -49,6 +49,53 @@ export function saveStyle(s: DiffStyle) {
   } catch {
     // Storage blocked: the choice lasts while the panel is open.
   }
+}
+
+// File sidebar width after a drag, per browser; unset: OpenCode's 240px (200px in a narrow panel).
+const LIST_WIDTH_KEY = "claude-ui.changesListWidth";
+function loadListWidth(): number | undefined {
+  try {
+    const n = Number(localStorage.getItem(LIST_WIDTH_KEY));
+    return n > 0 ? n : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function saveListWidth(w: number | undefined) {
+  try {
+    if (w) localStorage.setItem(LIST_WIDTH_KEY, String(w));
+    else localStorage.removeItem(LIST_WIDTH_KEY);
+  } catch {
+    // Storage blocked: the width lasts while the panel is open.
+  }
+}
+
+/** Drag handle (or arrow keys) between the file sidebar and the diff; double click restores the default width. */
+function ListResizer({ list, width, onResize }: { list: RefObject<HTMLDivElement | null>; width: number | undefined; onResize: (w: number | undefined) => void }) {
+  // 160px up to the panel width less 240px for the diff.
+  const clamp = (w: number) => {
+    const room = list.current?.parentElement?.clientWidth || Infinity;
+    return Math.round(Math.max(160, Math.min(w, room - 240)));
+  };
+  const now = () => width ?? (list.current?.offsetWidth || 240);
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize file list"
+      aria-valuenow={now()}
+      tabIndex={0}
+      className="-ml-1 w-1 shrink-0 cursor-col-resize touch-none hover:bg-primary/30 focus-visible:bg-primary/30"
+      data-testid="changes-list-resizer"
+      onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
+      onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && list.current && onResize(clamp(e.clientX - list.current.getBoundingClientRect().left))}
+      onDoubleClick={() => onResize(undefined)}
+      onKeyDown={(e) => {
+        const d = { ArrowLeft: -32, ArrowRight: 32 }[e.key];
+        if (d) (e.preventDefault(), onResize(clamp(now() + d)));
+      }}
+    />
+  );
 }
 export { useNarrow };
 
@@ -252,6 +299,8 @@ export function ChangesPanel({
   const outside = gitMode ? 0 : sessionRows.length - sessionShown.length;
   const total = rows.reduce((t, r) => ({ added: t.added + (r.stats?.added ?? 0), removed: t.removed + (r.stats?.removed ?? 0) }), { added: 0, removed: 0 });
   const [filter, setFilter] = useState("");
+  const [listWidth, setListWidth] = useState(loadListWidth);
+  useEffect(() => saveListWidth(listWidth), [listWidth]);
   // No filter in the narrow accordion (OpenCode has none there).
   const q = narrow ? "" : filter.trim().toLowerCase();
   const matched = q ? rows.filter((r) => relPath(r.path, cwd).toLowerCase().includes(q)) : rows;
@@ -592,9 +641,9 @@ export function ChangesPanel({
           {gitDiff?.truncated && <p className="p-2 text-muted-foreground text-xs">List cut at 3000 files</p>}
         </div>
       ) : (
-        // OpenCode's review file sidebar (240px, 200px in a narrow panel): filter and folder tree beside the diff.
+        // OpenCode's review file sidebar (240px, 200px in a narrow panel, resizable): filter and folder tree beside the diff.
         <div className="@container flex min-h-0 flex-1">
-          <div ref={listRef} className="flex w-50 shrink-0 flex-col border-r @2xl:w-60">
+          <div ref={listRef} className={cn("flex shrink-0 flex-col border-r", !listWidth && "w-50 @2xl:w-60")} style={listWidth ? { width: `min(${listWidth}px, calc(100% - 240px))` } : undefined}>
             <label className="relative flex items-center px-2 pt-2 pb-1">
               <SearchIcon className="pointer-events-none absolute left-4 size-4 text-faint" aria-hidden />
               <input
@@ -619,6 +668,7 @@ export function ChangesPanel({
             </ul>
             {gitDiff?.truncated && <p className="border-t p-2 text-muted-foreground text-xs">List cut at 3000 files</p>}
           </div>
+          <ListResizer list={listRef} width={listWidth} onResize={setListWidth} />
           {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} />}
         </div>
       )}

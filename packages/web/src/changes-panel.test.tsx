@@ -206,6 +206,30 @@ it("wide: a folder tree like OpenCode's review sidebar (folders first, file-type
   expect(el.querySelector("[data-testid=changed-folder]")!.getAttribute("aria-expanded")).toBe("false");
 });
 
+it("wide: the file sidebar resizes by arrow keys on its separator (kept per browser), not cycling files; double click restores the default width", async () => {
+  const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
+  const panel = () => <ChangesPanel client={client} view={view([edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")])} cwd="/p" onOpen={() => {}} />;
+  await act(async () => root.render(panel()));
+  await flush();
+  const sep = () => el.querySelector<HTMLElement>("[data-testid=changes-list-resizer]")!;
+  const list = () => sep().previousElementSibling as HTMLElement;
+  const header = () => el.querySelector("[data-testid=file-diff-header]")!.textContent;
+  expect(sep().getAttribute("aria-label")).toBe("Resize file list");
+  expect(list().className).toContain("w-50");
+  const before = header();
+  await act(async () => void sep().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(list().style.width).toMatch(/^min\(272px, /);
+  expect(list().className).not.toContain("w-50");
+  expect(header()).toBe(before);
+  await act(async () => root.render(null));
+  await act(async () => root.render(panel()));
+  await flush();
+  expect(list().style.width).toMatch(/^min\(272px, /);
+  await act(async () => void sep().dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  expect(list().style.width).toBe("");
+  expect(list().className).toContain("w-50");
+});
+
 it("leaves ← / → alone while the file list is not on screen (side panel closed, new-session tab: display none)", async () => {
   const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
   const parts = [edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")];

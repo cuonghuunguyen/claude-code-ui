@@ -10,10 +10,12 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 
 ### Changed
 
+- The "Run session in" chip and menu name the main checkout "Primary worktree" (were "Local" and "Local repository").
 - Usage errors (a bad flag or an unknown command) now exit 2 (were 1).
 
 ### Fixed
 
+- The Changes tab's file list beside the diff can be resized: drag its edge or press ←/→ on it (kept per browser, double click restores the default width).
 - `claude-ui update` that fails within 10 seconds no longer marks the running version as failed to start.
 - Windows: a terminal whose shell exits by itself (`exit`) no longer stays in the daemon's memory; an error in node-pty's output pipe, output worker or process-list helper ends only that terminal instead of the daemon; input typed before the shell's first output counts against the 1 MiB input cap ([#268](https://github.com/cuonghuunguyen/claude-code-ui/issues/268)).
 
