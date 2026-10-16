@@ -27,16 +27,18 @@ type Props = {
 };
 
 export function CleanupDialog(p: Props) {
+  // Esc and an outside press close it like Cancel, except during a run: it stays open until the summary.
+  const running = useRef(false);
   return (
-    <Dialog.Root open={p.scope !== undefined} onOpenChange={() => {}}>
-      {p.scope && <Body {...p} scope={p.scope} />}
+    <Dialog.Root open={p.scope !== undefined} onOpenChange={(open) => !open && !running.current && p.onClose()}>
+      {p.scope && <Body {...p} scope={p.scope} running={running} />}
     </Dialog.Root>
   );
 }
 
 const describe = (scope: CleanupScope) => (scope.kind === "all" ? "All projects" : scope.kind === "project" ? projectName(scope.cwd) : `Workers of “${scope.title}”`);
 
-function Body({ scope, list, worktrees, state, request, onClose, onDone }: Props & { scope: CleanupScope }) {
+function Body({ scope, list, worktrees, state, request, onClose, onDone, running }: Props & { scope: CleanupScope; running: { current: boolean } }) {
   const id = useId();
   const cands = useMemo(() => cleanupCandidates(scope, list, worktrees, state), []); // eslint-disable-line react-hooks/exhaustive-deps -- frozen while open
   const [status, setStatus] = useState<Record<string, WorktreeStatusResult | { error: string }>>({});
@@ -91,6 +93,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone }: Props
   const m = ticked.filter((r) => r.kind === "worktree" && safetyOf(r) === "has_work").length;
   const acked = m === 0 || ack === m;
   const busy = phase === "run";
+  running.current = busy;
   const set = (key: string, on: boolean) => setOverride((o) => ({ ...o, [key]: on }));
 
   useEffect(() => {
@@ -98,10 +101,12 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone }: Props
   }, [phase]);
 
   async function run() {
+    running.current = true;
     setPhase("run");
     setProgress(0);
     const items = cleanupItems(ticked, new Set(ticked.map((r) => r.key)), { deleteBranch }, request as never);
     const r = await runCleanup(items, setProgress);
+    running.current = false;
     setResult(r);
     setPhase("done");
     onDone();

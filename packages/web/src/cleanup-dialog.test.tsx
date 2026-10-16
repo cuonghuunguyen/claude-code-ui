@@ -205,3 +205,28 @@ it("shows 'Nothing to clean up' for an empty scope", async () => {
   expect(q("[data-testid=cleanup-dialog]").textContent).toContain("Nothing to clean up");
   expect(confirm().disabled).toBe(true);
 });
+
+const esc = () => act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+
+it("Esc closes the dialog like Cancel, also with focus on the select or a checkbox", async () => {
+  const { onClose } = await open();
+  q<HTMLElement>("[data-testid=cleanup-older]").focus();
+  await esc();
+  expect(onClose).toHaveBeenCalledTimes(1);
+  check(`wt:${P("safe")}`).focus();
+  await esc();
+  expect(onClose).toHaveBeenCalledTimes(2);
+});
+
+it("Esc during a run does not close; the summary stays until Close", async () => {
+  let release!: () => void;
+  const { onClose } = await open({ list: [], remove: () => new Promise((r) => (release = () => r({}))) });
+  await click(confirm());
+  await esc();
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => release());
+  await act(async () => {});
+  expect(q("[data-testid=cleanup-summary]")).not.toBeNull();
+  await esc();
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
