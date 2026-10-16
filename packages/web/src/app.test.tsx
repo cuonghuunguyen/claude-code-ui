@@ -1572,3 +1572,109 @@ describe("GH-359 tab menu commands", () => {
     expect(toast()?.textContent).toContain("Copy failed");
   });
 });
+
+describe("GH-378 clean up tabs", () => {
+  const S = (n: number) => `${n}${n}${n}${n}${n}${n}${n}${n}-2222-3333-4444-555555555555`;
+  const [S2, S3, S4, S5] = [S(2), S(3), S(4), S(5)];
+  const mk = (id: string, title: string, over: Partial<SessionListItem> = {}): SessionListItem => ({ ...session, id, title, ...over });
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  const undo = () => act(async () => [...toast()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+  const rule = async (from: string, r: string) => {
+    await act(async () => void el.querySelector(`[data-tab-id="${from}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+    await act(async () => document.querySelector<HTMLElement>(`[data-testid="tab-cleanup-${r}"]`)!.click());
+  };
+  async function remount(list: SessionListItem[], tabs: string[], active: string) {
+    act(() => root.unmount());
+    replies["session.list"] = { sessions: list, projects: ["/p/demo"] };
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e1", seq: 0, session: list.find((s) => s.id === m.sessionId) ?? session });
+    localStorage.setItem("claude-ui.tabs", JSON.stringify(tabs));
+    location.hash = `#${active}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+  }
+  const draft = (id: string) => {
+    localStorage.setItem(`claude-ui.draft.${id}`, "unsent");
+    localStorage.setItem("claude-ui.drafts", JSON.stringify({ ...JSON.parse(localStorage.getItem("claude-ui.drafts") ?? "{}"), [id]: Date.now() }));
+  };
+  afterEach(() => {
+    vi.useRealTimers();
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    replies["session.subscribe"] = { logEpoch: "e1", session };
+    localStorage.clear();
+  });
+
+  it("Close idle tabs closes idle read tabs, keeps the active, a running and a draft one; toast 'Closed 2 tabs'; Undo restores tabs and order; no session is stopped", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { state: "running" }), mk(S4, "Fourth"), mk(S5, "Fifth")], [ID, S2, S3, S4, S5], S2);
+    draft(S4);
+    sent.length = 0;
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([S2, S3, S4]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+    await undo();
+    expect(tabIds()).toEqual([ID, S2, S3, S4, S5]);
+    expect(sent.filter((m) => ["session.interrupt", "session.close", "session.delete", "session.archive"].includes(m.type))).toEqual([]);
+  });
+
+  it("Close tabs of archived or deleted sessions closes an archived tab and a tab whose session is not listed", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { archived: true })], [ID, S2, S3, S4], S2);
+    await rule(S2, "archived");
+    expect(tabIds()).toEqual([ID, S2]);
+  });
+
+  it("Close worker tabs closes tabs with coordinatorId", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { coordinatorId: ID })], [ID, S2, S3], S2);
+    await rule(S2, "workers");
+    expect(tabIds()).toEqual([ID, S2]);
+  });
+
+  it("Close tabs not used for 1 hour uses claude-ui.tab-used; switching tabs stamps both tabs", async () => {
+    const old = Date.now() - 2 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
+    await remount([session, mk(S2, "Second"), mk(S3, "Third")], [ID, S2, S3], S2);
+    // The shown tab is stamped on load; ID and S3 are not shown.
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S3}"] [role="tab"]`)!.click());
+    await act(async () => {});
+    const used = JSON.parse(localStorage.getItem("claude-ui.tab-used")!) as Record<string, number>;
+    expect(Date.now() - used[S2]!).toBeLessThan(60_000);
+    expect(Date.now() - used[S3]!).toBeLessThan(60_000);
+    expect(used[ID]).toBe(old);
+    await rule(S3, "unused1h");
+    expect(tabIds()).toEqual([S2, S3]);
+  });
+
+  it("pinned tabs and a tab with a draft are never closed by a rule", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth")], [ID, S2, S3, S4], S2);
+    localStorage.setItem("claude-ui.pinned-tabs", JSON.stringify([S3]));
+    await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth")], [ID, S2, S3, S4], S2);
+    draft(ID);
+    await rule(S2, "idle");
+    expect(tabIds().sort()).toEqual([ID, S2, S3].sort());
+  });
+
+  it("auto-close 1 hour closes stale idle tabs once with one 'Auto-closed N idle tabs' toast and does not toast again within 15 minutes", async () => {
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old, [S4]: old }));
+    localStorage.setItem("claude-ui.tabAutoClose", "1h");
+    await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth", { state: "running" })], [ID, S2, S3, S4], S2);
+    await act(async () => {});
+    expect(tabIds()).toEqual([S2, S4]);
+    expect(toast()?.textContent).toContain("Auto-closed 2 idle tabs");
+    // Undo brings them back; the throttle keeps the next check from closing them again.
+    await undo();
+    expect(tabIds()).toEqual([ID, S2, S3, S4]);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await act(async () => {});
+    expect(tabIds()).toEqual([ID, S2, S3, S4]);
+  });
+
+  it("auto-close off (default) closes nothing", async () => {
+    const old = Date.now() - 30 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
+    await remount([session, mk(S2, "Second"), mk(S3, "Third")], [ID, S2, S3], S2);
+    await act(async () => {});
+    expect(tabIds()).toEqual([ID, S2, S3]);
+  });
+});

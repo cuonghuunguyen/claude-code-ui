@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearDrafts, loadDraft, MAX_DRAFTS, saveDraft } from "./drafts.ts";
+import { clearDrafts, draftKeys, loadDraft, MAX_DRAFTS, saveDraft } from "./drafts.ts";
 
 const memory = () => {
   const m = new Map<string, string>();
@@ -7,6 +7,16 @@ const memory = () => {
 };
 
 describe("drafts", () => {
+  it("GH-378 draftKeys lists the keys with a saved draft; an emptied draft leaves it", () => {
+    const s = memory();
+    expect(draftKeys(s)).toEqual(new Set());
+    saveDraft("a", "x", s);
+    saveDraft("new", "y", s);
+    expect(draftKeys(s)).toEqual(new Set(["a", "new"]));
+    saveDraft("a", "", s);
+    expect(draftKeys(s)).toEqual(new Set(["new"]));
+  });
+
   it("saves and loads per key; empty text removes the draft", () => {
     const s = memory();
     saveDraft("a", "hello", s);

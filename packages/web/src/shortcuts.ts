@@ -35,6 +35,15 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "tab.closeRight", title: "Close tabs to the right", group: "Tabs" },
   { id: "tab.closeAll", title: "Close all tabs", group: "Tabs" },
   { id: "tab.pin", title: "Pin or unpin tab", group: "Tabs" },
+  // Clean up tabs (GH-378): no default key, bindable.
+  { id: "tab.cleanup", title: "Clean up tabs…", group: "Tabs" },
+  { id: "tab.cleanup.idle", title: "Close idle tabs", group: "Tabs" },
+  { id: "tab.cleanup.finished", title: "Close finished tabs", group: "Tabs" },
+  { id: "tab.cleanup.archived", title: "Close tabs of archived or deleted sessions", group: "Tabs" },
+  { id: "tab.cleanup.unused1h", title: "Close tabs not used for 1 hour", group: "Tabs" },
+  { id: "tab.cleanup.unused1d", title: "Close tabs not used for 1 day", group: "Tabs" },
+  { id: "tab.cleanup.unused7d", title: "Close tabs not used for 7 days", group: "Tabs" },
+  { id: "tab.cleanup.workers", title: "Close worker tabs", group: "Tabs" },
   { id: "tab.reopen", title: "Reopen closed tab", group: "Tabs", key: "alt+shift+t", mac: "ctrl+shift+t" },
   // Ctrl/Cmd+1..9 belong to the browser's tabs; Alt+digit is free on Windows and Linux, Ctrl+digit on macOS.
   ...[1, 2, 3, 4, 5, 6, 7, 8].map(gotoTab),

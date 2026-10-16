@@ -3,6 +3,7 @@ import type { Effort, ModelInfo, PermissionMode, SessionListItem } from "@claude
 import type { PaletteItem } from "./palette.tsx";
 import { matchesKey, shortcutById } from "./shortcuts.ts";
 import { specOf } from "./keymap.ts";
+import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
 import { timeAgo } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
 import { EFFORT_LABEL, MODE_LABEL, effortOptions } from "./toolbar.tsx";
@@ -38,6 +39,9 @@ export type CommandContext = {
   closeAll?: () => void;
   /** Pins or unpins the active session tab (GH-359); none on the New session tab. */
   togglePin?: () => void;
+  /** Clean up tabs (GH-378): counts per rule for the whole strip; absent: no cleanup commands. */
+  cleanup?: CleanupMenu;
+  cleanUp?: (rule: CleanupRule) => void;
   /** The active tab is pinned: the command reads "Unpin tab". */
   pinned?: boolean;
   quickOpen: () => void;
@@ -114,6 +118,16 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.closeOthers && cmd("tab.closeOthers", "Close other tabs", c.closeOthers),
     c.closeRight && cmd("tab.closeRight", "Close tabs to the right", c.closeRight),
     c.closeAll && cmd("tab.closeAll", "Close all tabs", c.closeAll),
+    c.cleanup &&
+      c.cleanUp &&
+      c.cleanup.items.some((i) => i.count) &&
+      page(
+        "tab.cleanup",
+        "Clean up tabs…",
+        "Close which tabs?",
+        c.cleanup.items.filter((i) => i.count).map((i) => ({ id: `cleanup:${i.rule}`, group: c.cleanup!.kept.text || "Rules", title: i.label, meta: `${i.count} ${i.count === 1 ? "tab" : "tabs"}`, run: () => c.cleanUp!(i.rule) })),
+      ),
+    ...(c.cleanup && c.cleanUp ? c.cleanup.items.filter((i) => i.count).map((i) => cmd(`tab.cleanup.${i.rule}`, i.label, () => c.cleanUp!(i.rule), true)) : []),
     c.togglePin && cmd("tab.pin", c.pinned ? "Unpin tab" : "Pin tab", c.togglePin),
     c.canReopen && cmd("tab.reopen", "Reopen closed tab", c.reopenTab),
     // Tab N: only for tabs that exist; found by typing "go to tab".

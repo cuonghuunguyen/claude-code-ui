@@ -2,11 +2,12 @@
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
 // Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
-// Pinned tabs (GH-359): icon only, first in their group. Tab context menu: Close others / to the right / all, Reopen closed tab, Copy session ID / cwd path, Reveal in sidebar (GH-359); Shift+F10 or the ContextMenu key opens it.
+// Pinned tabs (GH-359): icon only, first in their group. Tab context menu: Close others / to the right / all, Reopen closed tab, Copy session ID / cwd path, Reveal in sidebar (GH-359), Clean up tabs submenu (GH-378); Shift+F10 or the ContextMenu key opens it.
+// Clean up tabs by rule (GH-378): tab menu submenu, group chip "Clean up group", long press (or right click) on the phone close button.
 import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
-import { ChevronDownIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
@@ -16,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/u
 import { GHOST, ROW } from "./toolbar.tsx";
 import { SideLabel } from "./sides.tsx";
 import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
+import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
 import { KEY_FOLLOWUP_MS, openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
@@ -103,6 +105,8 @@ export function TabsBar({
   onCloseGroup,
   onCloseOtherGroups,
   onTabCommand,
+  cleanupMenu,
+  onCleanup,
   canReopen,
   pinned,
   onNew,
@@ -139,6 +143,10 @@ export function TabsBar({
   onCloseOtherGroups?: (key: string) => void;
   /** The tab menu's commands for tab `id` (close others / right / all, reopen, pin, copy, reveal); absent: the menu has Move and Close tab only. */
   onTabCommand?: (id: string, c: TabCommand) => void;
+  /** Clean up tabs (GH-378): counts and kept line for the whole strip or for `scope` (a group's ids); read when a menu opens. Absent: no cleanup items. */
+  cleanupMenu?: (scope?: string[]) => CleanupMenu;
+  /** Runs a cleanup rule; `scope`: only those tabs (Clean up group = rule "idle" on the group's ids). */
+  onCleanup?: (rule: CleanupRule, scope?: string[]) => void;
   /** A closed tab can be reopened. */
   canReopen?: boolean;
   /** Pinned session tabs (GH-359): first in their group, icon only, no close button, skipped by the bulk closes; they never cross the unpinned ones. */
@@ -232,6 +240,11 @@ export function TabsBar({
     if (kind) refocus.current = { id: kind === "others" ? id : closeMany(tabs, closeTargets(tabs, pins, id, kind), activeId ?? id).active };
     onTabCommand?.(id, c);
   };
+  // A cleanup never closes the active tab: focus stays there (the clicked tab may be gone).
+  const cleanUp = (rule: CleanupRule, scope?: string[]) => {
+    if (activeId && activeId !== FOCUS_TAB) refocus.current = { id: activeId };
+    onCleanup?.(rule, scope);
+  };
   const moveBy = (id: string, by: -1 | 1) => {
     const to = tabs[tabs.indexOf(id) + by];
     if (!to || keyOf(to) !== keyOf(id) || pins.has(to) !== pins.has(id)) return;
@@ -319,7 +332,7 @@ export function TabsBar({
         {groups.map(([cwd, ids]) => (
           // `contents`: groups are no boxes, tabs shrink in the strip as before. The chip is a button inside the tablist (a11y trade-off, no group role).
           <div key={cwd} role="none" className="contents" data-testid="tab-group">
-            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} onCloseGroup={() => closeGroup(cwd)} onCloseOthers={onCloseOtherGroups && (() => onCloseOtherGroups(cwd))} canCloseOthers={groups.some(([k, g]) => k !== cwd && g.some((t) => !pins.has(t)))} move={{ left: groups.findIndex(([k]) => k === cwd) > 0, right: groups.findIndex(([k]) => k === cwd) < groups.length - 1, by: (by) => ((refocus.current = { group: cwd }), onMoveGroup(cwd, by)) }} compact={!!compact} rows={{ activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) }} />}
+            {chips && cwd && <GroupChip cwd={cwd} ids={ids} hiddenIds={ids.filter(hidden)} info={info} collapsed={collapsed.has(cwd)} onToggle={() => toggle(cwd)} onMoveTo={onMoveGroupTo} onCloseGroup={() => closeGroup(cwd)} onCloseOthers={onCloseOtherGroups && (() => onCloseOtherGroups(cwd))} canCloseOthers={groups.some(([k, g]) => k !== cwd && g.some((t) => !pins.has(t)))} cleanupCount={cleanupMenu && onCleanup && (() => cleanupMenu(ids).items.find((i) => i.rule === "idle")!.count)} onCleanup={cleanupMenu && onCleanup && (() => cleanUp("idle", ids))} move={{ left: groups.findIndex(([k]) => k === cwd) > 0, right: groups.findIndex(([k]) => k === cwd) < groups.length - 1, by: (by) => ((refocus.current = { group: cwd }), onMoveGroup(cwd, by)) }} compact={!!compact} rows={{ activeId, onSelect, onClose: (id) => (ids.length === 1 ? closeKeepFocus(id) : onClose(id)) }} />}
             {ids
               .filter((id) => !hidden(id))
               .map((id) => {
@@ -336,6 +349,8 @@ export function TabsBar({
                     onSelect={onSelect}
                     onClose={onClose}
                     onMove={onMove}
+                    cleanup={cleanupMenu && onCleanup && (() => cleanupMenu())}
+                    onCleanup={cleanupMenu && onCleanup && cleanUp}
                     onMenuMove={(by) => moveBy(id, by)}
                     onMenuClose={() => closeKeepFocus(id)}
                     pinned={pins.has(id)}
@@ -408,14 +423,69 @@ export function TabsBar({
         </div>
       )}
       {activeId && activeId !== FOCUS_TAB && (
-        <IconButton className="md:hidden" label={`Close ${active?.title ?? "tab"}`} onClick={() => onClose(activeId)} testId="tab-close-active">
-          <XIcon />
-        </IconButton>
+        <PhoneClose label={`Close ${active?.title ?? "tab"}`} onClose={() => onClose(activeId)} cleanup={cleanupMenu && onCleanup && (() => cleanupMenu())} onCleanup={cleanUp} />
       )}
       <IconButton label="New session" onClick={onNew} testId="tab-new" command="session.new" ref={newButton}>
         <PlusIcon />
       </IconButton>
     </div>
+  );
+}
+
+/** Clean up tabs (GH-378): one item per rule (count right, disabled at 0), then the kept line. */
+function CleanupItems({ menu, onRun }: { menu: CleanupMenu; onRun: (rule: CleanupRule) => void }) {
+  return (
+    <>
+      {menu.items.map((i) => (
+        <ContextMenu.Item key={i.rule} className={ITEM} disabled={i.count === 0} data-testid={`tab-cleanup-${i.rule}`} aria-label={`${i.label} (${i.count})`} onClick={() => onRun(i.rule)}>
+          <span className="flex-1">{i.label}</span>
+          <span className="ml-4 text-muted-foreground tabular-nums">{i.count}</span>
+        </ContextMenu.Item>
+      ))}
+      {menu.kept.count > 0 && (
+        <div role="note" className="px-2 py-1 text-muted-foreground text-xs" data-testid="tab-cleanup-kept">
+          {menu.kept.text}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Clean up group (GH-378): Close idle tabs on this group's tabs; disabled when none would close. */
+function GroupCleanup({ X, count, onRun }: { X: typeof ContextMenu.Item; count: number; onRun: () => void }) {
+  return (
+    <X className={ITEM} disabled={count === 0} data-testid="tab-group-cleanup" onClick={onRun}>
+      <span className="flex-1">Clean up group</span>
+      <span className="ml-4 text-muted-foreground tabular-nums">{count}</span>
+    </X>
+  );
+}
+
+/** A click this soon after the long press that opened the cleanup menu is its touch release, not a tap. */
+const LONG_PRESS_CLICK_MS = 800;
+/** Phone close button (below md): a tap closes the active tab; a long press or right click opens the Clean up tabs items. */
+function PhoneClose({ label, onClose, cleanup, onCleanup }: { label: string; onClose: () => void; cleanup?: () => CleanupMenu; onCleanup: (rule: CleanupRule) => void }) {
+  const openedAt = useRef(-Infinity);
+  const button = (
+    <IconButton className="md:hidden" label={label} onClick={() => performance.now() - openedAt.current > LONG_PRESS_CLICK_MS && onClose()} testId="tab-close-active">
+      <XIcon />
+    </IconButton>
+  );
+  if (!cleanup) return button;
+  return (
+    <ContextMenu.Root onOpenChange={(o) => o && (openedAt.current = performance.now())}>
+      <ContextMenu.Trigger className="contents select-none [-webkit-touch-callout:none] md:hidden">{button}</ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Positioner className="z-50">
+          <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-2rem)]")} data-testid="tab-cleanup-menu">
+            <ContextMenu.Group>
+              <ContextMenu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">Clean up tabs</ContextMenu.GroupLabel>
+              <CleanupItems menu={cleanup()} onRun={onCleanup} />
+            </ContextMenu.Group>
+          </ContextMenu.Popup>
+        </ContextMenu.Positioner>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 
@@ -714,7 +784,7 @@ function GroupTabRows({ ids, info, rows }: { ids: string[]; info: (id: string) =
 }
 
 /** Group header: project color, name, tab count; a collapsed group shows its most urgent tab state. */
-function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, onCloseGroup, onCloseOthers, canCloseOthers, move, rows, compact }: { onCloseGroup: () => void; onCloseOthers?: () => void; canCloseOthers: boolean; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void }; rows: TabRowsProps; compact: boolean; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
+function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, onCloseGroup, onCloseOthers, canCloseOthers, cleanupCount, onCleanup, move, rows, compact }: { cleanupCount?: () => number; onCleanup?: () => void; onCloseGroup: () => void; onCloseOthers?: () => void; canCloseOthers: boolean; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void }; rows: TabRowsProps; compact: boolean; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
   const first = info(ids[0]!);
   const c = avatarColor(first.groupColor ?? cwd, use(AvatarColors));
   const states = hiddenIds.map((id) => status(id, info(id)));
@@ -786,6 +856,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
               </div>
               <GroupTabRows ids={ids} info={info} rows={rows} />
               <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
+              {onCleanup && <GroupCleanup X={Menu.Item} count={cleanupCount?.() ?? 0} onRun={onCleanup} />}
               {onCloseOthers && (
                 <Menu.Item className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
                   Close other groups
@@ -829,6 +900,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
             <GroupTabRows ids={ids} info={info} rows={rows} />
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+            {onCleanup && <GroupCleanup X={ContextMenu.Item} count={cleanupCount?.() ?? 0} onRun={onCleanup} />}
             {onCloseOthers && (
               <ContextMenu.Item className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
                 Close other groups
@@ -872,6 +944,8 @@ function Tab({
   onSelect,
   onClose,
   onMove,
+  cleanup,
+  onCleanup,
   onMenuMove,
   onMenuClose,
   canOthers,
@@ -897,6 +971,9 @@ function Tab({
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onMove: (from: string, to: string) => void;
+  /** Clean up tabs submenu (GH-378): read when the menu renders; absent: no submenu. */
+  cleanup?: () => CleanupMenu;
+  onCleanup?: (rule: CleanupRule) => void;
   onMenuMove: (by: -1 | 1) => void;
   onMenuClose: () => void;
   canOthers: boolean;
@@ -1025,6 +1102,21 @@ function Tab({
                       {x.label}
                     </ContextMenu.Item>
                   ))}
+                  {sec[0]!.id === "close" && cleanup && onCleanup && (
+                    <ContextMenu.SubmenuRoot>
+                      <ContextMenu.SubmenuTrigger className={ITEM} data-testid="tab-menu-cleanup">
+                        <span className="flex-1">Clean up tabs</span>
+                        <ChevronRightIcon className="ml-4 size-3.5" aria-hidden />
+                      </ContextMenu.SubmenuTrigger>
+                      <ContextMenu.Portal>
+                        <ContextMenu.Positioner className="z-50">
+                          <ContextMenu.Popup className={POPUP} data-testid="tab-cleanup-menu">
+                            <CleanupItems menu={cleanup()} onRun={onCleanup} />
+                          </ContextMenu.Popup>
+                        </ContextMenu.Positioner>
+                      </ContextMenu.Portal>
+                    </ContextMenu.SubmenuRoot>
+                  )}
                 </Fragment>
               ))}
             {session && (

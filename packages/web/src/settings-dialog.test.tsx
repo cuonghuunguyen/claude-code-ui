@@ -26,6 +26,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   const onTabGrouping = vi.fn();
   const onRestartGuide = vi.fn();
   const onTabCompact = vi.fn();
+  const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } };
   const calls: Request[] = [];
@@ -49,6 +50,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
     const [open, set] = useState(true);
     const [grouping, setGrouping] = useState<TabGrouping>("project");
     const [compact, setCompact] = useState(false);
+    const [auto, setAuto] = useState<"off" | "1h" | "1d">("off");
     return (
       <SettingsDialog
         open={open}
@@ -60,6 +62,11 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
         onTabCompact={(on) => {
           onTabCompact(on);
           setCompact(on);
+        }}
+        tabAutoClose={auto}
+        onTabAutoClose={(v) => {
+          onTabAutoClose(v);
+          setAuto(v);
         }}
         tabGrouping={grouping}
         onRestartGuide={onRestartGuide}
@@ -74,7 +81,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const pick = async (group: string) => void (await act(async () => q(`settings-group-${group}`)!.click()));
-  return { calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onShortcuts, onRestartGuide };
+  return { calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onRestartGuide };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -475,4 +482,17 @@ it("Usage limits: Usage ring shows is a per-browser choice, Highest usage by def
   expect(q("settings-usage-ring")?.textContent).toContain("Weekly");
   expect(calls.some((c) => c.type === "settings.set")).toBe(false);
   localStorage.removeItem("claude-ui.usageRing");
+});
+
+it("GH-378 Settings > Tabs has Auto-close idle tabs after (Off, 1 hour, 1 day), shows the value and calls onTabAutoClose", async () => {
+  const { q, calls, onTabAutoClose, pick } = await render();
+  await pick("tabs");
+  expect(document.getElementById("settings-tabs-autoclose-label")?.textContent).toBe("Auto-close idle tabs after");
+  expect(q("settings-tabs-autoclose")?.textContent).toContain("Off");
+  await act(async () => q("settings-tabs-autoclose")!.click());
+  expect([...document.querySelectorAll("[role=option]")].map((o) => o.textContent)).toEqual(["Off", "1 hour", "1 day"]);
+  await act(async () => document.querySelectorAll<HTMLElement>("[role=option]")[1]!.click());
+  expect(onTabAutoClose).toHaveBeenCalledWith("1h");
+  expect(q("settings-tabs-autoclose")?.textContent).toContain("1 hour");
+  expect(calls.some((c) => c.type === "settings.set")).toBe(false);
 });

@@ -2,6 +2,7 @@
 import { expect, it, vi } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { appCommands, shortcutFor, type CommandContext } from "./app-commands.ts";
+import { CLEANUP_RULES, RULE_LABEL, type CleanupMenu, type CleanupRule } from "./tab-cleanup.ts";
 import { KEYS } from "./shortcuts.ts";
 import { bind, resetAll } from "./keymap.ts";
 
@@ -367,4 +368,41 @@ it("GH-359 tab.pin is listed only for a session tab, reads Pin or Unpin tab, has
   expect(appCommands(ctx({ togglePin, pinned: true })).find((i) => i.id === "tab.pin")!.title).toBe("Unpin tab");
   run(ctx({ togglePin }), "tab.pin");
   expect(togglePin).toHaveBeenCalled();
+});
+
+const menu = (counts: Partial<Record<CleanupRule, number>>, kept = ""): CleanupMenu => ({ items: CLEANUP_RULES.map((rule) => ({ rule, label: RULE_LABEL[rule], count: counts[rule] ?? 0 })), kept: { count: kept ? 1 : 0, text: kept } });
+
+it("GH-378 Clean up tabs… is a page of the rules with a count > 0, meta 'N tabs', each runs cleanUp(rule)", () => {
+  const cleanUp = vi.fn();
+  const entry = appCommands(ctx({ cleanup: menu({ idle: 3, workers: 1 }, "2 kept: running/draft"), cleanUp })).find((i) => i.id === "tab.cleanup")!;
+  if (!("page" in entry)) throw new Error("not a page");
+  const page = entry;
+  expect([page.title, page.keys]).toEqual(["Clean up tabs…", undefined]);
+  expect(page.page.items.map((i) => [i.title, i.meta, i.group])).toEqual([
+    ["Close idle tabs", "3 tabs", "2 kept: running/draft"],
+    ["Close worker tabs", "1 tab", "2 kept: running/draft"],
+  ]);
+  const last = page.page.items[1]!;
+  if ("run" in last) last.run();
+  expect(cleanUp).toHaveBeenCalledWith("workers");
+  const direct = appCommands(ctx({ cleanup: menu({ idle: 3 }), cleanUp })).find((i) => i.id === "tab.cleanup.idle")!;
+  expect(direct.searchOnly).toBe(true);
+  if ("run" in direct) direct.run();
+  expect(cleanUp).toHaveBeenCalledWith("idle");
+});
+
+it("GH-378 Clean up tabs… is absent when no rule would close anything or without the callbacks", () => {
+  const has = (x: CommandContext) => appCommands(x).some((i) => i.id.startsWith("tab.cleanup"));
+  expect(has(ctx({ cleanup: menu({}), cleanUp: vi.fn() }))).toBe(false);
+  expect(has(ctx({ cleanup: menu({ idle: 1 }) }))).toBe(false);
+  expect(has(ctx())).toBe(false);
+});
+
+it("GH-378 tab.cleanup and tab.cleanup.<rule> have no default key and take a user binding", () => {
+  const over = { cleanup: menu({ idle: 2 }), cleanUp: vi.fn() };
+  const items = appCommands(ctx(over));
+  expect(["tab.cleanup", "tab.cleanup.idle"].map((id) => items.find((i) => i.id === id)?.keys)).toEqual([undefined, undefined]);
+  bind("tab.cleanup.idle", "mod+alt+i");
+  expect(shortcutFor(appCommands(ctx(over)), ev("i", { ctrlKey: true, altKey: true, code: "KeyI" }))?.id).toBe("tab.cleanup.idle");
+  resetAll();
 });

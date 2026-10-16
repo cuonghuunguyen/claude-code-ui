@@ -1138,3 +1138,59 @@ it("GH-359 a mouse right click does not move the focus into the menu", async () 
   expect(document.activeElement).not.toBe(itemOf("Move left"));
   await closeMenu();
 });
+
+// GH-378: Clean up tabs.
+const CLEAN = { items: [{ rule: "idle", label: "Close idle tabs", count: 2 }, { rule: "finished", label: "Close finished tabs", count: 0 }, { rule: "workers", label: "Close worker tabs", count: 1 }], kept: { count: 2, text: "2 kept: pinned/draft" } } as const;
+const cleanup = () => ({ cleanupMenu: vi.fn(() => ({ items: [...CLEAN.items], kept: CLEAN.kept })), onCleanup: vi.fn() });
+
+it("GH-378 the tab context menu has a Clean up tabs submenu with every rule, its count, disabled at 0, and the kept line", async () => {
+  const { el } = await render({ onTabCommand: vi.fn(), ...cleanup() });
+  await ctxMenu(el, "b");
+  expect(itemOf("Clean up tabs")).toBeTruthy();
+  await act(async () => itemOf("Clean up tabs").click());
+  const sub = document.querySelector<HTMLElement>('[data-testid="tab-cleanup-menu"]')!;
+  expect(sub).toBeTruthy();
+  expect([...sub.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Close idle tabs2", "Close finished tabs0", "Close worker tabs1"]);
+  expect(sub.querySelector('[data-testid="tab-cleanup-finished"]')!.getAttribute("aria-disabled")).toBe("true");
+  expect(sub.querySelector('[data-testid="tab-cleanup-idle"]')!.getAttribute("aria-label")).toBe("Close idle tabs (2)");
+  expect(sub.querySelector('[data-testid="tab-cleanup-kept"]')!.textContent).toBe("2 kept: pinned/draft");
+  await closeMenu();
+  await closeMenu();
+});
+
+it("GH-378 choosing a cleanup item calls onCleanup(rule) and focus goes to the active tab", async () => {
+  const c = cleanup();
+  const { el } = await render({ onTabCommand: vi.fn(), ...c });
+  await ctxMenu(el, NEW_TAB);
+  await act(async () => itemOf("Clean up tabs").click());
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-cleanup-workers"]')!.click());
+  expect(c.onCleanup).toHaveBeenCalledWith("workers", undefined);
+  // The strip re-renders with fewer tabs: focus lands on the active tab, not on the closed clicked one.
+  await act(async () => root!.render(<SideLabel value={() => undefined}><TabsBar tabs={["a", "b", "c", "d"]} activeId="c" info={(id) => INFO[id]!} onSelect={vi.fn()} onClose={vi.fn()} onMove={vi.fn()} onMoveGroup={vi.fn()} onMoveGroupTo={vi.fn()} onNew={vi.fn()} onAction={vi.fn()} onRenamed={vi.fn()} {...c} /></SideLabel>));
+  expect((document.activeElement as HTMLElement | null)?.closest("[data-tab-id]")?.getAttribute("data-tab-id")).toBe("c");
+});
+
+it("GH-378 without cleanupMenu the tab menu has no Clean up tabs item", async () => {
+  const { el } = await render({ onTabCommand: vi.fn() });
+  await ctxMenu(el, "b");
+  expect(document.querySelector('[data-testid="tab-menu-cleanup"]')).toBeNull();
+  await closeMenu();
+});
+
+it("GH-378 phone: a contextmenu on the close button opens the cleanup items; a click right after does not close the tab; a plain click closes it", async () => {
+  const c = cleanup();
+  const { el, onClose } = await render(c);
+  const x = el.querySelector<HTMLElement>('[data-testid="tab-close-active"]')!;
+  await act(async () => void x.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  const m = document.querySelector<HTMLElement>('[data-testid="tab-cleanup-menu"]')!;
+  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Close idle tabs2", "Close finished tabs0", "Close worker tabs1"]);
+  expect(m.textContent).toContain("Clean up tabs");
+  await act(async () => itemOf("Close idle tabs2").click());
+  expect(c.onCleanup).toHaveBeenCalledWith("idle", undefined);
+  await act(async () => x.click());
+  expect(onClose).not.toHaveBeenCalled();
+  vi.spyOn(performance, "now").mockReturnValue(performance.now() + 2000);
+  await act(async () => x.click());
+  expect(onClose).toHaveBeenCalledWith("c");
+  vi.restoreAllMocks();
+});

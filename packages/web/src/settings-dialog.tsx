@@ -11,6 +11,7 @@ import { Switch } from "./plugins-dialog.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
 import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
+import { AUTO_CLOSE, type AutoClose } from "./tab-cleanup.ts";
 import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
 import { USAGE_RINGS, saveUsageRing, useUsageRing, type UsageRing } from "./usage-ring.ts";
 import { GuideSection } from "./guide-settings.tsx";
@@ -134,7 +135,7 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, onShortcuts, onRestartGuide, push }: { push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onRestartGuide, push }: { tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
   const [daemon, setDaemon] = useState<SettingsResult["daemon"]>();
@@ -414,6 +415,28 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
                 </span>
               </div>
               <Switch on={tabCompact && tabGrouping !== "none"} label="Compact tabs" held={tabGrouping === "none"} onToggle={onTabCompact} title="Compact tabs" describedBy="settings-tabs-compact-hint" testId="settings-tabs-compact" />
+            </div>
+          )}
+          {onTabAutoClose && (
+            <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+              <div className="min-w-0 flex-1">
+                <span id="settings-tabs-autoclose-label" className="block text-sm">Auto-close idle tabs after</span>
+                <span id="settings-tabs-autoclose-hint" className="block text-muted-foreground text-xs">
+                  Closes idle tabs not used for this long. Never pinned, running, unread or with a draft. Sessions keep running. Kept in this browser.
+                </span>
+              </div>
+              <Select value={tabAutoClose} onValueChange={(v) => v && onTabAutoClose(v as AutoClose)}>
+                <SelectTrigger aria-labelledby="settings-tabs-autoclose-label" aria-describedby="settings-tabs-autoclose-hint" data-testid="settings-tabs-autoclose" className="w-36 max-md:data-[size=default]:h-11">
+                  <SelectValue>{(v: AutoClose) => AUTO_CLOSE.find((a) => a.value === v)?.label ?? v}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {AUTO_CLOSE.map((a) => (
+                    <SelectItem key={a.value} value={a.value} data-testid={`settings-tabs-autoclose-${a.value}`}>
+                      {a.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
         </section>

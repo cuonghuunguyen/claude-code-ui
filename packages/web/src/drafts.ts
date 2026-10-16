@@ -26,6 +26,11 @@ const readIndex = (s: Store): Record<string, number> => {
   }
 };
 
+/** Keys with a saved draft (GH-378: a tab with an unsent draft is never closed by a cleanup rule). */
+export function draftKeys(store = defaultStore()): Set<string> {
+  return store ? new Set(Object.keys(readIndex(store))) : new Set();
+}
+
 export function loadDraft(key: string, store = defaultStore()): string {
   try {
     return store?.getItem(PREFIX + key) ?? "";

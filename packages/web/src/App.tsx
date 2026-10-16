@@ -76,7 +76,9 @@ import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
-import { clearDrafts, loadDraft, NEW_TAB_DRAFT } from "./drafts.ts";
+import { clearDrafts, draftKeys, loadDraft, NEW_TAB_DRAFT } from "./drafts.ts";
+import { autoCloseDue, autoCloseTargets, cleanupMenu as buildCleanupMenu, cleanupTargets, loadAutoClose, saveAutoClose, type AutoClose, type CleanupContext, type CleanupRule, type TabFacts } from "./tab-cleanup.ts";
+import { loadUsed, pruneUsed, saveUsed, seedUsed, stampUsed } from "./tab-used.ts";
 import { PairingForm } from "./pairing-form.tsx";
 import { useDraft } from "./use-draft.ts";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
@@ -271,6 +273,15 @@ export function App() {
     setCompact(on);
     saveTabCompact(on);
   };
+  // Clean up tabs (GH-378): when each tab was last shown (per browser) and the auto-close setting.
+  const [used, setUsed] = useState(loadUsed);
+  const usedRef = useRef(used);
+  usedRef.current = used;
+  const [autoClose, setAutoClose] = useState(loadAutoClose);
+  const changeAutoClose = (v: AutoClose) => {
+    setAutoClose(v);
+    saveAutoClose(v);
+  };
   // A closed or replaced new-session tab starts with the defaults next time.
   const draftOpen = tabs.includes(NEW_TAB);
   useEffect(() => void (!draftOpen && setDraft(NEW_DRAFT)), [draftOpen]);
@@ -302,6 +313,8 @@ export function App() {
   // Pinned session tabs (GH-359), per browser; a pin ends with its tab.
   const [pinned, setPinnedState] = useState(loadPinned);
   const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
+  const pinnedRef = useRef(pinnedSet);
+  pinnedRef.current = pinnedSet;
   const [resumeSearch, setResumeSearch] = useState<{ text: string; seq: number }>();
   // Wide screens: the Home button shows or hides the sessions sidebar.
   const [sidebar, setSidebar] = useState(true);
@@ -437,6 +450,8 @@ export function App() {
   const restored = useRef<string[] | undefined>(tabs);
   /** True once a session list reply is in (never reset): the tab group keys are final only after it (GH-196). */
   const [listLoaded, setListLoaded] = useState(false);
+  const listLoadedRef = useRef(listLoaded);
+  listLoadedRef.current = listLoaded;
   /** Tabs whose subscribe failed for a reason other than unknown_session: their session never arrives, so they must not keep the group keys from becoming final (GH-201). */
   const [failedTabs, setFailedTabs] = useState<ReadonlySet<string>>(new Set());
 
@@ -778,7 +793,7 @@ export function App() {
   }
 
   /** Close others / to the right / all / other groups (GH-359): no question (the sessions keep running), one toast with Undo for all of them. */
-  function closeSeveral(ids: string[]) {
+  function closeSeveral(ids: string[], message?: (n: number, title: string | undefined) => string) {
     // Before closeGroup: release() reads the old tab list for each index.
     const now = tabsRef.current;
     const entries = ids.filter((id) => now.includes(id)).map((id) => ({ id, at: now.indexOf(id) }));
@@ -788,7 +803,7 @@ export function App() {
     const title = one && (one === NEW_TAB ? "New session" : listRef.current.find((s) => s.id === one)?.title || titles[one] || "Untitled");
     closeGroup(entries.map((e) => e.id));
     setToast({
-      message: one ? `Closed ${title}` : `Closed ${entries.length} tabs`,
+      message: message ? message(entries.length, title) : one ? `Closed ${title}` : `Closed ${entries.length} tabs`,
       action: {
         label: "Undo",
         onClick: () => {
@@ -802,6 +817,25 @@ export function App() {
       },
     });
   }
+
+  /** Clean up tabs (GH-378): what the rules know about each open tab, read at call time (refs), so a click acts on the current state. */
+  function tabFacts(): TabFacts[] {
+    const drafts = draftKeys();
+    return tabsRef.current.map((id) => {
+      if (id === NEW_TAB) return { id, unread: false, draft: drafts.has(NEW_TAB_DRAFT), listed: true, archived: false, worker: false, transcript: false, busy: false, lastUsed: usedRef.current[id] };
+      const item = listRef.current.find((s) => s.id === id);
+      const v = viewsRef.current[id];
+      // A view not replayed yet reads idle: the list state (running, needs input) still protects the tab.
+      const busyList = item?.state === "running" || item?.state === "needs_input";
+      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), unread: unreadRef.current.has(id), draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedRef.current[id] };
+    });
+  }
+  const cleanupCtx = (): CleanupContext => ({ activeId: activeRef.current, pinned: pinnedRef.current, listLoaded: listLoadedRef.current, now: Date.now() });
+  /** Runs one cleanup rule over the strip, or over `scope` (Clean up group); safety is re-checked now, not taken from the menu's counts. */
+  function cleanUp(rule: CleanupRule, scope?: string[]) {
+    closeSeveral(cleanupTargets(rule, tabFacts(), cleanupCtx(), scope && new Set(scope)));
+  }
+  const cleanupInfo = (scope?: string[]) => buildCleanupMenu(tabFacts(), cleanupCtx(), scope && new Set(scope));
 
   /** Tab menu commands (GH-359) of tab `id`. */
   function tabCommand(id: string, c: TabCommand) {
@@ -935,6 +969,19 @@ export function App() {
   }, [focused, activeId, activeView?.lastSeq]);
 
   useEffect(() => saveTabs(tabs), [tabs]);
+  // Clean up tabs (GH-378): stamp the tab that was shown and the one that is shown now; a tab without a stamp starts now; closed tabs keep theirs for Undo and Reopen.
+  const prevActive = useRef(activeId);
+  useEffect(() => {
+    setUsed((u) => stampUsed(u, [prevActive.current, activeId], Date.now()));
+    prevActive.current = activeId;
+  }, [activeId]);
+  useEffect(() => setUsed((u) => pruneUsed(seedUsed(u, tabs, Date.now()), new Set([...tabs, ...closedTabs.map((c) => c.id)]))), [tabs, closedTabs]);
+  useEffect(() => saveUsed(used), [used]);
+  useEffect(() => {
+    const onVis = () => document.visibilityState === "visible" && setUsed((u) => stampUsed(u, [activeRef.current], Date.now()));
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
   useEffect(() => savePinned(pinned), [pinned]);
   // A pin ends with its tab (Close tab, Delete, reopen and Undo bring a tab back unpinned).
   useEffect(() => {
@@ -944,6 +991,8 @@ export function App() {
   useEffect(() => applyTheme(theme), [theme]);
 
   const unread = new Set(list.filter((s) => views[s.id] && isUnread(views[s.id]!, seen[s.id])).map((s) => s.id));
+  const unreadRef = useRef(unread);
+  unreadRef.current = unread;
   // Focus (GH-159): every unanswered request; the sidebar row, the Focus tab, the browser tab and the status text all show the same number of sessions.
   const waiting = useMemo(() => {
     const w = waitingRequests(list, views, firstSeen.current, Date.now());
@@ -1196,6 +1245,22 @@ export function App() {
   // Regrouped only once every tab's key is final: on partial keys the unknown tabs gather in one group and the damaged order is stored (GH-196).
   const keysFinal = tabKeysFinal(tabs, listLoaded, (id) => !!sessionOf(id), failedTabs);
   useGroupedTabs(tabs, setTabs, groupOfTab, keysFinal, pinnedSet);
+  // Auto-close idle tabs (GH-378): only while the page shows, connected, with the list and group keys final; the 60 s tick is cheap, autoCloseDue lets one run through per 15 minutes.
+  const autoRan = useRef<number>(undefined);
+  useEffect(() => {
+    if (autoClose === "off" || status !== "connected" || !listLoaded || !keysFinal) return;
+    const run = () => {
+      if (document.visibilityState !== "visible" || !autoCloseDue(Date.now(), autoRan.current)) return;
+      autoRan.current = Date.now();
+      const ids = autoCloseTargets(tabFacts(), cleanupCtx(), autoClose);
+      if (ids.length) closeSeveral(ids, (n, t) => (n === 1 ? `Auto-closed ${t}` : `Auto-closed ${n} idle tabs`));
+    };
+    run();
+    const t = setInterval(run, 60_000);
+    document.addEventListener("visibilitychange", run);
+    return () => (clearInterval(t), document.removeEventListener("visibilitychange", run));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoClose, status, listLoaded, keysFinal]);
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   // GH-133: a just-created session shows (with its pending prompt) before its subscribe reply.
   // A tab that followed a /clear shows the new session at once too: an empty timeline carrying the old one's settings.
@@ -1411,6 +1476,8 @@ export function App() {
     closeOthers: activeId && closeTargets(tabs, pinnedSet, activeId, "others").length && tabs.includes(activeId) ? () => tabCommand(activeId, "closeOthers") : undefined,
     closeRight: activeId && closeTargets(tabs, pinnedSet, activeId, "right").length && tabs.includes(activeId) ? () => tabCommand(activeId, "closeRight") : undefined,
     closeAll: closeTargets(tabs, pinnedSet, activeId ?? "", "all").length ? () => tabCommand(activeId ?? tabs[0]!, "closeAll") : undefined,
+    cleanup: cleanupInfo(),
+    cleanUp: (rule) => cleanUp(rule),
     togglePin: activeId && activeId !== NEW_TAB && activeId !== FOCUS_TAB && tabs.includes(activeId) ? () => togglePin(activeId) : undefined,
     pinned: !!activeId && pinnedSet.has(activeId),
     quickOpen: showQuickOpen,
@@ -1608,6 +1675,8 @@ export function App() {
             onCloseGroup={requestCloseGroup}
             onCloseOtherGroups={(key) => closeSeveral(otherGroupTargets(tabs, pinnedSet, groupOfTab, key))}
             onTabCommand={tabCommand}
+            cleanupMenu={cleanupInfo}
+            onCleanup={cleanUp}
             canReopen={!!reopen}
             pinned={pinnedSet}
             onNew={() => newSession()}
@@ -2115,7 +2184,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
+      <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
       {shown && client.current && (
         <ViewerDialog
           target={viewer?.target}
