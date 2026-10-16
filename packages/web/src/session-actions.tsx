@@ -10,14 +10,14 @@ import { useKeyContextMenu } from "./context-menu-key.ts";
 import { trapTab } from "./focus-trap.ts";
 import { isImeKey } from "./ime.ts";
 
-export type SessionAction = "rename" | "rename-inline" | "archive" | "unarchive" | "delete" | "copy-id" | "close-tab" | "close-worker" | "remove-worker" | "close-finished" | "remove-closed";
+export type SessionAction = "rename" | "rename-inline" | "archive" | "unarchive" | "delete" | "copy-id" | "close-tab" | "close-worker" | "remove-worker" | "close-finished" | "remove-closed" | "cleanup-workers";
 
 /**
  * `busy`: running or needs input; it must be stopped before it can be deleted. `transcript`: false before the first prompt, nothing to rename or archive.
  * `copyId`: offers Copy session ID (the tab menu has its own). `tab`: the session has an open tab. `worker`: a worker row (Close worker / Remove worker… instead of Delete…); `closed`: it has no CLI process.
  * `coordinator`: a session with listed workers; counts of the bulk actions.
  */
-export type ActionTarget = { title: string; archived: boolean; busy: boolean; transcript: boolean; copyId?: boolean; tab?: boolean; worker?: { closed: boolean }; coordinator?: { finished: number; closed: number } };
+export type ActionTarget = { title: string; archived: boolean; busy: boolean; transcript: boolean; copyId?: boolean; tab?: boolean; worker?: { closed: boolean }; coordinator?: { finished: number; closed: number; cleanUp?: boolean } };
 
 export const POPUP =
   "z-50 min-w-40 rounded-lg bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none origin-(--transform-origin) transition-[scale,opacity] duration-100 data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0 motion-reduce:transition-none";
@@ -55,6 +55,11 @@ export function Items({ kind, target, onAction }: { kind: "menu" | "context"; ta
           <Item className={cn(ITEM, "text-destructive")} disabled={!target.coordinator.closed} onClick={() => onAction("remove-closed")} data-testid="action-remove-closed">
             Remove closed workers… ({target.coordinator.closed})
           </Item>
+          {target.coordinator.cleanUp && (
+            <Item className={ITEM} onClick={() => onAction("cleanup-workers")} data-testid="action-cleanup">
+              Clean up workers…
+            </Item>
+          )}
         </>
       )}
       <Separator className="-mx-1 my-1 h-px bg-border" />

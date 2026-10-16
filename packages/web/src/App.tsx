@@ -74,7 +74,9 @@ import { SessionList } from "./sidebar.tsx";
 import { noteRefs } from "./git-refs.ts";
 import { agentLinks, NO_LINKS, sameLinks, workerState, type AgentLinks } from "./workers.ts";
 import { confirmNames, daysLabel } from "./sidebar-menus.ts";
-import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removableWorktree, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
+import { resumeSearchText, byRow, inProject, keepsBranch, patchSession, projectCwd, projectOf, removableWorktree, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
+import { BLOCK_TEXT, type CleanupScope } from "./cleanup.ts";
+import { CleanupDialog } from "./cleanup-dialog.tsx";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
@@ -1128,11 +1130,14 @@ export function App() {
       setWorktreeJob({ project, error: (e as Error).message });
     }
   }
+  const [cleanup, setCleanup] = useState<CleanupScope>();
+  const listState = (s: SessionListItem) => (s.coordinatorId ? workerState(s, views[s.id]) : (shownState(views[s.id]) ?? s.state));
   async function askRemoveWorktree(project: string, path: string) {
     setError(undefined);
     try {
       const st = await client.current!.request<WorktreeStatusResult>({ type: "worktree.status", cwd: project, path });
-      setRemovingWt({ project, path, branch: st.branch, text: removeWorktreeText(st) });
+      if (st.safety === "blocked") return setError(`Worktree ${st.branch} cannot be removed: ${BLOCK_TEXT[st.blocked!]}`);
+      setRemovingWt({ project, path, branch: st.branch, text: removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[project], path) }) });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1198,7 +1203,7 @@ export function App() {
       if (a === "close-worker") return void runWorkers([sessionId], "close");
       if (a === "remove-worker") return void askRemoveWorker(sessionId);
       // The sidebar resolves the bulk actions to worker ids (onWorkers).
-      if (a === "close-finished" || a === "remove-closed") return;
+      if (a === "close-finished" || a === "remove-closed" || a === "cleanup-workers") return;
       // Shown at once like a rename; a failed archive restores the list.
       setList((l) => patchSession(l, sessionId, { archived: a === "archive" }));
       client.current!.request({ type: "session.archive", sessionId, archived: a === "archive" }).catch((e: Error) => (setError(e.message), void refreshList()));
@@ -1238,7 +1243,8 @@ export function App() {
     if (!hit) return;
     try {
       const st = await client.current!.request<WorktreeStatusResult>({ type: "worktree.status", cwd: hit.project, path: hit.path });
-      setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, branch: st.branch, text: removeWorktreeText(st) } : c));
+      if (st.safety === "blocked") setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, error: `Worktree ${st.branch} cannot be removed: ${BLOCK_TEXT[st.blocked!]}` } : c));
+      else setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, branch: st.branch, text: removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[hit.project], hit.path) }) } : c));
     } catch (e) {
       setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, error: (e as Error).message } : c));
     }
@@ -1554,6 +1560,7 @@ export function App() {
   const reopen = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs).tab;
   const commands = appCommands({
     newWorktree: canWorktree ? () => (setWtName(""), setNaming(gitProject)) : undefined,
+    cleanUp: Object.values(worktrees).some((l) => l.some((w) => !w.main)) || list.some((x) => x.coordinatorId) ? () => setCleanup({ kind: "all" }) : undefined,
     tabs,
     activeId,
     sessions: list,
@@ -1896,6 +1903,15 @@ export function App() {
         </div>
       </header>
       <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? "Untitled")} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
+      <CleanupDialog
+        scope={cleanup}
+        list={list}
+        worktrees={worktrees}
+        state={listState}
+        request={(m) => client.current!.request(m)}
+        onClose={() => setCleanup(undefined)}
+        onDone={() => void refreshList()}
+      />
       <ConfirmDialog
         open={closingGroup !== undefined}
         title={`Close ${lastClosingGroup.current.ids.length} tabs of ${lastClosingGroup.current.name}?`}
@@ -2074,7 +2090,7 @@ export function App() {
               list={list}
               projects={projects}
               worktrees={worktrees}
-              state={(s) => (s.coordinatorId ? workerState(s, views[s.id]) : (shownState(views[s.id]) ?? s.state))}
+              state={listState}
               titleLoading={(s) => titleLoading(s.title, prompted.has(s.id))}
               unread={unread}
               activeId={activeId}
@@ -2083,6 +2099,7 @@ export function App() {
               onRemove={setRemoving}
               onNewWorktree={(cwd, named) => (setDrawer(false), named ? (setWtName(""), setNaming(cwd)) : void newWorktree(cwd))}
               onRemoveWorktree={askRemoveWorktree}
+              onCleanUp={(scope) => (setDrawer(false), setCleanup(scope))}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}
               renaming={renaming?.in === "list" ? renaming.id : undefined}
               renamingFromMenu={renaming?.menu}

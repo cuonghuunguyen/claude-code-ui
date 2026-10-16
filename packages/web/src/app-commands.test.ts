@@ -221,6 +221,14 @@ it("New worktree… shows only with a git project, right after New session, and 
   expect(appCommands(ctx()).some((i) => i.id === "worktree.new")).toBe(false);
 });
 
+it("'Clean up worktrees and workers…' is listed only with cleanUp", () => {
+  const cleanUp = vi.fn();
+  expect(appCommands(ctx({ cleanUp })).find((i) => i.id === "cleanup.open")).toMatchObject({ title: "Clean up worktrees and workers…", group: "Commands" });
+  run(ctx({ cleanUp }), "cleanup.open");
+  expect(cleanUp).toHaveBeenCalled();
+  expect(appCommands(ctx()).some((i) => i.id === "cleanup.open")).toBe(false);
+});
+
 it("Toggle signal only runs from the palette and Mod+Alt+S, with or without a session", () => {
   const toggleSignalOnly = vi.fn();
   const c = ctx({ toggleSignalOnly });

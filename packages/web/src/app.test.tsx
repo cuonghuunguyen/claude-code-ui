@@ -1609,6 +1609,35 @@ describe("worktrees", () => {
     }
   });
 
+  it("Trash on a worktree whose status is blocked shows the reason, no confirmation", async () => {
+    const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] } };
+    const restore = await remount({ "session.list": listed, "worktree.status": { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "worktree-x", branchMerged: false, running: 1, safety: "blocked", blocked: "sessions_running" } });
+    try {
+      await act(async () => el.querySelector<HTMLElement>('[data-testid="worktree-remove"]')!.click());
+      expect(document.querySelector('[data-testid="remove-worktree-dialog"]')).toBeNull();
+      expect(el.textContent).toContain("Worktree worktree-x cannot be removed: A session there is running or needs input");
+    } finally {
+      restore();
+    }
+  });
+
+  it("palette Clean up worktrees and workers… opens the Clean up dialog for all projects", async () => {
+    const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] } };
+    const restore = await remount({ "session.list": listed, "worktree.status": { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "worktree-x", branchMerged: false, running: 0, safety: "safe" } });
+    const from = sent.length;
+    try {
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      await act(async () => paletteRow("Clean up worktrees and workers…")!.click());
+      await act(async () => {});
+      const d = document.querySelector('[data-testid="cleanup-dialog"]')!;
+      expect(d.textContent).toContain("All projects");
+      expect(sent.slice(from).filter((m) => m.type === "worktree.status")).toEqual([{ type: "worktree.status", cwd: "/p/demo", path: managed }]);
+      expect(d.textContent).toContain("Remove 1");
+    } finally {
+      restore();
+    }
+  });
+
   it("the name dialog: an invalid name disables Create with the rule; Enter creates the valid one", async () => {
     const restore = await remount({ "session.list": { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main] } }, "worktree.create": { path: "/p/demo/.claude/worktrees/my-feature", branch: "worktree-my-feature" } });
     const from = sent.length;

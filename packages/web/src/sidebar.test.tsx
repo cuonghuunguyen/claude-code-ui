@@ -43,7 +43,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-async function render(props: { reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState } = {}) {
+async function render(props: { reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState; cleanUp?: boolean } = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -57,6 +57,7 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
   const onRenamed = vi.fn();
   const onWorkers = vi.fn();
   const onArchiveIdle = vi.fn();
+  const onCleanUp = vi.fn();
   const ui = (reveal = props.reveal) => (
       <SideLabel value={props.side ?? (() => undefined)}>
       <SessionList
@@ -74,6 +75,7 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
         onRemove={onRemove}
         onNewWorktree={onNewWorktree}
         onRemoveWorktree={onRemoveWorktree}
+        onCleanUp={props.cleanUp ? onCleanUp : undefined}
         onOpenProject={onOpenProject}
         renaming={props.renaming}
         onAction={onAction}
@@ -95,7 +97,7 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
   };
-  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onOpenProject, onAction, onRenamed, onWorkers, onArchiveIdle };
+  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onOpenProject, onAction, onRenamed, onWorkers, onArchiveIdle, onCleanUp };
 }
 
 it("one group per working directory with the project name as header and the full path only as tooltip", async () => {
@@ -464,21 +466,22 @@ describe("worktrees", () => {
     expect(plain.el.querySelector('[data-testid="project-new-worktree"]')).toBeNull();
   });
 
-  it("Remove shows only on worktrees under <repo>/.claude/worktrees: not on the local row, hand-made, nested or outside-roots ones", async () => {
+  it("a hand-made worktree row has the Trash button and Delete worktree…; the local row, outside-roots and locked ones have neither", async () => {
     const managed = "/home/u/web/.claude/worktrees/fix";
     const all: Worktree[] = [
       ...wts,
       { path: managed, branch: "worktree-fix", main: false },
       { path: "/home/u/web/.claude/worktrees/a/b", branch: "nested", main: false },
       { path: "/home/u/web/.claude/other", branch: "other", main: false },
-      { path: "/home/u/web/.claude/worktrees-x/y", branch: "lookalike", main: false },
+      { path: "/home/u/locked", branch: "locked", main: false, locked: true },
     ];
     const { el, onRemoveWorktree } = await render({ list, projects: ["/home/u/web"], worktrees: { "/home/u/web": all } });
     const remove = (path: string) => el.querySelector<HTMLElement>(`[data-path="${path}"] [data-testid="worktree-remove"]`);
     expect(remove(managed)!.getAttribute("aria-label")).toBe("Remove worktree : worktree-fix");
-    for (const p of ["/home/u/web", "/home/u/orca/web/fix", "/srv/web-far", "/home/u/web/.claude/worktrees/a/b", "/home/u/web/.claude/other", "/home/u/web/.claude/worktrees-x/y"]) expect(remove(p), p).toBeNull();
-    await act(async () => remove(managed)!.click());
-    expect(onRemoveWorktree).toHaveBeenCalledWith("/home/u/web", managed);
+    for (const p of [managed, "/home/u/orca/web/fix", "/home/u/web/.claude/worktrees/a/b", "/home/u/web/.claude/other"]) expect(remove(p), p).not.toBeNull();
+    for (const p of ["/home/u/web", "/srv/web-far", "/home/u/locked"]) expect(remove(p), p).toBeNull();
+    await act(async () => remove("/home/u/orca/web/fix")!.click());
+    expect(onRemoveWorktree).toHaveBeenCalledWith("/home/u/web", "/home/u/orca/web/fix");
   });
 
   it("a repository without linked worktrees stays flat", async () => {
@@ -1099,6 +1102,21 @@ it("GH-358 the coordinator row and its N workers row carry Close finished / Remo
   expect(texts()).toEqual(["Close finished workers (1)", "Remove closed workers… (1)"]);
   await act(async () => tid("workers-menu-remove-closed").click());
   expect(onWorkers).toHaveBeenLastCalledWith(["w2"], "remove", { id: "co", title: "Boss" });
+});
+
+it("GH-377 the project menu's Clean up… calls onCleanUp with the project scope; the coordinator's Clean up workers… with its own", async () => {
+  const { el, onCleanUp } = await render({ list: WORKERS, activeId: null, cleanUp: true });
+  await ctx(el.querySelector('[data-cwd="/home/u/web"] [data-testid="group-toggle"]')!);
+  expect(texts()).toContain("Clean up…");
+  await act(async () => tid("group-menu-cleanup").click());
+  expect(onCleanUp).toHaveBeenLastCalledWith({ kind: "project", cwd: "/home/u/web" });
+  await ctx(row(el, "co"));
+  await act(async () => tid("action-cleanup").click());
+  expect(onCleanUp).toHaveBeenLastCalledWith({ kind: "coordinator", id: "co", title: "Boss" });
+  await ctx(el.querySelector('[data-testid="worker-group-toggle"]')!);
+  expect(texts()).toEqual(["Close finished workers (1)", "Remove closed workers… (1)", "Clean up workers…"]);
+  await act(async () => tid("workers-menu-cleanup").click());
+  expect(onCleanUp).toHaveBeenLastCalledWith({ kind: "coordinator", id: "co", title: "Boss" });
 });
 
 it("GH-358 bulk items are disabled at zero", async () => {

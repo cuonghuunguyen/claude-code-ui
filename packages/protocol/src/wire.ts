@@ -201,10 +201,14 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[] }
   /** Creates `<repo>/.claude/worktrees/<name>` on branch `worktree-<name>` (docs/spec.md "Worktrees"); no `name`: a generated one. Reply WorktreeCreateResult. Broadcasts `sessions.changed`. */
   | { type: "worktree.create"; cwd: string; name?: string }
-  /** What removing `path` loses; reply WorktreeStatusResult. */
+  /** What removing `path` loses and whether it may be removed (docs/spec.md "Worktrees"); reply WorktreeStatusResult. */
   | { type: "worktree.status"; cwd: string; path: string }
-  /** `git worktree remove --force` of a worktree under `<repo>/.claude/worktrees`, then `git branch -D` for a `worktree-*` branch; transcripts stay. Reply `{}`. Broadcasts `sessions.changed`. */
-  | { type: "worktree.remove"; cwd: string; path: string }
+  /**
+   * `git worktree remove --force` of a linked worktree inside the roots (not main, not locked, not a symlink), then `git branch -D` for a `worktree-*` branch,
+   * `git branch -d` for another one only with `deleteBranch`; `expectSafe`: refused with `stale` unless status is still safe; `expect`: refused with `stale` when the current status has more uncommitted files, commits ahead or ignored files than listed (checked before and after the sessions and terminals close). Transcripts stay.
+   * Reply WorktreeRemoveResult. Broadcasts `sessions.changed`.
+   */
+  | { type: "worktree.remove"; cwd: string; path: string; expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored: number }; deleteBranch?: boolean }
   // MCP servers dialog (docs/spec.md "Config dialogs"): the live query of `sessionId` when it has one, else the config query of `cwd`.
   /** Reply McpListResult. */
   | { type: "mcp.list"; cwd: string; sessionId?: string }
@@ -404,12 +408,22 @@ export type ListResult = {
 };
 /**
  * A git worktree of a project's repository, identified by its directory (canonical path). `main`: the repository's own checkout.
- * `branch`: the short hash on a detached HEAD. `outsideRoots`: listed, but no session can start there.
+ * `branch`: the short hash on a detached HEAD. `outsideRoots`: listed, but no session can start there. `locked`: `git worktree lock`; never removable.
  */
-export type Worktree = { path: string; branch?: string; main: boolean; outsideRoots?: boolean };
+export type Worktree = { path: string; branch?: string; main: boolean; outsideRoots?: boolean; locked?: true };
 export type WorktreeCreateResult = { path: string; branch: string };
-/** `uncommitted`: changed and untracked files; `commits`: commits only this worktree's branch (or detached HEAD) holds, 0 when the branch is kept (not `worktree-*`). */
-export type WorktreeStatusResult = { uncommitted: number; commits: number; branch: string };
+/** Why a worktree cannot be removed now. */
+export type WorktreeBlock = "locked" | "symlink" | "outside_roots" | "sessions_running" | "removing" | "contains_worktree";
+/**
+ * `uncommitted`: changed and untracked files (ignored not); `untracked`: the untracked part of it; `commits`: commits only this worktree's branch
+ * (or detached HEAD) holds, 0 when the branch is kept (not `worktree-*`); `ahead`: commits of HEAD in neither the base branch nor the upstream
+ * (nor a same-name remote branch); `branchMerged`: a kept branch (not `worktree-*`, not detached) has no commit outside base or upstream (`git branch -d` may delete it);
+ * `ignored`: ignored files that removal deletes (ignored directories git reports as a whole are not counted); `headTime`: ms of HEAD's committer date; `running`: its sessions that run or need input. `safety`: "blocked" when `blocked` is set, else
+ * "has_work" when `uncommitted` or `ahead`, else "safe".
+ */
+export type WorktreeStatusResult = { uncommitted: number; untracked: number; commits: number; ahead: number; ignored: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock };
+/** `branchKept`: why a kept branch the caller asked to delete stays (git's message). */
+export type WorktreeRemoveResult = { branchKept?: string };
 /** Claude Code's worktree name rule; undefined when `name` is valid. */
 export function worktreeNameError(name: string): string | undefined {
   if (!name || name.length > 64) return "Name must be 1 to 64 characters";
