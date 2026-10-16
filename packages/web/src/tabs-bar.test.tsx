@@ -1189,8 +1189,12 @@ it("GH-378 phone: a contextmenu on the close button opens the cleanup items; a c
   expect(c.onCleanup).toHaveBeenCalledWith("idle", undefined);
   await act(async () => x.click());
   expect(onClose).not.toHaveBeenCalled();
-  vi.spyOn(performance, "now").mockReturnValue(performance.now() + 2000);
+  // Held > 1.3 s: the release click still does not close; the next press does.
+  vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1300);
+  await act(async () => x.click());
+  expect(onClose).not.toHaveBeenCalled();
+  vi.restoreAllMocks();
+  await act(async () => void x.dispatchEvent(new Event("pointerdown", { bubbles: true })));
   await act(async () => x.click());
   expect(onClose).toHaveBeenCalledWith("c");
-  vi.restoreAllMocks();
 });

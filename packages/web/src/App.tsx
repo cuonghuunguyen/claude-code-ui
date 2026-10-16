@@ -811,6 +811,8 @@ export function App() {
           setClosedTabs(r.stack);
           setTabs(r.tabs);
           for (const id of r.restored) if (id !== NEW_TAB && id !== wasActive) void subscribe(id);
+          // Undo counts as use: the restored tabs must not be auto-closed again at once.
+          setUsed((u) => stampUsed(u, r.restored, Date.now()));
           // The tab that was shown comes back shown; the others are held again like any open tab.
           if (wasActive && r.restored.includes(wasActive)) open(wasActive);
         },
@@ -1247,19 +1249,21 @@ export function App() {
   useGroupedTabs(tabs, setTabs, groupOfTab, keysFinal, pinnedSet);
   // Auto-close idle tabs (GH-378): only while the page shows, connected, with the list and group keys final; the 60 s tick is cheap, autoCloseDue lets one run through per 15 minutes.
   const autoRan = useRef<number>(undefined);
+  // Reassigned each render: the check reads the current tabs, titles and list, the effect below only sets the timer.
+  const autoRun = useRef(() => {});
+  autoRun.current = () => {
+    if (autoClose === "off" || document.visibilityState !== "visible" || !autoCloseDue(Date.now(), autoRan.current)) return;
+    autoRan.current = Date.now();
+    const ids = autoCloseTargets(tabFacts(), cleanupCtx(), autoClose);
+    if (ids.length) closeSeveral(ids, (n, t) => (n === 1 ? `Auto-closed ${t}` : `Auto-closed ${n} idle tabs`));
+  };
   useEffect(() => {
     if (autoClose === "off" || status !== "connected" || !listLoaded || !keysFinal) return;
-    const run = () => {
-      if (document.visibilityState !== "visible" || !autoCloseDue(Date.now(), autoRan.current)) return;
-      autoRan.current = Date.now();
-      const ids = autoCloseTargets(tabFacts(), cleanupCtx(), autoClose);
-      if (ids.length) closeSeveral(ids, (n, t) => (n === 1 ? `Auto-closed ${t}` : `Auto-closed ${n} idle tabs`));
-    };
+    const run = () => autoRun.current();
     run();
     const t = setInterval(run, 60_000);
     document.addEventListener("visibilitychange", run);
     return () => (clearInterval(t), document.removeEventListener("visibilitychange", run));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoClose, status, listLoaded, keysFinal]);
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   // GH-133: a just-created session shows (with its pending prompt) before its subscribe reply.

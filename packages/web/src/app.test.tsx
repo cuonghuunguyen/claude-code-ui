@@ -1663,8 +1663,13 @@ describe("GH-378 clean up tabs", () => {
     expect(tabIds()).toEqual([S2, S4]);
     expect(toast()?.textContent).toContain("Auto-closed 2 idle tabs");
     // Undo brings them back; the throttle keeps the next check from closing them again.
+    const before = Date.now();
     await undo();
     expect(tabIds()).toEqual([ID, S2, S3, S4]);
+    // Undo counts as use.
+    const used = JSON.parse(localStorage.getItem("claude-ui.tab-used")!) as Record<string, number>;
+    expect(used[ID]).toBeGreaterThanOrEqual(before);
+    expect(used[S3]).toBeGreaterThanOrEqual(before);
     document.dispatchEvent(new Event("visibilitychange"));
     await act(async () => {});
     expect(tabIds()).toEqual([ID, S2, S3, S4]);

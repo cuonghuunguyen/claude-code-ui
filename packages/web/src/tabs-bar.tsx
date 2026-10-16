@@ -461,20 +461,19 @@ function GroupCleanup({ X, count, onRun }: { X: typeof ContextMenu.Item; count: 
   );
 }
 
-/** A click this soon after the long press that opened the cleanup menu is its touch release, not a tap. */
-const LONG_PRESS_CLICK_MS = 800;
 /** Phone close button (below md): a tap closes the active tab; a long press or right click opens the Clean up tabs items. */
 function PhoneClose({ label, onClose, cleanup, onCleanup }: { label: string; onClose: () => void; cleanup?: () => CleanupMenu; onCleanup: (rule: CleanupRule) => void }) {
-  const openedAt = useRef(-Infinity);
+  // After a long press opened the menu, the release fires a click: ignored until the next pointerdown, however long the press was held.
+  const afterMenu = useRef(false);
   const button = (
-    <IconButton className="md:hidden" label={label} onClick={() => performance.now() - openedAt.current > LONG_PRESS_CLICK_MS && onClose()} testId="tab-close-active">
+    <IconButton className="md:hidden" label={label} onClick={() => !afterMenu.current && onClose()} testId="tab-close-active">
       <XIcon />
     </IconButton>
   );
   if (!cleanup) return button;
   return (
-    <ContextMenu.Root onOpenChange={(o) => o && (openedAt.current = performance.now())}>
-      <ContextMenu.Trigger className="contents select-none [-webkit-touch-callout:none] md:hidden">{button}</ContextMenu.Trigger>
+    <ContextMenu.Root onOpenChange={(o) => o && (afterMenu.current = true)}>
+      <ContextMenu.Trigger className="contents select-none [-webkit-touch-callout:none] md:hidden" onPointerDown={() => (afterMenu.current = false)}>{button}</ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-2rem)]")} data-testid="tab-cleanup-menu">
