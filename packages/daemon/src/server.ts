@@ -14,7 +14,7 @@ import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
-import { createWorktree, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, isHash, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, isHash, classify, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
@@ -526,15 +526,25 @@ export function createDaemon(opts: {
   };
   /** Worktrees being removed: no session or terminal may start in them meanwhile (`worktree_removing`). */
   const removing = new Set<string>();
-  const isRemoving = (cwd: string) => [...removing].some((p) => cwd === p || cwd.startsWith(p.endsWith(sep) ? p : p + sep));
+  const inDir = (cwd: string, p: string) => cwd === p || cwd.startsWith(p.endsWith(sep) ? p : p + sep);
+  const isRemoving = (cwd: string) => [...removing].some((p) => inDir(cwd, p));
   /** Refused while a session in it runs or needs input; idle live sessions and its terminals close first (transcripts stay). */
-  const removeIn = async (cwd: string, path: string) => {
-    // Blocked from the start so no session slips in during git's checks; only paths that can be managed (the main checkout never is).
-    if (path.includes(`${sep}.claude${sep}worktrees${sep}`)) removing.add(path);
+  const removeIn = async (cwd: string, path: string, o: { expectSafe?: boolean; deleteBranch?: boolean }) => {
+    const marked: string[] = [];
+    // Early block for a worktree this app made, so no session slips in during git's own checks; the lock's mark below covers any other path.
+    if (path.includes(`${sep}.claude${sep}worktrees${sep}`)) {
+      marked.push(path);
+      removing.add(path);
+    }
     try {
-      // After the mark: this check awaits, and a session or terminal must not start in the worktree meanwhile.
       if (await gitOutside(cwd)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
-      await removeWorktree(cwd, path, (p) => inRoots(real(p) ?? p), async () => {
+      // The mark is set inside the repository lock once the worktree is validated (main, locked and symlink are refused before it), before any further await.
+      const result = await removeWorktree(cwd, path, (p) => inRoots(real(p) ?? p), { ...o, mark: (w) => {
+        for (const m of new Set([w.path, path])) {
+          if (!marked.includes(m)) marked.push(m);
+          removing.add(m);
+        }
+      }, beforeRemove: async () => {
         const live = [...sessions.values()].filter((s) => isRemoving(s.cwd));
         if (live.some((s) => ["running", "needs_input"].includes(s.info().state))) throw new WorktreeError("has_sessions_running", "A session in this worktree is running or needs input: stop it first");
         for (const s of live) {
@@ -545,10 +555,11 @@ export function createDaemon(opts: {
         }
         // Its terminals too: a shell running in the folder keeps Windows from deleting it ("Permission denied").
         await terminals.closeIn(isRemoving);
-      });
+      } });
       broadcast({ type: "sessions.changed" });
+      return result;
     } finally {
-      removing.delete(path);
+      for (const m of marked) removing.delete(m);
     }
   };
 
@@ -1844,13 +1855,21 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (msg.type === "worktree.create" && msg.name !== undefined && typeof msg.name !== "string") return fail("bad_name", "name must be a string");
           if (msg.type !== "worktree.remove" && (await gitOutside(cwd))) return fail("cwd_not_allowed", "The repository is outside the allowed roots");
+          // A path that is itself a link is refused before `allowed` resolves it; git.ts checks the path git registers too.
+          if (msg.type !== "worktree.create" && typeof msg.path === "string" && isAbsolute(msg.path) && lstatSync(msg.path, { throwIfNoEntry: false })?.isSymbolicLink()) return fail("not_removable", "The worktree path is a symbolic link");
           const path = msg.type === "worktree.create" ? undefined : allowed(msg.path);
           if (msg.type !== "worktree.create" && !path) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
+          if (msg.type === "worktree.remove") {
+            for (const k of ["expectSafe", "deleteBranch"] as const) if (msg[k] !== undefined && typeof msg[k] !== "boolean") return fail("bad_request", "expectSafe and deleteBranch must be booleans");
+          }
           try {
             if (msg.type === "worktree.create") return reply(await createIn(cwd, { name: msg.name || undefined }));
-            if (msg.type === "worktree.status") return reply(await worktreeStatus(cwd, path!));
-            await removeIn(cwd, path!);
-            return reply({});
+            if (msg.type === "worktree.status") {
+              const st = await worktreeStatus(cwd, msg.path, (p) => inRoots(real(p) ?? p));
+              const running = [...sessions.values()].filter((s) => inDir(s.cwd, path!) && ["running", "needs_input"].includes(s.info().state)).length;
+              return reply(classify({ ...st, running, blocked: st.blocked ?? (isRemoving(path!) ? "removing" : running ? "sessions_running" : undefined) }));
+            }
+            return reply(await removeIn(cwd, msg.path, { expectSafe: msg.expectSafe === true, deleteBranch: msg.deleteBranch === true }));
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }

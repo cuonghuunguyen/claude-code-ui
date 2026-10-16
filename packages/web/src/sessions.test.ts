@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { activeOnly, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
+import { activeOnly, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
   id,
@@ -339,4 +339,34 @@ describe("sidebar actions (GH-152)", () => {
       expect(loadSidebarView()).toEqual(v);
     });
   });
+});
+
+it("removableWorktree: any linked worktree inside the roots, not main, outside the roots or locked", () => {
+  const main = { path: "/r", main: true };
+  const list = [main];
+  expect(removableWorktree(list, { path: "/r/.claude/worktrees/a", main: false })).toBe(true);
+  expect(removableWorktree(list, { path: "/x/hand", main: false })).toBe(true);
+  expect(removableWorktree(list, main)).toBe(false);
+  expect(removableWorktree(list, { path: "/far", main: false, outsideRoots: true })).toBe(false);
+  expect(removableWorktree(list, { path: "/l", main: false, locked: true })).toBe(false);
+  expect(removableWorktree([], { path: "/x", main: false })).toBe(false);
+});
+
+it("externalWorktree: false only directly under <main>/.claude/worktrees", () => {
+  const list = [{ path: "/r", main: true }];
+  expect(externalWorktree(list, { path: "/r/.claude/worktrees/a", main: false })).toBe(false);
+  expect(externalWorktree(list, { path: "/r/.claude/worktrees/a/b", main: false })).toBe(true);
+  expect(externalWorktree(list, { path: "/r/.claude/other", main: false })).toBe(true);
+  expect(externalWorktree(list, { path: "/r/.claude/worktrees-x/y", main: false })).toBe(true);
+  expect(externalWorktree(list, { path: "/r", main: true })).toBe(false);
+  const win = [{ path: "C:\\r\\", main: true }];
+  expect(externalWorktree(win, { path: "C:\\r\\.claude\\worktrees\\a", main: false })).toBe(false);
+  expect(externalWorktree(win, { path: "D:\\wt\\a", main: false })).toBe(true);
+});
+
+it("removeWorktreeText adds 'Branch <b> stays.' for a kept branch; keepsBranch tells kept from worktree-* and detached", () => {
+  expect(removeWorktreeText({ uncommitted: 0, commits: 0, branch: "feat" }, { keepsBranch: true })).toBe("Clean up the worktree directory. Branch feat stays.");
+  expect(removeWorktreeText({ uncommitted: 1, commits: 0, branch: "feat" }, { keepsBranch: true })).toBe("You have 1 uncommitted file on feat. All will be lost if you remove. Branch feat stays.");
+  const l = [{ path: "/a", branch: "feat", main: false }, { path: "/b", branch: "worktree-b", main: false }, { path: "/c", branch: "abc1234", main: false }];
+  expect([keepsBranch(l, "/a"), keepsBranch(l, "/b"), keepsBranch(l, "/c"), keepsBranch(undefined, "/a")]).toEqual([true, false, false, false]);
 });

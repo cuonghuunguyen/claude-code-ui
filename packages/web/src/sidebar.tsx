@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
+import type { CleanupScope } from "./cleanup.ts";
 import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, loadCollapsed, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
 import { useNow } from "./plan-meter.tsx";
 import { projectName } from "./tabs.ts";
@@ -124,6 +125,7 @@ export function SessionList({
   onRemove,
   onNewWorktree,
   onRemoveWorktree,
+  onCleanUp,
   onOpenProject,
   renaming,
   renamingFromMenu,
@@ -153,8 +155,10 @@ export function SessionList({
   onRemove: (cwd: string) => void;
   /** New worktree in the project's repository; `named`: Shift+click, ask for a name. */
   onNewWorktree?: (cwd: string, named: boolean) => void;
-  /** Remove a worktree under the repository's .claude/worktrees (the app confirms first). */
+  /** Remove a linked worktree inside the roots that is not locked (the app confirms first). */
   onRemoveWorktree?: (project: string, path: string) => void;
+  /** Opens the Clean up dialog (GH-377) for a project's repository or a coordinator's workers. */
+  onCleanUp?: (scope: CleanupScope) => void;
   onOpenProject: () => void;
   /** Session whose row shows the title editor. */
   renaming?: string;
@@ -221,11 +225,13 @@ export function SessionList({
   });
   const nested = nestWorkers(list, archived);
   const workersAction = (id: string, a: SessionAction) => {
+    if (a === "cleanup-workers") return onCleanUp?.({ kind: "coordinator", id, title: list.find((x) => x.id === id)?.title ?? "" });
     if (a !== "close-finished" && a !== "remove-closed") return onAction(id, a);
     const c = workerCounts(nested.workers.get(id) ?? [], state);
     onWorkers?.(a === "close-finished" ? c.finished : c.closed, a === "close-finished" ? "close" : "remove", { id, title: list.find((x) => x.id === id)?.title ?? "" });
   };
   const rowProps = useStableProps({ onOpen, onAction: workersAction, onRenamed });
+  const cleanable = !!onCleanUp;
   const top = nested.top;
   const keepActive = (s: SessionListItem) => s.id === activeId || state(s) === "running" || state(s) === "needs_input";
   const shown = sortGroups(groupByCwd(top, query, projects, archived, worktrees, nested.workers), view.sort);
@@ -264,6 +270,7 @@ export function SessionList({
       ...menuBase(() => groupSessions(baseGroup(g.cwd) ?? g), projectName(g.cwd), prefix),
       newSession: () => onNew(g.cwd),
       newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (named) => onNewWorktree(g.cwd, named) : undefined,
+      cleanUp: onCleanUp && (() => onCleanUp({ kind: "project", cwd: g.cwd })),
       tail: { id: `${prefix}remove`, label: "Remove from list (files stay)", onSelect: () => onRemove(g.cwd) },
     });
   /** Menu of a worktree row. */
@@ -368,6 +375,7 @@ export function SessionList({
                   coordinator={!worker && !!counts}
                   finished={!worker && counts ? counts.finished.length : 0}
                   closedN={!worker && counts ? counts.closed.length : 0}
+                  cleanable={cleanable}
                   {...worker}
                   {...rowProps}
                 />
@@ -381,7 +389,7 @@ export function SessionList({
                         testId="workers-menu"
                         entries={() => {
                           const c = workerCounts(nested.workers.get(s.id) ?? [], state);
-                          return workerEntries("workers-menu-", c, { close: () => onWorkers?.(c.finished, "close", { id: s.id, title: s.title }), remove: () => onWorkers?.(c.closed, "remove", { id: s.id, title: s.title }) });
+                          return workerEntries("workers-menu-", c, { close: () => onWorkers?.(c.finished, "close", { id: s.id, title: s.title }), remove: () => onWorkers?.(c.closed, "remove", { id: s.id, title: s.title }), cleanUp: onCleanUp && (() => onCleanUp({ kind: "coordinator", id: s.id, title: s.title })) });
                         }}
                       >
                       <button
@@ -648,6 +656,7 @@ const SessionRow = memo(function SessionRow({
   coordinator,
   finished,
   closedN,
+  cleanable,
   onOpen,
   onAction,
   onRenamed,
@@ -676,6 +685,8 @@ const SessionRow = memo(function SessionRow({
   coordinator: boolean;
   finished: number;
   closedN: number;
+  /** The Clean up dialog is available: the coordinator menu offers Clean up workers…. */
+  cleanable?: boolean;
   onOpen: (id: string) => void;
   onAction: (id: string, a: SessionAction) => void;
   onRenamed: (id: string, title: string | undefined) => void;
@@ -691,7 +702,7 @@ const SessionRow = memo(function SessionRow({
     copyId: true,
     tab,
     worker: workerName ? { closed: st === "closed" } : undefined,
-    coordinator: coordinator ? { finished, closed: closedN } : undefined,
+    coordinator: coordinator ? { finished, closed: closedN, cleanUp: cleanable } : undefined,
   };
   const act = (a: SessionAction) => onAction(s.id, a);
   if (renaming)

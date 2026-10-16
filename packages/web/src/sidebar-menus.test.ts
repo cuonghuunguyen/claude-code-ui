@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionListItem, SessionState } from "@claude-ui/protocol";
 import type { SessionGroup, WorktreeRow } from "./sessions.ts";
-import { confirmNames, groupEntries, groupSessions, idleTargets, tidy, workerCounts, type MenuEntry } from "./sidebar-menus.ts";
+import { confirmNames, groupEntries, groupSessions, idleTargets, tidy, workerCounts, workerEntries, type MenuEntry } from "./sidebar-menus.ts";
 
 const NOW = 1_000_000_000_000;
 const DAY = 86_400_000;
@@ -56,6 +56,17 @@ describe("groupEntries", () => {
     expect(ids(e)).toEqual(["g-new-session", "g-new-worktree", "g-new-worktree-named", "-", "g-hide-inactive", "label", "g-archive-1", "g-archive-7", "g-archive-30", "-", "g-remove"]);
     expect(e.find((x) => x.kind === "item" && x.id === "g-archive-1")).toMatchObject({ disabled: true, label: "1 day (0)…" });
     expect(e.find((x) => x.kind === "item" && x.id === "g-archive-7")).toMatchObject({ disabled: false, label: "7 days (7)…" });
+  });
+  it("groupEntries adds Clean up… before the tail when cleanUp is given", () => {
+    const e = groupEntries({ ...base, newSession: () => {}, cleanUp: () => {}, tail: { id: "g-remove", label: "x", onSelect: () => {} } });
+    expect(ids(e).slice(-4)).toEqual(["-", "g-cleanup", "-", "g-remove"]);
+    expect(e.find((x) => x.kind === "item" && x.id === "g-cleanup")).toMatchObject({ label: "Clean up…" });
+    expect(ids(groupEntries(base)).includes("g-cleanup")).toBe(false);
+  });
+  it("workerEntries adds Clean up workers…", () => {
+    const c = { finished: [], closed: [] };
+    expect(workerEntries("w-", c, { close: () => {}, remove: () => {} }).map((x) => (x as { id: string }).id)).toEqual(["w-close-finished", "w-remove-closed"]);
+    expect(workerEntries("w-", c, { close: () => {}, remove: () => {}, cleanUp: () => {} }).at(-1)).toMatchObject({ id: "w-cleanup", label: "Clean up workers…" });
   });
   it("archived view drops hide and archive; no stray separators", () => {
     const e = groupEntries({ ...base, archivedView: true, newSession: () => {}, tail: { id: "g-remove", label: "x", onSelect: () => {} } });

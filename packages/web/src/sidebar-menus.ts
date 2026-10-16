@@ -75,6 +75,8 @@ export function groupEntries(o: {
   setOnlyActive: (on: boolean) => void;
   archiveCount: (days: number) => number;
   onArchive: (days: number) => void;
+  /** "Clean up…" (GH-377): the Clean up dialog scoped to this project. */
+  cleanUp?: () => void;
   /** Last section (Remove from list, Delete worktree…). */
   tail?: { id: string; label: string; onSelect: () => void };
 }): MenuEntry[] {
@@ -92,14 +94,16 @@ export function groupEntries(o: {
       e.push({ kind: "item", id: `${p}archive-${d}`, label: `${daysLabel(d)} (${n})…`, disabled: n === 0, onSelect: () => o.onArchive(d) });
     }
   }
+  if (o.cleanUp) e.push({ kind: "sep" }, { kind: "item", id: `${p}cleanup`, label: "Clean up…", onSelect: o.cleanUp });
   if (o.tail) e.push({ kind: "sep" }, { kind: "item", id: o.tail.id, label: o.tail.label, destructive: true, onSelect: o.tail.onSelect });
   return tidy(e);
 }
 
 /** Bulk worker actions of a coordinator (the N workers row); `finished` / `closed` are the ids workerCounts returned. */
-export function workerEntries(prefix: string, c: { finished: string[]; closed: string[] }, on: { close: () => void; remove: () => void }): MenuEntry[] {
+export function workerEntries(prefix: string, c: { finished: string[]; closed: string[] }, on: { close: () => void; remove: () => void; cleanUp?: () => void }): MenuEntry[] {
   return [
     { kind: "item", id: `${prefix}close-finished`, label: `Close finished workers (${c.finished.length})`, disabled: !c.finished.length, onSelect: on.close },
     { kind: "item", id: `${prefix}remove-closed`, label: `Remove closed workers… (${c.closed.length})`, disabled: !c.closed.length, destructive: true, onSelect: on.remove },
+    ...(on.cleanUp ? [{ kind: "item" as const, id: `${prefix}cleanup`, label: "Clean up workers…", onSelect: on.cleanUp }] : []),
   ];
 }
