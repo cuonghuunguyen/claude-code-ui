@@ -1150,7 +1150,9 @@ it("GH-378 the tab context menu has a Clean up tabs submenu with every rule, its
   await act(async () => itemOf("Clean up tabs").click());
   const sub = document.querySelector<HTMLElement>('[data-testid="tab-cleanup-menu"]')!;
   expect(sub).toBeTruthy();
-  expect([...sub.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Close idle tabs2", "Close finished tabs0", "Close worker tabs1"]);
+  expect([...sub.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Close idle tabs2", "Close finished tabs0", "Close worker tabs1", "2 kept: pinned/draft"]);
+  // The kept line is a disabled menu item: arrow keys reach it and screen readers announce it.
+  expect(sub.querySelector('[data-testid="tab-cleanup-kept"]')!.getAttribute("aria-disabled")).toBe("true");
   expect(sub.querySelector('[data-testid="tab-cleanup-finished"]')!.getAttribute("aria-disabled")).toBe("true");
   expect(sub.querySelector('[data-testid="tab-cleanup-idle"]')!.getAttribute("aria-label")).toBe("Close idle tabs (2)");
   expect(sub.querySelector('[data-testid="tab-cleanup-kept"]')!.textContent).toBe("2 kept: pinned/draft");
@@ -1183,7 +1185,7 @@ it("GH-378 phone: a contextmenu on the close button opens the cleanup items; a c
   const x = el.querySelector<HTMLElement>('[data-testid="tab-close-active"]')!;
   await act(async () => void x.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   const m = document.querySelector<HTMLElement>('[data-testid="tab-cleanup-menu"]')!;
-  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Close idle tabs2", "Close finished tabs0", "Close worker tabs1"]);
+  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Close idle tabs2", "Close finished tabs0", "Close worker tabs1", "2 kept: pinned/draft"]);
   expect(m.textContent).toContain("Clean up tabs");
   await act(async () => itemOf("Close idle tabs2").click());
   expect(c.onCleanup).toHaveBeenCalledWith("idle", undefined);
@@ -1215,4 +1217,16 @@ it("GH-378 phone: the cleanup menu stays open when the finger lifts after a long
   expect(document.querySelector('[data-testid="tab-cleanup-menu"]')).not.toBeNull();
   await act(async () => x.click());
   expect(onClose).not.toHaveBeenCalled();
+});
+
+it("GH-378 phone: after the menu was opened, Enter on the close button closes the tab (a keyboard click is not a touch release)", async () => {
+  const c = cleanup();
+  const { el, onClose } = await render(c);
+  const x = el.querySelector<HTMLElement>('[data-testid="tab-close-active"]')!;
+  await act(async () => void x.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  await act(async () => x.click());
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => void x.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  await act(async () => x.click());
+  expect(onClose).toHaveBeenCalledWith("c");
 });

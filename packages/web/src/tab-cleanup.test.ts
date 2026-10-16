@@ -8,9 +8,9 @@ const f = (id: string, over: Partial<TabFacts> = {}): TabFacts => ({ id, state: 
 const ctx = (over: Partial<CleanupContext> = {}): CleanupContext => ({ now: NOW, pinned: new Set(), listLoaded: true, activeId: "act", ...over });
 
 describe("GH-378 tab cleanup rules", () => {
-  it("GH-378 idle matches idle, closed, error and the New session tab; not running or needs_input", () => {
-    for (const state of ["idle", "closed", "error"] as const) expect(matchesRule("idle", f("a", { state }), ctx())).toBe(true);
-    for (const state of ["running", "needs_input"] as const) expect(matchesRule("idle", f("a", { state }), ctx())).toBe(false);
+  it("GH-378 idle matches idle, closed and the New session tab; not error, running or needs_input", () => {
+    for (const state of ["idle", "closed"] as const) expect(matchesRule("idle", f("a", { state }), ctx())).toBe(true);
+    for (const state of ["error", "running", "needs_input"] as const) expect(matchesRule("idle", f("a", { state }), ctx())).toBe(false);
     expect(matchesRule("idle", f(NEW_TAB, { state: undefined }), ctx())).toBe(true);
     expect(matchesRule("idle", f("a", { state: undefined }), ctx())).toBe(false);
   });
@@ -57,6 +57,16 @@ describe("GH-378 tab cleanup rules", () => {
     const c = ctx({ pinned: new Set(["pin"]) });
     for (const rule of CLEANUP_RULES) expect(cleanupTargets(rule, [...kept, f("free", everything)], c)).toEqual(["free"]);
     for (const rule of CLEANUP_RULES) expect(cleanupTargets(rule, kept, c)).toEqual([]);
+  });
+
+  it("GH-378 a tab whose view is still loading is never a target of any rule and shows as 'loading' in the kept line", () => {
+    const everything = { archived: true, worker: true, lastUsed: 0, loading: true };
+    for (const rule of CLEANUP_RULES) expect(cleanupTargets(rule, [f("l", everything)], ctx())).toEqual([]);
+    expect(keepReason(f("l", { loading: true }), ctx())).toBe("loading");
+    expect(keepReason(f("l", { loading: true, state: "running" }), ctx())).toBe("loading");
+    expect(keepReason(f("p", { loading: true }), ctx({ pinned: new Set(["p"]) }))).toBe("pinned");
+    expect(cleanupMenu([f("act"), f("l", { loading: true }), f("r", { state: "running" })], ctx()).kept.text).toBe("2 kept: loading/running");
+    expect(autoCloseTargets([f("l", { loading: true, lastUsed: 0 })], ctx(), "1h")).toEqual([]);
   });
 
   it("GH-378 keepReason order: active > pinned > running > needs_input > unread > draft", () => {

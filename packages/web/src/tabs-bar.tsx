@@ -445,9 +445,10 @@ function CleanupItems({ menu: read, onRun }: { menu: () => CleanupMenu; onRun: (
         </ContextMenu.Item>
       ))}
       {menu.kept.count > 0 && (
-        <div role="note" className="px-2 py-1 text-muted-foreground text-xs" data-testid="tab-cleanup-kept">
+        // A disabled item, not a note: arrow keys reach it, so a screen reader announces it.
+        <ContextMenu.Item className={cn(ITEM, "text-muted-foreground text-xs")} disabled data-testid="tab-cleanup-kept">
           {menu.kept.text}
-        </div>
+        </ContextMenu.Item>
       )}
     </>
   );
@@ -503,7 +504,7 @@ function PhoneClose({ label, onClose, cleanup, onCleanup }: { label: string; onC
   if (!cleanup) return button;
   return (
     <ContextMenu.Root onOpenChange={(o) => (o ? ((afterMenu.current = true), stopKeeping(), (keepOpen.current = keepMenuOpenAfterRelease())) : stopKeeping())}>
-      <ContextMenu.Trigger className="contents select-none [-webkit-touch-callout:none] md:hidden" onPointerDown={() => ((afterMenu.current = false), stopKeeping())}>{button}</ContextMenu.Trigger>
+      <ContextMenu.Trigger className="contents select-none [-webkit-touch-callout:none] md:hidden" onPointerDown={() => ((afterMenu.current = false), stopKeeping())} onKeyDown={() => (afterMenu.current = false)}>{button}</ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-2rem)]")} data-testid="tab-cleanup-menu">

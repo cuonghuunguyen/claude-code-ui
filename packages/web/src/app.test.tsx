@@ -1722,6 +1722,56 @@ describe("GH-378 clean up tabs", () => {
     expect(toast()?.textContent).toContain("No tabs to close");
   });
 
+  it("a session tab whose view is still loading is kept by auto-close and by a manual rule until its view arrives", async () => {
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
+    localStorage.setItem("claude-ui.tabAutoClose", "1h");
+    let release: (v: unknown) => void = () => {};
+    const slow = new Promise((r) => (release = r));
+    const list = [session, mk(S2, "Second"), mk(S3, "Third")];
+    act(() => root.unmount());
+    replies["session.list"] = { sessions: list, projects: ["/p/demo"] };
+    // The view of S3 arrives late.
+    replies["session.subscribe"] = (m: { sessionId: string }) => (m.sessionId === S3 ? slow.then(() => ({ logEpoch: "e1", seq: 0, session: list[2] })) : { logEpoch: "e1", seq: 0, session: list.find((x) => x.id === m.sessionId) });
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([ID, S2, S3]));
+    location.hash = `#${S2}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    // Auto-close ran at the list load: S3 (loading) stays, ID (view loaded) closed.
+    expect(tabIds()).toEqual([S2, S3]);
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([S2, S3]);
+    // The disabled item left its menu open: close it.
+    for (let i = 0; i < 2; i++) await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => release(undefined));
+    for (let i = 0; i < 3; i++) await act(async () => void (await new Promise((r) => setTimeout(r, 30))));
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([S2]);
+  });
+
+  it("a cleanup close while another cleanup toast shows joins it: one toast, Undo restores both sets", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { archived: true }), mk(S4, "Fourth", { coordinatorId: ID }), mk(S5, "Fifth", { state: "running" })], [ID, S2, S3, S4, S5], S2);
+    await rule(S2, "archived");
+    expect(tabIds()).toEqual([ID, S2, S4, S5]);
+    expect(toast()?.textContent).toContain("Closed Third");
+    await rule(S2, "workers");
+    expect(tabIds()).toEqual([ID, S2, S5]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+    await undo();
+    expect(tabIds()).toEqual([ID, S2, S3, S4, S5]);
+  });
+
+  it("a tab shown in another window (newer claude-ui.tab-used in storage) is not closed by a time rule or auto-close", async () => {
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
+    await remount([session, mk(S2, "Second"), mk(S3, "Third")], [ID, S2, S3], S2);
+    // Window B shows S3 now.
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: Date.now() }));
+    await rule(S2, "unused1h");
+    expect(tabIds()).toEqual([S2, S3]);
+  });
+
   it("auto-close off (default) closes nothing", async () => {
     const old = Date.now() - 30 * 3_600_000;
     localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));

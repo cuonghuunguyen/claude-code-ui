@@ -291,6 +291,10 @@ export function App() {
   const [error, setError] = useState<string>();
   const [toast, setToastState] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
   const toastKey = useRef(0);
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
+  /** The Undo toast of the last cleanup close: a following close while it shows joins it (one toast, Undo restores every set). */
+  const undoToast = useRef<{ key: number; parts: { entries: { id: string; at: number }[]; wasActive?: string }[] }>(undefined);
   // Every toast is its own element (a key): a closing one cannot clear the next, and the same text restarts the timer.
   const setToast = useCallback((t: string | { message: string; action: { label: string; onClick: () => void } } | undefined) => setToastState(t === undefined ? undefined : { key: ++toastKey.current, ...(typeof t === "string" ? { message: t } : t) }), []);
   const closeToast = useCallback(() => setToast(undefined), [setToast]);
@@ -802,34 +806,54 @@ export function App() {
     const one = entries.length === 1 ? entries[0]!.id : undefined;
     const title = one && (one === NEW_TAB ? "New session" : listRef.current.find((s) => s.id === one)?.title || titles[one] || "Untitled");
     closeGroup(entries.map((e) => e.id));
+    // A toast still showing with its Undo (an earlier cleanup close) is not replaced: one toast, Undo restores both sets.
+    const prev = undoToast.current;
+    const joined = prev && toastRef.current?.key === prev.key && toastRef.current.action ? prev.parts : [];
+    const parts = [...joined, { entries, wasActive }];
+    const total = parts.reduce((n, p) => n + p.entries.length, 0);
     setToast({
-      message: message ? message(entries.length, title) : one ? `Closed ${title}` : `Closed ${entries.length} tabs`,
+      message: joined.length ? `Closed ${total} tabs` : message ? message(entries.length, title) : one ? `Closed ${title}` : `Closed ${entries.length} tabs`,
       action: {
         label: "Undo",
         onClick: () => {
-          const r = restoreMany(closedRef.current, tabsRef.current, entries, (id) => id === NEW_TAB || listRef.current.some((s) => s.id === id));
-          setClosedTabs(r.stack);
-          setTabs(r.tabs);
-          for (const id of r.restored) if (id !== NEW_TAB && id !== wasActive) void subscribe(id);
+          // Latest set first, each on the list the previous step produced.
+          let stack = closedRef.current;
+          let tabs = tabsRef.current;
+          const restored: string[] = [];
+          let shown: string | undefined;
+          for (const p of [...parts].reverse()) {
+            const r = restoreMany(stack, tabs, p.entries, (id) => id === NEW_TAB || listRef.current.some((s) => s.id === id));
+            stack = r.stack;
+            tabs = r.tabs;
+            restored.push(...r.restored);
+            if (p.wasActive && r.restored.includes(p.wasActive)) shown = p.wasActive;
+          }
+          setClosedTabs(stack);
+          setTabs(tabs);
+          for (const id of restored) if (id !== NEW_TAB && id !== shown) void subscribe(id);
           // Undo counts as use: the restored tabs must not be auto-closed again at once.
-          setUsed((u) => stampUsed(u, r.restored, Date.now()));
+          setUsed((u) => stampUsed(u, restored, Date.now()));
           // The tab that was shown comes back shown; the others are held again like any open tab.
-          if (wasActive && r.restored.includes(wasActive)) open(wasActive);
+          if (shown) open(shown);
         },
       },
     });
+    undoToast.current = { key: toastKey.current, parts };
   }
 
   /** Clean up tabs (GH-378): what the rules know about each open tab, read at call time (refs), so a click acts on the current state. */
   function tabFacts(): TabFacts[] {
     const drafts = draftKeys();
+    // Another window of this browser may have shown a tab since: the newer stamp counts.
+    const stored = loadUsed();
+    const usedAt = (id: string) => Math.max(usedRef.current[id] ?? 0, stored[id] ?? 0) || undefined;
     return tabsRef.current.map((id) => {
-      if (id === NEW_TAB) return { id, unread: false, draft: drafts.has(NEW_TAB_DRAFT), listed: true, archived: false, worker: false, transcript: false, busy: false, lastUsed: usedRef.current[id] };
+      if (id === NEW_TAB) return { id, unread: false, draft: drafts.has(NEW_TAB_DRAFT), listed: true, archived: false, worker: false, transcript: false, busy: false, lastUsed: usedAt(id) };
       const item = listRef.current.find((s) => s.id === id);
       const v = viewsRef.current[id];
       // A view not replayed yet reads idle: the list state (running, needs input) still protects the tab.
       const busyList = item?.state === "running" || item?.state === "needs_input";
-      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), unread: unreadRef.current.has(id), draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedRef.current[id] };
+      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !!item && !v, unread: unreadRef.current.has(id), draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
     });
   }
   const cleanupCtx = (): CleanupContext => ({ activeId: activeRef.current, pinned: pinnedRef.current, listLoaded: listLoadedRef.current, now: Date.now() });

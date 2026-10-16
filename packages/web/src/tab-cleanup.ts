@@ -15,14 +15,16 @@ export const RULE_LABEL: Record<CleanupRule, string> = {
 };
 export const UNUSED_MS = { unused1h: 3_600_000, unused1d: 86_400_000, unused7d: 604_800_000 } as const;
 
-export type KeepReason = "active" | "pinned" | "running" | "needs_input" | "unread" | "draft";
-const REASON_ORDER: KeepReason[] = ["pinned", "running", "needs_input", "unread", "draft"]; // "active" never shown
-const REASON_WORD: Record<KeepReason, string> = { active: "active", pinned: "pinned", running: "running", needs_input: "needs input", unread: "unread", draft: "draft" };
+export type KeepReason = "active" | "pinned" | "loading" | "running" | "needs_input" | "unread" | "draft";
+const REASON_ORDER: KeepReason[] = ["pinned", "loading", "running", "needs_input", "unread", "draft"]; // "active" never shown
+const REASON_WORD: Record<KeepReason, string> = { active: "active", pinned: "pinned", loading: "loading", running: "running", needs_input: "needs input", unread: "unread", draft: "draft" };
 
 export type TabFacts = {
   id: string;
   /** shownState(view) ?? list state; undefined = unknown (no view, not listed). */
   state?: SessionState;
+  /** A listed session tab whose view is not loaded yet: unread, queue and continue are unknown, so no rule closes it. */
+  loading?: boolean;
   unread: boolean;
   draft: boolean;
   /** Listed in session.list (true for NEW_TAB). */
@@ -40,6 +42,7 @@ export type CleanupContext = { activeId?: string; pinned: ReadonlySet<string>; l
 export function keepReason(f: TabFacts, c: CleanupContext): KeepReason | undefined {
   if (f.id === c.activeId) return "active";
   if (c.pinned.has(f.id)) return "pinned";
+  if (f.loading) return "loading";
   if (f.state === "running" || f.busy) return "running";
   if (f.state === "needs_input") return "needs_input";
   if (f.unread) return "unread";
@@ -51,7 +54,7 @@ export function matchesRule(rule: CleanupRule, f: TabFacts, c: CleanupContext): 
   const isNew = f.id === NEW_TAB;
   switch (rule) {
     case "idle":
-      return isNew || f.state === "idle" || f.state === "closed" || f.state === "error";
+      return isNew || f.state === "idle" || f.state === "closed";
     case "finished":
       return !isNew && f.state === "idle" && f.transcript && !f.unread && !f.busy;
     case "archived":
