@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { createWorktree, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
+import { parseStatus, createWorktree, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { wslGitRunner } from "../src/wsl-git.ts";
 import { execFile } from "node:child_process";
@@ -482,6 +482,42 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ignored: 0, uncommitted: 0, safety: "safe" });
     writeFileSync(join(wt, "a.log"), "x");
     expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ignored: 1, uncommitted: 0, safety: "safe" });
+  });
+
+  it("worktreeStatus counts ignored files inside an untracked folder, per file, and names that need quoting", async () => {
+    const { main } = plain();
+    writeFileSync(join(main, ".gitignore"), "*.env\n*.log\nbuild/\nmy dir/\n");
+    run(main, "add", ".");
+    run(main, ...C, "commit", "-qm", "ignore");
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "ig2", wt);
+    mkdirSync(join(wt, "secrets"));
+    writeFileSync(join(wt, "secrets", "dev.env"), "k");
+    mkdirSync(join(wt, "build"));
+    writeFileSync(join(wt, "build", "o.js"), "x");
+    mkdirSync(join(wt, "my dir"));
+    writeFileSync(join(wt, "my dir", "f.txt"), "x");
+    // secrets/ holds only an ignored file: Safe, and the file is counted; build/ and "my dir/" are whole ignored directories.
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ignored: 1, uncommitted: 0, untracked: 0, safety: "safe" });
+  });
+
+  it("worktreeStatus counts every file of an untracked folder, so work added inside it is stale for expect", async () => {
+    const { main } = plain();
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "nd", wt);
+    mkdirSync(join(wt, "newdir"));
+    writeFileSync(join(wt, "newdir", "a"), "a");
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ uncommitted: 1, untracked: 1 });
+    writeFileSync(join(wt, "newdir", "b"), "b");
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ uncommitted: 2, untracked: 2 });
+    expect(await code(removeWorktree(main, wt, () => true, { expect: { uncommitted: 1, ahead: 0, ignored: 0 } }))).toBe("stale");
+    expect(existsSync(join(wt, "newdir", "b"))).toBe(true);
+  });
+
+  it("parseStatus: renames carry a second field, a leading-space first entry survives the runner's trim, directories are not counted, counts stop at the cap", () => {
+    expect(parseStatus("R  new\0old\0?? x\0!! dir/\0!! f.log\0")).toEqual({ uncommitted: 2, untracked: 1, ignored: 1 });
+    expect(parseStatus("M a.txt\0 M b.txt\0")).toEqual({ uncommitted: 2, untracked: 0, ignored: 0 });
+    expect(parseStatus(Array.from({ length: 1500 }, (_, i) => `?? f${i}`).join("\0")).uncommitted).toBe(1000);
   });
 
   it("removeWorktree expect refuses stale when more work exists than listed, also after beforeRemove ran", async () => {

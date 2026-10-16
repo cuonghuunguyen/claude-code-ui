@@ -1803,6 +1803,25 @@ describe("daemon", () => {
     }
   });
 
+  it("worktree.remove validates expect (bad types and negative counts refused) and answers stale on more work than listed", async () => {
+    const { root, repo, d, c } = await wtDaemon("wtexpect-");
+    try {
+      const wt = join(root, "wt");
+      execFileSync("git", ["worktree", "add", "-q", "-b", "wt", wt], { cwd: repo });
+      for (const expect_ of ["x", null, { uncommitted: -1, ahead: 0, ignored: 0 }, { uncommitted: "1", ahead: 0, ignored: 0 }, { uncommitted: 0, ahead: 0 }, { uncommitted: 1.5, ahead: 0, ignored: 0 }])
+        expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, expect: expect_ } as never), JSON.stringify(expect_)).toMatchObject({ code: "bad_request" });
+      expect(existsSync(wt)).toBe(true);
+      writeFileSync(join(wt, "a.txt"), "1");
+      writeFileSync(join(wt, "b.txt"), "2");
+      expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, expect: { uncommitted: 1, ahead: 0, ignored: 0 } })).toMatchObject({ code: "stale" });
+      expect(existsSync(wt)).toBe(true);
+      expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, expect: { uncommitted: 2, ahead: 0, ignored: 0 } })).toMatchObject({ result: {} });
+      expect(existsSync(wt)).toBe(false);
+    } finally {
+      d.close();
+    }
+  });
+
   it.skipIf(process.platform === "win32")("a session.create in an external worktree during its removal gets worktree_removing", async () => {
     const { root, repo, d, c } = await wtDaemon("wtext-");
     const bin = mkdtempSync(join(tmpdir(), "slowgit-"));

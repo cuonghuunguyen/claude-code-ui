@@ -567,6 +567,30 @@ export function classify(st: Omit<WorktreeStatusResult, "safety">): WorktreeStat
 
 const count = async (cwd: string, args: string[]) => Number(await g(cwd, ["rev-list", "--count", ...args])) || 0;
 
+/** Counts stop here: a huge untracked tree is "at least this much" (the web app shows `1000+`). */
+export const STATUS_CAP = 1000;
+/** Counts of `git status --porcelain -z --ignored=matching -uall`: changed or untracked files, the untracked part, ignored files (not directories). */
+export function parseStatus(out: string): { uncommitted: number; untracked: number; ignored: number } {
+  const c = { uncommitted: 0, untracked: 0, ignored: 0 };
+  const f = out.split("\0");
+  for (let i = 0; i < f.length; i++) {
+    let e = f[i]!;
+    // The runner trims the output: the first entry of " M file" lost its leading space.
+    if (i === 0 && e[2] !== " ") e = ` ${e}`;
+    if (e.length < 4) continue;
+    const xy = e.slice(0, 2);
+    // A rename or copy is followed by its source path as a field of its own.
+    if (xy[0] === "R" || xy[0] === "C" || xy[1] === "R" || xy[1] === "C") i++;
+    if (xy === "!!") {
+      if (!e.endsWith("/")) c.ignored = Math.min(STATUS_CAP, c.ignored + 1);
+      continue;
+    }
+    c.uncommitted = Math.min(STATUS_CAP, c.uncommitted + 1);
+    if (xy === "??") c.untracked = Math.min(STATUS_CAP, c.untracked + 1);
+  }
+  return c;
+}
+
 /** What removing `w` loses and whether it may be removed (WorktreeStatusResult); `running` is the caller's to fill. */
 async function statusOf(main: string, w: Listed, requested: string, allowed: (p: string) => boolean, list: Listed[]): Promise<WorktreeStatusResult> {
   const name = w.branch ?? basename(w.path);
@@ -574,10 +598,8 @@ async function statusOf(main: string, w: Listed, requested: string, allowed: (p:
   // No git runs in a worktree whose git dirs are outside the roots.
   if (!allowed(w.path) || (await gitEscapes(w.path, allowed))) return classify({ ...zero, blocked: "outside_roots" });
   const blocked = await blockOf(w, requested, list);
-  const all = (await g(w.path, ["status", "--porcelain", "--ignored"])).split("\n").filter((l) => l.trim());
-  const lines = all.filter((l) => !l.startsWith("!! "));
-  // Ignored files only; an ignored directory git reports as a whole (node_modules/, build output) is not counted.
-  const ignored = all.filter((l) => l.startsWith("!! ") && !l.endsWith("/")).length;
+  // Per file (-uall) and NUL separated (-z: names needing quotes stay exact). Ignored directories git reports whole (node_modules/, build output) are not counted.
+  const { uncommitted, untracked, ignored } = parseStatus(await g(w.path, ["status", "--porcelain", "-z", "--ignored=matching", "-uall"]));
   const detached = !(await gok(w.path, "symbolic-ref", "-q", "HEAD"));
   const keeps = !detached && !w.branch?.startsWith("worktree-");
   let commits = 0;
@@ -599,7 +621,7 @@ async function statusOf(main: string, w: Listed, requested: string, allowed: (p:
   else ahead = await count(w.path, ["HEAD", "--not", `--exclude=${w.branch}`, "--branches", "--remotes"]);
   const branchMerged = keeps && refs.length > 0 && (await count(w.path, [`refs/heads/${w.branch}`, "--not", ...refs])) === 0;
   const t = Number(await g(w.path, ["log", "-1", "--format=%ct", "HEAD"]).catch(() => "")) * 1000;
-  return classify({ uncommitted: lines.length, untracked: lines.filter((l) => l.startsWith("?? ")).length, commits, ahead, ignored, branch: name, branchMerged, ...(t > 0 && { headTime: t }), running: 0, ...(blocked && { blocked }) });
+  return classify({ uncommitted, untracked, commits, ahead, ignored, branch: name, branchMerged, ...(t > 0 && { headTime: t }), running: 0, ...(blocked && { blocked }) });
 }
 
 /** What removing `path` loses and whether it may (WorktreeStatusResult). `allowed`: the roots check; sessions are the caller's. */

@@ -208,6 +208,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
                             rows={rows}
                             safetyOf={safetyOf}
                             isOn={(x) => isOn(x) && visible.includes(x)}
+                            shown={(x) => visible.includes(x)}
                             set={set}
                             deleteBranch={deleteBranch.has(r.key)}
                             setDeleteBranch={(on) => setDeleteBranch((d) => (on ? new Set(d).add(r.key) : (d.delete(r.key), new Set(d))))}
@@ -257,7 +258,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
 
 const BADGE = { safe: "secondary", has_work: "outline", blocked: "destructive", checking: "ghost" } as const;
 
-function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, set, deleteBranch, setDeleteBranch }: {
+function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, shown, set, deleteBranch, setDeleteBranch }: {
   r: Row;
   ids: string;
   now: number;
@@ -266,6 +267,7 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, set, deleteBranc
   rows: Row[];
   safetyOf: (r: Row) => string;
   isOn: (r: Row) => boolean;
+  shown: (r: Row) => boolean;
   set: (key: string, on: boolean) => void;
   deleteBranch: boolean;
   setDeleteBranch: (on: boolean) => void;
@@ -276,11 +278,12 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, set, deleteBranc
   const meta = [
     r.kind === "worktree" ? `${r.sessions} ${r.sessions === 1 ? "session" : "sessions"}` : undefined,
     act ? timeAgo(act, now) : undefined,
-    r.kind === "worktree" && r.status?.ignored ? `${r.status.ignored} ignored ${r.status.ignored === 1 ? "file" : "files"} will be deleted` : undefined,
+    r.kind === "worktree" && r.status?.ignored ? `${r.status.ignored >= 1000 ? "1000+" : r.status.ignored} ignored ${r.status.ignored === 1 ? "file" : "files"} will be deleted` : undefined,
     r.kind === "worker" ? r.state : r.outsideRoots ? "outside roots" : r.locked ? "locked" : r.status ? (r.status.safety === "has_work" ? "has work" : "clean") : undefined,
   ].filter(Boolean);
   const wt = r.kind === "worker" && r.worktree ? rows.find((x) => x.kind === "worktree" && x.path === r.worktree) : undefined;
-  const wtOk = wt && !["blocked", "checking"].includes(safetyOf(wt));
+  const wtHidden = !!wt && !shown(wt);
+  const wtOk = wt && !wtHidden && !["blocked", "checking"].includes(safetyOf(wt));
   const keptBranch = r.kind === "worktree" && r.branch && !r.branch.startsWith("worktree-") && r.status?.branchMerged;
   return (
     <li className="flex min-h-8 flex-col justify-center py-1 max-md:min-h-11" data-testid="cleanup-row" data-key={r.key}>
@@ -315,7 +318,7 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, set, deleteBranc
       {wt && (
         <label className="ml-6 flex items-center gap-2 text-sm max-md:min-h-11">
           <input type="checkbox" disabled={busy || !wtOk} checked={isOn(wt)} onChange={(e) => set(wt.key, e.target.checked)} data-testid="cleanup-also-worktree" />
-          <span>Also remove its worktree</span>
+          <span>Also remove its worktree{wtHidden && <span className="text-muted-foreground"> (hidden by the filter)</span>}</span>
         </label>
       )}
     </li>

@@ -248,6 +248,10 @@ it("'Also remove its worktree' ticked while a filter hides that worktree: not re
     sel.dispatchEvent(new Event("change", { bubbles: true }));
   });
   expect(row(`wt:${P("safe")}`) ?? null).toBeNull();
+  const also = row("wk:w-wt").querySelector<HTMLInputElement>('[data-testid="cleanup-also-worktree"]')!;
+  expect(also.disabled).toBe(true);
+  expect(also.checked).toBe(false);
+  expect(also.closest("label")!.textContent).toContain("(hidden by the filter)");
   await click(confirm());
   await act(async () => {});
   expect(sent.filter((m) => m.type === "worktree.remove")).toEqual([]);
