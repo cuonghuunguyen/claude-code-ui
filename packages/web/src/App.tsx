@@ -1233,15 +1233,27 @@ export function App() {
   };
   // A moved pane's DOM moves with it: focus its tab in the new area once rendered, once (the menu that moved it returns no focus).
   const focusTab = useRef<PaneId>(undefined);
-  // True for the move's render: a terminal that shows because of it (moved, or next in the area the moved pane left) keeps off the focus.
-  const [moving, setMoving] = useState(false);
   useEffect(() => {
     const p = focusTab.current;
     if (!p) return;
     focusTab.current = undefined;
-    setMoving(false);
     document.querySelector<HTMLElement>(`[data-pane-tab="${p}"]`)?.focus();
   });
+  // From a move to the user's next key or pointer press: a terminal that shows because of the move (moved, or next in the area the
+  // moved pane left) keeps off the focus. Not only the move's render: the code-split panel's first mount commits after it (Suspense).
+  const [moving, setMoving] = useState(false);
+  useEffect(() => {
+    if (!moving) return;
+    const done = () => setMoving(false);
+    const kinds = ["keydown", "pointerdown"] as const;
+    for (const k of kinds) window.addEventListener(k, done, true);
+    return () => kinds.forEach((k) => window.removeEventListener(k, done, true));
+  }, [moving]);
+  /** A pane tab click; on the terminal's tab, the selected one too, the shell takes the focus (docs/spec.md Terminal panel). */
+  const selectPane = (p: Pane) => {
+    if (p === "terminal") setTermFocusReq((n) => n + 1);
+    setPane(p);
+  };
   const hosts = usePaneHosts();
   useEffect(() => {
     if (shows("graph") && panelSession) setGraphCwd(panelSession.cwd);
@@ -1634,7 +1646,7 @@ export function App() {
           active={activeOf("side")}
           changes={changeCount}
           side={layout.side}
-          onSelect={setPane}
+          onSelect={selectPane}
           onMove={move}
           onFlipSide={() => saveLayout(flipSide(layout))}
           onReset={resetLayout}
@@ -1868,7 +1880,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal"]} value={pane === "graph" && !isGit ? "files" : pane} onChange={setPane} changes={changeCount} />
+                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal"]} value={pane === "graph" && !isGit ? "files" : pane} onChange={selectPane} changes={changeCount} />
                 </div>
               )}
               {layout.side === "left" && lg && (
@@ -2101,7 +2113,7 @@ export function App() {
                 panes={areaPanes("bottom")}
                 active={activeOf("bottom")}
                 changes={changeCount}
-                onSelect={setPane}
+                onSelect={selectPane}
                 onMove={move}
                 onReset={resetLayout}
                 {...dragProps}

@@ -60,7 +60,7 @@ export function TerminalPanel({
   shown?: boolean;
   /** Bumped when a command wants the shell focused (Toggle terminal on a terminal that shows behind a maximized panel). */
   focusReq?: number;
-  /** True in the render where the panel mounts or shows because a pane moved: it leaves the focus where it is (the moved pane's tab). */
+  /** True from a pane move until the user's next input: a mount or show then leaves the focus where it is (the moved pane's tab). */
   quiet?: boolean;
 }) {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);

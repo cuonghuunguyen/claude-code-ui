@@ -1059,10 +1059,43 @@ it("moving a pane away from a terminal that then shows (or moving the terminal) 
   expect(q("bottom-panel")!.contains(q("terminal-panel"))).toBe(true);
   expect(document.activeElement).toBe(paneTab("bottom-panel", "terminal"));
   expect(g.__termFocused ?? 0).toBe(before);
-  // Revealing it on purpose still focuses the shell.
-  await clickId("pane-files");
-  await clickId("pane-terminal");
+  // Revealing it on purpose still focuses the shell (no key or pointer press before: the move's quiet is still on).
+  await act(async () => paneTab("bottom-panel", "files")!.click());
+  await act(async () => paneTab("bottom-panel", "terminal")!.click());
   await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+});
+
+it("a click on the terminal's pane tab, the selected one too, focuses the shell (GH-374)", async () => {
+  await clickId("terminal-toggle");
+  const g = globalThis as { __termFocused?: number };
+  const tab = paneTab("bottom-panel", "terminal")!;
+  expect(tab.getAttribute("aria-selected")).toBe("true");
+  tab.focus();
+  const before = g.__termFocused ?? 0;
+  await act(async () => tab.click());
+  await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+});
+
+it("a kept-mounted terminal revealed by Ctrl+`, New terminal or its pane tab takes the shell focus; a move before does not keep it quiet", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+  await rerender();
+  await press({ key: "`", ctrlKey: true });
+  const g = globalThis as { __termFocused?: number };
+  // A move first: the terminal stays quiet only until the user's next input.
+  await act(async () => paneTab("side-panel", "changes")!.click());
+  const t = paneTab("side-panel", "changes")!;
+  await act(async () => void t.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+  await act(async () => menuItem("pane-move").click());
+  const panel = q("terminal-panel")!;
+  for (const reveal of [() => press({ key: "`", ctrlKey: true }), () => press({ key: "`", ctrlKey: true, shiftKey: true }), () => act(async () => paneTab("side-panel", "terminal")!.click())]) {
+    await act(async () => paneTab("side-panel", "files")!.click());
+    expect(panel.className).toContain("hidden");
+    const before = g.__termFocused ?? 0;
+    await reveal();
+    expect(q("terminal-panel")).toBe(panel);
+    expect(panel.className).not.toContain("hidden");
+    await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+  }
 });
 
 it("after a move the focus is not taken back: a button focused right after keeps it", async () => {
