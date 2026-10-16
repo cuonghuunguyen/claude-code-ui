@@ -2,6 +2,16 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- The "Run session in" chip and menu name the main checkout "Primary worktree" (were "Local" and "Local repository").
+
+### Fixed
+
+- The Changes tab's file list beside the diff can be resized: drag its edge or press ←/→ on it (kept per browser, double click restores the default width).
+
 ## 0.6.0 - 2026-10-15
 
 ### Added

@@ -2422,11 +2422,11 @@ export function NewSession({
             <span aria-hidden className="select-none text-faint">
               /
             </span>
-            {/* OpenCode PromptWorkspaceSelector: "Run session in", Run session in, Local repository, the worktrees, New worktree. */}
+            {/* OpenCode PromptWorkspaceSelector: "Run session in", Run session in, Primary worktree (OpenCode: Local repository), the worktrees, New worktree. */}
             <Select value={cwd} onValueChange={(v) => (v === NEW_WT ? onNewWorktree?.(project) : v && onCwd(v))}>
-              <SelectTrigger aria-label={`${here?.main ? "Local" : (here?.branch ?? projectName(cwd))}, Run session in`} title={cwd} data-testid="worktree-chip" className={`${GHOST} max-md:h-11! text-foreground hover:bg-secondary`}>
+              <SelectTrigger aria-label={`${here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}, Run session in`} title={cwd} data-testid="worktree-chip" className={`${GHOST} max-md:h-11! text-foreground hover:bg-secondary`}>
                 {here?.main ? <MonitorIcon /> : <GitBranchIcon />}
-                <span className="max-w-50 truncate">{here?.main ? "Local" : (here?.branch ?? projectName(cwd))}</span>
+                <span className="max-w-50 truncate">{here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}</span>
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-48 max-w-[calc(100vw-2rem)] rounded-md p-0.5 shadow-floating! ring-0">
                 <SelectGroup>
@@ -2434,7 +2434,7 @@ export function NewSession({
                   {runIn.map((w) => (
                     <SelectItem key={w.path} value={w.path} title={w.path} className={ROW}>
                       {w.main ? <MonitorIcon /> : <GitBranchIcon />}
-                      <span className="truncate">{w.main ? "Local repository" : (w.branch ?? projectName(w.path))}</span>
+                      <span className="truncate">{w.main ? "Primary worktree" : (w.branch ?? projectName(w.path))}</span>
                     </SelectItem>
                   ))}
                 </SelectGroup>
