@@ -6,6 +6,7 @@ import type { Settings } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { SettingsDialog } from "./settings-dialog.tsx";
 import { loadSignalOnly, saveSignalOnly } from "./signal.ts";
+import { loadKeepAwake, saveKeepAwake } from "./keep-awake.ts";
 import { bind, resetAll } from "./keymap.ts";
 import type { TabGrouping } from "./tab-grouping.ts";
 import { loadSidebarView, saveSidebarView } from "./sessions.ts";
@@ -255,7 +256,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups: Timeline first, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Timeline", "Sending", "Notifications", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "About"]);
+  expect(ids).toEqual(["Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "About"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
 });
 
@@ -506,4 +507,37 @@ it("Usage limits: Usage ring shows is a per-browser choice, Highest usage by def
   expect(q("settings-usage-ring")?.textContent).toContain("Weekly");
   expect(calls.some((c) => c.type === "settings.set")).toBe(false);
   localStorage.removeItem("claude-ui.usageRing");
+});
+
+it("Settings > Screen has the Keep screen awake switches; unsupported here: held with the reason, choice still stored (GH-361)", async () => {
+  localStorage.removeItem("claude-ui.keepAwake");
+  const { q, pick } = await render();
+  await pick("screen");
+  expect(q("settings-screen")?.querySelector("h3")?.textContent).toBe("Screen");
+  // jsdom has no wake lock API.
+  expect(q("settings-keep-awake")!.getAttribute("aria-disabled")).toBe("true");
+  expect(q("settings-screen")!.textContent).toContain("needs HTTPS or localhost");
+  await act(async () => q("settings-keep-awake")!.click());
+  expect(loadKeepAwake().on).toBe(false);
+});
+
+it("Screen switches write the store; the sub-switch is held while the main one is off (GH-361)", async () => {
+  Object.defineProperty(window, "isSecureContext", { value: true, configurable: true });
+  Object.defineProperty(navigator, "wakeLock", { value: { request: async () => ({}) }, configurable: true });
+  try {
+    saveKeepAwake({ on: false, onlyRunning: false });
+    const { q, pick } = await render();
+    await pick("screen");
+    expect(q("settings-keep-awake-running")!.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => q("settings-keep-awake")!.click());
+    expect(loadKeepAwake()).toEqual({ on: true, onlyRunning: false });
+    expect(q("settings-keep-awake")!.getAttribute("aria-checked")).toBe("true");
+    expect(q("settings-keep-awake-running")!.getAttribute("aria-disabled")).toBe("false");
+    await act(async () => q("settings-keep-awake-running")!.click());
+    expect(loadKeepAwake()).toEqual({ on: true, onlyRunning: true });
+  } finally {
+    delete (navigator as { wakeLock?: unknown }).wakeLock;
+    Object.defineProperty(window, "isSecureContext", { value: undefined, configurable: true });
+    localStorage.removeItem("claude-ui.keepAwake");
+  }
 });

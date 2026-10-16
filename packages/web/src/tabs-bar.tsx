@@ -944,6 +944,7 @@ export const ICON_BUTTON =
 
 export function IconButton({
   label,
+  title,
   onClick,
   children,
   className,
@@ -956,6 +957,8 @@ export function IconButton({
   ref,
 }: {
   label: string;
+  /** The tooltip; defaults to `label`. */
+  title?: string;
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   children: React.ReactNode;
   className?: string;
@@ -973,7 +976,7 @@ export function IconButton({
     <button
       ref={ref}
       aria-label={label}
-      title={label}
+      title={title ?? label}
       aria-pressed={pressed}
       aria-expanded={expanded}
       aria-controls={controls}
