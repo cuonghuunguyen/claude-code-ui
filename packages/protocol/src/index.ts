@@ -4,3 +4,4 @@ export { createAdapter, bashRecords } from "./adapter.ts";
 export { imageBlock, isPromptImage, MEDIA_INLINE_MAX, omitMedia, omittedImage, parseOmitted, type ImageBlock, type OmittedSource } from "./images.ts";
 export * from "./wsl-path.ts";
 export * from "./histogram.ts";
+export * from "./file-name.ts";

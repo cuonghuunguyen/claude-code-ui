@@ -1,5 +1,6 @@
+import { createPortal } from "react-dom";
 import { Activity, lazy, memo, Suspense, use, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { CheckIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelBottomIcon, PanelLeftIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon, XIcon } from "lucide-react";
 import type {
   ContextUsage,
   CreateResult,
@@ -72,7 +73,10 @@ import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath
 import { SessionList } from "./sidebar.tsx";
 import { noteRefs } from "./git-refs.ts";
 import { agentLinks, NO_LINKS, sameLinks, workerState, type AgentLinks } from "./workers.ts";
-import { resumeSearchText, byRow, inProject, patchSession, projectCwd, projectOf, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
+import { confirmNames, daysLabel } from "./sidebar-menus.ts";
+import { resumeSearchText, byRow, inProject, keepsBranch, patchSession, projectCwd, projectOf, removableWorktree, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
+import { BLOCK_TEXT, type CleanupScope } from "./cleanup.ts";
+import { CleanupDialog } from "./cleanup-dialog.tsx";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
@@ -92,10 +96,12 @@ import { isUnread, loadSeen, loadShownActivity, pruneShownActivity, saveSeen, sa
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { FILE_LINK_PROPS, FileLinkContext } from "./file-links.tsx";
 import { ViewerContext, latestPlan, useOpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
+import { useSendMode } from "./send-mode.ts";
 import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
 import { FoldRow } from "./signal-fold.tsx";
 import { FocusPage, FocusRow, useNow } from "./focus-page.tsx";
@@ -128,9 +134,15 @@ import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
 import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
+import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, movePane, resetLayout, saveLayout, useLayout, useMinWidth } from "./layout.ts";
+import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
+import { useSplitDrop } from "./split-drop.ts";
+import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type Split, type SplitDir, canSplit as canSplitTabs, followSplit, isSession, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
+import { anySessionRunning, useKeepAwake } from "./keep-awake.ts";
+import { KeepAwakeButton } from "./keep-awake-button.tsx";
 import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
@@ -263,6 +275,9 @@ export function App() {
   const liveAt = useRef(new Map<string, number>());
   // Signal only (GH-159, one setting for the browser since GH-205), set in Settings.
   const signalOnly = useSignalOnly();
+  // Keep screen awake (GH-361): "running" = a listed, unarchived session that works or waits for the user.
+  const anyRunning = useMemo(() => anySessionRunning(list, views), [list, views]);
+  const awake = useKeepAwake(anyRunning);
   const [grouping, setGrouping] = useState<TabGrouping>(loadTabGrouping);
   const changeGrouping = (g: TabGrouping) => {
     setGrouping(g);
@@ -362,9 +377,11 @@ export function App() {
   const focused = usePageFocused();
   // Narrow screens show one pane; wide screens show the session plus a side panel with changes or files.
   // Per session tab, so switching tabs keeps each one's pane.
-  const [panes, setPanes] = useState<Record<string, Pane>>({});
-  const pane = (activeId && panes[activeId]) || "session";
-  const setPane = (p: Pane) => activeId && setPanes((x) => ({ ...x, [activeId]: p }));
+  // GH-355: newest first per session tab. The narrow pane is the first entry; each dock area shows its newest pane.
+  const [paneHist, setPaneHist] = useState<Record<string, Pane[]>>({});
+  const hist = (activeId && paneHist[activeId]) || [];
+  const pane: Pane = hist[0] ?? "session";
+  const setPane = (p: Pane) => activeId && setPaneHist((x) => ({ ...x, [activeId]: [p, ...(x[activeId] ?? []).filter((q) => q !== p)] }));
   const [panelWidth, setPanelWidth] = useState(480);
   // Wide screens: the side panel can be hidden (Toggle side panel).
   const [panel, setPanel] = useState(() => !loadFlag(PANEL_HIDDEN_KEY));
@@ -377,10 +394,10 @@ export function App() {
   const [rewindTo, setRewindTo] = useState<string>();
   // A content search hit (palette Messages) the opened session scrolls to once its message is loaded.
   const [revealHit, setRevealHit] = useState<{ sessionId: string; hit: SearchHit; query: string }>();
-  // Wide screens: the terminal panel below the side panel (Toggle terminal); narrow screens show it as the "terminal" pane.
+  // Wide screens: the bottom panel shown (GH-354 terminal, GH-355 any pane; the key keeps its name so saved state carries over).
   // Kept per browser across reloads; the daemon's shells outlive the page.
-  const [terminalOpen, setTerminalOpen] = useState(() => loadFlag(TERMINAL_KEY));
-  useEffect(() => saveFlag(TERMINAL_KEY, terminalOpen), [terminalOpen]);
+  const [bottomOpen, setBottomOpen] = useState(() => loadFlag(TERMINAL_KEY));
+  useEffect(() => saveFlag(TERMINAL_KEY, bottomOpen), [bottomOpen]);
   // OpenCode: 280px by default, resizable when stacked below the side panel.
   const [terminalHeight, setTerminalHeight] = useState(() => loadNumber(TERMINAL_HEIGHT_KEY, 280));
   useEffect(() => {
@@ -390,17 +407,39 @@ export function App() {
       // Storage blocked: the height lasts until the page reloads.
     }
   }, [terminalHeight]);
+  // GH-355: wide screens place each pane in the side or the bottom panel; narrow screens keep the pane switcher.
+  const layout = useLayout();
+  const lg = useMinWidth(1024);
+  // Split view (GH-356): two session tabs side by side or stacked; `activeId` stays the current session and the active split shows it.
+  const [splitRaw, setSplitRaw] = useState(loadSplit);
+  const split = followSplit(splitRaw, activeId, tabs);
+  useEffect(() => {
+    if (split !== splitRaw) setSplitRaw(split);
+    saveSplit(split);
+  }, [split]);
+  // The session area's size: two splits need room for both minimum sizes, else the active one shows alone (the split returns with the space).
+  const [area, setArea] = useState<{ w: number; h: number }>();
+  const splitFits = !split || !area || !area.w || (split.dir === "row" ? area.w >= 2 * SPLIT_MIN_W + 8 : area.h >= 2 * SPLIT_MIN_H + 8);
+  /** Wide with a split, but no room for both: the active split shows alone, with a hint. */
+  const splitCramped = lg && !!split && isSession(activeId) && !splitFits;
+  const splitRef = useRef(split);
+  splitRef.current = split;
+  /** Wide, roomy enough, a split exists and a session shows (the New session tab and Focus page suspend it). Both splits are on screen: they count as shown. */
+  const splitOn = lg && !!split && isSession(activeId) && splitFits;
+  const visibleIds = splitOn ? split.ids : [activeId];
   // A mention from "Send selection to Claude", a quote (`>`) or a command, waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
-  const [openFile, setOpenFile] = useState<string>();
+  const [openFile, setOpenFile] = useState<{ path: string; line?: number }>();
+  /** File tree "Show changes": the Changes tab selects this path (`seq` tells a repeat apart). */
+  const [changesReveal, setChangesReveal] = useState<{ path: string; seq: number }>();
   // Popup viewer (GH-238): what shows, for which session; `opener` takes the focus back on close.
   const [viewer, setViewer] = useState<ViewerState>();
   useEffect(() => setViewer(undefined), [activeId]);
   const quickOpener = useRef<Element>(null);
   // Title editor: in the sidebar row or in the tab the Rename action came from.
-  const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab" }>();
+  const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab"; menu: boolean }>();
   // Session waiting for the delete confirmation.
   const [deleting, setDeleting] = useState<string>();
   // Project cwd whose Remove waits for the confirmation.
@@ -421,6 +460,18 @@ export function App() {
   const [removingWt, setRemovingWt] = useState<{ project: string; path: string; branch: string; text: string }>();
   const lastRemovingWt = useRef(removingWt);
   if (removingWt) lastRemovingWt.current = removingWt;
+  // Remove worker dialog (GH-358): `project`/`path`: the worker's own worktree when the app may remove it; `text`: its status; `others`: other listed sessions in it.
+  const [removingWorker, setRemovingWorker] = useState<{ id: string; name: string; project?: string; path?: string; branch?: string; text?: string; others: number; loading: boolean; error?: string }>();
+  const lastRemovingWorker = useRef(removingWorker);
+  if (removingWorker) lastRemovingWorker.current = removingWorker;
+  const [alsoWorktree, setAlsoWorktree] = useState(false);
+  // Remove closed workers and Archive idle sessions confirmations; kept while the dialogs fade out.
+  const [removingWorkers, setRemovingWorkers] = useState<{ ids: string[]; names: string; title: string }>();
+  const lastRemovingWorkers = useRef(removingWorkers);
+  if (removingWorkers) lastRemovingWorkers.current = removingWorkers;
+  const [archiving, setArchiving] = useState<{ ids: string[]; where: string; days: number }>();
+  const lastArchiving = useRef(archiving);
+  if (archiving) lastArchiving.current = archiving;
   // Set on Remove worktree confirm: the project whose group toggle takes the focus.
   const removedWt = useRef<string>(undefined);
   if (removing) lastRemoving.current = removing;
@@ -434,6 +485,10 @@ export function App() {
   tabsRef.current = tabs;
   const activeRef = useRef(activeId);
   activeRef.current = activeId;
+  const runRef = useRef(run);
+  runRef.current = run;
+  const splitOnRef = useRef(false);
+  splitOnRef.current = splitOn;
   const listRef = useRef(list);
   listRef.current = list;
   /** Prompts sent while a session's /clear runs: they go to the session the tab follows to (or back to this one when the /clear ends without), keyed by the session they were typed in. */
@@ -702,6 +757,12 @@ export function App() {
   /** Opens or focuses a tab; `undefined` shows no tab. Only a session tab goes into the URL hash. */
   function open(id: string | undefined, keepHash = false) {
     setError(undefined);
+    // A tab shown in the other split is revealed there (VS Code), with its subagent view.
+    const sp = splitRef.current;
+    if (id && sp && splitOnRef.current && id !== activeRef.current && sp.ids.includes(id)) {
+      setDrawer(false);
+      return focusSplit(id, keepHash);
+    }
     setActiveId(id);
     setDrawer(false);
     if (!keepHash) setRun(undefined);
@@ -718,6 +779,47 @@ export function App() {
     // A session the list only follows in the background is held now (a tab shows it).
     const add = !viewsRef.current[id] || !listRef.current.some((s) => s.id === id);
     if (id !== NEW_TAB && (add || !held.current.has(id))) void subscribe(id, add);
+  }
+
+  /** Makes `t` the active tab of split `s` (already updated for it): the subagent view of each tab goes with it, the hash follows. Not `open()`: the tab is open already. */
+  function enter(s: Split, t: string, keepHash = false) {
+    const cur = activeRef.current;
+    const sw = cur === t ? { runs: s.runs, run: runRef.current } : switchRuns(s.runs, cur, runRef.current, t);
+    setSplitRaw({ ...s, runs: sw.runs });
+    setError(undefined);
+    setActiveId(t);
+    setRun(sw.run);
+    if (!keepHash) history.replaceState(null, "", sw.run ? runHash(t, sw.run) : tabHash(t));
+  }
+
+  /** Makes the split showing `id` the active one. */
+  function focusSplit(id: string, keepHash = false) {
+    const s = splitRef.current;
+    if (!s || !s.ids.includes(id) || id === activeRef.current) return;
+    enter({ ...s, at: s.ids.indexOf(id) }, id, keepHash);
+  }
+
+  /** Split right / Split down: `t` goes to a new split in the direction, focus moves there. */
+  function splitTab(t: string, dir: SplitDir, before = false) {
+    const r = splitTo(splitRef.current, tabsRef.current, activeRef.current, t, dir, before);
+    if (!r) return;
+    setDrawer(false);
+    enter(r.split, t);
+    focusShownPrompt(t);
+  }
+
+  /** A tab dropped on the middle of a split: it shows there (a tab shown in the other split swaps with it). */
+  function showInSplit(t: string, i: number) {
+    const s = splitRef.current;
+    if (!s) return open(t);
+    enter(placeIn(s, t, i), t);
+    focusShownPrompt(t);
+  }
+
+  /** Join splits: one session shows again, the active one. */
+  function joinSplits() {
+    saveSplit(undefined);
+    setSplitRaw(undefined);
   }
 
   /** Opens the subagent view of `id` in the active session tab, or its session view; a history entry each, so browser Back returns. */
@@ -748,9 +850,12 @@ export function App() {
   // These read the latest tabs and active tab (refs): a close can run from a timer of an earlier render (a swipe's slide-out), after another close.
   function close(id: string) {
     const r = closeTab(tabsRef.current, id, activeRef.current);
+    // Closing the active split's tab: the next tab is one outside the splits, else the other split's tab (the split ends).
+    const sp = splitRef.current;
+    const next = sp && splitOnRef.current && id === activeRef.current ? nextAfterClose(tabsRef.current, id, sp) : r.active;
     setTabs(r.tabs);
     release(id);
-    activate(r.active);
+    activate(next);
   }
 
   /** A close from the phone switcher (swipe or Delete on a row): the toast offers Undo for that exact tab; the New session tab has nothing to reopen. */
@@ -879,7 +984,7 @@ export function App() {
       return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !!item && !failed && (stale || (!v && !closed)), unknown: failed || (!!item && (!!v || closed) && read === undefined), unread: unreadRef.current.has(id) || read === true, draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
     });
   }
-  const cleanupCtx = (): CleanupContext => ({ activeId: activeRef.current, pinned: pinnedRef.current, listLoaded: listLoadedRef.current, now: Date.now() });
+  const cleanupCtx = (): CleanupContext => ({ activeId: activeRef.current, shown: splitOnRef.current && splitRef.current ? new Set(splitRef.current.ids) : undefined, pinned: pinnedRef.current, listLoaded: listLoadedRef.current, now: Date.now() });
   /** Runs one cleanup rule over the strip, or over `scope` (Clean up group); safety is re-checked now, not taken from the menu's counts. */
   function cleanUp(rule: CleanupRule, scope?: string[]) {
     const ids = cleanupTargets(rule, tabFacts(), cleanupCtx(), scope && new Set(scope));
@@ -902,6 +1007,7 @@ export function App() {
     else if (c === "copyId") copyText(id, "session ID");
     else if (c === "copyCwd") copyText(sessionOf(id)?.cwd, "cwd path");
     else if (c === "reveal") revealTab(id);
+    else if (c === "splitRight" || c === "splitDown") splitTab(id, c === "splitRight" ? "row" : "col");
   }
 
   /** Pin or unpin a session tab: it moves to the end of its group's pinned block, or right after the block. */
@@ -1012,20 +1118,33 @@ export function App() {
   }, [status, focused, activeId, coveredKey]);
 
   const activeView = activeId ? views[activeId] : undefined;
+  // Every session on screen (both splits) counts as seen.
+  const seenKey = visibleIds.map((id) => `${id}:${id ? views[id]?.lastSeq : ""}`).join();
   useEffect(() => {
-    if (!focused || !activeId || !activeView || !isUnread(activeView, seen[activeId])) return;
-    const next = { ...seen, [activeId]: seenNow(activeView) };
+    if (!focused) return;
+    let next = seen;
+    for (const id of visibleIds) {
+      const v = id ? views[id] : undefined;
+      if (id && v && isUnread(v, next[id])) next = { ...next, [id]: seenNow(v) };
+    }
+    if (next === seen) return;
     setSeen(next);
     saveSeen(next);
-  }, [focused, activeId, activeView?.lastSeq]);
-  // Clean up tabs (GH-378): the list's lastActivity the shown session had, for its unread state once the daemon no longer holds it.
-  const activeActivity = activeId ? list.find((s) => s.id === activeId)?.lastActivity : undefined;
+  }, [focused, seenKey]);
+  // Clean up tabs (GH-378): the list's lastActivity each session on screen had, for its unread state once the daemon no longer holds it.
+  const lastActivityOf = (id: string | undefined) => (id && views[id] ? list.find((s) => s.id === id)?.lastActivity : undefined);
+  const shownKey = visibleIds.map((id) => `${id}:${lastActivityOf(id)}`).join();
   useEffect(() => {
-    if (!focused || !activeId || !activeView || activeActivity === undefined || (shownActivity[activeId] ?? -Infinity) >= activeActivity) return;
-    const next = { ...shownActivity, [activeId]: activeActivity };
+    if (!focused) return;
+    let next = shownActivity;
+    for (const id of visibleIds) {
+      const at = lastActivityOf(id);
+      if (id && at !== undefined && (next[id] ?? -Infinity) < at) next = { ...next, [id]: at };
+    }
+    if (next === shownActivity) return;
     setShownActivity(next);
     saveShownActivity(next);
-  }, [focused, activeId, !!activeView, activeView?.lastSeq, activeActivity]);
+  }, [focused, shownKey]);
 
   useEffect(() => saveTabs(tabs), [tabs]);
   // Clean up tabs (GH-378): stamp the tab that was shown and the one that is shown now; a tab without a stamp starts now; closed tabs keep theirs for Undo and Reopen.
@@ -1066,6 +1185,10 @@ export function App() {
     return w;
   }, [list, views]);
   const waitingN = waitingCount(waiting);
+  /** A permission request or question of the shown session, or a file opened from search, needs the session view or side panel: restore. */
+  const needKey = waiting.filter((x) => visibleIds.includes(x.sessionId)).map((x) => x.part.id).join();
+  useEffect(() => void (needKey && setBottomMax(false)), [needKey]);
+  useEffect(() => void (openFile && setBottomMax(false)), [openFile]);
   const everWaiting = useRef(false);
   if (waitingN > 0) everWaiting.current = true;
   useEffect(() => {
@@ -1078,7 +1201,7 @@ export function App() {
   const [cardNote, setCardNote] = useState<{ card: Card; hint: boolean; at?: number }>();
   const hinted = useRef(false);
   const notify = useNotifications(
-    { enabled: inApp, focused, focusPage: activeId === FOCUS_TAB, shown: (id) => id === activeId, list, views },
+    { enabled: inApp, focused, focusPage: activeId === FOCUS_TAB, shown: (id) => visibleIds.includes(id), list, views },
     (card: Card) => {
       // Said once per page load: how to reach the cards without the mouse. The text itself is made at render, with the session's title as the card shows it.
       const hint = !hinted.current && !!specOf("notifications.focus");
@@ -1210,11 +1333,14 @@ export function App() {
       setWorktreeJob({ project, error: (e as Error).message });
     }
   }
+  const [cleanup, setCleanup] = useState<CleanupScope>();
+  const listState = (s: SessionListItem) => (s.coordinatorId ? workerState(s, views[s.id]) : (shownState(views[s.id]) ?? s.state));
   async function askRemoveWorktree(project: string, path: string) {
     setError(undefined);
     try {
       const st = await client.current!.request<WorktreeStatusResult>({ type: "worktree.status", cwd: project, path });
-      setRemovingWt({ project, path, branch: st.branch, text: removeWorktreeText(st) });
+      if (st.safety === "blocked") return setError(`Worktree ${st.branch} cannot be removed: ${BLOCK_TEXT[st.blocked!]}`);
+      setRemovingWt({ project, path, branch: st.branch, text: removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[project], path) }) });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1273,8 +1399,14 @@ export function App() {
   function sessionAction(where: "list" | "tab") {
     return (sessionId: string, a: SessionAction) => {
       setError(undefined);
-      if (a === "rename") return setRenaming({ id: sessionId, in: where });
+      if (a === "rename" || a === "rename-inline") return setRenaming({ id: sessionId, in: where, menu: a === "rename" });
       if (a === "delete") return setDeleting(sessionId);
+      if (a === "copy-id") return copyText(sessionId, "session ID");
+      if (a === "close-tab") return close(sessionId);
+      if (a === "close-worker") return void runWorkers([sessionId], "close");
+      if (a === "remove-worker") return void askRemoveWorker(sessionId);
+      // The sidebar resolves the bulk actions to worker ids (onWorkers).
+      if (a === "close-finished" || a === "remove-closed" || a === "cleanup-workers") return;
       // Shown at once like a rename; a failed archive restores the list.
       setList((l) => patchSession(l, sessionId, { archived: a === "archive" }));
       client.current!.request({ type: "session.archive", sessionId, archived: a === "archive" }).catch((e: Error) => (setError(e.message), void refreshList()));
@@ -1287,6 +1419,63 @@ export function App() {
     // Shown at once; a failed rename restores the list title.
     setList((l) => patchSession(l, sessionId, { title }));
     client.current!.request({ type: "session.rename", sessionId, title }).catch((e: Error) => (setError(e.message), void refreshList()));
+  }
+
+  /** worker.close / worker.remove per worker (GH-358): a toast when all went through, else the first error and a list refresh. */
+  async function runWorkers(ids: string[], a: "close" | "remove") {
+    if (!ids.length) return;
+    setError(undefined);
+    const results = await Promise.allSettled(ids.map((sessionId) => client.current!.request({ type: a === "close" ? "worker.close" : "worker.remove", sessionId })));
+    const bad = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    const verb = a === "close" ? "closed" : "removed";
+    if (bad.length) {
+      setError(`${ids.length - bad.length} of ${ids.length} ${ids.length === 1 ? "worker" : "workers"} ${verb}: ${(bad[0]!.reason as Error).message}`);
+      void refreshList();
+    } else setToast(`${verb[0]!.toUpperCase()}${verb.slice(1)} ${ids.length === 1 ? "1 worker" : `${ids.length} workers`}`);
+  }
+
+  /** Remove worker: asks first; offers the worker's own worktree too when the app may remove it. */
+  async function askRemoveWorker(id: string) {
+    const w = list.find((s) => s.id === id);
+    if (!w) return;
+    setError(undefined);
+    setAlsoWorktree(false);
+    const hit = Object.entries(worktrees).flatMap(([project, rows]) => rows.filter((r) => r.path === w.cwd && rows.find((x) => x.main)?.path === project && removableWorktree(rows, r)).map((r) => ({ project, path: r.path })))[0];
+    const others = hit ? list.filter((s) => s.id !== id && s.cwd === hit.path).length : 0;
+    setRemovingWorker({ id, name: w.workerName ?? w.title, ...hit, others, loading: !!hit });
+    if (!hit) return;
+    try {
+      const st = await client.current!.request<WorktreeStatusResult>({ type: "worktree.status", cwd: hit.project, path: hit.path });
+      if (st.safety === "blocked") setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, error: `Worktree ${st.branch} cannot be removed: ${BLOCK_TEXT[st.blocked!]}` } : c));
+      else setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, branch: st.branch, text: removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[hit.project], hit.path) }) } : c));
+    } catch (e) {
+      setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, error: (e as Error).message } : c));
+    }
+  }
+  async function removeWorker(w: NonNullable<typeof removingWorker>, withWorktree: boolean) {
+    setError(undefined);
+    try {
+      await client.current!.request({ type: "worker.remove", sessionId: w.id });
+    } catch (e) {
+      return setError((e as Error).message);
+    }
+    setToast(`Removed worker ${w.name}`);
+    if (withWorktree && w.project && w.path) await removeWorktree({ project: w.project, path: w.path });
+  }
+
+  /** Archive idle sessions older than N days: shown at once; a failed request restores the list. At most 8 requests at a time. */
+  async function archiveIdle(ids: string[]) {
+    setError(undefined);
+    setList((l) => ids.reduce((x, id) => patchSession(x, id, { archived: true }), l));
+    const failed: Error[] = [];
+    for (let i = 0; i < ids.length; i += 8) {
+      const rs = await Promise.allSettled(ids.slice(i, i + 8).map((sessionId) => client.current!.request({ type: "session.archive", sessionId, archived: true })));
+      for (const r of rs) if (r.status === "rejected") failed.push(r.reason as Error);
+    }
+    if (failed.length) {
+      setError(`${ids.length - failed.length} of ${ids.length} sessions archived: ${failed[0]!.message}`);
+      void refreshList();
+    } else setToast(`Archived ${ids.length} ${ids.length === 1 ? "session" : "sessions"}`);
   }
 
   function deleteSession(sessionId: string) {
@@ -1302,6 +1491,7 @@ export function App() {
     linksCache.current.set(id, l);
     return l;
   };
+  const openTabIds = useMemo(() => new Set(tabs), [tabs]);
   const isCoordinator = (id: string) => !!list.find((s) => s.id === id)?.coordinator;
   const sessionOf = (id: string): SessionInfo | undefined => infos[id] ?? list.find((s) => s.id === id);
   const groupOfTab = (id: string) => (id === NEW_TAB ? "" : tabGroup(sessionOf(id)?.cwd, grouping, worktrees).key);
@@ -1334,6 +1524,36 @@ export function App() {
   const viewOf = (id: string) => views[id] ?? heirViews[id] ?? (optimistic[id]?.length ? EMPTY_VIEW : undefined);
   const view = activeId ? viewOf(activeId) : undefined;
   const shown = active && view ? active : undefined;
+  /** Both splits render (a loading session shows alone until its view is there). */
+  // Drag a tab onto the session area (GH-356): an edge splits there, the middle of a split shows the tab in it.
+  const splitDrop = useSplitDrop({
+    enabled: () => lg && isSession(activeRef.current),
+    onDrop: (id, t) => {
+      if (!isSession(id) || !tabsRef.current.includes(id)) return;
+      if (t.zone !== "center") return splitTab(id, t.zone === "left" || t.zone === "right" ? "row" : "col", t.zone === "left" || t.zone === "top");
+      if (splitRef.current && splitOnRef.current && t.over >= 0) return showInSplit(id, t.over);
+      open(id);
+      focusShownPrompt(id);
+    },
+  });
+  const areaRef = useCallback((n: HTMLElement | null) => {
+    const off = splitDrop.ref(n);
+    if (!n || typeof ResizeObserver === "undefined") return off;
+    const ro = new ResizeObserver((es) => {
+      const r = es[0]?.contentRect;
+      if (r) setArea((a) => (a && a.w === Math.round(r.width) && a.h === Math.round(r.height) ? a : { w: Math.round(r.width), h: Math.round(r.height) }));
+    });
+    ro.observe(n);
+    return () => (off?.(), ro.disconnect());
+  }, []);
+  // The saved ratio can leave a split under its minimum when the area is small: only the drawn ratio is clamped, the user's ratio returns with the space.
+  const drawnRatio = (() => {
+    if (!split || !area || !area.w || !splitFits) return split?.ratio ?? 0.5;
+    const row = split.dir === "row";
+    const total = (row ? area.w : area.h) - 8;
+    return ratioFor(split.ratio * total, total, row ? SPLIT_MIN_W : SPLIT_MIN_H);
+  })();
+  const splitShown = splitOn && split.ids.every((id) => !!viewOf(id) && !!sessionOf(id));
   // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
   useEffect(() => {
     if (!shown || refocus.current !== shown.id) return;
@@ -1384,10 +1604,77 @@ export function App() {
   }, [panelCwd, status, knownGit]);
   // The Graph panel stays mounted (hidden) after its first visit, so coming back shows the loaded list at once.
   const [graphCwd, setGraphCwd] = useState<string>();
+  const available = (p: PaneId) => p !== "graph" || isGit;
+  /** Narrow: the side column holds every pane. */
+  const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? PANE_IDS : []).filter(available);
+  const activeOf = (a: DockArea) => activePane(areaPanes(a), hist);
+  const sideShown = lg && panel && areaPanes("side").length > 0;
+  const bottomShown = lg && bottomOpen && areaPanes("bottom").length > 0;
+  /** The pane shows: wide = its area shows it; narrow = it is the pane. */
+  const shows = (p: PaneId) => (lg ? (areaOf(layout, p) === "side" ? sideShown : bottomShown) && activeOf(areaOf(layout, p)) === p : p === "files" ? pane === "files" || (pane === "graph" && !isGit) : pane === p && available(p));
+  // Bottom panel only, this page only: it takes the whole work area.
+  const [bottomMax, setBottomMax] = useState(false);
+  /** Shown and in sight: a maximized bottom panel hides the side panel, so its panes are not seen. */
+  const inSight = (p: PaneId) => shows(p) && !(bottomMax && lg && areaOf(layout, p) === "side");
+  const sideEmpty = lg && areaPanes("side").length === 0;
+  // The terminal stays mounted (hidden) while another pane of its open area is selected, so switching tabs keeps it as it was.
+  const termAreaOpen = lg && (areaOf(layout, "terminal") === "side" ? sideShown : bottomShown);
+  // `termKeep`: it has shown and its area has stayed open since; it resets when the area hides, so hiding unmounts it.
+  const termShows = shows("terminal");
+  const [termKeep, setTermKeep] = useState(false);
+  const [termFocusReq, setTermFocusReq] = useState(0);
+  useEffect(() => setTermKeep((k) => termShows || (k && termAreaOpen)), [termShows, termAreaOpen]);
+  const termMounted = termShows || (termKeep && termAreaOpen);
+  useEffect(() => void (!bottomShown && setBottomMax(false)), [bottomShown]);
+  const openArea = (a: DockArea, v = true) => (a === "side" ? setPanel(v) : setBottomOpen(v));
+  /** Selects the pane and, on wide screens, opens its area. */
+  const reveal = (p: Pane) => {
+    setPane(p);
+    if (!lg || p === "session") return;
+    // A maximized bottom panel hides everything else: a pane outside it needs the restore.
+    if (areaOf(layout, p) === "side") setBottomMax(false);
+    openArea(areaOf(layout, p));
+  };
+  // GH-355 drag and drop: the pane being dragged and the target it is over (Esc cancels a native drag: dragend without drop).
+  const [drag, setDrag] = useState<PaneId>();
+  const [dropAt, setDropAt] = useState<DropAt>();
+  const move = (p: PaneId, to: DockArea, before?: PaneId) => {
+    const n = movePane(layout, p, to, before);
+    if (n !== layout) saveLayout(n);
+    // Only a move out of the bottom panel needs the session view and side panel back; a reorder inside it keeps the maximize.
+    if (to !== "bottom") setBottomMax(false);
+    openArea(to);
+    setPane(p);
+    focusTab.current = p;
+    setMoving(true);
+  };
+  // A moved pane's DOM moves with it: focus its tab in the new area once rendered, once (the menu that moved it returns no focus).
+  const focusTab = useRef<PaneId>(undefined);
   useEffect(() => {
-    if (pane === "graph" && panelSession) setGraphCwd(panelSession.cwd);
-  }, [pane, panelSession?.cwd]);
-  const sidePane = pane === "graph" && !isGit ? "files" : pane;
+    const p = focusTab.current;
+    if (!p) return;
+    focusTab.current = undefined;
+    document.querySelector<HTMLElement>(`[data-pane-tab="${p}"]`)?.focus();
+  });
+  // From a move to the user's next key or pointer press: a terminal that shows because of the move (moved, or next in the area the
+  // moved pane left) keeps off the focus. Not only the move's render: the code-split panel's first mount commits after it (Suspense).
+  const [moving, setMoving] = useState(false);
+  useEffect(() => {
+    if (!moving) return;
+    const done = () => setMoving(false);
+    const kinds = ["keydown", "pointerdown"] as const;
+    for (const k of kinds) window.addEventListener(k, done, true);
+    return () => kinds.forEach((k) => window.removeEventListener(k, done, true));
+  }, [moving]);
+  /** A pane tab click; on the terminal's tab, the selected one too, the shell takes the focus (docs/spec.md Terminal panel). */
+  const selectPane = (p: Pane) => {
+    if (p === "terminal") setTermFocusReq((n) => n + 1);
+    setPane(p);
+  };
+  const hosts = usePaneHosts();
+  useEffect(() => {
+    if (shows("graph") && panelSession) setGraphCwd(panelSession.cwd);
+  }, [shows("graph"), panelSession?.cwd]);
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
   const upload = (owner: () => UploadOwner, uploadCwd?: string, rotate: () => void = () => {}) => async (file: File) => {
@@ -1411,22 +1698,28 @@ export function App() {
   };
   const wide = (px: number) => window.matchMedia(`(min-width: ${px}px)`).matches;
   // Below lg the session and the side panel share one pane; from lg on the session always shows and "pane" picks the side panel tab.
-  const showSession = () => !wide(1024) && setPane("session");
+  // A maximized terminal hides the session view: whatever brings the session or the side panel forward restores it.
+  const showSession = () => (setBottomMax(false), !wide(1024) && setPane("session"));
   /** Opens a file of the shown session (path relative to its cwd) in the files panel. */
-  const openInPanel = (p: string) => {
-    setOpenFile(joinPath(shown!.cwd, p));
-    setPane("files");
-    setPanel(true);
+  const openInPanel = (p: string, line?: number) => {
+    setOpenFile({ path: joinPath(shown!.cwd, p), line });
+    reveal("files");
   };
   const openViewer = useOpenViewer(shown, setViewer);
+  /** A path in assistant text (absolute, inside the session cwd): the Files tab opens it at the line. */
+  const revealRef = useRef(reveal);
+  revealRef.current = reveal;
+  const openFileLink = useCallback((path: string, line?: number) => {
+    setOpenFile({ path, line });
+    revealRef.current("files");
+  }, []);
   const latest = useMemo(() => (view ? latestPlan(view) : undefined), [view?.parts, view?.aux]);
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
-    const seen = fileTree && (wide(1024) ? panel && sidePane !== "changes" && sidePane !== "graph" : sidePane === "files");
-    if (seen) return setFileTree(false);
+    setBottomMax(false);
+    if (fileTree && inSight("files")) return setFileTree(false);
     setFileTree(true);
-    setPane("files");
-    setPanel(true);
+    reveal("files");
   };
   const draftShown = activeId === NEW_TAB && tabs.includes(NEW_TAB);
   const draftModes = permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === pick.model && m.supportsAutoMode) });
@@ -1495,15 +1788,21 @@ export function App() {
   // `id`: the tab just selected, which this render does not show yet.
   const focusShownPrompt = (id = activeId) => {
     if (id !== NEW_TAB) showSession();
-    // After the render: only the shown tab's prompt box has a layout box.
-    const prompts = () => [...document.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"], textarea[aria-label="First prompt"]')];
+    // After the render: only the shown tab's prompt box has a layout box; in a split only the active split's (never the other one's).
     // A session that just opened (Reopen closed tab, Go to tab N after a reload) has its prompt box once its view loaded: wait for it, up to 1 s.
     const focus = (frames: number) => {
-      const el = id === NEW_TAB ? newPrompt.current : prompts().find((el) => el.offsetParent);
+      const el = id === NEW_TAB ? newPrompt.current : shownPrompt();
       if (el) el.focus();
       else if (frames > 0) requestAnimationFrame(() => focus(frames - 1));
     };
     requestAnimationFrame(() => focus(60));
+  };
+  // Wide: the terminal pane wherever it lives (VS Code: Ctrl+` reveals the view); it shows -> its area hides. Narrow: the terminal pane.
+  const toggleTerminal = () => {
+    if (!wide(1024)) return setPane(pane === "terminal" ? "session" : "terminal");
+    if (!inSight("terminal")) return (shows("terminal") && setTermFocusReq((n) => n + 1), reveal("terminal"));
+    openArea(areaOf(layout, "terminal"), false);
+    focusShownPrompt();
   };
   /** Reopen closed tab (palette, tab menu): the newest closed session that still exists, back in its place. */
   const reopenClosed = () => {
@@ -1518,8 +1817,14 @@ export function App() {
   const reopen = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs).tab;
   const commands = appCommands({
     newWorktree: canWorktree ? () => (setWtName(""), setNaming(gitProject)) : undefined,
+    cleanUp: Object.values(worktrees).some((l) => l.some((w) => !w.main)) || list.some((x) => x.coordinatorId) ? () => setCleanup({ kind: "all" }) : undefined,
     tabs,
     activeId,
+    splitRight: lg && isSession(activeId) && canSplitTabs(tabs) ? () => splitTab(activeId!, "row") : undefined,
+    splitDown: lg && isSession(activeId) && canSplitTabs(tabs) ? () => splitTab(activeId!, "col") : undefined,
+    splitNext: splitShown ? () => (focusSplit(nextSplit(split!, 1)), focusShownPrompt()) : undefined,
+    splitPrev: splitShown ? () => (focusSplit(nextSplit(split!, -1)), focusShownPrompt()) : undefined,
+    joinSplits: split ? joinSplits : undefined,
     sessions: list,
     session: draftShown
       ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: draftModes, running: false, prompts: [], draft: true }
@@ -1542,8 +1847,8 @@ export function App() {
     closeOthers: activeId && closeTargets(tabs, pinnedSet, activeId, "others").length && tabs.includes(activeId) ? () => tabCommand(activeId, "closeOthers") : undefined,
     closeRight: activeId && closeTargets(tabs, pinnedSet, activeId, "right").length && tabs.includes(activeId) ? () => tabCommand(activeId, "closeRight") : undefined,
     closeAll: closeTargets(tabs, pinnedSet, activeId ?? "", "all").length ? () => tabCommand(activeId ?? tabs[0]!, "closeAll") : undefined,
-    cleanup: cleanupInfo(),
-    cleanUp: (rule) => cleanUp(rule),
+    tabCleanup: cleanupInfo(),
+    cleanUpTabs: (rule) => cleanUp(rule),
     togglePin: activeId && activeId !== NEW_TAB && activeId !== FOCUS_TAB && tabs.includes(activeId) ? () => togglePin(activeId) : undefined,
     pinned: !!activeId && pinnedSet.has(activeId),
     quickOpen: showQuickOpen,
@@ -1551,19 +1856,22 @@ export function App() {
     toggleSidebar: () => (wide(768) ? setSidebar((v) => !v) : setDrawer((v) => !v)),
     // lg: the side panel breakpoint; below it the session and the files share one pane.
     toggleFileTree,
-    toggleSidePanel: () => (wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session")),
-    toggleTerminal: () => (wide(1024) ? setTerminalOpen((v) => !v) : setPane(pane === "terminal" ? "session" : "terminal")),
+    toggleSidePanel: () => (sideEmpty ? undefined : (setBottomMax(false), wide(1024) ? setPanel((v) => !v) : setPane(pane === "session" ? "files" : "session"))),
+    toggleTerminal,
     // The pane that shows already: focus goes back to the prompt (VS Code's Explorer key does the same).
     showPane: (p) => {
-      const side = sidePane === "changes" || sidePane === "graph" ? sidePane : "files";
-      if (wide(1024) ? panel && side === p : sidePane === p) return focusShownPrompt();
-      setPane(p);
-      setPanel(true);
+      if (inSight(p)) return focusShownPrompt();
+      reveal(p);
     },
     newTerminal: () => {
-      if (wide(1024) ? terminalOpen : pane === "terminal") return setTerminalTick((n) => n + 1);
-      wide(1024) ? setTerminalOpen(true) : setPane("terminal");
+      if (inSight("terminal")) return setTerminalTick((n) => n + 1);
+      // It may be the shown pane already, behind a maximized bottom panel: the shell takes the focus once it is in sight.
+      if (shows("terminal")) setTermFocusReq((n) => n + 1);
+      reveal("terminal");
     },
+    resetLayout,
+    flipSide: () => saveLayout(flipSide(layout)),
+    side: layout.side,
     canReopen: !!reopen,
     reopenTab: reopenClosed,
     openShortcuts: () => setShortcutsOpen(true),
@@ -1580,6 +1888,7 @@ export function App() {
     focusNotifications: notify.cards.length ? () => setCardFocus((n) => n + 1) : undefined,
     nextWaiting: waiting.length ? () => (open(FOCUS_TAB), setFocusSel(nextWaiting(waiting, activeId === FOCUS_TAB ? focusSel ?? waiting[0]?.part.id : undefined)?.part.id)) : undefined,
     toggleSignalOnly: () => saveSignalOnly(!loadSignalOnly()),
+    toggleKeepAwake: awake.supported ? awake.toggle : undefined,
     openSettings: () => setSettingsOpen(true),
     startGuide: () => startGuide("palette"),
     resetKeyTips: () => (resetAllKeyTips(), setToast("Shortcut tips reset.")),
@@ -1707,6 +2016,89 @@ export function App() {
 
   const prompted = useMemo(() => promptedIds(optimistic, views), [optimistic, views]);
 
+
+  // The terminal panel, rendered in one place only: inside the terminal pane's host.
+  const terminalPanel = () =>
+    panelSession && (
+      <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading terminal…</p>}>
+        <TerminalPanel
+          client={client.current!}
+          status={status}
+          cwd={panelSession.cwd}
+          onEmpty={() => {
+            if (!lg) return setPane("session");
+            // The last terminal closed: the area hides, or shows its other pane.
+            const a = areaOf(layout, "terminal");
+            const rest = areaPanes(a).filter((p) => p !== "terminal");
+            if (rest.length) setPane(rest[0]!);
+            else openArea(a, false);
+          }}
+          newTick={terminalTick}
+          shown={shows("terminal")}
+          focusReq={termFocusReq}
+          quiet={moving}
+        />
+      </Suspense>
+    );
+  const dragProps = { drag, dropAt, onDrag: setDrag, onDropAt: setDropAt };
+  /** Drop on an area (header or body): append at its end. */
+  const dropHandlers = (a: DockArea) => ({
+    over: (e: globalThis.DragEvent) => {
+      if (!isPaneDrag(e)) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = "move";
+      if (dropAt?.area !== a || dropAt.before) setDropAt({ area: a });
+    },
+    leave: (e: globalThis.DragEvent) => !(e.currentTarget as Node).contains(e.relatedTarget as Node | null) && setDropAt(undefined),
+    drop: (e: globalThis.DragEvent) => {
+      const p = droppedPane(e);
+      if (!p) return;
+      e.preventDefault();
+      setDrag(undefined);
+      setDropAt(undefined);
+      move(p, a);
+    },
+  });
+  /** While dragging every area is outlined; the one under the pointer is filled. */
+  const dropCls = (a: DockArea) => (drag ? (dropAt?.area === a && !dropAt.before ? "outline-2 outline-primary -outline-offset-2 bg-primary/5" : "outline-1 outline-dashed outline-primary/40 -outline-offset-2") : "");
+  const sideDropRef = useAreaDrop(dropHandlers("side"));
+  const bottomDropRef = useAreaDrop(dropHandlers("bottom"));
+  const dropPane = (a: DockArea) => (p: PaneId) => (setDrag(undefined), setDropAt(undefined), move(p, a));
+  const terminalToggle = areaOf(layout, "terminal") !== "side" && (
+    <IconButton label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle" command="terminal.toggle">
+      <SquareTerminalIcon />
+    </IconButton>
+  );
+  const resizer = shown && sideShown && <PanelResizer width={panelWidth} onResize={setPanelWidth} side={layout.side} />;
+  const sideStrip = panelSession && lg && drag && shown && !sideShown && (
+    <DropStrip area="side" over={dropAt?.area === "side"} onOver={() => setDropAt({ area: "side" })} onLeave={() => setDropAt(undefined)} onDrop={dropPane("side")} />
+  );
+  // The side panel (GH-355): its tabs, then the pane hosts it holds; the hosts move between areas without remounting.
+  const sideCol = panelSession && (
+    <div
+      className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${sideShown ? "" : "lg:hidden"}`}
+      style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
+    >
+      <section className={`${card} flex-1 ${dropCls("side")}`} id="side-panel" data-testid="side-panel" aria-label="Side panel" data-drop-target={drag && dropAt?.area === "side" ? "" : undefined} ref={sideDropRef}>
+        <DockHeader
+          area="side"
+          panes={areaPanes("side")}
+          active={activeOf("side")}
+          changes={changeCount}
+          side={layout.side}
+          onSelect={selectPane}
+          onMove={move}
+          onFlipSide={() => saveLayout(flipSide(layout))}
+          onReset={resetLayout}
+          extra={terminalToggle}
+          {...dragProps}
+        />
+        {areaPanes("side").map((p) => (
+          <PaneSlot key={p} host={hosts[p]} />
+        ))}
+      </section>
+    </div>
+  );
   return (
     <AvatarColors value={colors}>
     <SideLabel value={sideOf.badge}>
@@ -1728,6 +2120,7 @@ export function App() {
               return { title, titleLoading: titleLoading(title, prompted.has(id)), cwd: s?.cwd, ...(keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" }), worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, state: shownState(views[id]) ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
             }}
             renaming={renaming?.in === "tab" ? renaming.id : undefined}
+            renamingFromMenu={renaming?.menu}
             onAction={sessionAction("tab")}
             onRenamed={renamed}
             onSelect={open}
@@ -1745,6 +2138,8 @@ export function App() {
             onCleanup={cleanUp}
             canReopen={!!reopen}
             pinned={pinnedSet}
+            canSplit={lg ? canSplitTabs(tabs) : undefined}
+            splitShown={splitShown ? { id: split!.ids[1 - split!.at]!, dir: split!.dir, n: 2 - split!.at } : splitCramped ? { id: split!.ids[1 - split!.at]!, dir: split!.dir, n: 2 - split!.at, hidden: true } : undefined}
             onNew={() => newSession()}
             home={sidebar}
             onHome={() => setSidebar((v) => !v)}
@@ -1759,17 +2154,32 @@ export function App() {
               <SearchIcon />
             </IconButton>
           )}
+          <KeepAwakeButton className="max-sm:hidden" status={awake.status} error={awake.error} onToggle={awake.toggle} testId="keep-awake" />
           <IconButton className="max-sm:hidden" label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
             <ThemeIcon />
           </IconButton>
           {shown && (
-            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={withKey("Toggle side panel", specOf("panel.toggle"))} expanded={panel} controls="side-panel" onClick={() => setPanel((v) => !v)} testId="panel-toggle" command="panel.toggle">
-              <PanelRightIcon />
+            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={sideEmpty ? "No panes in the side panel" : withKey("Toggle side panel", specOf("panel.toggle"))} disabled={sideEmpty} expanded={panel && !sideEmpty} controls="side-panel" onClick={() => (setBottomMax(false), setPanel((v) => !v))} testId="panel-toggle" command="panel.toggle">
+              {layout.side === "left" ? <PanelLeftIcon /> : <PanelRightIcon />}
+            </IconButton>
+          )}
+          {shown && (
+            <IconButton className="max-lg:hidden" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar" command="terminal.toggle">
+              <PanelBottomIcon />
             </IconButton>
           )}
         </div>
       </header>
       <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? "Untitled")} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
+      <CleanupDialog
+        scope={cleanup}
+        list={list}
+        worktrees={worktrees}
+        state={listState}
+        request={(m) => client.current!.request(m)}
+        onClose={() => setCleanup(undefined)}
+        onDone={() => void refreshList()}
+      />
       <ConfirmDialog
         open={closingGroup !== undefined}
         title={`Close ${lastClosingGroup.current.ids.length} tabs of ${lastClosingGroup.current.name}?`}
@@ -1809,7 +2219,7 @@ export function App() {
           removed.current = undefined;
           if (target === undefined) return true;
           const row = [...document.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].find((r) => target.next !== undefined && r.dataset.cwd === target.next);
-          const prompt = [...document.querySelectorAll<HTMLElement>("textarea")].find((t) => t.offsetParent && !t.closest(`[data-cwd]`));
+          const prompt = shownPrompt();
           return row?.querySelector<HTMLElement>('[data-testid="group-toggle"]') ?? prompt ?? document.querySelector<HTMLElement>('[data-testid="open-project"]');
         }}
         testId="remove-project"
@@ -1843,6 +2253,63 @@ export function App() {
           </span>
         </label>
       </ConfirmDialog>
+      <ConfirmDialog
+        open={removingWorker !== undefined}
+        title={`Remove worker ${lastRemovingWorker.current?.name ?? ""}?`}
+        description="Its session and transcript are removed for good; the name is free again. The terminal CLI loses it too."
+        confirm="Remove"
+        destructive
+        confirmDisabled={!!removingWorker?.loading && alsoWorktree}
+        onConfirm={() => {
+          const w = removingWorker!;
+          setRemovingWorker(undefined);
+          void removeWorker(w, alsoWorktree && !w.loading && !w.error);
+        }}
+        onCancel={() => setRemovingWorker(undefined)}
+        testId="remove-worker"
+      >
+        {lastRemovingWorker.current?.path && (
+          <div className="flex flex-col gap-1 text-sm">
+            {!lastRemovingWorker.current.error && (
+              <label className="flex min-h-8 cursor-pointer items-center gap-2 max-md:min-h-11">
+                <input type="checkbox" className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring" checked={alsoWorktree} disabled={lastRemovingWorker.current.loading} onChange={(e) => setAlsoWorktree(e.target.checked)} data-testid="remove-worker-worktree" />
+                <span>Also remove worktree {lastRemovingWorker.current.branch ?? ""}</span>
+              </label>
+            )}
+            <p className="text-muted-foreground" data-testid="remove-worker-worktree-text">
+              {lastRemovingWorker.current.error ?? (lastRemovingWorker.current.loading ? "Checking the worktree…" : lastRemovingWorker.current.text)}
+              {!lastRemovingWorker.current.error && lastRemovingWorker.current.others > 0 && ` ${lastRemovingWorker.current.others} other ${lastRemovingWorker.current.others === 1 ? "session" : "sessions"} there; their transcripts stay.`}
+            </p>
+          </div>
+        )}
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={removingWorkers !== undefined}
+        title={`Remove ${lastRemovingWorkers.current?.ids.length === 1 ? "1 closed worker" : `${lastRemovingWorkers.current?.ids.length ?? 0} closed workers`}?`}
+        description={`Workers of “${lastRemovingWorkers.current?.title ?? ""}”: ${lastRemovingWorkers.current?.names ?? ""}. Their sessions and transcripts are removed for good. Worktrees stay.`}
+        confirm="Remove"
+        destructive
+        onConfirm={() => {
+          const ids = removingWorkers!.ids;
+          setRemovingWorkers(undefined);
+          void runWorkers(ids, "remove");
+        }}
+        onCancel={() => setRemovingWorkers(undefined)}
+        testId="remove-workers"
+      />
+      <ConfirmDialog
+        open={archiving !== undefined}
+        title={`Archive ${lastArchiving.current?.ids.length === 1 ? "1 session" : `${lastArchiving.current?.ids.length ?? 0} sessions`}?`}
+        description={`Sessions in ${lastArchiving.current?.where ?? ""} idle for more than ${daysLabel(lastArchiving.current?.days ?? 1)}. They move to Archived sessions; Unarchive brings one back.`}
+        confirm="Archive"
+        onConfirm={() => {
+          const ids = archiving!.ids;
+          setArchiving(undefined);
+          void archiveIdle(ids);
+        }}
+        onCancel={() => setArchiving(undefined)}
+        testId="archive-idle"
+      />
       <ConfirmDialog
         open={removingWt !== undefined}
         title={`Remove worktree ${lastRemovingWt.current?.branch ?? ""}?`}
@@ -1879,6 +2346,7 @@ export function App() {
                 <SearchIcon />
               </IconButton>
             )}
+            <KeepAwakeButton status={awake.status} error={awake.error} onToggle={awake.toggle} testId="drawer-keep-awake" />
             <IconButton label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="drawer-theme">
               <ThemeIcon />
             </IconButton>
@@ -1890,7 +2358,7 @@ export function App() {
               list={list}
               projects={projects}
               worktrees={worktrees}
-              state={(s) => (s.coordinatorId ? workerState(s, views[s.id]) : (shownState(views[s.id]) ?? s.state))}
+              state={listState}
               titleLoading={(s) => titleLoading(s.title, prompted.has(s.id))}
               unread={unread}
               activeId={activeId}
@@ -1899,12 +2367,21 @@ export function App() {
               onRemove={setRemoving}
               onNewWorktree={(cwd, named) => (setDrawer(false), named ? (setWtName(""), setNaming(cwd)) : void newWorktree(cwd))}
               onRemoveWorktree={askRemoveWorktree}
+              onCleanUp={(scope) => (setDrawer(false), setCleanup(scope))}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}
               renaming={renaming?.in === "list" ? renaming.id : undefined}
+              renamingFromMenu={renaming?.menu}
               onAction={sessionAction("list")}
               onRenamed={renamed}
               search={resumeSearch}
               reveal={revealSeq}
+              openTabs={openTabIds}
+              onWorkers={(ids, a, c) => {
+                if (!ids.length) return;
+                if (a === "close") return void runWorkers(ids, "close");
+                setRemovingWorkers({ ids, title: c.title, names: confirmNames(ids.map((id) => list.find((s) => s.id === id)?.workerName ?? id)) });
+              }}
+              onArchiveIdle={(ids, where, days) => ids.length && setArchiving({ ids, where, days })}
             />
           )}
           <button
@@ -1919,7 +2396,8 @@ export function App() {
           </button>
         </aside>
         {sidebar && <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />}
-        <main className="flex min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-0">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ "--terminal-h": `${terminalHeight}px` } as CSSProperties} data-testid="work-area">
+        <main className={`flex min-h-0 min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-0 ${bottomMax && shown ? "hidden" : ""}`}>
           {status === "unauthorized" ? (
             // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
             <div className={`${card} flex-1`}>
@@ -1929,12 +2407,25 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal"]} value={sidePane} onChange={setPane} changes={changeCount} />
+                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal"]} value={pane === "graph" && !isGit ? "files" : pane} onChange={selectPane} changes={changeCount} />
                 </div>
               )}
+              {layout.side === "left" && lg && (
+                <>
+                  {sideStrip}
+                  {sideCol}
+                  {resizer}
+                </>
+              )}
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
-              <div className={`${card} flex-1 ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}>
+              <div
+                ref={areaRef}
+                className={`relative ${splitShown ? `flex min-h-0 min-w-0 flex-1 ${split!.dir === "row" ? "flex-row" : "flex-col"}` : `${card} flex-1`} ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}
+                data-testid="session-area"
+                data-split={splitShown ? split!.dir : undefined}
+              >
                 <ViewerContext value={openViewer}>
+                <FileLinkContext value={openFileLink}>
                 <QuoteContext value={setInsert}>
                 {tabs.map((id) => {
                   const s = id === NEW_TAB ? undefined : sessionOf(id);
@@ -1943,15 +2434,30 @@ export function App() {
                   const v = viewOf(id);
                   if (!s || !v) return null;
                   return (
-                    <Activity key={tabKeys[id] ?? id} mode={id === activeId ? "visible" : "hidden"}>
+                    <Activity key={tabKeys[id] ?? id} mode={(splitShown ? split!.ids.includes(id) : id === activeId) ? "visible" : "hidden"}>
+                      <div
+                        className={splitShown && split!.ids.includes(id) ? `${card} ${id === activeId ? "outline outline-1 -outline-offset-1 outline-ring" : ""}` : "flex min-h-0 min-w-0 flex-1 flex-col"}
+                        style={splitShown && split!.ids.includes(id) ? { order: split!.ids[0] === id ? 0 : 2, flex: `${split!.ids[0] === id ? drawnRatio : 1 - drawnRatio} 1 0%` } : undefined}
+                        {...(splitShown && split!.ids.includes(id) && {
+                          id: `split-${id}`,
+                          role: "group",
+                          "aria-label": `${list.find((l) => l.id === id)?.title || titles[id] || "Untitled"}, split ${split!.ids.indexOf(id) + 1} of 2${id === activeId ? ", active" : ""}`,
+                          "data-testid": "split",
+                          "data-active": id === activeId ? "" : undefined,
+                          onPointerDownCapture: () => focusSplit(id),
+                          onFocusCapture: () => focusSplit(id),
+                        })}
+                      >
                       <SessionTab
+                        // Outside a split every pane is "active": a tab switch re-renders no pane (GH-51).
+                        active={splitShown ? id === activeId : true}
                         scrollKey={scrollKeys[id] ?? 0}
                         insert={id === activeId ? insert : undefined}
                         onInserted={() => setInsert(undefined)}
                         rewindTo={id === activeId ? rewindTo : undefined}
                         revealHit={id === revealHit?.sessionId ? revealHit : undefined}
                         onRevealShown={() => setRevealHit(undefined)}
-                        run={id === activeId ? run : undefined}
+                        run={id === activeId ? run : splitShown ? split!.runs?.[id] : undefined}
                         onOpenRun={(r) => openRun(s.id, r)}
                         links={linksOf(id)}
                         onOpenSession={(sid) => open(sid)}
@@ -2012,76 +2518,38 @@ export function App() {
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
                       />
+                      </div>
                     </Activity>
                   );
                 })}
                 </QuoteContext>
+                </FileLinkContext>
                 </ViewerContext>
-              </div>
-              {shown && (panel || terminalOpen) && <PanelResizer width={panelWidth} onResize={setPanelWidth} />}
-              {panelSession && (
-                <div
-                  className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${panel || terminalOpen ? "" : "lg:hidden"}`}
-                  style={{ "--panel-w": `${panelWidth}px`, "--terminal-h": `${terminalHeight}px` } as CSSProperties}
-                >
-                <section className={`${card} flex-1 ${pane === "terminal" ? "hidden lg:flex" : ""} ${panel ? "" : "lg:hidden"}`} id="side-panel" data-testid="side-panel">
-                  <div className="hidden items-center border-b px-2 py-1 lg:flex">
-                    <PaneTabs panes={["changes", "files", ...(isGit ? (["graph"] as const) : [])]} value={sidePane === "changes" || sidePane === "graph" ? sidePane : "files"} onChange={setPane} changes={changeCount} />
-                    <IconButton className="ml-auto" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={terminalOpen} onClick={() => setTerminalOpen((o) => !o)} testId="terminal-toggle" command="terminal.toggle">
-                      <SquareTerminalIcon />
-                    </IconButton>
+                {splitCramped && (
+                  <div className="order-first flex shrink-0 items-center gap-2 border-b px-3 py-1 text-muted-foreground text-xs" data-testid="split-hint" role="status">
+                    <span className="min-w-0 truncate">Split hidden — widen the window or hide a panel</span>
+                    <button type="button" className="shrink-0 cursor-pointer rounded-sm px-1.5 py-0.5 text-foreground underline underline-offset-2 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={joinSplits}>
+                      Close split
+                    </button>
                   </div>
-                  <div className={`min-h-0 flex-1 flex-col ${sidePane === "changes" || sidePane === "graph" ? "hidden" : "flex"}`}>
-                    <FilesPanel
-                      client={client.current!}
-                      status={status}
-                      cwd={panelSession.cwd}
-                      onSend={(mention) => (setInsert(mention), setPane("session"))}
-                      openPath={openFile}
-                      onOpened={() => setOpenFile(undefined)}
-                      watch={changedPaths}
-                      showTree={fileTree}
-                      onToggleTree={() => setFileTree((v) => !v)}
-                    />
-                  </div>
-                  {views[panelSession.id] && (
-                    <ChangesPanel
-                      key={panelSession.id}
-                      hidden={pane !== "changes"}
-                      onCount={(n) => setListedChanges({ id: panelSession.id, n })}
-                      client={client.current!}
-                      view={views[panelSession.id]!}
-                      cwd={panelSession.cwd}
-                      onOpen={(path) => (setOpenFile(path), setPane("files"))}
-                      sessionId={panelSession.id}
-                      onPopOut={() => openViewer({ kind: "changes" })}
-                    />
-                  )}
-                  {isGit && (sidePane === "graph" || graphCwd === panelSession.cwd) && (
-                    <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
-                      <GraphPanel key={panelSession.cwd} hidden={sidePane !== "graph"} client={client.current!} cwd={panelSession.cwd} />
-                    </Suspense>
-                  )}
-                </section>
-                {panel && terminalOpen && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
-                {(terminalOpen || pane === "terminal") && (
-                  // OpenCode: below the side panel, 100px to 60% of the window high (CSS keeps it there when the window shrinks).
-                  <section
-                    className={`${card} ${pane === "terminal" ? "flex-1" : "max-lg:hidden"} ${!terminalOpen ? "lg:hidden" : panel ? "lg:h-(--terminal-h) lg:max-h-[60vh] lg:min-h-25 lg:flex-none" : "lg:flex-1"}`}
-                    data-testid="terminal-panel"
-                  >
-                    <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading terminal…</p>}>
-                      <TerminalPanel
-                        client={client.current!}
-                        status={status}
-                        cwd={panelSession.cwd}
-                        onEmpty={() => (setTerminalOpen(false), pane === "terminal" && setPane("session"))}
-                        newTick={terminalTick}
-                      />
-                    </Suspense>
-                  </section>
                 )}
-                </div>
+                {splitDrop.state && (
+                  <div
+                    aria-hidden
+                    data-testid="split-drop"
+                    data-zone={splitDrop.state.zone}
+                    className="pointer-events-none absolute z-10 rounded-xl bg-ring/15 outline-2 -outline-offset-2 outline-ring"
+                    style={splitDrop.state.box}
+                  />
+                )}
+                {splitShown && <SplitResizer split={{ ...split!, ratio: drawnRatio }} onResize={(ratio) => setSplitRaw({ ...split!, ratio })} />}
+              </div>
+              {!(layout.side === "left" && lg) && (
+                <>
+                  {resizer}
+                  {sideCol}
+                  {sideStrip}
+                </>
               )}
               {/* Mounted while the tab is open: hidden, it keeps its draft; replaced by the created session, it starts empty next time. */}
               {tabs.includes(NEW_TAB) && (
@@ -2112,9 +2580,10 @@ export function App() {
                 <>
                   {/* The height of the pane tabs row the session card has below lg (28px + the main gap): the prompt does not move when the session shows. */}
                   <div className="h-7 shrink-0 lg:hidden" aria-hidden />
-                  <StartingSession cwd={draftProject} place={worktreeName(draftProject, worktrees)} pending={optimistic[NEW_TAB]} />
                   {/* The side panel's footprint (resizer 6px + panel) on wide screens, empty: the prompt does not shift when the session shows it. */}
-                  {(panel || terminalOpen) && <div className={`${card} ml-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
+                  {layout.side === "left" && sideShown && <div className={`${card} mr-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
+                  <StartingSession cwd={draftProject} place={worktreeName(draftProject, worktrees)} pending={optimistic[NEW_TAB]} />
+                  {layout.side === "right" && sideShown && <div className={`${card} ml-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
                 </>
               )}
               {activeId === FOCUS_TAB && (
@@ -2138,9 +2607,112 @@ export function App() {
                   <div className="m-auto text-muted-foreground">Open or create a session to start.</div>
                 </div>
               )}
+              {panelSession && (
+                <>
+                  {/* The pane contents render here once; each host sits in the slot of the area that holds the pane. */}
+                  {createPortal(
+                    <div className={shows("files") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+                      <FilesPanel
+                        client={client.current!}
+                        status={status}
+                        cwd={panelSession.cwd}
+                        onSend={(mention) => (setInsert(mention), setPane("session"))}
+                        onCopy={copyText}
+                        onViewer={(path) => openViewer({ kind: "file", path })}
+                        onShowChanges={(path) => (setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
+                        openPath={openFile?.path}
+                        openLine={openFile?.line}
+                        onOpened={() => setOpenFile(undefined)}
+                        watch={changedPaths}
+                        showTree={fileTree}
+                        onToggleTree={() => setFileTree((v) => !v)}
+                        gitStamp={isGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
+                        visible={inSight("files")}
+                      />
+                    </div>,
+                    hosts.files,
+                  )}
+                  {createPortal(
+                    views[panelSession.id] && (
+                      <ChangesPanel
+                        key={panelSession.id}
+                        hidden={!shows("changes")}
+                        onCount={(n) => setListedChanges({ id: panelSession.id, n })}
+                        client={client.current!}
+                        view={views[panelSession.id]!}
+                        cwd={panelSession.cwd}
+                        onOpen={(path) => (setOpenFile({ path }), reveal("files"))}
+                        sessionId={panelSession.id}
+                        onPopOut={() => openViewer({ kind: "changes" })}
+                        reveal={changesReveal}
+                      />
+                    ),
+                    hosts.changes,
+                  )}
+                  {createPortal(
+                    isGit && (shows("graph") || graphCwd === panelSession.cwd) && (
+                      <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
+                        <GraphPanel key={panelSession.cwd} hidden={!shows("graph")} client={client.current!} cwd={panelSession.cwd} />
+                      </Suspense>
+                    ),
+                    hosts.graph,
+                  )}
+                  {createPortal(
+                    // Mounted only while it shows: the terminal chunk and the shell focus load on show (GH-354).
+                    termMounted && (
+                      <section className={shows("terminal") ? "flex min-h-0 flex-1 flex-col" : "hidden"} data-testid="terminal-panel" data-dock={lg ? areaOf(layout, "terminal") : "side"}>
+                        {terminalPanel()}
+                      </section>
+                    ),
+                    hosts.terminal,
+                  )}
+                </>
+              )}
             </>
           )}
         </main>
+        {status !== "unauthorized" && panelSession && bottomShown && (
+          <>
+            {shown && !bottomMax && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
+            <section
+              id="bottom-panel"
+              aria-label="Bottom panel"
+              className={`${card} ${!shown ? "hidden" : bottomMax ? "flex-1" : "h-(--terminal-h) max-h-[60vh] min-h-25 flex-none"} ${dropCls("bottom")}`}
+              data-testid="bottom-panel"
+              data-dock="bottom"
+              data-drop-target={drag && dropAt?.area === "bottom" ? "" : undefined}
+              ref={bottomDropRef}
+            >
+              <DockHeader
+                area="bottom"
+                panes={areaPanes("bottom")}
+                active={activeOf("bottom")}
+                changes={changeCount}
+                onSelect={selectPane}
+                onMove={move}
+                onReset={resetLayout}
+                {...dragProps}
+                extra={
+                  <>
+                    <IconButton label={bottomMax ? "Restore panel" : "Maximize panel"} pressed={bottomMax} onClick={() => setBottomMax((m) => !m)} testId="dock-maximize">
+                      {bottomMax ? <ChevronDownIcon /> : <ChevronUpIcon />}
+                    </IconButton>
+                    <IconButton label="Hide bottom panel" onClick={() => (setBottomOpen(false), focusShownPrompt())} testId="dock-hide">
+                      <XIcon />
+                    </IconButton>
+                  </>
+                }
+              />
+              {areaPanes("bottom").map((p) => (
+                <PaneSlot key={p} host={hosts[p]} />
+              ))}
+            </section>
+          </>
+        )}
+        {status !== "unauthorized" && panelSession && lg && drag && shown && !bottomShown && (
+          <DropStrip area="bottom" over={dropAt?.area === "bottom"} onOver={() => setDropAt({ area: "bottom" })} onLeave={() => setDropAt(undefined)} onDrop={dropPane("bottom")} />
+        )}
+        </div>
       </div>
       <div role="status" aria-live="polite" className="sr-only" data-testid="attention-status">
         {noteText !== undefined ? noteText + (waitingN ? ` ${waitingStatus(waitingN)}.` : "") : announcement(waitingN, everWaiting.current)}
@@ -2260,7 +2832,7 @@ export function App() {
           view={viewer ? views[viewer.sessionId] : undefined}
           sessionId={viewer?.sessionId}
           onClose={() => setViewer(undefined)}
-          onOpenInEditor={(p) => (setViewer(undefined), setOpenFile(p), setPane("files"), setPanel(true))}
+          onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line }), setPane("files"), setPanel(true))}
         />
       )}
       <ShortcutsDialog open={shortcutsOpen} edit={shortcutsEdit} onClose={() => (setShortcutsOpen(false), setShortcutsEdit(undefined))} />
@@ -2316,7 +2888,7 @@ export function App() {
   );
 }
 
-type Pane = "session" | "changes" | "files" | "terminal" | "graph";
+type Pane = "session" | PaneId;
 
 /** `changes`: the changed file count, shown on the changes tab like OpenCode's "Files Changed N". */
 export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[]; value: Pane; onChange: (p: Pane) => void; changes?: number }) {
@@ -2343,7 +2915,7 @@ export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[
 }
 
 /** Drag handle (or arrow keys) between the session and the side panel on wide screens. */
-function PanelResizer({ width, onResize }: { width: number; onResize: (w: number) => void }) {
+function PanelResizer({ width, onResize, side }: { width: number; onResize: (w: number) => void; side: DockSide }) {
   const clamp = (w: number) => Math.round(Math.max(280, Math.min(w, window.innerWidth - 480)));
   return (
     <div
@@ -2352,12 +2924,54 @@ function PanelResizer({ width, onResize }: { width: number; onResize: (w: number
       aria-label="Resize side panel"
       aria-valuenow={width}
       tabIndex={0}
-      className="hidden w-1.5 shrink-0 cursor-col-resize touch-none border-l bg-border/40 hover:bg-primary/30 focus-visible:bg-primary/30 lg:block"
+      className={`hidden w-1.5 shrink-0 cursor-col-resize touch-none ${side === "left" ? "border-r" : "border-l"} bg-border/40 hover:bg-primary/30 focus-visible:bg-primary/30 lg:block`}
       onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
-      onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && onResize(clamp(window.innerWidth - e.clientX))}
+      // Right: the panel ends at the window edge; left: it starts at its own left edge (the element before the resizer).
+      onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && onResize(clamp(side === "left" ? e.clientX - e.currentTarget.previousElementSibling!.getBoundingClientRect().left : window.innerWidth - e.clientX))}
       onKeyDown={(e) => {
-        const d = { ArrowLeft: 32, ArrowRight: -32 }[e.key];
+        const d = (side === "left" ? { ArrowLeft: -32, ArrowRight: 32 } : { ArrowLeft: 32, ArrowRight: -32 })[e.key];
         if (d) onResize(clamp(width + d));
+      }}
+    />
+  );
+}
+
+/** Drag handle (or arrow keys) between the two splits; it takes the gap between them. */
+function SplitResizer({ split, onResize }: { split: Split; onResize: (ratio: number) => void }) {
+  const row = split.dir === "row";
+  const min = row ? SPLIT_MIN_W : SPLIT_MIN_H;
+  const GAP = 8;
+  const at = (e: { clientX: number; clientY: number }, el: HTMLElement) => {
+    const r = el.parentElement!.getBoundingClientRect();
+    return row ? ratioFor(e.clientX - r.left - GAP / 2, r.width - GAP, min) : ratioFor(e.clientY - r.top - GAP / 2, r.height - GAP, min);
+  };
+  const total = (el: HTMLElement) => {
+    const r = el.parentElement!.getBoundingClientRect();
+    return (row ? r.width : r.height) - GAP;
+  };
+  const step = (el: HTMLElement, px: number) => onResize(ratioFor(split.ratio * total(el) + px, total(el), min));
+  return (
+    <div
+      role="separator"
+      aria-orientation={row ? "vertical" : "horizontal"}
+      aria-label="Resize split"
+      aria-valuenow={Math.round(split.ratio * 100)}
+      aria-valuemin={15}
+      aria-valuemax={85}
+      aria-controls={`split-${split.ids[0]}`}
+      tabIndex={0}
+      className={`shrink-0 touch-none rounded-full hover:bg-primary/30 focus-visible:bg-primary/30 focus-visible:outline-2 focus-visible:outline-ring ${row ? "w-2 cursor-col-resize" : "h-2 cursor-row-resize"}`}
+      style={{ order: 1 }}
+      data-testid="split-resizer"
+      onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
+      onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && onResize(at(e, e.currentTarget))}
+      onDoubleClick={() => onResize(0.5)}
+      onKeyDown={(e) => {
+        const d = (row ? { ArrowLeft: -32, ArrowRight: 32 } : { ArrowUp: -32, ArrowDown: 32 })[e.key as "ArrowLeft"];
+        if (d) return (e.preventDefault(), step(e.currentTarget, d));
+        if (e.key === "Home") (e.preventDefault(), onResize(ratioFor(0, total(e.currentTarget), min)));
+        else if (e.key === "End") (e.preventDefault(), onResize(ratioFor(total(e.currentTarget), total(e.currentTarget), min)));
+        else if (e.key === "Enter") (e.preventDefault(), onResize(0.5));
       }}
     />
   );
@@ -2388,7 +3002,7 @@ function SidebarResizer({ width, onResize }: { width: number; onResize: (w: numb
   );
 }
 
-/** Drag handle (or arrow keys) between the side panel and the terminal panel below it on wide screens (OpenCode: 100px to 60% of the window). */
+/** Drag handle (or arrow keys) between the work area and the bottom panel on wide screens (OpenCode: 100px to 60% of the window). */
 function TerminalResizer({ height, onResize }: { height: number; onResize: (h: number) => void }) {
   const clamp = (h: number) => Math.round(Math.max(100, Math.min(h, window.innerHeight * 0.6)));
   return (
@@ -2647,11 +3261,11 @@ export function NewSession({
             <span aria-hidden className="select-none text-faint">
               /
             </span>
-            {/* OpenCode PromptWorkspaceSelector: "Run session in", Run session in, Local repository, the worktrees, New worktree. */}
+            {/* OpenCode PromptWorkspaceSelector: "Run session in", Run session in, Primary worktree (OpenCode: Local repository), the worktrees, New worktree. */}
             <Select value={cwd} onValueChange={(v) => (v === NEW_WT ? onNewWorktree?.(project) : v && onCwd(v))}>
-              <SelectTrigger aria-label={`${here?.main ? "Local" : (here?.branch ?? projectName(cwd))}, Run session in`} title={cwd} data-testid="worktree-chip" className={`${GHOST} max-md:h-11! text-foreground hover:bg-secondary`}>
+              <SelectTrigger aria-label={`${here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}, Run session in`} title={cwd} data-testid="worktree-chip" className={`${GHOST} max-md:h-11! text-foreground hover:bg-secondary`}>
                 {here?.main ? <MonitorIcon /> : <GitBranchIcon />}
-                <span className="max-w-50 truncate">{here?.main ? "Local" : (here?.branch ?? projectName(cwd))}</span>
+                <span className="max-w-50 truncate">{here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}</span>
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-48 max-w-[calc(100vw-2rem)] rounded-md p-0.5 shadow-floating! ring-0">
                 <SelectGroup>
@@ -2659,7 +3273,7 @@ export function NewSession({
                   {runIn.map((w) => (
                     <SelectItem key={w.path} value={w.path} title={w.path} className={ROW}>
                       {w.main ? <MonitorIcon /> : <GitBranchIcon />}
-                      <span className="truncate">{w.main ? "Local repository" : (w.branch ?? projectName(w.path))}</span>
+                      <span className="truncate">{w.main ? "Primary worktree" : (w.branch ?? projectName(w.path))}</span>
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -2719,6 +3333,7 @@ function SessionTab(props: ComponentProps<typeof SessionPane>) {
 }
 
 export function SessionPane({
+  active = true,
   place,
   coordinator,
   scrollKey,
@@ -2762,6 +3377,8 @@ export function SessionPane({
   onDialog,
   signalOnly = false,
 }: {
+  /** Split view: only the active split stops its turn on Esc. */
+  active?: boolean;
   scrollKey: number;
   /** Signal only: runs of tool cards fold into one line (GH-159). The browser-wide setting. */
   signalOnly?: boolean;
@@ -2836,6 +3453,7 @@ export function SessionPane({
   const modePicker = <ModePicker mode={view.permissionMode ?? session.permissionMode} modes={modesOf(session.permissionModes, view.model ?? session.model, models)} onMode={onMode} shortcut={false} />;
   // Waiting for a permission answer is part of the running turn.
   const turnRunning = view.state === "running" || view.state === "needs_input";
+  const sendModeSetting = useSendMode();
   const isClearing = clearing(view, pending);
   // A bash mode command runs: Stop and Esc kill it.
   const shellRunning = bashRunning(view);
@@ -2851,11 +3469,11 @@ export function SessionPane({
   const escStops = current ? isRunning(current) && !(stopOf && !stopOf.error) : turnRunning || shellRunning;
   const onEscape = useEffectEvent(() => (current ? stopRun(current.id) : onInterrupt()));
   useEffect(() => {
-    if (!escStops) return;
+    if (!escStops || !active) return;
     const onEsc = (e: globalThis.KeyboardEvent) => e.key === "Escape" && !isImeKey(e) && !e.defaultPrevented && !document.querySelector('[aria-modal="true"]') && onEscape();
     window.addEventListener("keydown", onEsc);
     return () => window.removeEventListener("keydown", onEsc);
-  }, [escStops]);
+  }, [escStops, active]);
   const [rewinding, setRewinding] = useState<string>();
   // Palette Rewind: the timeline scrolls to the message first (it can be outside the rendered window), then its panel opens.
   const [reveal, setReveal] = useState<{ key: string }>();
@@ -3115,7 +3733,7 @@ export function SessionPane({
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label="Prompt"
               inputRef={prompt}
-              placeholder={phone ? (turnRunning ? "Claude is working…" : "Ask Claude…") : turnRunning ? (onQueue ? "Claude is working… (Enter to steer, Alt+Enter to queue, Esc to stop)" : "Claude is working… (Enter to steer, Esc to stop)") : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
+              placeholder={phone ? (turnRunning ? "Claude is working…" : "Ask Claude…") : turnRunning ? (onQueue ? (sendModeSetting === "queue" ? "Claude is working… (Enter to queue, Alt+Enter to steer, Esc to stop)" : "Claude is working… (Enter to steer, Alt+Enter to queue, Esc to stop)") : "Claude is working… (Enter to steer, Esc to stop)") : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
             />
           </>
         )}
@@ -3335,7 +3953,12 @@ function PromptBox({
     errorCwd.current = cwd;
     setSendError(undefined);
   }, [cwd]);
-  const send = (t = text, how: "send" | "queue" = "send") => {
+  // While a turn runs and queueing is available, Enter and the send button follow the Sending setting and Alt+Enter does the other one.
+  const sendMode = useSendMode();
+  const running = state === "running" || state === "needs_input";
+  const enterHow: "send" | "queue" = running && onQueue && sendMode === "queue" ? "queue" : "send";
+  const altHow: "send" | "queue" = running && onQueue && sendMode === "queue" ? "send" : "queue";
+  const send = (t = text, how: "send" | "queue" = enterHow) => {
     if (bash) {
       const command = t.trim();
       if (!command || blocked) return;
@@ -3449,10 +4072,10 @@ function PromptBox({
       const next = nextMode(modes, mode);
       return next !== mode && onMode(next);
     }
-    // Alt+Enter queues the message, also with the picker open (the picker keeps plain Enter). Without a queue (new-session tab) it is Enter.
+    // Alt+Enter queues the message (while a turn runs: the mode Enter does not do), also with the picker open (the picker keeps plain Enter). Without a queue (new-session tab) it is Enter.
     if (e.key === "Enter" && e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
-      return send(text, "queue");
+      return send(text, altHow);
     }
     if (pickerOpen) {
       const n = rows;
@@ -3604,6 +4227,7 @@ function PromptBox({
         hasInput={!disabled && !blocked && (!!text.trim() || images.length > 0)}
         onSend={() => send()}
         onQueue={onQueue && (() => send(text, "queue"))}
+        sendMode={sendMode}
         onStop={() => onInterrupt?.()}
         // Not on touch screens: focusing the prompt box there opens the soft keyboard (OpenCode leaves focus on the page).
         onFocusLost={() => !window.matchMedia?.("(pointer: coarse)").matches && input.current?.focus()}
@@ -3893,7 +4517,7 @@ function AssistantText({ text, streaming }: { text: string; streaming: boolean }
     // OpenCode text part margin-top 24px, on top of the 12px timeline gap.
     <Message from="assistant" className="relative mt-6" data-testid="assistant-text">
       <MessageContent>
-        <MessageResponse mode={revealing ? "streaming" : "static"} isAnimating={revealing}>
+        <MessageResponse mode={revealing ? "streaming" : "static"} isAnimating={revealing} {...FILE_LINK_PROPS}>
           {shown}
         </MessageResponse>
       </MessageContent>

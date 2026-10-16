@@ -39,10 +39,11 @@ export type TabFacts = {
   /** claude-ui.tab-used stamp (ms); undefined = never stamped. */
   lastUsed?: number;
 };
-export type CleanupContext = { activeId?: string; pinned: ReadonlySet<string>; listLoaded: boolean; now: number };
+/** `shown`: tabs on screen besides the active one (the other split, GH-356): kept like the active tab. */
+export type CleanupContext = { activeId?: string; shown?: ReadonlySet<string>; pinned: ReadonlySet<string>; listLoaded: boolean; now: number };
 
 export function keepReason(f: TabFacts, c: CleanupContext): KeepReason | undefined {
-  if (f.id === c.activeId) return "active";
+  if (f.id === c.activeId || c.shown?.has(f.id)) return "active";
   if (c.pinned.has(f.id)) return "pinned";
   if (f.loading) return "loading";
   if (f.unknown) return "unknown";

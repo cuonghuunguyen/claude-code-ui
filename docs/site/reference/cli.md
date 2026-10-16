@@ -44,6 +44,7 @@ Not yet: `new`, `send`, `tail`, `interrupt`, `doctor`, `logs`, `stop` (names res
 | `--allow-bypass` | `CLAUDE_UI_ALLOW_BYPASS=1` | off | Offer the "Bypass permissions" mode |
 | `--no-update-check` | `CLAUDE_UI_UPDATE_CHECK=0` | check on | Do not check npm for a new version |
 | `--no-os-notify` | `CLAUDE_UI_OS_NOTIFY=0` | on | No desktop notifications on this computer |
+| `--no-open` | `CLAUDE_UI_OPEN=0` | open | Do not open the web UI in this computer's browser at start. It never opens after an update restart, over SSH, or on Linux without a display |
 | `-v`, `--version` | | | Print the version |
 | `-h`, `--help` | | | Print the help |
 

@@ -31,6 +31,8 @@ Options (a flag overrides its environment variable):
   --no-update-check   do not check npm for a newer version   (CLAUDE_UI_UPDATE_CHECK=0)
   --no-os-notify      no desktop notification on this machine when no browser
                       is subscribed to push                  (CLAUDE_UI_OS_NOTIFY=0)
+  --no-open           do not open the web UI in this machine's browser at start
+                                                             (CLAUDE_UI_OPEN=0)
   -v, --version       print the version
   -h, --help          print this help
 `;
@@ -42,7 +44,7 @@ export const USAGE_HINT = "Usage: claude-ui [options] | claude-ui update | claud
 export const PHONE_HINT = "Phone: open the link, then Install app (Android Chrome) or Share > Add to Home Screen (iOS Safari); on iOS paste the link into the app's pairing field.";
 
 /** `side`: run as a WSL side of a Windows daemon (sides.ts): wire protocol over stdio, no HTTP. Not in HELP: the Windows daemon starts it. */
-export type Cli = { kind: "run"; port: number; roots: string[]; hostname: string | undefined; lan: boolean; allowBypass: boolean; idleCloseMinutes: number; tailscale?: true; side?: boolean; updateCheck?: false; osNotify?: false } | { kind: "update" } | { kind: "client"; cmd: ClientCmd; json: boolean; port?: number; tokenFile?: string; sessionId?: string; print?: true; project?: string; state?: string; archived?: true } | { kind: "help" } | { kind: "version" } | { kind: "error"; message: string };
+export type Cli = { kind: "run"; port: number; roots: string[]; hostname: string | undefined; lan: boolean; allowBypass: boolean; idleCloseMinutes: number; tailscale?: true; side?: boolean; updateCheck?: false; osNotify?: false; open?: false } | { kind: "update" } | { kind: "client"; cmd: ClientCmd; json: boolean; port?: number; tokenFile?: string; sessionId?: string; print?: true; project?: string; state?: string; archived?: true } | { kind: "help" } | { kind: "version" } | { kind: "error"; message: string };
 
 export type ClientCmd = "status" | "open" | "sessions" | "projects" | "workers";
 const CLIENT_CMDS: Record<string, ClientCmd> = { status: "status", open: "open", sessions: "sessions", ls: "sessions", projects: "projects", workers: "workers" };
@@ -67,7 +69,7 @@ export function isDaemonRun(argv: string[]) {
 }
 const VALUE_FLAGS = ["--port", "--roots", "--hostname", "--token-file", "--project", "--state"];
 const NOT_A_START = [...Object.keys(CLIENT_CMDS), ...RESERVED, "update"];
-const DAEMON_ONLY = ["lan", "roots", "hostname", "tailscale", "allow-bypass", "no-update-check", "no-os-notify", "side"];
+const DAEMON_ONLY = ["lan", "roots", "hostname", "tailscale", "allow-bypass", "no-update-check", "no-os-notify", "no-open", "side"];
 
 export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string): Cli {
   let values;
@@ -76,7 +78,7 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string): 
     const r = parseArgs({
       args: argv,
       allowPositionals: true,
-      options: { "no-update-check": { type: "boolean" }, "no-os-notify": { type: "boolean" }, port: { type: "string" }, roots: { type: "string" }, hostname: { type: "string" }, tailscale: { type: "boolean" }, lan: { type: "boolean" }, "allow-bypass": { type: "boolean" }, json: { type: "boolean" }, "token-file": { type: "string" }, print: { type: "boolean" }, project: { type: "string" }, state: { type: "string" }, archived: { type: "boolean" }, side: { type: "boolean" }, version: { type: "boolean", short: "v" }, help: { type: "boolean", short: "h" } },
+      options: { "no-update-check": { type: "boolean" }, "no-os-notify": { type: "boolean" }, "no-open": { type: "boolean" }, port: { type: "string" }, roots: { type: "string" }, hostname: { type: "string" }, tailscale: { type: "boolean" }, lan: { type: "boolean" }, "allow-bypass": { type: "boolean" }, json: { type: "boolean" }, "token-file": { type: "string" }, print: { type: "boolean" }, project: { type: "string" }, state: { type: "string" }, archived: { type: "boolean" }, side: { type: "boolean" }, version: { type: "boolean", short: "v" }, help: { type: "boolean", short: "h" } },
     });
     values = r.values;
     positionals = r.positionals;
@@ -134,5 +136,18 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string): 
     ...(values.side && { side: true }),
     ...((values["no-update-check"] || env.CLAUDE_UI_UPDATE_CHECK === "0") && { updateCheck: false as const }),
     ...((values["no-os-notify"] || env.CLAUDE_UI_OS_NOTIFY === "0") && { osNotify: false as const }),
+    ...((values["no-open"] || env.CLAUDE_UI_OPEN === "0") && { open: false as const }),
   };
+}
+
+/** Set by the launcher on a start after an update restart (exit 75): the browser from the first start reconnects by itself. */
+export const RESTARTED_ENV = "CLAUDE_UI_RESTARTED";
+
+/**
+ * Whether a daemon start opens the web UI in this machine's browser: not after an update restart, not over SSH (the browser
+ * would open on the remote machine, if at all), and not on a Linux without a display (WSL opens the Windows browser).
+ */
+export function autoOpen(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, wsl: boolean) {
+  if (env[RESTARTED_ENV] === "1" || env.SSH_CONNECTION || env.SSH_TTY) return false;
+  return platform !== "linux" || wsl || Boolean(env.DISPLAY || env.WAYLAND_DISPLAY);
 }

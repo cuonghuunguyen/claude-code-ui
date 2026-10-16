@@ -1,5 +1,5 @@
 // Changes tab (docs/spec.md "Layout"): files changed in the session, or in the working tree against HEAD or a branch, each with its diff, like OpenCode's review panel.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitStatusResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
@@ -49,6 +49,53 @@ export function saveStyle(s: DiffStyle) {
   } catch {
     // Storage blocked: the choice lasts while the panel is open.
   }
+}
+
+// File sidebar width after a drag, per browser; unset: OpenCode's 240px (200px in a narrow panel).
+const LIST_WIDTH_KEY = "claude-ui.changesListWidth";
+function loadListWidth(): number | undefined {
+  try {
+    const n = Number(localStorage.getItem(LIST_WIDTH_KEY));
+    return n > 0 ? n : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function saveListWidth(w: number | undefined) {
+  try {
+    if (w) localStorage.setItem(LIST_WIDTH_KEY, String(w));
+    else localStorage.removeItem(LIST_WIDTH_KEY);
+  } catch {
+    // Storage blocked: the width lasts while the panel is open.
+  }
+}
+
+/** Drag handle (or arrow keys) between the file sidebar and the diff; double click restores the default width. */
+function ListResizer({ list, width, onResize }: { list: RefObject<HTMLDivElement | null>; width: number | undefined; onResize: (w: number | undefined) => void }) {
+  // 160px up to the panel width less 240px for the diff.
+  const clamp = (w: number) => {
+    const room = list.current?.parentElement?.clientWidth || Infinity;
+    return Math.round(Math.max(160, Math.min(w, room - 240)));
+  };
+  const now = () => width ?? (list.current?.offsetWidth || 240);
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize file list"
+      aria-valuenow={now()}
+      tabIndex={0}
+      className="-ml-1 w-1 shrink-0 cursor-col-resize touch-none hover:bg-primary/30 focus-visible:bg-primary/30"
+      data-testid="changes-list-resizer"
+      onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
+      onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && list.current && onResize(clamp(e.clientX - list.current.getBoundingClientRect().left))}
+      onDoubleClick={() => onResize(undefined)}
+      onKeyDown={(e) => {
+        const d = { ArrowLeft: -32, ArrowRight: 32 }[e.key];
+        if (d) (e.preventDefault(), onResize(clamp(now() + d)));
+      }}
+    />
+  );
 }
 export { useNarrow };
 
@@ -128,6 +175,7 @@ export function ChangesPanel({
   sessionId,
   initialChoice,
   onPopOut,
+  reveal,
 }: {
   client: Client;
   view: SessionView;
@@ -141,6 +189,8 @@ export function ChangesPanel({
   initialChoice?: { mode: DiffMode; ref?: string };
   /** Shows the "Open in popup" button. */
   onPopOut?: () => void;
+  /** File tree "Show changes": switches to Uncommitted (the tree's git marks) and selects the file; a new `seq` repeats it. */
+  reveal?: { path: string; seq: number };
 }) {
   const fresh = useMemo(() => sessionChanges(view), [view.parts, view.aux]);
   // Same calls and results per path: the previous list, so streamed text does not re-parse every diff.
@@ -252,6 +302,8 @@ export function ChangesPanel({
   const outside = gitMode ? 0 : sessionRows.length - sessionShown.length;
   const total = rows.reduce((t, r) => ({ added: t.added + (r.stats?.added ?? 0), removed: t.removed + (r.stats?.removed ?? 0) }), { added: 0, removed: 0 });
   const [filter, setFilter] = useState("");
+  const [listWidth, setListWidth] = useState(loadListWidth);
+  useEffect(() => saveListWidth(listWidth), [listWidth]);
   // No filter in the narrow accordion (OpenCode has none there).
   const q = narrow ? "" : filter.trim().toLowerCase();
   const matched = q ? rows.filter((r) => relPath(r.path, cwd).toLowerCase().includes(q)) : rows;
@@ -260,6 +312,25 @@ export function ChangesPanel({
   const shown = narrow ? [...matched].sort((a, b) => relPath(a.path, cwd).localeCompare(relPath(b.path, cwd))) : treeOrder(tree);
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // Show changes (file tree menu): Uncommitted mode, no filter hiding the file, its folders open, the file selected and scrolled to.
+  const scrollTo = useRef<string>(undefined);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!reveal) return;
+    if (git !== false) pick("uncommitted");
+    setFilter("");
+    setClosed((c) => Object.fromEntries(Object.entries(c).filter(([dir]) => !(reveal.path.startsWith(dir) && /[\\/]/.test(reveal.path[dir.length] ?? "")))));
+    setSelected(reveal.path);
+    setExpanded((e) => ({ ...e, [reveal.path]: true }));
+    scrollTo.current = reveal.path;
+  }, [reveal?.seq]);
+  useEffect(() => {
+    const p = scrollTo.current;
+    const el = p && [...(panelRef.current?.querySelectorAll<HTMLElement>("[data-path]") ?? [])].find((x) => x.dataset.path === p);
+    if (!el) return;
+    scrollTo.current = undefined;
+    el.scrollIntoView?.({ block: "nearest" });
+  });
   const allExpanded = shown.length > 0 && shown.every((r) => expanded[r.path]);
   const active = shown.find((r) => r.path === selected) ?? shown[0];
   const index = active ? shown.indexOf(active) : -1;
@@ -361,6 +432,7 @@ export function ChangesPanel({
             aria-label={label(r)}
             onClick={() => setSelected(r.path)}
             data-testid="changed-file"
+            data-path={r.path}
           >
             <FileIcon path={r.path} className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{filePath(r.path, cwd).name}</span>
@@ -475,7 +547,7 @@ export function ChangesPanel({
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" hidden={hidden} data-testid="changes-panel">
+    <div ref={panelRef} className="flex min-h-0 flex-1 flex-col" hidden={hidden} data-testid="changes-panel">
       {narrow ? (
         <div className="shrink-0 border-b">
           <div className="flex h-14 items-center gap-2 px-3">
@@ -574,6 +646,7 @@ export function ChangesPanel({
                     aria-label={label(r)}
                     onClick={() => setExpanded((x) => ({ ...x, [path]: !x[path] }))}
                     data-testid="changed-file"
+                    data-path={path}
                   >
                     <FileIcon path={path} className="size-4 shrink-0" />
                     <span className="min-w-0 flex-1 truncate">
@@ -592,9 +665,9 @@ export function ChangesPanel({
           {gitDiff?.truncated && <p className="p-2 text-muted-foreground text-xs">List cut at 3000 files</p>}
         </div>
       ) : (
-        // OpenCode's review file sidebar (240px, 200px in a narrow panel): filter and folder tree beside the diff.
+        // OpenCode's review file sidebar (240px, 200px in a narrow panel, resizable): filter and folder tree beside the diff.
         <div className="@container flex min-h-0 flex-1">
-          <div ref={listRef} className="flex w-50 shrink-0 flex-col border-r @2xl:w-60">
+          <div ref={listRef} className={cn("flex shrink-0 flex-col border-r", !listWidth && "w-50 @2xl:w-60")} style={listWidth ? { width: `min(${listWidth}px, calc(100% - 240px))` } : undefined}>
             <label className="relative flex items-center px-2 pt-2 pb-1">
               <SearchIcon className="pointer-events-none absolute left-4 size-4 text-faint" aria-hidden />
               <input
@@ -619,6 +692,7 @@ export function ChangesPanel({
             </ul>
             {gitDiff?.truncated && <p className="border-t p-2 text-muted-foreground text-xs">List cut at 3000 files</p>}
           </div>
+          <ListResizer list={listRef} width={listWidth} onResize={setListWidth} />
           {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} />}
         </div>
       )}

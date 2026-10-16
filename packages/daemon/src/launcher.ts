@@ -5,7 +5,7 @@ import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
-import { isDaemonRun } from "./cli.ts";
+import { isDaemonRun, RESTARTED_ENV } from "./cli.ts";
 import { compareVersions, FAILED_MARK, installedVersions, isVersion, RESTART_CODE, versionCli } from "./update.ts";
 
 /** A daemon from the versions dir that exits (not 0, not RESTART_CODE) this soon after its start failed to start. */
@@ -24,17 +24,19 @@ export async function launch(opts: {
   args: string[];
   own: { cli: string; version: string };
   dir: string;
-  spawn?: (cli: string, args: string[]) => ChildProcess;
+  /** `restarted`: a start after an update restart (exit 75), told to the daemon by RESTARTED_ENV so it opens no second browser tab. */
+  spawn?: (cli: string, args: string[], restarted: boolean) => ChildProcess;
   signals?: Pick<NodeJS.Process, "on" | "off">;
   log?: (line: string) => void;
 }): Promise<number> {
-  const spawn = opts.spawn ?? ((cli, args) => nodeSpawn(process.execPath, [cli, ...args], { stdio: "inherit", env: { ...process.env, CLAUDE_UI_LAUNCHER: "1" } }));
+  const spawn = opts.spawn ?? ((cli, args, restarted) => nodeSpawn(process.execPath, [cli, ...args], { stdio: "inherit", env: { ...process.env, CLAUDE_UI_LAUNCHER: "1", ...(restarted && { [RESTARTED_ENV]: "1" }) } }));
   const signals = opts.signals ?? process;
   const log = opts.log ?? console.error;
   // Only a daemon start restarts on 75 and can fail "to start"; a client command, `update` or help just ends with its code.
   const daemon = isDaemonRun(opts.args);
   let child: ChildProcess | undefined;
   let stopped = false;
+  let restarted = false;
   /** Versions this run marked as failed to start. */
   const marked: string[] = [];
   const forward = (sig: NodeJS.Signals) => {
@@ -46,13 +48,16 @@ export async function launch(opts: {
     for (;;) {
       const pick = newest(opts.own, opts.dir);
       const startedAt = Date.now();
-      child = spawn(pick.cli, opts.args);
+      child = spawn(pick.cli, opts.args, restarted);
       const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
         child!.on("error", (err) => (log(`claude-ui: ${err.message}`), resolve([1, null])));
         child!.on("exit", (c, s) => resolve([c, s]));
       });
       if (stopped) return exitCode(code, signal);
-      if (daemon && code === RESTART_CODE) continue;
+      if (daemon && code === RESTART_CODE) {
+        restarted = true;
+        continue;
+      }
       // 129, 130, 143: the daemon ended on a signal it handled or because its parent ended, not a broken release (a native crash code still counts).
       const failedEarly = daemon && code !== null && code !== 0 && code !== USAGE_EXIT && !SIGNAL_EXITS.includes(code) && signal === null && Date.now() - startedAt < START_WINDOW_MS;
       if (failedEarly && pick.version) {

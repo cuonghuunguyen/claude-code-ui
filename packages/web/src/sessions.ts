@@ -16,22 +16,33 @@ export const projectOf = (cwd: string, worktrees: Record<string, Worktree[]> = {
   worktrees[cwd] ? cwd : (Object.keys(worktrees).find((p) => worktrees[p]!.some((w) => w.path === cwd)) ?? cwd);
 
 /**
- * Whether the web app may remove `w`: a linked worktree inside the roots directly under `<main>/.claude/worktrees` (the ones it creates).
- * A worktree made by hand or by another tool is never offered; the daemon refuses it too.
+ * Whether the web app offers removal of `w`: any linked worktree inside the roots that is not locked. A symlinked path is refused by the
+ * daemon (status `blocked: "symlink"`).
  */
 export function removableWorktree(list: Worktree[], w: Worktree) {
-  const main = list.find((x) => x.main);
-  if (!main || w.main || w.outsideRoots) return false;
-  const dir = `${main.path.replace(/[\\/]+$/, "")}/.claude/worktrees/`;
-  const p = w.path.replace(/\\/g, "/");
-  const d = dir.replace(/\\/g, "/");
-  return p.startsWith(d) && p.length > d.length && !p.slice(d.length).includes("/");
+  return !!list.find((x) => x.main) && !w.main && !w.outsideRoots && !w.locked;
 }
 
-/** Remove worktree confirmation text (Claude Code CLI wording). */
-export function removeWorktreeText({ uncommitted, commits, branch }: WorktreeStatusResult) {
+/** A linked worktree that is not directly in `<main>/.claude/worktrees` (made by hand or by another tool). */
+export function externalWorktree(list: Worktree[], w: Worktree) {
+  const main = list.find((x) => x.main);
+  if (!main || w.main) return false;
+  const dir = `${main.path.replace(/[\\/]+$/, "")}/.claude/worktrees/`.replace(/\\/g, "/");
+  const p = w.path.replace(/\\/g, "/");
+  return !(p.startsWith(dir) && p.length > dir.length && !p.slice(dir.length).includes("/"));
+}
+
+/** The branch of the listed worktree `path` stays after removal: not `worktree-*` and not a detached HEAD (listed as the short hash). */
+export function keepsBranch(list: Worktree[] | undefined, path: string) {
+  const b = list?.find((w) => w.path === path)?.branch;
+  return !!b && !b.startsWith("worktree-") && !/^[0-9a-f]{7}$/.test(b);
+}
+
+/** Remove worktree confirmation text (Claude Code CLI wording). `keepsBranch`: the branch is not `worktree-*` and stays. */
+export function removeWorktreeText({ uncommitted, commits, branch }: Pick<WorktreeStatusResult, "uncommitted" | "commits" | "branch">, o: { keepsBranch?: boolean } = {}) {
   const lost = [uncommitted && `${uncommitted} uncommitted ${uncommitted === 1 ? "file" : "files"}`, commits && `${commits} ${commits === 1 ? "commit" : "commits"}`].filter(Boolean);
-  return lost.length ? `You have ${lost.join(" and ")} on ${branch}. All will be lost if you remove.` : "Clean up the worktree directory.";
+  const text = lost.length ? `You have ${lost.join(" and ")} on ${branch}. All will be lost if you remove.` : "Clean up the worktree directory.";
+  return o.keepsBranch ? `${text} Branch ${branch} stays.` : text;
 }
 
 /** "<project> · <branch>" for a cwd that is a linked worktree of an added project's repository; undefined otherwise (main checkout, non-git, unknown). */

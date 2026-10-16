@@ -20,6 +20,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "notifications.focus", title: "Go to notifications", group: "General", key: "mod+alt+n" },
   // No default key: listed in Keyboard shortcuts as "Not set" so the user can bind them (the key promoter offers it).
   { id: "focus.open", title: "Open Focus", group: "General" },
+  { id: "awake.toggle", title: "Toggle keep screen awake", group: "General" },
   { id: "guide.start", title: "Show guide", group: "General" },
   { id: "mcp.open", title: "MCP servers", group: "General" },
   { id: "skills.open", title: "Slash commands", group: "General" },
@@ -44,6 +45,12 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "tab.cleanup.unused1d", title: "Close tabs not used for 1 day", group: "Tabs" },
   { id: "tab.cleanup.unused7d", title: "Close tabs not used for 7 days", group: "Tabs" },
   { id: "tab.cleanup.workers", title: "Close worker tabs", group: "Tabs" },
+  // Split view (GH-356): Ctrl+Alt+Arrow is layout-independent (Ctrl+Alt+\ and ] are AltGr characters on Czech and German keyboards).
+  { id: "split.right", title: "Split right", group: "Panels" },
+  { id: "split.down", title: "Split down", group: "Panels" },
+  { id: "split.next", title: "Focus next split", group: "Panels", key: "mod+alt+arrowup" },
+  { id: "split.prev", title: "Focus previous split", group: "Panels" },
+  { id: "split.join", title: "Join splits", group: "Panels" },
   { id: "tab.reopen", title: "Reopen closed tab", group: "Tabs", key: "alt+shift+t", mac: "ctrl+shift+t" },
   // Ctrl/Cmd+1..9 belong to the browser's tabs; Alt+digit is free on Windows and Linux, Ctrl+digit on macOS.
   ...[1, 2, 3, 4, 5, 6, 7, 8].map(gotoTab),

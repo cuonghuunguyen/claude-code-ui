@@ -29,6 +29,8 @@ export type CommandContext = {
   newSession: () => void;
   /** Opens the New worktree name dialog for the shown project's repository; none outside git. */
   newWorktree?: () => void;
+  /** Opens the Clean up dialog for all projects; none while there is no linked worktree or worker. */
+  cleanUp?: () => void;
   selectTab: (id: string) => void;
   closeTab: (id: string) => void;
   /** Closes the active tab's group (asks first for 2 or more tabs); none while the active tab is in no named group. */
@@ -40,10 +42,16 @@ export type CommandContext = {
   /** Pins or unpins the active session tab (GH-359); none on the New session tab. */
   togglePin?: () => void;
   /** Clean up tabs (GH-378): counts per rule for the whole strip; absent: no cleanup commands. */
-  cleanup?: CleanupMenu;
-  cleanUp?: (rule: CleanupRule) => void;
+  tabCleanup?: CleanupMenu;
+  cleanUpTabs?: (rule: CleanupRule) => void;
   /** The active tab is pinned: the command reads "Unpin tab". */
   pinned?: boolean;
+  /** Split view (GH-356): each is absent while it does not apply (narrow screen, fewer than two sessions, no split). */
+  splitRight?: () => void;
+  splitDown?: () => void;
+  splitNext?: () => void;
+  splitPrev?: () => void;
+  joinSplits?: () => void;
   quickOpen: () => void;
   toggleSidebar: () => void;
   toggleSidePanel: () => void;
@@ -53,6 +61,10 @@ export type CommandContext = {
   showPane: (pane: "files" | "changes" | "graph") => void;
   /** Adds a terminal to the terminal panel (opens the panel first). */
   newTerminal: () => void;
+  resetLayout: () => void;
+  /** Moves the side panel to the other side of the session view. */
+  flipSide: () => void;
+  side: "left" | "right";
   /** Reopens the tab closed last that still exists; false when there is none. */
   reopenTab: () => void;
   canReopen: boolean;
@@ -79,6 +91,8 @@ export type CommandContext = {
   focusNotifications?: () => void;
   /** Toggles Signal only, the browser-wide setting (GH-205). */
   toggleSignalOnly: () => void;
+  /** Set only where the Screen Wake Lock API works (HTTPS or localhost). */
+  toggleKeepAwake?: () => void;
   /** Opens the Settings dialog. */
   openSettings: () => void;
   /** Restarts the guided tour from its first step. */
@@ -110,6 +124,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
   const items: (PaletteItem | false | undefined)[] = [
     cmd("session.new", "New session", c.newSession),
     c.newWorktree && cmd("worktree.new", "New worktree…", c.newWorktree),
+    c.cleanUp && cmd("cleanup.open", "Clean up worktrees and workers…", c.cleanUp),
     c.canQuickOpen && cmd("file.open", "Open file", c.quickOpen),
     c.tabs.length > 1 && cmd("tab.next", "Next tab", () => go(step(1))),
     c.tabs.length > 1 && cmd("tab.prev", "Previous tab", () => go(step(-1))),
@@ -118,16 +133,21 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.closeOthers && cmd("tab.closeOthers", "Close other tabs", c.closeOthers),
     c.closeRight && cmd("tab.closeRight", "Close tabs to the right", c.closeRight),
     c.closeAll && cmd("tab.closeAll", "Close all tabs", c.closeAll),
-    c.cleanup &&
-      c.cleanUp &&
+    c.tabCleanup &&
+      c.cleanUpTabs &&
       page(
         "tab.cleanup",
         "Clean up tabs…",
         "Close which tabs?",
-        c.cleanup.items.map((i) => ({ id: `cleanup:${i.rule}`, group: c.cleanup!.kept.text || "Rules", title: i.label, meta: `${i.count} ${i.count === 1 ? "tab" : "tabs"}`, disabled: i.count === 0, run: () => c.cleanUp!(i.rule) })),
+        c.tabCleanup.items.map((i) => ({ id: `cleanup:${i.rule}`, group: c.tabCleanup!.kept.text || "Rules", title: i.label, meta: `${i.count} ${i.count === 1 ? "tab" : "tabs"}`, disabled: i.count === 0, run: () => c.cleanUpTabs!(i.rule) })),
       ),
-    ...(c.cleanup && c.cleanUp ? c.cleanup.items.map((i) => cmd(`tab.cleanup.${i.rule}`, i.label, () => c.cleanUp!(i.rule), true)) : []),
+    ...(c.tabCleanup && c.cleanUpTabs ? c.tabCleanup.items.map((i) => cmd(`tab.cleanup.${i.rule}`, i.label, () => c.cleanUpTabs!(i.rule), true)) : []),
     c.togglePin && cmd("tab.pin", c.pinned ? "Unpin tab" : "Pin tab", c.togglePin),
+    c.splitRight && cmd("split.right", "Split right", c.splitRight),
+    c.splitDown && cmd("split.down", "Split down", c.splitDown),
+    c.splitNext && cmd("split.next", "Focus next split", c.splitNext),
+    c.splitPrev && cmd("split.prev", "Focus previous split", c.splitPrev),
+    c.joinSplits && cmd("split.join", "Join splits", c.joinSplits),
     c.canReopen && cmd("tab.reopen", "Reopen closed tab", c.reopenTab),
     // Tab N: only for tabs that exist; found by typing "go to tab".
     ...Array.from({ length: Math.min(8, c.tabs.length) }, (_, i) => cmd(`tab.goto${i + 1}`, `Go to tab ${i + 1}`, () => go(c.tabs[i]!), true)),
@@ -149,7 +169,10 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s && !s.draft && c.viewPlan && cmd("viewer.plan", "View plan", c.viewPlan),
     s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
     cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
+    c.toggleKeepAwake && cmd("awake.toggle", "Toggle keep screen awake", c.toggleKeepAwake),
     s && !s.draft && cmd("terminal.new", "New terminal", c.newTerminal),
+    cmd("layout.reset", "Reset layout", c.resetLayout),
+    s && !s.draft && cmd("panel.flip", c.side === "left" ? "Move side panel to right" : "Move side panel to left", c.flipSide),
     s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
     s &&
       c.models.length > 0 &&

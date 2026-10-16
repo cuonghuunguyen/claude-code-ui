@@ -206,6 +206,30 @@ it("wide: a folder tree like OpenCode's review sidebar (folders first, file-type
   expect(el.querySelector("[data-testid=changed-folder]")!.getAttribute("aria-expanded")).toBe("false");
 });
 
+it("wide: the file sidebar resizes by arrow keys on its separator (kept per browser), not cycling files; double click restores the default width", async () => {
+  const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
+  const panel = () => <ChangesPanel client={client} view={view([edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")])} cwd="/p" onOpen={() => {}} />;
+  await act(async () => root.render(panel()));
+  await flush();
+  const sep = () => el.querySelector<HTMLElement>("[data-testid=changes-list-resizer]")!;
+  const list = () => sep().previousElementSibling as HTMLElement;
+  const header = () => el.querySelector("[data-testid=file-diff-header]")!.textContent;
+  expect(sep().getAttribute("aria-label")).toBe("Resize file list");
+  expect(list().className).toContain("w-50");
+  const before = header();
+  await act(async () => void sep().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(list().style.width).toMatch(/^min\(272px, /);
+  expect(list().className).not.toContain("w-50");
+  expect(header()).toBe(before);
+  await act(async () => root.render(null));
+  await act(async () => root.render(panel()));
+  await flush();
+  expect(list().style.width).toMatch(/^min\(272px, /);
+  await act(async () => void sep().dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  expect(list().style.width).toBe("");
+  expect(list().className).toContain("w-50");
+});
+
 it("leaves ← / → alone while the file list is not on screen (side panel closed, new-session tab: display none)", async () => {
   const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
   const parts = [edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")];
@@ -913,4 +937,24 @@ it("the popup button shows only with onPopOut and calls it", async () => {
   await act(async () => root.render(panel(fakeClient({}), { onPopOut })));
   await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=changes-popout]")!.click(), undefined));
   expect(onPopOut).toHaveBeenCalledOnce();
+});
+
+it("GH-360 reveal switches to Uncommitted and selects the file (narrow: opens it); a repeated seq selects again", async () => {
+  saveDiffMode("session");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }, { status: "M", path: "src/b.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "a\n", [`${BASE}:src/b.ts`]: "b\n" } };
+  const client = fakeClient({ "/p/a.ts": "a\nx\n", "/p/src/b.ts": "b\ny\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(gitCalls(client, "git.diff")).toHaveLength(0);
+  await act(async () => root.render(panel(client, { reveal: { path: "/p/src/b.ts", seq: 1 } })));
+  await flush();
+  expect(gitCalls(client, "git.diff")[0]).toMatchObject({ base: "head" });
+  expect(mode().textContent).toContain("Uncommitted");
+  const current = () => el.querySelector("[data-testid=changed-file][aria-current=true]")?.getAttribute("data-path");
+  expect(current()).toBe("/p/src/b.ts");
+  await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=changed-file][data-path='/p/a.ts']")!.click(), undefined));
+  expect(current()).toBe("/p/a.ts");
+  await act(async () => root.render(panel(client, { reveal: { path: "/p/src/b.ts", seq: 2 } })));
+  await flush();
+  expect(current()).toBe("/p/src/b.ts");
 });

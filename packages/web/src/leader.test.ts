@@ -34,4 +34,5 @@ it("a modifier alone keeps the prefix armed", () => {
 it("prefixCommand maps tmux's keys", () => {
   expect(prefixCommand("N")).toBe("tab.next");
   expect(prefixCommand("0")).toBeUndefined();
+  expect([prefixCommand("%"), prefixCommand('"'), prefixCommand("o")]).toEqual(["split.right", "split.down", "split.next"]);
 });

@@ -1,6 +1,6 @@
 // Settings dialog (docs/spec.md "Settings"): two panes on the ConfigDialog shell, a list of groups on the left and the settings of the
 // selected group on the right (below md: the list first, a group drills in with a Back button). App-wide, daemon-side settings come from
-// SECTIONS, per-browser choices (Notifications, Timeline, Changes, Sidebar, Tabs, Keyboard, Guide) never reach the daemon.
+// SECTIONS, per-browser choices (Notifications, Timeline, Sending, Changes, Sidebar, Tabs, Keyboard, Guide) never reach the daemon.
 // A later setting is one more row in SECTIONS; a later group is one more entry in `groups`.
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Settings, SettingsPatch, SettingsResult } from "@claude-ui/protocol";
@@ -8,7 +8,9 @@ import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { Switch } from "./plugins-dialog.tsx";
+import { saveKeepAwake, useKeepAwakeSetting, wakeLockReason, wakeLockSupported } from "./keep-awake.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TERMINAL_DOCKS, saveTerminalDock, useTerminalDock, type DockArea } from "./layout.ts";
 import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
 import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
 import { AUTO_CLOSE, type AutoClose } from "./tab-cleanup.ts";
@@ -17,6 +19,7 @@ import { USAGE_RINGS, saveUsageRing, useUsageRing, type UsageRing } from "./usag
 import { GuideSection } from "./guide-settings.tsx";
 import { AboutSection } from "./about-settings.tsx";
 import { PerformanceSection } from "./perf-settings.tsx";
+import { SEND_MODES, saveSendMode, useSendMode, type SendMode } from "./send-mode.ts";
 import { saveSignalOnly, useSignalOnly } from "./signal.ts";
 import { IN_APP_EVENT, loadInApp, saveInApp } from "./notify.ts";
 import { useKeymap } from "./keymap.ts";
@@ -86,6 +89,69 @@ function TimelineSection() {
           </span>
         </div>
         <Switch on={on} label="Signal only" held={false} onToggle={saveSignalOnly} title={on ? "Show every tool call" : "Fold tool calls into one line"} describedBy="settings-timeline-signal-hint" testId="settings-signal-only" />
+      </div>
+    </section>
+  );
+}
+
+/** While Claude works, what Enter does: steer the turn or queue the message (per browser). */
+function SendingSection() {
+  const mode = useSendMode();
+  return (
+    <section aria-labelledby="settings-sending" className="flex flex-col" data-testid="settings-sending">
+      <h3 id="settings-sending" className="pb-1 font-medium text-[13px] text-muted-foreground">
+        Sending
+      </h3>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-send-mode-label" className="block text-sm">While Claude works, Enter</span>
+          <span id="settings-send-mode-hint" className="block text-muted-foreground text-xs">Steering adds your message to the running turn; a queued message waits and starts its own turn when Claude is idle. Alt+Enter does the other one. Kept in this browser.</span>
+        </div>
+        <Select value={mode} onValueChange={(v) => v && saveSendMode(v as SendMode)}>
+          <SelectTrigger aria-labelledby="settings-send-mode-label" aria-describedby="settings-send-mode-hint" data-testid="settings-send-mode" className="w-44 max-md:data-[size=default]:h-11">
+            <SelectValue>{(v: SendMode) => SEND_MODES.find((m) => m.value === v)?.label ?? v}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {SEND_MODES.map((m) => (
+              <SelectItem key={m.value} value={m.value} data-testid={`settings-send-mode-${m.value}`}>
+                {m.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </section>
+  );
+}
+
+/** The Keep screen awake rows (GH-361): this browser only; the titlebar button and the palette command change the same setting. */
+function ScreenSection() {
+  const s = useKeepAwakeSetting();
+  const supported = wakeLockSupported();
+  return (
+    <section aria-labelledby="settings-screen" className="flex flex-col" data-testid="settings-screen">
+      <h3 id="settings-screen" className="pb-1 font-medium text-[13px] text-muted-foreground">
+        Screen
+      </h3>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span className="block text-sm">Keep screen awake</span>
+          <span id="settings-awake-hint" className="block text-muted-foreground text-xs">
+            {supported
+              ? "Keeps this device's screen on while this page is visible. The browser lets it sleep when you switch away and it turns back on when you return. Kept in this browser."
+              : `Not available here: ${wakeLockReason()}. The choice is kept and applies when this browser opens the app over HTTPS or localhost.`}
+          </span>
+        </div>
+        <Switch on={s.on} label="Keep screen awake" held={!supported} onToggle={(on) => saveKeepAwake({ ...s, on })} title="Keep screen awake" describedBy="settings-awake-hint" testId="settings-keep-awake" />
+      </div>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span className="block text-sm">Only while a session is running</span>
+          <span id="settings-awake-running-hint" className="block text-muted-foreground text-xs">
+            Holds the screen on only while a session is running or waits for you.
+          </span>
+        </div>
+        <Switch on={s.onlyRunning} label="Only while a session is running" held={!s.on || !supported} onToggle={(onlyRunning) => saveKeepAwake({ ...s, onlyRunning })} title="Only while a session is running" describedBy="settings-awake-running-hint" testId="settings-keep-awake-running" />
       </div>
     </section>
   );
@@ -162,6 +228,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   // The number field's text while typing; committed on Enter or blur.
   const [draft, setDraft] = useState<Record<string, string>>({});
   const diffMode = useDefaultDiffMode();
+  const terminalDock = useTerminalDock();
   const ask = useRef(request);
   ask.current = request;
 
@@ -256,6 +323,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   // One entry per group; a later group (e.g. Notifications) is one more line here.
   const groups: Group[] = [
     { id: "timeline", title: "Timeline", body: <TimelineSection /> },
+    { id: "sending", title: "Sending", body: <SendingSection /> },
     {
       id: "notifications",
       title: "Notifications",
@@ -316,6 +384,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         </section>
       ),
     },
+    { id: "screen", title: "Screen", body: <ScreenSection /> },
     {
       id: "changes",
       title: "Changes",
@@ -372,6 +441,35 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           <SelectContent>
             <SelectItem value="default" data-testid="settings-sidebar-layout-default">Worktree</SelectItem>
             <SelectItem value="classic" data-testid="settings-sidebar-layout-classic">Project</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    </section>
+      ),
+    },
+    {
+      id: "terminal",
+      title: "Terminal",
+      body: (
+    <section aria-labelledby="settings-terminal" className="flex flex-col" data-testid="settings-terminal">
+      <h3 id="settings-terminal" className="pb-1 font-medium text-[13px] text-muted-foreground">
+        Terminal
+      </h3>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-terminal-position-label" className="block text-sm">Terminal position</span>
+          <span id="settings-terminal-position-hint" className="block text-muted-foreground text-xs">Where the terminal opens on wide screens: a tab of the bottom panel, under the session and side panel, or a tab of the side panel. Narrow screens show it as the terminal pane. Kept in this browser.</span>
+        </div>
+        <Select value={terminalDock} onValueChange={(v) => v && saveTerminalDock(v as DockArea)}>
+          <SelectTrigger aria-labelledby="settings-terminal-position-label" aria-describedby="settings-terminal-position-hint" data-testid="settings-terminal-position" className="w-40 max-md:data-[size=default]:h-11">
+            <SelectValue>{(v: DockArea) => TERMINAL_DOCKS.find((d) => d.value === v)?.label ?? v}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {TERMINAL_DOCKS.map((d) => (
+              <SelectItem key={d.value} value={d.value} data-testid={`settings-terminal-position-${d.value}`}>
+                {d.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>

@@ -14,7 +14,10 @@ globalThis.ResizeObserver ??= class {
 Element.prototype.scrollIntoView ??= () => {};
 let width = 1440;
 window.matchMedia = ((query: string) => ({
-  matches: /min-width: (\d+)px/.test(query) ? width >= +/min-width: (\d+)px/.exec(query)![1]! : false,
+  // Live like a real MediaQueryList.
+  get matches() {
+    return /min-width: (\d+)px/.test(query) ? width >= +/min-width: (\d+)px/.exec(query)![1]! : false;
+  },
   media: query,
   addEventListener() {},
   removeEventListener() {},
@@ -43,7 +46,9 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     loadAddon() {}
     open() {}
-    focus() {}
+    focus() {
+      (globalThis as { __termFocused?: number }).__termFocused = ((globalThis as { __termFocused?: number }).__termFocused ?? 0) + 1;
+    }
     write() {}
     reset() {}
     onData() {}
@@ -97,6 +102,7 @@ it("phone: the titlebar keeps the sessions menu, tab switcher with the session n
   const phoneHidden = (id: string) => bar.querySelector(`[data-testid="${id}"]`)!.className.includes("max-sm:hidden");
   expect(phoneHidden("quick-open-button")).toBe(true);
   expect(phoneHidden("theme-toggle")).toBe(true);
+  expect(phoneHidden("keep-awake")).toBe(true);
   for (const id of ["open-drawer", "tab-switcher", "tab-new", "tab-close-active"]) expect(bar.querySelector(`[data-testid="${id}"]`)!.className).not.toContain("max-sm:hidden");
   expect(bar.querySelector('[data-testid="tab-switcher"]')!.textContent).toContain("Demo");
   // The drawer has the same two tools, for sm and up hidden.
@@ -105,6 +111,7 @@ it("phone: the titlebar keeps the sessions menu, tab switcher with the session n
   const tools = el.querySelector('[data-testid="drawer-tools"]')!;
   expect(tools.className).toContain("sm:hidden");
   expect(tools.querySelector('[data-testid="drawer-theme"]')).not.toBeNull();
+  expect(tools.querySelector('[data-testid="drawer-keep-awake"]')).not.toBeNull();
   expect(tools.querySelector('[data-testid="drawer-quick-open"]')).not.toBeNull();
 });
 
@@ -610,11 +617,11 @@ it("1440: the titlebar Toggle side panel button hides and shows the side panel; 
   expect(sidePanel().id).toBe("side-panel");
   await act(async () => (panelBtn() as HTMLElement).click());
   expect(panelBtn().getAttribute("aria-expanded")).toBe("false");
-  expect(sidePanel().className).toContain("lg:hidden");
+  expect(sidePanel().parentElement!.className).toContain("lg:hidden");
   expect(localStorage.getItem("claude-ui.sidePanelHidden")).toBe("1");
   await reload();
   expect(panelBtn().getAttribute("aria-expanded")).toBe("false");
-  expect(sidePanel().className).toContain("lg:hidden");
+  expect(sidePanel().parentElement!.className).toContain("lg:hidden");
   await press({ key: "R", ctrlKey: true, shiftKey: true });
   expect(panelBtn().getAttribute("aria-expanded")).toBe("true");
   localStorage.clear();
@@ -650,10 +657,43 @@ it("the terminal panel stays open across a reload", async () => {
   localStorage.clear();
 });
 
-it("the terminal below the side panel resizes with the arrow keys (100px to 60% of the window) and keeps its height across a reload", async () => {
-  await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
+const rerender = async () => {
+  act(() => root.unmount());
+  root = createRoot(el);
+  await act(async () => root.render(<App />));
+  await act(async () => {});
+};
+const q = (id: string) => el.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+const clickId = (id: string) => act(async () => q(id)!.click());
+
+it("wide screens dock the terminal at the bottom by default, spanning the session and side panel", async () => {
+  await clickId("terminal-toggle");
+  const t = q("terminal-panel")!;
+  expect(t.dataset.dock).toBe("bottom");
+  expect(q("bottom-panel")!.parentElement).toBe(q("work-area"));
+  expect(q("bottom-panel")!.contains(t)).toBe(true);
+  expect(q("bottom-panel")!.querySelector('[data-testid="pane-terminal"]')!.getAttribute("aria-selected")).toBe("true");
+  expect(t.closest("main")).toBeNull();
+  expect(q("work-area")!.querySelector('[data-testid="side-panel"]')).not.toBeNull();
+  expect(q("work-area")!.contains(q("sidebar"))).toBe(false);
+});
+
+it("the titlebar terminal button opens and hides the terminal, pressed while shown", async () => {
+  const b = () => q("terminal-toggle-titlebar")!;
+  expect(b().getAttribute("aria-pressed")).toBe("false");
+  expect(b().className).toContain("max-lg:hidden");
+  expect(b().getAttribute("aria-label")).toBe("Toggle terminal (Ctrl+`)");
+  await clickId("terminal-toggle-titlebar");
+  expect(b().getAttribute("aria-pressed")).toBe("true");
+  expect(q("terminal-panel")).not.toBeNull();
+  await clickId("terminal-toggle-titlebar");
+  expect(b().getAttribute("aria-pressed")).toBe("false");
+  expect(q("terminal-panel")).toBeNull();
+});
+
+it("the bottom terminal resizes with the arrow keys (100px to 60%) and keeps its height across a reload", async () => {
+  await clickId("terminal-toggle");
   const handle = () => el.querySelector<HTMLElement>('[role="separator"][aria-label="Resize terminal"]')!;
-  expect(handle().getAttribute("aria-orientation")).toBe("horizontal");
   expect(handle().getAttribute("aria-valuenow")).toBe("280");
   await press({ key: "ArrowUp" }, handle());
   expect(handle().getAttribute("aria-valuenow")).toBe("312");
@@ -662,14 +702,470 @@ it("the terminal below the side panel resizes with the arrow keys (100px to 60% 
   for (let i = 0; i < 30; i++) await press({ key: "ArrowDown" }, handle());
   expect(handle().getAttribute("aria-valuenow")).toBe("100");
   await press({ key: "ArrowUp" }, handle());
-  act(() => root.unmount());
-  root = createRoot(el);
-  await act(async () => root.render(<App />));
-  await act(async () => {});
+  await rerender();
   expect(handle().getAttribute("aria-valuenow")).toBe("132");
-  expect(el.querySelector<HTMLElement>('[data-testid="terminal-panel"]')!.parentElement!.style.getPropertyValue("--terminal-h")).toBe("132px");
-  await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
-  localStorage.clear();
+  expect(q("work-area")!.style.getPropertyValue("--terminal-h")).toBe("132px");
+});
+
+const menuItem = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+const layoutKey = () => JSON.parse(localStorage.getItem("claude-ui.layout") ?? "null") as { side: string; areas: { side: string[]; bottom: string[] } } | null;
+
+it("the terminal moves between bottom and side panel from the area menu, kept across a reload", async () => {
+  await clickId("terminal-toggle");
+  await clickId("dock-menu-bottom");
+  expect(menuItem("dock-move").textContent).toBe("Move Terminal to side panel");
+  await act(async () => menuItem("dock-move").click());
+  expect(q("terminal-panel")!.dataset.dock).toBe("side");
+  expect(q("side-panel")!.contains(q("terminal-panel"))).toBe(true);
+  expect(q("side-panel")!.querySelector('[data-testid="pane-terminal"]')!.getAttribute("aria-selected")).toBe("true");
+  expect(q("bottom-panel")).toBeNull();
+  expect(layoutKey()!.areas.side).toContain("terminal");
+  await rerender();
+  // The layout is kept; which pane shows is per page and tab (Files), so pick the terminal again.
+  expect(q("side-panel")!.querySelector('[data-testid="pane-terminal"]')).not.toBeNull();
+  await clickId("pane-terminal");
+  expect(q("terminal-panel")!.dataset.dock).toBe("side");
+  await clickId("dock-menu-side");
+  expect(menuItem("dock-move").textContent).toBe("Move Terminal to bottom panel");
+  await act(async () => menuItem("dock-move").click());
+  expect(q("terminal-panel")!.dataset.dock).toBe("bottom");
+  expect(localStorage.getItem("claude-ui.layout")).toBeNull();
+});
+
+it("maximize hides the session view and side panel; restore and hide give them back", async () => {
+  await clickId("terminal-toggle");
+  const main = () => el.querySelector("main")!;
+  await clickId("dock-maximize");
+  expect(main().className).toContain("hidden");
+  expect(el.querySelector('[aria-label="Resize terminal"]')).toBeNull();
+  expect(q("bottom-panel")!.className).toContain("flex-1");
+  expect(q("dock-maximize")!.getAttribute("aria-label")).toBe("Restore panel");
+  await clickId("dock-maximize");
+  expect(main().className).not.toMatch(/(^| )hidden( |$)/);
+  expect(el.querySelector('[aria-label="Resize terminal"]')).not.toBeNull();
+  await clickId("dock-maximize");
+  await clickId("dock-hide");
+  expect(q("terminal-panel")).toBeNull();
+  expect(main().className).not.toMatch(/(^| )hidden( |$)/);
+  expect(q("terminal-toggle")!.getAttribute("aria-pressed")).toBe("false");
+});
+
+const mainHidden = () => /(^| )hidden( |$)/.test(el.querySelector("main")!.className);
+
+it("a maximized terminal restores for Focus prompt, the side panel toggle and the show-pane commands", async () => {
+  await clickId("terminal-toggle");
+  for (const key of [{ key: "l", code: "KeyL", ctrlKey: true }, { key: "r", code: "KeyR", ctrlKey: true, shiftKey: true }]) {
+    await clickId("dock-maximize");
+    expect(mainHidden()).toBe(true);
+    await press(key);
+    expect(mainHidden()).toBe(false);
+    expect(q("dock-maximize")!.getAttribute("aria-label")).toBe("Maximize panel");
+  }
+});
+
+it("a maximized terminal restores when the shown session asks for permission", async () => {
+  await clickId("terminal-toggle");
+  await clickId("dock-maximize");
+  expect(mainHidden()).toBe(true);
+  await act(async () =>
+    emit({ type: "event", sessionId: ID, seq: 1, part: { type: "permission_request", id: "p1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "touch x" }, suggestions: [], settled: false } }),
+  );
+  expect(mainHidden()).toBe(false);
+});
+
+it("hiding the side panel keeps the bottom terminal", async () => {
+  await clickId("terminal-toggle");
+  await clickId("panel-toggle");
+  expect(q("side-panel")!.parentElement!.className).toContain("lg:hidden");
+  expect(q("terminal-panel")!.dataset.dock).toBe("bottom");
+  expect(el.querySelector('[aria-label="Resize side panel"]')).toBeNull();
+});
+
+it("narrow screens keep the terminal pane whatever the position", async () => {
+  width = 800;
+  await rerender();
+  await clickId("pane-terminal");
+  const t = q("terminal-panel")!;
+  expect(t.dataset.dock).toBe("side");
+  expect(q("side-panel")!.contains(t)).toBe(true);
+  expect(q("bottom-panel")).toBeNull();
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+  await rerender();
+  await clickId("pane-terminal");
+  expect(q("side-panel")!.contains(q("terminal-panel"))).toBe(true);
+  expect(q("bottom-panel")).toBeNull();
+});
+
+const moveFromMenu = async (area: "side" | "bottom") => {
+  await clickId(`dock-menu-${area}`);
+  await act(async () => menuItem("dock-move").click());
+};
+const paneTab = (area: string, p: string) => q(area)!.querySelector<HTMLElement>(`[data-pane-tab="${p}"]`);
+
+it("the side panel docks left from its menu: DOM order side, resizer, session; kept across a reload; Reset layout restores right", async () => {
+  const side = () => q("side-panel")!.parentElement!;
+  const resizer = () => el.querySelector<HTMLElement>('[role="separator"][aria-label="Resize side panel"]')!;
+  const session = () => el.querySelector("main > div.bg-card.flex-1")!;
+  expect(q("dock-side-flip")).toBeNull();
+  await clickId("dock-menu-side");
+  expect(menuItem("dock-side-flip").textContent).toBe("Move side panel to left");
+  await act(async () => menuItem("dock-side-flip").click());
+  expect(layoutKey()!.side).toBe("left");
+  const follows = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(follows(side(), resizer())).toBe(true);
+  expect(follows(resizer(), session())).toBe(true);
+  expect(q("panel-toggle")!.querySelector("svg")!.getAttribute("class")).toContain("panel-left");
+  // Arrow keys grow the panel to the right when it is on the left.
+  const w = () => +resizer().getAttribute("aria-valuenow")!;
+  const before = w();
+  await press({ key: "ArrowRight" }, resizer());
+  expect(w()).toBe(before + 32);
+  await rerender();
+  expect(follows(side(), session())).toBe(true);
+  await clickId("dock-menu-side");
+  expect(menuItem("dock-side-flip").textContent).toBe("Move side panel to right");
+  await act(async () => menuItem("dock-reset").click());
+  expect(localStorage.getItem("claude-ui.layout")).toBeNull();
+  expect(follows(session(), side())).toBe(true);
+  expect(q("panel-toggle")!.querySelector("svg")!.getAttribute("class")).toContain("panel-right");
+});
+
+it("moving Files to the bottom keeps its content mounted (same host and child nodes)", async () => {
+  const host = () => el.querySelector<HTMLElement>('[data-pane-host="files"]')!;
+  const h = host();
+  const child = h.firstElementChild;
+  expect(q("side-panel")!.contains(h)).toBe(true);
+  await clickId("pane-files");
+  await moveFromMenu("side");
+  expect(host()).toBe(h);
+  expect(h.firstElementChild).toBe(child);
+  expect(q("bottom-panel")!.contains(h)).toBe(true);
+  expect(paneTab("bottom-panel", "files")!.getAttribute("aria-selected")).toBe("true");
+  expect(paneTab("bottom-panel", "terminal")).not.toBeNull();
+  expect(layoutKey()!.areas.bottom).toEqual(["terminal", "files"]);
+});
+
+it("an area without panes is hidden: terminal to the side hides the bottom, all side panes to the bottom hide the side", async () => {
+  await clickId("terminal-toggle");
+  await moveFromMenu("bottom");
+  expect(q("bottom-panel")).toBeNull();
+  await clickId("dock-menu-side");
+  await act(async () => menuItem("dock-move").click()); // terminal back
+  expect(q("bottom-panel")).not.toBeNull();
+  for (const p of ["changes", "files", "graph"]) {
+    const tab = paneTab("side-panel", p);
+    if (!tab) continue;
+    await act(async () => tab.click());
+    await moveFromMenu("side");
+  }
+  expect(q("side-panel")!.parentElement!.className).toContain("lg:hidden");
+  expect(el.querySelector('[aria-label="Resize side panel"]')).toBeNull();
+});
+
+it("each session tab remembers its pane per area", async () => {
+  await clickId("terminal-toggle");
+  await clickId("pane-terminal"); // tab = bottom's terminal
+  await clickId("pane-changes");
+  expect(paneTab("side-panel", "changes")!.getAttribute("aria-selected")).toBe("true");
+  expect(paneTab("bottom-panel", "terminal")!.getAttribute("aria-selected")).toBe("true");
+});
+
+it("shortcuts follow the panes: Ctrl+` shows the terminal in the side panel, Ctrl+Shift+G changes in the bottom, Ctrl+Shift+R toggles the side panel", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "left", areas: { side: ["files", "graph", "terminal"], bottom: ["changes"] } }));
+  await rerender();
+  await press({ key: "`", ctrlKey: true });
+  expect(q("side-panel")!.contains(q("terminal-panel"))).toBe(true);
+  expect(q("terminal-toggle-titlebar")!.getAttribute("aria-pressed")).toBe("true");
+  await press({ key: "`", ctrlKey: true });
+  expect(q("terminal-panel")).toBeNull();
+  expect(q("side-panel")!.parentElement!.className).toContain("lg:hidden");
+  await press({ key: "G", ctrlKey: true, shiftKey: true });
+  expect(q("bottom-panel")).not.toBeNull();
+  expect(paneTab("bottom-panel", "changes")!.getAttribute("aria-selected")).toBe("true");
+  await press({ key: "R", ctrlKey: true, shiftKey: true });
+  expect(q("side-panel")!.parentElement!.className).not.toContain("lg:hidden");
+  await press({ key: "\\", ctrlKey: true });
+  expect(q("side-panel")!.parentElement!.className).not.toContain("lg:hidden");
+});
+
+it("Reset layout from the palette restores the default", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "left", areas: { side: ["changes", "files"], bottom: ["graph", "terminal"] } }));
+  await rerender();
+  await press({ key: "k", code: "KeyK", ctrlKey: true });
+  const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Reset layout"))!;
+  await act(async () => row.click());
+  expect(localStorage.getItem("claude-ui.layout")).toBeNull();
+});
+
+it("a pane's context menu moves it and focus lands on its tab in the new area", async () => {
+  const tab = paneTab("side-panel", "changes")!;
+  await act(async () => void tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+  expect(menuItem("pane-move").textContent).toBe("Move to bottom panel");
+  await act(async () => menuItem("pane-move").click());
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(q("bottom-panel")!.contains(paneTab("bottom-panel", "changes"))).toBe(true);
+  expect(document.activeElement).toBe(paneTab("bottom-panel", "changes"));
+});
+
+const dnd = (target: Element | null, type: string, data: Map<string, string>, types = ["application/x-claude-ui-pane"]) => {
+  const e = new Event(type, { bubbles: true, cancelable: true });
+  Object.assign(e, { dataTransfer: { setData: (k: string, v: string) => data.set(k, v), getData: (k: string) => data.get(k) ?? "", types, dropEffect: "", effectAllowed: "" } });
+  return act(async () => void target!.dispatchEvent(e));
+};
+
+it("dragging a pane tab outlines the areas, shows the bottom drop strip when hidden; drop moves; dragend (Esc) changes nothing", async () => {
+  const data = new Map<string, string>();
+  expect(q("bottom-panel")).toBeNull();
+  await dnd(paneTab("side-panel", "files"), "dragstart", data);
+  expect(q("side-panel")!.className).toContain("outline-dashed");
+  expect(q("drop-bottom")!.textContent).toBe("Bottom panel");
+  // Esc: the browser fires dragend without drop.
+  await dnd(paneTab("side-panel", "files"), "dragend", data);
+  expect(q("drop-bottom")).toBeNull();
+  expect(q("side-panel")!.className).not.toContain("outline");
+  expect(localStorage.getItem("claude-ui.layout")).toBeNull();
+  await dnd(paneTab("side-panel", "files"), "dragstart", data);
+  await dnd(q("drop-bottom"), "dragover", data);
+  expect(q("drop-bottom")!.className).toContain("border-primary bg-primary/5");
+  await dnd(q("drop-bottom"), "drop", data);
+  expect(q("bottom-panel")!.contains(paneTab("bottom-panel", "files"))).toBe(true);
+  expect(paneTab("bottom-panel", "files")!.getAttribute("aria-selected")).toBe("true");
+  expect(layoutKey()!.areas.bottom).toEqual(["terminal", "files"]);
+  // Drop on a tab inserts before it.
+  await dnd(paneTab("bottom-panel", "files"), "dragstart", data);
+  await dnd(paneTab("bottom-panel", "terminal"), "drop", data);
+  expect(layoutKey()!.areas.bottom).toEqual(["files", "terminal"]);
+});
+
+it("dropping a pane on the area body appends it; a session tab drag is not a target", async () => {
+  await clickId("terminal-toggle");
+  const data = new Map<string, string>();
+  await dnd(paneTab("bottom-panel", "terminal"), "dragstart", data);
+  await dnd(q("side-panel"), "dragover", data);
+  expect(q("side-panel")!.className).toContain("outline-primary");
+  await dnd(q("side-panel"), "drop", data);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "terminal"]);
+  const other = new Map<string, string>();
+  await dnd(q("side-panel"), "dragover", other, ["application/x-claude-ui-tab"]);
+  expect(q("side-panel")!.className).not.toContain("outline-primary");
+});
+
+it("dropping a pane on an area's content (inside a pane host) moves it and fills the area", async () => {
+  await clickId("terminal-toggle");
+  const data = new Map<string, string>();
+  await dnd(paneTab("bottom-panel", "terminal"), "dragstart", data);
+  // The pane content is portaled: its React events do not reach the section, so the section listens natively.
+  const body = q("side-panel")!.querySelector('[data-pane-host="files"]')!.firstElementChild!;
+  await dnd(body, "dragover", data);
+  expect(q("side-panel")!.className).toContain("outline-primary");
+  expect(q("side-panel")!.hasAttribute("data-drop-target")).toBe(true);
+  await dnd(body, "drop", data);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "terminal"]);
+});
+
+/** Terminal in the side panel, Files in a maximized bottom panel: the side panel is hidden behind the maximize. */
+const maximizedBottomWithSideTerminal = async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["graph", "terminal"], bottom: ["files", "changes"] } }));
+  await rerender();
+  await press({ key: "E", ctrlKey: true, shiftKey: true }); // shows Files: opens the bottom panel
+  await clickId("dock-maximize");
+  expect(mainHidden()).toBe(true);
+};
+
+it("Ctrl+` with the terminal in the side panel restores a maximized bottom panel", async () => {
+  await maximizedBottomWithSideTerminal();
+  await press({ key: "`", ctrlKey: true });
+  expect(mainHidden()).toBe(false);
+  expect(q("side-panel")!.contains(q("terminal-panel"))).toBe(true);
+});
+
+it("New terminal with the terminal in the side panel restores a maximized bottom panel, even when the terminal was the shown side pane", async () => {
+  await maximizedBottomWithSideTerminal();
+  await press({ key: "`", ctrlKey: true });
+  await clickId("dock-maximize");
+  expect(mainHidden()).toBe(true);
+  await press({ key: "`", ctrlKey: true, shiftKey: true });
+  expect(mainHidden()).toBe(false);
+});
+
+it("moving a pane from a maximized bottom panel to the side panel restores it", async () => {
+  await maximizedBottomWithSideTerminal();
+  await clickId("dock-menu-bottom");
+  expect(menuItem("dock-move").textContent).toBe("Move Files to side panel");
+  await act(async () => menuItem("dock-move").click());
+  expect(mainHidden()).toBe(false);
+  expect(q("side-panel")!.contains(paneTab("side-panel", "files"))).toBe(true);
+});
+
+it("reordering tabs inside a maximized bottom panel keeps it maximized", async () => {
+  await maximizedBottomWithSideTerminal();
+  const data = new Map<string, string>();
+  await dnd(paneTab("bottom-panel", "changes"), "dragstart", data);
+  await dnd(paneTab("bottom-panel", "files"), "drop", data);
+  expect(layoutKey()!.areas.bottom).toEqual(["changes", "files"]);
+  expect(mainHidden()).toBe(true);
+});
+
+it("Ctrl+` with the terminal shown behind a maximized bottom panel restores it and focuses the shell", async () => {
+  await maximizedBottomWithSideTerminal();
+  await press({ key: "`", ctrlKey: true }); // terminal now the shown side pane
+  await clickId("dock-maximize");
+  q("dock-maximize")!.focus();
+  const g = globalThis as { __termFocused?: number };
+  const before = g.__termFocused ?? 0;
+  await press({ key: "`", ctrlKey: true });
+  expect(mainHidden()).toBe(false);
+  await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+});
+
+it("moving a pane from its tab's context menu opened from the keyboard (Shift+F10, Enter) leaves the focus on the moved tab", async () => {
+  const tab = paneTab("side-panel", "changes")!;
+  tab.focus();
+  await act(async () => void tab.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
+  await act(async () => void tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 0, clientY: 0 })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(menuItem("pane-move")));
+  await act(async () => void menuItem("pane-move").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  await vi.waitFor(() => expect(q("bottom-panel")!.contains(paneTab("bottom-panel", "changes"))).toBe(true));
+  await vi.waitFor(() => expect(document.activeElement).toBe(paneTab("bottom-panel", "changes")), { timeout: 2000 });
+});
+
+it("moving the last pane of the bottom panel from its ⋯ menu puts the focus on the moved tab, not on the prompt box", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "graph", "terminal"], bottom: ["files"] } }));
+  await rerender();
+  // The prompt box had the focus before: the menu's own focus return would fall back to it once the area unmounts.
+  await press({ key: "E", ctrlKey: true, shiftKey: true });
+  promptBox().focus();
+  await clickId("dock-menu-bottom");
+  expect(menuItem("dock-move").textContent).toBe("Move Files to side panel");
+  await act(async () => menuItem("dock-move").click());
+  await act(async () => new Promise((r) => setTimeout(r, 100)));
+  expect(q("bottom-panel")).toBeNull();
+  expect(document.activeElement).toBe(paneTab("side-panel", "files"));
+});
+
+it("moving a pane away from a terminal that then shows (or moving the terminal) keeps the focus on the moved tab, not the shell", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+  await rerender();
+  await press({ key: "`", ctrlKey: true });
+  await clickId("pane-files"); // the terminal stays mounted, hidden
+  const g = globalThis as { __termFocused?: number };
+  const before = g.__termFocused ?? 0;
+  const tab = paneTab("side-panel", "files")!;
+  await act(async () => void tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+  await act(async () => menuItem("pane-move").click());
+  await act(async () => new Promise((r) => setTimeout(r, 300)));
+  expect(q("terminal-panel")!.className).not.toContain("hidden");
+  expect(document.activeElement).toBe(paneTab("bottom-panel", "files"));
+  expect(g.__termFocused ?? 0).toBe(before);
+  // The terminal itself moved: it shows in the bottom panel, its tab keeps the focus.
+  const t = paneTab("side-panel", "terminal")!;
+  await act(async () => void t.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+  await act(async () => menuItem("pane-move").click());
+  await act(async () => new Promise((r) => setTimeout(r, 300)));
+  expect(q("bottom-panel")!.contains(q("terminal-panel"))).toBe(true);
+  expect(document.activeElement).toBe(paneTab("bottom-panel", "terminal"));
+  expect(g.__termFocused ?? 0).toBe(before);
+  // Revealing it on purpose still focuses the shell (no key or pointer press before: the move's quiet is still on).
+  await act(async () => paneTab("bottom-panel", "files")!.click());
+  await act(async () => paneTab("bottom-panel", "terminal")!.click());
+  await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+});
+
+it("a click on the terminal's pane tab, the selected one too, focuses the shell (GH-374)", async () => {
+  await clickId("terminal-toggle");
+  const g = globalThis as { __termFocused?: number };
+  const tab = paneTab("bottom-panel", "terminal")!;
+  expect(tab.getAttribute("aria-selected")).toBe("true");
+  tab.focus();
+  const before = g.__termFocused ?? 0;
+  await act(async () => tab.click());
+  await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+});
+
+it("narrow screens: a click on the selected terminal pane tab focuses the shell too (GH-374)", async () => {
+  width = 800;
+  await rerender();
+  const g = globalThis as { __termFocused?: number };
+  const start = g.__termFocused ?? 0;
+  await clickId("pane-terminal");
+  // The first reveal's own shell focus lands first, then the count settles.
+  await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(start));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  expect(q("pane-terminal")!.getAttribute("aria-selected")).toBe("true");
+  const before = g.__termFocused ?? 0;
+  await clickId("pane-terminal");
+  await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+});
+
+it("a kept-mounted terminal revealed by Ctrl+`, New terminal or its pane tab takes the shell focus; a move before does not keep it quiet", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+  await rerender();
+  await press({ key: "`", ctrlKey: true });
+  const g = globalThis as { __termFocused?: number };
+  // A move first: the terminal stays quiet only until the user's next input.
+  await act(async () => paneTab("side-panel", "changes")!.click());
+  const t = paneTab("side-panel", "changes")!;
+  await act(async () => void t.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+  await act(async () => menuItem("pane-move").click());
+  const panel = q("terminal-panel")!;
+  for (const reveal of [() => press({ key: "`", ctrlKey: true }), () => press({ key: "`", ctrlKey: true, shiftKey: true }), () => act(async () => paneTab("side-panel", "terminal")!.click())]) {
+    await act(async () => paneTab("side-panel", "files")!.click());
+    expect(panel.className).toContain("hidden");
+    const before = g.__termFocused ?? 0;
+    await reveal();
+    expect(q("terminal-panel")).toBe(panel);
+    expect(panel.className).not.toContain("hidden");
+    await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+  }
+});
+
+it("after a move the focus is not taken back: a button focused right after keeps it", async () => {
+  await clickId("terminal-toggle");
+  const tab = paneTab("side-panel", "changes")!;
+  tab.focus();
+  await act(async () => void tab.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
+  await act(async () => void tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 0, clientY: 0 })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(menuItem("pane-move")));
+  await act(async () => void menuItem("pane-move").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(paneTab("bottom-panel", "changes")));
+  // The user tabs on at once (Tab from the moved tab reaches the bottom panel's buttons).
+  q("dock-maximize")!.focus();
+  await act(async () => new Promise((r) => setTimeout(r, 600)));
+  expect(document.activeElement).toBe(q("dock-maximize"));
+});
+
+it("with no pane in the side panel the toggle is disabled with the reason, and Ctrl+Shift+R does nothing", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: [], bottom: ["changes", "files", "graph", "terminal"] } }));
+  await rerender();
+  const b = q("panel-toggle")!;
+  expect(b.getAttribute("aria-label")).toBe("No panes in the side panel");
+  expect(b.getAttribute("aria-disabled")).toBe("true");
+  expect(b.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => b.click());
+  await press({ key: "R", ctrlKey: true, shiftKey: true });
+  expect(q("panel-toggle")!.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("the terminal stays mounted while another pane of its area is selected", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+  await rerender();
+  await press({ key: "`", ctrlKey: true });
+  const t = q("terminal-panel")!;
+  await clickId("pane-files");
+  expect(q("terminal-panel")).toBe(t);
+  expect(t.className).toContain("hidden");
+  await clickId("pane-terminal");
+  expect(q("terminal-panel")).toBe(t);
+  expect(t.className).not.toContain("hidden");
+  // Hiding the area unmounts it as before.
+  await press({ key: "`", ctrlKey: true });
+  expect(q("terminal-panel")).toBeNull();
+});
+
+it("Hide bottom panel is not the terminal's command (no Ctrl+` tip)", async () => {
+  await clickId("terminal-toggle");
+  expect(q("dock-hide")!.hasAttribute("data-command")).toBe(false);
+  expect(q("dock-hide")!.getAttribute("aria-label")).toBe("Hide bottom panel");
 });
 
 it("the sessions sidebar resizes with the arrow keys (200px to half the window) and keeps its width across a reload", async () => {
@@ -1108,6 +1604,35 @@ describe("worktrees", () => {
       await act(async () => trash().click());
       await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-worktree-confirm"]')!.click());
       expect(sent.slice(from).filter((m) => m.type === "worktree.remove")).toEqual([{ type: "worktree.remove", cwd: "/p/demo", path: managed }]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Trash on a worktree whose status is blocked shows the reason, no confirmation", async () => {
+    const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] } };
+    const restore = await remount({ "session.list": listed, "worktree.status": { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "worktree-x", branchMerged: false, running: 1, safety: "blocked", blocked: "sessions_running" } });
+    try {
+      await act(async () => el.querySelector<HTMLElement>('[data-testid="worktree-remove"]')!.click());
+      expect(document.querySelector('[data-testid="remove-worktree-dialog"]')).toBeNull();
+      expect(el.textContent).toContain("Worktree worktree-x cannot be removed: A session there is running or needs input");
+    } finally {
+      restore();
+    }
+  });
+
+  it("palette Clean up worktrees and workers… opens the Clean up dialog for all projects", async () => {
+    const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] } };
+    const restore = await remount({ "session.list": listed, "worktree.status": { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "worktree-x", branchMerged: false, running: 0, safety: "safe" } });
+    const from = sent.length;
+    try {
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      await act(async () => paletteRow("Clean up worktrees and workers…")!.click());
+      await act(async () => {});
+      const d = document.querySelector('[data-testid="cleanup-dialog"]')!;
+      expect(d.textContent).toContain("All projects");
+      expect(sent.slice(from).filter((m) => m.type === "worktree.status")).toEqual([{ type: "worktree.status", cwd: "/p/demo", path: managed }]);
+      expect(d.textContent).toContain("Remove 1");
     } finally {
       restore();
     }
@@ -1570,6 +2095,594 @@ describe("GH-359 tab menu commands", () => {
     const again = await menu(ID);
     await again("Copy session ID");
     expect(toast()?.textContent).toContain("Copy failed");
+  });
+});
+
+describe("GH-358 sidebar menus", () => {
+  const DAY = 86_400_000;
+  const W1 = "aaaaaaaa-2222-3333-4444-555555555555";
+  const W2 = "bbbbbbbb-2222-3333-4444-555555555555";
+  const O1 = "cccccccc-2222-3333-4444-555555555555";
+  const O2 = "dddddddd-2222-3333-4444-555555555555";
+  const main = { path: "/p/demo", branch: "main", main: true };
+  const managed = "/p/demo/.claude/worktrees/x";
+  const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  const ctx = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  const rowOf = (id: string) => el.querySelector(`[data-session-id="${id}"]`)!;
+  const tid = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+  const click = (id: string) => act(async () => tid(id).click());
+  const flush = () => act(async () => {});
+  const coord = { ...session, coordinator: true as const };
+  const worker = (id: string, name: string, o: Partial<SessionListItem> = {}): SessionListItem => ({ ...session, id, title: name, workerName: name, coordinatorId: ID, lastActivity: Date.now() - DAY, ...o });
+  const saved = { list: replies["session.list"] };
+  afterEach(() => {
+    replies["session.list"] = saved.list;
+    delete replies["worker.close"];
+    delete replies["worker.remove"];
+    delete replies["worktree.status"];
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+  });
+  const mount = async (sessions: SessionListItem[], worktrees: Record<string, unknown[]> = {}) => {
+    replies["session.list"] = { sessions, projects: ["/p/demo"], worktrees };
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await flush();
+  };
+  const bodies = (type: string, from: number) => sent.slice(from).filter((m) => m.type === type);
+
+  it("Copy session ID from the sidebar writes the clipboard and toasts; without a clipboard the toast says why", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    await ctx(rowOf(ID));
+    await click("action-copy-id");
+    expect(writeText).toHaveBeenCalledWith(ID);
+    expect(toast()?.textContent).toBe("Copied session ID");
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    await ctx(rowOf(ID));
+    await click("action-copy-id");
+    expect(toast()?.textContent).toContain("Copy failed");
+  });
+
+  it("Close tab from the sidebar menu closes the tab; the session stays listed", async () => {
+    await ctx(rowOf(ID));
+    expect(tid("action-close-tab")).not.toBeNull();
+    await click("action-close-tab");
+    expect(el.querySelector(`[data-tab-id="${ID}"]`)).toBeNull();
+    expect(rowOf(ID)).not.toBeNull();
+    await ctx(rowOf(ID));
+    expect(document.querySelector('[data-testid="action-close-tab"]')).toBeNull();
+  });
+
+  it("Close finished workers sends one worker.close per idle worker, no dialog, then toasts", async () => {
+    await mount([coord, worker(W1, "one"), worker(W2, "two", { live: false })]);
+    const from = sent.length;
+    await ctx(el.querySelector('[data-testid="worker-group-toggle"]')!);
+    await click("workers-menu-close-finished");
+    expect(bodies("worker.close", from)).toEqual([{ type: "worker.close", sessionId: W1 }]);
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(toast()?.textContent).toBe("Closed 1 worker");
+  });
+
+  it("Remove closed workers confirms with the count and names, then one worker.remove each; a failure shows '1 of 2 …'", async () => {
+    await mount([coord, worker(W1, "one", { live: false }), worker(W2, "two", { live: false })]);
+    replies["worker.remove"] = (m: { sessionId: string }) => (m.sessionId === W2 ? Promise.reject(new Error("The worker is running or waiting for input: close it first")) : {});
+    const from = sent.length;
+    await ctx(rowOf(ID));
+    await click("action-remove-closed");
+    const dialog = tid("remove-workers-dialog");
+    expect(dialog.textContent).toContain("Remove 2 closed workers?");
+    expect(dialog.textContent).toContain("one, two");
+    expect(bodies("worker.remove", from)).toEqual([]);
+    await click("remove-workers-confirm");
+    await flush();
+    expect(bodies("worker.remove", from).map((m) => (m as unknown as { sessionId: string }).sessionId).sort()).toEqual([W1, W2]);
+    expect(el.textContent).toContain("1 of 2 workers removed: The worker is running or waiting for input: close it first");
+  });
+
+  it("Close worker from the row sends worker.close", async () => {
+    await mount([coord, worker(W1, "one")]);
+    const from = sent.length;
+    await ctx(rowOf(W1));
+    await click("action-close-worker");
+    expect(bodies("worker.close", from)).toEqual([{ type: "worker.close", sessionId: W1 }]);
+  });
+
+  it("Remove worker asks first and sends worker.remove; the worktree option is absent for a worker in a plain folder", async () => {
+    await mount([coord, worker(W1, "one", { live: false })]);
+    const from = sent.length;
+    await ctx(rowOf(W1));
+    await click("action-remove-worker");
+    expect(tid("remove-worker-dialog").textContent).toContain("Remove worker one?");
+    expect(document.querySelector('[data-testid="remove-worker-worktree"]')).toBeNull();
+    await click("remove-worker-confirm");
+    await flush();
+    expect(bodies("worker.remove", from)).toEqual([{ type: "worker.remove", sessionId: W1 }]);
+    expect(bodies("worktree.remove", from)).toEqual([]);
+    expect(toast()?.textContent).toBe("Removed worker one");
+  });
+
+  it("Remove worker with 'Also remove worktree' ticked fetches the worktree status on open, then removes the worker and the worktree", async () => {
+    replies["worktree.status"] = { uncommitted: 1, commits: 0, branch: "worktree-x" };
+    await mount([coord, worker(W1, "one", { live: false, cwd: managed }), { ...session, id: O1, title: "Other", cwd: managed }], { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] });
+    const from = sent.length;
+    await ctx(rowOf(W1));
+    await click("action-remove-worker");
+    await flush();
+    expect(bodies("worktree.status", from)).toEqual([{ type: "worktree.status", cwd: "/p/demo", path: managed }]);
+    expect(tid("remove-worker-worktree").textContent ?? "").toBe("");
+    expect(tid("remove-worker-dialog").textContent).toContain("Also remove worktree worktree-x");
+    expect(tid("remove-worker-worktree-text").textContent).toContain("1 uncommitted file");
+    expect(tid("remove-worker-worktree-text").textContent).toContain("1 other session there; their transcripts stay.");
+    await act(async () => tid("remove-worker-worktree").click());
+    await click("remove-worker-confirm");
+    await flush();
+    expect(bodies("worker.remove", from)).toEqual([{ type: "worker.remove", sessionId: W1 }]);
+    expect(bodies("worktree.remove", from)).toEqual([{ type: "worktree.remove", cwd: "/p/demo", path: managed }]);
+  });
+
+  it("unticked, Remove worker leaves the worktree alone", async () => {
+    replies["worktree.status"] = { uncommitted: 0, commits: 0, branch: "worktree-x" };
+    await mount([coord, worker(W1, "one", { live: false, cwd: managed })], { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] });
+    const from = sent.length;
+    await ctx(rowOf(W1));
+    await click("action-remove-worker");
+    await flush();
+    await click("remove-worker-confirm");
+    await flush();
+    expect(bodies("worker.remove", from)).toHaveLength(1);
+    expect(bodies("worktree.remove", from)).toEqual([]);
+  });
+
+  it("Archive idle sessions confirms with the count, archives each at once, and a failure refreshes with the error", async () => {
+    const old = (id: string, title: string, days: number): SessionListItem => ({ ...session, id, title, lastActivity: Date.now() - days * DAY });
+    await mount([old(O1, "Old one", 40), old(O2, "Old two", 20), { ...session, lastActivity: Date.now() }]);
+    replies["session.archive"] = (m: { sessionId: string }) => (m.sessionId === O2 ? Promise.reject(new Error("no transcript")) : {});
+    const from = sent.length;
+    await ctx(el.querySelector('[data-testid="group-toggle"]')!);
+    expect(tid("group-menu-archive-7").textContent).toBe("7 days (2)…");
+    await click("group-menu-archive-7");
+    expect(tid("archive-idle-dialog").textContent).toContain("Archive 2 sessions?");
+    expect(tid("archive-idle-dialog").textContent).toContain("idle for more than 7 days");
+    expect(bodies("session.archive", from)).toEqual([]);
+    await click("archive-idle-confirm");
+    await flush();
+    expect(bodies("session.archive", from).map((m) => (m as unknown as { sessionId: string; archived: boolean }).archived)).toEqual([true, true]);
+    expect(el.textContent).toContain("1 of 2 sessions archived: no transcript");
+    delete replies["session.archive"];
+  });
+
+  it("Archive idle sessions drops the rows from the list at once and toasts", async () => {
+    const old = (id: string, title: string, days: number): SessionListItem => ({ ...session, id, title, lastActivity: Date.now() - days * DAY });
+    await mount([old(O1, "Old one", 40), { ...session, lastActivity: Date.now() }]);
+    await ctx(el.querySelector('[data-testid="group-toggle"]')!);
+    await click("group-menu-archive-30");
+    await click("archive-idle-confirm");
+    await flush();
+    expect(rowOf(O1)).toBeNull();
+    expect(toast()?.textContent).toBe("Archived 1 session");
+  });
+
+  it("Rename from the row context menu opens the title editor with the title selected and keeps it: Enter saves, Escape cancels", async () => {
+    const input = () => el.querySelector<HTMLInputElement>('[data-testid="rename-input"]');
+    await ctx(rowOf(ID));
+    await click("action-rename");
+    await new Promise((r) => setTimeout(r, 400));
+    await flush();
+    expect(input()).not.toBeNull();
+    expect(document.activeElement).toBe(input());
+    expect(input()!.selectionStart).toBe(0);
+    expect(input()!.selectionEnd).toBe(input()!.value.length);
+    const from = sent.length;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input()!, "Renamed");
+      input()!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => void input()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(bodies("session.rename", from)).toEqual([{ type: "session.rename", sessionId: ID, title: "Renamed" }]);
+    await ctx(rowOf(ID));
+    await click("action-rename");
+    await new Promise((r) => setTimeout(r, 400));
+    await flush();
+    expect(input()).not.toBeNull();
+    await act(async () => void input()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(input()).toBeNull();
+  });
+
+  it("Rename from the row context menu survives the closing menu taking the focus back", async () => {
+    await ctx(rowOf(ID));
+    await click("action-rename");
+    const input = () => el.querySelector<HTMLInputElement>('[data-testid="rename-input"]');
+    // The menu's focus return, as a real browser does it while the popup fades out.
+    await act(async () => void input()!.blur());
+    await new Promise((r) => setTimeout(r, 50));
+    await flush();
+    expect(input()).not.toBeNull();
+    expect(document.activeElement).toBe(input());
+    // A blur after the grace period still ends the edit.
+    await new Promise((r) => setTimeout(r, 600));
+    await act(async () => void input()!.blur());
+    expect(input()).toBeNull();
+  });
+});
+
+describe("GH-356 split view", () => {
+  const S2 = "22222222-2222-3333-4444-555555555555";
+  const S3 = "33333333-2222-3333-4444-555555555555";
+  const sessions = [session, { ...session, id: S2, title: "Second", cwd: "/p/other" }, { ...session, id: S3, title: "Third" }];
+  const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetParent")!;
+  const splits = () => [...el.querySelectorAll<HTMLElement>('[data-testid="split"]')];
+  const activeSplit = () => el.querySelector<HTMLElement>('[data-testid="split"][data-active]');
+  const labels = () => splits().sort((a, b) => +a.style.order - +b.style.order).map((s) => s.getAttribute("aria-label"));
+  const menu = async (id: string) => {
+    await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    return (label: string) => act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === label)!.click());
+  };
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
+  async function remount(hash = S2, tabs = [ID, S2, S3]) {
+    act(() => root.unmount());
+    replies["session.list"] = { sessions, projects: ["/p/demo", "/p/other"] };
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e1", session: sessions.find((s) => s.id === m.sessionId) ?? session });
+    localStorage.setItem("claude-ui.tabs", JSON.stringify(tabs));
+    location.hash = `#${hash}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+  }
+  const splitRight = async (id = S2) => (await menu(id))("Split right");
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get(this: HTMLElement) { return this.closest('[style*="display: none"]') ? null : document.body; } });
+  });
+  afterEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", offsetParent);
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    replies["session.subscribe"] = { logEpoch: "e1", session };
+    sent.length = 0;
+  });
+
+  it("GH-378 Clean up tabs keeps the tab shown in the other split like the active tab", async () => {
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 1e15, [S2]: 1e15, [S3]: 1e15 }));
+    await remount(ID);
+    await splitRight(S2);
+    await (await menu(S3))("Clean up tabs");
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-cleanup-idle"]')!.click());
+    expect(tabIds()).toEqual([ID, S2]);
+    expect(labels()).toHaveLength(2);
+    localStorage.removeItem("claude-ui.shown-activity");
+  });
+
+  it("Split right from the tab menu shows both sessions side by side, focuses the new split's prompt and puts it in the hash", async () => {
+    await remount(ID);
+    expect(splits()).toHaveLength(0);
+    await splitRight(S2);
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Second, split 2 of 2, active"]);
+    expect(el.querySelector('[data-testid="session-area"]')!.getAttribute("data-split")).toBe("row");
+    expect(activeSplit()).toBe(splits()[1]);
+    expect(location.hash).toBe(`#${S2}`);
+    await vi.waitFor(() => expect(document.activeElement).toBe(activeSplit()!.querySelector('textarea[aria-label="Prompt"]')));
+    expect(splits().map((s) => s.style.order)).toEqual(["0", "2"]);
+  });
+
+  it("the tab shown in the other split is marked with an icon and text, not by color", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    const mark = el.querySelector(`[data-tab-id="${ID}"] [data-testid="tab-split-mark"]`);
+    expect(mark).not.toBeNull();
+    expect(el.querySelector(`[data-tab-id="${ID}"] [role="tab"]`)!.getAttribute("aria-label")).toContain("shown in split 1");
+    expect(el.querySelector(`[data-tab-id="${S2}"] [data-testid="tab-split-mark"]`)).toBeNull();
+  });
+
+  it("Split down stacks the sessions with a horizontal resizer", async () => {
+    await remount(ID);
+    await (await menu(S2))("Split down");
+    expect(el.querySelector('[data-testid="session-area"]')!.className).toContain("flex-col");
+    expect(el.querySelector('[data-testid="split-resizer"]')!.getAttribute("aria-orientation")).toBe("horizontal");
+  });
+
+  it("clicking the other split makes it active: hash, side panel and tab follow", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await act(async () => void splits()[0]!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    expect(activeSplit()).toBe(splits()[0]);
+    expect(location.hash).toBe(`#${ID}`);
+    expect(el.querySelector(`[data-tab-id="${ID}"]`)!.getAttribute("data-active")).not.toBeNull();
+    expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
+  });
+
+  it("Esc stops only the active split's turn", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    for (const [i, id] of [ID, S2].entries()) await act(async () => emit({ type: "event", sessionId: id, seq: 1 + i, part: { type: "session_state", id: "session_state", state: "running" } }));
+    sent.length = 0;
+    await press({ key: "Escape" });
+    const stops = sent.filter((m) => m.type === "session.interrupt") as unknown as { sessionId: string }[];
+    expect(stops.map((m) => m.sessionId)).toEqual([S2]);
+  });
+
+  it("Focus next split (Ctrl+Alt+ArrowUp) and the prefix key o move the focus between the splits' prompts", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    const focusIn = (i: number) => vi.waitFor(() => expect(document.activeElement).toBe(splits()[i]!.querySelector('textarea[aria-label="Prompt"]')));
+    await press({ key: "ArrowUp", code: "ArrowUp", ctrlKey: true, altKey: true });
+    await focusIn(0);
+    expect(activeSplit()).toBe(splits()[0]);
+    await press({ key: "a", code: "KeyA", altKey: true });
+    await press({ key: "o", code: "KeyO" });
+    await focusIn(1);
+    expect(activeSplit()).toBe(splits()[1]);
+  });
+
+  it("closing the other split's tab ends the split; closing the active split's tab shows the next tab outside the splits", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] button[aria-label^="Close"]`)!.click());
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${S2}`);
+    await splitRight(S2);
+    expect(splits()).toHaveLength(2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] button[aria-label^="Close"]`)!.click());
+    expect(splits()).toHaveLength(0);
+    expect(tabIds()).toEqual([S3]);
+    expect(location.hash).toBe(`#${S3}`);
+  });
+
+  it("closing the active split's tab with no tab outside the splits leaves the other split's tab", async () => {
+    await remount(ID, [ID, S2]);
+    await splitRight(S2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] button[aria-label^="Close"]`)!.click());
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${ID}`);
+  });
+
+  it("the split survives a remount", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Second, split 2 of 2, active"]);
+  });
+
+  it("narrow screens show one session; the split comes back on a wide screen", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    width = 800;
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    expect(splits()).toHaveLength(0);
+    expect(el.querySelector(`[data-tab-id="${S2}"]`)).not.toBeNull();
+    expect(localStorage.getItem("claude-ui.split")).not.toBeNull();
+    await act(async () => void el.querySelector(`[data-tab-id="${ID}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 })));
+    expect([...document.querySelectorAll('[role="menuitem"]')].some((i) => i.textContent === "Split right")).toBe(false);
+  });
+
+  it("the resizer: arrow keys change the ratio, Home and End stop at the limits, Enter resets, and it persists", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    const bar = () => el.querySelector<HTMLElement>('[data-testid="split-resizer"]')!;
+    expect(bar().getAttribute("aria-valuenow")).toBe("50");
+    expect(splits()[0]!.style.flex).toBe("0.5 1 0%");
+    // 1000px area, 8px gap: each split keeps 320px.
+    bar().parentElement!.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 600, right: 1000, bottom: 600, x: 0, y: 0, toJSON() {} });
+    await press({ key: "Home" }, bar());
+    expect(bar().getAttribute("aria-valuenow")).toBe("32");
+    await press({ key: "End" }, bar());
+    expect(bar().getAttribute("aria-valuenow")).toBe("68");
+    expect(JSON.parse(localStorage.getItem("claude-ui.split")!).ratio).toBeCloseTo(0.677, 2);
+    await press({ key: "Enter" }, bar());
+    expect(bar().getAttribute("aria-valuenow")).toBe("50");
+  });
+
+  it("the New session tab suspends the split; the next session tab brings it back", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-new"]')!.click());
+    expect(location.hash).toBe("#new");
+    expect(splits()).toHaveLength(0);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
+    expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
+  });
+
+  it("Join splits (palette) shows the active session alone", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Join splits"))!.click());
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${S2}`);
+    expect(localStorage.getItem("claude-ui.split")).toBeNull();
+  });
+
+  it("Split right is disabled with one session tab and the palette does not list it", async () => {
+    await remount(ID, [ID]);
+    await menu(ID);
+    expect(document.querySelector<HTMLElement>('[data-testid="tab-menu-splitRight"]')!.hasAttribute("data-disabled")).toBe(true);
+  });
+
+  // Slice 2: dragging a tab onto the session area.
+  const drag = (area: HTMLElement, type: string, x: number, y: number, id = S3) => {
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(e, { clientX: x, clientY: y, dataTransfer: { types: ["application/x-claude-ui-tab"], getData: () => id, dropEffect: "none" } });
+    return act(async () => void area.dispatchEvent(e));
+  };
+  const area = () => {
+    const a = el.querySelector<HTMLElement>('[data-testid="session-area"]')!;
+    a.getBoundingClientRect = () => ({ left: 0, top: 0, width: 900, height: 600, right: 900, bottom: 600, x: 0, y: 0, toJSON() {} });
+    return a;
+  };
+
+  it("dragging a tab over the right edge shows the overlay on the right half; dropping splits right with that tab; dragleave clears", async () => {
+    await remount(ID);
+    await drag(area(), "dragover", 880, 300);
+    const o = () => el.querySelector<HTMLElement>('[data-testid="split-drop"]');
+    expect(o()?.dataset.zone).toBe("right");
+    expect(o()!.style.left).toBe("450px");
+    expect(o()!.style.width).toBe("450px");
+    await drag(area(), "dragleave", 880, 300);
+    expect(o()).toBeNull();
+    await drag(area(), "dragover", 880, 300);
+    await drag(area(), "drop", 880, 300);
+    expect(o()).toBeNull();
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Third, split 2 of 2, active"]);
+  });
+
+  it("dropping on the left edge puts the tab left; on the bottom edge it stacks", async () => {
+    await remount(ID);
+    await drag(area(), "drop", 10, 300);
+    expect(labels()).toEqual(["Third, split 1 of 2, active", "Demo, split 2 of 2"]);
+    await drag(area(), "drop", 450, 590, S2);
+    expect(el.querySelector('[data-testid="session-area"]')!.getAttribute("data-split")).toBe("col");
+  });
+
+  it("dropping on the middle of a split shows the tab there; with no split it just shows the tab", async () => {
+    await remount(ID);
+    await drag(area(), "drop", 450, 300, S2);
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${S2}`);
+    await splitRight(S2);
+    for (const s of splits()) s.getBoundingClientRect = () => ({ left: s === splits()[0] ? 0 : 450, top: 0, width: 440, height: 600, right: s === splits()[0] ? 440 : 890, bottom: 600, x: 0, y: 0, toJSON() {} });
+    await drag(area(), "dragover", 350, 300);
+    expect(el.querySelector<HTMLElement>('[data-testid="split-drop"]')!.style.width).toBe("440px");
+    await drag(area(), "drop", 350, 300, S3);
+    expect(labels()).toEqual(["Third, split 1 of 2, active", "Second, split 2 of 2"]);
+  });
+
+  it("Remove project returns the focus to the active split's prompt, not the other split's", async () => {
+    await remount(ID, [ID, S3]);
+    replies["session.list"] = { sessions: [session, sessions[2]!], projects: ["/p/other"] };
+    await act(async () => void sessionsChanged({}));
+    await splitRight(S3);
+    // The last project (no next row) has no tab open: the dialog hands the focus to the prompt box.
+    await act(async () => el.querySelector<HTMLElement>('[data-cwd="/p/other"] [data-testid="project-remove"]')!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-confirm"]')!.click());
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(document.activeElement).toBe(activeSplit()!.querySelector('textarea[aria-label="Prompt"]'));
+    expect(activeSplit()!.getAttribute("aria-label")).toContain("Third");
+  });
+
+  it("the resizer's aria-controls names the first split's element", async () => {
+    await remount(ID);
+    await splitRight(S2);
+    const id = el.querySelector('[data-testid="split-resizer"]')!.getAttribute("aria-controls")!;
+    expect(document.getElementById(id)).toBe(splits().find((s) => s.getAttribute("aria-label")!.includes("split 1 of 2")));
+  });
+
+  it("a centre drop overlay matches the target split when the ratio is not 50%, in screen order", async () => {
+    await remount(ID);
+    await splitRight(S2); // ids [ID, S2]
+    await act(async () => void el.querySelector<HTMLElement>('[data-testid="split-resizer"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
+    const r = (left: number, width: number) => () => ({ left, top: 0, width, height: 600, right: left + width, bottom: 600, x: 0, y: 0, toJSON() {} });
+    const [a, b] = [...splits()].sort((x, y) => +x.style.order - +y.style.order);
+    a!.getBoundingClientRect = r(0, 300);
+    b!.getBoundingClientRect = r(308, 592);
+    await drag(area(), "dragover", 500, 300);
+    const o = el.querySelector<HTMLElement>('[data-testid="split-drop"]')!;
+    expect([o.style.left, o.style.width]).toEqual(["308px", "592px"]);
+    await drag(area(), "drop", 500, 300, S3);
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Third, split 2 of 2, active"]);
+  });
+
+  it("a saved ratio that would leave a split under the minimum is clamped when drawn only; the saved ratio returns with the space", async () => {
+    const callbacks: { cb: ResizeObserverCallback; target?: Element }[] = [];
+    const RO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      rec: { cb: ResizeObserverCallback; target?: Element };
+      constructor(cb: ResizeObserverCallback) {
+        this.rec = { cb };
+        callbacks.push(this.rec);
+      }
+      observe(t: Element) {
+        this.rec.target = t;
+      }
+      unobserve() {}
+      disconnect() {}
+    } as never;
+    try {
+      localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, S2], at: 0, ratio: 0.3 }));
+      await remount(ID);
+      const size = (w: number) =>
+        act(async () => callbacks.filter((c) => (c.target as HTMLElement | undefined)?.dataset?.testid === "session-area").forEach((c) => c.cb([{ contentRect: { width: w, height: 800 } } as ResizeObserverEntry], {} as ResizeObserver)));
+      const saved = () => JSON.parse(localStorage.getItem("claude-ui.split")!).ratio as number;
+      const drawn = () => parseFloat(splits().sort((a, b) => +a.style.order - +b.style.order)[0]!.style.flex);
+      await size(3000);
+      expect(drawn()).toBeCloseTo(0.3, 3);
+      await size(1000);
+      expect(drawn()).toBeCloseTo(320 / 992, 3);
+      expect(saved()).toBe(0.3);
+      await size(3000);
+      expect(drawn()).toBeCloseTo(0.3, 3);
+      expect(saved()).toBe(0.3);
+    } finally {
+      globalThis.ResizeObserver = RO;
+    }
+  });
+
+  it("a session area narrower than two minimum splits shows the active split alone; the split returns with the space", async () => {
+    const callbacks: { cb: ResizeObserverCallback; target?: Element }[] = [];
+    const RO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      rec: { cb: ResizeObserverCallback; target?: Element };
+      constructor(cb: ResizeObserverCallback) {
+        this.rec = { cb };
+        callbacks.push(this.rec);
+      }
+      observe(t: Element) {
+        this.rec.target = t;
+      }
+      unobserve() {}
+      disconnect() {}
+    } as never;
+    try {
+      await remount(ID);
+      await splitRight(S2);
+      const size = (w: number, h = 800) =>
+        act(async () => callbacks.filter((c) => (c.target as HTMLElement | undefined)?.dataset?.testid === "session-area").forEach((c) => c.cb([{ contentRect: { width: w, height: h } } as ResizeObserverEntry], {} as ResizeObserver)));
+      await size(1000);
+      expect(splits()).toHaveLength(2);
+      await size(600);
+      expect(splits()).toHaveLength(0);
+      expect(localStorage.getItem("claude-ui.split")).not.toBeNull();
+      expect(el.querySelector('[data-testid="split-hint"]')!.textContent).toContain("Split hidden — widen the window or hide a panel");
+      expect(el.querySelector(`[data-tab-id="${ID}"] [role="tab"]`)!.getAttribute("aria-label")).toBe("Demo (hidden: not enough room)");
+      await size(900);
+      expect(el.querySelector('[data-testid="split-hint"]')).toBeNull();
+      await size(600);
+      await act(async () => [...el.querySelectorAll<HTMLElement>('[data-testid="split-hint"] button')].find((b) => b.textContent === "Close split")!.click());
+      expect(el.querySelector('[data-testid="split-hint"]')).toBeNull();
+      expect(localStorage.getItem("claude-ui.split")).toBeNull();
+      await splitRight(S2);
+      await size(900);
+      expect(labels()).toEqual(["Third, split 1 of 2", "Second, split 2 of 2, active"]);
+    } finally {
+      globalThis.ResizeObserver = RO;
+    }
+  });
+
+  it("a drag that is no tab, or on a narrow screen, shows no overlay", async () => {
+    await remount(ID);
+    const e = new Event("dragover", { bubbles: true, cancelable: true });
+    Object.assign(e, { clientX: 880, clientY: 300, dataTransfer: { types: ["Files"], getData: () => "" } });
+    await act(async () => void area().dispatchEvent(e));
+    expect(el.querySelector('[data-testid="split-drop"]')).toBeNull();
+    width = 800;
+    act(() => root.unmount());
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    await drag(area(), "dragover", 880, 300);
+    expect(el.querySelector('[data-testid="split-drop"]')).toBeNull();
+  });
+
+  it("Split right from the palette splits the active tab", async () => {
+    await remount(S2);
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Split right"))!.click());
+    expect(labels()).toHaveLength(2);
+    expect(activeSplit()!.getAttribute("aria-label")).toContain("Second");
   });
 });
 

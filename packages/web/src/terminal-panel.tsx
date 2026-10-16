@@ -41,7 +41,28 @@ const storage = {
  * to an empty list starts none. `onEmpty`: the last terminal was closed or its shell exited; the panel should hide.
  */
 /** `newTick`: bumped by the New terminal shortcut; each bump adds a terminal. */
-export function TerminalPanel({ client, status, cwd, onEmpty, newTick = 0 }: { client: Client; status: ConnectionStatus; cwd: string; onEmpty: () => void; newTick?: number }) {
+export function TerminalPanel({
+  client,
+  status,
+  cwd,
+  onEmpty,
+  newTick = 0,
+  shown = true,
+  focusReq = 0,
+  quiet = false,
+}: {
+  client: Client;
+  status: ConnectionStatus;
+  cwd: string;
+  onEmpty: () => void;
+  newTick?: number;
+  /** False while the panel stays mounted but hidden (another pane of its area is selected); showing it again focuses the shell. */
+  shown?: boolean;
+  /** Bumped when a command wants the shell focused (Toggle terminal on a terminal that shows behind a maximized panel). */
+  focusReq?: number;
+  /** True from a pane move until the user's next input: a mount or show then leaves the focus where it is (the moved pane's tab). */
+  quiet?: boolean;
+}) {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [activeId, setActiveId] = useState<string>();
   const [error, setError] = useState<string>();
@@ -53,13 +74,13 @@ export function TerminalPanel({ client, status, cwd, onEmpty, newTick = 0 }: { c
   }
   const spawn = useRef(true);
   // A tab selected with a click (or a new terminal) focuses its shell; one selected with the arrow keys keeps the focus.
-  const focusShell = useRef(true);
+  const focusShell = useRef(!quiet);
   // Bumped by a click on the tab already selected: its shell takes the focus again.
   const [focusTick, setFocusTick] = useState(0);
 
-  const create = async () => {
+  const create = async (focus = true) => {
     setError(undefined);
-    focusShell.current = true;
+    focusShell.current = focus;
     try {
       // The size is fixed by the view's fit right after it attaches.
       const { terminal } = await client.request<TerminalCreateResult>({ type: "terminal.create", cwd, cols: 80, rows: 24 });
@@ -69,6 +90,25 @@ export function TerminalPanel({ client, status, cwd, onEmpty, newTick = 0 }: { c
       setError((e as Error).message);
     }
   };
+
+  const wasShown = useRef(shown);
+  useEffect(() => {
+    // A move does not hand the focus to the shell: also not a focus still pending from earlier (xterm opens after its font loads).
+    if (quiet) focusShell.current = false;
+    else if (shown && !wasShown.current) {
+      focusShell.current = true;
+      setFocusTick((n) => n + 1);
+    }
+    wasShown.current = shown;
+  }, [shown, quiet]);
+
+  const seenFocusReq = useRef(focusReq);
+  useEffect(() => {
+    if (focusReq === seenFocusReq.current) return;
+    seenFocusReq.current = focusReq;
+    focusShell.current = true;
+    setFocusTick((n) => n + 1);
+  }, [focusReq]);
 
   const seenTick = useRef(newTick);
   useEffect(() => {
@@ -101,7 +141,8 @@ export function TerminalPanel({ client, status, cwd, onEmpty, newTick = 0 }: { c
         setTerminals(r.terminals);
         const has = (id?: string) => r.terminals.some((t) => t.id === id);
         setActiveId((a) => (has(a) ? a : has(storage.get()) ? storage.get() : r.terminals[0]?.id));
-        if (!r.terminals.length && spawn.current) void create();
+        // The first shell, spawned on open, takes the focus as the panel would (none when it opened quietly).
+        if (!r.terminals.length && spawn.current) void create(focusShell.current);
         spawn.current = false;
       },
       (e: Error) => !stale && e.message !== "disconnected" && setError(e.message),

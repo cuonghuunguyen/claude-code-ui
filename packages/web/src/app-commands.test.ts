@@ -27,6 +27,9 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   toggleSignalOnly: vi.fn(),
   showPane: vi.fn(),
   newTerminal: vi.fn(),
+  resetLayout: vi.fn(),
+  flipSide: vi.fn(),
+  side: "right",
   reopenTab: vi.fn(),
   canReopen: false,
   openShortcuts: vi.fn(),
@@ -73,6 +76,8 @@ it("lists the issue's commands with shortcuts, then the sessions", () => {
     ["terminal.toggle", "ctrl+`"],
     ["signal.toggle", "mod+alt+s"],
     ["terminal.new", "ctrl+shift+`"],
+    ["layout.reset", undefined],
+    ["panel.flip", undefined],
     ["prompt.focus", "ctrl+l"],
     ["model.choose", "mod+'"],
     ["effort.choose", undefined],
@@ -142,7 +147,7 @@ it("rewind lists prompts newest first; hidden while a turn runs, when Stop shows
 
 it("without a shown session only the app-level commands remain", () => {
   const items = appCommands(ctx({ session: undefined, canQuickOpen: false, tabs: ["new"], activeId: "new", sessions: [] }));
-  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "guide.start", "tips.reset", "sidebar.toggle", "signal.toggle"]);
+  expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "guide.start", "tips.reset", "sidebar.toggle", "signal.toggle", "layout.reset"]);
 });
 
 it("a shortcut finds its command; Esc, Shift+Tab and plain keys run nothing from here", () => {
@@ -217,6 +222,14 @@ it("New worktree… shows only with a git project, right after New session, and 
   expect(appCommands(ctx()).some((i) => i.id === "worktree.new")).toBe(false);
 });
 
+it("'Clean up worktrees and workers…' is listed only with cleanUp", () => {
+  const cleanUp = vi.fn();
+  expect(appCommands(ctx({ cleanUp })).find((i) => i.id === "cleanup.open")).toMatchObject({ title: "Clean up worktrees and workers…", group: "Commands" });
+  run(ctx({ cleanUp }), "cleanup.open");
+  expect(cleanUp).toHaveBeenCalled();
+  expect(appCommands(ctx()).some((i) => i.id === "cleanup.open")).toBe(false);
+});
+
 it("Toggle signal only runs from the palette and Mod+Alt+S, with or without a session", () => {
   const toggleSignalOnly = vi.fn();
   const c = ctx({ toggleSignalOnly });
@@ -225,6 +238,13 @@ it("Toggle signal only runs from the palette and Mod+Alt+S, with or without a se
   expect(shortcutFor(appCommands(c), ev("s", { ctrlKey: true, altKey: true }))?.id).toBe("signal.toggle");
   expect(appCommands(ctx({ toggleSignalOnly, session: { ...ctx().session!, draft: true } })).some((i) => i.id === "signal.toggle")).toBe(true);
   expect(appCommands(ctx({ toggleSignalOnly, session: undefined })).some((i) => i.id === "signal.toggle")).toBe(true);
+});
+
+it("Toggle keep screen awake is listed only where App offers it, and runs it", () => {
+  const toggleKeepAwake = vi.fn();
+  expect(appCommands(ctx()).some((i) => i.id === "awake.toggle")).toBe(false);
+  run(ctx({ toggleKeepAwake }), "awake.toggle");
+  expect(toggleKeepAwake).toHaveBeenCalledOnce();
 });
 
 it("Open Focus is always listed when App offers it; Next waiting request only while something waits, on Ctrl+Alt+Down", () => {
@@ -346,6 +366,14 @@ it("viewer commands show only with their callbacks and a session", () => {
   expect(ids(ctx({ viewChanges, viewPlan, session: { ...ctx().session!, draft: true } }))).not.toContain("viewer.plan");
 });
 
+it("Reset layout is always listed; the side flip names the other side and needs a session", () => {
+  const title = (c: CommandContext, id: string) => appCommands(c).find((x) => x.id === id)?.title;
+  expect(title(ctx({ session: undefined, activeId: undefined, tabs: [] }), "layout.reset")).toBe("Reset layout");
+  expect(title(ctx(), "panel.flip")).toBe("Move side panel to left");
+  expect(title(ctx({ side: "left" }), "panel.flip")).toBe("Move side panel to right");
+  expect(title(ctx({ session: undefined, activeId: undefined, tabs: [] }), "panel.flip")).toBeUndefined();
+});
+
 it("GH-359 tab.closeOthers / closeRight / closeAll are listed only when given, have no default key, run their handler and take a user binding", () => {
   const ids = ["tab.closeOthers", "tab.closeRight", "tab.closeAll"];
   expect(appCommands(ctx()).some((i) => ids.includes(i.id))).toBe(false);
@@ -374,7 +402,7 @@ const menu = (counts: Partial<Record<CleanupRule, number>>, kept = ""): CleanupM
 
 it("GH-378 Clean up tabs… is a page of the rules with a count > 0, meta 'N tabs', each runs cleanUp(rule)", () => {
   const cleanUp = vi.fn();
-  const entry = appCommands(ctx({ cleanup: menu({ idle: 3, workers: 1 }, "2 kept: running/draft"), cleanUp })).find((i) => i.id === "tab.cleanup")!;
+  const entry = appCommands(ctx({ tabCleanup: menu({ idle: 3, workers: 1 }, "2 kept: running/draft"), cleanUpTabs: cleanUp })).find((i) => i.id === "tab.cleanup")!;
   if (!("page" in entry)) throw new Error("not a page");
   const page = entry;
   expect([page.title, page.keys]).toEqual(["Clean up tabs…", undefined]);
@@ -385,27 +413,38 @@ it("GH-378 Clean up tabs… is a page of the rules with a count > 0, meta 'N tab
   const last = page.page.items.find((i) => i.id === "cleanup:workers")!;
   if ("run" in last) last.run();
   expect(cleanUp).toHaveBeenCalledWith("workers");
-  const direct = appCommands(ctx({ cleanup: menu({ idle: 3 }), cleanUp })).find((i) => i.id === "tab.cleanup.idle")!;
+  const direct = appCommands(ctx({ tabCleanup: menu({ idle: 3 }), cleanUpTabs: cleanUp })).find((i) => i.id === "tab.cleanup.idle")!;
   expect(direct.searchOnly).toBe(true);
   if ("run" in direct) direct.run();
   expect(cleanUp).toHaveBeenCalledWith("idle");
 });
 
 it("GH-378 Clean up tabs… lists every rule, those with count 0 disabled; absent without the callbacks", () => {
-  const entry = appCommands(ctx({ cleanup: menu({ idle: 1 }), cleanUp: vi.fn() })).find((i) => i.id === "tab.cleanup")!;
+  const entry = appCommands(ctx({ tabCleanup: menu({ idle: 1 }), cleanUpTabs: vi.fn() })).find((i) => i.id === "tab.cleanup")!;
   if (!("page" in entry)) throw new Error("not a page");
   expect(entry.page.items.map((i) => [i.title, i.disabled])).toEqual(CLEANUP_RULES.map((r) => [RULE_LABEL[r], r !== "idle"]));
   const has = (x: CommandContext) => appCommands(x).some((i) => i.id.startsWith("tab.cleanup"));
-  expect(has(ctx({ cleanup: menu({}), cleanUp: vi.fn() }))).toBe(true);
-  expect(has(ctx({ cleanup: menu({ idle: 1 }) }))).toBe(false);
+  expect(has(ctx({ tabCleanup: menu({}), cleanUpTabs: vi.fn() }))).toBe(true);
+  expect(has(ctx({ tabCleanup: menu({ idle: 1 }) }))).toBe(false);
   expect(has(ctx())).toBe(false);
 });
 
 it("GH-378 tab.cleanup and tab.cleanup.<rule> have no default key and take a user binding", () => {
-  const over = { cleanup: menu({ idle: 2 }), cleanUp: vi.fn() };
+  const over = { tabCleanup: menu({ idle: 2 }), cleanUpTabs: vi.fn() };
   const items = appCommands(ctx(over));
   expect(["tab.cleanup", "tab.cleanup.idle"].map((id) => items.find((i) => i.id === id)?.keys)).toEqual([undefined, undefined]);
   bind("tab.cleanup.idle", "mod+alt+i");
   expect(shortcutFor(appCommands(ctx(over)), ev("i", { ctrlKey: true, altKey: true, code: "KeyI" }))?.id).toBe("tab.cleanup.idle");
   resetAll();
+});
+
+it("GH-356 split commands are listed only when given, run their handler; Focus next split shows its default key and the others have none", () => {
+  const ids = ["split.right", "split.down", "split.next", "split.prev", "split.join"];
+  expect(appCommands(ctx()).some((i) => ids.includes(i.id))).toBe(false);
+  const over = { splitRight: vi.fn(), splitDown: vi.fn(), splitNext: vi.fn(), splitPrev: vi.fn(), joinSplits: vi.fn() };
+  const items = appCommands(ctx(over));
+  expect(ids.map((id) => items.find((i) => i.id === id)?.title)).toEqual(["Split right", "Split down", "Focus next split", "Focus previous split", "Join splits"]);
+  expect(ids.map((id) => items.find((i) => i.id === id)?.keys)).toEqual([undefined, undefined, "mod+alt+arrowup", undefined, undefined]);
+  ids.forEach((id) => run(ctx(over), id));
+  expect(Object.values(over).map((f) => f.mock.calls.length)).toEqual([1, 1, 1, 1, 1]);
 });

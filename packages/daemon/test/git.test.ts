@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { createWorktree, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus } from "../src/git.ts";
+import { parseStatus, createWorktree, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { wslGitRunner } from "../src/wsl-git.ts";
 import { execFile } from "node:child_process";
@@ -314,7 +314,7 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(existsSync(join(main, "node_modules", "x"))).toBe(true);
   });
 
-  it("removes the directory and its worktree-* branch; a foreign branch stays; main, unknown and hand-made worktrees are refused", async () => {
+  it("removes the directory and its worktree-* branch; a foreign branch stays; main and unknown worktrees are refused", async () => {
     const { main, opts } = plain();
     const r = await createWorktree(main, { ...opts, name: "feat" });
     commit(r.path, "c.txt");
@@ -333,25 +333,34 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(await code(removeWorktree(main, tmp(), () => true))).toBe("not_worktree");
   });
 
-  it("refuses to remove worktrees outside <repo>/.claude/worktrees (hand-made, sibling dir, symlinked)", async () => {
+  it("removes any linked worktree inside the roots (hand-made sibling, nested, another tool's folder) and keeps their branches", async () => {
     const { main, opts } = plain();
     const hand = join(tmp(), "wt");
     run(main, "worktree", "add", "-q", "-b", "hand", hand);
-    expect(await code(removeWorktree(main, hand, () => true))).toBe("not_removable");
-    expect(await code(worktreeStatus(main, hand))).toBe("not_removable");
-    // Nested below .claude/worktrees: not a direct child.
     const nested = join(main, ".claude", "worktrees", "a", "b");
     run(main, "worktree", "add", "-q", "-b", "nest", nested);
-    expect(await code(removeWorktree(main, nested, () => true))).toBe("not_removable");
-    // Another tool's folder next to it.
     const other = join(main, ".claude", "other");
     run(main, "worktree", "add", "-q", "-b", "other", other);
-    expect(await code(removeWorktree(main, other, () => true))).toBe("not_removable");
-    // A managed worktree outside the roots is refused by the predicate.
+    // A worktree outside the roots is refused by the predicate.
     const r = await createWorktree(main, { ...opts, name: "ok" });
     expect(await code(removeWorktree(main, r.path, () => false))).toBe("cwd_not_allowed");
-    for (const d of [hand, nested, other, r.path]) expect(existsSync(d), d).toBe(true);
-    expect(out(main, "branch", "--list", "hand")).toContain("hand");
+    expect(existsSync(r.path)).toBe(true);
+    for (const d of [hand, nested, other]) {
+      await removeWorktree(main, d, () => true);
+      expect(existsSync(d), d).toBe(false);
+    }
+    for (const b of ["hand", "nest", "other"]) expect(out(main, "branch", "--list", b)).toContain(b);
+  });
+
+  it("listWorktrees and removeWorktree: a locked worktree is listed locked and refused", async () => {
+    const { main } = plain();
+    const hand = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "hand", hand);
+    run(main, "worktree", "lock", "--reason", "usb", hand);
+    expect((await listWorktrees(main))!.find((w) => w.path === hand)).toMatchObject({ locked: true });
+    expect(await code(removeWorktree(main, hand, () => true))).toBe("not_removable");
+    expect(await worktreeStatus(main, hand, () => true)).toMatchObject({ safety: "blocked", blocked: "locked" });
+    expect(existsSync(hand)).toBe(true);
   });
 
   it.skipIf(process.platform === "win32")("refuses to remove through a symlink that points out of .claude/worktrees", async () => {
@@ -362,6 +371,7 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     mkdirSync(dir, { recursive: true });
     symlinkSync(hand, join(dir, "link"));
     expect(await code(removeWorktree(main, join(dir, "link"), () => true))).toBe("not_removable");
+    expect(await worktreeStatus(main, join(dir, "link"), () => true)).toMatchObject({ safety: "blocked", blocked: "symlink" });
     expect(existsSync(hand)).toBe(true);
     void opts;
   });
@@ -379,26 +389,219 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
   it("worktreeStatus counts uncommitted files and the commits only this branch holds", async () => {
     const { main, opts } = origin();
     const r = await createWorktree(main, { ...opts, name: "feat" });
-    expect(await worktreeStatus(main, r.path)).toEqual({ uncommitted: 0, commits: 0, branch: "worktree-feat" });
+    const all = () => true;
+    expect(await worktreeStatus(main, r.path, all)).toMatchObject({ uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "worktree-feat", safety: "safe" });
     commit(r.path, "1.txt");
     commit(r.path, "2.txt");
     writeFileSync(join(r.path, "a.txt"), "changed");
     writeFileSync(join(r.path, "new.txt"), "n");
-    expect(await worktreeStatus(main, r.path)).toEqual({ uncommitted: 2, commits: 2, branch: "worktree-feat" });
+    const st = await worktreeStatus(main, r.path, all);
+    expect(st).toMatchObject({ uncommitted: 2, untracked: 1, commits: 2, ahead: 2, safety: "has_work" });
+    expect(st.headTime).toBeGreaterThan(0);
     const keep = join(main, ".claude", "worktrees", "keep");
     run(main, "worktree", "add", "-q", "-b", "keep", keep);
     commit(keep, "k.txt");
-    expect(await worktreeStatus(main, keep)).toEqual({ uncommitted: 0, commits: 0, branch: "keep" });
+    expect(await worktreeStatus(main, keep, all)).toMatchObject({ uncommitted: 0, commits: 0, ahead: 1, branch: "keep", safety: "has_work" });
+  });
+
+  it("worktreeStatus: a kept branch with unpushed commits has work; pushed to its upstream it is safe; merged into base it is branchMerged", async () => {
+    const { main } = origin();
+    run(main, "remote", "set-head", "origin", "main");
+    const ext = join(tmp(), "ext");
+    run(main, "worktree", "add", "-q", "-b", "feat", ext);
+    commit(ext, "f.txt");
+    const all = () => true;
+    expect(await worktreeStatus(main, ext, all)).toMatchObject({ ahead: 1, safety: "has_work", branchMerged: false });
+    run(ext, "push", "-q", "-u", "origin", "feat");
+    expect(await worktreeStatus(main, ext, all)).toMatchObject({ ahead: 0, safety: "safe", branchMerged: true });
+    const done = join(tmp(), "done");
+    run(main, "worktree", "add", "-q", "-b", "done", done);
+    expect(await worktreeStatus(main, done, all)).toMatchObject({ ahead: 0, safety: "safe", branchMerged: true });
+  });
+
+  it.skipIf(process.platform === "win32")("worktreeStatus never runs a worktree's fsmonitor program", async () => {
+    const { main } = plain();
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "fsm", wt);
+    run(main, "config", "extensions.worktreeConfig", "true");
+    const marker = join(tmp(), "marker");
+    const script = join(tmp(), "fsm.sh");
+    writeFileSync(script, `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
+    run(wt, "config", "--worktree", "core.fsmonitor", script);
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ safety: "safe" });
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("worktreeStatus of a worktree whose git dirs are outside the roots runs no git and is blocked outside_roots", async () => {
+    const { main } = plain();
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "far", wt);
+    writeFileSync(join(wt, "u.txt"), "u");
+    const st = await worktreeStatus(main, wt, (p) => !p.startsWith(main));
+    expect(st).toMatchObject({ safety: "blocked", blocked: "outside_roots", uncommitted: 0 });
+    expect(await code(removeWorktree(main, wt, (p) => !p.startsWith(main)))).toBe("cwd_not_allowed");
+    expect(existsSync(wt)).toBe(true);
+  });
+
+  it("a worktree that contains another listed worktree is blocked contains_worktree and refused; the inner work stays", async () => {
+    const { main } = plain();
+    const outer = join(tmp(), "outer");
+    run(main, "worktree", "add", "-q", "-b", "outer", outer);
+    const inner = join(outer, "inner");
+    run(main, "worktree", "add", "-q", "-b", "inner", inner);
+    writeFileSync(join(inner, "work.txt"), "precious");
+    expect(await worktreeStatus(main, outer, () => true)).toMatchObject({ safety: "blocked", blocked: "contains_worktree" });
+    expect(await code(removeWorktree(main, outer, () => true))).toBe("not_removable");
+    expect(readFileSync(join(inner, "work.txt"), "utf8")).toBe("precious");
+    // The inner one is removable itself, then the outer one too.
+    await removeWorktree(main, inner, () => true);
+    expect(await worktreeStatus(main, outer, () => true)).toMatchObject({ safety: "safe" });
+  });
+
+  it("worktreeStatus ahead counts a local-only commit of a kept branch when there is no origin/HEAD, main, master or upstream", async () => {
+    const dir = tmp();
+    run(dir, "init", "-q", "-b", "trunk", "r");
+    const main = join(dir, "r");
+    commit(main, "a.txt");
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "feat", wt);
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ahead: 0, safety: "safe" });
+    commit(wt, "f.txt");
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ahead: 1, safety: "has_work" });
+  });
+
+  it("worktreeStatus counts ignored files but not ignored directories git reports whole", async () => {
+    const { main } = plain();
+    writeFileSync(join(main, ".gitignore"), "*.log\nbuild/\n");
+    run(main, "add", ".");
+    run(main, ...C, "commit", "-qm", "ignore");
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "ig", wt);
+    mkdirSync(join(wt, "build"));
+    writeFileSync(join(wt, "build", "o.js"), "x");
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ignored: 0, uncommitted: 0, safety: "safe" });
+    writeFileSync(join(wt, "a.log"), "x");
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ignored: 1, uncommitted: 0, safety: "safe" });
+  });
+
+  it("worktreeStatus counts ignored files inside an untracked folder, per file, and names that need quoting", async () => {
+    const { main } = plain();
+    writeFileSync(join(main, ".gitignore"), "*.env\n*.log\nbuild/\nmy dir/\n");
+    run(main, "add", ".");
+    run(main, ...C, "commit", "-qm", "ignore");
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "ig2", wt);
+    mkdirSync(join(wt, "secrets"));
+    writeFileSync(join(wt, "secrets", "dev.env"), "k");
+    mkdirSync(join(wt, "build"));
+    writeFileSync(join(wt, "build", "o.js"), "x");
+    mkdirSync(join(wt, "my dir"));
+    writeFileSync(join(wt, "my dir", "f.txt"), "x");
+    // secrets/ holds only an ignored file: Safe, and the file is counted; build/ and "my dir/" are whole ignored directories.
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ignored: 1, uncommitted: 0, untracked: 0, safety: "safe" });
+  });
+
+  it("worktreeStatus counts every file of an untracked folder, so work added inside it is stale for expect", async () => {
+    const { main } = plain();
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "nd", wt);
+    mkdirSync(join(wt, "newdir"));
+    writeFileSync(join(wt, "newdir", "a"), "a");
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ uncommitted: 1, untracked: 1 });
+    writeFileSync(join(wt, "newdir", "b"), "b");
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ uncommitted: 2, untracked: 2 });
+    expect(await code(removeWorktree(main, wt, () => true, { expect: { uncommitted: 1, ahead: 0, ignored: 0 } }))).toBe("stale");
+    expect(existsSync(join(wt, "newdir", "b"))).toBe(true);
+  });
+
+  it("parseStatus: renames carry a second field, a leading-space first entry survives the runner's trim, directories are not counted, counts stop at the cap", () => {
+    expect(parseStatus("R  new\0old\0?? x\0!! dir/\0!! f.log\0")).toEqual({ uncommitted: 2, untracked: 1, ignored: 1 });
+    expect(parseStatus("M a.txt\0 M b.txt\0")).toEqual({ uncommitted: 2, untracked: 0, ignored: 0 });
+    expect(parseStatus(Array.from({ length: 1500 }, (_, i) => `?? f${i}`).join("\0")).uncommitted).toBe(1000);
+  });
+
+  it("removeWorktree expect refuses stale when more work exists than listed, also after beforeRemove ran", async () => {
+    const { main } = plain();
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "ex", wt);
+    writeFileSync(join(wt, "u.txt"), "u");
+    const listed = { uncommitted: 1, ahead: 0, ignored: 0 };
+    // Unchanged since the list: removed.
+    const wt2 = join(tmp(), "wt2");
+    run(main, "worktree", "add", "-q", "-b", "ex2", wt2);
+    writeFileSync(join(wt2, "u.txt"), "u");
+    await removeWorktree(main, wt2, () => true, { expect: listed });
+    expect(existsSync(wt2)).toBe(false);
+    // More work than listed.
+    writeFileSync(join(wt, "v.txt"), "v");
+    const before = vi.fn(async () => {});
+    expect(await code(removeWorktree(main, wt, () => true, { expect: listed, beforeRemove: before }))).toBe("stale");
+    expect(before).not.toHaveBeenCalled();
+    rmSync(join(wt, "v.txt"));
+    // A shell writes while the sessions and terminals close.
+    expect(await code(removeWorktree(main, wt, () => true, { expect: listed, beforeRemove: async () => void writeFileSync(join(wt, "late.txt"), "l") }))).toBe("stale");
+    expect(existsSync(join(wt, "late.txt"))).toBe(true);
+  });
+
+  it("classify: blocked beats has_work beats safe", () => {
+    const z = { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0 };
+    expect(classify(z).safety).toBe("safe");
+    expect(classify({ ...z, ahead: 1 }).safety).toBe("has_work");
+    expect(classify({ ...z, uncommitted: 1, blocked: "removing" }).safety).toBe("blocked");
+  });
+
+  it("removeWorktree expectSafe refuses with stale once the worktree has work", async () => {
+    const { main } = plain();
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "st", wt);
+    writeFileSync(join(wt, "u.txt"), "u");
+    const before = vi.fn(async () => {});
+    expect(await code(removeWorktree(main, wt, () => true, { expectSafe: true, beforeRemove: before }))).toBe("stale");
+    expect(existsSync(wt)).toBe(true);
+    expect(before).not.toHaveBeenCalled();
+    rmSync(join(wt, "u.txt"));
+    await removeWorktree(main, wt, () => true, { expectSafe: true, beforeRemove: before });
+    expect(existsSync(wt)).toBe(false);
+  });
+
+  it("removeWorktree deleteBranch deletes a merged kept branch with -d and keeps an unmerged one", async () => {
+    const { main } = plain();
+    const a = join(tmp(), "a");
+    run(main, "worktree", "add", "-q", "-b", "merged", a);
+    expect(await removeWorktree(main, a, () => true, { deleteBranch: true })).toEqual({});
+    expect(out(main, "branch", "--list", "merged")).toBe("");
+    const b = join(tmp(), "b");
+    run(main, "worktree", "add", "-q", "-b", "unmerged", b);
+    commit(b, "u.txt");
+    const r = await removeWorktree(main, b, () => true, { deleteBranch: true });
+    expect(existsSync(b)).toBe(false);
+    expect(r.branchKept).toContain("not fully merged");
+    expect(out(main, "branch", "--list", "unmerged")).toContain("unmerged");
+  });
+
+  it("removeWorktree calls mark with the validated worktree before beforeRemove; a refused one never marks", async () => {
+    const { main } = plain();
+    const wt = join(tmp(), "wt");
+    run(main, "worktree", "add", "-q", "-b", "mk", wt);
+    const order: string[] = [];
+    await removeWorktree(main, wt, () => true, { mark: (w) => void order.push(`mark:${w.path === wt}`), beforeRemove: async () => void order.push("before") });
+    expect(order).toEqual(["mark:true", "before"]);
+    const lk = join(tmp(), "lk");
+    run(main, "worktree", "add", "-q", "-b", "lk", lk);
+    run(main, "worktree", "lock", lk);
+    const mark = vi.fn();
+    expect(await code(removeWorktree(main, lk, () => true, { mark }))).toBe("not_removable");
+    expect(mark).not.toHaveBeenCalled();
   });
 
   it("worktreeStatus of a detached HEAD counts the commits no branch holds", async () => {
     const { main } = plain();
     const d = join(main, ".claude", "worktrees", "det");
     run(main, "worktree", "add", "-q", "--detach", d);
-    expect(await worktreeStatus(main, d)).toMatchObject({ uncommitted: 0, commits: 0 });
+    expect(await worktreeStatus(main, d, () => true)).toMatchObject({ uncommitted: 0, commits: 0 });
     commit(d, "d1.txt");
     commit(d, "d2.txt");
-    expect(await worktreeStatus(main, d)).toMatchObject({ uncommitted: 0, commits: 2, branch: out(d, "rev-parse", "--short", "HEAD") });
+    expect(await worktreeStatus(main, d, () => true)).toMatchObject({ uncommitted: 0, commits: 2, branch: out(d, "rev-parse", "--short", "HEAD") });
   });
 
   it("refuses a repository with a separate git dir (git lists the git dir as main)", async () => {
@@ -420,11 +623,11 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     mkdirSync(join(main, ".claude"));
     symlinkSync(join(main, "src"), join(main, ".claude", "worktrees"));
     expect(await code(createWorktree(main, { ...opts, name: "x" }))).toBe("cwd_not_allowed");
-    // A worktree reached through such a link is not removable either.
+    // A plain linked worktree inside the repository is removable (the links are not the worktree's own path).
     const via = join(main, "src", "y");
     run(main, "worktree", "add", "-q", "-b", "y", via);
-    expect(await code(removeWorktree(main, via, () => true))).toBe("not_removable");
-    expect(existsSync(via)).toBe(true);
+    await removeWorktree(main, via, () => true);
+    expect(existsSync(via)).toBe(false);
   });
 
   it("worktreeNameError follows Claude Code's rule", () => {
@@ -803,7 +1006,8 @@ describe("gitLog / gitShow / gitFileAt", () => {
     await expect(gitShow(r.dir, tree, all)).rejects.toMatchObject({ code: "not_found" });
   });
 
-  it("gitFileAt reads a file name with a line break", async () => {
+  // Windows file names cannot hold a line break.
+  it.skipIf(process.platform === "win32")("gitFileAt reads a file name with a line break", async () => {
     const r = graphRepo();
     const name = "we\nird.txt";
     writeFileSync(join(r.dir, name), "odd\n");
@@ -1212,7 +1416,8 @@ describe("WSL projects opened by their UNC path", () => {
     ]);
   });
 
-  it("gitStatus of a UNC WSL cwd reads through the WSL runner", async () => {
+  // Fakes the distro with a local POSIX folder and bash; on Windows the UNC path names the real \\wsl.localhost share and `bash` may be WSL's own.
+  it.skipIf(process.platform === "win32")("gitStatus of a UNC WSL cwd reads through the WSL runner", async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "wslst-")));
     run(dir, "init", "-q", "-b", "main");
     writeFileSync(join(dir, "a.txt"), "1\n");

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { inDir } from "./paths.ts";
-import { mediaKind, readFailure, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention } from "./files.ts";
+import { mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, fileMention, moveTabs, dropTabs, movedPath } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -115,10 +115,10 @@ describe("selectionMention", () => {
 describe("readFailure", () => {
   const fail = (code: string, size?: number) => readFailure(Object.assign(new Error(`${code}: /p/x raw`), { code, size }));
   it("words each unshowable file, with its size, without the raw code", () => {
-    expect(fail("binary", 1536)).toEqual({ text: "Binary file, not shown (1.5 KB)", notice: true });
-    expect(fail("too_large", 3 * 1024 ** 2)).toEqual({ text: "File too large to show (3 MB)", notice: true });
-    expect(fail("not_utf8", 6)).toEqual({ text: "File is not UTF-8 text, not shown (6 B)", notice: true });
-    expect(fail("binary")).toEqual({ text: "Binary file, not shown", notice: true });
+    expect(fail("binary", 1536)).toEqual({ text: "Binary file, not shown (1.5 KB)", notice: true, hint: "Only text files open in the editor." });
+    expect(fail("too_large", 3 * 1024 ** 2)).toEqual({ text: "File too large to show (3 MB)", notice: true, hint: "The editor opens text files up to 2 MB." });
+    expect(fail("not_utf8", 6)).toEqual({ text: "File is not UTF-8 text, not shown (6 B)", notice: true, hint: "The editor opens UTF-8 text only." });
+    expect(fail("binary")).toEqual({ text: "Binary file, not shown", notice: true, hint: "Only text files open in the editor." });
   });
   it("passes a real error through", () => {
     expect(fail("fs_error")).toEqual({ text: "fs_error: /p/x raw", notice: false });
@@ -135,5 +135,65 @@ describe("media", () => {
     expect(mediaKind("/p/a.ogg")).toBe("audio");
     expect(mediaKind("C:\\p\\a.MP3")).toBe("audio");
     for (const p of ["/p/a.ts", "/p/a.html", "/p/noext", "/p.png/file", "/p/a.constructor"]) expect(mediaKind(p)).toBeUndefined();
+  });
+});
+
+describe("placeTab", () => {
+  const tab = (path: string, preview?: boolean): Tab => ({ path, disk: "", draft: "", mtime: 1, ...(preview && { preview }) });
+  const scope = (p: string) => inDir(p, "/p");
+  const set = (...ts: Tab[]) => Object.fromEntries(ts.map((t) => [t.path, t]));
+
+  it("a preview open replaces the previous preview tab at its position", () => {
+    const tabs = set(tab("/p/a.ts"), tab("/p/b.ts", true), tab("/p/c.ts"));
+    const next = placeTab(tabs, tab("/p/d.ts"), true, scope);
+    expect(Object.keys(next)).toEqual(["/p/a.ts", "/p/d.ts", "/p/c.ts"]);
+    expect(next["/p/d.ts"]!.preview).toBe(true);
+    expect(Object.keys(placeTab(set(tab("/p/a.ts")), tab("/p/d.ts"), true, scope))).toEqual(["/p/a.ts", "/p/d.ts"]);
+  });
+
+  it("a pinned open adds a regular tab and keeps the preview; on an open preview tab it pins it; a preview open of an open tab changes nothing", () => {
+    const tabs = set(tab("/p/b.ts", true));
+    const added = placeTab(tabs, tab("/p/d.ts"), false, scope);
+    expect(added["/p/d.ts"]!.preview).toBeUndefined();
+    expect(added["/p/b.ts"]!.preview).toBe(true);
+    expect(placeTab(tabs, tab("/p/b.ts"), false, scope)["/p/b.ts"]!.preview).toBeUndefined();
+    expect(placeTab(tabs, tab("/p/b.ts"), true, scope)).toBe(tabs);
+    expect(pin(tab("/p/x.ts"))).toEqual(tab("/p/x.ts"));
+  });
+
+  it("a preview tab outside the scope is left alone", () => {
+    const tabs = set(tab("/q/b.ts", true));
+    const next = placeTab(tabs, tab("/p/d.ts"), true, scope);
+    expect(Object.keys(next)).toEqual(["/q/b.ts", "/p/d.ts"]);
+    expect(next["/q/b.ts"]!.preview).toBe(true);
+  });
+});
+
+describe("fileMention (GH-360)", () => {
+  it("is the path relative to cwd as an @-mention; a Windows path with /; a space is quoted", () => {
+    expect(fileMention("/p/src/a.ts", "/p")).toBe("@src/a.ts");
+    expect(fileMention("C:\\p\\src\\a.ts", "C:\\p")).toBe("@src/a.ts");
+    expect(fileMention("/p/my file.ts", "/p")).toBe('@"my file.ts"');
+  });
+});
+
+describe("moveTabs and dropTabs (GH-360)", () => {
+  const t = (path: string, draft?: string): Tab => ({ ...opened(path, { content: "one", mtime: 1 }), ...(draft !== undefined && { draft }) });
+  const tabs = { "/p/a.ts": t("/p/a.ts", "edited"), "/p/src/b.ts": t("/p/src/b.ts"), "/p/src2/c.ts": t("/p/src2/c.ts") };
+  it("moveTabs renames a file tab keeping its draft and order", () => {
+    const m = moveTabs(tabs, "/p/a.ts", "/p/z.ts");
+    expect(Object.keys(m)).toEqual(["/p/z.ts", "/p/src/b.ts", "/p/src2/c.ts"]);
+    expect(m["/p/z.ts"]).toMatchObject({ path: "/p/z.ts", draft: "edited" });
+  });
+  it("moveTabs moves every tab below a renamed folder, not a sibling with the same prefix", () => {
+    const m = moveTabs(tabs, "/p/src", "/p/lib");
+    expect(Object.keys(m)).toEqual(["/p/a.ts", "/p/lib/b.ts", "/p/src2/c.ts"]);
+    expect(m["/p/lib/b.ts"]!.path).toBe("/p/lib/b.ts");
+    expect(movedPath("/p/src/b.ts", "/p/src", "/p/lib")).toBe("/p/lib/b.ts");
+    expect(movedPath("/p/src2/c.ts", "/p/src", "/p/lib")).toBe("/p/src2/c.ts");
+  });
+  it("dropTabs closes clean tabs below the path and keeps a tab with unsaved edits", () => {
+    expect(Object.keys(dropTabs(tabs, "/p/src"))).toEqual(["/p/a.ts", "/p/src2/c.ts"]);
+    expect(Object.keys(dropTabs(tabs, "/p/a.ts"))).toEqual(["/p/a.ts", "/p/src/b.ts", "/p/src2/c.ts"]);
   });
 });

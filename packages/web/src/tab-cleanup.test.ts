@@ -138,3 +138,10 @@ describe("GH-378 auto-close setting", () => {
     expect(localStorage.getItem("claude-ui.tabAutoClose")).toBeNull();
   });
 });
+
+it("GH-378 a tab shown in the other split is kept like the active tab", () => {
+  const f = (id: string) => ({ id, state: "idle" as const, unread: false, draft: false, listed: true, archived: false, worker: false, transcript: true, busy: false });
+  const c = { activeId: "a", shown: new Set(["a", "b"]), pinned: new Set<string>(), listLoaded: true, now: 0 };
+  expect(keepReason(f("b"), c)).toBe("active");
+  expect(keepReason(f("c"), c)).toBeUndefined();
+});

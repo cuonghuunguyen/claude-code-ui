@@ -6,16 +6,42 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 
 ### Added
 
+- Terminal docked at the bottom by default, under the session view and the side panel; Settings > Terminal or a move of its pane tab puts it back into the side panel. The bottom terminal resizes, maximizes, and has a titlebar toggle ([#354](https://github.com/cuonghuunguyen/claude-code-ui/issues/354)).
+- Movable panes: Changes, Files, Git graph and Terminal are tabs of the side panel or the bottom panel. Move a pane with its tab's context menu (right click, Shift+F10, long press), the panel's ⋯ menu, or drag and drop; the side panel docks left or right; the layout is kept per browser and "Reset layout" restores the default. A moved pane keeps its state and its tab keeps the focus ([#355](https://github.com/cuonghuunguyen/claude-code-ui/issues/355), [#374](https://github.com/cuonghuunguyen/claude-code-ui/issues/374)).
+- Clean up dialog: remove worktrees and workers in bulk from the palette, a project's or coordinator's menu, with Safe / Has work / Blocked badges, filters and a result summary. Any linked worktree inside the roots can be removed now, also one made by hand or by another tool (not a locked or symlinked one) ([#377](https://github.com/cuonghuunguyen/claude-code-ui/issues/377)).
+- Sidebar context menus: right click, long press or Shift+F10 on a project or worktree row (new session or worktree, Hide inactive sessions, Archive idle sessions older than 1, 7 or 30 days, remove), on a worker row (Close worker, Remove worker… with an option to remove its worktree), on a coordinator or its "N workers" row (Close finished workers, Remove closed workers…) and on any session row (Copy session ID, Close tab) ([#358](https://github.com/cuonghuunguyen/claude-code-ui/issues/358)).
+
+### Changed
+
+- The "Run session in" chip and menu name the main checkout "Primary worktree" (were "Local" and "Local repository").
+
+### Fixed
+
+- Files tab: the file tree fills the tab while no file is open, instead of an empty editor area with "Open a file from the tree.".
+- The Changes tab's file list beside the diff can be resized: drag its edge or press ←/→ on it (kept per browser, double click restores the default width).
+
+## 0.6.0 - 2026-10-15
+
+### Added
+
+- `claude-ui` opens the web UI in this computer's browser when it starts. Turn it off with `--no-open` or `CLAUDE_UI_OPEN=0`. It does not open after an update restart, over SSH, or on Linux without a display.
+- Queue a message while Claude works: Alt+Enter adds it as a chip above the prompt box, and it is sent when Claude is idle. Settings > Sending picks what Enter does while Claude works (steer, the default, or queue); Alt+Enter does the other, and a hint above the send button says which ([#77](https://github.com/cuonghuunguyen/claude-code-ui/issues/77)).
+- Git graph: a Fetch button and a branch menu with push, force push and pull ([#221](https://github.com/cuonghuunguyen/claude-code-ui/issues/221)).
+- The agent map shows orchestration workers with their live state ([#254](https://github.com/cuonghuunguyen/claude-code-ui/issues/254)).
+- The artifact publish card shows a sandboxed local preview of the page ([#175](https://github.com/cuonghuunguyen/claude-code-ui/issues/175)).
 - Client commands: `claude-ui status`, `open`, `sessions` (`ls`), `projects` and `workers` ask the running daemon from another terminal, with `--json`. The daemon writes `daemon.json` (port, pid, version) to its config folder. `claude-ui update` does not replace the global launcher: run `npm i -g claude-code-ui` to get the new launcher (an old launcher marks the new version as failed when a client command exits non-zero within 10 seconds, for example when the daemon is not running).
 
 ### Changed
 
+- `/clear` in a coordinator session keeps its workers: notices, permission requests and `worker_start` follow the new session ([#334](https://github.com/cuonghuunguyen/claude-code-ui/issues/334)).
 - Usage errors (a bad flag or an unknown command) now exit 2 (were 1).
 
 ### Fixed
 
 - `claude-ui update` that fails within 10 seconds no longer marks the running version as failed to start.
 - Windows: a terminal whose shell exits by itself (`exit`) no longer stays in the daemon's memory; an error in node-pty's output pipe, output worker or process-list helper ends only that terminal instead of the daemon; input typed before the shell's first output counts against the 1 MiB input cap ([#268](https://github.com/cuonghuunguyen/claude-code-ui/issues/268)).
+- WSL projects: the Git graph and git status run inside the distro ([#275](https://github.com/cuonghuunguyen/claude-code-ui/issues/275)); projects opened by their `\\wsl$` path also search and run the safety scan inside the distro ([#298](https://github.com/cuonghuunguyen/claude-code-ui/issues/298)).
+- A WSL or Docker side builds node-pty against the side's own installed Node headers ([#260](https://github.com/cuonghuunguyen/claude-code-ui/issues/260)).
 
 ## 0.5.1 - 2026-10-10
 

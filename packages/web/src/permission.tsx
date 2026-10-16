@@ -1,11 +1,12 @@
 // Permission panel (replaces the prompt box) and its timeline marker (docs/spec.md "Permission bridge").
-import { useState, type FormEvent, type ReactNode } from "react";
+import { use, useState, type FormEvent, type ReactNode } from "react";
 import type { PermissionUpdate } from "@claude-ui/protocol";
-import { FileDiffIcon, ListTodoIcon, PencilIcon, ShieldAlertIcon, SquareIcon, TriangleAlertIcon } from "lucide-react";
+import { FileDiffIcon, ListTodoIcon, Maximize2Icon, PencilIcon, ShieldAlertIcon, SquareIcon, TriangleAlertIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import type { PermissionRequest } from "./store.ts";
 import { InputDiff } from "./tool-card.tsx";
+import { ViewerContext } from "./viewer.ts";
 
 export type PermissionAnswer = {
   decision: "allow" | "allow_always" | "deny";
@@ -66,6 +67,8 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
   const [editing, setEditing] = useState(false);
   const updatedInput = draft === undefined ? undefined : editedInput(part, draft);
   const plan = planOf(part);
+  // Absent outside a session tab (the Focus page): no popup button there.
+  const openViewer = use(ViewerContext);
   const deny = (e: FormEvent) => {
     e.preventDefault();
     onRespond({ decision: "deny", message: feedback.trim() || undefined });
@@ -81,6 +84,11 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
             {plan !== undefined ? <ListTodoIcon className="size-4 shrink-0 text-muted-foreground" /> : <TriangleAlertIcon className="size-4 shrink-0 text-warning" />}
             {plan !== undefined ? "Ready to code? Claude has written up a plan" : "Permission required"}
           </p>
+          {plan && openViewer && (
+            <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 pointer-coarse:size-11" aria-label="Open plan in popup" title="Open in popup" data-testid="plan-open" onClick={(e) => openViewer({ kind: "plan", plan }, e.currentTarget)}>
+              <Maximize2Icon aria-hidden className="size-4" />
+            </Button>
+          )}
           {onStop && (
             <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 pointer-coarse:size-11" aria-label="Stop" title="Stop (Esc)" data-testid="permission-stop" onClick={onStop}>
               <SquareIcon aria-hidden className="size-3 fill-current" />

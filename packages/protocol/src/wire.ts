@@ -126,6 +126,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.archive"; sessionId: string; archived: boolean }
   /** Removes the transcript. Refused while a turn runs or input is pending: stop it first. */
   | { type: "session.delete"; sessionId: string }
+  /** Web app Close worker (docs/spec.md "Orchestration"): as `worker_close` for the worker's own coordinator. Reply `{}`; errors not_worker, unknown_worker, unknown_session, held_elsewhere, stop_timeout. */
+  | { type: "worker.close"; sessionId: string }
+  /** Web app Remove worker: as `worker_remove` (session and transcript deleted, link dropped, worktree kept). Reply `{}`; errors not_worker, unknown_worker, held_elsewhere, session_running, delete_failed. Broadcasts `sessions.changed`. */
+  | { type: "worker.remove"; sessionId: string }
   /** Without `path`: the allowlisted roots (of `side`). */
   | { type: "fs.list"; path?: string }
   /**
@@ -161,6 +165,14 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number }
   /** Overwrites an existing file. Fails with `conflict` when `baseMtime` is given and the disk version differs. */
   | { type: "fs.write"; path: string; content: string; baseMtime?: number }
+  /** New empty file, or folder with `dir` (one level: the parent must exist). Fails `exists`, `bad_name`, `path_not_allowed`. Reply FsPathResult. */
+  | { type: "fs.create"; path: string; dir?: boolean }
+  /** New name in the same folder (`name`: one path segment). A link is renamed, never followed. Fails `exists`, `bad_name`, `not_found`, `root_protected`, `in_use`. Reply FsPathResult. */
+  | { type: "fs.rename"; path: string; name: string }
+  /** Deletes for good (no trash): a file, a link (never its target) or a folder with everything in it. `dryRun`: only counts. Fails `not_found`, `root_protected`, `in_use`. Reply FsDeleteResult. */
+  | { type: "fs.delete"; path: string; dryRun?: boolean }
+  /** Copy of a file next to it, named "<name> copy<.ext>", "<name> copy 2<.ext>", ... Files only (`not_a_file`), at most 512 MiB (`too_large`). Reply FsPathResult. */
+  | { type: "fs.duplicate"; path: string }
   /** Replaces this connection's watched files; each change on disk sends `fs.changed`. */
   | { type: "fs.watch"; paths: string[] }
   /** Starts the user's shell in a PTY in `cwd` (inside the roots). It runs until closed or its shell exits, across reconnects. */
@@ -197,10 +209,14 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[] }
   /** Creates `<repo>/.claude/worktrees/<name>` on branch `worktree-<name>` (docs/spec.md "Worktrees"); no `name`: a generated one. Reply WorktreeCreateResult. Broadcasts `sessions.changed`. */
   | { type: "worktree.create"; cwd: string; name?: string }
-  /** What removing `path` loses; reply WorktreeStatusResult. */
+  /** What removing `path` loses and whether it may be removed (docs/spec.md "Worktrees"); reply WorktreeStatusResult. */
   | { type: "worktree.status"; cwd: string; path: string }
-  /** `git worktree remove --force` of a worktree under `<repo>/.claude/worktrees`, then `git branch -D` for a `worktree-*` branch; transcripts stay. Reply `{}`. Broadcasts `sessions.changed`. */
-  | { type: "worktree.remove"; cwd: string; path: string }
+  /**
+   * `git worktree remove --force` of a linked worktree inside the roots (not main, not locked, not a symlink), then `git branch -D` for a `worktree-*` branch,
+   * `git branch -d` for another one only with `deleteBranch`; `expectSafe`: refused with `stale` unless status is still safe; `expect`: refused with `stale` when the current status has more uncommitted files, commits ahead or ignored files than listed (checked before and after the sessions and terminals close). Transcripts stay.
+   * Reply WorktreeRemoveResult. Broadcasts `sessions.changed`.
+   */
+  | { type: "worktree.remove"; cwd: string; path: string; expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored: number }; deleteBranch?: boolean }
   // MCP servers dialog (docs/spec.md "Config dialogs"): the live query of `sessionId` when it has one, else the config query of `cwd`.
   /** Reply McpListResult. */
   | { type: "mcp.list"; cwd: string; sessionId?: string }
@@ -400,12 +416,22 @@ export type ListResult = {
 };
 /**
  * A git worktree of a project's repository, identified by its directory (canonical path). `main`: the repository's own checkout.
- * `branch`: the short hash on a detached HEAD. `outsideRoots`: listed, but no session can start there.
+ * `branch`: the short hash on a detached HEAD. `outsideRoots`: listed, but no session can start there. `locked`: `git worktree lock`; never removable.
  */
-export type Worktree = { path: string; branch?: string; main: boolean; outsideRoots?: boolean };
+export type Worktree = { path: string; branch?: string; main: boolean; outsideRoots?: boolean; locked?: true };
 export type WorktreeCreateResult = { path: string; branch: string };
-/** `uncommitted`: changed and untracked files; `commits`: commits only this worktree's branch (or detached HEAD) holds, 0 when the branch is kept (not `worktree-*`). */
-export type WorktreeStatusResult = { uncommitted: number; commits: number; branch: string };
+/** Why a worktree cannot be removed now. */
+export type WorktreeBlock = "locked" | "symlink" | "outside_roots" | "sessions_running" | "removing" | "contains_worktree";
+/**
+ * `uncommitted`: changed and untracked files (ignored not); `untracked`: the untracked part of it; `commits`: commits only this worktree's branch
+ * (or detached HEAD) holds, 0 when the branch is kept (not `worktree-*`); `ahead`: commits of HEAD in neither the base branch nor the upstream
+ * (nor a same-name remote branch); `branchMerged`: a kept branch (not `worktree-*`, not detached) has no commit outside base or upstream (`git branch -d` may delete it);
+ * `ignored`: ignored files that removal deletes (ignored directories git reports as a whole are not counted); `headTime`: ms of HEAD's committer date; `running`: its sessions that run or need input. `safety`: "blocked" when `blocked` is set, else
+ * "has_work" when `uncommitted` or `ahead`, else "safe".
+ */
+export type WorktreeStatusResult = { uncommitted: number; untracked: number; commits: number; ahead: number; ignored: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock };
+/** `branchKept`: why a kept branch the caller asked to delete stays (git's message). */
+export type WorktreeRemoveResult = { branchKept?: string };
 /** Claude Code's worktree name rule; undefined when `name` is valid. */
 export function worktreeNameError(name: string): string | undefined {
   if (!name || name.length > 64) return "Name must be 1 to 64 characters";
@@ -460,6 +486,10 @@ export type FsMediaResult = { url: string; mime: string; size: number; mtime: nu
 /** `data`: base64 of the bytes at the offset (shorter at the end of the file); `size` of the whole file; `mtime` 0 for a file at a commit. */
 export type MediaReadResult = { data: string; size: number; mtime: number; mime: string };
 export type FsWriteResult = { mtime: number };
+/** The path an fs.create / fs.rename / fs.duplicate made (parent as fs.list gives it, plus the name). */
+export type FsPathResult = { path: string };
+/** Entries below the folder (none for a file or link); `more`: the count stopped at 10 000 entries or 2 s. */
+export type FsDeleteResult = { files: number; folders: number; more?: boolean };
 /** `title`: "Terminal N", the smallest N free in its cwd. */
 export type TerminalInfo = { id: string; title: string };
 export type TerminalCreateResult = { terminal: TerminalInfo };

@@ -16,6 +16,10 @@ export type Tab = {
   error?: string;
   /** The file turned into one that cannot be shown (binary, too large, not UTF-8) while the tab had no edits: shown in place of the editor. */
   notice?: string;
+  /** What the editor can open instead, under `notice`. */
+  noticeHint?: string;
+  /** A preview tab (italic): the next single-click open replaces it; an edit, a save or a double click pins it. */
+  preview?: boolean;
   /** A media tab (image, SVG, video, audio viewer): `disk` and `draft` are empty, so it is never dirty. */
   media?: FsMediaResult;
 };
@@ -37,11 +41,54 @@ export function mediaKind(path: string): "image" | "svg" | "video" | "audio" | u
 
 export const opened = (path: string, r: FsReadResult): Tab => ({ path, disk: r.content, mtime: r.mtime, draft: r.content });
 
+/** Markdown files get the Source / Preview / Split control. */
+export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
+
+export type MdView = "source" | "preview" | "split";
+const MD_VIEW_KEY = "claude-ui.markdown-view";
+/** The markdown view, one choice per browser; Source by default (VS Code). */
+export function loadMdView(): MdView {
+  try {
+    const v = localStorage.getItem(MD_VIEW_KEY);
+    return v === "preview" || v === "split" ? v : "source";
+  } catch {
+    return "source";
+  }
+}
+export function saveMdView(v: MdView) {
+  try {
+    localStorage.setItem(MD_VIEW_KEY, v);
+  } catch {
+    // Storage unavailable: the choice lasts until the page reloads.
+  }
+}
+
 export const isDirty = (t: Tab) => t.draft !== t.disk;
+
+/** The tab as a regular one. */
+export const pin = (t: Tab): Tab => {
+  if (!t.preview) return t;
+  const { preview: _, ...rest } = t;
+  return rest;
+};
+
+/**
+ * Opens `tab` among `tabs` (VS Code's preview editor). A new tab opened as `preview` replaces the one preview tab inside `scope`, at its position;
+ * an open tab stays, and a pinned open (`preview` false) pins it.
+ */
+export function placeTab(tabs: Record<string, Tab>, tab: Tab, preview: boolean, scope: (path: string) => boolean): Record<string, Tab> {
+  const open = tabs[tab.path];
+  if (open) return preview ? tabs : { ...tabs, [tab.path]: pin(open) };
+  if (!preview) return { ...tabs, [tab.path]: pin(tab) };
+  const old = Object.keys(tabs).find((p) => scope(p) && tabs[p]!.preview);
+  const next: Tab = { ...tab, preview: true };
+  if (old === undefined) return { ...tabs, [tab.path]: next };
+  return Object.fromEntries(Object.entries(tabs).map(([p, t]) => (p === old ? [tab.path, next] : [p, t])));
+}
 
 /** A disk version read after a change: a clean tab reloads, a dirty one gets a conflict. */
 export function diskChanged(t: Tab, r: FsReadResult): Tab {
-  if (t.notice) return { ...t, disk: r.content, draft: r.content, mtime: r.mtime, conflict: undefined, error: undefined, notice: undefined };
+  if (t.notice) return { ...t, disk: r.content, draft: r.content, mtime: r.mtime, conflict: undefined, error: undefined, notice: undefined, noticeHint: undefined };
   if (r.mtime === t.mtime) return t;
   if (r.content === t.disk) return { ...t, mtime: r.mtime, conflict: undefined };
   if (!isDirty(t)) return { ...t, disk: r.content, draft: r.content, mtime: r.mtime, conflict: undefined, error: undefined };
@@ -86,13 +133,18 @@ export function replaceDoc(state: EditorState, text: string): TransactionSpec {
 /** The document joined with its own line breaks (`doc.toString()` always joins with "\n"). */
 export const docText = (state: EditorState) => state.sliceDoc();
 
+/** A Windows path in "/": the CLI resolves either, and "\" would read as an escape in a quoted mention. */
+const mentionRel = (path: string, cwd: string) => (isWinPath(path) ? relPath(path, cwd).replace(/\\/g, "/") : relPath(path, cwd));
+
+/** "Add to prompt" from the file tree: `@path` of the file, relative to `cwd`. */
+export const fileMention = (path: string, cwd: string) => mentionPath(mentionRel(path, cwd));
+
 /**
  * "Send selection to Claude": `@path#Lstart-end` of the main selection, path relative to `cwd`; the file alone when nothing is selected.
  * The SDK attaches only the range for `#L…` (`#start-end` attaches the whole file), and a quoted path needs the range inside the quotes.
  */
 export function selectionMention(state: EditorState, path: string, cwd: string) {
-  // A Windows path in "/": the CLI resolves either, and "\" would read as an escape in a quoted mention.
-  const rel = isWinPath(path) ? relPath(path, cwd).replace(/\\/g, "/") : relPath(path, cwd);
+  const rel = mentionRel(path, cwd);
   const { from, to, empty } = state.selection.main;
   if (empty) return mentionPath(rel);
   const start = state.doc.lineAt(from);
@@ -111,7 +163,7 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
  * The fs.read checks on a file the daemon already decoded (the changes tab's before side, from the SDK): too large, UTF-16 BOM or NUL bytes,
  * or U+FFFD from invalid UTF-8. Undefined for text. ponytail: a text file that holds U+FFFD itself counts as not UTF-8.
  */
-export function textFailure(s: string): { text: string; notice: boolean } | undefined {
+export function textFailure(s: string): { text: string; notice: boolean; hint?: string } | undefined {
   const byteSize = new TextEncoder().encode(s).length;
   const code = byteSize > MAX_FILE_BYTES ? "too_large" : /^\ufffd\ufffd(\0[^\0]|[^\0\ufffd]\0)/.test(s) ? "not_utf8" : s.includes("\0") ? "binary" : s.includes("\ufffd") ? "not_utf8" : undefined;
   // The decoded string has no true byte size, so only a too large file shows one.
@@ -119,18 +171,44 @@ export function textFailure(s: string): { text: string; notice: boolean } | unde
 }
 
 /** What the viewer says about a failed fs.read: `notice` for a file that cannot be shown (not an error), no raw error code. */
-export function readFailure(e: RequestError): { text: string; notice: boolean } {
+export function readFailure(e: RequestError): { text: string; notice: boolean; hint?: string } {
   const size = e.size === undefined ? "" : ` (${fileSize(e.size)})`;
   switch (e.code) {
     case "binary":
-      return { text: `Binary file, not shown${size}`, notice: true };
+      return { text: `Binary file, not shown${size}`, notice: true, hint: "Only text files open in the editor." };
     case "too_large":
-      return { text: `File too large to show${size}`, notice: true };
+      return { text: `File too large to show${size}`, notice: true, hint: "The editor opens text files up to 2 MB." };
     case "not_utf8":
-      return { text: `File is not UTF-8 text, not shown${size}`, notice: true };
+      return { text: `File is not UTF-8 text, not shown${size}`, notice: true, hint: "The editor opens UTF-8 text only." };
     case "not_a_file":
       return { text: "Not a file", notice: true };
     default:
       return { text: e.message, notice: false };
   }
+}
+
+const below = (p: string, dir: string) => {
+  if (isWinPath(dir)) {
+    const [k, d] = [p.replace(/\//g, "\\").toLowerCase(), dir.replace(/\//g, "\\").toLowerCase()];
+    return k === d || k.startsWith(d + "\\");
+  }
+  return p === dir || p.startsWith(dir + "/");
+};
+
+/** The tabs after `from` was renamed to `to` (a file, or a folder: every tab below it): keys and paths change, drafts and order stay. */
+export function moveTabs(tabs: Record<string, Tab>, from: string, to: string): Record<string, Tab> {
+  const out: Record<string, Tab> = {};
+  for (const [k, t] of Object.entries(tabs)) {
+    const p = below(k, from) ? to + k.slice(from.length) : k;
+    out[p] = p === k ? t : { ...t, path: p };
+  }
+  return out;
+}
+
+/** The tab key `path` has after `from` became `to`. */
+export const movedPath = (path: string, from: string, to: string) => (below(path, from) ? to + path.slice(from.length) : path);
+
+/** The tabs after `path` was deleted: the clean tabs below it close, tabs with unsaved edits stay. */
+export function dropTabs(tabs: Record<string, Tab>, path: string): Record<string, Tab> {
+  return Object.fromEntries(Object.entries(tabs).filter(([k, t]) => !below(k, path) || isDirty(t)));
 }
