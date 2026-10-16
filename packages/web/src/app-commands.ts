@@ -28,6 +28,8 @@ export type CommandContext = {
   newSession: () => void;
   /** Opens the New worktree name dialog for the shown project's repository; none outside git. */
   newWorktree?: () => void;
+  /** Opens the Clean up dialog for all projects; none while there is no linked worktree or worker. */
+  cleanUp?: () => void;
   selectTab: (id: string) => void;
   closeTab: (id: string) => void;
   /** Closes the active tab's group (asks first for 2 or more tabs); none while the active tab is in no named group. */
@@ -106,6 +108,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
   const items: (PaletteItem | false | undefined)[] = [
     cmd("session.new", "New session", c.newSession),
     c.newWorktree && cmd("worktree.new", "New worktree…", c.newWorktree),
+    c.cleanUp && cmd("cleanup.open", "Clean up worktrees and workers…", c.cleanUp),
     c.canQuickOpen && cmd("file.open", "Open file", c.quickOpen),
     c.tabs.length > 1 && cmd("tab.next", "Next tab", () => go(step(1))),
     c.tabs.length > 1 && cmd("tab.prev", "Previous tab", () => go(step(-1))),

@@ -1679,7 +1679,7 @@ describe("daemon", () => {
     }
   });
 
-  it("worktree.remove is refused for the main and hand-made worktrees and while a session in it needs input; blocks new sessions and terminals while it runs; then removes and broadcasts", async () => {
+  it("worktree.remove is refused for the main worktree and while a session in it needs input; removes hand-made ones; blocks new sessions and terminals while it runs; then removes and broadcasts", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "wtremove-")));
     const repo = join(root, "repo");
     const hand = join(root, "hand");
@@ -1708,9 +1708,9 @@ describe("daemon", () => {
       const req = (await a.waitFor((m) => m.type === "event" && m.part.type === "permission_request")) as Extract<ServerMessage, { type: "event" }>;
       expect(await a.request({ type: "worktree.remove", cwd: repo, path: wt })).toMatchObject({ code: "has_sessions_running" });
       expect(await a.request({ type: "worktree.remove", cwd: repo, path: repo })).toMatchObject({ code: "not_worktree" });
-      expect(await a.request({ type: "worktree.remove", cwd: repo, path: hand })).toMatchObject({ code: "not_removable" });
-      expect(existsSync(hand)).toBe(true);
-      expect(await a.request({ type: "worktree.status", cwd: repo, path: wt })).toMatchObject({ result: { uncommitted: 0, commits: 0, branch: "worktree-feat" } });
+      expect(await a.request({ type: "worktree.status", cwd: repo, path: wt })).toMatchObject({ result: { safety: "blocked", blocked: "sessions_running", running: 1 } });
+      expect(await a.request({ type: "worktree.remove", cwd: repo, path: hand })).toMatchObject({ result: {} });
+      expect(existsSync(hand)).toBe(false);
       // A refused removal leaves no block behind.
       expect(await a.request({ type: "session.create", cwd: wt })).toMatchObject({ type: "reply" });
       await a.request({ type: "permission.respond", requestId: (req.part as { requestId: string }).requestId, decision: "deny" });
@@ -1719,6 +1719,7 @@ describe("daemon", () => {
         if (l.result.sessions.find((s) => s.id === sessionId)?.state === "idle") break;
         await new Promise((r) => setTimeout(r, 50));
       }
+      expect(await a.request({ type: "worktree.status", cwd: repo, path: wt })).toMatchObject({ result: { uncommitted: 0, commits: 0, branch: "worktree-feat", safety: "safe" } });
       // Messages of one connection start in order: while git removes, no session or terminal starts in the worktree.
       const removed = a.request({ type: "worktree.remove", cwd: repo, path: wt });
       expect(await a.request({ type: "session.create", cwd: wt })).toMatchObject({ code: "worktree_removing" });
@@ -1734,10 +1735,112 @@ describe("daemon", () => {
       const l2 = (await a.request({ type: "session.list" })) as { result: { sessions: { cwd: string }[] } };
       expect(l2.result.sessions.filter((s) => s.cwd === again.result.path)).toEqual([]);
       expect(existsSync(wt)).toBe(false);
-      expect(execFileSync("git", ["worktree", "list"], { cwd: repo, encoding: "utf8" }).trim().split("\n")).toHaveLength(2);
+      expect(execFileSync("git", ["worktree", "list"], { cwd: repo, encoding: "utf8" }).trim().split("\n")).toHaveLength(1);
       const l = (await a.request({ type: "session.list" })) as { result: { sessions: { id: string }[] } };
       expect(l.result.sessions.find((s) => s.id === sessionId)).toBeUndefined();
     } finally {
+      d.close();
+    }
+  });
+
+  async function wtDaemon(prefix: string) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [root],
+      query: fakeQuery as never,
+      projects: added(repo),
+      history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    return { root, repo, d, c: await client((d.address() as AddressInfo).port) };
+  }
+
+  it("worktree.remove with expectSafe skips a worktree that changed (stale) and keeps it", async () => {
+    const { root, repo, d, c } = await wtDaemon("wtstale-");
+    try {
+      const wt = join(root, "wt");
+      execFileSync("git", ["worktree", "add", "-q", "-b", "wt", wt], { cwd: repo });
+      writeFileSync(join(wt, "new.txt"), "x");
+      expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, expectSafe: true })).toMatchObject({ code: "stale" });
+      expect(existsSync(wt)).toBe(true);
+      expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt })).toMatchObject({ result: {} });
+      expect(existsSync(wt)).toBe(false);
+    } finally {
+      d.close();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("worktree.status and worktree.remove refuse a symlinked path (not_removable)", async () => {
+    const { root, repo, d, c } = await wtDaemon("wtlink-");
+    try {
+      const wt = join(root, "wt");
+      execFileSync("git", ["worktree", "add", "-q", "-b", "wt", wt], { cwd: repo });
+      const link = join(root, "link");
+      symlinkSync(wt, link);
+      expect(await c.request({ type: "worktree.status", cwd: repo, path: link })).toMatchObject({ code: "not_removable" });
+      expect(await c.request({ type: "worktree.remove", cwd: repo, path: link })).toMatchObject({ code: "not_removable" });
+      expect(existsSync(wt)).toBe(true);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("worktree.remove rejects non-boolean expectSafe/deleteBranch (bad_request)", async () => {
+    const { root, repo, d, c } = await wtDaemon("wtbool-");
+    try {
+      const wt = join(root, "wt");
+      execFileSync("git", ["worktree", "add", "-q", "-b", "wt", wt], { cwd: repo });
+      for (const extra of [{ expectSafe: "yes" }, { deleteBranch: 1 }]) expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, ...extra } as never)).toMatchObject({ code: "bad_request" });
+      expect(existsSync(wt)).toBe(true);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("worktree.remove validates expect (bad types and negative counts refused) and answers stale on more work than listed", async () => {
+    const { root, repo, d, c } = await wtDaemon("wtexpect-");
+    try {
+      const wt = join(root, "wt");
+      execFileSync("git", ["worktree", "add", "-q", "-b", "wt", wt], { cwd: repo });
+      for (const expect_ of ["x", null, { uncommitted: -1, ahead: 0, ignored: 0 }, { uncommitted: "1", ahead: 0, ignored: 0 }, { uncommitted: 0, ahead: 0 }, { uncommitted: 1.5, ahead: 0, ignored: 0 }])
+        expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, expect: expect_ } as never), JSON.stringify(expect_)).toMatchObject({ code: "bad_request" });
+      expect(existsSync(wt)).toBe(true);
+      writeFileSync(join(wt, "a.txt"), "1");
+      writeFileSync(join(wt, "b.txt"), "2");
+      expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, expect: { uncommitted: 1, ahead: 0, ignored: 0 } })).toMatchObject({ code: "stale" });
+      expect(existsSync(wt)).toBe(true);
+      expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, expect: { uncommitted: 2, ahead: 0, ignored: 0 } })).toMatchObject({ result: {} });
+      expect(existsSync(wt)).toBe(false);
+    } finally {
+      d.close();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("a session.create in an external worktree during its removal gets worktree_removing", async () => {
+    const { root, repo, d, c } = await wtDaemon("wtext-");
+    const bin = mkdtempSync(join(tmpdir(), "slowgit-"));
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const started = join(bin, "started");
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase "$*" in *"worktree remove"*) touch ${started}; sleep 1;; esac\nexec ${realGit} "$@"\n`, { mode: 0o755 });
+    const path = process.env.PATH;
+    try {
+      const wt = join(root, "hand");
+      execFileSync("git", ["worktree", "add", "-q", "-b", "hand", wt], { cwd: repo });
+      process.env.PATH = `${bin}:${path}`;
+      const removed = c.request({ type: "worktree.remove", cwd: repo, path: wt });
+      // The hand-made path has no `.claude/worktrees` part: the mark comes from the lock, so wait until git is removing.
+      for (let i = 0; i < 100 && !existsSync(started); i++) await new Promise((r) => setTimeout(r, 20));
+      expect(existsSync(started)).toBe(true);
+      expect(await c.request({ type: "session.create", cwd: wt })).toMatchObject({ code: "worktree_removing" });
+      expect(await removed).toMatchObject({ result: {} });
+    } finally {
+      process.env.PATH = path;
       d.close();
     }
   });
