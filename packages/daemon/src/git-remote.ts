@@ -1,6 +1,6 @@
 // Remote operations of the Graph tab (docs/spec.md "Layout", Graph tab; wire `git.fetch`, later `git.push`/`git.pull`):
 // started by a click, so the repository's hooks run like in a terminal; they never prompt for credentials.
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { wslHostPath, wslPathOf } from "@claude-ui/protocol";
 import type { GitBranchInfo, GitBranchResult } from "@claude-ui/protocol";
@@ -188,7 +188,8 @@ async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remo
     if (r[2]) symrefs.set(r[0]!, r[2]);
   }
   const info: GitBranchInfo = { ref, local: localHash };
-  if (worktree) info.checkedOut = sameDir(worktree, top) ? "here" : worktree;
+  // git prints `C:/x/y` on Windows: shown in the platform's own form, like every other path.
+  if (worktree) info.checkedOut = sameDir(worktree, top) ? "here" : normalize(worktree);
   if (upstream) info.upstream = upstream.replace(/^refs\/(heads|remotes)\//, "");
   const only = remotes.size === 1 ? [...remotes][0] : undefined;
   const remote = [pushRemote, upRemote !== "." ? upRemote : "", only, remotes.has("origin") ? "origin" : undefined].find((r) => r && remotes.has(r));

@@ -1,12 +1,12 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { homedir, networkInterfaces } from "node:os";
+import { homedir, networkInterfaces, release } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
-import { HELP, PHONE_HINT, USAGE_HINT, parseCli } from "./cli.ts";
+import { HELP, PHONE_HINT, USAGE_HINT, autoOpen, parseCli } from "./cli.ts";
 import { createSettings } from "./settings.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
@@ -70,7 +70,7 @@ if (cli.kind === "update") {
   console.log(`claude-ui ${latest} installed; it runs from the next start of claude-ui.`);
   process.exit(0);
 }
-const { port, roots, lan, allowBypass, idleCloseMinutes, side, updateCheck, osNotify, tailscale } = cli;
+const { port, roots, lan, allowBypass, idleCloseMinutes, side, updateCheck, osNotify, tailscale, open } = cli;
 let hostname = cli.hostname;
 // ponytail: LAN addresses are read once at start; an address the network assigns later is refused until a restart.
 const lanIps = lan ? Object.values(networkInterfaces()).flat().filter((a) => a && a.family === "IPv4" && !a.internal && !a.address.startsWith("169.254.")).map((a) => a!.address) : [];
@@ -174,6 +174,9 @@ if (side) {
         (hostname ? `\n${PHONE_HINT}` : "") +
         `\n${await QRCode.toString(urls[0]!, { type: "terminal", small: true })}`,
     );
+    // This machine's browser gets the loopback pairing URL (always the last); a failing opener only leaves the link above to click.
+    if (open !== false && autoOpen(process.env, process.platform, process.platform === "linux" && /microsoft/i.test(release())))
+      openInBrowser(urls.at(-1)!).catch((e: Error) => console.error(`claude-ui: could not open a browser (${e.message}); open the link above`));
   });
 }
 

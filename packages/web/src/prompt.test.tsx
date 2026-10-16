@@ -6,6 +6,7 @@ import type { ModelInfo } from "@claude-ui/protocol";
 import { SessionPane } from "./App.tsx";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 import { effortOptions, nextMode, shortModel } from "./toolbar.tsx";
+import { loadSendMode, saveSendMode } from "./send-mode.ts";
 import { QuestionPanel } from "./question.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -985,27 +986,80 @@ it("GH-77: chips also show above a permission request", async () => {
   expect(el.querySelector('section[aria-label="Queued messages"]')).not.toBeNull();
 });
 
-it("GH-77: the send menu shows only while running with input, and queues or steers", async () => {
+it("the send menu is gone: the toolbar has Stop and the send button only, with a hint on the send button", async () => {
+  const { $, el, box } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  await type(box, "hello");
+  expect($("send-menu")).toBeNull();
+  expect(el.querySelector('[aria-label="More send options"]')).toBeNull();
+  expect($("toolbar-stop")).not.toBeNull();
+  expect($("send")!.getAttribute("aria-label")).toBe("Claude is working. Steer");
+});
+
+it("the send mode defaults to steer, and an unknown stored value is steer", async () => {
+  expect(loadSendMode()).toBe("steer");
+  localStorage.setItem("claude-ui.sendMode", "nonsense");
+  expect(loadSendMode()).toBe("steer");
+  saveSendMode("queue");
+  expect(localStorage.getItem("claude-ui.sendMode")).toBe("queue");
+  expect(loadSendMode()).toBe("queue");
+  saveSendMode("steer");
+  expect(localStorage.getItem("claude-ui.sendMode")).toBeNull();
+});
+
+it("queue mode: Enter queues and Alt+Enter steers while a turn runs", async () => {
+  saveSendMode("queue");
   const onPrompt = vi.fn(async () => {});
   const onQueue = vi.fn(async () => {});
-  const idle = await render({ onQueue });
-  await type(idle.box, "x");
-  expect(idle.el.querySelector('[aria-label="More send options"]')).toBeNull();
-  unmount();
-  localStorage.clear();
-  const run = await render({ onPrompt, onQueue }, { ...emptySession(), state: "running" });
-  expect(run.el.querySelector('[aria-label="More send options"]')).toBeNull();
-  await type(run.box, "hello");
-  const menu = run.el.querySelector<HTMLElement>('[aria-label="More send options"]')!;
-  expect(menu).not.toBeNull();
-  await act(async () => menu.click());
-  const item = (name: string) => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent!.includes(name))!;
-  await act(async () => item("Queue for when Claude is idle").click());
+  const { box } = await render({ onPrompt, onQueue }, { ...emptySession(), state: "running" });
+  await type(box, "later");
+  await key(box, { key: "Enter" });
+  expect(onQueue).toHaveBeenCalledWith("later", []);
+  expect(onPrompt).not.toHaveBeenCalled();
+  await type(box, "now");
+  await key(box, { key: "Enter", altKey: true });
+  expect(onPrompt).toHaveBeenCalledWith("now", []);
+  expect(onQueue).toHaveBeenCalledTimes(1);
+});
+
+it("queue mode: the send button queues and is labelled Queue; the placeholder follows", async () => {
+  saveSendMode("queue");
+  const onPrompt = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
+  const { $, box } = await render({ onPrompt, onQueue }, { ...emptySession(), state: "running" });
+  expect(box.placeholder).toBe("Claude is working… (Enter to queue, Alt+Enter to steer, Esc to stop)");
+  await type(box, "hello");
+  expect($("send")!.getAttribute("aria-label")).toBe("Claude is working. Queue");
+  await act(async () => $("send")!.click());
   expect(onQueue).toHaveBeenCalledWith("hello", []);
-  await type(run.box, "again");
-  await act(async () => run.el.querySelector<HTMLElement>('[aria-label="More send options"]')!.click());
-  await act(async () => item("Steer now").click());
-  expect(onPrompt).toHaveBeenCalledWith("again", []);
+  expect(onPrompt).not.toHaveBeenCalled();
+});
+
+it("steer mode: the send button steers", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
+  const { $, box } = await render({ onPrompt, onQueue }, { ...emptySession(), state: "running" });
+  await type(box, "hello");
+  await act(async () => $("send")!.click());
+  expect(onPrompt).toHaveBeenCalledWith("hello", []);
+  expect(onQueue).not.toHaveBeenCalled();
+});
+
+it("queue mode without onQueue still steers; idle Enter still sends and idle Alt+Enter still queues", async () => {
+  saveSendMode("queue");
+  const onPrompt = vi.fn(async () => {});
+  const run = await render({ onPrompt }, { ...emptySession(), state: "running" });
+  await type(run.box, "a");
+  await key(run.box, { key: "Enter" });
+  expect(onPrompt).toHaveBeenCalledWith("a", []);
+  unmount();
+  const onQueue = vi.fn(async () => {});
+  const idle = await render({ onPrompt, onQueue });
+  await type(idle.box, "b");
+  await key(idle.box, { key: "Enter" });
+  expect(onPrompt).toHaveBeenCalledWith("b", []);
+  await type(idle.box, "c");
+  await key(idle.box, { key: "Enter", altKey: true });
+  expect(onQueue).toHaveBeenCalledWith("c", []);
 });
 
 it("GH-77: the desktop placeholder mentions Alt+Enter while running", async () => {
@@ -1013,10 +1067,10 @@ it("GH-77: the desktop placeholder mentions Alt+Enter while running", async () =
   expect(box.placeholder).toBe("Claude is working… (Enter to steer, Alt+Enter to queue, Esc to stop)");
 });
 
-it("GH-77: Stop, Steer and the send menu trigger are 44px below md and on coarse pointers (also with a fine pointer at 390px)", async () => {
+it("GH-77: Stop and Steer are 44px below md and on coarse pointers (also with a fine pointer at 390px)", async () => {
   const { $, box } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
   await type(box, "x");
-  for (const el of [$("toolbar-stop"), $("send"), $("send-menu")]) {
+  for (const el of [$("toolbar-stop"), $("send")]) {
     expect(el!.className).toMatch(/\bmax-md:size-11\b/);
     expect(el!.className).toContain("pointer-coarse:size-11");
   }
@@ -1063,32 +1117,4 @@ it("GH-77: after Delete of the first of two chips focus moves to the next Delete
   await act(async () => void del.click());
   await d.rerender({ view: applyEvent(first, { type: "event", sessionId: "s1", seq: 2, part: { type: "prompt_queue", id: "prompt_queue", items: [two[1]!] } }) });
   expect(document.activeElement?.getAttribute("aria-label")).toBe("Delete: two");
-});
-
-it("GH-77: after a choice in the send menu focus is in the prompt box", async () => {
-  const run = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
-  const { box, el } = run;
-  await type(box, "hello");
-  await act(async () => el.querySelector<HTMLElement>('[aria-label="More send options"]')!.click());
-  expect(document.body.textContent).toContain("Enter");
-  expect(document.body.textContent).not.toContain("ENTER");
-  const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent!.includes("Queue for"))!;
-  await act(async () => item.click());
-  // The menu and Steer are gone once the box is empty; focus must still arrive, and stay.
-  expect(run.el.querySelector('[aria-label="More send options"]')).toBeNull();
-  await act(async () => new Promise((r) => setTimeout(r, 50)));
-  expect(document.activeElement).toBe(box);
-  await act(async () => new Promise((r) => setTimeout(r, 300)));
-  expect(document.activeElement).toBe(box);
-});
-
-it("GH-77: Escape closes the send menu and focus is in the prompt box", async () => {
-  const { box, el } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
-  await type(box, "hello");
-  await act(async () => el.querySelector<HTMLElement>('[aria-label="More send options"]')!.click());
-  expect(document.querySelector('[role="menuitem"]')).not.toBeNull();
-  await act(async () => void document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  await act(async () => new Promise((r) => setTimeout(r, 100)));
-  expect(document.querySelector('[role="menuitem"]')).toBeNull();
-  expect(document.activeElement).toBe(box);
 });

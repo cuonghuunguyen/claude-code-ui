@@ -284,7 +284,8 @@ describe("localRemotePath", () => {
     expect(localRemotePath("ext::sh -c x", "/y/a")).toBeUndefined();
   });
   it("treats a malformed file URL as a path to refuse", () => {
-    expect(localRemotePath("file://host/x", "/y/a")).toBe("");
+    // Windows reads `file://host/x` as the UNC path \\host\x, which checkRemotes refuses as another host (foreignPointer).
+    expect(localRemotePath("file://host/x", "/y/a")).toBe(process.platform === "win32" ? "\\\\host\\x" : "");
   });
 });
 

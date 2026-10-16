@@ -155,6 +155,8 @@ export function FilesPanel({
   const shown = paths.filter((p) => inDir(p, cwd));
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
   const refused = notice ?? (active?.notice ? { path: active.path, text: active.notice } : undefined);
+  // No file open: the tree takes the whole panel; with a file, at most 40% above the editor.
+  const empty = !refused && !active;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="files-panel">
@@ -182,7 +184,7 @@ export function FilesPanel({
       </div>
       {showTree && (
         <nav
-          className="max-h-[40%] shrink-0 overflow-auto border-b py-1 font-mono text-xs"
+          className={`overflow-auto py-1 font-mono text-xs ${empty ? "min-h-0 flex-1" : "max-h-[40%] shrink-0 border-b"}`}
           id="file-tree"
           data-testid="file-tree"
           aria-label="File tree"
@@ -292,7 +294,7 @@ export function FilesPanel({
           )}
         </div>
       ) : (
-        <p className="m-auto p-4 text-muted-foreground text-sm">Open a file from the tree.</p>
+        !showTree && <p className="m-auto p-4 text-muted-foreground text-sm" data-testid="files-empty">Open a file from the tree.</p>
       )}
     </div>
   );

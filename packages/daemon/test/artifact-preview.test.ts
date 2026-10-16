@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolve } from "node:path";
 import type { Part } from "@claude-ui/protocol";
 import { ARTIFACT_CSP, artifactFileOf } from "../src/artifact-preview.ts";
 
@@ -6,9 +7,9 @@ const call = (input: unknown, status: string = "done", tool = "Artifact"): Part 
 
 describe("artifactFileOf", () => {
   it("accepts a done publish of an .html/.htm page, absolute or relative to the cwd", () => {
-    expect(artifactFileOf(call({ file_path: "/t/a.html" }), "/c")).toEqual({ path: "/t/a.html" });
-    expect(artifactFileOf(call({ file_path: "a/p.HTM" }), "/c")).toEqual({ path: "/c/a/p.HTM" });
-    expect(artifactFileOf(call({ action: "publish", file_path: "/t/a.html" }), "/c")).toEqual({ path: "/t/a.html" });
+    expect(artifactFileOf(call({ file_path: "/t/a.html" }), "/c")).toEqual({ path: resolve("/t/a.html") });
+    expect(artifactFileOf(call({ file_path: "a/p.HTM" }), "/c")).toEqual({ path: resolve("/c", "a/p.HTM") });
+    expect(artifactFileOf(call({ action: "publish", file_path: "/t/a.html" }), "/c")).toEqual({ path: resolve("/t/a.html") });
   });
 
   it("refuses other tools, other actions, asset uploads, unfinished calls and missing paths (unknown_part)", () => {

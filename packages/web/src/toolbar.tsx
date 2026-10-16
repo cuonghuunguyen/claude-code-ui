@@ -1,9 +1,10 @@
 // Prompt box toolbar (OpenCode prompt input v2): attach, model, effort, permission mode; context meter, send / stop on the right.
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
-import { ArrowUpIcon, BrainIcon, ChevronUpIcon, FilePenIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
-import { Menu } from "@base-ui/react/menu";
+import { ArrowUpIcon, BrainIcon, FilePenIcon, ListPlusIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
 import { Popover } from "@base-ui/react/popover";
 import { keyText } from "./shortcuts.ts";
+import type { SendMode } from "./send-mode.ts";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ContextUsage, Effort, ModelInfo, PermissionMode } from "@claude-ui/protocol";
 import { usePhone } from "./lib/use-narrow.ts";
 import { ContextMeter } from "./context-meter.tsx";
@@ -142,11 +143,13 @@ export function PromptToolbar(props: {
   stats?: Totals;
   /** What the send button shows: the session state, or `disconnected` while the daemon is unreachable. */
   state: SendState;
-  /** Text or images are in the prompt box: idle it sends, during a turn it steers. */
+  /** Text or images are in the prompt box: idle it sends, during a turn it steers (or queues, see `sendMode`). */
   hasInput: boolean;
   onSend: () => void;
-  /** Given (session view): while a turn runs and the box has input, a menu beside Steer queues the message instead (GH-77). */
+  /** Given (session view): while a turn runs and the box has input, queues the message (GH-77); the send button does it when `sendMode` is queue. */
   onQueue?: () => void;
+  /** What Enter and the send button do while a turn runs and `onQueue` is given: the Sending setting. */
+  sendMode?: SendMode;
   onStop: () => void;
   /** The focused send button became disabled (stopped or sent from the keyboard, disconnected): focus goes back to the prompt box. */
   onFocusLost: () => void;
@@ -210,7 +213,7 @@ export function PromptToolbar(props: {
       </div>
       <div className="flex items-end gap-1 pointer-coarse:gap-2">
         {props.usage && <ContextMeter usage={props.usage} stats={props.stats} />}
-        <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onQueue={props.onQueue} onStop={props.onStop} onFocusLost={props.onFocusLost} />
+        <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onQueue={props.onQueue} sendMode={props.sendMode} onStop={props.onStop} onFocusLost={props.onFocusLost} />
       </div>
     </div>
   );
@@ -259,7 +262,7 @@ export type SendState = "idle" | "running" | "needs_input" | "disconnected";
 const SEND_BASE = `relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-linear-to-b from-white/20 to-transparent shadow-button-contrast ${FOCUS} disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11 max-md:size-11`;
 
 /** OpenCode send/stop button plus the session state: spinner while running, warning color while Claude waits for an answer. */
-function SendButton({ state, hasInput, onSend, onQueue, onStop, onFocusLost }: { state: SendState; hasInput: boolean; onSend: () => void; onQueue?: () => void; onStop: () => void; onFocusLost: () => void }) {
+function SendButton({ state, hasInput, onSend, onQueue, sendMode = "steer", onStop, onFocusLost }: { state: SendState; hasInput: boolean; onSend: () => void; onQueue?: () => void; sendMode?: SendMode; onStop: () => void; onFocusLost: () => void }) {
   const ref = useRef<HTMLButtonElement>(null);
   const disabled = state === "disconnected" || (state === "idle" && !hasInput);
   // Chrome blurs a focused button the moment it is disabled, inside React's commit: React drops the event (native listener) and the
@@ -277,31 +280,31 @@ function SendButton({ state, hasInput, onSend, onQueue, onStop, onFocusLost }: {
   }, [disabled]);
   const busy = state === "running" || state === "needs_input";
   const steer = busy && hasInput;
+  // Steering and queueing are both the "send" while busy; queue only when the box can queue and the setting says so.
+  const queue = steer && !!onQueue && sendMode === "queue";
+  const verb = queue ? "Queue" : "Steer";
   const [label, key] =
     state === "disconnected"
       ? ["Disconnected from the daemon", ""]
       : state === "idle"
         ? ["Send", " (Enter)"]
-        : [`${state === "running" ? "Claude is working" : "Claude needs your input"}. ${steer ? "Steer" : "Stop"}`, steer ? " (Enter)" : " (Esc)"];
-  const Icon = state === "disconnected" ? WifiOffIcon : busy && !steer ? SquareIcon : ArrowUpIcon;
-  return (
-    <>
-    {/* Steering: the send button is Steer, so Stop (Esc, which a phone has not) gets its own button (GH-165). */}
-    {steer && (
-      <button type="button" aria-label="Stop" title="Stop (Esc)" data-testid="toolbar-stop" className={`${SEND_BASE} bg-secondary text-secondary-foreground`} onClick={onStop}>
-        <SquareIcon aria-hidden className="size-2.5 fill-current" />
-      </button>
-    )}
+        : [`${state === "running" ? "Claude is working" : "Claude needs your input"}. ${steer ? verb : "Stop"}`, steer ? " (Enter)" : " (Esc)"];
+  const Icon = state === "disconnected" ? WifiOffIcon : busy && !steer ? SquareIcon : queue ? ListPlusIcon : ArrowUpIcon;
+  // The hint above the button: Enter does the setting's mode, Alt+Enter the other (only when the box can queue).
+  const alt = keyText("alt+enter");
+  const enter = keyText("enter");
+  const hint = steer && onQueue ? (queue ? `${enter} queue · ${alt} steer` : `${enter} steer · ${alt} queue`) : "";
+  const button = (
     <button
       type="button"
       aria-label={label}
-      title={label + key}
+      title={hint ? undefined : label + key}
       data-state={state}
       data-testid={busy && !steer ? "toolbar-stop" : "send"}
       ref={ref}
       disabled={disabled}
       className={`${SEND_BASE} ${state === "needs_input" ? "bg-warning text-background motion-safe:animate-pulse" : "bg-send text-primary-foreground"}`}
-      onClick={steer || state === "idle" ? onSend : onStop}
+      onClick={queue ? onQueue : steer || state === "idle" ? onSend : onStop}
     >
       {state === "running" && <LoaderCircleIcon aria-hidden className="absolute size-5.5 animate-spin opacity-60 motion-reduce:animate-none pointer-coarse:size-8" />}
       {state === "needs_input" && !steer ? (
@@ -310,37 +313,22 @@ function SendButton({ state, hasInput, onSend, onQueue, onStop, onFocusLost }: {
         <Icon aria-hidden className={Icon === SquareIcon ? "size-2.5 fill-current" : state === "running" ? "size-3" : "size-4"} />
       )}
     </button>
-    {steer && onQueue && <SendMenu onSteer={onSend} onQueue={onQueue} onClosed={onFocusLost} />}
-    </>
   );
-}
-
-/** Beside Steer: "Steer now" (Enter) or "Queue for when Claude is idle" (Alt+Enter). Hints are for keyboards, so hidden on touch. */
-/** After the commit that removes the menu (its message cleared the box, so Steer and the menu are gone): the inert page and the focus return are settled by the next frame. */
-const later = (f: () => void) => void requestAnimationFrame(() => f());
-
-function SendMenu({ onSteer, onQueue, onClosed }: { onSteer: () => void; onQueue: () => void; onClosed: () => void }) {
-  const item = "flex h-8 cursor-pointer select-none items-center justify-between gap-4 rounded-md px-2 outline-none data-highlighted:bg-secondary max-md:h-11 pointer-coarse:h-11";
   return (
-    // The open menu makes the rest of the page inert and returns focus to its trigger, which is gone once the box is empty (a queued or steered message clears it): so focus moves only after the close finished.
-    <Menu.Root onOpenChangeComplete={(open) => !open && onClosed()}>
-      <Menu.Trigger aria-label="More send options" title="More send options" data-testid="send-menu" className={`${SEND_BASE} bg-secondary text-secondary-foreground`}>
-        <ChevronUpIcon aria-hidden className="size-4" />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner side="top" align="end" sideOffset={6} className="z-50">
-          <Menu.Popup finalFocus={false} className="z-50 min-w-40 rounded-lg bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none">
-            <Menu.Item className={item} onClick={() => (onSteer(), later(onClosed))}>
-              Steer now
-              <kbd className="text-muted-foreground text-xs pointer-coarse:hidden">{keyText("enter")}</kbd>
-            </Menu.Item>
-            <Menu.Item className={item} onClick={() => (onQueue(), later(onClosed))}>
-              Queue for when Claude is idle
-              <kbd className="text-muted-foreground text-xs pointer-coarse:hidden">{keyText("alt+enter")}</kbd>
-            </Menu.Item>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+    <>
+    {/* Steering or queueing: the send button is that action, so Stop (Esc, which a phone has not) gets its own button (GH-165). */}
+    {steer && (
+      <button type="button" aria-label="Stop" title="Stop (Esc)" data-testid="toolbar-stop" className={`${SEND_BASE} bg-secondary text-secondary-foreground`} onClick={onStop}>
+        <SquareIcon aria-hidden className="size-2.5 fill-current" />
+      </button>
+    )}
+    {/* One tree whether or not there is a hint: the button must stay mounted (its focus handling holds the element). */}
+    <TooltipProvider>
+      <Tooltip disabled={!hint}>
+        <TooltipTrigger render={button} />
+        <TooltipContent side="top" data-testid="send-hint">{hint}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+    </>
   );
 }
