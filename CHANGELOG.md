@@ -4,6 +4,10 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 
 ## Unreleased
 
+### Added
+
+- Terminal docked at the bottom by default, under the session view and the side panel; Settings > Terminal or the terminal's menu moves it back into the side panel. The bottom terminal resizes, maximizes, and has a titlebar toggle ([#354](https://github.com/cuonghuunguyen/claude-code-ui/issues/354)).
+
 ### Changed
 
 - The "Run session in" chip and menu name the main checkout "Primary worktree" (were "Local" and "Local repository").
