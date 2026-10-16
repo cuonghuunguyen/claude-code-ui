@@ -37,3 +37,15 @@ export function popClosed(stack: ClosedTab[], exists: (id: string) => boolean, o
   for (let i = stack.length - 1; i >= 0; i--) if (exists(stack[i]!.id) && !open.includes(stack[i]!.id)) return { tab: stack[i]!, rest: stack.slice(0, i) };
   return { tab: undefined, rest: [] as ClosedTab[] };
 }
+
+/** Undo of a bulk close: each entry goes back to its old index (ascending, which rebuilds the old order), unless it is open already or gone (`exists`); restored ids leave the stack. */
+export function restoreMany(stack: ClosedTab[], tabs: string[], entries: ClosedTab[], exists: (id: string) => boolean) {
+  const next = [...tabs];
+  const restored: string[] = [];
+  for (const e of [...entries].sort((a, b) => a.at - b.at)) {
+    if (next.includes(e.id) || !exists(e.id)) continue;
+    next.splice(Math.min(e.at, next.length), 0, e.id);
+    restored.push(e.id);
+  }
+  return { tabs: next, stack: stack.filter((t) => !restored.includes(t.id)), restored };
+}

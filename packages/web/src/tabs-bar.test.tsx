@@ -919,3 +919,222 @@ it("Delete on the chip of a one-tab group leaves the focus on a control", async 
   expect(el.querySelector('[data-group-chip="/home/u/docs"]')).toBeNull();
   expect(document.activeElement).not.toBe(document.body);
 });
+
+// GH-359: tab context menu commands.
+const ctxMenu = async (el: ParentNode, id: string) => {
+  await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  return document.querySelector<HTMLElement>('[role="menu"]')!;
+};
+const itemOf = (label: string) => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === label)!;
+const closeMenu = () => act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+
+it("GH-359 the tab menu lists the close block, reopen, pin, copy and reveal, in sections", async () => {
+  const { el } = await render({ onTabCommand: vi.fn(), canReopen: true });
+  const m = await ctxMenu(el, "c");
+  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Move left", "Move right", "Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab", "Pin tab", "Copy session ID", "Copy cwd path", "Reveal in sidebar", "Rename", "Archive", "Delete…"]);
+  expect(m.querySelectorAll('[role="separator"]')).toHaveLength(5);
+  await closeMenu();
+});
+
+it("GH-359 each new item calls onTabCommand with the tab id and command", async () => {
+  const onTabCommand = vi.fn();
+  const { el } = await render({ onTabCommand, canReopen: true });
+  for (const [label, cmd] of [["Close others", "closeOthers"], ["Close to the right", "closeRight"], ["Close all", "closeAll"], ["Reopen closed tab", "reopen"], ["Copy session ID", "copyId"], ["Copy cwd path", "copyCwd"], ["Reveal in sidebar", "reveal"]] as const) {
+    await ctxMenu(el, "b");
+    await act(async () => itemOf(label).click());
+    expect(onTabCommand).toHaveBeenLastCalledWith("b", cmd);
+  }
+});
+
+it("GH-359 Close to the right is disabled on the last tab, Reopen without canReopen, Copy cwd without a cwd", async () => {
+  const { el } = await render({ tabs: ["a", NEW_TAB], onTabCommand: vi.fn(), info: (id) => (id === "a" ? { ...INFO.a!, cwd: undefined } : INFO[id]!) });
+  await ctxMenu(el, NEW_TAB);
+  expect(itemOf("Close to the right").getAttribute("aria-disabled")).toBe("true");
+  expect(itemOf("Close others").getAttribute("aria-disabled")).not.toBe("true");
+  expect(itemOf("Reopen closed tab").getAttribute("aria-disabled")).toBe("true");
+  await closeMenu();
+  await ctxMenu(el, "a");
+  expect(itemOf("Copy cwd path").getAttribute("aria-disabled")).toBe("true");
+  expect(itemOf("Close to the right").getAttribute("aria-disabled")).not.toBe("true");
+  await closeMenu();
+});
+
+it("GH-359 the New session tab has the move and close items only", async () => {
+  const { el } = await render({ onTabCommand: vi.fn() });
+  const m = await ctxMenu(el, NEW_TAB);
+  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Move left", "Move right", "Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab"]);
+  await closeMenu();
+});
+
+it("GH-359 without onTabCommand the menu has Move and Close tab only", async () => {
+  const { el } = await render();
+  const m = await ctxMenu(el, "b");
+  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent).slice(0, 4)).toEqual(["Move left", "Move right", "Close tab", "Rename"]);
+  await closeMenu();
+});
+
+it("GH-359 Shift+F10 and the ContextMenu key on a focused tab open its menu; Escape returns focus to the tab", async () => {
+  const { btn } = await renderLive();
+  for (const init of [{ key: "F10", shiftKey: true }, { key: "ContextMenu" }]) {
+    btn("c").focus();
+    await act(async () => void btn("c").dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
+    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull());
+    await act(async () => void (document.activeElement ?? document).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(btn("c")));
+  }
+});
+
+it("GH-359 F10 alone does not open the menu", async () => {
+  const { btn } = await renderLive();
+  btn("c").focus();
+  await act(async () => void btn("c").dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "F10" })));
+  expect(document.querySelector('[role="menu"]')).toBeNull();
+});
+
+it("GH-359 a pinned tab is icon only, has no close button, is labelled '<title>, pinned' and comes first in its group", async () => {
+  const { el, tab } = await render({ pinned: new Set(["b"]), tabs: ["a", "b", "c"], info: (id) => ({ ...INFO[id]!, cwd: "/home/u/web" }) });
+  const ids = [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
+  expect(ids).toEqual(["b", "a", "c"]);
+  const b = tab("b");
+  expect(b.dataset.pinned).toBe("true");
+  expect(b.querySelector('[data-testid="tab-close"]')).toBeNull();
+  expect(b.textContent).toBe("");
+  expect(b.querySelector('[role="tab"]')!.getAttribute("aria-label")).toBe("Docs, pinned, needs input");
+  expect(b.className).toMatch(/\bw-9\b/);
+  expect(tab("a").querySelector('[data-testid="tab-close"]')).not.toBeNull();
+  expect(tab("a").dataset.pinned).toBeUndefined();
+});
+
+it("GH-359 a pinned tab's menu offers Unpin tab, an unpinned one Pin tab; each calls onTabCommand", async () => {
+  const onTabCommand = vi.fn();
+  const { el } = await render({ onTabCommand, pinned: new Set(["a"]) });
+  await ctxMenu(el, "a");
+  expect(itemOf("Pin tab")).toBeUndefined();
+  await act(async () => itemOf("Unpin tab").click());
+  expect(onTabCommand).toHaveBeenLastCalledWith("a", "unpin");
+  await ctxMenu(el, "b");
+  await act(async () => itemOf("Pin tab").click());
+  expect(onTabCommand).toHaveBeenLastCalledWith("b", "pin");
+});
+
+it("GH-359 Close all is disabled when every tab is pinned; Close others and to the right skip pinned tabs", async () => {
+  const { el } = await render({ onTabCommand: vi.fn(), tabs: ["a", "b", "c"], info: (id) => ({ ...INFO[id]!, cwd: "/home/u/web" }), pinned: new Set(["a", "b", "c"]) });
+  await ctxMenu(el, "a");
+  expect(["Close all", "Close others", "Close to the right"].map((l) => itemOf(l).getAttribute("aria-disabled"))).toEqual(["true", "true", "true"]);
+  await closeMenu();
+  await root!.unmount();
+  const r = await render({ onTabCommand: vi.fn(), tabs: ["a", "b", "c"], info: (id) => ({ ...INFO[id]!, cwd: "/home/u/web" }), pinned: new Set(["c"]) });
+  await ctxMenu(r.el, "b");
+  expect(itemOf("Close to the right").getAttribute("aria-disabled")).toBe("true");
+  expect(itemOf("Close others").getAttribute("aria-disabled")).not.toBe("true");
+  await closeMenu();
+});
+
+it("GH-359 Move left / right and Alt+Shift+Arrow do not cross the pin boundary", async () => {
+  const onMove = vi.fn();
+  const { el, tab } = await render({ onMove, onTabCommand: vi.fn(), tabs: ["a", "b", "c"], activeId: "c", info: (id) => ({ ...INFO[id]!, cwd: "/home/u/web" }), pinned: new Set(["a"]) });
+  // Strip order: a (pinned), b, c.
+  await ctxMenu(el, "b");
+  expect(itemOf("Move left").getAttribute("aria-disabled")).toBe("true");
+  expect(itemOf("Move right").getAttribute("aria-disabled")).not.toBe("true");
+  await closeMenu();
+  await ctxMenu(el, "a");
+  expect(itemOf("Move right").getAttribute("aria-disabled")).toBe("true");
+  await closeMenu();
+  const btn = tab("b").querySelector<HTMLElement>('[role="tab"]')!;
+  await act(async () => void btn.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, shiftKey: true, bubbles: true, cancelable: true })));
+  expect(onMove).not.toHaveBeenCalled();
+  await act(async () => void btn.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, shiftKey: true, bubbles: true, cancelable: true })));
+  expect(onMove).toHaveBeenCalledWith("b", "c");
+});
+
+it("GH-359 Close group skips pinned tabs", async () => {
+  const onCloseGroup = vi.fn();
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  const info = (id: string) => ({ ...INFO[id]!, cwd: id === "a" || id === "b" ? "/home/u/web" : "/home/u/api" });
+  await act(async () => root!.render(<SideLabel value={() => undefined}><TabsBar tabs={["a", "b", "c"]} activeId="c" info={info} pinned={new Set(["a"])} onCloseGroup={onCloseGroup} onSelect={() => {}} onClose={() => {}} onMove={() => {}} onMoveGroup={() => {}} onMoveGroupTo={() => {}} onNew={() => {}} onAction={() => {}} onRenamed={() => {}} /></SideLabel>));
+  await act(async () => void el.querySelector('[data-group-chip="/home/u/web"]')!.dispatchEvent(new MouseEvent("auxclick", { bubbles: true, button: 1 })));
+  expect(onCloseGroup).toHaveBeenCalledWith("/home/u/web", ["b"]);
+});
+
+it("GH-359 on a touch screen (coarse primary pointer) tabs are not draggable, so a long press opens the menu instead of a native drag", async () => {
+  const { tab } = await render();
+  expect(tab("a").getAttribute("draggable")).toBe("true");
+  root!.unmount();
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ matches: q === "(pointer: coarse)", media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  try {
+    const r = await render();
+    expect(r.tab("a").getAttribute("draggable")).toBe("false");
+  } finally {
+    window.matchMedia = mm;
+  }
+});
+
+it("GH-359 Close others focuses the kept (clicked) tab even when a pinned tab of another group would take over", async () => {
+  function Host() {
+    const [tabs, setTabs] = useState(["a", "b", "c"]);
+    return <TabsBar tabs={tabs} activeId="a" pinned={new Set(["b"])} info={(id) => ({ ...INFO[id]!, cwd: id === "a" ? "/home/u/web" : "/home/u/api" })} onSelect={() => {}} onClose={() => {}} onMove={() => {}} onMoveGroup={() => {}} onMoveGroupTo={() => {}} onNew={() => {}} onAction={() => {}} onRenamed={() => {}} onTabCommand={(id, c) => c === "closeOthers" && setTabs(tabs.filter((t) => t === id || t === "b"))} />;
+  }
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root!.render(<SideLabel value={() => undefined}><Host /></SideLabel>));
+  await ctxMenu(el, "c");
+  await act(async () => itemOf("Close others").click());
+  await vi.waitFor(() => expect(document.activeElement).toBe(el.querySelector('[data-tab-id="c"] [role="tab"]')));
+});
+
+it("GH-359 the touch drag switch follows the (pointer: coarse) media query", async () => {
+  let coarse = false;
+  const listeners = new Set<() => void>();
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ get matches() { return coarse && q === "(pointer: coarse)"; }, media: q, addEventListener: (_: string, f: () => void) => listeners.add(f), removeEventListener: (_: string, f: () => void) => listeners.delete(f) })) as never;
+  try {
+    const { tab } = await render();
+    expect(tab("a").getAttribute("draggable")).toBe("true");
+    coarse = true;
+    await act(async () => listeners.forEach((f) => f()));
+    expect(tab("a").getAttribute("draggable")).toBe("false");
+  } finally {
+    window.matchMedia = mm;
+  }
+});
+
+it.each([
+  ["Shift+F10", { key: "F10", shiftKey: true }],
+  ["the ContextMenu key", { key: "ContextMenu" }],
+])("GH-359 %s on a focused tab opens the menu with its first enabled item focused", async (_n, key) => {
+  const onTabCommand = vi.fn();
+  const { tab } = await render({ onTabCommand, activeId: "a" });
+  const btn = tab("d").querySelector<HTMLElement>('[role="tab"]')!;
+  btn.focus();
+  // The browser's sequence: keydown, then (Firefox, Chrome) a trusted-looking contextmenu is swallowed by the app's guard; the app's own event opens the menu.
+  await act(async () => void btn.dispatchEvent(new KeyboardEvent("keydown", { ...key, bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(itemOf("Move left")));
+  expect(onTabCommand).not.toHaveBeenCalled();
+  await closeMenu();
+});
+
+it("GH-359 the keyboard-opened menu focuses the first ENABLED item", async () => {
+  const { tab } = await render({ onTabCommand: vi.fn(), tabs: ["a", "b", "c", "d"], activeId: "a" });
+  // a is alone in its group: Move left and Move right are disabled.
+  const btn = tab("a").querySelector<HTMLElement>('[role="tab"]')!;
+  btn.focus();
+  await act(async () => void btn.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(document.activeElement).toBe(itemOf("Close tab")));
+  await closeMenu();
+});
+
+it("GH-359 a mouse right click does not move the focus into the menu", async () => {
+  const { el, btn } = await renderLive();
+  btn("b").focus();
+  await ctxMenu(el, "c");
+  await act(async () => new Promise((r) => setTimeout(r, 120)));
+  expect(document.querySelector('[role="menu"]')).not.toBeNull();
+  expect(document.activeElement).not.toBe(itemOf("Move left"));
+  await closeMenu();
+});
