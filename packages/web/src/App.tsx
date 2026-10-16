@@ -94,6 +94,7 @@ import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./un
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { FILE_LINK_PROPS, FileLinkContext } from "./file-links.tsx";
 import { ViewerContext, latestPlan, useOpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
@@ -389,7 +390,7 @@ export function App() {
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
-  const [openFile, setOpenFile] = useState<string>();
+  const [openFile, setOpenFile] = useState<{ path: string; line?: number }>();
   // Popup viewer (GH-238): what shows, for which session; `opener` takes the focus back on close.
   const [viewer, setViewer] = useState<ViewerState>();
   useEffect(() => setViewer(undefined), [activeId]);
@@ -1450,11 +1451,18 @@ export function App() {
   // A maximized terminal hides the session view: whatever brings the session or the side panel forward restores it.
   const showSession = () => (setBottomMax(false), !wide(1024) && setPane("session"));
   /** Opens a file of the shown session (path relative to its cwd) in the files panel. */
-  const openInPanel = (p: string) => {
-    setOpenFile(joinPath(shown!.cwd, p));
+  const openInPanel = (p: string, line?: number) => {
+    setOpenFile({ path: joinPath(shown!.cwd, p), line });
     reveal("files");
   };
   const openViewer = useOpenViewer(shown, setViewer);
+  /** A path in assistant text (absolute, inside the session cwd): the Files tab opens it at the line. */
+  const revealRef = useRef(reveal);
+  revealRef.current = reveal;
+  const openFileLink = useCallback((path: string, line?: number) => {
+    setOpenFile({ path, line });
+    revealRef.current("files");
+  }, []);
   const latest = useMemo(() => (view ? latestPlan(view) : undefined), [view?.parts, view?.aux]);
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
@@ -2152,6 +2160,7 @@ export function App() {
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
               <div className={`${card} flex-1 ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}>
                 <ViewerContext value={openViewer}>
+                <FileLinkContext value={openFileLink}>
                 <QuoteContext value={setInsert}>
                 {tabs.map((id) => {
                   const s = id === NEW_TAB ? undefined : sessionOf(id);
@@ -2233,6 +2242,7 @@ export function App() {
                   );
                 })}
                 </QuoteContext>
+                </FileLinkContext>
                 </ViewerContext>
               </div>
               {!(layout.side === "left" && lg) && (
@@ -2308,11 +2318,14 @@ export function App() {
                         status={status}
                         cwd={panelSession.cwd}
                         onSend={(mention) => (setInsert(mention), setPane("session"))}
-                        openPath={openFile}
+                        openPath={openFile?.path}
+                        openLine={openFile?.line}
                         onOpened={() => setOpenFile(undefined)}
                         watch={changedPaths}
                         showTree={fileTree}
                         onToggleTree={() => setFileTree((v) => !v)}
+                        gitStamp={isGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
+                        visible={inSight("files")}
                       />
                     </div>,
                     hosts.files,
@@ -2326,7 +2339,7 @@ export function App() {
                         client={client.current!}
                         view={views[panelSession.id]!}
                         cwd={panelSession.cwd}
-                        onOpen={(path) => (setOpenFile(path), reveal("files"))}
+                        onOpen={(path) => (setOpenFile({ path }), reveal("files"))}
                         sessionId={panelSession.id}
                         onPopOut={() => openViewer({ kind: "changes" })}
                       />
@@ -2516,7 +2529,7 @@ export function App() {
           view={viewer ? views[viewer.sessionId] : undefined}
           sessionId={viewer?.sessionId}
           onClose={() => setViewer(undefined)}
-          onOpenInEditor={(p) => (setViewer(undefined), setOpenFile(p), setPane("files"), setPanel(true))}
+          onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line }), setPane("files"), setPanel(true))}
         />
       )}
       <ShortcutsDialog open={shortcutsOpen} edit={shortcutsEdit} onClose={() => (setShortcutsOpen(false), setShortcutsEdit(undefined))} />
@@ -4157,7 +4170,7 @@ function AssistantText({ text, streaming }: { text: string; streaming: boolean }
     // OpenCode text part margin-top 24px, on top of the 12px timeline gap.
     <Message from="assistant" className="relative mt-6" data-testid="assistant-text">
       <MessageContent>
-        <MessageResponse mode={revealing ? "streaming" : "static"} isAnimating={revealing}>
+        <MessageResponse mode={revealing ? "streaming" : "static"} isAnimating={revealing} {...FILE_LINK_PROPS}>
           {shown}
         </MessageResponse>
       </MessageContent>

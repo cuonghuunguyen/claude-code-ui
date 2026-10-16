@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
@@ -36,10 +36,13 @@ it("editor keys: Ctrl+L selects the line and stays with the editor; Ctrl+S saves
   expect(key("S", { shiftKey: true })).toBe(false);
   expect(key("s", { shiftKey: true })).toBe(false);
   expect(onSave).toHaveBeenCalledTimes(1);
+  // Go to line is the literal Ctrl+G; Cmd+G stays CodeMirror's find next.
+  expect(key("g")).toBe(true);
+  expect(key("g", { ctrlKey: false, metaKey: true })).toBe(false);
   view.destroy();
 });
 
-it("opening a binary, too large or not UTF-8 file shows its state in the viewer, no raw error, and keeps the open tabs", async () => {
+it("opening a binary, too large or not UTF-8 file gets a tab that shows its state, no raw error", async () => {
   const states: Record<string, [string, number]> = { "/p/a.bin": ["binary", 2048], "/p/big.log": ["too_large", 5 * 1024 ** 2], "/p/u16.txt": ["not_utf8", 10] };
   const request = vi.fn(async (m: { type: string; path?: string }) => {
     if (m.type === "fs.list") return { entries: [] };
@@ -57,16 +60,19 @@ it("opening a binary, too large or not UTF-8 file shows its state in the viewer,
     await show(path!);
     const notice = el.querySelector("[data-testid=file-notice]")!;
     expect(notice.textContent).toContain(text);
-    expect(notice.textContent).toContain(path!.slice(3));
+    expect(notice.querySelector("nav[aria-label=Breadcrumb] [aria-current=page]")!.textContent).toBe(path!.slice(3));
     expect(el.textContent).not.toMatch(/raw:|too_large|not_utf8/);
+    // It is a tab like any file (here a preview tab replacing the previous one), and the active one.
+    const tabs = [...el.querySelectorAll("[data-testid=editor-tab]")];
+    expect(tabs).toHaveLength(1);
+    expect(tabs.at(-1)!.getAttribute("aria-selected")).toBe("true");
+    expect(tabs.at(-1)!.textContent).toContain(path!.slice(3));
   }
-  expect(el.querySelectorAll("[data-testid=editor-tab]")).toHaveLength(1);
   expect(el.querySelector("[data-testid=file-notice]")!.getAttribute("role")).toBe("status");
-  // The notice is the current view: the tab strip does not mark the previous tab as selected.
-  expect(el.querySelector("[data-testid=editor-tab]")!.getAttribute("aria-selected")).toBe("false");
-  // Choosing the open tab again replaces the notice with its editor.
-  await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=editor-tab] button")!.click(), undefined));
+  // The notice tab closes like any tab.
+  await act(async () => el.querySelector<HTMLButtonElement>("[aria-label='Close u16.txt']")!.click());
   expect(el.querySelector("[data-testid=file-notice]")).toBeNull();
+  expect(el.querySelectorAll("[data-testid=editor-tab]")).toHaveLength(0);
   act(() => root.render(null));
 });
 
@@ -222,6 +228,21 @@ it("the tree follows showTree; the Files button asks to toggle it", async () => 
   act(() => root.render(null));
 });
 
+it("the header shows Collapse all and Reveal buttons only while the tree shows; Reveal needs an open file", async () => {
+  const client = { request: vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : {})), onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  const root = createRoot(el);
+  const show = (showTree: boolean) => act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree={showTree} onToggleTree={() => {}} />));
+  await show(false);
+  expect(el.querySelector("[aria-label='Collapse all folders']")).toBeNull();
+  expect(el.querySelector("[aria-label='Reveal active file in tree']")).toBeNull();
+  await show(true);
+  expect(el.querySelector("[aria-label='Collapse all folders']")).not.toBeNull();
+  expect(el.querySelector<HTMLButtonElement>("[aria-label='Reveal active file in tree']")!.disabled).toBe(true);
+  expect(el.querySelector("[aria-label='Reload the file tree']")!.className).toContain("max-md:size-11");
+  act(() => root.render(null));
+});
+
 /** A panel whose fs.media answers per path; fs.read answers text. */
 function mediaPanel(opts: { media?: (path: string) => unknown; read?: string } = {}) {
   let changed = (_: { path: string }) => {};
@@ -333,4 +354,302 @@ it("the editable editor is unchanged: not read-only, no tabindex", async () => {
   expect(view.state.readOnly).toBe(false);
   expect(el.querySelector(".cm-content")!.hasAttribute("tabindex")).toBe(false);
   act(() => root.render(null));
+});
+
+// jsdom has no layout: CodeMirror's selection layer measures text ranges once the editor is focused.
+const rangeProto = Range.prototype as { getClientRects?: () => unknown; getBoundingClientRect?: () => unknown };
+rangeProto.getClientRects ??= () => Object.assign([], { item: () => null });
+rangeProto.getBoundingClientRect ??= () => new DOMRect();
+
+/** A panel over /p with a.ts, b.ts and src/c.ts; fs.read answers a 5-line text, fs.write is recorded. */
+function treePanel(opts: { read?: (path: string) => Promise<unknown> | unknown } = {}) {
+  const request = vi.fn(async (m: { type: string; path?: string }) => {
+    if (m.type === "fs.list")
+      return {
+        entries: m.path === "/p/src" ? [{ name: "c.ts", path: "/p/src/c.ts", isDir: false }] : [{ name: "src", path: "/p/src", isDir: true }, { name: "a.ts", path: "/p/a.ts", isDir: false }, { name: "b.ts", path: "/p/b.ts", isDir: false }],
+      };
+    if (m.type === "fs.read") return opts.read ? opts.read(m.path!) : { content: "one\ntwo\nthree\nfour\nfive", mtime: 1 };
+    if (m.type === "fs.write") return { mtime: 2 };
+    return {};
+  });
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const show = (props: Partial<ComponentProps<typeof FilesPanel>> = {}) =>
+    act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} {...props} />));
+  const row = (path: string) => [...el.querySelectorAll<HTMLElement>("[role=treeitem]")].find((r) => r.dataset.path === path)!;
+  const tabs = () => [...el.querySelectorAll<HTMLElement>("[data-testid=editor-tab]")];
+  const tabButton = (name: string) => tabs().map((t) => t.querySelector("button")!).find((b) => b.textContent!.startsWith(name))!;
+  const view = async () => {
+    const { EditorView } = await import("@codemirror/view");
+    return EditorView.findFromDOM(el.querySelector<HTMLElement>("[data-testid=code-editor] .cm-editor")!)!;
+  };
+  return { request, el, root, show, row, tabs, tabButton, view, click: (e: HTMLElement) => act(async () => e.click()), dbl: (e: HTMLElement) => act(async () => void e.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }))) };
+}
+
+it("a single click on a tree file opens an italic preview tab; another single click replaces it; a double click pins; editing pins", async () => {
+  const t = treePanel();
+  await t.show();
+  await t.click(t.row("/p/a.ts"));
+  expect(t.tabs()).toHaveLength(1);
+  expect(t.tabs()[0]!.querySelector("button")!.className).toContain("italic");
+  expect(t.tabs()[0]!.querySelector("button")!.getAttribute("aria-label")).toBe("a.ts, preview");
+  await t.click(t.row("/p/b.ts"));
+  expect(t.tabs().map((x) => x.textContent)).toEqual(["b.ts×"]);
+  await t.dbl(t.row("/p/b.ts"));
+  expect(t.tabButton("b.ts").className).not.toContain("italic");
+  await t.click(t.row("/p/a.ts"));
+  expect(t.tabs()).toHaveLength(2);
+  expect(t.tabButton("a.ts").className).toContain("italic");
+  // Editing the preview tab pins it, so the next single click opens a third tab.
+  const v = await t.view();
+  await act(async () => v.dispatch({ changes: { from: 0, insert: "x" } }));
+  expect(t.tabButton("a.ts").className).not.toContain("italic");
+  await t.click(t.row("/p/src"));
+  await t.click(t.row("/p/src/c.ts"));
+  expect(t.tabs()).toHaveLength(3);
+  // Double click on the tab pins it; middle click closes it.
+  await t.dbl(t.tabButton("c.ts"));
+  expect(t.tabButton("c.ts").className).not.toContain("italic");
+  await act(async () => void t.tabButton("c.ts").dispatchEvent(new MouseEvent("auxclick", { bubbles: true, button: 1, cancelable: true })));
+  expect(t.tabs()).toHaveLength(2);
+  act(() => t.root.render(null));
+});
+
+it("dirty marker: editing a tab shows ● (aria-label unsaved); saving removes it and pins the tab", async () => {
+  const t = treePanel();
+  await t.show({ openPath: "/p/a.ts" });
+  expect(t.el.querySelector("[aria-label=unsaved]")).toBeNull();
+  const v = await t.view();
+  await act(async () => v.dispatch({ changes: { from: 0, insert: "x" } }));
+  expect(t.el.querySelector("[aria-label=unsaved]")!.textContent).toContain("●");
+  await t.click(t.el.querySelector<HTMLElement>("[data-testid=editor-save]")!);
+  expect(t.request).toHaveBeenCalledWith(expect.objectContaining({ type: "fs.write", path: "/p/a.ts" }));
+  expect(t.el.querySelector("[aria-label=unsaved]")).toBeNull();
+  act(() => t.root.render(null));
+});
+
+it("breadcrumb: the folders of the path below cwd, the file last with aria-current=page; a folder click shows the tree and reveals it", async () => {
+  const t = treePanel();
+  const onToggleTree = vi.fn();
+  await t.show({ openPath: "/p/src/c.ts", showTree: false, onToggleTree });
+  const nav = t.el.querySelector("nav[aria-label=Breadcrumb]")!;
+  expect([...nav.querySelectorAll("li")].map((l) => l.textContent)).toEqual(["src", "c.ts"]);
+  expect(nav.querySelector("[aria-current=page]")!.textContent).toBe("c.ts");
+  await act(async () => nav.querySelector("button")!.click());
+  expect(onToggleTree).toHaveBeenCalledOnce();
+  await t.show({ showTree: true });
+  await act(async () => void (await new Promise((r) => requestAnimationFrame(r))));
+  expect(t.row("/p/src").getAttribute("aria-expanded")).toBe("true");
+  expect(document.activeElement).toBe(t.row("/p/src"));
+  act(() => t.root.render(null));
+});
+
+it("Ctrl+G opens the go-to-line dialog and a line number moves the cursor; Ctrl+F opens the search panel", async () => {
+  const t = treePanel();
+  await t.show({ openPath: "/p/a.ts" });
+  const v = await t.view();
+  const press = (key: string, init: KeyboardEventInit = {}) => act(async () => void v.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key, code: `Key${key.toUpperCase()}`, bubbles: true, cancelable: true, ...init })));
+  await press("g", { ctrlKey: true });
+  const dialog = t.el.querySelector(".cm-goto-line")!;
+  expect(dialog).not.toBeNull();
+  const input = dialog.querySelector<HTMLInputElement>("input[name=line]")!;
+  const form = input.form!;
+  await act(async () => {
+    input.value = "3";
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  expect(v.state.doc.lineAt(v.state.selection.main.head).number).toBe(3);
+  expect(t.el.querySelector(".cm-search")).toBeNull();
+  await press("f", { ctrlKey: true });
+  expect(t.el.querySelector(".cm-search")).not.toBeNull();
+  act(() => t.root.render(null));
+});
+
+it("openLine puts the cursor on that line, also in an already open tab", async () => {
+  const t = treePanel();
+  await t.show({ openPath: "/p/a.ts", openLine: 4 });
+  expect((await t.view()).state.doc.lineAt((await t.view()).state.selection.main.head).number).toBe(4);
+  await t.show({ openPath: undefined });
+  await t.show({ openPath: "/p/a.ts", openLine: 2 });
+  expect((await t.view()).state.doc.lineAt((await t.view()).state.selection.main.head).number).toBe(2);
+  act(() => t.root.render(null));
+});
+
+it("an unshowable file shows its title and a hint line", async () => {
+  const t = treePanel({ read: () => Promise.reject(Object.assign(new Error("raw"), { code: "binary", size: 2048 })) });
+  await t.show({ openPath: "/p/a.ts" });
+  const n = t.el.querySelector("[data-testid=file-notice]")!;
+  expect(n.textContent).toContain("Binary file, not shown (2 KB)");
+  expect(n.textContent).toContain("Only text files open in the editor.");
+  expect(n.querySelector("svg[data-icon]")).not.toBeNull();
+  act(() => t.root.render(null));
+});
+
+it("a slow fs.read shows Loading file… until it answers", async () => {
+  vi.useFakeTimers();
+  let done = (_: unknown) => {};
+  const t = treePanel({ read: () => new Promise((r) => (done = r)) });
+  await t.show({ openPath: "/p/a.ts" });
+  expect(t.el.querySelector("[data-testid=file-loading]")).toBeNull();
+  await act(async () => void (await vi.advanceTimersByTimeAsync(200)));
+  expect(t.el.querySelector("[data-testid=file-loading]")!.textContent).toBe("Loading file…");
+  await act(async () => (done({ content: "x", mtime: 1 }), void (await vi.advanceTimersByTimeAsync(10))));
+  expect(t.el.querySelector("[data-testid=file-loading]")).toBeNull();
+  expect(t.el.querySelector("[data-testid=code-editor]")).not.toBeNull();
+  vi.useRealTimers();
+  act(() => t.root.render(null));
+});
+
+const MD_DOC = "# Title\n\nsee [next](./next.md) and `src/c.ts:2`\n";
+const mdPanel = () => treePanel({ read: (path) => ({ content: path.endsWith(".md") ? MD_DOC : "const a = 1;", mtime: 1 }) });
+
+it("markdown tab: Source / Preview / Split (aria-pressed), the preview renders the draft live, the choice is kept in localStorage; a non-markdown file has no control", async () => {
+  localStorage.clear();
+  const t = mdPanel();
+  await t.show({ openPath: "/p/docs/guide.md" });
+  const btn = (m: string) => t.el.querySelector<HTMLElement>(`[data-testid=md-view-${m}]`)!;
+  expect(t.el.querySelector("[role=group][aria-label='Markdown view']")).not.toBeNull();
+  expect(btn("source").getAttribute("aria-pressed")).toBe("true");
+  expect(t.el.querySelector("[data-testid=md-preview]")).toBeNull();
+  await t.click(btn("preview"));
+  expect(btn("preview").getAttribute("aria-pressed")).toBe("true");
+  expect(localStorage.getItem("claude-ui.markdown-view")).toBe("preview");
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  const pane = t.el.querySelector<HTMLElement>("[data-testid=md-preview]")!;
+  expect(pane.getAttribute("aria-label")).toBe("Markdown preview");
+  expect(pane.tabIndex).toBe(0);
+  expect(pane.querySelector("h1")!.textContent).toBe("Title");
+  // The source stays mounted (undo history, selection), hidden.
+  expect(t.el.querySelector("[data-testid=code-editor]")!.parentElement!.className).toContain("hidden");
+  await t.click(btn("split"));
+  expect(t.el.querySelector("[data-testid=code-editor]")!.parentElement!.className).not.toContain("hidden");
+  const v = await t.view();
+  await act(async () => v.dispatch({ changes: { from: 0, to: 7, insert: "# Changed" } }));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  expect(t.el.querySelector("[data-testid=md-preview] h1")!.textContent).toBe("Changed");
+  await t.show({ openPath: undefined });
+  await t.show({ openPath: "/p/a.ts" });
+  expect(t.el.querySelector("[aria-label='Markdown view']")).toBeNull();
+  expect(t.el.querySelector("[data-testid=md-preview]")).toBeNull();
+  act(() => t.root.render(null));
+  localStorage.clear();
+});
+
+it("markdown tab below md: no Split button, a stored Split shows the Preview", async () => {
+  localStorage.setItem("claude-ui.markdown-view", "split");
+  const original = window.matchMedia;
+  window.matchMedia = ((query: string) => ({ matches: true, media: query, addEventListener() {}, removeEventListener() {} })) as never;
+  const t = mdPanel();
+  await t.show({ openPath: "/p/docs/guide.md" });
+  expect(t.el.querySelector("[data-testid=md-view-split]")).toBeNull();
+  expect(t.el.querySelector("[data-testid=md-view-preview]")!.getAttribute("aria-pressed")).toBe("true");
+  expect(t.el.querySelector("[data-testid=md-view-preview]")!.className).toContain("max-md:h-11");
+  expect(t.el.querySelector("[data-testid=md-preview]")).not.toBeNull();
+  window.matchMedia = original;
+  act(() => t.root.render(null));
+  localStorage.clear();
+});
+
+it("a link and a path in the markdown preview open that file in a tab, resolved from the markdown file's folder; an open at a line shows the source", async () => {
+  localStorage.setItem("claude-ui.markdown-view", "preview");
+  const t = mdPanel();
+  await t.show({ openPath: "/p/docs/guide.md" });
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  const buttons = [...t.el.querySelectorAll<HTMLButtonElement>("[data-testid=md-preview] button[title='Open in Files tab']")];
+  expect(buttons.map((b) => b.textContent)).toEqual(["next", "src/c.ts:2"]);
+  await act(async () => buttons[0]!.click());
+  expect(t.request).toHaveBeenCalledWith({ type: "fs.read", path: "/p/docs/next.md" });
+  expect(t.tabs().map((x) => x.textContent)).toEqual(["next.md×"]);
+  // A chat link with a line shows the source of a markdown file, although Preview is chosen.
+  await t.show({ openPath: undefined });
+  await t.show({ openPath: "/p/docs/guide.md", openLine: 3 });
+  expect(t.el.querySelector("[data-testid=md-view-source]")!.getAttribute("aria-pressed")).toBe("true");
+  expect(t.el.querySelector("[data-testid=md-preview]")).toBeNull();
+  expect(localStorage.getItem("claude-ui.markdown-view")).toBe("preview");
+  act(() => t.root.render(null));
+  localStorage.clear();
+});
+
+it("a relative image in the markdown preview loads through fs.media from the file's folder; an image outside the root and a failing one show the alt text", async () => {
+  const request = vi.fn(async (m: { type: string; path?: string }) => {
+    if (m.type === "fs.list") return { entries: [] };
+    if (m.type === "fs.read") return { content: "![pic](img/pic.png) ![up](../up.png) ![out](../../../etc/x.png) ![gone](missing.png)", mtime: 1 };
+    if (m.type === "fs.media") {
+      if (m.path!.endsWith("missing.png")) throw new Error("nope");
+      return { url: `/media/k${m.path}?v=1`, mime: "image/png", size: 1, mtime: 1 };
+    }
+    return {};
+  });
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  const root = createRoot(el);
+  localStorage.setItem("claude-ui.markdown-view", "preview");
+  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} openPath="/p/docs/guide.md" />));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 80))));
+  const pane = el.querySelector("[data-testid=md-preview]")!;
+  expect([...pane.querySelectorAll("img")].map((i) => [i.getAttribute("src"), i.alt])).toEqual([["/media/k/p/docs/img/pic.png?v=1", "pic"], ["/media/k/p/up.png?v=1", "up"]]);
+  expect(request).toHaveBeenCalledWith({ type: "fs.media", path: "/p/docs/img/pic.png" });
+  expect(request.mock.calls.some(([m]) => (m as { path?: string }).path?.includes("etc"))).toBe(false);
+  expect(pane.textContent).toContain("out");
+  expect(pane.textContent).toContain("gone");
+  expect(pane.textContent).not.toContain("blocked");
+  act(() => root.render(null));
+  localStorage.clear();
+});
+
+it("the breadcrumb keeps the file name when the pane is narrow: folders shrink first, middle folders collapse to … below md", async () => {
+  const original = window.matchMedia;
+  window.matchMedia = ((query: string) => ({ matches: true, media: query, addEventListener() {}, removeEventListener() {} })) as never;
+  const t = treePanel();
+  await t.show({ openPath: "/p/a/b/c/d/long-file-name.ts" });
+  const nav = t.el.querySelector("nav[aria-label=Breadcrumb]")!;
+  expect([...nav.querySelectorAll("li")].map((l) => l.textContent)).toEqual(["a", "…", "d", "long-file-name.ts"]);
+  const lis = [...nav.querySelectorAll("li")];
+  expect(lis.at(-1)!.className).toContain("shrink");
+  expect(lis.at(-1)!.className).not.toContain("shrink-[1000]");
+  expect(lis[0]!.className).toContain("shrink-[1000]");
+  expect(lis[0]!.className).toContain("min-w-0");
+  window.matchMedia = original;
+  act(() => t.root.render(null));
+});
+
+it("a slow open keeps the active editor mounted (undo history, draft) and shows Loading file… as a line", async () => {
+  const t = treePanel({ read: (path) => (path === "/p/b.ts" ? new Promise((r) => setTimeout(() => r({ content: "bee", mtime: 1 }), 400)) : { content: "one\ntwo", mtime: 1 }) });
+  await t.show({ openPath: "/p/a.ts" });
+  const v = await t.view();
+  await act(async () => v.dispatch({ changes: { from: 0, insert: "x" } }));
+  await t.click(t.row("/p/b.ts"));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 250))));
+  expect(t.el.querySelector("[data-testid=file-loading]")!.textContent).toBe("Loading file…");
+  expect(await t.view()).toBe(v);
+  expect(v.state.doc.toString()).toBe("xone\ntwo");
+  await act(async () => void (await new Promise((r) => setTimeout(r, 300))));
+  expect(t.el.querySelector("[data-testid=file-loading]")).toBeNull();
+  expect((await t.view()).state.doc.toString()).toBe("bee");
+  act(() => t.root.render(null));
+});
+
+it("two quick single clicks: an older, slower answer does not take the preview tab or the focus", async () => {
+  const t = treePanel({ read: (path) => (path === "/p/a.ts" ? new Promise((r) => setTimeout(() => r({ content: "aaa", mtime: 1 }), 300)) : { content: "bbb", mtime: 1 }) });
+  await t.show();
+  await t.click(t.row("/p/a.ts"));
+  await t.click(t.row("/p/b.ts"));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 450))));
+  expect(t.tabs().map((x) => x.textContent)).toEqual(["b.ts×"]);
+  expect((await t.view()).state.doc.toString()).toBe("bbb");
+  act(() => t.root.render(null));
+});
+
+it("a markdown file opened at a line shows its source only for that open", async () => {
+  localStorage.setItem("claude-ui.markdown-view", "preview");
+  const t = mdPanel();
+  await t.show({ openPath: "/p/docs/guide.md", openLine: 2 });
+  expect(t.el.querySelector("[data-testid=md-preview]")).toBeNull();
+  await t.show({ openPath: undefined });
+  await t.show({ openPath: "/p/docs/guide.md" });
+  expect(t.el.querySelector("[data-testid=md-preview]")).not.toBeNull();
+  act(() => t.root.render(null));
+  localStorage.clear();
 });

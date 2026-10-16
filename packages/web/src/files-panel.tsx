@@ -1,21 +1,27 @@
 // File tree and CodeMirror editor tabs (docs/spec.md "Layout", "Editor"). Files are read and saved through the daemon.
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { basicSetup, EditorView } from "codemirror";
-import { Compartment, EditorState } from "@codemirror/state";
+import { Compartment, EditorState, Prec } from "@codemirror/state";
+import { gotoLine } from "@codemirror/search";
 import { keymap, type KeyBinding } from "@codemirror/view";
 import { selectLine } from "@codemirror/commands";
 import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { styleTags, tags as t } from "@lezer/highlight";
 import { languages } from "@codemirror/language-data";
-import type { FsEntry, FsListResult, FsMediaResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
-import { ChevronDownIcon, ChevronRightIcon, RotateCwIcon } from "lucide-react";
+import type { FsMediaResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
+import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, LocateFixedIcon, RotateCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { MessageResponse } from "@/components/ai-elements/message";
+import { useNarrow } from "@/lib/use-narrow.ts";
 import type { connect, ConnectionStatus, RequestError } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
-import { baseName, inDir } from "./paths.ts";
+import { baseName, inDir, relPath } from "./paths.ts";
 import { MediaView } from "./media-view.tsx";
-import { diskChanged, docText, isDirty, lineBreaks, mediaKind, opened, openedMedia, reload, readFailure, replaceDoc, saveBase, saved, selectionMention, type Tab } from "./files.ts";
+import { FileIcon } from "./file-icon.tsx";
+import { FILE_LINK_PROPS, FileBaseContext, FileImageContext, FileLinkContext } from "./file-links.tsx";
+import { FileTree, type FileTreeHandle, type OpenOptions } from "./file-tree.tsx";
+import { diskChanged, docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, opened, openedMedia, pin, placeTab, reload, readFailure, replaceDoc, saveBase, saved, saveMdView, selectionMention, type MdView, type Tab } from "./files.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -31,28 +37,47 @@ export function FilesPanel({
   cwd,
   onSend,
   openPath,
+  openLine,
   onOpened,
   watch = [],
   showTree,
   onToggleTree,
+  gitStamp,
+  visible = true,
 }: {
   client: Client;
   status: ConnectionStatus;
   cwd: string;
   onSend: (mention: string) => void;
   openPath?: string;
+  /** With `openPath`: the line to put the cursor on. */
+  openLine?: number;
   onOpened?: () => void;
   watch?: string[];
   /** The file tree's open state is the app's (Toggle file tree, kept per browser). */
   showTree: boolean;
   onToggleTree: () => void;
+  /** Defined in a git work tree: a new value reads the tree's git marks again. */
+  gitStamp?: string;
+  /** The panel is on screen (the tree reads git marks only then). */
+  visible?: boolean;
 }) {
   const [tabs, setTabs] = useState<Record<string, Tab>>({});
   const [activePath, setActivePath] = useState<string>();
   const [treeKey, setTreeKey] = useState(0);
+  const [gitNudge, setGitNudge] = useState(0);
+  const [filtering, setFiltering] = useState(false);
+  const tree = useRef<FileTreeHandle>(undefined);
+  const [mdView, setMdView] = useState<MdView>(loadMdView);
+  /** A markdown file opened at a line shows its source for that open, whatever view is chosen (not stored). */
+  const [sourceOnly, setSourceOnly] = useState<string>();
+  const narrow = useNarrow();
   const [error, setError] = useState<string>();
-  /** The last opened file that cannot be shown (binary, too large, not UTF-8); it replaces the editor until a tab is chosen. */
-  const [notice, setNotice] = useState<{ path: string; text: string }>();
+  /** The file being read for longer than 150 ms. */
+  const [loading, setLoading] = useState<string>();
+  const openSeq = useRef(0);
+  /** A line to go to in `path`'s editor once it shows (`key` tells a repeat of the same line apart). */
+  const [goto, setGoto] = useState<{ path: string; line: number; key: number }>();
   const editor = useRef<EditorView>(undefined);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
@@ -83,28 +108,46 @@ export function FilesPanel({
       if ((e as Error).message === "disconnected") return;
       const f = readFailure(e as RequestError);
       // A clean tab shows the state instead of its stale text; a dirty one keeps its edits and shows the line.
-      update(path, (t) => (f.notice && !isDirty(t) ? { ...t, error: undefined, notice: f.text } : { ...t, error: f.text }));
+      update(path, (t) => (f.notice && !isDirty(t) ? { ...t, error: undefined, notice: f.text, noticeHint: f.hint } : { ...t, error: f.text }));
     }
   }
 
-  async function open(path: string) {
+  /** Opens `path` as a preview tab (italic, replaced by the next single-click open) unless `preview` is false. */
+  async function open(path: string, opts: { preview?: boolean; line?: number; focusEditor?: boolean } = {}) {
+    const preview = opts.preview ?? true;
+    const scope = (p: string) => inDir(p, cwd);
     setError(undefined);
-    setNotice(undefined);
-    if (!tabsRef.current[path]) {
+    // Answers come back in any order: only the latest open may take the preview slot and the focus.
+    const seq = ++openSeq.current;
+    if (!opts.line) setSourceOnly((p) => (p === path ? undefined : p));
+    if (tabsRef.current[path]) setTabs((ts) => (ts[path] ? placeTab(ts, ts[path], preview, scope) : ts));
+    else {
+      const timer = setTimeout(() => setLoading(path), 150);
       try {
         const tab = await readTab(path);
-        setTabs((ts) => ({ ...ts, [path]: ts[path] ?? tab }));
+        if (seq !== openSeq.current && preview) return;
+        setTabs((ts) => placeTab(ts, ts[path] ?? tab, preview, scope));
       } catch (e) {
         const f = readFailure(e as RequestError);
-        return f.notice ? setNotice({ path, text: f.text }) : setError(f.text);
+        if (seq !== openSeq.current && preview) return;
+        if (!f.notice) return setError(f.text);
+        // A file that cannot be shown still gets a tab (closable, with its breadcrumb) that says why.
+        setTabs((ts) => placeTab(ts, ts[path] ?? { path, disk: "", draft: "", mtime: 0, notice: f.text, noticeHint: f.hint }, preview, scope));
+        return void setActivePath(path);
+      } finally {
+        clearTimeout(timer);
+        setLoading((l) => (l === path ? undefined : l));
       }
     }
-    setActivePath(path);
+    if (seq === openSeq.current) setActivePath(path);
+    if (opts.line && isMarkdown(path)) setSourceOnly(path);
+    if (opts.line) setGoto((g) => ({ path, line: opts.line!, key: (g?.key ?? 0) + 1 }));
+    if (opts.focusEditor) requestAnimationFrame(() => editor.current?.focus());
   }
 
   useEffect(() => {
     if (!openPath) return;
-    void open(openPath);
+    void open(openPath, { line: openLine });
     onOpened?.();
   }, [openPath]);
 
@@ -114,7 +157,8 @@ export function FilesPanel({
     const content = t.draft;
     try {
       const r = await client.request<FsWriteResult>({ type: "fs.write", path, content, baseMtime: saveBase(t, overwrite) });
-      update(path, (t) => saved(t, content, r.mtime));
+      update(path, (t) => pin(saved(t, content, r.mtime)));
+      setGitNudge((n) => n + 1);
     } catch (e) {
       update(path, (t) => ({ ...t, error: (e as Error).message }));
       void refresh(path); // a conflict error means a newer disk version; this shows it as a conflict
@@ -150,13 +194,37 @@ export function FilesPanel({
       .then(() => added.forEach((p) => void refresh(p)))
       .catch(() => {});
   }, [status, watchKey]);
-  useEffect(() => client.onFsChanged((m) => void (tabsRef.current[m.path] && refresh(m.path))), [client]);
+  useEffect(
+    () =>
+      client.onFsChanged((m) => {
+        if (!tabsRef.current[m.path]) return;
+        void refresh(m.path);
+        setGitNudge((n) => n + 1);
+      }),
+    [client],
+  );
 
+  const openRef = useRef(open);
+  openRef.current = open;
+  const openLink = useCallback((path: string, line?: number) => void openRef.current(path, { line }), []);
+  const imageUrl = useCallback((path: string) => client.request<FsMediaResult>({ type: "fs.media", path }).then((m) => m.url), [client]);
   const shown = paths.filter((p) => inDir(p, cwd));
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
-  const refused = notice ?? (active?.notice ? { path: active.path, text: active.notice } : undefined);
+  const md = !!active && !active.media && isMarkdown(active.path);
+  /** Split needs room: below md it shows Preview. */
+  const view: MdView = !md ? "source" : sourceOnly === active!.path ? "source" : mdView === "split" && narrow ? "preview" : mdView;
+  const previewDoc = useDeferredValue(active?.draft ?? "");
+  const previewBase = useMemo(() => ({ base: active ? active.path.slice(0, Math.max(active.path.length - baseName(active.path).length - 1, 1)) : cwd, root: cwd }), [active?.path, cwd]);
+  useEffect(() => editor.current?.requestMeasure(), [view]);
+  const refused = active?.notice ? { path: active.path, text: active.notice, hint: active.noticeHint } : undefined;
   // No file open: the tree takes the whole panel; with a file, at most 40% above the editor.
   const empty = !refused && !active;
+
+  /** Breadcrumb folder: show the tree, then reveal the folder in it. */
+  function revealFolder(dir: string) {
+    if (!showTree) onToggleTree();
+    requestAnimationFrame(() => void tree.current?.reveal(dir, true, true));
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="files-panel">
@@ -165,16 +233,45 @@ export function FilesPanel({
           size="xs"
           variant="ghost"
           onClick={onToggleTree}
+          className="max-md:h-11 pointer-coarse:h-11"
           aria-expanded={showTree}
           aria-controls="file-tree"
           data-testid="toggle-tree"
         >
           {showTree ? <ChevronDownIcon /> : <ChevronRightIcon />} Files
         </Button>
+        {showTree && (
+          <>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="ml-auto max-md:size-11 pointer-coarse:size-11"
+              onClick={() => tree.current?.collapseAll()}
+              disabled={filtering}
+              title="Collapse all folders"
+              aria-label="Collapse all folders"
+              data-testid="tree-collapse-all"
+            >
+              <ChevronsDownUpIcon />
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="max-md:size-11 pointer-coarse:size-11"
+              onClick={() => active && void tree.current?.reveal(active.path, true)}
+              disabled={!active}
+              title="Reveal active file in tree"
+              aria-label="Reveal active file in tree"
+              data-testid="tree-reveal"
+            >
+              <LocateFixedIcon />
+            </Button>
+          </>
+        )}
         <Button
           size="xs"
           variant="ghost"
-          className="ml-auto"
+          className={`${showTree ? "" : "ml-auto "}max-md:size-11 pointer-coarse:size-11`}
           onClick={() => setTreeKey((k) => k + 1)}
           title="Reload the file tree"
           aria-label="Reload the file tree"
@@ -189,7 +286,19 @@ export function FilesPanel({
           data-testid="file-tree"
           aria-label="File tree"
         >
-          <TreeDir key={`${cwd}:${treeKey}`} client={client} path={cwd} depth={0} activePath={active?.path} onOpen={open} />
+          <FileTree
+            key={cwd}
+            client={client}
+            cwd={cwd}
+            activePath={active?.path}
+            reloadKey={treeKey}
+            gitStamp={gitStamp}
+            visible={visible}
+            gitNudge={gitNudge}
+            handleRef={tree}
+            onFilter={setFiltering}
+            onOpen={(path, o) => void open(path, { preview: !o.pinned, focusEditor: o.focusEditor })}
+          />
         </nav>
       )}
       {error && <p className="px-2 py-1 text-destructive text-xs">{error}</p>}
@@ -201,18 +310,24 @@ export function FilesPanel({
               <div
                 key={p}
                 role="tab"
-                aria-selected={t === active && !notice}
+                aria-selected={t === active}
                 data-testid="editor-tab"
-                className={`flex shrink-0 items-center gap-1 border-r pl-2 ${t === active && !notice ? "bg-muted" : ""}`}
+                className={`flex shrink-0 items-center gap-1 border-r pl-2 ${t === active ? "bg-muted" : ""}`}
                 title={p}
               >
-                <button className="py-1.5" onClick={() => (setNotice(undefined), setActivePath(p))}>
+                <button
+                  className={`py-1.5 max-md:min-h-11 ${t.preview ? "italic" : ""}`}
+                  aria-label={t.preview ? `${baseName(p)}, preview` : undefined}
+                  onClick={() => setActivePath(p)}
+                  onDoubleClick={() => update(p, pin)}
+                  onAuxClick={(e) => e.button === 1 && (e.preventDefault(), close(p))}
+                >
                   {baseName(p)}
                   {isDirty(t) && <span aria-label="unsaved"> ●</span>}
                   {t.conflict && <span className="text-warning"> !</span>}
                 </button>
                 <button
-                  className="px-1.5 py-1.5 text-muted-foreground hover:text-foreground"
+                  className="px-1.5 py-1.5 text-muted-foreground hover:text-foreground max-md:min-w-11 max-md:min-h-11"
                   onClick={() => close(p)}
                   aria-label={`Close ${baseName(p)}`}
                 >
@@ -223,13 +338,25 @@ export function FilesPanel({
           })}
         </div>
       )}
-      {refused ? (
-        <p className="m-auto max-w-full p-4 text-center text-muted-foreground text-sm" data-testid="file-notice" role="status">
-          <span className="block truncate font-mono text-xs" title={refused.path}>
-            {refused.path.slice(cwd.length + 1) || refused.path}
-          </span>
-          {refused.text}
+      {loading && active && (
+        // The editor stays mounted (undo history, cursor, scroll) while another file loads.
+        <p className="shrink-0 border-b px-2 py-1 text-muted-foreground text-xs" role="status" data-testid="file-loading">
+          Loading file…
         </p>
+      )}
+      {loading && !active ? (
+        <p className="m-auto p-4 text-muted-foreground text-sm" role="status" data-testid="file-loading">
+          Loading file…
+        </p>
+      ) : refused ? (
+        <div className="m-auto flex max-w-full flex-col items-center gap-1 p-4 text-center" data-testid="file-notice" role="status">
+          <FileIcon path={refused.path} className="mb-1 size-8" />
+          <div className="w-full max-w-full text-xs">
+            <Breadcrumb path={refused.path} cwd={cwd} onFolder={revealFolder} />
+          </div>
+          <span className="text-foreground text-sm">{refused.text}</span>
+          {refused.hint && <span className="text-muted-foreground text-xs">{refused.hint}</span>}
+        </div>
       ) : active ? (
         <div className="flex min-h-0 flex-1 flex-col">
           {active.conflict && (
@@ -257,10 +384,25 @@ export function FilesPanel({
             />
           ) : (
             <>
-          <div className="flex items-center gap-2 border-b px-2 py-1 text-xs">
-            <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground" title={active.path}>
-              {active.path.slice(cwd.length + 1) || active.path}
-            </span>
+          <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1 text-xs">
+            <Breadcrumb path={active.path} cwd={cwd} onFolder={revealFolder} />
+            {md && (
+              <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Markdown view">
+                {(narrow ? (["source", "preview"] as const) : (["source", "preview", "split"] as const)).map((m) => (
+                  <Button
+                    key={m}
+                    size="sm"
+                    variant="ghost"
+                    aria-pressed={view === m}
+                    className={`max-md:h-11 pointer-coarse:h-11 ${view === m ? "bg-card shadow-xs hover:bg-card" : ""}`}
+                    onClick={() => (setSourceOnly(undefined), setMdView(m), saveMdView(m))}
+                    data-testid={`md-view-${m}`}
+                  >
+                    {m === "source" ? "Source" : m === "preview" ? "Preview" : "Split"}
+                  </Button>
+                ))}
+              </div>
+            )}
             {mediaKind(active.path) === "svg" && (
               <Button size="xs" variant="outline" disabled={isDirty(active)} onClick={() => void switchView(active.path, false)} className="max-md:h-11 pointer-coarse:h-11">
                 Show preview
@@ -272,24 +414,49 @@ export function FilesPanel({
               variant="outline"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => editor.current && onSend(selectionMention(editor.current.state, active.path, cwd))}
+              className="max-md:h-11 pointer-coarse:h-11"
               title="Insert the file and selected lines into the prompt box (Alt+K, Option+K on macOS)"
               data-testid="send-selection"
             >
               Send selection to Claude
             </Button>
-            <Button size="xs" disabled={!isDirty(active) || !!active.conflict} onClick={() => void save(active.path)} data-testid="editor-save">
+            <Button size="xs" className="max-md:h-11 pointer-coarse:h-11" disabled={!isDirty(active) || !!active.conflict} onClick={() => void save(active.path)} data-testid="editor-save">
               Save
             </Button>
           </div>
+          <div className="flex min-h-0 flex-1">
+            <div className={`min-h-0 min-w-0 flex-1 flex-col ${view === "preview" ? "hidden" : "flex"}`}>
           <CodeEditor
             key={active.path}
             path={active.path}
             doc={active.draft}
             viewRef={editor}
             onSend={(state) => onSend(selectionMention(state, active.path, cwd))}
-            onChange={(draft) => update(active.path, (t) => ({ ...t, draft }))}
+            onChange={(draft) => update(active.path, (t) => ({ ...pin(t), draft }))}
+            goto={goto?.path === active.path ? goto : undefined}
+            onGoto={() => setGoto(undefined)}
             onSave={() => void save(active.path)}
           />
+            </div>
+            {md && view !== "source" && (
+              <div
+                tabIndex={0}
+                aria-label="Markdown preview"
+                data-testid="md-preview"
+                className={`min-h-0 min-w-0 flex-1 overflow-auto px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${view === "split" ? "border-l" : ""}`}
+              >
+                <FileBaseContext value={previewBase}>
+                  <FileLinkContext value={openLink}>
+                    <FileImageContext value={imageUrl}>
+                      <MessageResponse mode="static" {...FILE_LINK_PROPS}>
+                        {previewDoc}
+                      </MessageResponse>
+                    </FileImageContext>
+                  </FileLinkContext>
+                </FileBaseContext>
+              </div>
+            )}
+          </div>
             </>
           )}
         </div>
@@ -300,68 +467,50 @@ export function FilesPanel({
   );
 }
 
-/** One directory level, listed when first expanded. */
-function TreeDir({
-  client,
-  path,
-  depth,
-  activePath,
-  onOpen,
-}: {
-  client: Client;
-  path: string;
-  depth: number;
-  activePath?: string;
-  onOpen: (path: string) => void;
-}) {
-  const [entries, setEntries] = useState<FsEntry[]>();
-  const [error, setError] = useState<string>();
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    client
-      .request<FsListResult>({ type: "fs.list", path })
-      .then((r) => setEntries(r.entries.filter((e) => e.name !== ".git").sort((a, b) => Number(b.isDir) - Number(a.isDir))))
-      .catch((e: Error) => setError(e.message));
-  }, [path]);
-
-  const pad = { paddingLeft: `${depth * 12 + 8}px` };
-  if (error)
-    return (
-      <p className="text-destructive" style={pad}>
-        {error}
-      </p>
-    );
-  if (!entries)
-    return (
-      <p className="text-muted-foreground" style={pad}>
-        …
-      </p>
-    );
+/** The file's path below `cwd` as folders (a click reveals one in the tree) and the file name. */
+function Breadcrumb({ path, cwd, onFolder }: { path: string; cwd: string; onFolder: (dir: string) => void }) {
+  const rel = relPath(path, cwd);
+  const parts = rel.split(/[\\/]/).filter(Boolean);
+  const base = rel === path ? "" : path.slice(0, path.length - rel.length);
+  const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  const collapse = useNarrow() && parts.length > 4;
   return (
-    <ul>
-      {entries.map((e) => (
-        <li key={e.path}>
-          <button
-            className={`flex w-full items-center gap-1 py-1 pr-2 text-left hover:bg-muted ${e.path === activePath ? "bg-muted" : ""}`}
-            style={pad}
-            data-testid="tree-entry"
-            aria-expanded={e.isDir ? !!expanded[e.path] : undefined}
-            onClick={() => (e.isDir ? setExpanded((x) => ({ ...x, [e.path]: !x[e.path] })) : onOpen(e.path))}
-          >
-            {e.isDir ? (
-              expanded[e.path] ? <ChevronDownIcon className="size-3.5 shrink-0 text-faint" /> : <ChevronRightIcon className="size-3.5 shrink-0 text-faint" />
-            ) : (
-              <span className="size-3.5 shrink-0" />
-            )}
-            <span className="truncate">{e.name}</span>
-          </button>
-          {e.isDir && expanded[e.path] && (
-            <TreeDir client={client} path={e.path} depth={depth + 1} activePath={activePath} onOpen={onOpen} />
-          )}
-        </li>
-      ))}
-    </ul>
+    <nav aria-label="Breadcrumb" className="min-w-0 max-md:basis-full md:flex-1" title={path}>
+      <ol className="flex min-w-0 items-center font-mono text-muted-foreground">
+        {parts.map((part, i) => {
+          const last = i === parts.length - 1;
+          // A narrow screen keeps the first and last folder and the file; the folders between become one "…".
+          if (collapse && i > 0 && i < parts.length - 2)
+            return i === 1 ? (
+              <li key={i} className="flex shrink-0 items-center" title={parts.slice(1, -2).join(sep)}>
+                <span aria-hidden>…</span>
+                <ChevronRightIcon className="mx-0.5 size-3 shrink-0 text-faint" aria-hidden />
+              </li>
+            ) : null;
+          return (
+            <li key={i} className={`flex items-center ${last ? "min-w-[6ch] shrink" : "min-w-0 shrink-[1000] overflow-hidden"}`}>
+              {last ? (
+                <span className="flex min-w-0 items-center gap-1 text-foreground" aria-current="page">
+                  <FileIcon path={path} className="size-4 shrink-0" />
+                  <span className="truncate">{part}</span>
+                </span>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="min-w-0 max-w-[16ch] truncate rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring max-md:min-h-11"
+                    onClick={() => onFolder(base + parts.slice(0, i + 1).join(sep))}
+                  >
+                    {part}
+                  </button>
+                  <ChevronRightIcon className="mx-0.5 size-3 shrink-0 text-faint" aria-hidden />
+                </>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }
 
@@ -373,6 +522,8 @@ export const editorKeys = ({ onSave, onSend }: { onSave: () => void; onSend: (st
   { key: "Mod-l", preventDefault: true, run: selectLine },
   // Claude Code's shortcut for inserting an @-mention of the selection.
   { key: "Alt-k", preventDefault: true, run: (v) => (onSend(v.state), true) },
+  // VS Code's Go to Line, also on Linux and Windows where basicSetup's Ctrl+G is find next (still F3); on macOS Cmd+G stays find next.
+  { key: "Ctrl-g", preventDefault: true, run: gotoLine },
 ];
 
 /** Uncontrolled CodeMirror view: `doc` replaces the content only when it is not what the editor itself reported. */
@@ -434,6 +585,8 @@ export const chromeTheme = {
   },
   ".cm-textfield": { backgroundColor: "transparent", color: "inherit", border: "1px solid var(--input)", borderRadius: "4px" },
   ".cm-button": { backgroundImage: "none", backgroundColor: "var(--secondary)", color: "var(--secondary-foreground)", border: "1px solid var(--border)", borderRadius: "4px" },
+  // Go to line (Ctrl+G) dialog.
+  ".cm-dialog": { backgroundColor: "var(--card)", color: "var(--foreground)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px" },
   // Touch: 44px targets (the repo's pointer-coarse rule). The close button joins the options row instead of narrowing the search field.
   "@media (pointer: coarse)": {
     ".cm-tooltip.cm-tooltip-autocomplete > ul": { maxHeight: "calc(5 * 44px + 8px)" },
@@ -442,6 +595,8 @@ export const chromeTheme = {
     ".cm-panel.cm-search": { paddingRight: "6px" },
     ".cm-panel.cm-search .cm-textfield": { minHeight: "44px", fontSize: "16px", flexBasis: "4em" },
     ".cm-panel.cm-search label": { minHeight: "44px", display: "inline-flex", alignItems: "center" },
+    ".cm-dialog .cm-textfield": { minHeight: "44px", fontSize: "16px" },
+    ".cm-dialog .cm-button, .cm-dialog-close": { minHeight: "44px", minWidth: "44px" },
     ".cm-panel.cm-search [name=close]": { position: "static", order: "2", marginLeft: "auto", minWidth: "44px", minHeight: "44px" },
   },
 };
@@ -471,6 +626,8 @@ export function CodeEditor({
   readOnly,
   tabbable,
   line,
+  goto,
+  onGoto,
 }: {
   path: string;
   doc: string;
@@ -481,6 +638,9 @@ export function CodeEditor({
   readOnly?: boolean;
   tabbable?: boolean;
   line?: number;
+  /** The cursor goes to this line when `key` changes (or on mount); `onGoto` then clears it. */
+  goto?: { line: number; key: number };
+  onGoto?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>(undefined);
@@ -499,7 +659,7 @@ export function CodeEditor({
       extensions: [
         basicSetup,
         lineBreaks(doc),
-        keymap.of(editorKeys({ onSave: () => cb.current.onSave(), onSend: (s) => cb.current.onSend(s) })),
+        Prec.high(keymap.of(editorKeys({ onSave: () => cb.current.onSave(), onSend: (s) => cb.current.onSend(s) }))),
         language.of([]),
         chrome,
         darkTheme.of(EditorView.darkTheme.of(dark)),
@@ -525,6 +685,15 @@ export function CodeEditor({
       if (viewRef.current === v) viewRef.current = undefined;
     };
   }, [path]);
+
+  useEffect(() => {
+    const v = view.current;
+    if (!v || !goto) return;
+    const l = v.state.doc.line(Math.max(1, Math.min(goto.line, v.state.doc.lines)));
+    v.dispatch({ selection: { anchor: l.from }, effects: EditorView.scrollIntoView(l.from, { y: "center" }) });
+    v.focus();
+    onGoto?.();
+  }, [goto?.key]);
 
   useEffect(() => view.current?.dispatch({ effects: darkTheme.reconfigure(EditorView.darkTheme.of(dark)) }), [dark]);
 
