@@ -522,14 +522,19 @@ export function App() {
   failedTabsRef.current = failedTabs;
   /** Sessions whose subscribe is in flight while they have a view (a reconnect resubscribe): the view may be of an earlier daemon run (GH-378). */
   const resubscribing = useRef(new Set<string>());
+  /** Connections opened so far, and whether a session.list reply requested on the current one arrived (GH-378): before it the list (state, lastActivity) may be of before a daemon restart. */
+  const connGen = useRef(0);
+  const listFresh = useRef(false);
 
   async function refreshList() {
+    const gen = connGen.current;
     try {
       const { sessions, projects, recentProjects = [], permissionModes, sides, docker, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
       const listed = new Set(sessions.map((s) => s.id));
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
       setList(sessions);
+      if (gen === connGen.current) listFresh.current = true;
       setProjects(projects);
       if (!guideDecided.current) {
         // The first list of this page decides: a fresh browser on a daemon with no projects gets the tour, anything else is only offered it.
@@ -981,7 +986,7 @@ export function App() {
       // Disconnected or resubscribing: the view may be of an earlier daemon run, the new one is on its way.
       const stale = !!v && (statusRef.current !== "connected" || resubscribing.current.has(id));
       const read = item && (v || closed) ? tabUnread(v, seenRef.current[id], item.lastActivity, shownAt(id)) : undefined;
-      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !!item && !failed && (stale || (!v && !closed)), unknown: failed || (!!item && (!!v || closed) && read === undefined), unread: unreadRef.current.has(id) || read === true, draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
+      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !listFresh.current || (!!item && !failed && (stale || (!v && !closed))), unknown: failed || (!!item && (!!v || closed) && read === undefined), unread: unreadRef.current.has(id) || read === true, draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
     });
   }
   const cleanupCtx = (): CleanupContext => ({ activeId: activeRef.current, shown: splitOnRef.current && splitRef.current ? new Set(splitRef.current.ids) : undefined, pinned: pinnedRef.current, listLoaded: listLoadedRef.current, now: Date.now() });
@@ -1064,6 +1069,9 @@ export function App() {
         setReloadFailed((f) => nextReloadFailed(f, m.reloadFailed));
       },
       onOpen: () => {
+        // Clean up tabs (GH-378): every session tab is "loading" until this connection's first list reply.
+        connGen.current++;
+        listFresh.current = false;
         // The daemon sends its update state right after the connect; a restarted one has none.
         setUpdate(undefined);
         setStale(undefined);

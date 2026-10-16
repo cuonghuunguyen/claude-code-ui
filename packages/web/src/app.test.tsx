@@ -2340,6 +2340,19 @@ describe("GH-356 split view", () => {
     sent.length = 0;
   });
 
+  it("GH-378 the session in the other split pane gets its shown record (list lastActivity) too", async () => {
+    localStorage.setItem("claude-ui.shown-activity", "{}");
+    await remount(ID);
+    await splitRight(S2);
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    // ID is on screen but not active; its session's lastActivity moves.
+    replies["session.list"] = { sessions: [{ ...sessions[0]!, lastActivity: 500 }, ...sessions.slice(1)], projects: ["/p/demo", "/p/other"] };
+    await act(async () => sessionsChanged({}));
+    await act(async () => {});
+    expect(JSON.parse(localStorage.getItem("claude-ui.shown-activity")!)[ID]).toBe(500);
+    localStorage.removeItem("claude-ui.shown-activity");
+  });
+
   it("GH-378 Clean up tabs keeps the tab shown in the other split like the active tab", async () => {
     localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 1e15, [S2]: 1e15, [S3]: 1e15 }));
     await remount(ID);
@@ -2981,6 +2994,39 @@ describe("GH-378 clean up tabs", () => {
     await act(async () => reconnect());
     await act(async () => {});
     expect(el.querySelector(`[data-tab-id="${ID}"] [aria-label]`)?.getAttribute("aria-label")).toContain("unread");
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+  });
+
+  it("after a reconnect, every session tab is kept ('loading') until a session.list reply after it arrives; a failed list keeps them", async () => {
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 100, [S2]: 100 }));
+    await remount([mk(ID, "First", { lastActivity: 100 }), mk(S2, "Second", { lastActivity: 100 })], [ID, S2], S2);
+    // Daemon restarted; a turn of ID ended while disconnected. The resubscribe replies first, the list is late.
+    let release: (v: unknown) => void = () => {};
+    const late = new Promise((r) => (release = r));
+    replies["session.list"] = () => late;
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e2", seq: 0, session: m.sessionId === ID ? mk(ID, "First", { lastActivity: 200 }) : mk(S2, "Second") });
+    await act(async () => reconnect());
+    await act(async () => {});
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+    for (let i = 0; i < 2; i++) await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => release({ sessions: [mk(ID, "First", { lastActivity: 200 }), mk(S2, "Second", { lastActivity: 100 })], projects: ["/p/demo"] }));
+    await act(async () => {});
+    expect(el.querySelector(`[data-tab-id="${ID}"] [aria-label]`)?.getAttribute("aria-label")).toContain("unread");
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+    for (let i = 0; i < 2; i++) await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    // Another restart, the list request fails. ID is then shown in a focused page (read by its record): still kept, the list is not fresh.
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    replies["session.list"] = () => {
+      throw new Error("boom");
+    };
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e3", seq: 0, session: m.sessionId === ID ? mk(ID, "First", { lastActivity: 200 }) : mk(S2, "Second") });
+    await act(async () => reconnect());
+    await act(async () => {});
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] [role="tab"]`)!.click());
     await rule(S2, "idle");
     expect(tabIds()).toEqual([ID, S2]);
   });
