@@ -1198,3 +1198,19 @@ it("GH-378 phone: a contextmenu on the close button opens the cleanup items; a c
   await act(async () => x.click());
   expect(onClose).toHaveBeenCalledWith("c");
 });
+
+it("GH-378 phone: the cleanup menu stays open when the finger lifts after a long hold (> 500 ms); the active tab does not close", async () => {
+  const c = cleanup();
+  const { el, onClose } = await render(c);
+  const x = el.querySelector<HTMLElement>('[data-testid="tab-close-active"]')!;
+  await act(async () => void x.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+  await act(async () => void x.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  expect(document.querySelector('[data-testid="tab-cleanup-menu"]')).not.toBeNull();
+  // Base UI accepts a closing release 500 ms after the menu opened.
+  await act(async () => void (await new Promise((r) => setTimeout(r, 650))));
+  await act(async () => void x.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 })));
+  await act(async () => {});
+  expect(document.querySelector('[data-testid="tab-cleanup-menu"]')).not.toBeNull();
+  await act(async () => x.click());
+  expect(onClose).not.toHaveBeenCalled();
+});

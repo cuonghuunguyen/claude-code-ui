@@ -378,11 +378,11 @@ it("GH-378 Clean up tabs… is a page of the rules with a count > 0, meta 'N tab
   if (!("page" in entry)) throw new Error("not a page");
   const page = entry;
   expect([page.title, page.keys]).toEqual(["Clean up tabs…", undefined]);
-  expect(page.page.items.map((i) => [i.title, i.meta, i.group])).toEqual([
+  expect(page.page.items.filter((i) => !i.disabled).map((i) => [i.title, i.meta, i.group])).toEqual([
     ["Close idle tabs", "3 tabs", "2 kept: running/draft"],
     ["Close worker tabs", "1 tab", "2 kept: running/draft"],
   ]);
-  const last = page.page.items[1]!;
+  const last = page.page.items.find((i) => i.id === "cleanup:workers")!;
   if ("run" in last) last.run();
   expect(cleanUp).toHaveBeenCalledWith("workers");
   const direct = appCommands(ctx({ cleanup: menu({ idle: 3 }), cleanUp })).find((i) => i.id === "tab.cleanup.idle")!;
@@ -391,9 +391,12 @@ it("GH-378 Clean up tabs… is a page of the rules with a count > 0, meta 'N tab
   expect(cleanUp).toHaveBeenCalledWith("idle");
 });
 
-it("GH-378 Clean up tabs… is absent when no rule would close anything or without the callbacks", () => {
+it("GH-378 Clean up tabs… lists every rule, those with count 0 disabled; absent without the callbacks", () => {
+  const entry = appCommands(ctx({ cleanup: menu({ idle: 1 }), cleanUp: vi.fn() })).find((i) => i.id === "tab.cleanup")!;
+  if (!("page" in entry)) throw new Error("not a page");
+  expect(entry.page.items.map((i) => [i.title, i.disabled])).toEqual(CLEANUP_RULES.map((r) => [RULE_LABEL[r], r !== "idle"]));
   const has = (x: CommandContext) => appCommands(x).some((i) => i.id.startsWith("tab.cleanup"));
-  expect(has(ctx({ cleanup: menu({}), cleanUp: vi.fn() }))).toBe(false);
+  expect(has(ctx({ cleanup: menu({}), cleanUp: vi.fn() }))).toBe(true);
   expect(has(ctx({ cleanup: menu({ idle: 1 }) }))).toBe(false);
   expect(has(ctx())).toBe(false);
 });

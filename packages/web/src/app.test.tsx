@@ -1675,6 +1675,53 @@ describe("GH-378 clean up tabs", () => {
     expect(tabIds()).toEqual([ID, S2, S3, S4]);
   });
 
+  it("the Clean up tabs counts, kept line and closed set are the same whichever tab opens the menu (not the active one, not a stale render)", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth", { state: "running" }), mk(S5, "Fifth")], [ID, S2, S3, S4, S5], S2);
+    // A draft appears without any prop of a tab changing: a memoized tab does not render again.
+    draft(S3);
+    const open = async (from: string) => {
+      await act(async () => void el.querySelector(`[data-tab-id="${from}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+      await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+      return document.querySelector<HTMLElement>('[data-testid="tab-cleanup-menu"]')!;
+    };
+    const read = (m: HTMLElement) => [m.querySelector('[data-testid="tab-cleanup-idle"]')!.getAttribute("aria-label"), m.querySelector('[data-testid="tab-cleanup-kept"]')?.textContent];
+    const seen: unknown[] = [];
+    for (const from of [S5, ID, S4]) {
+      seen.push(read(await open(from)));
+      await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    }
+    // Idle and unprotected: ID and S5 (S3 has a draft, S4 runs, S2 is active).
+    for (const r of seen) expect(r).toEqual(["Close idle tabs (2)", "2 kept: running/draft"]);
+    await rule(S5, "idle");
+    expect(tabIds()).toEqual([S2, S3, S4]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+  });
+
+  it("a palette rule or a bound key with nothing to close shows 'No tabs to close'; the page lists the rule disabled", async () => {
+    await remount([session], [ID], ID);
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    const input = document.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Clean up tabs");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => paletteRow("Clean up tabs…")!.click());
+    const idle = paletteRow("Close idle tabs")!;
+    expect(idle.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => idle.click());
+    expect(document.querySelector('[data-testid="palette"]')).not.toBeNull();
+    await press({ key: "Escape", code: "Escape" });
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    const again = document.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(again, "Close idle tabs");
+      again.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => paletteRow("Close idle tabs")!.click());
+    expect(toast()?.textContent).toContain("No tabs to close");
+  });
+
   it("auto-close off (default) closes nothing", async () => {
     const old = Date.now() - 30 * 3_600_000;
     localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));

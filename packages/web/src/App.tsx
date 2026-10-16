@@ -835,7 +835,9 @@ export function App() {
   const cleanupCtx = (): CleanupContext => ({ activeId: activeRef.current, pinned: pinnedRef.current, listLoaded: listLoadedRef.current, now: Date.now() });
   /** Runs one cleanup rule over the strip, or over `scope` (Clean up group); safety is re-checked now, not taken from the menu's counts. */
   function cleanUp(rule: CleanupRule, scope?: string[]) {
-    closeSeveral(cleanupTargets(rule, tabFacts(), cleanupCtx(), scope && new Set(scope)));
+    const ids = cleanupTargets(rule, tabFacts(), cleanupCtx(), scope && new Set(scope));
+    if (!ids.length) return setToast("No tabs to close");
+    closeSeveral(ids);
   }
   const cleanupInfo = (scope?: string[]) => buildCleanupMenu(tabFacts(), cleanupCtx(), scope && new Set(scope));
 

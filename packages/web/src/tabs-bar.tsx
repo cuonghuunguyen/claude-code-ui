@@ -433,7 +433,9 @@ export function TabsBar({
 }
 
 /** Clean up tabs (GH-378): one item per rule (count right, disabled at 0), then the kept line. */
-function CleanupItems({ menu, onRun }: { menu: CleanupMenu; onRun: (rule: CleanupRule) => void }) {
+function CleanupItems({ menu: read, onRun }: { menu: () => CleanupMenu; onRun: (rule: CleanupRule) => void }) {
+  // Read when the popup mounts (it opens), not when the memoized tab last rendered: the counts must be current.
+  const menu = read();
   return (
     <>
       {menu.items.map((i) => (
@@ -452,7 +454,8 @@ function CleanupItems({ menu, onRun }: { menu: CleanupMenu; onRun: (rule: Cleanu
 }
 
 /** Clean up group (GH-378): Close idle tabs on this group's tabs; disabled when none would close. */
-function GroupCleanup({ X, count, onRun }: { X: typeof ContextMenu.Item; count: number; onRun: () => void }) {
+function GroupCleanup({ X, count: read, onRun }: { X: typeof ContextMenu.Item; count: () => number; onRun: () => void }) {
+  const count = read();
   return (
     <X className={ITEM} disabled={count === 0} data-testid="tab-group-cleanup" onClick={onRun}>
       <span className="flex-1">Clean up group</span>
@@ -465,6 +468,10 @@ function GroupCleanup({ X, count, onRun }: { X: typeof ContextMenu.Item; count: 
 function PhoneClose({ label, onClose, cleanup, onCleanup }: { label: string; onClose: () => void; cleanup?: () => CleanupMenu; onCleanup: (rule: CleanupRule) => void }) {
   // After a long press opened the menu, the release fires a click: ignored until the next pointerdown, however long the press was held.
   const afterMenu = useRef(false);
+  // Base UI closes the menu on the release of a press held longer than 500 ms (a mouse right click selecting by drag): on touch that is the long press itself.
+  const swallow = (e: Event) => e.stopImmediatePropagation();
+  const stopSwallowing = () => window.removeEventListener("mouseup", swallow, true);
+  useEffect(() => stopSwallowing, []);
   const button = (
     <IconButton className="md:hidden" label={label} onClick={() => !afterMenu.current && onClose()} testId="tab-close-active">
       <XIcon />
@@ -472,14 +479,14 @@ function PhoneClose({ label, onClose, cleanup, onCleanup }: { label: string; onC
   );
   if (!cleanup) return button;
   return (
-    <ContextMenu.Root onOpenChange={(o) => o && (afterMenu.current = true)}>
-      <ContextMenu.Trigger className="contents select-none [-webkit-touch-callout:none] md:hidden" onPointerDown={() => (afterMenu.current = false)}>{button}</ContextMenu.Trigger>
+    <ContextMenu.Root onOpenChange={(o) => (o ? ((afterMenu.current = true), window.addEventListener("mouseup", swallow, { capture: true, once: true })) : stopSwallowing())}>
+      <ContextMenu.Trigger className="contents select-none [-webkit-touch-callout:none] md:hidden" onPointerDown={() => ((afterMenu.current = false), stopSwallowing())}>{button}</ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-2rem)]")} data-testid="tab-cleanup-menu">
             <ContextMenu.Group>
               <ContextMenu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">Clean up tabs</ContextMenu.GroupLabel>
-              <CleanupItems menu={cleanup()} onRun={onCleanup} />
+              <CleanupItems menu={cleanup} onRun={onCleanup} />
             </ContextMenu.Group>
           </ContextMenu.Popup>
         </ContextMenu.Positioner>
@@ -855,7 +862,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
               </div>
               <GroupTabRows ids={ids} info={info} rows={rows} />
               <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
-              {onCleanup && <GroupCleanup X={Menu.Item} count={cleanupCount?.() ?? 0} onRun={onCleanup} />}
+              {onCleanup && <GroupCleanup X={Menu.Item} count={cleanupCount ?? (() => 0)} onRun={onCleanup} />}
               {onCloseOthers && (
                 <Menu.Item className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
                   Close other groups
@@ -899,7 +906,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
             <GroupTabRows ids={ids} info={info} rows={rows} />
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-            {onCleanup && <GroupCleanup X={ContextMenu.Item} count={cleanupCount?.() ?? 0} onRun={onCleanup} />}
+            {onCleanup && <GroupCleanup X={ContextMenu.Item} count={cleanupCount ?? (() => 0)} onRun={onCleanup} />}
             {onCloseOthers && (
               <ContextMenu.Item className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
                 Close other groups
@@ -1110,7 +1117,7 @@ function Tab({
                       <ContextMenu.Portal>
                         <ContextMenu.Positioner className="z-50">
                           <ContextMenu.Popup className={POPUP} data-testid="tab-cleanup-menu">
-                            <CleanupItems menu={cleanup()} onRun={onCleanup} />
+                            <CleanupItems menu={cleanup} onRun={onCleanup} />
                           </ContextMenu.Popup>
                         </ContextMenu.Positioner>
                       </ContextMenu.Portal>
