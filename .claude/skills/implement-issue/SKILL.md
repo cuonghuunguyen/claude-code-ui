@@ -25,7 +25,7 @@ acceptance:  playwright
 install:     npm ci
 test:        npm test        scoped: npx vitest run <files>
 typecheck:   npm run typecheck
-app:         env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN PORT=<port> nohup npm start > <scratch>/app.log 2>&1 & echo $! > <scratch>/app.pid
+app:         mkdir -p <scratch>/ui-config; env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN XDG_CONFIG_HOME=<scratch>/ui-config PORT=<port> nohup npm start > <scratch>/app.log 2>&1 & echo $! > <scratch>/app.pid
              (the pairing URL is in the log: #token=...)   stop: kill that PID's process tree
 ports:       one per worker, assigned by the coordinator; never the user's own daemon port
 
@@ -68,7 +68,8 @@ Also plan first when the issue changes the protocol or part model, or `docs/spec
 - Do not merge into main, do not comment on GitHub, do not push unless the user asks.
 
 ## Acceptance
-- Start the app on the assigned port only (Commands › app) and record the PID.
+- Start the app on the assigned port only (Commands › app) with the isolated config and record the PID.
+  Check `daemon.json` appears under `<scratch>/ui-config/claude-ui`, not `~/.config/claude-ui`.
 - Drive it with `playwright-cli -s=w<port>` (a named session only). Create a session in a
   scratch project under the scratch folder, let Claude run real turns, answer permission
   requests.
@@ -84,6 +85,8 @@ Also plan first when the issue changes the protocol or part model, or `docs/spec
    `ANTHROPIC_AUTH_TOKEN` (subscription login only, ADR 0002).
 3. **`getSessionMessages()` strips `tool_use_result`.** Types are not enough for SDK
    behaviour; probe it.
+4. **Never run a test app on the real config dir (`~/.config/claude-ui`):** it adds test projects and
+   sessions to the user's install. Always `XDG_CONFIG_HOME=<scratch>/ui-config`.
 
 ## Without a coordinator
 Working an issue by hand: run the stages yourself in order (plan when the skip rules in
