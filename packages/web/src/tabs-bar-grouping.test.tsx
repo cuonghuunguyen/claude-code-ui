@@ -304,3 +304,28 @@ it("GH-359 Shift+F10 on a focused chip opens its context menu", async () => {
   await settle();
   expect(menu()).not.toBeNull();
 });
+
+// GH-378: Clean up group in the chip menus.
+const cleanupFor = (count: number) => ({ cleanupMenu: vi.fn((scope?: string[]) => ({ items: [{ rule: "idle" as const, label: "Close idle tabs", count: scope ? count : 99 }], kept: { count: 0, text: "" } })), onCleanup: vi.fn() });
+
+it("GH-378 not compact: the chip context menu has Clean up group before Close other groups and calls onCleanup('idle', group ids)", async () => {
+  const c = cleanupFor(2);
+  const el = await mount(<TabsBar {...noop} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} onCloseOtherGroups={() => {}} {...c} />);
+  await act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  await settle();
+  const labels = [...document.querySelectorAll('[data-testid="tab-group-menu"] [role="menuitem"]')].map((i) => i.textContent);
+  expect(labels.slice(-3)).toEqual(["Clean up group2", "Close other groups", "Close group"]);
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-group-cleanup"]')!.click());
+  expect(c.onCleanup).toHaveBeenCalledWith("idle", ["a1", "a2"]);
+});
+
+it("GH-378 compact: the chip menu has Clean up group; disabled when the group has nothing to clean", async () => {
+  const c = cleanupFor(0);
+  const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} {...c} />);
+  await act(async () => chip(el, A).click());
+  await settle();
+  const item = document.querySelector<HTMLElement>('[data-testid="tab-group-cleanup"]')!;
+  expect(item.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => item.click());
+  expect(c.onCleanup).not.toHaveBeenCalled();
+});

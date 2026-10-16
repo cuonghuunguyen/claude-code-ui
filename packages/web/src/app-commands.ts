@@ -3,6 +3,7 @@ import type { Effort, ModelInfo, PermissionMode, SessionListItem } from "@claude
 import type { PaletteItem } from "./palette.tsx";
 import { matchesKey, shortcutById } from "./shortcuts.ts";
 import { specOf } from "./keymap.ts";
+import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
 import { timeAgo } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
 import { EFFORT_LABEL, MODE_LABEL, effortOptions } from "./toolbar.tsx";
@@ -40,6 +41,9 @@ export type CommandContext = {
   closeAll?: () => void;
   /** Pins or unpins the active session tab (GH-359); none on the New session tab. */
   togglePin?: () => void;
+  /** Clean up tabs (GH-378): counts per rule for the whole strip; absent: no cleanup commands. */
+  tabCleanup?: CleanupMenu;
+  cleanUpTabs?: (rule: CleanupRule) => void;
   /** The active tab is pinned: the command reads "Unpin tab". */
   pinned?: boolean;
   /** Split view (GH-356): each is absent while it does not apply (narrow screen, fewer than two sessions, no split). */
@@ -129,6 +133,15 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.closeOthers && cmd("tab.closeOthers", "Close other tabs", c.closeOthers),
     c.closeRight && cmd("tab.closeRight", "Close tabs to the right", c.closeRight),
     c.closeAll && cmd("tab.closeAll", "Close all tabs", c.closeAll),
+    c.tabCleanup &&
+      c.cleanUpTabs &&
+      page(
+        "tab.cleanup",
+        "Clean up tabs…",
+        "Close which tabs?",
+        c.tabCleanup.items.map((i) => ({ id: `cleanup:${i.rule}`, group: c.tabCleanup!.kept.text || "Rules", title: i.label, meta: `${i.count} ${i.count === 1 ? "tab" : "tabs"}`, disabled: i.count === 0, run: () => c.cleanUpTabs!(i.rule) })),
+      ),
+    ...(c.tabCleanup && c.cleanUpTabs ? c.tabCleanup.items.map((i) => cmd(`tab.cleanup.${i.rule}`, i.label, () => c.cleanUpTabs!(i.rule), true)) : []),
     c.togglePin && cmd("tab.pin", c.pinned ? "Unpin tab" : "Pin tab", c.togglePin),
     c.splitRight && cmd("split.right", "Split right", c.splitRight),
     c.splitDown && cmd("split.down", "Split down", c.splitDown),

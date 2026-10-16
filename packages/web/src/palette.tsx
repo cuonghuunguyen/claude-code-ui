@@ -24,6 +24,8 @@ export type PaletteItem = {
   path?: string;
   /** Message hits: the text around the match, shown with the match highlighted in place of `description`. */
   snippet?: { text: string; query: string };
+  /** Shown dimmed and not chosen (a rule with nothing to close). */
+  disabled?: boolean;
   /** Choosing runs it without closing the palette. */
   keep?: boolean;
 } & ({ run: () => void } | { page: { placeholder: string; items: PaletteItem[] } });
@@ -166,7 +168,7 @@ export function CommandPalette({
   // void: current Chromium returns a Promise, which React would call as the cleanup.
   useEffect(() => void listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" }), [active, page]);
   const choose = (item: PaletteItem | undefined) => {
-    if (!item) return;
+    if (!item || item.disabled) return;
     if (item.keep && "run" in item) return item.run();
     if ("page" in item) return setPage(item.page), setQuery(""), setActive(startRow(item.page.items));
     onClose();
@@ -249,9 +251,10 @@ export function CommandPalette({
                       id={`palette-${i}`}
                       role="option"
                       aria-selected={i === active}
+                      aria-disabled={item.disabled || undefined}
                       data-id={item.id}
                       title={item.snippet ? `${item.title} — ${item.snippet.text}` : item.title}
-                      className={`flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-3 aria-selected:bg-accent ${item.snippet ? "min-h-12 py-1.5 pointer-coarse:min-h-14" : "h-9 pointer-coarse:h-11"}`}
+                      className={`flex shrink-0 ${item.disabled ? "cursor-default opacity-50" : "cursor-pointer"} items-center gap-2 rounded-md px-3 aria-selected:bg-accent ${item.snippet ? "min-h-12 py-1.5 pointer-coarse:min-h-14" : "h-9 pointer-coarse:h-11"}`}
                       onMouseMove={() => i !== active && setActive(i)}
                       onClick={() => choose(item)}
                     >

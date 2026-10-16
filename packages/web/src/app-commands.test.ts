@@ -2,6 +2,7 @@
 import { expect, it, vi } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { appCommands, shortcutFor, type CommandContext } from "./app-commands.ts";
+import { CLEANUP_RULES, RULE_LABEL, type CleanupMenu, type CleanupRule } from "./tab-cleanup.ts";
 import { KEYS } from "./shortcuts.ts";
 import { bind, resetAll } from "./keymap.ts";
 
@@ -395,6 +396,46 @@ it("GH-359 tab.pin is listed only for a session tab, reads Pin or Unpin tab, has
   expect(appCommands(ctx({ togglePin, pinned: true })).find((i) => i.id === "tab.pin")!.title).toBe("Unpin tab");
   run(ctx({ togglePin }), "tab.pin");
   expect(togglePin).toHaveBeenCalled();
+});
+
+const menu = (counts: Partial<Record<CleanupRule, number>>, kept = ""): CleanupMenu => ({ items: CLEANUP_RULES.map((rule) => ({ rule, label: RULE_LABEL[rule], count: counts[rule] ?? 0 })), kept: { count: kept ? 1 : 0, text: kept } });
+
+it("GH-378 Clean up tabs… is a page of the rules with a count > 0, meta 'N tabs', each runs cleanUp(rule)", () => {
+  const cleanUp = vi.fn();
+  const entry = appCommands(ctx({ tabCleanup: menu({ idle: 3, workers: 1 }, "2 kept: running/draft"), cleanUpTabs: cleanUp })).find((i) => i.id === "tab.cleanup")!;
+  if (!("page" in entry)) throw new Error("not a page");
+  const page = entry;
+  expect([page.title, page.keys]).toEqual(["Clean up tabs…", undefined]);
+  expect(page.page.items.filter((i) => !i.disabled).map((i) => [i.title, i.meta, i.group])).toEqual([
+    ["Close idle tabs", "3 tabs", "2 kept: running/draft"],
+    ["Close worker tabs", "1 tab", "2 kept: running/draft"],
+  ]);
+  const last = page.page.items.find((i) => i.id === "cleanup:workers")!;
+  if ("run" in last) last.run();
+  expect(cleanUp).toHaveBeenCalledWith("workers");
+  const direct = appCommands(ctx({ tabCleanup: menu({ idle: 3 }), cleanUpTabs: cleanUp })).find((i) => i.id === "tab.cleanup.idle")!;
+  expect(direct.searchOnly).toBe(true);
+  if ("run" in direct) direct.run();
+  expect(cleanUp).toHaveBeenCalledWith("idle");
+});
+
+it("GH-378 Clean up tabs… lists every rule, those with count 0 disabled; absent without the callbacks", () => {
+  const entry = appCommands(ctx({ tabCleanup: menu({ idle: 1 }), cleanUpTabs: vi.fn() })).find((i) => i.id === "tab.cleanup")!;
+  if (!("page" in entry)) throw new Error("not a page");
+  expect(entry.page.items.map((i) => [i.title, i.disabled])).toEqual(CLEANUP_RULES.map((r) => [RULE_LABEL[r], r !== "idle"]));
+  const has = (x: CommandContext) => appCommands(x).some((i) => i.id.startsWith("tab.cleanup"));
+  expect(has(ctx({ tabCleanup: menu({}), cleanUpTabs: vi.fn() }))).toBe(true);
+  expect(has(ctx({ tabCleanup: menu({ idle: 1 }) }))).toBe(false);
+  expect(has(ctx())).toBe(false);
+});
+
+it("GH-378 tab.cleanup and tab.cleanup.<rule> have no default key and take a user binding", () => {
+  const over = { tabCleanup: menu({ idle: 2 }), cleanUpTabs: vi.fn() };
+  const items = appCommands(ctx(over));
+  expect(["tab.cleanup", "tab.cleanup.idle"].map((id) => items.find((i) => i.id === id)?.keys)).toEqual([undefined, undefined]);
+  bind("tab.cleanup.idle", "mod+alt+i");
+  expect(shortcutFor(appCommands(ctx(over)), ev("i", { ctrlKey: true, altKey: true, code: "KeyI" }))?.id).toBe("tab.cleanup.idle");
+  resetAll();
 });
 
 it("GH-356 split commands are listed only when given, run their handler; Focus next split shows its default key and the others have none", () => {

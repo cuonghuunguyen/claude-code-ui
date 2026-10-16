@@ -80,7 +80,9 @@ import { CleanupDialog } from "./cleanup-dialog.tsx";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
-import { clearDrafts, loadDraft, NEW_TAB_DRAFT } from "./drafts.ts";
+import { clearDrafts, draftKeys, loadDraft, NEW_TAB_DRAFT } from "./drafts.ts";
+import { autoCloseDue, autoCloseTargets, cleanupMenu as buildCleanupMenu, cleanupTargets, loadAutoClose, saveAutoClose, type AutoClose, type CleanupContext, type CleanupRule, type TabFacts } from "./tab-cleanup.ts";
+import { loadUsed, pruneUsed, saveUsed, seedUsed, stampUsed } from "./tab-used.ts";
 import { PairingForm } from "./pairing-form.tsx";
 import { useDraft } from "./use-draft.ts";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
@@ -90,7 +92,7 @@ import { StatusBar, totals, type Totals } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
-import { isUnread, loadSeen, saveSeen, seenNow, tabTitle, type Seen } from "./unread.ts";
+import { isUnread, loadSeen, loadShownActivity, pruneShownActivity, saveSeen, saveShownActivity, seenNow, tabTitle, tabUnread, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
@@ -286,6 +288,15 @@ export function App() {
     setCompact(on);
     saveTabCompact(on);
   };
+  // Clean up tabs (GH-378): when each tab was last shown (per browser) and the auto-close setting.
+  const [used, setUsed] = useState(loadUsed);
+  const usedRef = useRef(used);
+  usedRef.current = used;
+  const [autoClose, setAutoClose] = useState(loadAutoClose);
+  const changeAutoClose = (v: AutoClose) => {
+    setAutoClose(v);
+    saveAutoClose(v);
+  };
   // A closed or replaced new-session tab starts with the defaults next time.
   const draftOpen = tabs.includes(NEW_TAB);
   useEffect(() => void (!draftOpen && setDraft(NEW_DRAFT)), [draftOpen]);
@@ -295,6 +306,10 @@ export function App() {
   const [error, setError] = useState<string>();
   const [toast, setToastState] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
   const toastKey = useRef(0);
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
+  /** The Undo toast of the last cleanup close: a following close while it shows joins it (one toast, Undo restores every set). */
+  const undoToast = useRef<{ key: number; parts: { entries: { id: string; at: number }[]; wasActive?: string }[] }>(undefined);
   // Every toast is its own element (a key): a closing one cannot clear the next, and the same text restarts the timer.
   const setToast = useCallback((t: string | { message: string; action: { label: string; onClick: () => void } } | undefined) => setToastState(t === undefined ? undefined : { key: ++toastKey.current, ...(typeof t === "string" ? { message: t } : t) }), []);
   const closeToast = useCallback(() => setToast(undefined), [setToast]);
@@ -317,6 +332,8 @@ export function App() {
   // Pinned session tabs (GH-359), per browser; a pin ends with its tab.
   const [pinned, setPinnedState] = useState(loadPinned);
   const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
+  const pinnedRef = useRef(pinnedSet);
+  pinnedRef.current = pinnedSet;
   const [resumeSearch, setResumeSearch] = useState<{ text: string; seq: number }>();
   // Wide screens: the Home button shows or hides the sessions sidebar.
   const [sidebar, setSidebar] = useState(true);
@@ -339,6 +356,11 @@ export function App() {
   /** Titles from subscribe replies: a tab of a session not (yet) in the list, e.g. the page-load hash session. */
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
+  const seenRef = useRef(seen);
+  seenRef.current = seen;
+  const [shownActivity, setShownActivity] = useState(loadShownActivity);
+  const shownActivityRef = useRef(shownActivity);
+  shownActivityRef.current = shownActivity;
   // In-app notifications (GH-158): `notifyRef` takes every event; the choice is per browser and Settings tells this page by event.
   const notifyRef = useRef<(e: Event, live: boolean) => void>(undefined);
   const [inApp, setInApp] = useState(loadInApp);
@@ -492,16 +514,27 @@ export function App() {
   const restored = useRef<string[] | undefined>(tabs);
   /** True once a session list reply is in (never reset): the tab group keys are final only after it (GH-196). */
   const [listLoaded, setListLoaded] = useState(false);
+  const listLoadedRef = useRef(listLoaded);
+  listLoadedRef.current = listLoaded;
   /** Tabs whose subscribe failed for a reason other than unknown_session: their session never arrives, so they must not keep the group keys from becoming final (GH-201). */
   const [failedTabs, setFailedTabs] = useState<ReadonlySet<string>>(new Set());
+  const failedTabsRef = useRef(failedTabs);
+  failedTabsRef.current = failedTabs;
+  /** Sessions whose subscribe is in flight while they have a view (a reconnect resubscribe): the view may be of an earlier daemon run (GH-378). */
+  const resubscribing = useRef(new Set<string>());
+  /** Connections opened so far, and whether a session.list reply requested on the current one arrived (GH-378): before it the list (state, lastActivity) may be of before a daemon restart. */
+  const connGen = useRef(0);
+  const listFresh = useRef(false);
 
   async function refreshList() {
+    const gen = connGen.current;
     try {
       const { sessions, projects, recentProjects = [], permissionModes, sides, docker, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
       const listed = new Set(sessions.map((s) => s.id));
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
       setList(sessions);
+      if (gen === connGen.current) listFresh.current = true;
       setProjects(projects);
       if (!guideDecided.current) {
         // The first list of this page decides: a fresh browser on a daemon with no projects gets the tour, anything else is only offered it.
@@ -539,6 +572,7 @@ export function App() {
   /** `fresh`: a new snapshot (last page) whatever the view holds: a cursor or rewind the view cannot follow. `background`: follow only (no hold). */
   async function subscribe(sessionId: string, addProject = false, fresh = false, background = false) {
     const view = viewsRef.current[sessionId];
+    if (view) resubscribing.current.add(sessionId);
     // After a daemon restart the snapshot starts at the oldest turn this view holds (transcript uuids are stable), so the scroll position survives.
     const from = fresh ? undefined : view?.order.find((id) => {
       const p = view.parts.get(id);
@@ -577,6 +611,8 @@ export function App() {
         setError((e as Error).message);
         setFailedTabs((f) => (f.has(sessionId) ? f : new Set(f).add(sessionId)));
       } // else resubscribed on reconnect
+    } finally {
+      resubscribing.current.delete(sessionId);
     }
   }
 
@@ -883,7 +919,7 @@ export function App() {
   }
 
   /** Close others / to the right / all / other groups (GH-359): no question (the sessions keep running), one toast with Undo for all of them. */
-  function closeSeveral(ids: string[]) {
+  function closeSeveral(ids: string[], message?: (n: number, title: string | undefined) => string) {
     // Before closeGroup: release() reads the old tab list for each index.
     const now = tabsRef.current;
     const entries = ids.filter((id) => now.includes(id)).map((id) => ({ id, at: now.indexOf(id) }));
@@ -892,21 +928,75 @@ export function App() {
     const one = entries.length === 1 ? entries[0]!.id : undefined;
     const title = one && (one === NEW_TAB ? "New session" : listRef.current.find((s) => s.id === one)?.title || titles[one] || "Untitled");
     closeGroup(entries.map((e) => e.id));
+    // A toast still showing with its Undo (an earlier cleanup close) is not replaced: one toast, Undo restores both sets.
+    const prev = undoToast.current;
+    const joined = prev && toastRef.current?.key === prev.key && toastRef.current.action ? prev.parts : [];
+    const parts = [...joined, { entries, wasActive }];
+    const total = parts.reduce((n, p) => n + p.entries.length, 0);
     setToast({
-      message: one ? `Closed ${title}` : `Closed ${entries.length} tabs`,
+      message: joined.length ? `Closed ${total} tabs` : message ? message(entries.length, title) : one ? `Closed ${title}` : `Closed ${entries.length} tabs`,
       action: {
         label: "Undo",
         onClick: () => {
-          const r = restoreMany(closedRef.current, tabsRef.current, entries, (id) => id === NEW_TAB || listRef.current.some((s) => s.id === id));
-          setClosedTabs(r.stack);
-          setTabs(r.tabs);
-          for (const id of r.restored) if (id !== NEW_TAB && id !== wasActive) void subscribe(id);
+          // A cleanup during the toast's exit must not join a set that is back already.
+          if (undoToast.current?.parts === parts) undoToast.current = undefined;
+          // Latest set first, each on the list the previous step produced.
+          let stack = closedRef.current;
+          let tabs = tabsRef.current;
+          const restored: string[] = [];
+          let shown: string | undefined;
+          for (const p of [...parts].reverse()) {
+            const r = restoreMany(stack, tabs, p.entries, (id) => id === NEW_TAB || listRef.current.some((s) => s.id === id));
+            stack = r.stack;
+            tabs = r.tabs;
+            restored.push(...r.restored);
+            if (p.wasActive && r.restored.includes(p.wasActive)) shown = p.wasActive;
+          }
+          setClosedTabs(stack);
+          setTabs(tabs);
+          for (const id of restored) if (id !== NEW_TAB && id !== shown) void subscribe(id);
+          // Undo counts as use: the restored tabs must not be auto-closed again at once.
+          setUsed((u) => stampUsed(u, restored, Date.now()));
           // The tab that was shown comes back shown; the others are held again like any open tab.
-          if (wasActive && r.restored.includes(wasActive)) open(wasActive);
+          if (shown) open(shown);
         },
       },
     });
+    undoToast.current = { key: toastKey.current, parts };
   }
+
+  /** Clean up tabs (GH-378): what the rules know about each open tab, read at call time (refs), so a click acts on the current state. */
+  function tabFacts(): TabFacts[] {
+    const drafts = draftKeys();
+    // Another window of this browser may have shown a tab since: the newer stamp counts.
+    const stored = loadUsed();
+    const usedAt = (id: string) => Math.max(usedRef.current[id] ?? 0, stored[id] ?? 0) || undefined;
+    const shown = loadShownActivity();
+    const shownAt = (id: string) => (shownActivityRef.current[id] ?? shown[id]) === undefined ? undefined : Math.max(shownActivityRef.current[id] ?? 0, shown[id] ?? 0);
+    return tabsRef.current.map((id) => {
+      if (id === NEW_TAB) return { id, unread: false, draft: drafts.has(NEW_TAB_DRAFT), listed: true, archived: false, worker: false, transcript: false, busy: false, lastUsed: usedAt(id) };
+      const item = listRef.current.find((s) => s.id === id);
+      const v = viewsRef.current[id];
+      // A view not replayed yet reads idle: the list state (running, needs input) still protects the tab.
+      const busyList = item?.state === "running" || item?.state === "needs_input";
+      // Not loaded in this daemon run: no queue, continue, request or attention seq exists; unread comes from the list's lastActivity.
+      const closed = !v && item?.state === "closed";
+      // A failed subscribe: no view, or one that may be of an earlier daemon run.
+      const failed = failedTabsRef.current.has(id);
+      // Disconnected or resubscribing: the view may be of an earlier daemon run, the new one is on its way.
+      const stale = !!v && (statusRef.current !== "connected" || resubscribing.current.has(id));
+      const read = item && (v || closed) ? tabUnread(v, seenRef.current[id], item.lastActivity, shownAt(id)) : undefined;
+      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !listFresh.current || (!!item && !failed && (stale || (!v && !closed))), unknown: failed || (!!item && (!!v || closed) && read === undefined), unread: unreadRef.current.has(id) || read === true, draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
+    });
+  }
+  const cleanupCtx = (): CleanupContext => ({ activeId: activeRef.current, shown: splitOnRef.current && splitRef.current ? new Set(splitRef.current.ids) : undefined, pinned: pinnedRef.current, listLoaded: listLoadedRef.current, now: Date.now() });
+  /** Runs one cleanup rule over the strip, or over `scope` (Clean up group); safety is re-checked now, not taken from the menu's counts. */
+  function cleanUp(rule: CleanupRule, scope?: string[]) {
+    const ids = cleanupTargets(rule, tabFacts(), cleanupCtx(), scope && new Set(scope));
+    if (!ids.length) return setToast("No tabs to close");
+    closeSeveral(ids);
+  }
+  const cleanupInfo = (scope?: string[]) => buildCleanupMenu(tabFacts(), cleanupCtx(), scope && new Set(scope));
 
   /** Tab menu commands (GH-359) of tab `id`. */
   function tabCommand(id: string, c: TabCommand) {
@@ -979,6 +1069,9 @@ export function App() {
         setReloadFailed((f) => nextReloadFailed(f, m.reloadFailed));
       },
       onOpen: () => {
+        // Clean up tabs (GH-378): every session tab is "loading" until this connection's first list reply.
+        connGen.current++;
+        listFresh.current = false;
         // The daemon sends its update state right after the connect; a restarted one has none.
         setUpdate(undefined);
         setStale(undefined);
@@ -1046,8 +1139,39 @@ export function App() {
     setSeen(next);
     saveSeen(next);
   }, [focused, seenKey]);
+  // Clean up tabs (GH-378): the list's lastActivity each session on screen had, for its unread state once the daemon no longer holds it.
+  const lastActivityOf = (id: string | undefined) => (id && views[id] ? list.find((s) => s.id === id)?.lastActivity : undefined);
+  const shownKey = visibleIds.map((id) => `${id}:${lastActivityOf(id)}`).join();
+  useEffect(() => {
+    if (!focused) return;
+    let next = shownActivity;
+    for (const id of visibleIds) {
+      const at = lastActivityOf(id);
+      if (id && at !== undefined && (next[id] ?? -Infinity) < at) next = { ...next, [id]: at };
+    }
+    if (next === shownActivity) return;
+    setShownActivity(next);
+    saveShownActivity(next);
+  }, [focused, shownKey]);
 
   useEffect(() => saveTabs(tabs), [tabs]);
+  // Clean up tabs (GH-378): stamp the tab that was shown and the one that is shown now; a tab without a stamp starts now; closed tabs keep theirs for Undo and Reopen.
+  const prevActive = useRef(activeId);
+  useEffect(() => {
+    setUsed((u) => stampUsed(u, [prevActive.current, activeId], Date.now()));
+    prevActive.current = activeId;
+  }, [activeId]);
+  useEffect(() => {
+    const keep = new Set([...tabs, ...closedTabs.map((c) => c.id)]);
+    setUsed((u) => pruneUsed(seedUsed(u, tabs, Date.now()), keep));
+    setShownActivity((a) => pruneShownActivity(a, keep));
+  }, [tabs, closedTabs]);
+  useEffect(() => saveUsed(used), [used]);
+  useEffect(() => {
+    const onVis = () => document.visibilityState === "visible" && setUsed((u) => stampUsed(u, [activeRef.current], Date.now()));
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
   useEffect(() => savePinned(pinned), [pinned]);
   // A pin ends with its tab (Close tab, Delete, reopen and Undo bring a tab back unpinned).
   useEffect(() => {
@@ -1056,7 +1180,10 @@ export function App() {
   }, [tabs, pinned]);
   useEffect(() => applyTheme(theme), [theme]);
 
-  const unread = new Set(list.filter((s) => views[s.id] && isUnread(views[s.id]!, seen[s.id])).map((s) => s.id));
+  // GH-378: a view of another daemon run than the seen mark, and a tab of a session not loaded in this run (no view), also count output after the lastActivity this browser last showed.
+  const unread = new Set(list.filter((s) => (views[s.id] || (s.state === "closed" && tabs.includes(s.id))) && tabUnread(views[s.id], seen[s.id], s.lastActivity, shownActivity[s.id]) === true).map((s) => s.id));
+  const unreadRef = useRef(unread);
+  unreadRef.current = unread;
   // Focus (GH-159): every unanswered request; the sidebar row, the Focus tab, the browser tab and the status text all show the same number of sessions.
   const waiting = useMemo(() => {
     const w = waitingRequests(list, views, firstSeen.current, Date.now());
@@ -1380,6 +1507,24 @@ export function App() {
   // Regrouped only once every tab's key is final: on partial keys the unknown tabs gather in one group and the damaged order is stored (GH-196).
   const keysFinal = tabKeysFinal(tabs, listLoaded, (id) => !!sessionOf(id), failedTabs);
   useGroupedTabs(tabs, setTabs, groupOfTab, keysFinal, pinnedSet);
+  // Auto-close idle tabs (GH-378): only while the page shows, connected, with the list and group keys final; the 60 s tick is cheap, autoCloseDue lets one run through per 15 minutes.
+  const autoRan = useRef<number>(undefined);
+  // Reassigned each render: the check reads the current tabs, titles and list, the effect below only sets the timer.
+  const autoRun = useRef(() => {});
+  autoRun.current = () => {
+    if (autoClose === "off" || document.visibilityState !== "visible" || !autoCloseDue(Date.now(), autoRan.current)) return;
+    autoRan.current = Date.now();
+    const ids = autoCloseTargets(tabFacts(), cleanupCtx(), autoClose);
+    if (ids.length) closeSeveral(ids, (n, t) => (n === 1 ? `Auto-closed ${t}` : `Auto-closed ${n} idle tabs`));
+  };
+  useEffect(() => {
+    if (autoClose === "off" || status !== "connected" || !listLoaded || !keysFinal) return;
+    const run = () => autoRun.current();
+    run();
+    const t = setInterval(run, 60_000);
+    document.addEventListener("visibilitychange", run);
+    return () => (clearInterval(t), document.removeEventListener("visibilitychange", run));
+  }, [autoClose, status, listLoaded, keysFinal]);
   const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
   // GH-133: a just-created session shows (with its pending prompt) before its subscribe reply.
   // A tab that followed a /clear shows the new session at once too: an empty timeline carrying the old one's settings.
@@ -1710,6 +1855,8 @@ export function App() {
     closeOthers: activeId && closeTargets(tabs, pinnedSet, activeId, "others").length && tabs.includes(activeId) ? () => tabCommand(activeId, "closeOthers") : undefined,
     closeRight: activeId && closeTargets(tabs, pinnedSet, activeId, "right").length && tabs.includes(activeId) ? () => tabCommand(activeId, "closeRight") : undefined,
     closeAll: closeTargets(tabs, pinnedSet, activeId ?? "", "all").length ? () => tabCommand(activeId ?? tabs[0]!, "closeAll") : undefined,
+    tabCleanup: cleanupInfo(),
+    cleanUpTabs: (rule) => cleanUp(rule),
     togglePin: activeId && activeId !== NEW_TAB && activeId !== FOCUS_TAB && tabs.includes(activeId) ? () => togglePin(activeId) : undefined,
     pinned: !!activeId && pinnedSet.has(activeId),
     quickOpen: showQuickOpen,
@@ -1995,6 +2142,8 @@ export function App() {
             onCloseGroup={requestCloseGroup}
             onCloseOtherGroups={(key) => closeSeveral(otherGroupTargets(tabs, pinnedSet, groupOfTab, key))}
             onTabCommand={tabCommand}
+            cleanupMenu={cleanupInfo}
+            onCleanup={cleanUp}
             canReopen={!!reopen}
             pinned={pinnedSet}
             canSplit={lg ? canSplitTabs(tabs) : undefined}
@@ -2681,7 +2830,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
+      <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
       {shown && client.current && (
         <ViewerDialog
           target={viewer?.target}

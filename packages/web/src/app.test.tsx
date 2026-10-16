@@ -2340,6 +2340,30 @@ describe("GH-356 split view", () => {
     sent.length = 0;
   });
 
+  it("GH-378 the session in the other split pane gets its shown record (list lastActivity) too", async () => {
+    localStorage.setItem("claude-ui.shown-activity", "{}");
+    await remount(ID);
+    await splitRight(S2);
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    // ID is on screen but not active; its session's lastActivity moves.
+    replies["session.list"] = { sessions: [{ ...sessions[0]!, lastActivity: 500 }, ...sessions.slice(1)], projects: ["/p/demo", "/p/other"] };
+    await act(async () => sessionsChanged({}));
+    await act(async () => {});
+    expect(JSON.parse(localStorage.getItem("claude-ui.shown-activity")!)[ID]).toBe(500);
+    localStorage.removeItem("claude-ui.shown-activity");
+  });
+
+  it("GH-378 Clean up tabs keeps the tab shown in the other split like the active tab", async () => {
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 1e15, [S2]: 1e15, [S3]: 1e15 }));
+    await remount(ID);
+    await splitRight(S2);
+    await (await menu(S3))("Clean up tabs");
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-cleanup-idle"]')!.click());
+    expect(tabIds()).toEqual([ID, S2]);
+    expect(labels()).toHaveLength(2);
+    localStorage.removeItem("claude-ui.shown-activity");
+  });
+
   it("Split right from the tab menu shows both sessions side by side, focuses the new split's prompt and puts it in the hash", async () => {
     await remount(ID);
     expect(splits()).toHaveLength(0);
@@ -2672,5 +2696,402 @@ describe("GH-356 split view", () => {
     await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Split right"))!.click());
     expect(labels()).toHaveLength(2);
     expect(activeSplit()!.getAttribute("aria-label")).toContain("Second");
+  });
+});
+
+describe("GH-378 clean up tabs", () => {
+  const S = (n: number) => `${n}${n}${n}${n}${n}${n}${n}${n}-2222-3333-4444-555555555555`;
+  const [S2, S3, S4, S5] = [S(2), S(3), S(4), S(5)];
+  const mk = (id: string, title: string, over: Partial<SessionListItem> = {}): SessionListItem => ({ ...session, id, title, ...over });
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  const undo = () => act(async () => [...toast()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+  const rule = async (from: string, r: string) => {
+    await act(async () => void el.querySelector(`[data-tab-id="${from}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+    await act(async () => document.querySelector<HTMLElement>(`[data-testid="tab-cleanup-${r}"]`)!.click());
+  };
+  async function remount(list: SessionListItem[], tabs: string[], active: string) {
+    act(() => root.unmount());
+    replies["session.list"] = { sessions: list, projects: ["/p/demo"] };
+    // An error session's state comes from its snapshot heads, as from the daemon.
+    const errorSnapshot = (id: string) => ({ seq: 1, snapshot: { heads: [{ type: "event", sessionId: id, seq: 1, part: { type: "session_state", id: "session_state", state: "error" } }], attentionSeq: 0, page: { parts: [] }, aux: [] } });
+    replies["session.subscribe"] = (m: { sessionId: string }) => {
+      const s = list.find((x) => x.id === m.sessionId) ?? session;
+      return { logEpoch: "e1", seq: 0, session: s, ...(s.state === "error" && errorSnapshot(s.id)) };
+    };
+    localStorage.setItem("claude-ui.tabs", JSON.stringify(tabs));
+    location.hash = `#${active}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+  }
+  const draft = (id: string) => {
+    localStorage.setItem(`claude-ui.draft.${id}`, "unsent");
+    localStorage.setItem("claude-ui.drafts", JSON.stringify({ ...JSON.parse(localStorage.getItem("claude-ui.drafts") ?? "{}"), [id]: Date.now() }));
+  };
+  // This browser showed every session after its last output (tests that need otherwise set the record themselves).
+  beforeEach(() => localStorage.setItem("claude-ui.shown-activity", JSON.stringify(Object.fromEntries([ID, S2, S3, S4, S5, S(6)].map((id) => [id, 1e15])))));
+  afterEach(() => {
+    vi.useRealTimers();
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    replies["session.subscribe"] = { logEpoch: "e1", session };
+    localStorage.clear();
+  });
+
+  it("Close idle tabs closes idle read tabs, keeps the active, a running and a draft one; toast 'Closed 2 tabs'; Undo restores tabs and order; no session is stopped", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { state: "running" }), mk(S4, "Fourth"), mk(S5, "Fifth")], [ID, S2, S3, S4, S5], S2);
+    draft(S4);
+    sent.length = 0;
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([S2, S3, S4]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+    await undo();
+    expect(tabIds()).toEqual([ID, S2, S3, S4, S5]);
+    expect(sent.filter((m) => ["session.interrupt", "session.close", "session.delete", "session.archive"].includes(m.type))).toEqual([]);
+  });
+
+  it("Close tabs of archived or deleted sessions closes an archived tab and a tab whose session is not listed", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { archived: true })], [ID, S2, S3, S4], S2);
+    await rule(S2, "archived");
+    expect(tabIds()).toEqual([ID, S2]);
+  });
+
+  it("Close worker tabs closes tabs with coordinatorId", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { coordinatorId: ID })], [ID, S2, S3], S2);
+    await rule(S2, "workers");
+    expect(tabIds()).toEqual([ID, S2]);
+  });
+
+  it("Close tabs not used for 1 hour uses claude-ui.tab-used; switching tabs stamps both tabs", async () => {
+    const old = Date.now() - 2 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
+    await remount([session, mk(S2, "Second"), mk(S3, "Third")], [ID, S2, S3], S2);
+    // The shown tab is stamped on load; ID and S3 are not shown.
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S3}"] [role="tab"]`)!.click());
+    await act(async () => {});
+    const used = JSON.parse(localStorage.getItem("claude-ui.tab-used")!) as Record<string, number>;
+    expect(Date.now() - used[S2]!).toBeLessThan(60_000);
+    expect(Date.now() - used[S3]!).toBeLessThan(60_000);
+    expect(used[ID]).toBe(old);
+    await rule(S3, "unused1h");
+    expect(tabIds()).toEqual([S2, S3]);
+  });
+
+  it("pinned tabs and a tab with a draft are never closed by a rule", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth")], [ID, S2, S3, S4], S2);
+    localStorage.setItem("claude-ui.pinned-tabs", JSON.stringify([S3]));
+    await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth")], [ID, S2, S3, S4], S2);
+    draft(ID);
+    await rule(S2, "idle");
+    expect(tabIds().sort()).toEqual([ID, S2, S3].sort());
+  });
+
+  it("auto-close 1 hour closes stale idle tabs once with one 'Auto-closed N idle tabs' toast and does not toast again within 15 minutes", async () => {
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old, [S4]: old }));
+    localStorage.setItem("claude-ui.tabAutoClose", "1h");
+    await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth", { state: "running" })], [ID, S2, S3, S4], S2);
+    await act(async () => {});
+    expect(tabIds()).toEqual([S2, S4]);
+    expect(toast()?.textContent).toContain("Auto-closed 2 idle tabs");
+    // Undo brings them back; the throttle keeps the next check from closing them again.
+    const before = Date.now();
+    await undo();
+    expect(tabIds()).toEqual([ID, S2, S3, S4]);
+    // Undo counts as use.
+    const used = JSON.parse(localStorage.getItem("claude-ui.tab-used")!) as Record<string, number>;
+    expect(used[ID]).toBeGreaterThanOrEqual(before);
+    expect(used[S3]).toBeGreaterThanOrEqual(before);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await act(async () => {});
+    expect(tabIds()).toEqual([ID, S2, S3, S4]);
+  });
+
+  it("the Clean up tabs counts, kept line and closed set are the same whichever tab opens the menu (not the active one, not a stale render)", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth", { state: "running" }), mk(S5, "Fifth")], [ID, S2, S3, S4, S5], S2);
+    // A draft appears without any prop of a tab changing: a memoized tab does not render again.
+    draft(S3);
+    const open = async (from: string) => {
+      await act(async () => void el.querySelector(`[data-tab-id="${from}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+      await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+      return document.querySelector<HTMLElement>('[data-testid="tab-cleanup-menu"]')!;
+    };
+    const read = (m: HTMLElement) => [m.querySelector('[data-testid="tab-cleanup-idle"]')!.getAttribute("aria-label"), m.querySelector('[data-testid="tab-cleanup-kept"]')?.textContent];
+    const seen: unknown[] = [];
+    for (const from of [S5, ID, S4]) {
+      seen.push(read(await open(from)));
+      await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    }
+    // Idle and unprotected: ID and S5 (S3 has a draft, S4 runs, S2 is active).
+    for (const r of seen) expect(r).toEqual(["Close idle tabs (2)", "2 kept: running/draft"]);
+    await rule(S5, "idle");
+    expect(tabIds()).toEqual([S2, S3, S4]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+  });
+
+  it("a palette rule or a bound key with nothing to close shows 'No tabs to close'; the page lists the rule disabled", async () => {
+    await remount([session], [ID], ID);
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    const input = document.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Clean up tabs");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => paletteRow("Clean up tabs…")!.click());
+    const idle = paletteRow("Close idle tabs")!;
+    expect(idle.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => idle.click());
+    expect(document.querySelector('[data-testid="palette"]')).not.toBeNull();
+    await press({ key: "Escape", code: "Escape" });
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    const again = document.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(again, "Close idle tabs");
+      again.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => paletteRow("Close idle tabs")!.click());
+    expect(toast()?.textContent).toContain("No tabs to close");
+  });
+
+  it("a session tab whose view is still loading is kept by auto-close and by a manual rule until its view arrives", async () => {
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
+    localStorage.setItem("claude-ui.tabAutoClose", "1h");
+    let release: (v: unknown) => void = () => {};
+    const slow = new Promise((r) => (release = r));
+    const list = [session, mk(S2, "Second"), mk(S3, "Third")];
+    act(() => root.unmount());
+    replies["session.list"] = { sessions: list, projects: ["/p/demo"] };
+    // The view of S3 arrives late.
+    replies["session.subscribe"] = (m: { sessionId: string }) => (m.sessionId === S3 ? slow.then(() => ({ logEpoch: "e1", seq: 0, session: list[2] })) : { logEpoch: "e1", seq: 0, session: list.find((x) => x.id === m.sessionId) });
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([ID, S2, S3]));
+    location.hash = `#${S2}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    // Auto-close ran at the list load: S3 (loading) stays, ID (view loaded) closed.
+    expect(tabIds()).toEqual([S2, S3]);
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([S2, S3]);
+    // The disabled item left its menu open: close it.
+    for (let i = 0; i < 2; i++) await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => release(undefined));
+    for (let i = 0; i < 3; i++) await act(async () => void (await new Promise((r) => setTimeout(r, 30))));
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([S2]);
+  });
+
+  it("a cleanup close while another cleanup toast shows joins it: one toast, Undo restores both sets", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { archived: true }), mk(S4, "Fourth", { coordinatorId: ID }), mk(S5, "Fifth", { state: "running" })], [ID, S2, S3, S4, S5], S2);
+    await rule(S2, "archived");
+    expect(tabIds()).toEqual([ID, S2, S4, S5]);
+    expect(toast()?.textContent).toContain("Closed Third");
+    await rule(S2, "workers");
+    expect(tabIds()).toEqual([ID, S2, S5]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+    await undo();
+    expect(tabIds()).toEqual([ID, S2, S3, S4, S5]);
+  });
+
+  it("a tab shown in another window (newer claude-ui.tab-used in storage) is not closed by a time rule or auto-close", async () => {
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
+    await remount([session, mk(S2, "Second"), mk(S3, "Third")], [ID, S2, S3], S2);
+    // Window B shows S3 now.
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: Date.now() }));
+    await rule(S2, "unused1h");
+    expect(tabIds()).toEqual([S2, S3]);
+  });
+
+  it("after a reload, tabs of closed sessions (not loaded in this daemon run) are counted and closed by rules without a subscribe; one with output after this browser last showed it stays unread", async () => {
+    const S6 = S(6);
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old, [S4]: old, [S5]: old, [S6]: old }));
+    // lastActivity of each session's list item when this browser last showed it; S5 ran a turn after that.
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 100, [S3]: 100, [S4]: 100, [S5]: 150, [S6]: 100 }));
+    const closed = { state: "closed" as const, lastActivity: 100 };
+    sent.length = 0;
+    await remount(
+      [mk(ID, "First", closed), mk(S2, "Second"), mk(S3, "Third", { ...closed, archived: true }), mk(S4, "Fourth", { ...closed, coordinatorId: S2 }), mk(S5, "Fifth", { ...closed, lastActivity: 200 }), mk(S6, "Sixth", { state: "error", lastActivity: 100 })],
+      [ID, S2, S3, S4, S5, S6],
+      S2,
+    );
+    await act(async () => void el.querySelector(`[data-tab-id="${S2}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+    expect(document.querySelector('[data-testid="tab-cleanup-menu"]')!.textContent).toContain("1 kept: unread");
+    expect(document.querySelector('[data-testid="tab-cleanup-idle"]')!.textContent).toContain("3");
+    // The error tab is followed in the background (not shown), so its unread state is known.
+    expect(document.querySelector('[data-testid="tab-cleanup-unused1h"]')!.textContent).toContain("4");
+    for (let i = 0; i < 2; i++) await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    // The unread one shows its marker in the strip.
+    expect(el.querySelector(`[data-tab-id="${S5}"] [aria-label]`)?.getAttribute("aria-label")).toContain("unread");
+    await rule(S2, "archived");
+    expect(tabIds()).toEqual([ID, S2, S4, S5, S6]);
+    await rule(S2, "workers");
+    expect(tabIds()).toEqual([ID, S2, S5, S6]);
+    await rule(S2, "unused1h");
+    expect(tabIds()).toEqual([S2, S5]);
+    // No transcript restore for the closed ones: only the shown tab and the error tab were subscribed.
+    const subscribed = sent.filter((m) => m.type === "session.subscribe").map((m) => (m as unknown as { sessionId: string }).sessionId);
+    for (const id of [ID, S3, S4, S5]) expect(subscribed).not.toContain(id);
+    expect(subscribed).toContain(S6);
+  });
+
+  it("auto-close 1 hour after a reload closes read tabs of closed sessions; keeps one with unseen output and one this browser has no record of", async () => {
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old, [S4]: old, [S5]: old }));
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 100, [S3]: 150, [S5]: 100 }));
+    localStorage.setItem("claude-ui.tabAutoClose", "1h");
+    const closed = { state: "closed" as const, lastActivity: 100 };
+    await remount([mk(ID, "First", closed), mk(S2, "Second"), mk(S3, "Third", { ...closed, lastActivity: 200 }), mk(S4, "Fourth", closed), mk(S5, "Fifth", closed)], [ID, S2, S3, S4, S5], S2);
+    await act(async () => {});
+    expect(tabIds()).toEqual([S2, S3, S4]);
+    expect(toast()?.textContent).toContain("Auto-closed 2 idle tabs");
+    await act(async () => void el.querySelector(`[data-tab-id="${S2}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+    expect(document.querySelector('[data-testid="tab-cleanup-menu"]')!.textContent).toContain("2 kept: unknown/unread");
+  });
+
+  it("showing a tab records its session's list lastActivity, so a closed session read here is closable after the next reload", async () => {
+    localStorage.removeItem("claude-ui.shown-activity");
+    await remount([mk(ID, "First", { lastActivity: 100 }), mk(S2, "Second", { lastActivity: 300 })], [ID, S2], S2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
+    await act(async () => {});
+    expect(JSON.parse(localStorage.getItem("claude-ui.shown-activity")!)).toMatchObject({ [ID]: 100, [S2]: 300 });
+  });
+
+  it("a tab whose subscribe failed is kept as 'unknown' by every rule", async () => {
+    const list = [session, mk(S2, "Second"), mk(S3, "Third")];
+    act(() => root.unmount());
+    replies["session.list"] = { sessions: list, projects: ["/p/demo"] };
+    replies["session.subscribe"] = (m: { sessionId: string }) => {
+      if (m.sessionId === S3) throw new Error("boom");
+      return { logEpoch: "e1", seq: 0, session: list.find((x) => x.id === m.sessionId) };
+    };
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([ID, S2, S3]));
+    location.hash = `#${S2}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([S2, S3]);
+    await act(async () => void el.querySelector(`[data-tab-id="${S2}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+    expect(document.querySelector('[data-testid="tab-cleanup-menu"]')!.textContent).toContain("1 kept: unknown");
+  });
+
+  it("page open across a daemon restart: a background tab with output this browser never showed keeps its unread marker and is not closed", async () => {
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 100, [S2]: 100 }));
+    await remount([mk(ID, "First", { lastActivity: 100 }), mk(S2, "Second", { lastActivity: 100 })], [ID, S2], S2);
+    const st = (seq: number, state: string) => ({ type: "event", sessionId: ID, seq, part: { type: "session_state", id: "session_state", state } });
+    await act(async () => (emit(st(1, "running")), emit(st(2, "idle"))));
+    expect(el.querySelector(`[data-tab-id="${ID}"] [aria-label]`)?.getAttribute("aria-label")).toContain("unread");
+    // Daemon restart (new log epoch) while the page stays open: the replay has no attention, the list shows the new output time.
+    replies["session.list"] = { sessions: [mk(ID, "First", { lastActivity: 200 }), mk(S2, "Second", { lastActivity: 100 })], projects: ["/p/demo"] };
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e2", seq: 0, session: m.sessionId === ID ? mk(ID, "First", { lastActivity: 200 }) : mk(S2, "Second") });
+    await act(async () => reconnect());
+    await act(async () => {});
+    expect(el.querySelector(`[data-tab-id="${ID}"] [aria-label]`)?.getAttribute("aria-label")).toContain("unread");
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+  });
+
+  it("after a reconnect, every session tab is kept ('loading') until a session.list reply after it arrives; a failed list keeps them", async () => {
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 100, [S2]: 100 }));
+    await remount([mk(ID, "First", { lastActivity: 100 }), mk(S2, "Second", { lastActivity: 100 })], [ID, S2], S2);
+    // Daemon restarted; a turn of ID ended while disconnected. The resubscribe replies first, the list is late.
+    let release: (v: unknown) => void = () => {};
+    const late = new Promise((r) => (release = r));
+    replies["session.list"] = () => late;
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e2", seq: 0, session: m.sessionId === ID ? mk(ID, "First", { lastActivity: 200 }) : mk(S2, "Second") });
+    await act(async () => reconnect());
+    await act(async () => {});
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+    for (let i = 0; i < 2; i++) await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => release({ sessions: [mk(ID, "First", { lastActivity: 200 }), mk(S2, "Second", { lastActivity: 100 })], projects: ["/p/demo"] }));
+    await act(async () => {});
+    expect(el.querySelector(`[data-tab-id="${ID}"] [aria-label]`)?.getAttribute("aria-label")).toContain("unread");
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+    for (let i = 0; i < 2; i++) await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    // Another restart, the list request fails. ID is then shown in a focused page (read by its record): still kept, the list is not fresh.
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    replies["session.list"] = () => {
+      throw new Error("boom");
+    };
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e3", seq: 0, session: m.sessionId === ID ? mk(ID, "First", { lastActivity: 200 }) : mk(S2, "Second") });
+    await act(async () => reconnect());
+    await act(async () => {});
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] [role="tab"]`)!.click());
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+  });
+
+  it("after a daemon restart, a tab with a replayed view and no shown record is kept as 'unknown'; with an older record it closes", async () => {
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [S2]: 100, [S3]: 100 }));
+    localStorage.setItem("claude-ui.seen", JSON.stringify({ [ID]: { epoch: "e0", seq: 4 }, [S3]: { epoch: "e0", seq: 4 } }));
+    await remount([mk(ID, "First", { lastActivity: 100 }), mk(S2, "Second", { lastActivity: 100 }), mk(S3, "Third", { lastActivity: 100 })], [ID, S2, S3], S2);
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+    await act(async () => void el.querySelector(`[data-tab-id="${S2}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Clean up tabs")!.click());
+    expect(document.querySelector('[data-testid="tab-cleanup-menu"]')!.textContent).toContain("1 kept: unknown");
+  });
+
+  it("a tab whose resubscribe is in flight or failed after a reconnect is kept ('loading', then 'unknown'), its old view does not count as read", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third")], [ID, S2, S3], S2);
+    let fail: (e: Error) => void = () => {};
+    const slow = new Promise((_, r) => (fail = r));
+    replies["session.subscribe"] = (m: { sessionId: string }) => (m.sessionId === ID ? slow : { logEpoch: "e2", seq: 0, session: m.sessionId === S2 ? mk(S2, "Second") : mk(S3, "Third") });
+    await act(async () => reconnect());
+    await act(async () => {});
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+    await undo();
+    await act(async () => fail(new Error("boom")));
+    await act(async () => {});
+    await rule(S2, "idle");
+    expect(tabIds()).toEqual([ID, S2]);
+  });
+
+  it("showing a tab while the page is not focused writes no shown record", async () => {
+    localStorage.setItem("claude-ui.shown-activity", "{}");
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      await remount([mk(ID, "First", { lastActivity: 100 }), mk(S2, "Second", { lastActivity: 300 })], [ID, S2], S2);
+      await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
+      await act(async () => {});
+      expect(JSON.parse(localStorage.getItem("claude-ui.shown-activity")!)).toEqual({});
+    } finally {
+      hasFocus.mockRestore();
+    }
+  });
+
+  it("claude-ui.shown-activity keeps only open tabs and the closed-tab stack", async () => {
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 1, [S2]: 1, [S3]: 1, [S4]: 1 }));
+    localStorage.setItem("claude-ui.closed-tabs", JSON.stringify([{ id: S3, at: 1 }]));
+    await remount([session, mk(S2, "Second")], [ID, S2], S2);
+    expect(Object.keys(JSON.parse(localStorage.getItem("claude-ui.shown-activity")!)).sort()).toEqual([ID, S2, S3].sort());
+  });
+
+  it("a cleanup right after Undo (toast still leaving) does not join the undone toast", async () => {
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { archived: true }), mk(S4, "Fourth", { coordinatorId: ID })], [ID, S2, S3, S4], S2);
+    await rule(S2, "archived");
+    await undo();
+    await rule(S2, "workers");
+    expect(tabIds()).toEqual([ID, S2, S3]);
+    expect(toast()?.textContent).toContain("Closed Fourth");
+  });
+
+  it("auto-close off (default) closes nothing", async () => {
+    const old = Date.now() - 30 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
+    await remount([session, mk(S2, "Second"), mk(S3, "Third")], [ID, S2, S3], S2);
+    await act(async () => {});
+    expect(tabIds()).toEqual([ID, S2, S3]);
   });
 });
