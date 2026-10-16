@@ -464,14 +464,37 @@ function GroupCleanup({ X, count: read, onRun }: { X: typeof ContextMenu.Item; c
   );
 }
 
+const COMPAT_MOUSE_MS = 700;
+/** From the next pointerup on, the compat mouse events of that release (mousedown, mouseup, click) outside the cleanup menu are stopped for COMPAT_MOUSE_MS; returns the disposer. */
+function keepMenuOpenAfterRelease(): () => void {
+  const types = ["mousedown", "mouseup", "click"] as const;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const swallow = (e: Event) => {
+    if (!(e.target as Element | null)?.closest?.('[data-testid="tab-cleanup-menu"]')) e.stopImmediatePropagation();
+  };
+  const dispose = () => {
+    clearTimeout(timer);
+    window.removeEventListener("pointerup", arm, true);
+    for (const t of types) window.removeEventListener(t, swallow, true);
+  };
+  function arm() {
+    window.removeEventListener("pointerup", arm, true);
+    for (const t of types) window.addEventListener(t, swallow, true);
+    timer = setTimeout(dispose, COMPAT_MOUSE_MS);
+  }
+  window.addEventListener("pointerup", arm, true);
+  return dispose;
+}
+
 /** Phone close button (below md): a tap closes the active tab; a long press or right click opens the Clean up tabs items. */
 function PhoneClose({ label, onClose, cleanup, onCleanup }: { label: string; onClose: () => void; cleanup?: () => CleanupMenu; onCleanup: (rule: CleanupRule) => void }) {
   // After a long press opened the menu, the release fires a click: ignored until the next pointerdown, however long the press was held.
   const afterMenu = useRef(false);
-  // Base UI closes the menu on the release of a press held longer than 500 ms (a mouse right click selecting by drag): on touch that is the long press itself.
-  const swallow = (e: Event) => e.stopImmediatePropagation();
-  const stopSwallowing = () => window.removeEventListener("mouseup", swallow, true);
-  useEffect(() => stopSwallowing, []);
+  // Base UI closes the menu on the release of a long press (its mouseup rule, then the compat mousedown / click that the touch release produces land outside the popup).
+  // Measured in Chromium touch (GH-378): after a hold > 500 ms touchend is followed by mousedown, mouseup and a click on the body, which close it.
+  const keepOpen = useRef<() => void>(undefined);
+  const stopKeeping = () => (keepOpen.current?.(), (keepOpen.current = undefined));
+  useEffect(() => stopKeeping, []);
   const button = (
     <IconButton className="md:hidden" label={label} onClick={() => !afterMenu.current && onClose()} testId="tab-close-active">
       <XIcon />
@@ -479,8 +502,8 @@ function PhoneClose({ label, onClose, cleanup, onCleanup }: { label: string; onC
   );
   if (!cleanup) return button;
   return (
-    <ContextMenu.Root onOpenChange={(o) => (o ? ((afterMenu.current = true), window.addEventListener("mouseup", swallow, { capture: true, once: true })) : stopSwallowing())}>
-      <ContextMenu.Trigger className="contents select-none [-webkit-touch-callout:none] md:hidden" onPointerDown={() => ((afterMenu.current = false), stopSwallowing())}>{button}</ContextMenu.Trigger>
+    <ContextMenu.Root onOpenChange={(o) => (o ? ((afterMenu.current = true), stopKeeping(), (keepOpen.current = keepMenuOpenAfterRelease())) : stopKeeping())}>
+      <ContextMenu.Trigger className="contents select-none [-webkit-touch-callout:none] md:hidden" onPointerDown={() => ((afterMenu.current = false), stopKeeping())}>{button}</ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-2rem)]")} data-testid="tab-cleanup-menu">

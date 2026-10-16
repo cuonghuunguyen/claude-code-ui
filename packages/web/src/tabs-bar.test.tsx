@@ -1208,7 +1208,9 @@ it("GH-378 phone: the cleanup menu stays open when the finger lifts after a long
   expect(document.querySelector('[data-testid="tab-cleanup-menu"]')).not.toBeNull();
   // Base UI accepts a closing release 500 ms after the menu opened.
   await act(async () => void (await new Promise((r) => setTimeout(r, 650))));
-  await act(async () => void x.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 })));
+  // The release as Chromium touch sends it after a hold: pointerup, then compat mousedown, mouseup and a click on the body.
+  await act(async () => void x.dispatchEvent(new Event("pointerup", { bubbles: true })));
+  for (const t of ["mousedown", "mouseup", "click"]) await act(async () => void document.body.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, button: 0 })));
   await act(async () => {});
   expect(document.querySelector('[data-testid="tab-cleanup-menu"]')).not.toBeNull();
   await act(async () => x.click());
