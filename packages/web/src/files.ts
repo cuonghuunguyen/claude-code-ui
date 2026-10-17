@@ -22,6 +22,8 @@ export type Tab = {
   preview?: boolean;
   /** A media tab (image, SVG, video, audio viewer): `disk` and `draft` are empty, so it is never dirty. */
   media?: FsMediaResult;
+  /** Opened from the timeline from outside the session folder: the file dialog lists it, the Files tab does not. */
+  outside?: boolean;
 };
 
 export const openedMedia = (path: string, m: FsMediaResult): Tab => ({ path, disk: "", draft: "", mtime: m.mtime, media: m });

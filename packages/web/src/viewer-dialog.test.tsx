@@ -44,7 +44,7 @@ function fakeClient(handler: (m: Req) => unknown = (m) => (m.type === "fs.read" 
 }
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 const call = (tool: string, input: unknown): ToolCall => ({ type: "tool_call", id: "t1", toolUseId: "t1", tool, input, status: "done" });
-const dialog = (p: { target?: ViewerTarget; client?: ReturnType<typeof fakeClient>; onClose?: () => void; opener?: HTMLElement | null; sessionId?: string; view?: ReturnType<typeof emptySession>; onOpenInEditor?: (path: string, line?: number) => void }) => (
+const dialog = (p: { target?: Exclude<ViewerTarget, { kind: "file" }>; client?: ReturnType<typeof fakeClient>; onClose?: () => void; opener?: HTMLElement | null; sessionId?: string; view?: ReturnType<typeof emptySession>; onOpenInEditor?: (path: string, line?: number) => void }) => (
   <ViewerDialog target={p.target} client={p.client ?? fakeClient()} cwd="/w" view={p.view} sessionId={p.sessionId} opener={p.opener} onClose={p.onClose ?? (() => {})} onOpenInEditor={p.onOpenInEditor ?? (() => {})} />
 );
 const open = async (p: Parameters<typeof dialog>[0]) => {
@@ -55,20 +55,25 @@ const q = <T extends Element = HTMLElement>(sel: string) => document.querySelect
 const click = (sel: string) => act(async () => (q(sel)!.click(), undefined));
 const esc = (t: Element = document.activeElement ?? document.body) => act(async () => void t.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
 
-it("a file target reads the file and shows it read-only at the given line", async () => {
-  await open({ target: { kind: "file", path: "/w/a.ts", line: 40 } });
+/** The diff target of `path`, switched to its File view: the read-only FileBody. */
+const openFileView = async (path: string, client = fakeClient(), onOpenInEditor?: (path: string, line?: number) => void) => {
+  await open({ target: { kind: "diff", call: call("Edit", { file_path: path, old_string: "a", new_string: "b" }) }, client, onOpenInEditor });
+  await click("[data-testid=viewer-show-file]");
+  await flush();
+};
+
+it("the File view of a diff target reads the file and shows it read-only", async () => {
+  await openFileView("/w/a.ts");
   expect(q("[data-testid=code-editor]")).not.toBeNull();
   const content = q(".cm-content")!;
-  expect(content.textContent).toContain("l40");
+  expect(content.textContent).toContain("l1");
   expect(content.getAttribute("tabindex")).toBe("0");
-  const view = EditorView.findFromDOM(q(".cm-editor")!)!;
-  expect(view.state.readOnly).toBe(true);
-  expect(view.state.selection.main.head).toBe(view.state.doc.line(40).from);
+  expect(EditorView.findFromDOM(q(".cm-editor")!)!.state.readOnly).toBe(true);
 });
 
 it("a media file opens in the media viewer", async () => {
   const client = fakeClient((m) => (m.type === "fs.media" ? { url: "/media/x/p.png", mime: "image/png", size: 3, mtime: 1 } : {}));
-  await open({ target: { kind: "file", path: "/w/p.png" }, client });
+  await openFileView("/w/p.png", client);
   expect(q<HTMLImageElement>("[data-testid=media-image]")!.getAttribute("src")).toMatch(/\/media\/x\/p\.png$/);
   expect(client.calls.mock.calls.some(([m]) => m.type === "fs.read")).toBe(false);
 });
@@ -77,7 +82,7 @@ it("a file that cannot be read says why", async () => {
   const client = fakeClient(() => {
     throw Object.assign(new Error("binary"), { code: "binary", size: 2048 });
   });
-  await open({ target: { kind: "file", path: "/w/a.bin" }, client });
+  await openFileView("/w/a.bin", client);
   const err = q("[data-testid=viewer-error]")!;
   expect(err.textContent).toBe("Binary file, not shown (2 KB)");
   expect(err.getAttribute("role")).toBe("status");
@@ -85,7 +90,7 @@ it("a file that cannot be read says why", async () => {
 
 it("Reload from disk reads the file again", async () => {
   const client = fakeClient();
-  await open({ target: { kind: "file", path: "/w/a.ts" }, client });
+  await openFileView("/w/a.ts", client);
   await click('[aria-label="Reload from disk"]');
   await flush();
   expect(client.calls.mock.calls.filter(([m]) => m.type === "fs.read")).toHaveLength(2);
@@ -114,7 +119,7 @@ it("the dialog is modal and labelled", async () => {
   const d = q("[role=dialog]")!;
   expect(d.getAttribute("aria-modal")).toBe("true");
   expect(document.getElementById(d.getAttribute("aria-labelledby")!)!.textContent).toBe("Plan");
-  await open({ target: { kind: "file", path: "/w/src/a.ts" } });
+  await open({ target: { kind: "diff", call: call("Edit", { file_path: "/w/src/a.ts", old_string: "a", new_string: "b" }) } });
   expect(document.getElementById(q("[role=dialog]")!.getAttribute("aria-labelledby")!)!.textContent).toBe("src/a.ts");
 });
 
@@ -148,7 +153,9 @@ it("closing as App does (target and opener both cleared) returns focus to the op
 
 it("Esc inside an open CodeMirror search panel closes the panel, not the dialog", async () => {
   const onClose = vi.fn();
-  await open({ target: { kind: "file", path: "/w/a.ts" }, onClose });
+  await open({ target: { kind: "diff", call: call("Edit", { file_path: "/w/a.ts", old_string: "a", new_string: "b" }) }, onClose });
+  await click("[data-testid=viewer-show-file]");
+  await flush();
   const view = EditorView.findFromDOM(q(".cm-editor")!)!;
   await act(async () => (view.focus(), openSearchPanel(view)));
   expect(q(".cm-search")).not.toBeNull();
@@ -226,13 +233,8 @@ it("useOpenViewer keeps one identity across renders and opens for the latest sho
   expect(set).toHaveBeenCalledWith({ target: { kind: "changes" }, sessionId: "b", cwd: "/b", opener: btn });
 });
 
-it("Open in Files tab on a file target calls onOpenInEditor with the path and the line; on a diff target with the edited file", async () => {
+it("Open in Files tab on a diff target calls onOpenInEditor with the edited file", async () => {
   const onOpenInEditor = vi.fn();
-  await open({ target: { kind: "file", path: "/w/a.ts", line: 40 }, onOpenInEditor });
-  expect(q("[data-testid=viewer-open-editor]")!.getAttribute("aria-label")).toBe("Open in Files tab");
-  expect(q("[data-testid=viewer-open-editor]")!.className).toContain("max-md:size-11");
-  await click("[data-testid=viewer-open-editor]");
-  expect(onOpenInEditor).toHaveBeenLastCalledWith("/w/a.ts", 40);
   await open({ target: { kind: "diff", call: call("Edit", { file_path: "/w/b.ts", old_string: "a", new_string: "b" }) }, onOpenInEditor });
   await click("[data-testid=viewer-open-editor]");
   expect(onOpenInEditor).toHaveBeenLastCalledWith("/w/b.ts", undefined);

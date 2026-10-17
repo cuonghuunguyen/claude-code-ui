@@ -557,7 +557,7 @@ it("a link and a path in the markdown preview open that file in a tab, resolved 
   const t = mdPanel();
   await t.show({ openPath: "/p/docs/guide.md" });
   await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
-  const buttons = [...t.el.querySelectorAll<HTMLButtonElement>("[data-testid=md-preview] button[title='Open in Files tab']")];
+  const buttons = [...t.el.querySelectorAll<HTMLButtonElement>("[data-testid=md-preview] button[title='Open in file dialog']")];
   expect(buttons.map((b) => b.textContent)).toEqual(["next", "src/c.ts:2"]);
   await act(async () => buttons[0]!.click());
   expect(t.request).toHaveBeenCalledWith({ type: "fs.read", path: "/p/docs/next.md" });

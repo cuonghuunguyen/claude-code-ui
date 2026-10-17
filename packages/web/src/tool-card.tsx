@@ -141,7 +141,7 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
 const openLabel = (t: ViewerTarget, stats: { added: number; removed: number } | undefined, cwd: string) => {
   if (t.kind === "plan") return "Open plan in popup";
   const name = t.kind === "file" ? filePath(t.path, cwd).name : t.kind === "diff" ? filePath(field(t.call.input, "file_path"), cwd).name : "";
-  return t.kind === "diff" && stats ? `Open diff of ${name} (+${stats.added} -${stats.removed}) in popup` : `Open ${name} in popup`;
+  return t.kind === "diff" && stats ? `Open diff of ${name} (+${stats.added} -${stats.removed}) in popup` : t.kind === "file" ? `Open ${name} in file dialog` : `Open ${name} in popup`;
 };
 
 /** Open-in-popup button right of a card header: hover, keyboard focus, open card, always on touch (like the chevron). */
@@ -150,7 +150,7 @@ function OpenButton({ target, onOpen, label }: { target: ViewerTarget; onOpen: O
     <button
       type="button"
       aria-label={label}
-      title="Open in popup"
+      title={target.kind === "file" ? "Open in file dialog" : "Open in popup"}
       data-testid="viewer-open"
       onClick={(e) => onOpen(target, e.currentTarget)}
       className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info group-hover/head:opacity-100 group-has-[[data-panel-open]]/head:opacity-100 max-md:size-11 pointer-coarse:size-11 pointer-coarse:opacity-100"

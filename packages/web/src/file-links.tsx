@@ -131,7 +131,7 @@ function FileCode(props: ComponentProps<"code">) {
   const ref = open && base && text ? fileRef(text, base, root) : undefined;
   if (!ref) return createElement(defaultComponents.code as never, props as never);
   return (
-    <button type="button" className={`rounded bg-muted px-1.5 py-0.5 font-mono text-sm ${refClass}`} title="Open in Files tab" onClick={() => open!(ref.path, ref.line)}>
+    <button type="button" className={`rounded bg-muted px-1.5 py-0.5 font-mono text-sm ${refClass}`} title="Open in file dialog" onClick={() => open!(ref.path, ref.line)}>
       {text}
     </button>
   );
@@ -145,7 +145,7 @@ function FileAnchor(props: ComponentProps<"a">) {
   const ref = open && base ? (fileRef(percentDecoded(target), base, root) ?? linkRef(target, base, root)) : undefined;
   if (!ref) return <span>{props.children}</span>;
   return (
-    <button type="button" className={`text-primary ${refClass}`} title="Open in Files tab" onClick={() => open!(ref.path, ref.line)}>
+    <button type="button" className={`text-primary ${refClass}`} title="Open in file dialog" onClick={() => open!(ref.path, ref.line)}>
       {props.children}
     </button>
   );
