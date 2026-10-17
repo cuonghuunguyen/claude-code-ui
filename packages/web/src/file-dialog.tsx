@@ -61,6 +61,8 @@ export function FileDialog({
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-overlay" />
         <Dialog.Popup
+          // The editor when a file shows (Ctrl+Z right after Pop out works), else Base UI's default (the first control).
+          initialFocus={() => store.view.current?.contentDOM ?? true}
           finalFocus={() => (lastOpener.current?.isConnected ? lastOpener.current : (replacement(lastOpener.current) ?? shownPrompt() ?? true))}
           onKeyDown={trapTab}
           // App shortcuts and Esc (stop turn) skip while an aria-modal dialog shows; Base UI does not set it.

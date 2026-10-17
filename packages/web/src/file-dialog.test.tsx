@@ -142,6 +142,16 @@ it("Open in editor shows only for a file inside cwd and calls onOpenInFiles; a f
   expect(dlg()).toBeNull();
 });
 
+it("after Pop out the keyboard focus is in the dialog's editor, so Ctrl+Z works without a click", async () => {
+  const { store } = await setup();
+  await openTab(store, "/p/a.ts");
+  await type(side(), "X");
+  await click("[data-testid=files-popout]");
+  await flush();
+  const v = cmView(dlg()!);
+  await vi.waitFor(() => expect(document.activeElement).toBe(v.contentDOM));
+});
+
 it("opening at a line puts the cursor on it in the dialog", async () => {
   const { store } = await setup();
   await openTab(store, "/p/a.ts", { line: 40 });

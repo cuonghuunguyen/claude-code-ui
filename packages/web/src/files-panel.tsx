@@ -13,6 +13,8 @@ import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, LocateFixedIcon,
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { useNarrow } from "@/lib/use-narrow.ts";
+import { useContainerWidth } from "@/lib/use-container-width.ts";
+import { cn } from "@/lib/utils";
 import type { connect, ConnectionStatus } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
@@ -21,11 +23,15 @@ import { MediaView } from "./media-view.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { FILE_LINK_PROPS, FileBaseContext, FileImageContext, FileLinkContext } from "./file-links.tsx";
 import { FileTree, type FileTreeHandle } from "./file-tree.tsx";
+import { ListResizer, loadListWidth, saveListWidth } from "./changes-panel.tsx";
 import { docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, pin, fileMention, replaceDoc, saveMdView, selectionMention, type MdView } from "./files.ts";
 import { createEditorStore, useEditorStore, useEditorSync, type EditorStore } from "./editor-store.ts";
 
 type Client = ReturnType<typeof connect>;
 
+/** Panel width from which the tree sits beside the editor (Tailwind's `@2xl`, the Changes tab's list rule); below it the tree is a drawer. */
+export const TREE_BESIDE_PX = 672;
+const TREE_WIDTH_KEY = "claude-ui.filesTreeWidth";
 
 /**
  * Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. `onSend` gets an `@path#lines` mention.
@@ -119,6 +125,21 @@ export function FilesPanel({
   const imageUrl = useCallback((path: string) => client.request<FsMediaResult>({ type: "fs.media", path }).then((m) => m.url), [client]);
   const shown = paths.filter((p) => inDir(p, cwd) || (dialog && tabs[p]!.outside));
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
+  const rootRef = useRef<HTMLDivElement>(null);
+  const treeColumn = useRef<HTMLDivElement>(null);
+  const filesButton = useRef<HTMLButtonElement>(null);
+  const width = useContainerWidth(rootRef);
+  /** Unmeasured counts as wide, like useNarrow without matchMedia. */
+  const wide = width === undefined || width >= TREE_BESIDE_PX;
+  const [treeWidth, setTreeWidth] = useState(() => loadListWidth(TREE_WIDTH_KEY));
+  // Below the threshold the tree is a drawer: open (whatever its state) while no file shows, closed when one appears. The Files button and a change of `showTree` (Toggle file tree, Ctrl+\) flip it; it never writes `showTree`.
+  const [drawer, setDrawer] = useState(false);
+  const lastShowTree = useRef(showTree);
+  useEffect(() => {
+    if (lastShowTree.current === showTree) return;
+    lastShowTree.current = showTree;
+    if (!wide) setDrawer((d) => !d);
+  }, [showTree]);
   const md = !!active && !active.media && isMarkdown(active.path);
   /** Split needs room: below md it shows Preview. */
   const view: MdView = !md ? "source" : sourceOnly === active!.path ? "source" : mdView === "split" && narrow ? "preview" : mdView;
@@ -140,8 +161,25 @@ export function FilesPanel({
     )
   );
   const refused = active?.notice ? { path: active.path, text: active.notice, hint: active.noticeHint } : undefined;
-  // No file open: the tree takes the whole panel; with a file, at most 40% above the editor.
+  // No file open: the tree takes the whole panel (both layouts); with a file it is beside the editor, or a drawer over it when narrow.
   const empty = !refused && !active;
+  const treeShown = wide ? showTree : drawer || empty;
+  const overlay = treeShown && !wide && !empty;
+  const closeDrawer = (refocus?: boolean) => {
+    setDrawer(false);
+    if (refocus) filesButton.current?.focus();
+  };
+  const drawerRef = useRef<HTMLDivElement>(null);
+  // The first file to show (opened from anywhere) puts the drawer away: it is open on its own only while no file shows.
+  useEffect(() => {
+    if (!empty) setDrawer(false);
+  }, [empty]);
+  useEffect(() => {
+    if (!overlay) return;
+    drawerRef.current?.focus();
+    if (activePath) void tree.current?.reveal(activePath, true);
+  }, [overlay]);
+  const toggleTree = () => (wide ? onToggleTree() : setDrawer((d) => !d));
 
   /** Breadcrumb folder: show the tree, then reveal the folder in it. */
   function revealFolder(dir: string) {
@@ -149,21 +187,54 @@ export function FilesPanel({
     requestAnimationFrame(() => void tree.current?.reveal(dir, true, true));
   }
 
+  const treeNav = (
+    <nav
+          className="flex min-h-0 flex-1 flex-col overflow-auto py-1 font-mono text-xs"
+          id="file-tree"
+          data-testid="file-tree"
+          aria-label="File tree"
+        >
+          <FileTree
+            key={cwd}
+            client={client}
+            cwd={cwd}
+            activePath={active?.path}
+            reloadKey={treeKey}
+            gitStamp={gitStamp}
+            visible={visible && !suspended}
+            gitNudge={gitNudge}
+            handleRef={tree}
+            onFilter={setFiltering}
+            onCopy={onCopy}
+            onViewer={dialog ? undefined : onViewer}
+            onShowChanges={onShowChanges}
+            onMention={(p) => onSend(fileMention(p, cwd))}
+            onReload={() => setTreeKey((k) => k + 1)}
+            onChanged={store.nudge}
+            onMoved={store.moved}
+            onDeleted={store.deleted}
+            dirtyUnder={(path) => Object.values(store.get().tabs).filter((t) => isDirty(t) && inDir(t.path, path)).length}
+            onOpen={(path, o) => (overlay && setDrawer(false), void open(path, { preview: !o.pinned, focusEditor: o.focusEditor }))}
+          />
+        </nav>
+  );
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="files-panel">
+    <div ref={rootRef} className="@container flex min-h-0 flex-1 flex-col" data-testid="files-panel" data-layout={wide ? "beside" : "drawer"}>
       <div className="flex items-center gap-1 border-b px-2 py-1 text-xs">
         <Button
+          ref={filesButton}
           size="xs"
           variant="ghost"
-          onClick={onToggleTree}
+          onClick={toggleTree}
           className="max-md:h-11 pointer-coarse:h-11"
-          aria-expanded={showTree}
+          aria-expanded={treeShown}
           aria-controls="file-tree"
           data-testid="toggle-tree"
         >
-          {showTree ? <ChevronDownIcon /> : <ChevronRightIcon />} Files
+          {treeShown ? <ChevronDownIcon /> : <ChevronRightIcon />} Files
         </Button>
-        {showTree && (
+        {treeShown && (
           <>
             <Button
               size="xs"
@@ -194,7 +265,7 @@ export function FilesPanel({
         <Button
           size="xs"
           variant="ghost"
-          className={`${showTree ? "" : "ml-auto "}max-md:size-11 pointer-coarse:size-11`}
+          className={`${treeShown ? "" : "ml-auto "}max-md:size-11 pointer-coarse:size-11`}
           onClick={() => setTreeKey((k) => k + 1)}
           title="Reload the file tree"
           aria-label="Reload the file tree"
@@ -203,40 +274,40 @@ export function FilesPanel({
         </Button>
         {headerEnd}
       </div>
-      {showTree && (
-        <nav
-          className={`flex flex-col overflow-auto py-1 font-mono text-xs ${empty ? "min-h-0 flex-1" : "max-h-[40%] shrink-0 border-b"}`}
-          id="file-tree"
-          data-testid="file-tree"
-          aria-label="File tree"
-        >
-          <FileTree
-            key={cwd}
-            client={client}
-            cwd={cwd}
-            activePath={active?.path}
-            reloadKey={treeKey}
-            gitStamp={gitStamp}
-            visible={visible && !suspended}
-            gitNudge={gitNudge}
-            handleRef={tree}
-            onFilter={setFiltering}
-            onCopy={onCopy}
-            onViewer={dialog ? undefined : onViewer}
-            onShowChanges={onShowChanges}
-            onMention={(p) => onSend(fileMention(p, cwd))}
-            onReload={() => setTreeKey((k) => k + 1)}
-            onChanged={store.nudge}
-            onMoved={store.moved}
-            onDeleted={store.deleted}
-            dirtyUnder={(path) => Object.values(store.get().tabs).filter((t) => isDirty(t) && inDir(t.path, path)).length}
-            onOpen={(path, o) => void open(path, { preview: !o.pinned, focusEditor: o.focusEditor })}
-          />
-        </nav>
-      )}
       {error && <p className="px-2 py-1 text-destructive text-xs">{error}</p>}
+      <div className={cn("relative flex min-h-0 flex-1", empty && treeShown ? "flex-col" : "flex-row")}>
+      {treeShown && empty && treeNav}
+      {treeShown && !empty && wide && (
+        <>
+          <div
+            ref={treeColumn}
+            className={cn("flex min-h-0 shrink-0 flex-col border-r", !treeWidth && "w-50 @2xl:w-60")}
+            style={treeWidth ? { width: `min(${treeWidth}px, calc(100% - 240px))` } : undefined}
+          >
+            {treeNav}
+          </div>
+          <ListResizer list={treeColumn} width={treeWidth} onResize={(w) => (setTreeWidth(w), saveListWidth(w, TREE_WIDTH_KEY))} label="Resize file tree" testId="files-tree-resizer" />
+        </>
+      )}
+      {overlay && (
+        <>
+          <div className="absolute inset-0 z-10 bg-overlay/40" onClick={() => closeDrawer(true)} data-testid="file-tree-scrim" />
+          <div
+            ref={drawerRef}
+            tabIndex={-1}
+            role="region"
+            aria-label="File tree"
+            className="absolute inset-y-0 left-0 z-20 flex w-[min(320px,85%)] flex-col border-r bg-card shadow-floating outline-none"
+            data-testid="file-tree-drawer"
+            onKeyDown={(e) => e.key === "Escape" && !e.defaultPrevented && (e.preventDefault(), closeDrawer(true))}
+          >
+            {treeNav}
+          </div>
+        </>
+      )}
+      <div className={cn("flex min-h-0 min-w-0 flex-col", empty && treeShown ? "flex-none" : "flex-1")}>
       {shown.length > 0 && (
-        <div className="flex shrink-0 overflow-x-auto border-b text-xs" role="tablist" aria-label="Editor tabs">
+        <div className="flex h-9 shrink-0 overflow-x-auto border-b bg-card text-xs max-md:h-auto" role="tablist" aria-label="Editor tabs">
           {shown.map((p) => {
             const t = tabs[p]!;
             return (
@@ -245,22 +316,25 @@ export function FilesPanel({
                 role="tab"
                 aria-selected={t === active}
                 data-testid="editor-tab"
-                className={`flex shrink-0 items-center gap-1 border-r pl-2 ${t === active ? "bg-muted" : ""}`}
+                className={cn("flex shrink-0 items-center gap-1.5 pl-2 text-muted-foreground hover:bg-accent hover:text-foreground", t === active && "bg-secondary text-foreground")}
                 title={p}
               >
                 <button
-                  className={`py-1.5 max-md:min-h-11 ${t.preview ? "italic" : ""}`}
+                  className={cn("flex items-center gap-1.5 py-1.5 max-md:min-h-11 max-md:min-w-11", t.preview && "italic")}
                   aria-label={t.preview ? `${baseName(p)}, preview` : undefined}
                   onClick={() => store.setActive(p)}
                   onDoubleClick={() => update(p, pin)}
                   onAuxClick={(e) => e.button === 1 && (e.preventDefault(), close(p))}
                 >
-                  {baseName(p)}
-                  {isDirty(t) && <span aria-label="unsaved"> ●</span>}
-                  {t.conflict && <span className="text-warning"> !</span>}
+                  <FileIcon path={p} className="size-4 shrink-0" />
+                  <span>
+                    {baseName(p)}
+                    {isDirty(t) && <span aria-label="unsaved"> ●</span>}
+                    {t.conflict && <span className="text-warning"> !</span>}
+                  </span>
                 </button>
                 <button
-                  className="px-1.5 py-1.5 text-muted-foreground hover:text-foreground max-md:min-w-11 max-md:min-h-11"
+                  className="grid size-6 shrink-0 place-items-center rounded-sm text-muted-foreground hover:text-foreground max-md:size-11 pointer-coarse:size-11"
                   onClick={() => close(p)}
                   aria-label={`Close ${baseName(p)}`}
                 >
@@ -287,7 +361,7 @@ export function FilesPanel({
         </p>
       ) : refused ? (
         <>
-        {placeButton && <div className="flex shrink-0 justify-end border-b px-2 py-1">{placeButton}</div>}
+        {placeButton && <div className="flex min-h-10 shrink-0 items-center justify-end border-b px-3 py-1" data-testid="file-path-header">{placeButton}</div>}
         <div className="m-auto flex max-w-full flex-col items-center gap-1 p-4 text-center" data-testid="file-notice" role="status">
           <FileIcon path={refused.path} className="mb-1 size-8" />
           <div className="w-full max-w-full text-xs">
@@ -306,10 +380,10 @@ export function FilesPanel({
               data-testid="editor-conflict"
             >
               <span className="flex-1">Changed on disk while you have unsaved edits.</span>
-              <Button size="xs" variant="outline" onClick={() => store.reload(active.path)}>
+              <Button size="xs" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => store.reload(active.path)}>
                 Reload from disk
               </Button>
-              <Button size="xs" variant="outline" onClick={() => void save(active.path, true)}>
+              <Button size="xs" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => void save(active.path, true)}>
                 Overwrite with mine
               </Button>
             </div>
@@ -317,7 +391,7 @@ export function FilesPanel({
           {active.error && <p className="border-b px-2 py-1 text-destructive text-xs">{active.error}</p>}
           {active.media ? (
             <>
-              {placeButton && <div className="flex shrink-0 justify-end border-b px-2 py-1">{placeButton}</div>}
+              {placeButton && <div className="flex min-h-10 shrink-0 items-center justify-end border-b px-3 py-1" data-testid="file-path-header">{placeButton}</div>}
               <MediaView
                 key={active.media.url}
                 path={active.path}
@@ -327,7 +401,7 @@ export function FilesPanel({
             </>
           ) : (
             <>
-          <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1 text-xs">
+          <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1 text-xs" data-testid="file-path-header">
             <Breadcrumb path={active.path} cwd={cwd} onFolder={revealFolder} />
             {md && (
               <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Markdown view">
@@ -406,8 +480,10 @@ export function FilesPanel({
           )}
         </div>
       ) : (
-        !showTree && <p className="m-auto p-4 text-muted-foreground text-sm" data-testid="files-empty">Open a file from the tree.</p>
+        !treeShown && <p className="m-auto p-4 text-muted-foreground text-sm" data-testid="files-empty">Open a file from the tree.</p>
       )}
+      </div>
+      </div>
     </div>
   );
 }
@@ -494,10 +570,13 @@ export const syntaxStyle = HighlightStyle.define([
 /** Editor chrome on the app tokens (the panel is a card); `darkTheme` still drives CodeMirror's base theme for what is not listed here (search matches). */
 export const chromeTheme = {
   "&": { height: "100%", color: "var(--foreground)", backgroundColor: "var(--card)" },
-  ".cm-scroller": { fontFamily: "var(--font-mono, monospace)" },
-  ".cm-content": { caretColor: "var(--foreground)" },
+  // The diff's text metrics (@pierre/diffs: 13px mono on 20px lines, 8px above and below, tab size 2). Below lg 16px / 24px stays: iOS zooms into smaller focused text.
+  ".cm-scroller": { fontFamily: "var(--font-mono, monospace)", lineHeight: "20px" },
+  ".cm-content": { caretColor: "var(--foreground)", padding: "8px 0", tabSize: "2" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--foreground)" },
-  ".cm-gutters": { backgroundColor: "var(--card)", color: "var(--muted-foreground)", borderRight: "1px solid var(--border)" },
+  // Gutter like the diff's: no rule, line numbers in --diffs-fg-number's mix, numbers 1ch apart from the code and at least 3ch wide.
+  ".cm-gutters": { backgroundColor: "var(--card)", color: "color-mix(in lab, var(--foreground) 65%, var(--card))", borderRight: "none" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 1ch", minWidth: "3ch" },
   ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "var(--accent)" },
   ".cm-activeLineGutter": { color: "var(--foreground)" },
   // Autocomplete and other tooltips: the look of the prompt's command picker (bg-popover, border, shadow-md, rounded rows). Selected row: OpenCode's raised-hover background as --secondary plus a --foreground left bar, so keyboard selection reaches 3:1.
@@ -532,6 +611,7 @@ export const chromeTheme = {
   ".cm-button": { backgroundImage: "none", backgroundColor: "var(--secondary)", color: "var(--secondary-foreground)", border: "1px solid var(--border)", borderRadius: "4px" },
   // Go to line (Ctrl+G) dialog.
   ".cm-dialog": { backgroundColor: "var(--card)", color: "var(--foreground)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px" },
+  "@media (width < 64rem)": { ".cm-scroller": { lineHeight: "24px" } },
   // Touch: 44px targets (the repo's pointer-coarse rule). The close button joins the options row instead of narrowing the search field.
   "@media (pointer: coarse)": {
     ".cm-tooltip.cm-tooltip-autocomplete > ul": { maxHeight: "calc(5 * 44px + 8px)" },
