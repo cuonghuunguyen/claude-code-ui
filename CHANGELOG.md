@@ -17,6 +17,7 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 
 ### Changed
 
+- Code colors: the editor and every diff (Changes tab, tool cards, popup) use one palette, pierre's hues made dark enough (light) or light enough (dark) to read at 4.5:1 on the code background, the active line and the added and removed lines; the dark diff sits on the card surface, and the editor now colours parameters, operators, decorators, JSON keys, CSS and Markdown like the diff does ([#394](https://github.com/cuonghuunguyen/claude-code-ui/issues/394)).
 - The artifact preview loads the supporting files of a multi-file publish (CSS, scripts, images, fonts, JSON) that sit in the project or next to the page; files it does not serve are named under the preview ([#335](https://github.com/cuonghuunguyen/claude-code-ui/issues/335)).
 - The "Run session in" chip and menu name the main checkout "Primary worktree" (were "Local" and "Local repository").
 

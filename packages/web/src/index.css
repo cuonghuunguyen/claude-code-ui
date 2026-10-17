@@ -95,8 +95,8 @@
     --ring-track: #dbdbdb;
     --ring-progress: #3a3a3a;
     /* Context breakdown categories: OpenCode syntax tokens (v2 primitive, keyword, type; v1 string, primitive, info), 3:1 on popover and bar track. */
-    /* Code editor syntax: OpenCode --syntax-* (oc-2); keyword, string, property one shade darker for 4.5:1 on the active line. */
-    --syntax-comment: #5c5c5c; --syntax-keyword: #aa3576; --syntax-string: #1d783c; --syntax-property: #b35624; --syntax-type: #5230c2; --syntax-constant: #007b80; --syntax-critical: #b82d35;
+    /* Code palette (GH-394): pierre-light/dark hues, each failing colour moved in lightness only to 4.5:1 on the editor, its active line and the diff's context/added/removed lines. Same values feed the diff theme (code-palette.ts). */
+    --syntax-comment: #6a6a6a; --syntax-punctuation: #636363; --syntax-parameter: #636363; --syntax-keyword: #cc215b; --syntax-type: #a631be; --syntax-function: #693acf; --syntax-variable: #a65502; --syntax-builtin: #926006; --syntax-string: #057c30; --syntax-number: #067491; --syntax-constant: #846701; --syntax-operator: #087492; --syntax-decorator: #036eb4; --syntax-tag: #c03d19; --syntax-attribute: #047a4e; --syntax-regexp: #07767e; --syntax-escape: #047869; --syntax-critical: #b82d35;
     --context-1: #034cff; --context-2: #a753ae; --context-3: #006656; --context-4: #fb4804; --context-5: #8a6f00; --context-6: #0092a8;
     /* Commit graph lanes (8 colors, 3:1 on card, background, secondary and a hovered row). */
     --graph-1: #034cff; --graph-2: #a753ae; --graph-3: #006656; --graph-4: #d24a04; --graph-5: #8a6f00; --graph-6: #0086a0; --graph-7: #b82d35; --graph-8: #5230c2;
@@ -147,7 +147,7 @@
     --faint: #808080;
     --ring-track: #5c5c5c;
     --ring-progress: #dbdbdb;
-    --syntax-comment: #aeaeae; --syntax-keyword: #f799c6; --syntax-string: #96e3a6; --syntax-property: #ffc1a4; --syntax-type: #9e99f7; --syntax-constant: #93e9f6; --syntax-critical: #f29b96;
+    --syntax-comment: #989898; --syntax-punctuation: #989898; --syntax-parameter: #a3a3a3; --syntax-keyword: #ff678d; --syntax-type: #d86bed; --syntax-function: #a981fe; --syntax-variable: #ffa359; --syntax-builtin: #ffab16; --syntax-string: #5ecc71; --syntax-number: #68cdf2; --syntax-constant: #ffd452; --syntax-operator: #08c0ef; --syntax-decorator: #69b1ff; --syntax-tag: #ff855e; --syntax-attribute: #60d199; --syntax-regexp: #64d1db; --syntax-escape: #61d5c0; --syntax-critical: #f29b96;
     --context-1: #8cb0ff; --context-2: #edb2f1; --context-3: #00ceb9; --context-4: #fab283; --context-5: #fcd53a; --context-6: #35c02d;
     --graph-1: #8cb0ff; --graph-2: #edb2f1; --graph-3: #00ceb9; --graph-4: #fab283; --graph-5: #fcd53a; --graph-6: #35c02d; --graph-7: #f29b96; --graph-8: #9e99f7;
     --secondary: #2e2e2e;

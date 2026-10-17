@@ -5,9 +5,7 @@ import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { gotoLine } from "@codemirror/search";
 import { keymap, type KeyBinding } from "@codemirror/view";
 import { selectLine } from "@codemirror/commands";
-import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
-import { styleTags, tags as t } from "@lezer/highlight";
-import { languages } from "@codemirror/language-data";
+import { syntaxHighlighting } from "@codemirror/language";
 import type { FsMediaResult } from "@claude-ui/protocol";
 import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,6 +17,7 @@ import { trapTab } from "./focus-trap.ts";
 import type { connect, ConnectionStatus } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
+import { loadLanguage, syntaxStyle } from "./code-theme.ts";
 import { baseName, inDir, relPath } from "./paths.ts";
 import { MediaView } from "./media-view.tsx";
 import { FileIcon } from "./file-icon.tsx";
@@ -567,26 +566,6 @@ export const editorKeys = ({ onSave, onSend }: { onSave: () => void; onSend: (st
   { key: "Ctrl-g", preventDefault: true, run: gotoLine },
 ];
 
-/** Uncontrolled CodeMirror view: `doc` replaces the content only when it is not what the editor itself reported. */
-/** Syntax colors: the --syntax-* tokens (index.css), so light and dark switch with `.dark`. Scopes follow OpenCode's Shiki theme (marked-theme.tsx). */
-export const syntaxStyle = HighlightStyle.define([
-  { tag: t.comment, color: "var(--syntax-comment)" },
-  { tag: [t.keyword, t.modifier, t.function(t.variableName), t.function(t.propertyName), t.standard(t.name)], color: "var(--syntax-keyword)" },
-  { tag: [t.string, t.special(t.string), t.tagName], color: "var(--syntax-string)" },
-  { tag: [t.propertyName, t.attributeName], color: "var(--syntax-property)" },
-  { tag: [t.typeName, t.className, t.namespace, t.definition(t.variableName)], color: "var(--syntax-type)" },
-  { tag: [t.number, t.bool, t.null, t.atom, t.constant(t.name), t.self, t.escape], color: "var(--syntax-constant)" },
-  { tag: t.invalid, color: "var(--syntax-critical)" },
-  // Markdown: OpenCode markup.heading/markup.quote are --syntax-info (= our --syntax-constant in dark, near it in light); marks are punctuation (muted).
-  { tag: t.heading, color: "var(--syntax-constant)", fontWeight: "bold" },
-  { tag: t.quote, color: "var(--syntax-constant)" },
-  { tag: [t.processingInstruction, t.contentSeparator], color: "var(--syntax-comment)" },
-  { tag: t.strong, fontWeight: "bold" },
-  { tag: t.emphasis, fontStyle: "italic" },
-  { tag: t.link, textDecoration: "underline" },
-  { tag: t.strikethrough, textDecoration: "line-through" },
-]);
-
 /** Editor chrome on the app tokens (the panel is a card); `darkTheme` still drives CodeMirror's base theme for what is not listed here (search matches). */
 export const chromeTheme = {
   "&": { height: "100%", color: "var(--foreground)", backgroundColor: "var(--card)" },
@@ -650,15 +629,6 @@ const chrome = [
   EditorView.theme(chromeTheme),
   syntaxHighlighting(syntaxStyle),
 ];
-
-/** Language of a file by name. language-data's Markdown is plain CommonMark; OpenCode (Shiki) shows GFM with fenced code in its own language. */
-export function loadLanguage(path: string) {
-  const lang = LanguageDescription.matchFilename(languages, baseName(path));
-  if (lang?.name !== "Markdown") return lang?.load();
-  // GFM tags table headers as headings and pipes as marks; OpenCode's theme has no table scope, so both keep the text color.
-  const table = { props: [styleTags({ "TableHeader/...": t.content, TableDelimiter: t.content })] };
-  return import("@codemirror/lang-markdown").then((m) => m.markdown({ base: m.markdownLanguage, codeLanguages: languages, extensions: table }));
-}
 
 const languageC = new Compartment();
 const darkC = new Compartment();
