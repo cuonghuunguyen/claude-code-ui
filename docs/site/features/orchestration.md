@@ -17,6 +17,7 @@ One session (the **coordinator**) can start and steer other sessions (the **work
 | **Enable orchestration** | Every session except a worker gets the worker tools. |
 | **Maximum workers** | How many workers may run at once (1 to 20). |
 | **Worker mode** | The [permission mode](permissions) of a new worker when the coordinator does not pick one. Default: the coordinator's own mode (bypass becomes auto). |
+| **Notifications from workers** | Turn it off and a worker that finishes, needs input or fails sends no push, desktop or in-app notification. Its coordinator still hears. A request the coordinator passes on to you still notifies you. |
 | **Coordinator may answer permission requests** | Lets the coordinator allow or deny, once, a worker's low-risk requests: reads and edits inside the worker's folder, reads of the repo's agent docs, read-only git. Everything else waits for you. |
 
 ## The worker tools

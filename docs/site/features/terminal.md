@@ -1,6 +1,6 @@
 # Terminal
 
-A real terminal at the bottom of the side panel, in the session's folder. It runs on the daemon's computer.
+A real terminal in the session's folder, docked at the bottom of the window by default. It runs on the daemon's computer.
 
 ## How to use
 
@@ -19,6 +19,8 @@ A real terminal at the bottom of the side panel, in the session's folder. It run
 For Git Bash on Windows, set `SHELL` to `C:\Program Files\Git\bin\bash.exe` before you start claude-ui.
 
 ## Good to know
+
+- The terminal is a [pane](panes): it sits in the bottom panel, under the session and the side panel. The bottom panel resizes and maximizes. **Terminal position** in [Settings › Terminal](../reference/settings#terminal), or a move of its tab, puts it in the side panel.
 
 - Terminals live in the daemon. They survive a page reload or a lost connection, and the last output is replayed.
 - Plain <kbd>Ctrl</kbd>+letter keys go to the shell. App shortcuts with <kbd>Alt</kbd> still work.

@@ -25,9 +25,15 @@ Hover a session row and click `⋯`:
 | --- | --- |
 | Rename | Changes the title. |
 | Archive / Unarchive | Hides the session from the list without deleting it. |
+| Copy session ID | Copies the ID. |
+| Close tab | Closes its tab, while one is open. |
 | Delete… | Deletes the session and its history for good (asks first). |
 
+The same menu opens with a right click. See [Context menus](context-menus).
+
 ## Tabs
+
+Right-click a tab for **Close others**, **Pin tab**, **Reveal in sidebar** and more: [Context menus](context-menus). To show two sessions at once, see [Split view](split-view). To close many tabs by rule, see [Clean up](clean-up).
 
 Each open session is a tab at the top. Tabs are grouped by project, like Chrome tab groups.
 
