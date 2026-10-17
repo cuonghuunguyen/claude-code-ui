@@ -50,12 +50,13 @@ const dlg = () => q("[data-testid=file-dialog]");
 /** The Files tab and the file dialog on one store, as App wires them. */
 function Harness(p: { client: ReturnType<typeof fakeClient>; store: ReturnType<typeof createEditorStore>; onSend?: (m: string) => void; onOpenInFiles?: () => void; startOpen?: boolean }) {
   const [open, setOpen] = useState(!!p.startOpen);
+  const [opener, setOpener] = useState<HTMLElement | null>(null);
   return (
     <>
       <div data-testid="side">
-        <FilesPanel client={p.client} status="connected" cwd="/p" onSend={p.onSend ?? (() => {})} showTree={false} onToggleTree={() => {}} editors={p.store} suspended={open} onPopOut={() => setOpen(true)} />
+        <FilesPanel client={p.client} status="connected" cwd="/p" onSend={p.onSend ?? (() => {})} showTree={false} onToggleTree={() => {}} editors={p.store} suspended={open} onPopOut={() => (setOpener(document.activeElement instanceof HTMLElement ? document.activeElement : null), setOpen(true))} />
       </div>
-      <FileDialog open={open} client={p.client} status="connected" cwd="/p" store={p.store} onClose={() => setOpen(false)} onSend={(m) => (setOpen(false), p.onSend?.(m))} onOpenInFiles={() => (setOpen(false), p.onOpenInFiles?.())} />
+      <FileDialog open={open} opener={opener} client={p.client} status="connected" cwd="/p" store={p.store} onClose={() => setOpen(false)} onSend={(m) => (setOpen(false), p.onSend?.(m))} onOpenInFiles={() => (setOpen(false), p.onOpenInFiles?.())} />
     </>
   );
 }
@@ -208,4 +209,20 @@ it("Send selection closes the dialog and hands the @mention to onSend; Alt+K too
   await flush();
   await act(async () => void cmView(dlg()!).contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "k", altKey: true, bubbles: true, cancelable: true })));
   expect(onSend).toHaveBeenCalledTimes(1);
+});
+
+it("opened with Pop out, Esc and Close return focus to the Pop out button, which the Files tab recreates while the dialog is open", async () => {
+  const { store } = await setup();
+  await openTab(store, "/p/a.ts");
+  for (const close of ["esc", "x"]) {
+    const popOut = q<HTMLButtonElement>("[data-testid=files-popout]", side())!;
+    popOut.focus();
+    await click(popOut);
+    await flush();
+    expect(popOut.isConnected).toBe(false);
+    if (close === "x") await click("[data-testid=viewer-close]");
+    else await act(async () => void cmView(dlg()!).contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    await vi.waitFor(() => expect(dlg()).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(q("[data-testid=files-popout]", side())));
+  }
 });

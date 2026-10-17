@@ -11,6 +11,9 @@ import { DialogClose } from "./viewer-dialog.tsx";
 
 type Client = ReturnType<typeof connect>;
 
+/** The Files tab swaps its Pop out button for a status line while the dialog is open, so that opener is gone on close: its replacement gets the focus. */
+const replacement = (opener: HTMLElement | null | undefined) => (opener?.dataset.testid === "files-popout" ? document.querySelector<HTMLElement>("[data-testid=files-popout]") : null);
+
 export function FileDialog({
   open,
   opener,
@@ -58,7 +61,7 @@ export function FileDialog({
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-overlay" />
         <Dialog.Popup
-          finalFocus={() => (lastOpener.current?.isConnected ? lastOpener.current : (shownPrompt() ?? true))}
+          finalFocus={() => (lastOpener.current?.isConnected ? lastOpener.current : (replacement(lastOpener.current) ?? shownPrompt() ?? true))}
           onKeyDown={trapTab}
           // App shortcuts and Esc (stop turn) skip while an aria-modal dialog shows; Base UI does not set it.
           aria-modal="true"
