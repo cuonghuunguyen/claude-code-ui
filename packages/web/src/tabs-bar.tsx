@@ -391,7 +391,10 @@ export function TabsBar({
         <div className="flex h-7 min-w-0 flex-1 max-md:h-11 md:hidden">
           <Select
             value={activeId ?? null}
-            onValueChange={(v, d) => (justSwiped(swiped) ? d.cancel() : v && onSelect(v))}
+            // GH-417: only a picked row (tap, click, Enter/Space: "item-press") switches tabs. base-ui also changes the value when the
+            // rows change and the active tab has no row yet (a New session tab becoming its session, a /clear): it falls back to the
+            // tab the switcher mounted with, which must not be opened.
+            onValueChange={(v, d) => (justSwiped(swiped) ? d.cancel() : d.reason === "item-press" && v && onSelect(v))}
             onOpenChange={(o, d) => (o ? d.reason === "trigger-press" : d.reason === "item-press") && justSwiped(swiped) && d.cancel()}
           >
             <SelectTrigger
