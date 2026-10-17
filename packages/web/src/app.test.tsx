@@ -3162,4 +3162,21 @@ describe("GH-381: remembered dock tabs", () => {
     expect(selected("side-panel", "terminal")).toBe("true");
     expect(g.__termFocused ?? 0).toBe(before);
   });
+
+  it("a bottom terminal shown by the page load does not take the focus; a Terminal tab click then does", async () => {
+    const g = globalThis as { __termFocused?: number };
+    localStorage.setItem("claude-ui.terminalOpen", "1");
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "changes" }));
+    const before = g.__termFocused ?? 0;
+    await rerender();
+    await act(async () => new Promise((r) => setTimeout(r, 300)));
+    expect(q("bottom-panel")!.contains(q("terminal-panel"))).toBe(true);
+    expect(g.__termFocused ?? 0).toBe(before);
+    // Also after the user's first key: the latch ends on an explicit request, not on input.
+    await press({ key: "a" });
+    await act(async () => new Promise((r) => setTimeout(r, 100)));
+    expect(g.__termFocused ?? 0).toBe(before);
+    await act(async () => paneTab("bottom-panel", "terminal")!.click());
+    await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+  });
 });

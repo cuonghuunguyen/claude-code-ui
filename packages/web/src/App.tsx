@@ -1696,7 +1696,8 @@ export function App() {
   // panel can mount (and want the shell focus) long after the user pressed Tab. An explicit request (a click on the Terminal pane
   // tab, New terminal, Ctrl+` behind a maximized panel) ends the latch, also before the panel has mounted, so it focuses the shell
   // then. A click on one of the terminal's own tabs does not need it: the panel focuses itself.
-  const [termMoveShow, setTermMoveShow] = useState(false);
+  // GH-381: a terminal that shows at page load (the default bottom terminal, a remembered tab) starts latched the same way.
+  const [termMoveShow, setTermMoveShow] = useState(termShows);
   const [termShowsBefore, setTermShowsBefore] = useState(termShows);
   if (termShows !== termShowsBefore) {
     setTermShowsBefore(termShows);
