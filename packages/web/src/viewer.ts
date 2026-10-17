@@ -7,6 +7,9 @@ import { editFiles } from "./tools.ts";
 /** `line`: first line to show (a Read's offset). `call`: the Edit/Write call whose diff shows. */
 export type ViewerTarget = { kind: "file"; path: string; line?: number } | { kind: "diff"; call: ToolCall } | { kind: "plan"; plan: string } | { kind: "changes" };
 
+/** A file target opens the file dialog; every other target opens the popup viewer. */
+export const isFileTarget = (t: ViewerTarget): t is Extract<ViewerTarget, { kind: "file" }> => t.kind === "file";
+
 /** What a tool card opens; undefined: no open button (other tools, input still streaming). */
 export function cardTarget(call: ToolCall): ViewerTarget | undefined {
   const i = (call.input ?? {}) as Record<string, unknown>;

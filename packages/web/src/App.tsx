@@ -97,7 +97,7 @@ import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext } from "./file-links.tsx";
-import { ViewerContext, latestPlan, useOpenViewer, type ViewerState } from "./viewer.ts";
+import { ViewerContext, isFileTarget, latestPlan, useOpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
@@ -109,8 +109,10 @@ import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./foc
 import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
-import { joinPath, relPath } from "./paths.ts";
+import { inDir, joinPath, relPath } from "./paths.ts";
 import { FilesPanel } from "./files-panel.tsx";
+import { FileDialog } from "./file-dialog.tsx";
+import { createEditorStore } from "./editor-store.ts";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
@@ -455,7 +457,10 @@ export function App() {
   const [changesReveal, setChangesReveal] = useState<{ path: string; seq: number }>();
   // Popup viewer (GH-238): what shows, for which session; `opener` takes the focus back on close.
   const [viewer, setViewer] = useState<ViewerState>();
-  useEffect(() => setViewer(undefined), [activeId]);
+  // File dialog: the Files tab's editor state in a modal (Pop out, Read cards, file references); it closes when another tab shows, like the viewer.
+  const [editors] = useState(() => createEditorStore(() => client.current));
+  const [fileDialog, setFileDialog] = useState<{ opener: HTMLElement | null }>();
+  useEffect(() => (setViewer(undefined), setFileDialog(undefined)), [activeId]);
   const quickOpener = useRef<Element>(null);
   // Title editor: in the sidebar row or in the tab the Rename action came from.
   const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab"; menu: boolean }>();
@@ -1592,6 +1597,8 @@ export function App() {
   const lastShown = useRef<SessionInfo>(undefined);
   if (shown) lastShown.current = shown;
   const panelSession = shown ?? lastShown.current;
+  const panelSessionRef = useRef(panelSession);
+  panelSessionRef.current = panelSession;
   const panelView = panelSession && views[panelSession.id];
   // The changes panel needs the Edit/Write calls of the unloaded region: asked once per session (the cursor moves, aux keeps them).
   useEffect(() => {
@@ -1750,14 +1757,14 @@ export function App() {
     setOpenFile({ path: joinPath(shown!.cwd, p), line });
     reveal("files");
   };
-  const openViewer = useOpenViewer(shown, setViewer);
-  /** A path in assistant text (absolute, inside the session cwd): the Files tab opens it at the line. */
-  const revealRef = useRef(reveal);
-  revealRef.current = reveal;
-  const openFileLink = useCallback((path: string, line?: number) => {
-    setOpenFile({ path, line });
-    revealRef.current("files");
+  const popFile = useCallback((path?: string, line?: number, opener?: HTMLElement | null) => {
+    const cwd = panelSessionRef.current?.cwd;
+    if (path && cwd) void editors.open(path, { cwd, line, outside: !inDir(path, cwd) });
+    setFileDialog({ opener: opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) });
   }, []);
+  const openViewer = useOpenViewer(shown, (v) => (isFileTarget(v.target) ? popFile(v.target.path, v.target.line, v.opener) : setViewer(v)));
+  /** A path in assistant text (absolute, inside the session cwd): the Files tab opens it at the line. */
+  const openFileLink = useCallback((path: string, line?: number) => popFile(path, line), []);
   const latest = useMemo(() => (view ? latestPlan(view) : undefined), [view?.parts, view?.aux]);
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
@@ -2663,7 +2670,10 @@ export function App() {
                         cwd={panelSession.cwd}
                         onSend={(mention) => (setInsert(mention), setPane("session"))}
                         onCopy={copyText}
-                        onViewer={(path) => openViewer({ kind: "file", path })}
+                        onViewer={(path) => popFile(path)}
+                        editors={editors}
+                        suspended={!!fileDialog}
+                        onPopOut={() => popFile()}
                         onShowChanges={(path) => (setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
                         openPath={openFile?.path}
                         openLine={openFile?.line}
@@ -2870,7 +2880,7 @@ export function App() {
       <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
       {shown && client.current && (
         <ViewerDialog
-          target={viewer?.target}
+          target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
           opener={viewer?.opener}
           client={client.current}
           cwd={viewer?.cwd ?? shown.cwd}
@@ -2878,6 +2888,22 @@ export function App() {
           sessionId={viewer?.sessionId}
           onClose={() => setViewer(undefined)}
           onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line }), setPane("files"), setPanel(true))}
+        />
+      )}
+      {panelSession && client.current && (
+        <FileDialog
+          open={!!fileDialog}
+          opener={fileDialog?.opener}
+          client={client.current}
+          status={status}
+          cwd={panelSession.cwd}
+          store={editors}
+          gitStamp={isGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
+          onClose={() => setFileDialog(undefined)}
+          onSend={(m) => (setFileDialog(undefined), setInsert(m), setPane("session"))}
+          onCopy={copyText}
+          onShowChanges={(path) => (setFileDialog(undefined), setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
+          onOpenInFiles={() => (setFileDialog(undefined), reveal("files"))}
         />
       )}
       <ShortcutsDialog open={shortcutsOpen} edit={shortcutsEdit} onClose={() => (setShortcutsOpen(false), setShortcutsEdit(undefined))} />

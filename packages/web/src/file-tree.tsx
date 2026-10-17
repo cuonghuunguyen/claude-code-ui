@@ -196,7 +196,7 @@ export function FileTree({
   onOpen: (path: string, opts: OpenOptions) => void;
   /** Copy path / Copy relative path: the text and what it is (for the toast). */
   onCopy?: (text: string, what: string) => void;
-  /** Open in popup viewer. */
+  /** Open in file dialog (hidden when unset). */
   onViewer?: (path: string) => void;
   /** Show changes (a file with a git mark). */
   onShowChanges?: (path: string) => void;
@@ -706,7 +706,7 @@ export function FileTree({
             data-testid="tree-menu"
             finalFocus={() => (movedFocus.current ? false : (rowEl(root.current, menuTarget.kind === "root" ? tabPath : menuTarget.entry.path) ?? true))}
           >
-            {treeMenuSections(menuTarget, MAC).map((section, i) => (
+            {treeMenuSections(menuTarget, MAC, !!onViewer).map((section, i) => (
                 <div key={i} role="none">
                   {i > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
                   {section.map((x) => (

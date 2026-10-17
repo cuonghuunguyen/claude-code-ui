@@ -28,7 +28,7 @@ function setup(props: Partial<ComponentProps<typeof FileTree>> = {}, replies: Re
   const handle = createRef<FileTreeHandle | undefined>() as { current: FileTreeHandle | undefined };
   const onOpen = vi.fn();
   const render = (p: Partial<ComponentProps<typeof FileTree>> = {}) =>
-    act(async () => root.render(<FileTree client={client} cwd="/p" onOpen={onOpen} handleRef={handle} {...props} {...p} />));
+    act(async () => root.render(<FileTree client={client} cwd="/p" onOpen={onOpen} onViewer={() => {}} handleRef={handle} {...props} {...p} />));
   const rows = () => [...el.querySelectorAll<HTMLElement>("[role=treeitem]")];
   const names = () => rows().map((r) => r.dataset.path!.slice(3));
   const row = (path: string) => rows().find((r) => r.dataset.path === path)!;
@@ -600,4 +600,11 @@ it("GH-360 deleting a row from the filter results removes it from the list", asy
   await act(async () => {});
   expect(t.rows().some((r) => r.dataset.path === "/p/src/app.ts")).toBe(false);
   t.unmount();
+});
+
+it("GH-394 the file dialog's own tree (no onViewer) has no Open in file dialog item", async () => {
+  const t = setup();
+  await t.render({ onViewer: undefined });
+  await ctxMenu(t.row("/p/README.md"));
+  expect(menuIds()).toEqual(["open", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
 });

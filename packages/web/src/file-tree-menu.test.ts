@@ -9,6 +9,11 @@ describe("treeMenuSections (GH-360)", () => {
   it("a file: open, prompt and copy, change", () => {
     expect(ids(treeMenuSections({ kind: "file", entry: file, changed: false }, false))).toEqual([["open", "viewer"], ["mention", "copyPath", "copyRel"], ["rename", "duplicate", "delete"]]);
   });
+  it("the file dialog item is named so and left out where there is no dialog", () => {
+    const t = { kind: "file", entry: file, changed: false } as const;
+    expect(treeMenuSections(t, false)[0]!.find((e) => e.id === "viewer")!.label).toBe("Open in file dialog");
+    expect(ids(treeMenuSections(t, false, false))[0]).toEqual(["open"]);
+  });
   it("Show changes only for a changed file", () => {
     expect(ids(treeMenuSections({ kind: "file", entry: file, changed: true }, false))[0]).toEqual(["open", "viewer", "changes"]);
   });

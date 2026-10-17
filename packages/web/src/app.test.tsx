@@ -3096,6 +3096,60 @@ describe("GH-378 clean up tabs", () => {
   });
 });
 
+describe("GH-394: the file dialog", () => {
+  // jsdom has no layout: CodeMirror measures through Range rects when it scrolls to a line.
+  Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+  const lines = Array.from({ length: 60 }, (_, i) => `l${i + 1}`).join("\n");
+  const call = (id: string, tool: string, input: unknown) => ({ type: "tool_call", id, toolUseId: id, tool, input, status: "done" });
+  const fileDialog = () => document.querySelector("[data-testid=file-dialog]");
+  const popup = () => document.querySelector("[data-testid=viewer-dialog]");
+  const cursorLine = async () => {
+    const v = (await import("@codemirror/view")).EditorView.findFromDOM(document.querySelector<HTMLElement>("[data-testid=file-dialog] .cm-editor")!)!;
+    return v.state.doc.lineAt(v.state.selection.main.head).number;
+  };
+  beforeEach(() => void (replies["fs.read"] = { content: lines, mtime: 1 }));
+  afterEach(() => void (replies["fs.read"] = { content: "x", mtime: 1 }));
+
+  it("a Read card's open button opens the file dialog at the read's offset, not the popup viewer", async () => {
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: call("r1", "Read", { file_path: "/p/demo/a.ts", offset: 40 }) }));
+    const open = el.querySelector<HTMLElement>("[data-testid=viewer-open]")!;
+    expect(open.getAttribute("aria-label")).toBe("Open a.ts in file dialog");
+    await act(async () => open.click());
+    await act(async () => {});
+    expect(fileDialog()).not.toBeNull();
+    expect(popup()).toBeNull();
+    expect(await cursorLine()).toBe(40);
+  });
+
+  it("a file reference in assistant text opens the file dialog with the cursor on its line", async () => {
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "assistant_text", id: "a1", text: "See `/p/demo/a.ts:12` now.", streaming: false } }));
+    const ref = el.querySelector<HTMLElement>("button[title='Open in file dialog']")!;
+    await act(async () => ref.click());
+    await act(async () => {});
+    expect(fileDialog()).not.toBeNull();
+    expect(await cursorLine()).toBe(12);
+  });
+
+  it("an Edit card still opens the diff popup, not the file dialog", async () => {
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: call("e1", "Edit", { file_path: "/p/demo/a.ts", old_string: "a", new_string: "b" }) }));
+    await act(async () => el.querySelector<HTMLElement>("[data-testid=viewer-open]")!.click());
+    await act(async () => {});
+    expect(popup()).not.toBeNull();
+    expect(fileDialog()).toBeNull();
+  });
+
+  it("the file dialog closes when another tab shows", async () => {
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: call("r1", "Read", { file_path: "/p/demo/a.ts" }) }));
+    await act(async () => el.querySelector<HTMLElement>("[data-testid=viewer-open]")!.click());
+    await act(async () => {});
+    expect(fileDialog()).not.toBeNull();
+    await act(async () => void (location.hash = "#new"));
+    await act(async () => {});
+    await vi.waitFor(() => expect(fileDialog()).toBeNull());
+  });
+});
+
 describe("GH-381: remembered dock tabs", () => {
   const tabsKey = () => JSON.parse(localStorage.getItem("claude-ui.paneTabs") ?? "null") as Record<string, string> | null;
   const selected = (area: string, p: string) => paneTab(area, p)?.getAttribute("aria-selected");

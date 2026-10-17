@@ -119,6 +119,22 @@ A coordinator hands a worker's pending question or permission request to the use
 The app-level page (sidebar row, pinned tab, `#focus`) that lists every pending permission request and question, and every session that needs a look (error, usage limit, quiet, finished unread), across all projects; answers requests in place.
 _Avoid_: inbox, queue page
 
+**Side panel**:
+The dock area on the right or left of the session view; its tabs are panes (Changes, Files, Git graph, Terminal).
+_Avoid_: sidebar (the project and session list)
+
+**Files tab**:
+The side-panel pane with the file tree and the editor tabs.
+_Avoid_: explorer
+
+**Changes tab**:
+The side-panel pane that reviews the session's file changes as diffs.
+_Avoid_: review panel
+
+**File dialog**:
+The large modal that shows the Files tab (tree, tabs, editor) over the same editor state. Pop out opens it; Read cards and file references in the timeline open it at a line. Not the popup viewer (the dialog for a diff, a plan or the Changes view).
+_Avoid_: popup viewer, file popup
+
 **Split view**:
 The session area showing two session tabs at once, side by side or stacked; each region is a **split**. One split is active and shows the active tab (the current session for the side panel, terminal and commands). Not a tab group (the project chip).
 _Avoid_: group, pane (a pane is a side-panel view), editor group
