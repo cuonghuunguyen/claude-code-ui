@@ -3,7 +3,7 @@
 import { createJsonFile } from "./json-file.ts";
 import { WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } };
 
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string };
 const bool = (label: string): Check => ({ valid: (v) => typeof v === "boolean", label, rule: "on or off" });
@@ -14,6 +14,7 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     workerCap: { valid: (v) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 20, label: "Maximum workers", rule: "a whole number from 1 to 20" },
     coordinatorPermissions: bool("Coordinator may answer permission requests"),
     workerMode: { valid: (v) => (WORKER_MODES as readonly unknown[]).includes(v), label: "Worker mode", rule: `one of ${WORKER_MODES.join(", ")}` },
+    workerNotifications: bool("Notifications from workers"),
   },
   usageLimit: { autoContinue: bool("Continue automatically after a usage limit resets") },
   notifications: { desktop: bool("Desktop notifications") },

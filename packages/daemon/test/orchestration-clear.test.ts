@@ -27,7 +27,7 @@ function setup(links = createSessionSettings()) {
   let worktreeGate: (() => void) | undefined;
   const o = createOrchestration({
     links,
-    settings: () => ({ enabled: true, workerCap: 5, coordinatorPermissions: true, workerMode: "coordinator" }) as any,
+    settings: () => ({ enabled: true, workerCap: 5, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }) as any,
     sessions,
     find: async (id) => sessions.get(id),
     create: (cwd) => {

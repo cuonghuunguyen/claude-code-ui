@@ -29,7 +29,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } };
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
@@ -99,7 +99,18 @@ it("shows the Orchestration section with labelled controls, loaded from the daem
   expect(desc("settings-orchestration-enabled")).toContain("start and supervise worker sessions");
   expect(desc("settings-orchestration-workerCap")).toContain("1 to 20");
   expect(desc("settings-orchestration-coordinatorPermissions")).toContain("read-only git commands (status, log, diff, show). Other commands and everything else wait for you");
+  expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-label")).toBe("Notifications from workers");
+  expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-checked")).toBe("true");
+  expect(desc("settings-orchestration-workerNotifications")).toContain("a request the coordinator escalates to you still notifies");
   expect(desc("settings-orchestration-coordinatorPermissions")).toContain("Edits can change code that commands you approve later will run.");
+});
+
+it("Notifications from workers is on by default and its switch sends a patch of that field (GH-387)", async () => {
+  const { q, calls, pick } = await render();
+  await pick("orchestration");
+  await act(async () => q("settings-orchestration-workerNotifications")!.click());
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { workerNotifications: false } } });
+  expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-checked")).toBe("false");
 });
 
 it("a switch sends a patch of its field only", async () => {

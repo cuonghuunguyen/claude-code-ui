@@ -260,7 +260,7 @@ it("a request whose render has not landed yet still makes its card: the hook wai
   const list = [{ id: "b", cwd: "/p", state: "idle", title: "B", lastActivity: 0, archived: false, transcript: true }] as never;
   let api!: ReturnType<typeof useNotifications>;
   function Host({ views }: { views: Record<string, ReturnType<typeof emptySession>> }) {
-    api = useNotifications({ enabled: true, focused: true, focusPage: false, shown: () => false, list, views });
+    api = useNotifications({ enabled: true, focused: true, focusPage: false, shown: () => false, list, views, workers: true });
     return <p data-testid="n">{api.cards.length}</p>;
   }
   await act(async () => root.render(<Host views={{ b: emptySession() }} />));
@@ -367,7 +367,7 @@ it("a finished card that does not fit is not announced either: only what shows i
     const views = Object.fromEntries(ids.map((id) => [id, waiting.includes(id) ? applyEvent(emptySession(), { type: "event", sessionId: id, seq: 1, part: perm(`r${id}`) }) : emptySession()]));
     let api!: ReturnType<typeof useNotifications>;
     function Host() {
-      api = useNotifications({ enabled: true, focused: true, focusPage: false, shown: () => false, list, views }, (c) => said.push(`${c.sessionId}:${c.kind}`));
+      api = useNotifications({ enabled: true, focused: true, focusPage: false, shown: () => false, list, views, workers: true }, (c) => said.push(`${c.sessionId}:${c.kind}`));
       return null;
     }
     await act(async () => root.render(<Host key={waiting.join()} />));

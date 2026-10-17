@@ -564,7 +564,7 @@ export type ConfigScope = "local" | "user" | "project";
 /** `orchestration.workerMode`: the permission mode of a new worker when the coordinator names none; `coordinator` = the coordinator's own mode. */
 export const WORKER_MODES = ["coordinator", "default", "acceptEdits", "plan", "auto"] as const;
 export type WorkerModeSetting = (typeof WORKER_MODES)[number];
-export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
+export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
   /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */
   performance: { monitor: boolean };
 };
