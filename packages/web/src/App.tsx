@@ -136,7 +136,7 @@ import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
 import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
-import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, movePane, resetLayout, saveLayout, useLayout, useMinWidth } from "./layout.ts";
+import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, useLayout, useMinWidth, withPane } from "./layout.ts";
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
@@ -380,10 +380,27 @@ export function App() {
   // Narrow screens show one pane; wide screens show the session plus a side panel with changes or files.
   // Per session tab, so switching tabs keeps each one's pane.
   // GH-355: newest first per session tab. The narrow pane is the first entry; each dock area shows its newest pane.
+  // GH-381: every selection is also remembered per browser (layout.ts PaneTabs), so a reload reopens on it.
   const [paneHist, setPaneHist] = useState<Record<string, Pane[]>>({});
   const hist = (activeId && paneHist[activeId]) || [];
   const pane: Pane = hist[0] ?? "session";
-  const setPane = (p: Pane) => activeId && setPaneHist((x) => ({ ...x, [activeId]: [p, ...(x[activeId] ?? []).filter((q) => q !== p)] }));
+  // The remembered tabs: read once at load, then updated by this page's own picks only (another browser tab's picks are not followed).
+  const [paneTabs, setPaneTabs] = useState(loadPaneTabs);
+  const resetPanes = () => (resetLayout(), setPaneTabs({}));
+  const setPane = (p: Pane) => {
+    if (!activeId) return;
+    rememberPane(p);
+    setPaneTabs((t) => withPane(t, p, loadLayout()));
+    setPaneHist((x) => ({ ...x, [activeId]: [p, ...(x[activeId] ?? []).filter((q) => q !== p)] }));
+  };
+  // GH-381: after a reload the first shown session tab reopens on the last selected pane (narrow: the pane switcher).
+  const [restoreTo] = useState(() => loadPaneTabs().narrow);
+  const paneRestored = useRef(false);
+  useLayoutEffect(() => {
+    if (paneRestored.current || !isSession(activeId)) return;
+    paneRestored.current = true;
+    if (restoreTo && restoreTo !== "session") setPaneHist((x) => (x[activeId] ? x : { ...x, [activeId]: [restoreTo] }));
+  }, [activeId]);
   const [panelWidth, setPanelWidth] = useState(480);
   // Wide screens: the side panel can be hidden (Toggle side panel).
   const [panel, setPanel] = useState(() => !loadFlag(PANEL_HIDDEN_KEY));
@@ -1622,7 +1639,7 @@ export function App() {
   const available = (p: PaneId) => p !== "graph" || isGit;
   /** Narrow: the side column holds every pane. */
   const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? PANE_IDS : []).filter(available);
-  const activeOf = (a: DockArea) => activePane(areaPanes(a), hist);
+  const activeOf = (a: DockArea) => activePane(areaPanes(a), hist, paneTabs[a]);
   const sideShown = lg && panel && areaPanes("side").length > 0;
   const bottomShown = lg && bottomOpen && areaPanes("bottom").length > 0;
   /** The pane shows: wide = its area shows it; narrow = it is the pane. */
@@ -1672,8 +1689,9 @@ export function App() {
     document.querySelector<HTMLElement>(`[data-pane-tab="${p}"]`)?.focus();
   });
   // From a move to the user's next key or pointer press: a terminal that shows because of the move (moved, or next in the area the
-  // moved pane left) keeps off the focus. Not only the move's render: the code-split panel's first mount commits after it (Suspense).
-  const [moving, setMoving] = useState(false);
+  // moved pane left) keeps off the focus. A late (Suspense) mount of a terminal shown by the move is covered by `termMoveShow`.
+  // GH-381: a terminal the reload restores as the narrow pane (shown one effect after the first render) keeps off the focus until the first key or pointer press.
+  const [moving, setMoving] = useState(() => loadPaneTabs().narrow === "terminal");
   useEffect(() => {
     if (!moving) return;
     const done = () => setMoving(false);
@@ -1681,6 +1699,22 @@ export function App() {
     for (const k of kinds) window.addEventListener(k, done, true);
     return () => kinds.forEach((k) => window.removeEventListener(k, done, true));
   }, [moving]);
+  // GH-382: a terminal that shows because of a move stays quiet for that whole show, not only until the next key: its code-split
+  // panel can mount (and want the shell focus) long after the user pressed Tab. An explicit request (a click on the Terminal pane
+  // tab, New terminal, Ctrl+` behind a maximized panel) ends the latch, also before the panel has mounted, so it focuses the shell
+  // then. A click on one of the terminal's own tabs does not need it: the panel focuses itself.
+  // GH-381: a terminal that shows at page load (the default bottom terminal, a remembered tab) starts latched the same way.
+  const [termMoveShow, setTermMoveShow] = useState(termShows);
+  const [termShowsBefore, setTermShowsBefore] = useState(termShows);
+  if (termShows !== termShowsBefore) {
+    setTermShowsBefore(termShows);
+    setTermMoveShow(termShows && moving);
+  }
+  const [termAsk, setTermAsk] = useState(termFocusReq + terminalTick);
+  if (termFocusReq + terminalTick !== termAsk) {
+    setTermAsk(termFocusReq + terminalTick);
+    setTermMoveShow(false);
+  }
   /** A pane tab click; on the terminal's tab, the selected one too, the shell takes the focus (docs/spec.md Terminal panel). */
   const selectPane = (p: Pane) => {
     if (p === "terminal") setTermFocusReq((n) => n + 1);
@@ -1886,7 +1920,7 @@ export function App() {
       if (shows("terminal")) setTermFocusReq((n) => n + 1);
       reveal("terminal");
     },
-    resetLayout,
+    resetLayout: resetPanes,
     flipSide: () => saveLayout(flipSide(layout)),
     side: layout.side,
     canReopen: !!reopen,
@@ -2053,7 +2087,7 @@ export function App() {
           newTick={terminalTick}
           shown={shows("terminal")}
           focusReq={termFocusReq}
-          quiet={moving}
+          quiet={moving || termMoveShow}
         />
       </Suspense>
     );
@@ -2106,7 +2140,7 @@ export function App() {
           onSelect={selectPane}
           onMove={move}
           onFlipSide={() => saveLayout(flipSide(layout))}
-          onReset={resetLayout}
+          onReset={resetPanes}
           extra={terminalToggle}
           {...dragProps}
         />
@@ -2710,7 +2744,7 @@ export function App() {
                 changes={changeCount}
                 onSelect={selectPane}
                 onMove={move}
-                onReset={resetLayout}
+                onReset={resetPanes}
                 {...dragProps}
                 extra={
                   <>

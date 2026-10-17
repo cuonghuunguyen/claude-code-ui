@@ -122,11 +122,3 @@ export function artifactPreviewable(call: Pick<ToolCall, "tool" | "input" | "sta
   if ((i.action !== undefined && i.action !== "publish") || i.asset === true) return false;
   return typeof i.file_path === "string" && /\.html?$/i.test(i.file_path);
 }
-
-/** Count of supporting files of a publish (`files` map or list); 0 without. */
-export function supportingFiles(input: unknown): number {
-  const files = (input as { files?: unknown } | null)?.files;
-  if (Array.isArray(files)) return files.length;
-  if (typeof files === "object" && files !== null) return Object.values(files).filter((v) => v !== null).length;
-  return 0;
-}
