@@ -142,6 +142,45 @@ it("Open in editor shows only for a file inside cwd and calls onOpenInFiles; a f
   expect(dlg()).toBeNull();
 });
 
+const pointer = (fine: boolean) => {
+  window.matchMedia = ((query: string) => ({ matches: fine && query.includes("pointer: fine"), media: query, addEventListener() {}, removeEventListener() {} })) as never;
+};
+
+it("after Pop out with a mouse the keyboard focus is in the dialog's editor, so Ctrl+Z works without a click", async () => {
+  pointer(true);
+  try {
+    const { store } = await setup();
+    await openTab(store, "/p/a.ts");
+    q<HTMLElement>("[data-testid=files-popout]")!.focus();
+    await click("[data-testid=files-popout]");
+    await flush();
+    await vi.waitFor(() => expect(document.activeElement).toBe(cmView(dlg()!).contentDOM));
+  } finally {
+    pointer(false);
+  }
+});
+
+it("on touch Pop out leaves the editor unfocused (the soft keyboard stays closed), and a dialog not opened by Pop out does not take the editor", async () => {
+  const { store } = await setup();
+  await openTab(store, "/p/a.ts");
+  q<HTMLElement>("[data-testid=files-popout]")!.focus();
+  await click("[data-testid=files-popout]");
+  await flush();
+  expect(document.activeElement).not.toBe(cmView(dlg()!).contentDOM);
+  expect(dlg()!.contains(document.activeElement)).toBe(true);
+  act(() => root.render(null));
+  pointer(true);
+  try {
+    // A Read card or file link: the dialog opens with no Pop out button as its opener.
+    const other = await setup({ startOpen: true });
+    await openTab(other.store, "/p/b.ts");
+    await flush();
+    expect(document.activeElement).not.toBe(cmView(dlg()!).contentDOM);
+  } finally {
+    pointer(false);
+  }
+});
+
 it("opening at a line puts the cursor on it in the dialog", async () => {
   const { store } = await setup();
   await openTab(store, "/p/a.ts", { line: 40 });

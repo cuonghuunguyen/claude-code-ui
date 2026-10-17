@@ -53,25 +53,37 @@ export function saveStyle(s: DiffStyle) {
 
 // File sidebar width after a drag, per browser; unset: OpenCode's 240px (200px in a narrow panel).
 const LIST_WIDTH_KEY = "claude-ui.changesListWidth";
-function loadListWidth(): number | undefined {
+export function loadListWidth(key = LIST_WIDTH_KEY): number | undefined {
   try {
-    const n = Number(localStorage.getItem(LIST_WIDTH_KEY));
+    const n = Number(localStorage.getItem(key));
     return n > 0 ? n : undefined;
   } catch {
     return undefined;
   }
 }
-function saveListWidth(w: number | undefined) {
+export function saveListWidth(w: number | undefined, key = LIST_WIDTH_KEY) {
   try {
-    if (w) localStorage.setItem(LIST_WIDTH_KEY, String(w));
-    else localStorage.removeItem(LIST_WIDTH_KEY);
+    if (w) localStorage.setItem(key, String(w));
+    else localStorage.removeItem(key);
   } catch {
     // Storage blocked: the width lasts while the panel is open.
   }
 }
 
 /** Drag handle (or arrow keys) between the file sidebar and the diff; double click restores the default width. */
-function ListResizer({ list, width, onResize }: { list: RefObject<HTMLDivElement | null>; width: number | undefined; onResize: (w: number | undefined) => void }) {
+export function ListResizer({
+  list,
+  width,
+  onResize,
+  label = "Resize file list",
+  testId = "changes-list-resizer",
+}: {
+  list: RefObject<HTMLDivElement | null>;
+  width: number | undefined;
+  onResize: (w: number | undefined) => void;
+  label?: string;
+  testId?: string;
+}) {
   // 160px up to the panel width less 240px for the diff.
   const clamp = (w: number) => {
     const room = list.current?.parentElement?.clientWidth || Infinity;
@@ -82,11 +94,11 @@ function ListResizer({ list, width, onResize }: { list: RefObject<HTMLDivElement
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize file list"
+      aria-label={label}
       aria-valuenow={now()}
       tabIndex={0}
       className="-ml-1 w-1 shrink-0 cursor-col-resize touch-none hover:bg-primary/30 focus-visible:bg-primary/30"
-      data-testid="changes-list-resizer"
+      data-testid={testId}
       onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
       onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && list.current && onResize(clamp(e.clientX - list.current.getBoundingClientRect().left))}
       onDoubleClick={() => onResize(undefined)}

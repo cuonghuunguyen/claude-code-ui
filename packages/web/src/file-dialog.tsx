@@ -14,6 +14,9 @@ type Client = ReturnType<typeof connect>;
 /** The Files tab swaps its Pop out button for a status line while the dialog is open, so that opener is gone on close: its replacement gets the focus. */
 const replacement = (opener: HTMLElement | null | undefined) => (opener?.dataset.testid === "files-popout" ? document.querySelector<HTMLElement>("[data-testid=files-popout]") : null);
 
+/** Opened by the Files tab's Pop out button on a device with a mouse (not touch). */
+const popOutByMouseOrKeys = (opener: HTMLElement | null | undefined) => opener?.dataset.testid === "files-popout" && !!window.matchMedia?.("(pointer: fine)").matches;
+
 export function FileDialog({
   open,
   opener,
@@ -61,6 +64,8 @@ export function FileDialog({
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-overlay" />
         <Dialog.Popup
+          // Pop out with a fine pointer: the editor (Ctrl+Z works at once). Touch (keeps the keyboard closed), a Read card and a file link: Base UI's default.
+          initialFocus={() => (popOutByMouseOrKeys(opener) ? (store.view.current?.contentDOM ?? true) : true)}
           finalFocus={() => (lastOpener.current?.isConnected ? lastOpener.current : (replacement(lastOpener.current) ?? shownPrompt() ?? true))}
           onKeyDown={trapTab}
           // App shortcuts and Esc (stop turn) skip while an aria-modal dialog shows; Base UI does not set it.
