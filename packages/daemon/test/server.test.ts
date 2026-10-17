@@ -15,6 +15,7 @@ import { ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
 import { openChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
+import { createSettings } from "../src/settings.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { scanThreadConfig } from "../src/session-scan.ts";
 import { SideSocket } from "../src/sides.ts";
@@ -3411,6 +3412,37 @@ describe("push", () => {
       await c.request({ type: "session.prompt", sessionId: other, text: "run tests" });
       await vi.waitFor(() => expect(f.sent).toHaveLength(1));
       expect(f.sent[0]!.sessionId).toBe(other);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("Notifications from workers off: a worker's request pushes nothing, a plain session's does; on again: the worker's next one pushes (GH-387)", async () => {
+    const f = fakePush();
+    const [w, w2, plain, coordinator] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    const dir = mkdtempSync(join(tmpdir(), "cfg-"));
+    const settingsFile = join(dir, "sessions.json");
+    writeFileSync(settingsFile, JSON.stringify({ [w]: { coordinatorId: coordinator, name: "w" }, [w2]: { coordinatorId: coordinator, name: "w2" }, [plain]: {}, [coordinator]: {} }));
+    const d = createDaemon({
+      webRoot, roots: [webRoot], query: permissionQuery as never, token, push: f.push, settingsFile,
+      appSettings: createSettings({ file: join(dir, "settings.json") }),
+      history: { listSessions: (async () => []) as never, getSessionInfo: (async (sid: string) => ({ sessionId: sid, cwd: webRoot })) as never, getSessionMessages: (async () => history) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      for (const id of [w, w2, plain]) await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      expect(await c.request({ type: "settings.set", patch: { orchestration: { workerNotifications: false } } })).toMatchObject({ type: "reply" });
+      await c.request({ type: "session.prompt", sessionId: w, text: "run tests" });
+      await c.waitFor((m) => m.type === "event" && m.sessionId === w && m.part.type === "permission_request");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(f.sent).toEqual([]);
+      await c.request({ type: "session.prompt", sessionId: plain, text: "run tests" });
+      await vi.waitFor(() => expect(f.sent.map((p) => p.sessionId)).toEqual([plain]));
+      // On again: the next worker's request pushes (a second worker, so the first one's blocked turn is not in the way).
+      expect(await c.request({ type: "settings.set", patch: { orchestration: { workerNotifications: true } } })).toMatchObject({ type: "reply" });
+      await c.request({ type: "session.prompt", sessionId: w2, text: "run tests" });
+      await vi.waitFor(() => expect(f.sent.map((p) => p.sessionId)).toEqual([plain, w2]));
     } finally {
       d.close();
     }

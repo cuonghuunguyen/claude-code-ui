@@ -595,6 +595,8 @@ export function createDaemon(opts: {
     // A request that settled: the same tag, silent (Web Push must show every push; one that only closes would show "updated in the background").
     replace: async (sessionId, body, tag) => void (await opts.push?.send({ sessionId, title: await pushTitleOf(sessionId), body, ...(tag && { tag }), silent: true, replace: true })),
     group: (id) => settings.get(id)?.coordinatorId,
+    // Settings › Orchestration › Notifications from workers (GH-387): read per push, so a change applies to the next event.
+    quiet: (id) => !appSettings.get().orchestration.workerNotifications && !!settings.get(id)?.coordinatorId,
   });
   /**
    * Per session: its transcript entries read so far (JsonlTail), the main chain built from them for a file stamp, and each

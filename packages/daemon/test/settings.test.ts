@@ -7,13 +7,13 @@ import { createSettings, DEFAULTS } from "../src/settings.ts";
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
   const f = file();
   createSettings({ file: f }).set({ orchestration: { enabled: true, workerCap: 7 } });
-  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 7, coordinatorPermissions: false, workerMode: "coordinator" });
+  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 7, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
 });
 
 it("a patch keeps another daemon's change to a different field", () => {
@@ -39,7 +39,7 @@ it("a corrupt file gives the defaults and is logged once", () => {
 it("an invalid hand-edited field falls back to its default, the valid ones stay", () => {
   const f = file();
   writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerCap: 99, coordinatorPermissions: "yes" } }));
-  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" });
+  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
 });
 
 it("a stored coordinatorPermissions keeps its value over the default", () => {
@@ -74,7 +74,7 @@ it("an old file with coordinatorAnswersPermissions: true (saved before the field
   const f = file();
   writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerCap: 4, coordinatorAnswersPermissions: true } }));
   const s = createSettings({ file: f });
-  expect(s.get().orchestration).toEqual({ enabled: true, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" });
+  expect(s.get().orchestration).toEqual({ enabled: true, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
   // The stored default workerCap goes too: it follows a later default change.
   s.set({ orchestration: { enabled: true } });
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { enabled: true } });
@@ -87,14 +87,14 @@ it("workerMode defaults to coordinator, accepts the five values, refuses others 
   for (const m of ["coordinator", "default", "acceptEdits", "plan", "auto"] as const) expect(s.set({ orchestration: { workerMode: m } }).orchestration.workerMode).toBe(m);
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { workerMode: "auto" } });
   for (const bad of ["bypassPermissions", "dontAsk", "", 1, null]) expect(() => s.set({ orchestration: { workerMode: bad as never } })).toThrow(/^Worker mode must be one of coordinator, default, acceptEdits, plan, auto$/);
-  s.set({ orchestration: { workerMode: "coordinator" } });
+  s.set({ orchestration: { workerMode: "coordinator", workerNotifications: true } });
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: {} });
 });
 
 it("a stored invalid workerMode falls back to coordinator", () => {
   const f = file();
   writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerMode: "bypassPermissions" } }));
-  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator" });
+  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
 });
 
 it("the file keeps only fields that differ from their default", () => {
@@ -141,4 +141,14 @@ it("performance.monitor defaults to true and accepts a boolean; a string is refu
   expect(s.get().performance).toEqual({ monitor: true });
   expect(s.set({ performance: { monitor: false } }).performance).toEqual({ monitor: false });
   expect(() => s.set({ performance: { monitor: "x" as never } })).toThrow("Performance monitor must be on or off");
+});
+
+it("workerNotifications defaults to on, saves off, refuses a non-boolean with 'Notifications from workers must be on or off'", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.get().orchestration.workerNotifications).toBe(true);
+  expect(s.set({ orchestration: { workerNotifications: false } }).orchestration.workerNotifications).toBe(false);
+  expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { workerNotifications: false } });
+  expect(createSettings({ file: f }).get().orchestration.workerNotifications).toBe(false);
+  for (const bad of ["off", 0, null]) expect(() => s.set({ orchestration: { workerNotifications: bad as never } })).toThrow(/^Notifications from workers must be on or off$/);
 });

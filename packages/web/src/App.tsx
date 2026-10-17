@@ -40,7 +40,7 @@ import type {
   WorktreeCreateResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
-import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type SearchHit, worktreeNameError } from "@claude-ui/protocol";
+import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type SearchHit, type SettingsResult, worktreeNameError } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -364,6 +364,8 @@ export function App() {
   // In-app notifications (GH-158): `notifyRef` takes every event; the choice is per browser and Settings tells this page by event.
   const notifyRef = useRef<(e: Event, live: boolean) => void>(undefined);
   const [inApp, setInApp] = useState(loadInApp);
+  // Settings › Orchestration › Notifications from workers (GH-387): read on connect and from settings_changed.
+  const [workerNotices, setWorkerNotices] = useState(true);
   useEffect(() => {
     const sync = (e: globalThis.Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
     window.addEventListener(IN_APP_EVENT, sync);
@@ -1061,7 +1063,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: () => setSettingsChanged((n) => n + 1),
+      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       onConfigChanged: (m) => {
@@ -1082,6 +1084,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => setWorkerNotices(r.settings.orchestration.workerNotifications !== false)).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -1209,7 +1212,7 @@ export function App() {
   const [cardNote, setCardNote] = useState<{ card: Card; hint: boolean; at?: number }>();
   const hinted = useRef(false);
   const notify = useNotifications(
-    { enabled: inApp, focused, focusPage: activeId === FOCUS_TAB, shown: (id) => visibleIds.includes(id), list, views },
+    { enabled: inApp, focused, focusPage: activeId === FOCUS_TAB, shown: (id) => visibleIds.includes(id), list, views, workers: workerNotices },
     (card: Card) => {
       // Said once per page load: how to reach the cards without the mouse. The text itself is made at render, with the session's title as the card shows it.
       const hint = !hinted.current && !!specOf("notifications.focus");

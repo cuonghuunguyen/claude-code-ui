@@ -28,6 +28,8 @@ type Gate = {
   shown: (sessionId: string) => boolean;
   list: SessionListItem[];
   views: Record<string, SessionView | undefined>;
+  /** Settings › Orchestration › Notifications from workers: false = no card for a worker unless its request is escalated (GH-387). */
+  workers: boolean;
 };
 
 /**
@@ -50,9 +52,9 @@ export function useNotifications(gate: Gate, onCard?: (card: Card) => void) {
   const kinds = useRef(new Map<string, string>());
 
   // The Focus page lists the waiting requests (no card for them there), but not a finished turn: that still gets its card.
-  const allowed = (sessionId: string, request = true) => {
+  const allowed = (sessionId: string, request = true, escalated = false) => {
     const g = latest.current;
-    return g.enabled && g.focused && !(request && g.focusPage) && !g.shown(sessionId) && g.list.some((s) => s.id === sessionId && !s.archived);
+    return g.enabled && g.focused && !(request && g.focusPage) && !g.shown(sessionId) && g.list.some((s) => s.id === sessionId && !s.archived) && (g.workers || escalated || !g.list.some((s) => s.id === sessionId && s.coordinatorId));
   };
   const add = (card: Card) => {
     // A finished or error card that does not fit is dropped by the stack at once: it is never said either.
@@ -75,13 +77,13 @@ export function useNotifications(gate: Gate, onCard?: (card: Card) => void) {
   const handle = (s: Signal) => {
     if (s.type === "resume") return cancel(`finish:${s.sessionId}`);
     if (s.type === "request") {
-      if (!allowed(s.sessionId)) return;
+      if (!allowed(s.sessionId, true, s.escalated)) return;
       const show = (tries = 0) => {
         const g = latest.current;
         const part = g.views[s.sessionId]?.parts.get(s.requestId);
         // The event is applied to the views by the render that follows it: wait for that render (at most 1 s).
-        if (!part && tries < 20 && allowed(s.sessionId)) return later(`req:${s.requestId}`, 50, () => show(tries + 1));
-        if (!allowed(s.sessionId) || !part || (part.type !== "permission_request" && part.type !== "question") || part.settled) return;
+        if (!part && tries < 20 && allowed(s.sessionId, true, s.escalated)) return later(`req:${s.requestId}`, 50, () => show(tries + 1));
+        if (!allowed(s.sessionId, true, s.escalated) || !part || (part.type !== "permission_request" && part.type !== "question") || part.settled) return;
         add({ sessionId: s.sessionId, kind: s.kind, requestId: s.requestId, since: part.at ?? Date.now() });
       };
       const worker = !!latest.current.list.find((x) => x.id === s.sessionId)?.coordinatorId;

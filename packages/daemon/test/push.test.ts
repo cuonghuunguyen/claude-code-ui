@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Event, Part } from "@claude-ui/protocol";
-import { createNotifier, createPush, fitPayload, MAX_PAYLOAD_BYTES, osNotify, osNotifyCommand, type Run } from "../src/push.ts";
+import { createNotifier, createPush, FINISH_DELAY_MS, fitPayload, MAX_PAYLOAD_BYTES, osNotify, osNotifyCommand, type Run } from "../src/push.ts";
 
 // File modes are POSIX: on Windows chmod only sets the read-only flag.
 const posix = process.platform !== "win32";
@@ -456,5 +456,105 @@ describe("desktop notification", () => {
     expect(calls).toHaveLength(2);
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
+  });
+});
+
+describe("notifier: worker notifications off (GH-387)", () => {
+  type P = { sessionId: string; body: string; tag?: string; silent?: boolean; replace?: boolean };
+  let pushed: P[];
+  let n: ReturnType<typeof createNotifier>;
+  let quiet: boolean;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    pushed = [];
+    quiet = true;
+    n = createNotifier({
+      push: (sessionId, body, extra) => void pushed.push({ sessionId, body, ...extra }),
+      replace: (sessionId, body, tag) => void pushed.push({ sessionId, body, tag, silent: true, replace: true }),
+      suppressed: () => false,
+      group: (id) => (id === "w" || id === "w2" ? "c" : undefined),
+      quiet: (id) => quiet && (id === "w" || id === "w2"),
+    });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const bash = (requestId: string, extra: object = {}) =>
+    ({ type: "permission_request", id: requestId, requestId, toolUseId: `t-${requestId}`, tool: "Bash", input: { command: "npm test" }, suggestions: [], settled: false, ...extra }) as Part;
+  const read = (requestId: string, extra: object = {}) =>
+    ({ type: "permission_request", id: requestId, requestId, toolUseId: `t-${requestId}`, tool: "Read", input: { file_path: "/x/y.ts" }, suggestions: [], settled: false, ...extra }) as Part;
+  const finish = (sid: string, label = "done") => {
+    n.observe(ev({ type: "user_text", id: "u", text: "go" } as Part, sid));
+    n.observe(state("running", sid));
+    n.observe(ev({ type: "assistant_text", id: "a", text: label, streaming: false }, sid));
+    n.observe(state("idle", sid));
+    vi.advanceTimersByTime(FINISH_DELAY_MS);
+  };
+
+  it("a quiet worker: no push for needs input, finished or error", () => {
+    n.observe(state("running", "w"));
+    n.observe(ev(bash("r1"), "w"));
+    n.observe(state("needs_input", "w"));
+    expect(pushed).toEqual([]);
+    n.observe(ev(bash("r1", { settled: true, decision: "allow" }), "w"));
+    n.observe(state("running", "w"));
+    n.observe(state("idle", "w"));
+    vi.advanceTimersByTime(FINISH_DELAY_MS);
+    expect(pushed).toEqual([]);
+    vi.advanceTimersByTime(6000);
+    n.observe(state("running", "w"));
+    n.observe(ev({ type: "raw", id: "e", message: { error: "boom" } } as Part, "w"));
+    n.observe(state("error", "w"));
+    vi.advanceTimersByTime(FINISH_DELAY_MS);
+    expect(pushed).toEqual([]);
+  });
+
+  it("a quiet worker's escalated request still pushes at once and its settle replaces it silently", () => {
+    n.observe(state("running", "w"));
+    n.observe(ev(bash("r1"), "w"));
+    n.observe(state("needs_input", "w"));
+    n.observe(ev(bash("r1", { escalated: true, reason: "blocked" }), "w"));
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]!.body).toContain("Escalated by coordinator");
+    n.observe(ev(bash("r1", { settled: true, decision: "allow", escalated: true }), "w"));
+    expect(pushed.filter((p) => p.replace)).toHaveLength(1);
+    expect(pushed.at(-1)!.body).toMatch(/^No longer needs input/);
+  });
+
+  it("a quiet worker blocked on a shared request: no group push; a settle replaces nothing", () => {
+    for (const sid of ["w", "w2"]) {
+      n.observe(state("running", sid));
+      n.observe(ev(read(`r-${sid}`), sid));
+      n.observe(state("needs_input", sid));
+    }
+    expect(pushed).toEqual([]);
+    for (const sid of ["w", "w2"]) {
+      n.observe(ev(read(`r-${sid}`, { settled: true, decision: "allow" }), sid));
+      n.observe(state("running", sid));
+    }
+    expect(pushed).toEqual([]);
+  });
+
+  it("the coordinator and other sessions still push", () => {
+    finish("c");
+    finish("s");
+    expect(pushed.map((p) => p.sessionId)).toEqual(["c", "s"]);
+  });
+
+  it("quiet is read per push: turning it back on applies to the next event", () => {
+    finish("w");
+    expect(pushed).toEqual([]);
+    quiet = false;
+    vi.advanceTimersByTime(6000);
+    finish("w", "second");
+    expect(pushed.map((p) => p.body)).toEqual(["second"]);
+  });
+
+  it("a finish timer started while on, with the setting turned off before it fires: no push", () => {
+    quiet = false;
+    n.observe(state("running", "w"));
+    n.observe(state("idle", "w"));
+    quiet = true;
+    vi.advanceTimersByTime(FINISH_DELAY_MS);
+    expect(pushed).toEqual([]);
   });
 });
