@@ -178,6 +178,7 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
           { value: "auto", label: "Auto" },
         ],
       },
+      { key: "workerNotifications", kind: "switch", label: "Notifications from workers", hint: "Push, desktop and in-app notifications when a worker finishes, needs input or stops with an error. Off: only its coordinator hears about it; a request the coordinator escalates to you still notifies." },
       { key: "coordinatorPermissions", kind: "switch", label: "Coordinator may answer permission requests", hint: "Allows the coordinator to approve or deny, once, reads and file edits inside the worker folder, reads of the repository's main checkout and agent docs (.claude/skills, CLAUDE.md), and read-only git commands (status, log, diff, show). Other commands and everything else wait for you; no permission rule is saved. Edits can change code that commands you approve later will run." },
     ],
   },
