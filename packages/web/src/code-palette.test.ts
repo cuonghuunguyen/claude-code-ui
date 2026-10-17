@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import pierreLight from "@pierre/theme/pierre-light";
 import pierreDark from "@pierre/theme/pierre-dark";
-import { ADJUST, adjustedTheme, DIFF_THEMES, registerDiffThemes, SYNTAX_SOURCE } from "./code-palette.ts";
+import { ADJUST, adjustTheme, DIFF_THEMES, registerDiffThemes, SYNTAX_SOURCE } from "./code-palette.ts";
 
 // GH-394: one palette for the editor and every diff. Every colour must reach 4.5:1 on every background code sits on.
 const css = readFileSync(new URL("./index.css", import.meta.url), "utf8");
@@ -97,7 +97,7 @@ describe.each(["light", "dark"] as const)("code palette (%s)", (mode) => {
   });
 
   it("adjustedTheme keeps every scope and fontStyle of pierre; only colours change; background and foreground are the app's card and foreground", () => {
-    const adjusted = adjustedTheme(mode);
+    const adjusted = adjustTheme(mode, themes[mode]);
     const src = themes[mode];
     expect(adjusted.tokenColors).toHaveLength(src.tokenColors.length);
     src.tokenColors.forEach((rule, i) => {
@@ -120,7 +120,7 @@ describe.each(["light", "dark"] as const)("code palette (%s)", (mode) => {
 });
 
 it("the dark diff sits on the app's card surface (#161616), not pierre's #0a0a0a", () => {
-  expect((adjustedTheme("dark").colors as Record<string, string>)["editor.background"]).toBe("#161616");
+  expect((adjustTheme("dark", themes.dark).colors as Record<string, string>)["editor.background"]).toBe("#161616");
 });
 
 it("registerDiffThemes registers both themes with @pierre/diffs, once", async () => {

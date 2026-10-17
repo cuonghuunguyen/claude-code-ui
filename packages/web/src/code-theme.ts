@@ -54,7 +54,19 @@ export const syntaxStyle = HighlightStyle.define([
 const withTags = (support: LanguageSupport, spec: Parameters<typeof styleTags>[0]) =>
   new LanguageSupport((support.language as unknown as { configure(o: object): Language }).configure({ props: [styleTags(spec)] }), support.support);
 
-const SCRIPT = { "ClassDeclaration/VariableName": t.className, "ParamList/VariableDefinition": t.local(t.variableName), "extends implements": t.modifier, Arrow: t.definitionKeyword };
+// Method names, `< >` of type arguments and parameters, `?`/`:` of a ternary or optional field, `|` `&` of unions, and `new X` are told apart by
+// their parent node (verified with highlightTree probes), as pierre's grammar does.
+const SCRIPT = {
+  "MethodDeclaration/PropertyDefinition": t.function(t.propertyName),
+  'TypeArgList/"<" TypeArgList/">" TypeParamList/"<" TypeParamList/">"': t.angleBracket,
+  "NewExpression/VariableName": t.function(t.variableName),
+  "UnionType/LogicOp IntersectionType/LogicOp": t.punctuation,
+  "ConditionalExpression/LogicOp Optional": t.keyword,
+  "ClassDeclaration/VariableName": t.className,
+  "ParamList/VariableDefinition": t.local(t.variableName),
+  "extends implements": t.modifier,
+  Arrow: t.definitionKeyword,
+};
 
 /** Per language, node names Lezer's own tags do not say enough about (verified against the grammars with highlightTree). */
 const OVERRIDES: Record<string, Parameters<typeof styleTags>[0]> = {

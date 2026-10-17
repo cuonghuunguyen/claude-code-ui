@@ -4,9 +4,11 @@ import { EditorState } from "@codemirror/state";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { highlightTree, tags } from "@lezer/highlight";
+import pierreLight from "@pierre/theme/pierre-light";
+import pierreDark from "@pierre/theme/pierre-dark";
 import { createHighlighter } from "shiki";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
-import { ADJUST, adjustedTheme } from "./code-palette.ts";
+import { ADJUST, adjustTheme } from "./code-palette.ts";
 import { loadLanguage, syntaxStyle } from "./code-theme.ts";
 
 // GH-394: the editor (Lezer + syntaxStyle + --syntax-* in index.css) and the diff (Shiki + the adjusted pierre theme) are two engines
@@ -19,7 +21,8 @@ const SAMPLES: Record<string, { file: string; lang: string; code: string }> = {
   ts: {
     file: "a.ts",
     lang: "ts",
-    code: `import { readFile } from "node:fs";\n// comment\nexport interface Opts { path: string; line?: number }\nconst MAX = 2 * 1024;\nlet n = 0, ok = true, none = null;\n@dec class Foo<T> extends Bar implements Baz {\n  private x = /a+b/g;\n  constructor(readonly p: Opts) { super(); this.x = \`v\${n}\n\`; }\n  async run(a: number): Promise<void> { if (a > MAX && !ok) return; console.log(a, Foo.name, undefined); }\n}\nfunction f(x = 1) { return typeof x === "number" ? x : -1; }\nexport default new Foo({ path: "a", line: 1 }).run(3);`,
+    code: `import { readFile } from "node:fs";\n// comment\nexport interface Opts { path: string; line?: number }\nconst MAX = 2 * 1024;\nlet n = 0, ok = true, none = null;\n@dec class Foo<T> extends Bar implements Baz {\n  private x = /a+b/g;\n  constructor(readonly p: Opts) { super(); this.x = \`v\${n}\n\`; }\n  async run(a: number): Promise<void> { if (a > MAX && !ok) return; console.log(a, Foo.name, undefined); }\n}\nfunction f(x = 1) { return typeof x === "number" ? x : -1; }\nexport default new Foo({ path: "a", line: 1 }).run(3);
+type U = string | number;`,
   },
   tsx: { file: "a.tsx", lang: "tsx", code: `const A = () => <div className="x" onClick={go}>hi {name}</div>;` },
   json: { file: "a.json", lang: "json", code: `{ "name": "x", "n": 1.5, "ok": true, "z": null, "arr": ["a", 2] }` },
@@ -36,45 +39,45 @@ const SAMPLES: Record<string, { file: string; lang: string; code: string }> = {
 };
 
 /** Tokens where Lezer cannot tell what Shiki's TextMate grammar can (a name's role, a regexp's inside, punctuation that is also an operator), so
- *  the editor keeps the neighbouring colour. The plan expected five (UPPER_CASE consts, `new Foo`, `undefined`, template backticks, `${ }`);
- *  the probe found the rest listed here. A gap is visible, not hidden: fixing one makes the stale-entry test below ask to delete it.
- *  Tokens are Shiki's (a run of one colour, so light and dark can cut them differently: the list is the union). */
+ *  the editor keeps the neighbouring colour. Each entry is `sample line:column token` (1-based, Shiki's token: a run of one colour), so an entry
+ *  excuses that one token and not every token with the same text. Light and dark can cut tokens differently: the list is the union.
+ *  A gap is visible, not hidden: fixing one makes the stale-entry test ask to delete it. */
 const KNOWN_GAPS = new Set<string>([
-  "css: #",
-  "css: (a.png)",
-  "css: (width",
-  "css: .",
-  "css: ::",
-  "css: =",
-  "css: >",
-  "css: @",
-  "css: a.png",
-  "css: url",
-  "markdown: (",
-  "markdown: )",
-  "markdown: a",
-  "ts: ${",
-  "ts: +",
-  "ts: /",
-  "ts: :",
-  "ts: <",
-  "ts: >",
-  "ts: ?",
-  "ts: Foo",
-  "ts: MAX",
-  "ts: `",
-  "ts: constructor",
-  "ts: g",
-  "ts: run",
-  "ts: undefined",
-  "ts: void",
-  "ts: }",
-  "tsx: >hi",
-  "tsx: A",
-  "tsx: {",
-  "tsx: }",
+  "css 1:1 @",
+  "css 1:141 url",
+  "css 1:144 (a.png)",
+  "css 1:145 a.png",
+  "css 1:26 .",
+  "css 1:29 >",
+  "css 1:31 #",
+  "css 1:39 ::",
+  "css 1:59 =",
+  "css 1:8 (width",
+  "markdown 11:7 a",
+  "markdown 5:41 (",
+  "markdown 5:50 )",
+  "markdown 5:58 (",
+  "markdown 5:64 )",
+  "ts 10:33 void",
+  "ts 10:49 MAX",
+  "ts 10:94 undefined",
+  "ts 4:7 MAX",
+  "ts 7:15 /",
+  "ts 7:17 +",
+  "ts 7:19 /",
+  "ts 7:20 g",
+  "ts 8:3 constructor",
+  "ts 8:53 `",
+  "ts 8:55 ${",
+  "ts 8:58 }",
+  "ts 9:1 `",
+  "tsx 1:44 {",
+  "tsx 1:47 }",
+  "tsx 1:48 >hi",
+  "tsx 1:52 {",
+  "tsx 1:57 }",
+  "tsx 1:7 A",
 ]);
-const found: Record<"light" | "dark", Set<string>> = { light: new Set(), dark: new Set() };
 
 const classColors = (mode: "light" | "dark") => {
   const vars = cssVars(mode);
@@ -100,33 +103,44 @@ async function lezerColors(file: string, code: string, mode: "light" | "dark") {
   return out;
 }
 
-describe("palette parity: the editor colours the samples like the diff does", () => {
-  const gaps = found;
-  for (const mode of ["light", "dark"] as const) {
-    it(`${mode}: every token Shiki colours has the same colour in the editor, except KNOWN_GAPS`, async () => {
-      const h = await createHighlighter({ themes: [adjustedTheme(mode)], langs: ["ts", "tsx", "json", "markdown", "css"], engine: createJavaScriptRegexEngine() });
-      for (const [name, s] of Object.entries(SAMPLES)) {
-        const cm = await lezerColors(s.file, s.code, mode);
-        let offset = 0;
-        for (const line of h.codeToTokens(s.code, { lang: s.lang as never, theme: adjustedTheme(mode).name! }).tokens) {
-          for (const tok of line) {
-            const text = tok.content;
-            const at = s.code.indexOf(text, offset);
-            offset = at + text.length;
-            if (!text.trim()) continue;
-            const wrong = [...text].some((ch, i) => ch.trim() && cm[at + i] !== tok.color!.toLowerCase());
-            if (wrong) gaps[mode].add(`${name}: ${text.trim()}`);
-          }
+const adjustedTheme = (mode: "light" | "dark") => adjustTheme(mode, mode === "light" ? pierreLight : pierreDark);
+const gapCache: Partial<Record<"light" | "dark", Promise<Set<string>>>> = {};
+/** Every token Shiki colours that the editor colours differently, as `sample line:col token`. Computed once per mode, whichever test asks first. */
+function gapsFor(mode: "light" | "dark") {
+  return (gapCache[mode] ??= (async () => {
+    const gaps = new Set<string>();
+    const h = await createHighlighter({ themes: [adjustedTheme(mode)], langs: ["ts", "tsx", "json", "markdown", "css"], engine: createJavaScriptRegexEngine() });
+    for (const [name, s] of Object.entries(SAMPLES)) {
+      const cm = await lezerColors(s.file, s.code, mode);
+      let offset = 0;
+      for (const [row, line] of h.codeToTokens(s.code, { lang: s.lang as never, theme: adjustedTheme(mode).name! }).tokens.entries()) {
+        const lineStart = s.code.split(String.fromCharCode(10)).slice(0, row).reduce((n, l) => n + l.length + 1, 0);
+        for (const tok of line) {
+          const text = tok.content;
+          const at = s.code.indexOf(text, offset);
+          offset = at + text.length;
+          if (!text.trim()) continue;
+          const wrong = [...text].some((ch, i) => ch.trim() && cm[at + i] !== tok.color!.toLowerCase());
+          if (wrong) gaps.add(`${name} ${row + 1}:${at - lineStart + 1} ${text.trim()}`);
         }
       }
-      for (const g of gaps[mode]) expect(KNOWN_GAPS.has(g), `${mode}: ${g} is a new mismatch with the diff`).toBe(true);
+    }
+    return gaps;
+  })());
+}
+
+describe("palette parity: the editor colours the samples like the diff does", () => {
+  for (const mode of ["light", "dark"] as const) {
+    it(`${mode}: every token Shiki colours has the same colour in the editor, except KNOWN_GAPS`, async () => {
+      for (const g of await gapsFor(mode)) expect(KNOWN_GAPS.has(g), `${mode}: ${g} is a new mismatch with the diff`).toBe(true);
     }, 60000);
   }
 });
 
-it("KNOWN_GAPS has no stale entry: each one still differs in light or dark", () => {
-  for (const g of KNOWN_GAPS) expect(found.light.has(g) || found.dark.has(g), `${g} now matches: delete it from KNOWN_GAPS`).toBe(true);
-});
+it("KNOWN_GAPS has no stale entry: each one still differs in light or dark", async () => {
+  const [light, dark] = await Promise.all([gapsFor("light"), gapsFor("dark")]);
+  for (const g of KNOWN_GAPS) expect(light.has(g) || dark.has(g), `${g} now matches: delete it from KNOWN_GAPS`).toBe(true);
+}, 60000);
 
 it("markdown: headings, list marks and heading marks are --syntax-tag, quotes comment grey, other marks punctuation, emphasis keeps its font", async () => {
   const vars = cssVars("light");

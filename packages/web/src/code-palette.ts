@@ -1,5 +1,4 @@
-import pierreLight from "@pierre/theme/pierre-light";
-import pierreDark from "@pierre/theme/pierre-dark";
+import type pierreLight from "@pierre/theme/pierre-light";
 import { registerCustomTheme, type ThemeRegistration } from "@pierre/diffs";
 
 /**
@@ -81,11 +80,12 @@ export const SYNTAX_SOURCE = {
 export const DIFF_THEMES = { light: "claude-ui-light", dark: "claude-ui-dark" } as const;
 
 const adjust = (mode: Mode, color: string) => ADJUST[mode][color.toLowerCase()] ?? color;
-const sources = { light: pierreLight, dark: pierreDark } as const;
+/** The pierre theme files (about 61 KB) are imported when the first diff asks for its theme, not at startup (`registerCustomTheme` takes a loader). */
+const loadSource = (mode: Mode): Promise<Source> => (mode === "light" ? import("@pierre/theme/pierre-light") : import("@pierre/theme/pierre-dark")).then((m) => m.default as Source);
+type Source = typeof pierreLight;
 
 /** pierre with every foreground mapped through ADJUST and the editor background/foreground set to the app's card/foreground. */
-export function adjustedTheme(mode: Mode): ThemeRegistration {
-  const src = sources[mode];
+export function adjustTheme(mode: Mode, src: Source): ThemeRegistration {
   return {
     name: DIFF_THEMES[mode],
     displayName: `Claude UI ${mode}`,
@@ -103,5 +103,5 @@ let registered = false;
 export function registerDiffThemes() {
   if (registered) return;
   registered = true;
-  for (const mode of ["light", "dark"] as const) registerCustomTheme(DIFF_THEMES[mode], () => Promise.resolve(adjustedTheme(mode)));
+  for (const mode of ["light", "dark"] as const) registerCustomTheme(DIFF_THEMES[mode], () => loadSource(mode).then((src) => adjustTheme(mode, src)));
 }
