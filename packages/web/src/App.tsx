@@ -1764,8 +1764,6 @@ export function App() {
   }, []);
   const openViewer = useOpenViewer(shown, (v) => (isFileTarget(v.target) ? popFile(v.target.path, v.target.line, v.opener) : setViewer(v)));
   /** A path in assistant text (absolute, inside the session cwd): the Files tab opens it at the line. */
-  const revealRef = useRef(reveal);
-  revealRef.current = reveal;
   const openFileLink = useCallback((path: string, line?: number) => popFile(path, line), []);
   const latest = useMemo(() => (view ? latestPlan(view) : undefined), [view?.parts, view?.aux]);
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */

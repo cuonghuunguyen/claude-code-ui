@@ -103,7 +103,8 @@ export function createEditorStore(getClient: () => Client | undefined) {
     // Answers come back in any order: only the latest open may take the preview slot and the focus.
     const seq = ++openSeq;
     const make = (tab: Tab): Tab => (o.outside ? { ...tab, outside: true } : tab);
-    if (state.tabs[path]) setTabs((ts) => (ts[path] ? placeTab(ts, ts[path], preview, scope) : ts));
+    // An open tab (say, from another project's Files tab) a Read card now opens from outside this folder is listed by the file dialog.
+    if (state.tabs[path]) setTabs((ts) => (ts[path] ? placeTab(o.outside ? { ...ts, [path]: { ...ts[path]!, outside: true } } : ts, o.outside ? { ...ts[path]!, outside: true } : ts[path]!, preview, scope) : ts));
     else {
       const timer = setTimeout(() => set((s) => ({ ...s, loading: path })), 150);
       try {

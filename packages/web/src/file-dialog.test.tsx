@@ -226,3 +226,27 @@ it("opened with Pop out, Esc and Close return focus to the Pop out button, which
     await vi.waitFor(() => expect(document.activeElement).toBe(q("[data-testid=files-popout]", side())));
   }
 });
+
+it("a Read card for a file already open from another project's Files tab shows it in the dialog, at the line", async () => {
+  const { store } = await setup({ startOpen: true });
+  await openTab(store, "/o/out.ts", { preview: false }); // opened without the flag, as project B's Files tab would
+  await openTab(store, "/p/a.ts");
+  await act(async () => void (await store.open("/o/out.ts", { cwd: "/p", outside: true, line: 1 })));
+  await flush();
+  expect(store.get().tabs["/o/out.ts"]!.outside).toBe(true);
+  expect(q(".cm-content", dlg()!)!.textContent).toContain("outside");
+});
+
+it("the restored editor scrolls its cursor into view", async () => {
+  const { store } = await setup();
+  await openTab(store, "/p/a.ts");
+  const v = cmView(side());
+  const head = v.state.doc.line(40).from;
+  await act(async () => v.dispatch({ selection: { anchor: head } }));
+  const spy = vi.spyOn(EditorView.prototype, "dispatch");
+  await click("[data-testid=files-popout]");
+  await flush();
+  const effects = spy.mock.calls.flatMap((c) => ((c[0] as { effects?: unknown })?.effects ? [(c[0] as { effects: unknown }).effects].flat() : [])) as { value?: { range?: { head: number } } }[];
+  spy.mockRestore();
+  expect(effects.some((e) => e.value?.range?.head === head)).toBe(true);
+});

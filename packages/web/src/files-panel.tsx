@@ -89,8 +89,8 @@ export function FilesPanel({
   onOpenInFiles?: () => void;
   headerEnd?: ReactNode;
 }) {
-  const [own] = useState(() => createEditorStore(() => client));
-  const store = editors ?? own;
+  const [own] = useState(() => (editors ? undefined : createEditorStore(() => client)));
+  const store = (editors ?? own)!;
   const { tabs, activePath, gitNudge, sourceOnly, error, loading, goto } = useEditorStore(store);
   const [treeKey, setTreeKey] = useState(0);
   const [filtering, setFiltering] = useState(false);
@@ -632,7 +632,8 @@ export function CodeEditor({
             ],
           }),
     });
-    if (parkedState) v.dispatch({ effects: [wiringC.reconfigure(wiring()), darkC.reconfigure(EditorView.darkTheme.of(dark))] });
+    // The restored view starts at line 1: scroll to the restored cursor.
+    if (parkedState) v.dispatch({ effects: [wiringC.reconfigure(wiring()), darkC.reconfigure(EditorView.darkTheme.of(dark)), EditorView.scrollIntoView(v.state.selection.main.head, { y: "center" })] });
     view.current = viewRef.current = v;
     if (line && !parkedState) {
       const l = v.state.doc.line(Math.min(line, v.state.doc.lines));
