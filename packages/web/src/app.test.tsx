@@ -3179,4 +3179,32 @@ describe("GH-381: remembered dock tabs", () => {
     await act(async () => paneTab("bottom-panel", "terminal")!.click());
     await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
   });
+
+  it("another browser tab's pick (storage event) changes nothing shown here and focuses nothing", async () => {
+    const g = globalThis as { __termFocused?: number };
+    localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+    await rerender();
+    expect(selected("side-panel", "files")).toBe("true");
+    const before = g.__termFocused ?? 0;
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "terminal", narrow: "terminal" }));
+    await act(async () => void window.dispatchEvent(new StorageEvent("storage", { key: "claude-ui.paneTabs" })));
+    await act(async () => new Promise((r) => setTimeout(r, 200)));
+    expect(selected("side-panel", "files")).toBe("true");
+    expect(q("terminal-panel")).toBeNull();
+    expect(g.__termFocused ?? 0).toBe(before);
+  });
+
+  it("narrow: the restore waits for the first session tab (a New session tab at load does not use it up)", async () => {
+    width = 390;
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ narrow: "files" }));
+    location.hash = "#new";
+    await rerender();
+    await act(async () => {
+      location.hash = `#${ID}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await act(async () => {});
+    expect(q("pane-files")!.getAttribute("aria-selected")).toBe("true");
+    width = 1440;
+  });
 });

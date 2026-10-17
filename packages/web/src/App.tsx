@@ -134,7 +134,7 @@ import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
 import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
-import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, useLayout, useMinWidth, usePaneTabs } from "./layout.ts";
+import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, useLayout, useMinWidth, withPane } from "./layout.ts";
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
@@ -382,16 +382,20 @@ export function App() {
   const [paneHist, setPaneHist] = useState<Record<string, Pane[]>>({});
   const hist = (activeId && paneHist[activeId]) || [];
   const pane: Pane = hist[0] ?? "session";
+  // The remembered tabs: read once at load, then updated by this page's own picks only (another browser tab's picks are not followed).
+  const [paneTabs, setPaneTabs] = useState(loadPaneTabs);
+  const resetPanes = () => (resetLayout(), setPaneTabs({}));
   const setPane = (p: Pane) => {
     if (!activeId) return;
     rememberPane(p);
+    setPaneTabs((t) => withPane(t, p, loadLayout()));
     setPaneHist((x) => ({ ...x, [activeId]: [p, ...(x[activeId] ?? []).filter((q) => q !== p)] }));
   };
   // GH-381: after a reload the first shown session tab reopens on the last selected pane (narrow: the pane switcher).
   const [restoreTo] = useState(() => loadPaneTabs().narrow);
   const paneRestored = useRef(false);
   useLayoutEffect(() => {
-    if (paneRestored.current || !activeId) return;
+    if (paneRestored.current || !isSession(activeId)) return;
     paneRestored.current = true;
     if (restoreTo && restoreTo !== "session") setPaneHist((x) => (x[activeId] ? x : { ...x, [activeId]: [restoreTo] }));
   }, [activeId]);
@@ -422,7 +426,6 @@ export function App() {
   }, [terminalHeight]);
   // GH-355: wide screens place each pane in the side or the bottom panel; narrow screens keep the pane switcher.
   const layout = useLayout();
-  const paneTabs = usePaneTabs();
   const lg = useMinWidth(1024);
   // Split view (GH-356): two session tabs side by side or stacked; `activeId` stays the current session and the active split shows it.
   const [splitRaw, setSplitRaw] = useState(loadSplit);
@@ -1680,11 +1683,8 @@ export function App() {
   });
   // From a move to the user's next key or pointer press: a terminal that shows because of the move (moved, or next in the area the
   // moved pane left) keeps off the focus. A late (Suspense) mount of a terminal shown by the move is covered by `termMoveShow`.
-  // GH-381: a terminal the reload restores (remembered narrow pane or side tab) keeps off the focus until the first key or pointer press.
-  const [moving, setMoving] = useState(() => {
-    const t = loadPaneTabs();
-    return t.narrow === "terminal" || t.side === "terminal";
-  });
+  // GH-381: a terminal the reload restores as the narrow pane (shown one effect after the first render) keeps off the focus until the first key or pointer press.
+  const [moving, setMoving] = useState(() => loadPaneTabs().narrow === "terminal");
   useEffect(() => {
     if (!moving) return;
     const done = () => setMoving(false);
@@ -1911,7 +1911,7 @@ export function App() {
       if (shows("terminal")) setTermFocusReq((n) => n + 1);
       reveal("terminal");
     },
-    resetLayout,
+    resetLayout: resetPanes,
     flipSide: () => saveLayout(flipSide(layout)),
     side: layout.side,
     canReopen: !!reopen,
@@ -2131,7 +2131,7 @@ export function App() {
           onSelect={selectPane}
           onMove={move}
           onFlipSide={() => saveLayout(flipSide(layout))}
-          onReset={resetLayout}
+          onReset={resetPanes}
           extra={terminalToggle}
           {...dragProps}
         />
@@ -2732,7 +2732,7 @@ export function App() {
                 changes={changeCount}
                 onSelect={selectPane}
                 onMove={move}
-                onReset={resetLayout}
+                onReset={resetPanes}
                 {...dragProps}
                 extra={
                   <>

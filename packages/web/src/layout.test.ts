@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { DEFAULT_LAYOUT, activePane, areaOf, loadLayout, loadPaneTabs, loadTerminalDock, movePane, parsePaneTabs, parseLayout, rememberPane, resetLayout, saveLayout, saveTerminalDock, usePaneTabs, useLayout, useMinWidth, useTerminalDock } from "./layout.ts";
+import { DEFAULT_LAYOUT, activePane, areaOf, loadLayout, loadPaneTabs, loadTerminalDock, movePane, parsePaneTabs, parseLayout, rememberPane, resetLayout, saveLayout, saveTerminalDock, useLayout, useMinWidth, useTerminalDock } from "./layout.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => (vi.restoreAllMocks(), resetLayout(), localStorage.clear()));
@@ -159,19 +159,4 @@ it("blocked storage keeps the remembered tabs in memory", () => {
   });
   rememberPane("graph");
   expect(loadPaneTabs().side).toBe("graph");
-});
-
-it("usePaneTabs re-renders on rememberPane and on another tab's storage event", async () => {
-  const el = document.body.appendChild(document.createElement("div"));
-  const root = createRoot(el);
-  const Probe = () => createElement("span", null, usePaneTabs().side ?? "-");
-  await act(async () => root.render(createElement(Probe)));
-  expect(el.textContent).toBe("-");
-  await act(async () => rememberPane("graph"));
-  expect(el.textContent).toBe("graph");
-  localStorage.setItem("claude-ui.paneTabs", '{"side":"changes"}');
-  await act(async () => void window.dispatchEvent(new StorageEvent("storage", { key: "claude-ui.paneTabs" })));
-  expect(el.textContent).toBe("changes");
-  await act(async () => root.unmount());
-  el.remove();
 });

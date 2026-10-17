@@ -118,7 +118,7 @@ export function parsePaneTabs(raw: string | null): PaneTabs {
 let tabsMemory: PaneTabs | undefined;
 let tabsCache: { raw: string | null; tabs: PaneTabs } | undefined;
 
-/** Snapshot for useSyncExternalStore: the same object while the stored string is equal. */
+/** The stored tabs; the same object while the stored string is equal. A page reads them once at load (no storage-event sync: another browser tab's picks must not change what this one shows). */
 export function loadPaneTabs(): PaneTabs {
   try {
     const raw = localStorage.getItem(TABS_KEY);
@@ -137,13 +137,14 @@ export function savePaneTabs(t: PaneTabs) {
   } catch {
     // See `tabsMemory`.
   }
-  listeners.forEach((f) => f());
 }
 
 /** Remembers a selection per browser: the overall (narrow) pane, and for a real pane its dock area's tab too. */
+export const withPane = (t: PaneTabs, p: PaneId | "session", l: Layout): PaneTabs => (p === "session" ? { ...t, narrow: p } : { ...t, narrow: p, [areaOf(l, p)]: p });
+
 export function rememberPane(p: PaneId | "session") {
   const t = loadPaneTabs();
-  const n: PaneTabs = p === "session" ? { ...t, narrow: p } : { ...t, narrow: p, [areaOf(loadLayout(), p)]: p };
+  const n = withPane(t, p, loadLayout());
   if (n.narrow === t.narrow && n.side === t.side && n.bottom === t.bottom) return;
   savePaneTabs(n);
 }
@@ -154,7 +155,7 @@ export const resetLayout = () => (savePaneTabs(NO_TABS), saveLayout(DEFAULT_LAYO
 function subscribe(l: () => void) {
   listeners.add(l);
   // Another tab of this browser moved a pane.
-  const onStorage = (e: StorageEvent) => (e.key === LAYOUT_KEY || e.key === DOCK_KEY || e.key === TABS_KEY || e.key === null) && l();
+  const onStorage = (e: StorageEvent) => (e.key === LAYOUT_KEY || e.key === DOCK_KEY || e.key === null) && l();
   window.addEventListener("storage", onStorage);
   return () => {
     listeners.delete(l);
@@ -162,7 +163,6 @@ function subscribe(l: () => void) {
   };
 }
 
-export const usePaneTabs = (): PaneTabs => useSyncExternalStore(subscribe, loadPaneTabs, () => NO_TABS);
 export const useLayout = (): Layout => useSyncExternalStore(subscribe, loadLayout, () => DEFAULT_LAYOUT);
 
 // Terminal position (Settings › Terminal) = the dock area of the terminal pane.
