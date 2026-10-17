@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // GH-394 slice B: the Files tab's layout (tree beside the editor from 672px, a drawer below), path header, tab bar and editor chrome.
-import { act, type ComponentProps } from "react";
+import { act, useState, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
@@ -9,7 +9,7 @@ import { FilesPanel, chromeTheme } from "./files-panel.tsx";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const ent = (path: string, isDir = false) => ({ name: path.split("/").at(-1)!, path, isDir });
-const files: Record<string, string> = { "/p/a.ts": "one\ntwo", "/p/b.ts": "bee", "/o/out.ts": "outside" };
+const files: Record<string, string> = { "/p/sub/c.ts": "see", "/p/a.ts": "one\ntwo", "/p/b.ts": "bee", "/o/out.ts": "outside" };
 
 /** A ResizeObserver whose width the test sets: `resize(w)` reports `w` for the observed Files panel. */
 let observers: { cb: ResizeObserverCallback; target?: Element }[] = [];
@@ -42,11 +42,16 @@ afterEach(() => {
 });
 const q = <T extends Element = HTMLElement>(sel: string) => el.querySelector<T>(sel);
 const panel = () => q("[data-testid=files-panel]")!;
+/** The drawer is kept mounted (so the tree keeps its folders) and `hidden` while closed. */
+const drawerOpen = () => {
+  const d = q("[data-testid=file-tree-drawer]");
+  return !!d && !d.hidden;
+};
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 
 function fakeClient() {
   const request = vi.fn(async (m: { type: string; path?: string }) => {
-    if (m.type === "fs.list") return { entries: m.path === "/p" ? [ent("/p/a.ts"), ent("/p/b.ts")] : [] };
+    if (m.type === "fs.list") return { entries: m.path === "/p" ? [ent("/p/a.ts"), ent("/p/b.ts"), ent("/p/sub", true)] : m.path === "/p/sub" ? [ent("/p/sub/c.ts")] : [] };
     if (m.type === "fs.read") return { content: files[m.path!] ?? "", mtime: 1 };
     return {};
   });
@@ -71,8 +76,7 @@ it("from 672px of panel width the tree sits beside the editor; at 671px it is a 
   expect(q("[data-testid=code-editor]")).not.toBeNull();
   await resize(671);
   expect(panel().dataset.layout).toBe("drawer");
-  expect(q("[data-testid=file-tree-drawer]")).toBeNull();
-  expect(q("nav#file-tree")).toBeNull();
+  expect(drawerOpen()).toBe(false);
   expect(q("[data-testid=code-editor]")).not.toBeNull();
 });
 
@@ -93,29 +97,100 @@ it("the drawer opens with the Files button (showTree is not toggled), and closes
   const esc = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   await act(async () => void document.activeElement!.dispatchEvent(esc));
   expect(esc.defaultPrevented).toBe(true);
-  expect(q("[data-testid=file-tree-drawer]")).toBeNull();
+  expect(drawerOpen()).toBe(false);
   expect(document.activeElement).toBe(button);
   // The scrim closes it.
   await act(async () => button.click());
   await act(async () => q<HTMLElement>("[data-testid=file-tree-scrim]")!.click());
-  expect(q("[data-testid=file-tree-drawer]")).toBeNull();
+  expect(drawerOpen()).toBe(false);
   // A file opened from it closes it and shows in the editor.
   await act(async () => button.click());
   await flush();
   await act(async () => q<HTMLElement>("[role=treeitem][data-path='/p/b.ts']")!.click());
   await flush();
-  expect(q("[data-testid=file-tree-drawer]")).toBeNull();
+  expect(drawerOpen()).toBe(false);
   expect(q("[data-testid=editor-tab][aria-selected=true]")!.textContent).toContain("b.ts");
 });
 
-it("Ctrl+\\ (the app flips showTree) toggles the drawer, and the drawer does not store its own state in showTree", async () => {
-  const props = await show({ openPath: "/p/a.ts", showTree: true });
+it("Ctrl+\\ (the app flips showTree) toggles the drawer, and the kept beside setting is flipped back", async () => {
+  let flip = () => {};
+  const shown: boolean[] = [];
+  function App() {
+    const [showTree, setShowTree] = useState(true);
+    flip = () => setShowTree((v) => !v);
+    shown.push(showTree);
+    return <FilesPanel client={fakeClient()} status="connected" cwd="/p" onSend={() => {}} showTree={showTree} onToggleTree={() => setShowTree((v) => !v)} openPath="/p/a.ts" />;
+  }
+  await act(async () => root.render(<App />));
+  await flush();
   await resize(400);
-  expect(q("[data-testid=file-tree-drawer]")).toBeNull();
-  await show({ ...props, showTree: false, openPath: undefined });
-  expect(q("[data-testid=file-tree-drawer]")).not.toBeNull();
-  await show({ ...props, showTree: true, openPath: undefined });
-  expect(q("[data-testid=file-tree-drawer]")).toBeNull();
+  expect(drawerOpen()).toBe(false);
+  await act(async () => flip());
+  await flush();
+  expect(drawerOpen()).toBe(true);
+  expect(shown.at(-1)).toBe(true);
+  await act(async () => flip());
+  await flush();
+  expect(drawerOpen()).toBe(false);
+  expect(shown.at(-1)).toBe(true);
+  // Wide again: the kept setting still shows the tree.
+  await resize(900);
+  expect(q("nav#file-tree")).not.toBeNull();
+});
+
+it("a breadcrumb folder opens the drawer in the drawer layout and reveals the folder", async () => {
+  await show({ openPath: "/p/sub/c.ts", showTree: true });
+  await resize(480);
+  expect(drawerOpen()).toBe(false);
+  const crumb = [...el.querySelectorAll<HTMLButtonElement>("nav[aria-label=Breadcrumb] button")].find((b) => b.textContent === "sub")!;
+  await act(async () => crumb.click());
+  await flush();
+  await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+  await flush();
+  expect(drawerOpen()).toBe(true);
+  expect(q("[role=treeitem][data-path='/p/sub']")!.getAttribute("aria-expanded")).toBe("true");
+});
+
+it("widening past 672px and narrowing again leaves the drawer closed and the focus alone", async () => {
+  await show({ openPath: "/p/a.ts" });
+  await resize(480);
+  await act(async () => q<HTMLButtonElement>("[data-testid=toggle-tree]")!.click());
+  await flush();
+  expect(drawerOpen()).toBe(true);
+  await resize(800);
+  const cm = q<HTMLElement>(".cm-content")!;
+  cm.focus();
+  await resize(480);
+  await flush();
+  expect(drawerOpen()).toBe(false);
+  expect(document.activeElement).toBe(cm);
+});
+
+it("the tree keeps its folders across closing and opening the drawer", async () => {
+  await show({ openPath: "/p/a.ts" });
+  await resize(480);
+  const button = q<HTMLButtonElement>("[data-testid=toggle-tree]")!;
+  await act(async () => button.click());
+  await flush();
+  await act(async () => q<HTMLElement>("[role=treeitem][data-path='/p/sub']")!.click());
+  await flush();
+  expect(q("[role=treeitem][data-path='/p/sub/c.ts']")).not.toBeNull();
+  await act(async () => button.click());
+  expect(drawerOpen()).toBe(false);
+  await act(async () => button.click());
+  await flush();
+  expect(q("[role=treeitem][data-path='/p/sub/c.ts']")).not.toBeNull();
+});
+
+it("while the drawer is open the editor column is inert, so Tab cannot go behind the scrim", async () => {
+  await show({ openPath: "/p/a.ts" });
+  await resize(480);
+  const button = q<HTMLButtonElement>("[data-testid=toggle-tree]")!;
+  await act(async () => button.click());
+  await flush();
+  expect(q("[data-testid=code-editor]")!.closest("[inert]")).not.toBeNull();
+  await act(async () => button.click());
+  expect(q("[data-testid=code-editor]")!.closest("[inert]")).toBeNull();
 });
 
 it("with no file open the tree fills the panel in both layouts, and a file opens the drawer closed", async () => {
@@ -125,6 +200,7 @@ it("with no file open the tree fills the panel in both layouts, and a file opens
   await resize(400);
   expect(panel().dataset.layout).toBe("drawer");
   expect(q("nav#file-tree")!.className).toContain("flex-1");
+  expect(q("[data-testid=file-tree-drawer]")).toBeNull();
   expect(q("[data-testid=file-tree-scrim]")).toBeNull();
 });
 

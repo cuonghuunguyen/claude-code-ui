@@ -15,6 +15,7 @@ import { MessageResponse } from "@/components/ai-elements/message";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { useContainerWidth } from "@/lib/use-container-width.ts";
 import { cn } from "@/lib/utils";
+import { trapTab } from "./focus-trap.ts";
 import type { connect, ConnectionStatus } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
@@ -135,11 +136,21 @@ export function FilesPanel({
   // Below the threshold the tree is a drawer: open (whatever its state) while no file shows, closed when one appears. The Files button and a change of `showTree` (Toggle file tree, Ctrl+\) flip it; it never writes `showTree`.
   const [drawer, setDrawer] = useState(false);
   const lastShowTree = useRef(showTree);
+  const undoing = useRef(false);
   useEffect(() => {
     if (lastShowTree.current === showTree) return;
     lastShowTree.current = showTree;
-    if (!wide) setDrawer((d) => !d);
+    if (undoing.current) return void (undoing.current = false);
+    if (wide) return;
+    setDrawer((d) => !d);
+    // The app flipped its kept "tree shown" setting, which is the beside layout's: flip it back (the drawer has its own state).
+    undoing.current = true;
+    onToggleTree();
   }, [showTree]);
+  // Back to the beside layout: the drawer starts closed the next time the panel is narrow.
+  useEffect(() => {
+    if (wide) setDrawer(false);
+  }, [wide]);
   const md = !!active && !active.media && isMarkdown(active.path);
   /** Split needs room: below md it shows Preview. */
   const view: MdView = !md ? "source" : sourceOnly === active!.path ? "source" : mdView === "split" && narrow ? "preview" : mdView;
@@ -170,6 +181,8 @@ export function FilesPanel({
     if (refocus) filesButton.current?.focus();
   };
   const drawerRef = useRef<HTMLDivElement>(null);
+  /** A breadcrumb folder opened the drawer: the tree reveals that folder, not the active file. */
+  const folderReveal = useRef(false);
   // The first file to show (opened from anywhere) puts the drawer away: it is open on its own only while no file shows.
   useEffect(() => {
     if (!empty) setDrawer(false);
@@ -177,13 +190,17 @@ export function FilesPanel({
   useEffect(() => {
     if (!overlay) return;
     drawerRef.current?.focus();
-    if (activePath) void tree.current?.reveal(activePath, true);
+    if (folderReveal.current) folderReveal.current = false;
+    else if (activePath) void tree.current?.reveal(activePath, true);
   }, [overlay]);
   const toggleTree = () => (wide ? onToggleTree() : setDrawer((d) => !d));
 
   /** Breadcrumb folder: show the tree, then reveal the folder in it. */
   function revealFolder(dir: string) {
-    if (!showTree) onToggleTree();
+    if (!wide) {
+      folderReveal.current = true;
+      setDrawer(true);
+    } else if (!showTree) onToggleTree();
     requestAnimationFrame(() => void tree.current?.reveal(dir, true, true));
   }
 
@@ -201,7 +218,7 @@ export function FilesPanel({
             activePath={active?.path}
             reloadKey={treeKey}
             gitStamp={gitStamp}
-            visible={visible && !suspended}
+            visible={visible && !suspended && treeShown}
             gitNudge={gitNudge}
             handleRef={tree}
             onFilter={setFiltering}
@@ -276,36 +293,39 @@ export function FilesPanel({
       </div>
       {error && <p className="px-2 py-1 text-destructive text-xs">{error}</p>}
       <div className={cn("relative flex min-h-0 flex-1", empty && treeShown ? "flex-col" : "flex-row")}>
-      {treeShown && empty && treeNav}
-      {treeShown && !empty && wide && (
-        <>
-          <div
-            ref={treeColumn}
-            className={cn("flex min-h-0 shrink-0 flex-col border-r", !treeWidth && "w-50 @2xl:w-60")}
-            style={treeWidth ? { width: `min(${treeWidth}px, calc(100% - 240px))` } : undefined}
-          >
-            {treeNav}
-          </div>
-          <ListResizer list={treeColumn} width={treeWidth} onResize={(w) => (setTreeWidth(w), saveListWidth(w, TREE_WIDTH_KEY))} label="Resize file tree" testId="files-tree-resizer" />
-        </>
+      {wide && treeShown && (
+        <div
+          ref={treeColumn}
+          className={cn("flex min-h-0 flex-col", empty ? "flex-1" : cn("shrink-0 border-r", !treeWidth && "w-50 @2xl:w-60"))}
+          style={!empty && treeWidth ? { width: `min(${treeWidth}px, calc(100% - 240px))` } : undefined}
+        >
+          {treeNav}
+        </div>
       )}
-      {overlay && (
-        <>
-          <div className="absolute inset-0 z-10 bg-overlay/40" onClick={() => closeDrawer(true)} data-testid="file-tree-scrim" />
-          <div
-            ref={drawerRef}
-            tabIndex={-1}
-            role="region"
-            aria-label="File tree"
-            className="absolute inset-y-0 left-0 z-20 flex w-[min(320px,85%)] flex-col border-r bg-card shadow-floating outline-none"
-            data-testid="file-tree-drawer"
-            onKeyDown={(e) => e.key === "Escape" && !e.defaultPrevented && (e.preventDefault(), closeDrawer(true))}
-          >
-            {treeNav}
-          </div>
-        </>
+      {wide && treeShown && !empty && (
+        <ListResizer list={treeColumn} width={treeWidth} onResize={(w) => (setTreeWidth(w), saveListWidth(w, TREE_WIDTH_KEY))} label="Resize file tree" testId="files-tree-resizer" />
       )}
-      <div className={cn("flex min-h-0 min-w-0 flex-col", empty && treeShown ? "flex-none" : "flex-1")}>
+      {overlay && <div className="absolute inset-0 z-10 bg-overlay/40" onClick={() => closeDrawer(true)} data-testid="file-tree-scrim" />}
+      {/* Narrow: one container, so the tree keeps its folders and filter while the drawer is closed (hidden, not unmounted) or no file is open (it then fills the panel). */}
+      {!wide && (
+        <div
+          ref={drawerRef}
+          hidden={!treeShown}
+          tabIndex={empty ? undefined : -1}
+          role={empty ? undefined : "region"}
+          aria-label={empty ? undefined : "File tree"}
+          className={cn("flex flex-col outline-none", empty ? "min-h-0 flex-1" : "absolute inset-y-0 left-0 z-20 w-[min(320px,85%)] border-r bg-card shadow-floating")}
+          data-testid={empty ? undefined : "file-tree-drawer"}
+          onKeyDown={(e) => {
+            if (!overlay) return;
+            if (e.key === "Escape" && !e.defaultPrevented) return (e.preventDefault(), closeDrawer(true));
+            trapTab(e);
+          }}
+        >
+          {treeNav}
+        </div>
+      )}
+      <div inert={overlay} className={cn("flex min-h-0 min-w-0 flex-col", empty && treeShown ? "flex-none" : "flex-1")}>
       {shown.length > 0 && (
         <div className="flex h-9 shrink-0 overflow-x-auto border-b bg-card text-xs max-md:h-auto" role="tablist" aria-label="Editor tabs">
           {shown.map((p) => {
