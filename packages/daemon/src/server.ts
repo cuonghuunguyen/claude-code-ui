@@ -1108,6 +1108,11 @@ export function createDaemon(opts: {
     const rel = relative(dir, path);
     return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
   };
+  /** The uploads folder (docs/spec.md "Uploads") may lie inside the config dir (POSIX): it is exempt from the config-dir deny, and nothing else in the config dir is. */
+  const uploadsReal = (() => {
+    const u = real(uploads.parent);
+    return u && privateDir && u !== privateDir && within(u, privateDir) ? u : undefined;
+  })();
   /** The canonical file of a named Artifact page, or why not (GH-175): no UNC/device path, the named file itself no symlink, a regular file within the cap. */
   const checkArtifact = (named: string, kind: "page" | "asset" = "page", confine: string[] = []): { path: string; size: number; mtime: number } | { code: string; message: string } => {
     if (refused(named)) return { code: "path_not_allowed", message: `refused path: ${named}` };
@@ -1119,9 +1124,10 @@ export function createDaemon(opts: {
     }
     if (l.isSymbolicLink()) return { code: "path_not_allowed", message: `a symlink: ${named}` };
     if (!l.isFile()) return { code: "not_a_file", message: `not a file: ${named}` };
+    if (kind === "asset" && l.nlink > 1) return { code: "path_not_allowed", message: `hard-linked file: ${named}` };
     const path = real(named);
     if (!path || refused(path)) return { code: "path_not_allowed", message: `refused path: ${named}` };
-    if (privateDir && within(path, privateDir)) return { code: "path_not_allowed", message: `refused path: ${named}` };
+    if (privateDir && within(path, privateDir) && !(uploadsReal && within(path, uploadsReal))) return { code: "path_not_allowed", message: `refused path: ${named}` };
     // A supporting file must lie in the session's cwd or the page's directory (GH-335): a file the model names elsewhere is never served.
     if (kind === "asset" && !confine.some((d) => within(path, d))) return { code: "path_not_allowed", message: `outside the project and the page's directory: ${named}` };
     if (kind === "page" && !/\.html?$/i.test(path)) return { code: "unsupported_type", message: `not an HTML page: ${named}` };
@@ -1141,11 +1147,11 @@ export function createDaemon(opts: {
     stream.pipe(res);
   };
   /** Opens a checked artifact file: no-follow, device/inode match as /media; undefined when it is not a regular file within the cap. */
-  const openArtifact = (path: string) => {
+  const openArtifact = (path: string, asset = false) => {
     try {
       const fd = openChecked(path, OPEN_READ);
       const st = fstatSync(fd);
-      if (!st.isFile() || st.size > ARTIFACT_PREVIEW_MAX) {
+      if (!st.isFile() || st.size > ARTIFACT_PREVIEW_MAX || (asset && st.nlink > 1)) {
         closeSync(fd);
         return undefined;
       }
@@ -1170,7 +1176,7 @@ export function createDaemon(opts: {
       entry.used = Date.now();
       const c = checkArtifact(a.named, "asset", src.confine);
       if ("code" in c || c.path !== a.path) return void res.writeHead(404).end();
-      const f = openArtifact(c.path);
+      const f = openArtifact(c.path, true);
       if (!f) return void res.writeHead(404).end();
       return streamFile(req, res, f.fd, f.size, { ...ARTIFACT_ASSET_HEADERS, "content-type": a.type, ...(a.type === "image/svg+xml" && { "content-disposition": "attachment" }) });
     }
@@ -1550,7 +1556,10 @@ export function createDaemon(opts: {
           const c = checkArtifact(f.path);
           if ("code" in c) return fail(c.code, c.message);
           const page = basename(c.path);
-          const confine = [real(s.cwd), dirname(c.path)].filter((d) => d !== undefined);
+          // The project folder; the page's directory only when the page itself is in the project or in this session's upload folder (a page elsewhere must not widen it). The Claude scratchpad is not named by the daemon, so it is not a root.
+          const cwdReal = real(s.cwd);
+          const upReal = real(join(uploads.parent, msg.sessionId));
+          const confine = [cwdReal, ...[cwdReal, upReal].filter((r) => r !== undefined && within(c.path, r)).map(() => dirname(c.path))].filter((d) => d !== undefined);
           const assets = new Map<string, { named: string; path: string; type: string }>();
           const unavailable = [...f.unavailable];
           for (const a of f.assets as ArtifactAsset[]) {

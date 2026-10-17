@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomBytes, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -5055,9 +5055,11 @@ describe("artifact.preview and /artifact (GH-175)", () => {
 
 describe("artifact supporting files (GH-335)", () => {
   const sessionId = "9a6071a2-a3b4-4ec5-9fd6-e7f8091a2b3c";
-  const site = mkdtempSync(join(tmpdir(), "art335-"));
+  const site = mkdtempSync(join(webRoot, "art335-")); // the page lives in the session cwd
   const far = mkdtempSync(join(tmpdir(), "far335-")); // outside the cwd and the page's directory
   const cfg = join(site, "cfg"); // the daemon's private dir, inside the page's directory
+  const upDir = join(cfg, "uploads"); // the uploads folder lives inside it (POSIX default)
+  const outer = mkdtempSync(join(tmpdir(), "outer335-")); // a page directory outside the cwd
   mkdirSync(join(site, "img"), { recursive: true });
   mkdirSync(cfg, { recursive: true });
   mkdirSync(join(webRoot, "proj"), { recursive: true });
@@ -5075,7 +5077,19 @@ describe("artifact supporting files (GH-335)", () => {
   truncateSync(join(site, "big.css"), (16 << 20) + 1);
   writeFileSync(join(cfg, "settings.json"), SECRET);
   writeFileSync(join(cfg, "x.html"), "<p>cfg</p>");
+  mkdirSync(join(upDir, sessionId), { recursive: true });
+  writeFileSync(join(upDir, sessionId, "up.html"), "<p>uploaded</p>");
+  writeFileSync(join(upDir, sessionId, "up.css"), "u{x:1}");
+  writeFileSync(join(upDir, sessionId, "u.txt"), SECRET);
+  writeFileSync(join(outer, "page.html"), "<p>outer</p>");
+  writeFileSync(join(outer, "sib.css"), SECRET);
   writeFileSync(join(far, "far.css"), SECRET);
+  let canHardLink = true;
+  try {
+    linkSync(join(far, "far.css"), join(webRoot, "proj", "hard.css")); // a hard link inside the cwd to an outside file
+  } catch {
+    canHardLink = false;
+  }
   writeFileSync(join(webRoot, "proj", "inproj.css"), "p{margin:0}");
   let canSymlink = true;
   try {
@@ -5123,7 +5137,8 @@ describe("artifact supporting files (GH-335)", () => {
     "index.html": "secret.txt",
     "cfg.json": "cfg/settings.json",
     "far.css": farCss,
-    "farup.css": "../" + basename(far) + "/far.css",
+    "farup.css": relative(site, join(far, "far.css")),
+    "hard.css": join(webRoot, "proj", "hard.css"),
     "home.css": homeFile,
     "upper.css": farCss.toUpperCase(),
     "short.css": short83(farCss) ?? farCss,
@@ -5138,6 +5153,8 @@ describe("artifact supporting files (GH-335)", () => {
     publish("toolu_e", { file_path: join(site, "index.html"), files: { "style.css": join(site, "style.css") } }),
     publish("toolu_s", { file_path: join(site, "index.html") }),
     publish("toolu_cfg", { file_path: join(cfg, "x.html") }),
+    publish("toolu_up", { file_path: join(upDir, sessionId, "up.html"), root: join(upDir, sessionId), files: { "up.css": "up.css", "u.txt": "u.txt", "settings.json": join(cfg, "settings.json") } }),
+    publish("toolu_outer", { file_path: join(outer, "page.html"), root: outer, files: { "sib.css": "sib.css" } }),
   ];
   const transcript = [
     { type: "user", uuid: "u1", session_id: sessionId, parent_tool_use_id: null, message: { role: "user", content: "publish" } },
@@ -5150,6 +5167,7 @@ describe("artifact supporting files (GH-335)", () => {
     roots: [webRoot],
     query: fakeQuery as never,
     privateDir: cfg,
+    uploadDir: upDir,
     history: {
       listSessions: (async () => []) as never,
       getSessionInfo: (async (sid: string) => (sid === sessionId ? { sessionId: sid, cwd: webRoot, summary: "Art" } : undefined)) as never,
@@ -5183,7 +5201,7 @@ describe("artifact supporting files (GH-335)", () => {
     });
   // What a sandboxed page's subresource load sends: cross-site, no Origin (no-cors) or Origin: null (cors).
   const aget = (nonce: string, rest: string, headers: Record<string, string> = {}, method = "GET") => get(`/artifact/${nonce}/${rest}`, { "sec-fetch-dest": "style", "sec-fetch-site": "cross-site", ...headers }, method);
-  const expectedUnavailable = ["copied.css", "../up.css", "x.exe", "missing.css", "big.css", "index.html", "cfg.json", "far.css", "farup.css", "home.css", "upper.css", "short.css", "farlink.css", "farfile.css", "link.css"]; // link.css is a symlink, or missing where links cannot be made
+  const expectedUnavailable = ["copied.css", "../up.css", "x.exe", "missing.css", "big.css", "index.html", "cfg.json", "far.css", "farup.css", "home.css", "upper.css", "short.css", "farlink.css", "farfile.css", "link.css", ...(canHardLink ? ["hard.css"] : [])]; // link.css is a symlink, or missing where links cannot be made
 
   it("serves each named supporting file under the page's nonce with its type and the asset headers", async () => {
     const c = await open();
@@ -5365,6 +5383,54 @@ describe("artifact supporting files (GH-335)", () => {
     expect((await aget(nonce, "style.css")).status).toBe(200);
     c.ws.close();
     await expect.poll(async () => (await aget(nonce, "style.css")).status).toBe(404);
+  });
+
+  it("ATTACK (review A1): a page outside the cwd does not make its directory servable", async () => {
+    const c = await open();
+    const r = await preview(c, "toolu_outer");
+    expect(r.type).toBe("reply");
+    expect(r.result.unavailable).toEqual(["sib.css"]);
+    const g = await aget(nonceOf(r.result.url), "sib.css");
+    expect(g.status).toBe(404);
+    expect(g.body.toString()).not.toContain(SECRET);
+    c.ws.close();
+  });
+
+  it("ATTACK (review): a hard link inside the cwd to an outside file is not served, also when made after the URL was issued", async () => {
+    if (!canHardLink) return;
+    const c = await open();
+    const r = await preview(c, "toolu_m");
+    expect(r.result.unavailable).toContain("hard.css");
+    const nonce = nonceOf(r.result.url);
+    const g = await aget(nonce, "hard.css");
+    expect(g.status).toBe(404);
+    expect(g.body.toString()).not.toContain(SECRET);
+    // made after the URL was issued: style.css gets a second name
+    const l2 = join(webRoot, "proj", "style-second.css");
+    linkSync(join(site, "style.css"), l2);
+    try {
+      expect((await aget(nonce, "style.css")).status).toBe(404);
+    } finally {
+      rmSync(l2);
+    }
+    expect((await aget(nonce, "style.css")).status).toBe(200);
+    c.ws.close();
+  });
+
+  it("a page the user uploaded previews although the uploads folder is inside the config dir; the rest of the config dir stays refused", async () => {
+    const c = await open();
+    const r = await preview(c, "toolu_up");
+    expect(r.type).toBe("reply");
+    const g = await get(r.result.url);
+    expect(g.status).toBe(200);
+    expect(g.body.toString()).toBe("<p>uploaded</p>");
+    const nonce = nonceOf(r.result.url);
+    expect(r.result.unavailable, JSON.stringify(r.result)).not.toContain("up.css");
+    expect((await aget(nonce, "up.css")).body.toString()).toBe("u{x:1}");
+    expect(r.result.unavailable).toEqual(expect.arrayContaining(["settings.json"]));
+    expect((await aget(nonce, "settings.json")).status).toBe(404);
+    expect((await preview(c, "toolu_cfg")).code).toBe("path_not_allowed");
+    c.ws.close();
   });
 
   it("a failed publish has no preview", async () => {
