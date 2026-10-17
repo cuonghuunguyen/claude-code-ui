@@ -534,6 +534,31 @@ describe("notifier: worker notifications off (GH-387)", () => {
     expect(pushed).toEqual([]);
   });
 
+  it("one quiet worker and one escalated worker on the same request: the escalation pushes with sound and its reason, the settle replaces only that, nothing for the quiet one", () => {
+    for (const sid of ["w", "w2"]) {
+      n.observe(state("running", sid));
+      n.observe(ev(read(`r-${sid}`), sid));
+      n.observe(state("needs_input", sid));
+    }
+    expect(pushed).toEqual([]);
+    n.observe(ev(read("r-w2", { escalated: true, reason: "outside the worktree" }), "w2"));
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({ sessionId: "w2" });
+    expect(pushed[0]!.body).toContain("Escalated by coordinator: outside the worktree");
+    expect(pushed[0]!.silent).toBeUndefined();
+    expect(pushed[0]!.replace).toBeUndefined();
+    pushed.length = 0;
+    n.observe(ev(read("r-w2", { settled: true, decision: "allow", escalated: true }), "w2"));
+    n.observe(state("running", "w2"));
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({ replace: true, silent: true });
+    expect(pushed[0]!.body).toMatch(/^No longer needs input/);
+    pushed.length = 0;
+    n.observe(ev(read("r-w", { settled: true, decision: "allow" }), "w"));
+    n.observe(state("running", "w"));
+    expect(pushed).toEqual([]);
+  });
+
   it("the coordinator and other sessions still push", () => {
     finish("c");
     finish("s");
