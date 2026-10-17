@@ -8,7 +8,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, type ArtifactAsset } from "./artifact-preview.ts";
+import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
 import { searchFiles } from "./search.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
@@ -1109,6 +1109,20 @@ export function createDaemon(opts: {
     return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
   };
   /** The uploads folder (docs/spec.md "Uploads") may lie inside the config dir (POSIX): it is exempt from the config-dir deny, and nothing else in the config dir is. */
+  /** This session's scratchpad as the CLI names it (scratchpadOf), when that folder exists as a plain directory inside <tmp>/claude: its real path. Anything else (the CLI changed its convention, a link) gives undefined: the preview then confines to the cwd only, never wider. */
+  const scratchpadRoot = (cwd: string, sessionId: string) => {
+    const d = scratchpadOf(cwd, sessionId, tmpdir());
+    if (!d) return undefined;
+    try {
+      const l = lstatSync(d);
+      if (l.isSymbolicLink() || !l.isDirectory()) return undefined;
+    } catch {
+      return undefined;
+    }
+    const r = real(d);
+    const base = real(join(tmpdir(), "claude"));
+    return r && base && within(r, base) ? r : undefined;
+  };
   const uploadsReal = (() => {
     const u = real(uploads.parent);
     return u && privateDir && u !== privateDir && within(u, privateDir) ? u : undefined;
@@ -1556,10 +1570,11 @@ export function createDaemon(opts: {
           const c = checkArtifact(f.path);
           if ("code" in c) return fail(c.code, c.message);
           const page = basename(c.path);
-          // The project folder; the page's directory only when the page itself is in the project or in this session's upload folder (a page elsewhere must not widen it). The Claude scratchpad is not named by the daemon, so it is not a root.
+          // The project folder; the page's directory only when the page itself is in the project, in this session's upload folder or in this session's Claude scratchpad (a page elsewhere must not widen it).
           const cwdReal = real(s.cwd);
           const upReal = real(join(uploads.parent, msg.sessionId));
-          const confine = [cwdReal, ...[cwdReal, upReal].filter((r) => r !== undefined && within(c.path, r)).map(() => dirname(c.path))].filter((d) => d !== undefined);
+          const spReal = scratchpadRoot(s.cwd, msg.sessionId);
+          const confine = [cwdReal, ...[cwdReal, upReal, spReal].filter((r) => r !== undefined && within(c.path, r)).map(() => dirname(c.path))].filter((d) => d !== undefined);
           const assets = new Map<string, { named: string; path: string; type: string }>();
           const unavailable = [...f.unavailable];
           for (const a of f.assets as ArtifactAsset[]) {

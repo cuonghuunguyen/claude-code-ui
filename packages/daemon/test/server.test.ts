@@ -5060,6 +5060,17 @@ describe("artifact supporting files (GH-335)", () => {
   const cfg = join(site, "cfg"); // the daemon's private dir, inside the page's directory
   const upDir = join(cfg, "uploads"); // the uploads folder lives inside it (POSIX default)
   const outer = mkdtempSync(join(tmpdir(), "outer335-")); // a page directory outside the cwd
+  // The CLI's scratchpad of a session: <tmp>/claude/<cwd slug>/<session id>/scratchpad (the slug: every non-alphanumeric of the cwd -> "-").
+  const claudeTmp = join(tmpdir(), "claude", webRoot.replace(/[^a-zA-Z0-9]/g, "-"));
+  const otherSession = "1b2c3d4e-5f60-4718-8293-a4b5c6d7e8f9";
+  const scratch = join(claudeTmp, sessionId, "scratchpad");
+  const otherScratch = join(claudeTmp, otherSession, "scratchpad");
+  for (const d of [scratch, otherScratch]) {
+    mkdirSync(join(d, "img"), { recursive: true });
+    writeFileSync(join(d, "index.html"), "<p>scratch</p>");
+    writeFileSync(join(d, "s.css"), "s{x:1}");
+    writeFileSync(join(d, "img", "i.png"), "png-bytes");
+  }
   mkdirSync(join(site, "img"), { recursive: true });
   mkdirSync(cfg, { recursive: true });
   mkdirSync(join(webRoot, "proj"), { recursive: true });
@@ -5154,6 +5165,8 @@ describe("artifact supporting files (GH-335)", () => {
     publish("toolu_s", { file_path: join(site, "index.html") }),
     publish("toolu_cfg", { file_path: join(cfg, "x.html") }),
     publish("toolu_up", { file_path: join(upDir, sessionId, "up.html"), root: join(upDir, sessionId), files: { "up.css": "up.css", "u.txt": "u.txt", "settings.json": join(cfg, "settings.json") } }),
+    publish("toolu_sp", { file_path: join(scratch, "index.html"), root: scratch, files: { "s.css": "s.css", "img/i.png": "img/i.png", "far.css": farCss } }),
+    publish("toolu_osp", { file_path: join(otherScratch, "index.html"), root: otherScratch, files: { "s.css": "s.css" } }),
     publish("toolu_outer", { file_path: join(outer, "page.html"), root: outer, files: { "sib.css": "sib.css" } }),
   ];
   const transcript = [
@@ -5178,6 +5191,7 @@ describe("artifact supporting files (GH-335)", () => {
   afterAll(() => {
     d.close();
     if (homeOk) rmSync(homeFile, { force: true });
+    rmSync(claudeTmp, { recursive: true, force: true });
   });
   const dport = () => (d.address() as AddressInfo).port;
   const open = async () => {
@@ -5396,7 +5410,23 @@ describe("artifact supporting files (GH-335)", () => {
     c.ws.close();
   });
 
-  it("ATTACK (review): a hard link inside the cwd to an outside file is not served, also when made after the URL was issued", async () => {
+  it("page and supporting files in this session's scratchpad are served; another session's scratchpad and a file outside it are not", async () => {
+    const c = await open();
+    const r = await preview(c, "toolu_sp");
+    expect(r.type).toBe("reply");
+    expect(r.result.unavailable).toEqual(["far.css"]);
+    const nonce = nonceOf(r.result.url);
+    expect((await get(r.result.url)).body.toString()).toBe("<p>scratch</p>");
+    expect((await aget(nonce, "s.css")).body.toString()).toBe("s{x:1}");
+    expect((await aget(nonce, "img/i.png", { "sec-fetch-dest": "image" })).body.toString()).toBe("png-bytes");
+    const o = await preview(c, "toolu_osp");
+    expect(o.type).toBe("reply");
+    expect(o.result.unavailable).toEqual(["s.css"]);
+    expect((await aget(nonceOf(o.result.url), "s.css")).status).toBe(404);
+    c.ws.close();
+  });
+
+  it("ATTACK (review A1): a page outside the cwd inside the cwd to an outside file is not served, also when made after the URL was issued", async () => {
     if (!canHardLink) return;
     const c = await open();
     const r = await preview(c, "toolu_m");

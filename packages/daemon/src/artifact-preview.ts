@@ -114,6 +114,13 @@ export function artifactAssetsOf(input: { files?: unknown; root?: unknown }, cwd
   return { assets, unavailable };
 }
 
+/** The folder the Claude CLI names as a session's scratchpad: <tmp>/claude/<cwd slug>/<session id>/scratchpad. The slug is the cwd with every non-alphanumeric replaced by "-" (the CLI's own rule, verified against the folders under %TEMP%\\claude and the SDK's slug function); the CLI adds a hash to a slug over 200 characters, which is not reproduced: undefined then. Pure: the caller checks that the folder exists. */
+export function scratchpadOf(cwd: string, sessionId: string, tmp: string): string | undefined {
+  const slug = cwd.replace(/[^a-zA-Z0-9]/g, "-");
+  if (slug.length > 200 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sessionId)) return undefined;
+  return resolve(tmp, "claude", slug, sessionId, "scratchpad");
+}
+
 /** The page CSP of a multi-file publish: `assetBase` (http://<host>/artifact/<nonce>/, never 'self') joins the sources of the resource types a page links, plus connect-src for fetch of named files. Without it: ARTIFACT_CSP. */
 export function artifactCsp(assetBase?: string): string {
   if (!assetBase) return ARTIFACT_CSP;

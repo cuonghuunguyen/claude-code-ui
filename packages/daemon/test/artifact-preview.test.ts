@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import type { Part } from "@claude-ui/protocol";
-import { ARTIFACT_ASSET_HEADERS, ARTIFACT_ASSETS_MAX, ARTIFACT_CSP, ARTIFACT_HEADERS, artifactAssetsOf, artifactCsp, artifactFileOf, artifactHeaders, assetKey, assetRequestAllowed } from "../src/artifact-preview.ts";
+import { ARTIFACT_ASSET_HEADERS, ARTIFACT_ASSETS_MAX, ARTIFACT_CSP, ARTIFACT_HEADERS, artifactAssetsOf, artifactCsp, artifactFileOf, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf } from "../src/artifact-preview.ts";
 
 const call = (input: unknown, status: string = "done", tool = "Artifact"): Part => ({ type: "tool_call", id: "t", toolUseId: "t", tool, input, status }) as Part;
 
@@ -160,5 +160,19 @@ describe("ARTIFACT_ASSET_HEADERS / assetRequestAllowed", () => {
     expect(assetRequestAllowed({ origin: "null" }, false)).toBe(true);
     expect(assetRequestAllowed({ origin: "http://own" }, true)).toBe(true);
     expect(assetRequestAllowed({}, false)).toBe(true);
+  });
+});
+
+describe("scratchpadOf", () => {
+  const id = "36a77cf8-ba9a-48cd-b806-032f7e6b6ae8";
+  it("matches the folders the CLI makes (slug: every non-alphanumeric of the cwd -> '-')", () => {
+    expect(scratchpadOf("C:\\Users\\chnguyen\\IdeaProjects\\claude-code-ui", id, "C:\\Users\\chnguyen\\AppData\\Local\\Temp")).toBe(
+      resolve("C:\\Users\\chnguyen\\AppData\\Local\\Temp", "claude", "C--Users-chnguyen-IdeaProjects-claude-code-ui", id, "scratchpad"),
+    );
+    expect(scratchpadOf("/home/a.b/my proj", id, "/tmp")).toBe(resolve("/tmp", "claude", "-home-a-b-my-proj", id, "scratchpad"));
+  });
+  it("is undefined for a slug over 200 characters (the CLI adds a hash) and for a session id that is not a uuid", () => {
+    expect(scratchpadOf("/" + "a".repeat(201), id, "/tmp")).toBeUndefined();
+    for (const bad of ["..", "../x", "", "A".repeat(36)]) expect(scratchpadOf("/p", bad, "/tmp")).toBeUndefined();
   });
 });
