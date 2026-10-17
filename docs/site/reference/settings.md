@@ -28,6 +28,13 @@ Most settings are **kept in this browser** only. Orchestration, Usage limits (ex
 
 See [Notifications](../features/notifications).
 
+## Screen
+
+| Setting | Does |
+| --- | --- |
+| Keep screen awake | Holds the screen on while claude-ui is open. See [Keep screen awake](../features/keep-awake). |
+| Only while a session is running | Holds it only while a session runs or waits for you. |
+
 ## Changes
 
 | Setting | Options |
@@ -48,6 +55,12 @@ See [Notifications](../features/notifications).
 | Tab grouping | By project, By worktree, or None |
 | Compact tabs | Shows each group as one chip. Open its tabs from the chip. Needs a tab grouping. |
 
+## Terminal
+
+| Setting | Does |
+| --- | --- |
+| Terminal position | **Bottom** (default) or **Side panel**. See [Panes & layout](../features/panes). |
+
 ## Keyboard
 
 Opens the [Keyboard shortcuts](shortcuts) dialog, where you can rebind every shortcut.
@@ -58,7 +71,7 @@ Opens the [Keyboard shortcuts](shortcuts) dialog, where you can rebind every sho
 
 ## Orchestration
 
-Lets a session start and steer worker sessions. Off by default. Every setting is described on the [Orchestration](../features/orchestration#settings) page.
+Lets a session start and steer worker sessions. Off by default. **Notifications from workers** turns notifications for worker sessions on or off. Every setting is described on the [Orchestration](../features/orchestration#settings) page.
 
 ## Usage limits
 

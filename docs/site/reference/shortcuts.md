@@ -47,6 +47,7 @@ Shortcuts work anywhere in the app, including the prompt box, except as noted un
 
 | Action | Windows / Linux | macOS |
 | --- | --- | --- |
+| Focus next split | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>↑</kbd> | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>↑</kbd> |
 | Toggle sidebar | <kbd>Ctrl</kbd>+<kbd>B</kbd> | <kbd>⌘</kbd> <kbd>B</kbd> |
 | Toggle side panel | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>R</kbd> |
 | Toggle file tree | <kbd>Ctrl</kbd>+<kbd>\\</kbd> | <kbd>⌘</kbd> <kbd>\\</kbd> |
@@ -76,6 +77,9 @@ Press <kbd>Alt</kbd>+<kbd>A</kbd> (like tmux), let go, then press one more key w
 | <kbd>p</kbd> | Previous tab |
 | <kbd>1</kbd> … <kbd>9</kbd> | Tab 1 to 9 (9 = last tab) |
 | <kbd>x</kbd> | Close tab |
+| <kbd>%</kbd> | Split right |
+| <kbd>"</kbd> | Split down |
+| <kbd>o</kbd> | Next split |
 | <kbd>t</kbd> | Terminal |
 | <kbd>f</kbd> | Files |
 | <kbd>g</kbd> | Changes |
