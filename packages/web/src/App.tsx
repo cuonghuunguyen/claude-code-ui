@@ -1665,7 +1665,7 @@ export function App() {
     document.querySelector<HTMLElement>(`[data-pane-tab="${p}"]`)?.focus();
   });
   // From a move to the user's next key or pointer press: a terminal that shows because of the move (moved, or next in the area the
-  // moved pane left) keeps off the focus. Not only the move's render: the code-split panel's first mount commits after it (Suspense).
+  // moved pane left) keeps off the focus. A late (Suspense) mount of a terminal shown by the move is covered by `termMoveShow`.
   const [moving, setMoving] = useState(false);
   useEffect(() => {
     if (!moving) return;
@@ -1674,6 +1674,21 @@ export function App() {
     for (const k of kinds) window.addEventListener(k, done, true);
     return () => kinds.forEach((k) => window.removeEventListener(k, done, true));
   }, [moving]);
+  // GH-382: a terminal that shows because of a move stays quiet for that whole show, not only until the next key: its code-split
+  // panel can mount (and want the shell focus) long after the user pressed Tab. An explicit request (a click on the Terminal pane
+  // tab, New terminal, Ctrl+` behind a maximized panel) ends the latch, also before the panel has mounted, so it focuses the shell
+  // then. A click on one of the terminal's own tabs does not need it: the panel focuses itself.
+  const [termMoveShow, setTermMoveShow] = useState(false);
+  const [termShowsBefore, setTermShowsBefore] = useState(termShows);
+  if (termShows !== termShowsBefore) {
+    setTermShowsBefore(termShows);
+    setTermMoveShow(termShows && moving);
+  }
+  const [termAsk, setTermAsk] = useState(termFocusReq + terminalTick);
+  if (termFocusReq + terminalTick !== termAsk) {
+    setTermAsk(termFocusReq + terminalTick);
+    setTermMoveShow(false);
+  }
   /** A pane tab click; on the terminal's tab, the selected one too, the shell takes the focus (docs/spec.md Terminal panel). */
   const selectPane = (p: Pane) => {
     if (p === "terminal") setTermFocusReq((n) => n + 1);
@@ -2044,7 +2059,7 @@ export function App() {
           newTick={terminalTick}
           shown={shows("terminal")}
           focusReq={termFocusReq}
-          quiet={moving}
+          quiet={moving || termMoveShow}
         />
       </Suspense>
     );
