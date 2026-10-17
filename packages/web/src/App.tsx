@@ -1675,12 +1675,19 @@ export function App() {
     return () => kinds.forEach((k) => window.removeEventListener(k, done, true));
   }, [moving]);
   // GH-382: a terminal that shows because of a move stays quiet for that whole show, not only until the next key: its code-split
-  // panel can mount (and want the shell focus) long after the user pressed Tab. A deliberate reveal or tab click still focuses it.
+  // panel can mount (and want the shell focus) long after the user pressed Tab. An explicit request (a click on the Terminal pane
+  // tab, New terminal, Ctrl+` behind a maximized panel) ends the latch, also before the panel has mounted, so it focuses the shell
+  // then. A click on one of the terminal's own tabs does not need it: the panel focuses itself.
   const [termMoveShow, setTermMoveShow] = useState(false);
   const [termShowsBefore, setTermShowsBefore] = useState(termShows);
   if (termShows !== termShowsBefore) {
     setTermShowsBefore(termShows);
     setTermMoveShow(termShows && moving);
+  }
+  const [termAsk, setTermAsk] = useState(termFocusReq + terminalTick);
+  if (termFocusReq + terminalTick !== termAsk) {
+    setTermAsk(termFocusReq + terminalTick);
+    setTermMoveShow(false);
   }
   /** A pane tab click; on the terminal's tab, the selected one too, the shell takes the focus (docs/spec.md Terminal panel). */
   const selectPane = (p: Pane) => {
