@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { DEFAULT_LAYOUT, activePane, areaOf, loadLayout, loadTerminalDock, movePane, parseLayout, resetLayout, saveLayout, saveTerminalDock, useLayout, useMinWidth, useTerminalDock } from "./layout.ts";
+import { DEFAULT_LAYOUT, activePane, areaOf, loadLayout, loadPaneTabs, loadTerminalDock, movePane, parsePaneTabs, parseLayout, rememberPane, resetLayout, saveLayout, saveTerminalDock, usePaneTabs, useLayout, useMinWidth, useTerminalDock } from "./layout.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => (vi.restoreAllMocks(), resetLayout(), localStorage.clear()));
@@ -111,4 +111,67 @@ it("useMinWidth follows matchMedia change events", async () => {
   act(() => root.unmount());
   el.remove();
   window.matchMedia = original;
+});
+
+it("parsePaneTabs: bad input reads as empty; unknown panes drop; narrow takes session", () => {
+  for (const raw of [null, "{x", "[]"]) expect(parsePaneTabs(raw)).toEqual({});
+  expect(parsePaneTabs('{"side":"zzz","bottom":"files","narrow":"session"}')).toEqual({ bottom: "files", narrow: "session" });
+  expect(parsePaneTabs('{"narrow":"bogus"}')).toEqual({});
+});
+
+it("activePane: the remembered pane wins over files when the area holds it; history still wins; one the area lacks falls back", () => {
+  expect(activePane(["changes", "files"], [], "changes")).toBe("changes");
+  expect(activePane(["changes", "files"], ["files"], "changes")).toBe("files");
+  expect(activePane(["changes", "files"], [], "terminal")).toBe("files");
+  expect(activePane(["changes", "graph"], [], undefined)).toBe("changes");
+});
+
+it("rememberPane stores the pane under its area and as narrow; session only as narrow", () => {
+  const stored = () => JSON.parse(localStorage.getItem("claude-ui.paneTabs")!);
+  rememberPane("changes");
+  expect(stored()).toEqual({ narrow: "changes", side: "changes" });
+  rememberPane("terminal");
+  expect(stored()).toEqual({ narrow: "terminal", side: "changes", bottom: "terminal" });
+  rememberPane("session");
+  expect(stored()).toEqual({ narrow: "session", side: "changes", bottom: "terminal" });
+  saveLayout(movePane(DEFAULT_LAYOUT, "files", "bottom"));
+  rememberPane("files");
+  expect(stored().bottom).toBe("files");
+  expect(loadPaneTabs()).toBe(loadPaneTabs());
+});
+
+it("Reset layout forgets the remembered tabs; saveTerminalDock does not", () => {
+  rememberPane("changes");
+  saveTerminalDock("side");
+  saveTerminalDock("bottom");
+  expect(localStorage.getItem("claude-ui.paneTabs")).not.toBeNull();
+  resetLayout();
+  expect(localStorage.getItem("claude-ui.paneTabs")).toBeNull();
+  expect(loadPaneTabs()).toEqual({});
+});
+
+it("blocked storage keeps the remembered tabs in memory", () => {
+  vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    throw new Error("blocked");
+  });
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new Error("blocked");
+  });
+  rememberPane("graph");
+  expect(loadPaneTabs().side).toBe("graph");
+});
+
+it("usePaneTabs re-renders on rememberPane and on another tab's storage event", async () => {
+  const el = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(el);
+  const Probe = () => createElement("span", null, usePaneTabs().side ?? "-");
+  await act(async () => root.render(createElement(Probe)));
+  expect(el.textContent).toBe("-");
+  await act(async () => rememberPane("graph"));
+  expect(el.textContent).toBe("graph");
+  localStorage.setItem("claude-ui.paneTabs", '{"side":"changes"}');
+  await act(async () => void window.dispatchEvent(new StorageEvent("storage", { key: "claude-ui.paneTabs" })));
+  expect(el.textContent).toBe("changes");
+  await act(async () => root.unmount());
+  el.remove();
 });
