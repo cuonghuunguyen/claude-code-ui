@@ -24,6 +24,7 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 - Files tab: the file tree fills the tab while no file is open, instead of an empty editor area with "Open a file from the tree.".
 - The Changes tab's file list beside the diff can be resized: drag its edge or press ←/→ on it (kept per browser, double click restores the default width).
 - Moving a pane tab on a slow connection: a key pressed before the terminal has loaded no longer lets the terminal take the focus from the control you tabbed to ([#382](https://github.com/cuonghuunguyen/claude-code-ui/issues/382)).
+- Phone: sending the first message from the New session tab shows the new session, instead of jumping back to another open tab once the tab switcher had been used; a /clear keeps showing its new session the same way ([#417](https://github.com/cuonghuunguyen/claude-code-ui/issues/417)).
 
 ## 0.6.0 - 2026-10-15
 
