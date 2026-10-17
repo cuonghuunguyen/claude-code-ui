@@ -5,6 +5,8 @@ import { MediaPlaceholder } from "./media-notice.tsx";
 import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { useDark } from "./theme.ts";
+import { DIFF_THEMES } from "./code-palette.ts";
+import "./code-theme.ts"; // registers the diff themes before any diff renders
 import type { ToolUIPart } from "ai";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
 import { Maximize2Icon, SquareArrowOutUpRightIcon } from "lucide-react";
@@ -59,7 +61,7 @@ const text = (output: unknown) =>
 // themeType follows the app theme (`.dark` on <html>), not the OS: "system" would ignore the theme toggle.
 export const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {
   diffStyle: "unified",
-  theme: { light: "pierre-light", dark: "pierre-dark" },
+  theme: DIFF_THEMES,
   overflow: "wrap",
 };
 

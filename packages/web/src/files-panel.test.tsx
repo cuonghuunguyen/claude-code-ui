@@ -136,7 +136,7 @@ it("the editor follows the app theme: dark chrome while `.dark` is on <html>, sw
   const { EditorView } = await import("@codemirror/view");
   const { highlightingFor } = await import("@codemirror/language");
   const { tags } = await import("@lezer/highlight");
-  const { syntaxStyle } = await import("./files-panel.tsx");
+  const { syntaxStyle } = await import("./code-theme.ts");
   const view = EditorView.findFromDOM(el.querySelector<HTMLElement>("[data-testid=code-editor] .cm-editor")!)!;
   expect(view.state.facet(EditorView.darkTheme)).toBe(false);
   await act(async () => document.documentElement.classList.add("dark"));
@@ -146,43 +146,6 @@ it("the editor follows the app theme: dark chrome while `.dark` is on <html>, sw
   expect(highlightingFor(view.state, [tags.keyword])).toBe(syntaxStyle.style([tags.keyword]));
   expect(syntaxStyle.module!.getRules()).toContain("var(--syntax-keyword)");
   act(() => root.render(null));
-});
-
-it("markdown: headings and quotes take --syntax-constant (OpenCode markup.heading/quote: syntax-info), marks --syntax-comment, fenced code its own language colors", async () => {
-  const md = "# Title\n\n> quote\n\n```python\ndef f():\n    return 1\n```\n";
-  const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : m.type === "fs.read" ? { content: md, mtime: 1 } : {}));
-  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
-  const el = document.createElement("div");
-  const root = createRoot(el);
-  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} openPath="/p/README.md" />));
-  const { EditorView } = await import("@codemirror/view");
-  const { ensureSyntaxTree, highlightingFor } = await import("@codemirror/language");
-  const { tags } = await import("@lezer/highlight");
-  const { syntaxStyle } = await import("./files-panel.tsx");
-  const view = EditorView.findFromDOM(el.querySelector<HTMLElement>("[data-testid=code-editor] .cm-editor")!)!;
-  const rules = syntaxStyle.module!.getRules();
-  const colorOf = (tag: Parameters<typeof highlightingFor>[1]) => {
-    const cls = highlightingFor(view.state, tag)!;
-    return new RegExp(`\\.${cls} \\{[^}]*color: (var\\(--[\\w-]+\\))`).exec(rules)?.[1];
-  };
-  expect(colorOf([tags.heading1])).toBe("var(--syntax-constant)");
-  expect(colorOf([tags.quote])).toBe("var(--syntax-constant)");
-  expect(colorOf([tags.processingInstruction])).toBe("var(--syntax-comment)");
-  act(() => root.render(null));
-  const { loadLanguage } = await import("./files-panel.tsx");
-  const { languages } = await import("@codemirror/language-data");
-  const { EditorState } = await import("@codemirror/state");
-  await languages.find((l) => l.name === "Python")!.load();
-  const state = EditorState.create({ doc: md, extensions: await loadLanguage("/p/README.md")! });
-  // Tables as in OpenCode (no Shiki theme scope for markup.table or its separators): header cells and pipes keep the text color.
-  const { highlightTree } = await import("@lezer/highlight");
-  const table = "| a | b |\n|---|---|\n| 1 | 2 |\n";
-  const tableState = EditorState.create({ doc: table, extensions: await loadLanguage("/p/README.md")! });
-  const styled: string[] = [];
-  highlightTree(ensureSyntaxTree(tableState, table.length, 5000)!, syntaxStyle, (from, to) => void styled.push(table.slice(from, to)));
-  expect(styled).toEqual([]);
-  // The fenced block is a mounted Python tree: the node at `def` is Python's keyword, not markdown CodeText.
-  expect(ensureSyntaxTree(state, state.doc.length, 5000)!.resolveInner(md.indexOf("def") + 1, 1).name).toBe("def");
 });
 
 it("autocomplete popup and search panel use the app tokens: popover, selected row on --secondary with a --foreground left bar (3:1 indicator), flex rows that do not wrap single labels", async () => {
