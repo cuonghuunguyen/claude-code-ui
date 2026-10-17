@@ -25,7 +25,7 @@ const contrast = (a: number[], b: number[]) => {
 };
 
 const SURFACES = ["background", "card", "popover", "muted", "secondary"];
-const SYNTAX = ["comment", "keyword", "string", "property", "type", "constant", "critical"];
+const SYNTAX = ["comment", "punctuation", "parameter", "keyword", "type", "function", "variable", "builtin", "string", "number", "constant", "operator", "decorator", "tag", "attribute", "regexp", "escape", "critical"];
 const TEXT = ["foreground", "muted-foreground", "destructive", "success", "warning", "info"];
 
 for (const theme of [":root", ".dark"]) {
