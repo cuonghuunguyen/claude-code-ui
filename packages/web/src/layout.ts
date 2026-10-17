@@ -1,4 +1,4 @@
-// Pane layout per browser (docs/spec.md "Layout"): which dock area holds each pane on wide screens, their order and the side panel's side.
+// Pane layout per browser (docs/spec.md "Layout"): which dock area holds each pane on wide screens, their order and the side panel's side; plus the pane last selected per dock area (GH-381).
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 export type PaneId = "changes" | "files" | "graph" | "terminal";
@@ -18,6 +18,10 @@ export const TERMINAL_DOCKS: { value: DockArea; label: string }[] = [
 
 const LAYOUT_KEY = "claude-ui.layout";
 const DOCK_KEY = "claude-ui.terminalDock"; // GH-354, read once as a migration
+/** GH-381: the last selected pane per dock area, and overall (the narrow pane switcher's value), per browser. */
+export type PaneTabs = Partial<Record<DockArea, PaneId>> & { narrow?: PaneId | "session" };
+const TABS_KEY = "claude-ui.paneTabs";
+const NO_TABS: PaneTabs = {};
 const DEFAULT_JSON = JSON.stringify(DEFAULT_LAYOUT);
 const isPane = (v: unknown): v is PaneId => PANE_IDS.includes(v as PaneId);
 const defaultArea = (p: PaneId): DockArea => (DEFAULT_LAYOUT.areas.side.includes(p) ? "side" : "bottom");
@@ -59,9 +63,10 @@ export function movePane(l: Layout, p: PaneId, to: DockArea, before?: PaneId): L
 
 export const flipSide = (l: Layout): Layout => ({ ...l, side: l.side === "left" ? "right" : "left" });
 
-/** The pane an area shows: the newest of `hist` that it holds, else files, else its first. */
-export function activePane(panes: PaneId[], hist: readonly string[]): PaneId | undefined {
+/** The pane an area shows: the newest of `hist` that it holds, else the browser's `remembered` one if it holds it, else files, else its first. */
+export function activePane(panes: PaneId[], hist: readonly string[], remembered?: PaneId): PaneId | undefined {
   for (const h of hist) if (panes.includes(h as PaneId)) return h as PaneId;
+  if (remembered && panes.includes(remembered)) return remembered;
   return panes.includes("files") ? "files" : panes[0];
 }
 
@@ -95,7 +100,57 @@ export function saveLayout(l: Layout) {
   listeners.forEach((f) => f());
 }
 
-export const resetLayout = () => saveLayout(DEFAULT_LAYOUT);
+/** Never throws: bad input reads as empty; unknown panes drop. */
+export function parsePaneTabs(raw: string | null): PaneTabs {
+  try {
+    const v = raw === null ? undefined : (JSON.parse(raw) as Record<string, unknown>);
+    if (!v || typeof v !== "object" || Array.isArray(v)) return NO_TABS;
+    const t: PaneTabs = {};
+    for (const a of ["side", "bottom"] as const) if (isPane(v[a])) t[a] = v[a];
+    if (isPane(v.narrow) || v.narrow === "session") t.narrow = v.narrow;
+    return Object.keys(t).length ? t : NO_TABS;
+  } catch {
+    return NO_TABS;
+  }
+}
+
+// Storage blocked: the remembered tabs last while the page is open.
+let tabsMemory: PaneTabs | undefined;
+let tabsCache: { raw: string | null; tabs: PaneTabs } | undefined;
+
+/** The stored tabs; the same object while the stored string is equal. A page reads them once at load (no storage-event sync: another browser tab's picks must not change what this one shows). */
+export function loadPaneTabs(): PaneTabs {
+  try {
+    const raw = localStorage.getItem(TABS_KEY);
+    if (!tabsCache || tabsCache.raw !== raw) tabsCache = { raw, tabs: parsePaneTabs(raw) };
+    return tabsCache.tabs;
+  } catch {
+    return tabsMemory ?? NO_TABS;
+  }
+}
+
+export function savePaneTabs(t: PaneTabs) {
+  tabsMemory = Object.keys(t).length ? t : NO_TABS;
+  try {
+    if (Object.keys(t).length) localStorage.setItem(TABS_KEY, JSON.stringify(t));
+    else localStorage.removeItem(TABS_KEY);
+  } catch {
+    // See `tabsMemory`.
+  }
+}
+
+/** Remembers a selection per browser: the overall (narrow) pane, and for a real pane its dock area's tab too. */
+export const withPane = (t: PaneTabs, p: PaneId | "session", l: Layout): PaneTabs => (p === "session" ? { ...t, narrow: p } : { ...t, narrow: p, [areaOf(l, p)]: p });
+
+export function rememberPane(p: PaneId | "session") {
+  const t = loadPaneTabs();
+  const n = withPane(t, p, loadLayout());
+  if (n.narrow === t.narrow && n.side === t.side && n.bottom === t.bottom) return;
+  savePaneTabs(n);
+}
+
+/** Also forgets the remembered tabs. */
+export const resetLayout = () => (savePaneTabs(NO_TABS), saveLayout(DEFAULT_LAYOUT));
 
 function subscribe(l: () => void) {
   listeners.add(l);
