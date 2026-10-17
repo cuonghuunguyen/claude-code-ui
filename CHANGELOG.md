@@ -13,6 +13,7 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 
 ### Changed
 
+- The artifact preview loads the supporting files of a multi-file publish (CSS, scripts, images, fonts, JSON) that sit in the project or next to the page; files it does not serve are named under the preview ([#335](https://github.com/cuonghuunguyen/claude-code-ui/issues/335)).
 - The "Run session in" chip and menu name the main checkout "Primary worktree" (were "Local" and "Local repository").
 
 ### Fixed

@@ -8,7 +8,8 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ARTIFACT_HEADERS, ARTIFACT_PREVIEW_MAX } from "./artifact-preview.ts";
+import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, type ArtifactAsset } from "./artifact-preview.ts";
+import { configDir } from "./token.ts";
 import { searchFiles } from "./search.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { createEntry, deleteEntry, duplicateFile, renameEntry, type FsOpsContext } from "./fs-ops.ts";
@@ -255,6 +256,8 @@ async function lastMessageAt(projectsDir: string, cwd: string, sessionId: string
  * `modelListWaitMs`: how long session.list waits for the model list (default MODEL_LIST_WAIT_MS).
  */
 export function createDaemon(opts: {
+  /** Directory no Artifact preview (page or supporting file) may read: the daemon's config dir (token, settings). Default configDir(). */
+  privateDir?: string;
   webRoot: string;
   token: string;
   roots: string[];
@@ -1050,7 +1053,7 @@ export function createDaemon(opts: {
   /** Piece of a media file: undefined when it can no longer be read (gone, outside the roots, side stopped). */
   type MediaRead = (offset: number, length: number) => Promise<MediaReadResult | undefined>;
   /** fs.media capabilities: nonce -> a hub file (canonical path, streamed from disk) or bytes read in pieces (a file at a commit, a side's file), issuing connection, last use. */
-  const media = new Map<string, { src: { kind: "file"; path: string } | { kind: "artifact"; named: string; path: string } | { kind: "bytes"; read: MediaRead; mime: string; name: string }; ws: Conn; used: number; live?: Set<ServerResponse> }>();
+  const media = new Map<string, { src: { kind: "file"; path: string } | { kind: "artifact"; named: string; path: string; page: string; confine: string[]; assets: Map<string, { named: string; path: string; type: string }> } | { kind: "bytes"; read: MediaRead; mime: string; name: string }; ws: Conn; used: number; live?: Set<ServerResponse> }>();
   const mediaHead = (type: string, name: string, size: number, start: number, end: number, ranged: boolean) => ({
     ...MEDIA_HEADERS,
     "content-type": type,
@@ -1089,16 +1092,24 @@ export function createDaemon(opts: {
     return undefined;
   };
   /** Host, Origin and Sec-Fetch-Site of a /media or /artifact request: the own host names, own origin, same-origin or direct navigation only. */
+  const hostOk = (req: IncomingMessage) => {
+    try {
+      return hostnames.has(new URL("http://" + req.headers.host).hostname);
+    } catch {
+      return false;
+    }
+  };
   const requestOk = (req: IncomingMessage) => {
     const site = req.headers["sec-fetch-site"];
-    let hostOk = false;
-    try {
-      hostOk = hostnames.has(new URL("http://" + req.headers.host).hostname);
-    } catch {}
-    return hostOk && !(req.headers.origin && !isOwnOrigin(req, hostnames)) && !(site && site !== "same-origin" && site !== "none");
+    return hostOk(req) && !(req.headers.origin && !isOwnOrigin(req, hostnames)) && !(site && site !== "same-origin" && site !== "none");
+  };
+  const privateDir = real(opts.privateDir ?? configDir());
+  const within = (path: string, dir: string) => {
+    const rel = relative(dir, path);
+    return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
   };
   /** The canonical file of a named Artifact page, or why not (GH-175): no UNC/device path, the named file itself no symlink, a regular file within the cap. */
-  const checkArtifact = (named: string): { path: string; size: number; mtime: number } | { code: string; message: string } => {
+  const checkArtifact = (named: string, kind: "page" | "asset" = "page", confine: string[] = []): { path: string; size: number; mtime: number } | { code: string; message: string } => {
     if (refused(named)) return { code: "path_not_allowed", message: `refused path: ${named}` };
     let l;
     try {
@@ -1110,35 +1121,16 @@ export function createDaemon(opts: {
     if (!l.isFile()) return { code: "not_a_file", message: `not a file: ${named}` };
     const path = real(named);
     if (!path || refused(path)) return { code: "path_not_allowed", message: `refused path: ${named}` };
-    if (!/\.html?$/i.test(path)) return { code: "unsupported_type", message: `not an HTML page: ${named}` };
+    if (privateDir && within(path, privateDir)) return { code: "path_not_allowed", message: `refused path: ${named}` };
+    // A supporting file must lie in the session's cwd or the page's directory (GH-335): a file the model names elsewhere is never served.
+    if (kind === "asset" && !confine.some((d) => within(path, d))) return { code: "path_not_allowed", message: `outside the project and the page's directory: ${named}` };
+    if (kind === "page" && !/\.html?$/i.test(path)) return { code: "unsupported_type", message: `not an HTML page: ${named}` };
     if (l.size > ARTIFACT_PREVIEW_MAX) return { code: "too_large", message: `larger than 16 MiB: ${named}` };
     return { path, size: l.size, mtime: l.mtimeMs };
   };
-  /** GET /artifact/<nonce>/<name> (GH-175): the page of an artifact.preview nonce in a sandbox CSP, for an iframe only; <name> is cosmetic. */
-  const serveArtifact = (req: IncomingMessage, res: ServerResponse, nonce: string) => {
-    if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
-    const dest = req.headers["sec-fetch-dest"];
-    if (!requestOk(req) || (dest && dest !== "iframe")) return void res.writeHead(403).end();
-    const entry = mediaEntry(nonce);
-    if (!entry || entry.src.kind !== "artifact") return void res.writeHead(404).end();
-    entry.used = Date.now();
-    const c = checkArtifact(entry.src.named);
-    if ("code" in c || c.path !== entry.src.path) return void res.writeHead(404).end();
-    let fd: number;
-    let size: number;
-    try {
-      // Same no-follow open and device/inode match as /media.
-      fd = openChecked(c.path, OPEN_READ);
-      const st = fstatSync(fd);
-      if (!st.isFile() || st.size > ARTIFACT_PREVIEW_MAX) {
-        closeSync(fd);
-        return void res.writeHead(404).end();
-      }
-      size = st.size;
-    } catch {
-      return void res.writeHead(404).end();
-    }
-    res.writeHead(200, { ...ARTIFACT_HEADERS, "content-length": size });
+  /** Streams an open file of exactly `size` bytes (never past it, even if it grows) as the response body. */
+  const streamFile = (req: IncomingMessage, res: ServerResponse, fd: number, size: number, head: Record<string, string | number>) => {
+    res.writeHead(200, { ...head, "content-length": size });
     if (req.method === "HEAD" || size === 0) {
       closeSync(fd);
       return void res.end();
@@ -1147,6 +1139,50 @@ export function createDaemon(opts: {
     res.on("close", () => stream.destroy());
     stream.on("error", () => res.destroy());
     stream.pipe(res);
+  };
+  /** Opens a checked artifact file: no-follow, device/inode match as /media; undefined when it is not a regular file within the cap. */
+  const openArtifact = (path: string) => {
+    try {
+      const fd = openChecked(path, OPEN_READ);
+      const st = fstatSync(fd);
+      if (!st.isFile() || st.size > ARTIFACT_PREVIEW_MAX) {
+        closeSync(fd);
+        return undefined;
+      }
+      return { fd, size: st.size };
+    } catch {
+      return undefined;
+    }
+  };
+  /** GET /artifact/<nonce>/<page name | published path> (GH-175, GH-335): the page in a sandbox CSP (iframe only), or a supporting file named in the same publish (a subresource load only). Lookup is by key, never a file system path. */
+  const serveArtifact = (req: IncomingMessage, res: ServerResponse, nonce: string, rest: string) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
+    const entry = mediaEntry(nonce);
+    if (!entry || entry.src.kind !== "artifact") return void res.writeHead(404).end();
+    const key = assetKey(rest);
+    if (key === undefined) return void res.writeHead(404).end();
+    const src = entry.src;
+    if (key !== src.page) {
+      const h = req.headers;
+      if (!hostOk(req) || !assetRequestAllowed({ origin: h.origin, dest: h["sec-fetch-dest"] as string | undefined, mode: h["sec-fetch-mode"] as string | undefined }, isOwnOrigin(req, hostnames))) return void res.writeHead(403).end();
+      const a = src.assets.get(key);
+      if (!a) return void res.writeHead(404).end();
+      entry.used = Date.now();
+      const c = checkArtifact(a.named, "asset", src.confine);
+      if ("code" in c || c.path !== a.path) return void res.writeHead(404).end();
+      const f = openArtifact(c.path);
+      if (!f) return void res.writeHead(404).end();
+      return streamFile(req, res, f.fd, f.size, { ...ARTIFACT_ASSET_HEADERS, "content-type": a.type, ...(a.type === "image/svg+xml" && { "content-disposition": "attachment" }) });
+    }
+    const dest = req.headers["sec-fetch-dest"];
+    if (!requestOk(req) || (dest && dest !== "iframe")) return void res.writeHead(403).end();
+    entry.used = Date.now();
+    const c = checkArtifact(src.named);
+    if ("code" in c || c.path !== src.path) return void res.writeHead(404).end();
+    const f = openArtifact(c.path);
+    if (!f) return void res.writeHead(404).end();
+    const base = src.assets.size ? `http://${new URL("http://" + req.headers.host).host}/artifact/${nonce}/` : undefined;
+    streamFile(req, res, f.fd, f.size, artifactHeaders(base));
   };
   /** GET /media/<nonce>/<name>: the file comes only from the nonce entry; <name> is cosmetic. */
   const serveMedia = (req: IncomingMessage, res: ServerResponse, nonce: string) => {
@@ -1205,8 +1241,8 @@ export function createDaemon(opts: {
       return m ? serveMedia(req, res, m[1]!) : void res.writeHead(404).end();
     }
     if (rawPath.startsWith("/artifact/")) {
-      const m = /^\/artifact\/([0-9a-f]{32})\/[^/]*$/.exec(rawPath);
-      return m ? serveArtifact(req, res, m[1]!) : void res.writeHead(404).end();
+      const m = /^\/artifact\/([0-9a-f]{32})\/(.*)$/.exec(rawPath);
+      return m ? serveArtifact(req, res, m[1]!, m[2]!) : void res.writeHead(404).end();
     }
     try {
       path = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
@@ -1513,9 +1549,18 @@ export function createDaemon(opts: {
           if ("code" in f) return fail(f.code, f.message);
           const c = checkArtifact(f.path);
           if ("code" in c) return fail(c.code, c.message);
-          const nonce = nonceFor(`artifact\0${c.path}`);
-          media.set(nonce, { src: { kind: "artifact", named: f.path, path: c.path }, ws, used: Date.now() });
-          return reply({ url: `/artifact/${nonce}/${encodeURIComponent(basename(c.path))}?v=${c.mtime}`, size: c.size, mtime: c.mtime });
+          const page = basename(c.path);
+          const confine = [real(s.cwd), dirname(c.path)].filter((d) => d !== undefined);
+          const assets = new Map<string, { named: string; path: string; type: string }>();
+          const unavailable = [...f.unavailable];
+          for (const a of f.assets as ArtifactAsset[]) {
+            const ac = a.key === page ? undefined : checkArtifact(a.path, "asset", confine);
+            if (!ac || "code" in ac) unavailable.push(a.key);
+            else assets.set(a.key, { named: a.path, path: ac.path, type: a.type });
+          }
+          const nonce = nonceFor(`artifact\0${msg.sessionId}\0${msg.partId}`);
+          media.set(nonce, { src: { kind: "artifact", named: f.path, path: c.path, page, confine, assets }, ws, used: Date.now() });
+          return reply({ url: `/artifact/${nonce}/${encodeURIComponent(page)}?v=${c.mtime}`, size: c.size, mtime: c.mtime, ...(unavailable.length > 0 && { unavailable }) });
         }
         case "session.unsubscribe": {
           // No find(): this must not restore a session.

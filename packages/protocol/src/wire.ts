@@ -60,7 +60,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.edits"; sessionId: string; logEpoch: string; before: string }
   /** A base64 payload a snapshot or page left out (images.ts omitMedia): `index` into the tool_result output or the user_text images. Reply `MediaResult`; error `unknown_media`. */
   | { type: "session.media"; sessionId: string; partId: string; index: number }
-  /** URL of the local page an Artifact publish part of the session names (GH-175); reply ArtifactPreviewResult. */
+  /** URL of the local page an Artifact publish part of the session names (GH-175, GH-335); reply ArtifactPreviewResult. */
   | { type: "artifact.preview"; sessionId: string; partId: string }
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
@@ -481,7 +481,8 @@ export type RewindPreview = { filesChanged: string[]; insertions: number; deleti
 export type FsSearchResult = { paths: string[] };
 export type FsReadResult = { content: string; mtime: number };
 /** `url`: same-origin path, valid while this connection is open and used within 10 min. */
-export type ArtifactPreviewResult = { url: string; size: number; mtime: number };
+/** `unavailable`: published paths of supporting files named in the call that this preview does not serve (absent when none; GH-335). */
+export type ArtifactPreviewResult = { url: string; size: number; mtime: number; unavailable?: string[] };
 export type FsMediaResult = { url: string; mime: string; size: number; mtime: number };
 /** `data`: base64 of the bytes at the offset (shorter at the end of the file); `size` of the whole file; `mtime` 0 for a file at a commit. */
 export type MediaReadResult = { data: string; size: number; mtime: number; mime: string };
