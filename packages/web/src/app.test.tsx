@@ -3095,3 +3095,116 @@ describe("GH-378 clean up tabs", () => {
     expect(tabIds()).toEqual([ID, S2, S3]);
   });
 });
+
+describe("GH-381: remembered dock tabs", () => {
+  const tabsKey = () => JSON.parse(localStorage.getItem("claude-ui.paneTabs") ?? "null") as Record<string, string> | null;
+  const selected = (area: string, p: string) => paneTab(area, p)?.getAttribute("aria-selected");
+
+  it("the selected side and bottom tabs reopen after a reload", async () => {
+    await clickId("terminal-toggle");
+    await clickId("pane-files");
+    await moveFromMenu("side");
+    await act(async () => paneTab("bottom-panel", "terminal")!.click());
+    await act(async () => paneTab("side-panel", "changes")!.click());
+    expect(tabsKey()).toMatchObject({ side: "changes", bottom: "terminal" });
+    await rerender();
+    expect(selected("side-panel", "changes")).toBe("true");
+    expect(selected("bottom-panel", "terminal")).toBe("true");
+  });
+
+  it("a remembered tab the area no longer holds falls back to the area's default", async () => {
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "terminal", bottom: "zzz" }));
+    await rerender();
+    expect(selected("side-panel", "files")).toBe("true");
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "graph" }));
+    await rerender();
+    expect(selected("side-panel", "files")).toBe("true");
+  });
+
+  it("Reset layout forgets the remembered side and bottom tabs", async () => {
+    await act(async () => paneTab("side-panel", "changes")!.click());
+    expect(tabsKey()?.side).toBe("changes");
+    await clickId("dock-menu-side");
+    await act(async () => menuItem("dock-reset").click());
+    expect(localStorage.getItem("claude-ui.paneTabs")).toBeNull();
+    await rerender();
+    expect(selected("side-panel", "files")).toBe("true");
+  });
+
+  it("narrow: the pane switcher reopens on the last selected pane", async () => {
+    width = 390;
+    await rerender();
+    await clickId("pane-files");
+    await rerender();
+    expect(q("pane-files")!.getAttribute("aria-selected")).toBe("true");
+    expect(q("pane-session")!.getAttribute("aria-selected")).toBe("false");
+    await clickId("pane-session");
+    await rerender();
+    expect(q("pane-session")!.getAttribute("aria-selected")).toBe("true");
+    width = 1440;
+  });
+
+  it("a terminal restored as the remembered pane does not take the focus (narrow, and in the side panel)", async () => {
+    const g = globalThis as { __termFocused?: number };
+    width = 390;
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ narrow: "terminal", bottom: "terminal" }));
+    const before = g.__termFocused ?? 0;
+    await rerender();
+    await act(async () => new Promise((r) => setTimeout(r, 300)));
+    expect(q("pane-terminal")!.getAttribute("aria-selected")).toBe("true");
+    expect(q("terminal-panel")).not.toBeNull();
+    expect(g.__termFocused ?? 0).toBe(before);
+    width = 1440;
+    localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "terminal" }));
+    await rerender();
+    await act(async () => new Promise((r) => setTimeout(r, 300)));
+    expect(selected("side-panel", "terminal")).toBe("true");
+    expect(g.__termFocused ?? 0).toBe(before);
+  });
+
+  it("a bottom terminal shown by the page load does not take the focus; a Terminal tab click then does", async () => {
+    const g = globalThis as { __termFocused?: number };
+    localStorage.setItem("claude-ui.terminalOpen", "1");
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "changes" }));
+    const before = g.__termFocused ?? 0;
+    await rerender();
+    await act(async () => new Promise((r) => setTimeout(r, 300)));
+    expect(q("bottom-panel")!.contains(q("terminal-panel"))).toBe(true);
+    expect(g.__termFocused ?? 0).toBe(before);
+    // Also after the user's first key: the latch ends on an explicit request, not on input.
+    await press({ key: "a" });
+    await act(async () => new Promise((r) => setTimeout(r, 100)));
+    expect(g.__termFocused ?? 0).toBe(before);
+    await act(async () => paneTab("bottom-panel", "terminal")!.click());
+    await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+  });
+
+  it("another browser tab's pick (storage event) changes nothing shown here and focuses nothing", async () => {
+    const g = globalThis as { __termFocused?: number };
+    localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+    await rerender();
+    expect(selected("side-panel", "files")).toBe("true");
+    const before = g.__termFocused ?? 0;
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "terminal", narrow: "terminal" }));
+    await act(async () => void window.dispatchEvent(new StorageEvent("storage", { key: "claude-ui.paneTabs" })));
+    await act(async () => new Promise((r) => setTimeout(r, 200)));
+    expect(selected("side-panel", "files")).toBe("true");
+    expect(q("terminal-panel")).toBeNull();
+    expect(g.__termFocused ?? 0).toBe(before);
+  });
+
+  it("narrow: the restore waits for the first session tab (a New session tab at load does not use it up)", async () => {
+    width = 390;
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ narrow: "files" }));
+    location.hash = "#new";
+    await rerender();
+    await act(async () => {
+      location.hash = `#${ID}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await act(async () => {});
+    expect(q("pane-files")!.getAttribute("aria-selected")).toBe("true");
+    width = 1440;
+  });
+});

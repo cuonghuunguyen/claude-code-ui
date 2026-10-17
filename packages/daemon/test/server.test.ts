@@ -1,17 +1,17 @@
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomBytes, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect, type AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
-import { ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
+import { ARTIFACT_ASSET_HEADERS, ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
 import { openChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { createProjects } from "../src/projects.ts";
@@ -5082,5 +5082,428 @@ describe("artifact.preview and /artifact (GH-175)", () => {
     expect((await get(url)).status).toBe(200);
     c.ws.close();
     await expect.poll(async () => (await get(url)).status).toBe(404);
+  });
+});
+
+describe("artifact supporting files (GH-335)", () => {
+  const sessionId = "9a6071a2-a3b4-4ec5-9fd6-e7f8091a2b3c";
+  const site = mkdtempSync(join(webRoot, "art335-")); // the page lives in the session cwd
+  const far = mkdtempSync(join(tmpdir(), "far335-")); // outside the cwd and the page's directory
+  const cfg = join(site, "cfg"); // the daemon's private dir, inside the page's directory
+  const upDir = join(cfg, "uploads"); // the uploads folder lives inside it (POSIX default)
+  const outer = mkdtempSync(join(tmpdir(), "outer335-")); // a page directory outside the cwd
+  // The CLI's scratchpad of a session: <tmp>/claude/<cwd slug>/<session id>/scratchpad (the slug: every non-alphanumeric of the cwd -> "-").
+  const claudeTmp = join(tmpdir(), "claude", webRoot.replace(/[^a-zA-Z0-9]/g, "-"));
+  const otherSession = "1b2c3d4e-5f60-4718-8293-a4b5c6d7e8f9";
+  const scratch = join(claudeTmp, sessionId, "scratchpad");
+  const otherScratch = join(claudeTmp, otherSession, "scratchpad");
+  for (const d of [scratch, otherScratch]) {
+    mkdirSync(join(d, "img"), { recursive: true });
+    writeFileSync(join(d, "index.html"), "<p>scratch</p>");
+    writeFileSync(join(d, "s.css"), "s{x:1}");
+    writeFileSync(join(d, "img", "i.png"), "png-bytes");
+  }
+  mkdirSync(join(site, "img"), { recursive: true });
+  mkdirSync(cfg, { recursive: true });
+  mkdirSync(join(webRoot, "proj"), { recursive: true });
+  const SECRET = "TOP-SECRET-335";
+  const index = '<!doctype html><link rel="stylesheet" href="style.css"><p>multi</p>';
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  writeFileSync(join(site, "index.html"), index);
+  writeFileSync(join(site, "style.css"), "body{color:red}");
+  writeFileSync(join(site, "other.css"), "body{color:blue}");
+  writeFileSync(join(site, "app.js"), "window.x=1");
+  writeFileSync(join(site, "data.json"), '{"a":1}');
+  writeFileSync(join(site, "img", "a.png"), png);
+  writeFileSync(join(site, "secret.txt"), SECRET);
+  writeFileSync(join(site, "big.css"), "");
+  truncateSync(join(site, "big.css"), (16 << 20) + 1);
+  writeFileSync(join(cfg, "settings.json"), SECRET);
+  writeFileSync(join(cfg, "x.html"), "<p>cfg</p>");
+  mkdirSync(join(upDir, sessionId), { recursive: true });
+  writeFileSync(join(upDir, sessionId, "up.html"), "<p>uploaded</p>");
+  writeFileSync(join(upDir, sessionId, "up.css"), "u{x:1}");
+  writeFileSync(join(upDir, sessionId, "u.txt"), SECRET);
+  writeFileSync(join(outer, "page.html"), "<p>outer</p>");
+  writeFileSync(join(outer, "sib.css"), SECRET);
+  writeFileSync(join(far, "far.css"), SECRET);
+  let canHardLink = true;
+  try {
+    linkSync(join(far, "far.css"), join(webRoot, "proj", "hard.css")); // a hard link inside the cwd to an outside file
+  } catch {
+    canHardLink = false;
+  }
+  writeFileSync(join(webRoot, "proj", "inproj.css"), "p{margin:0}");
+  let canSymlink = true;
+  try {
+    symlinkSync(join(site, "style.css"), join(site, "link.css"));
+    symlinkSync(join(far, "far.css"), join(webRoot, "proj", "farfile.css"));
+  } catch {
+    canSymlink = false; // Windows without the privilege: file links are skipped, directory junctions still run
+  }
+  let canJunction = true;
+  try {
+    symlinkSync(far, join(webRoot, "proj", "farlink"), "junction"); // a link inside the cwd that points outside
+  } catch {
+    canJunction = false;
+  }
+  const homeFile = join(homedir(), `.claude-ui-gh335-${randomUUID()}.css`);
+  let homeOk = true;
+  try {
+    writeFileSync(homeFile, SECRET);
+  } catch {
+    homeOk = false;
+  }
+  const short83 = (p: string) => {
+    if (process.platform !== "win32") return undefined;
+    try {
+      const o = execFileSync("cmd", ["/d", "/c", `for %I in ("${p}") do @echo %~sI`], { encoding: "utf8" }).trim();
+      return o && o.toLowerCase() !== p.toLowerCase() ? o : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const farCss = join(far, "far.css");
+  const named = {
+    "style.css": "style.css",
+    "js/app.js": { from: join(site, "app.js"), contentType: "text/html" },
+    "img/a.png": "img/a.png",
+    "data.json": "data.json",
+    "inproj.css": join(webRoot, "proj", "inproj.css"),
+    "copied.css": { artifact: "https://claude.ai/artifact/x", path: "a.css" },
+    "removed.css": null,
+    "../up.css": "style.css",
+    "x.exe": "style.css",
+    "link.css": "link.css",
+    "missing.css": "nope.css",
+    "big.css": "big.css",
+    "index.html": "secret.txt",
+    "cfg.json": "cfg/settings.json",
+    "far.css": farCss,
+    "farup.css": relative(site, join(far, "far.css")),
+    "hard.css": join(webRoot, "proj", "hard.css"),
+    "home.css": homeFile,
+    "upper.css": farCss.toUpperCase(),
+    "short.css": short83(farCss) ?? farCss,
+    "farlink.css": join(webRoot, "proj", "farlink", "far.css"),
+    "farfile.css": join(webRoot, "proj", "farfile.css"),
+  };
+  const publish = (id: string, input: object) => ({ id, name: "Artifact", input: { title: "T", ...input } });
+  const items = [
+    publish("toolu_m", { file_path: join(site, "index.html"), root: site, files: named }),
+    publish("toolu_l", { file_path: join(site, "index.html"), root: site, files: [{ path: "style.css" }, { path: "img/a.png" }] }),
+    publish("toolu_o", { file_path: join(site, "index.html"), files: { "style.css": join(site, "other.css") } }),
+    publish("toolu_e", { file_path: join(site, "index.html"), files: { "style.css": join(site, "style.css") } }),
+    publish("toolu_s", { file_path: join(site, "index.html") }),
+    publish("toolu_cfg", { file_path: join(cfg, "x.html") }),
+    publish("toolu_up", { file_path: join(upDir, sessionId, "up.html"), root: join(upDir, sessionId), files: { "up.css": "up.css", "u.txt": "u.txt", "settings.json": join(cfg, "settings.json") } }),
+    publish("toolu_sp", { file_path: join(scratch, "index.html"), root: scratch, files: { "s.css": "s.css", "img/i.png": "img/i.png", "far.css": farCss } }),
+    publish("toolu_osp", { file_path: join(otherScratch, "index.html"), root: otherScratch, files: { "s.css": "s.css" } }),
+    publish("toolu_outer", { file_path: join(outer, "page.html"), root: outer, files: { "sib.css": "sib.css" } }),
+  ];
+  const transcript = [
+    { type: "user", uuid: "u1", session_id: sessionId, parent_tool_use_id: null, message: { role: "user", content: "publish" } },
+    { type: "assistant", uuid: "a1", session_id: sessionId, parent_tool_use_id: null, message: { id: "m1", role: "assistant", content: items.map((c) => ({ type: "tool_use", ...c })), stop_reason: "tool_use" } },
+    { type: "user", uuid: "r1", session_id: sessionId, parent_tool_use_id: null, message: { role: "user", content: items.map((c) => ({ type: "tool_result", tool_use_id: c.id, content: "ok", ...(c.id === "toolu_e" && { is_error: true }) })) } },
+  ];
+  const d = createDaemon({
+    webRoot,
+    token,
+    roots: [webRoot],
+    query: fakeQuery as never,
+    privateDir: cfg,
+    uploadDir: upDir,
+    history: {
+      listSessions: (async () => []) as never,
+      getSessionInfo: (async (sid: string) => (sid === sessionId ? { sessionId: sid, cwd: webRoot, summary: "Art" } : undefined)) as never,
+      getSessionMessages: (async (sid: string) => (sid === sessionId ? transcript : [])) as never,
+    },
+  });
+  const listening = new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+  afterAll(() => {
+    d.close();
+    if (homeOk) rmSync(homeFile, { force: true });
+    rmSync(claudeTmp, { recursive: true, force: true });
+  });
+  const dport = () => (d.address() as AddressInfo).port;
+  const open = async () => {
+    await listening;
+    const c = await client(dport());
+    await c.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+    return c;
+  };
+  type Reply = { type: string; code?: string; result: { url: string; size: number; mtime: number; unavailable?: string[] } };
+  const preview = async (c: Awaited<ReturnType<typeof client>>, partId: string) => (await c.request({ type: "artifact.preview", sessionId, partId })) as Reply;
+  const nonceOf = (url: string) => /\/artifact\/([0-9a-f]{32})\//.exec(url)![1]!;
+  const get = (url: string, headers: Record<string, string> = {}, method = "GET") =>
+    new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }>((resolve, reject) => {
+      const req = httpRequest({ host: "127.0.0.1", port: dport(), path: url, method, headers: { "sec-fetch-dest": "iframe", ...headers } }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (x) => chunks.push(x));
+        res.on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body: Buffer.concat(chunks) }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  // What a sandboxed page's subresource load sends: cross-site, no Origin (no-cors) or Origin: null (cors).
+  const aget = (nonce: string, rest: string, headers: Record<string, string> = {}, method = "GET") => get(`/artifact/${nonce}/${rest}`, { "sec-fetch-dest": "style", "sec-fetch-site": "cross-site", ...headers }, method);
+  const expectedUnavailable = ["copied.css", "../up.css", "x.exe", "missing.css", "big.css", "index.html", "cfg.json", "far.css", "farup.css", "home.css", "upper.css", "short.css", "farlink.css", "farfile.css", "link.css", ...(canHardLink ? ["hard.css"] : [])]; // link.css is a symlink, or missing where links cannot be made
+
+  it("serves each named supporting file under the page's nonce with its type and the asset headers", async () => {
+    const c = await open();
+    const nonce = nonceOf((await preview(c, "toolu_m")).result.url);
+    const cases: [string, string, string, Buffer | string][] = [
+      ["style.css", "style", "text/css; charset=utf-8", "body{color:red}"],
+      ["js/app.js", "script", "text/javascript; charset=utf-8", "window.x=1"],
+      ["img/a.png", "image", "image/png", png],
+      ["data.json", "empty", "application/json", '{"a":1}'],
+      ["inproj.css", "style", "text/css; charset=utf-8", "p{margin:0}"],
+    ];
+    for (const [rest, dest, type, body] of cases) {
+      const g = await aget(nonce, rest, { "sec-fetch-dest": dest });
+      expect(g.status, rest).toBe(200);
+      expect(g.body.equals(Buffer.from(body)), rest).toBe(true);
+      expect(g.headers["content-type"]).toBe(type);
+      expect(g.headers).toMatchObject(ARTIFACT_ASSET_HEADERS);
+      expect(g.headers["content-length"]).toBe(String(Buffer.from(body).length));
+      const h = await aget(nonce, rest, { "sec-fetch-dest": dest }, "HEAD");
+      expect(h.status).toBe(200);
+      expect(h.headers["content-length"]).toBe(String(Buffer.from(body).length));
+      expect(h.body.length).toBe(0);
+    }
+    c.ws.close();
+  });
+
+  it("a module script, font or fetch (Origin: null, cors) gets Access-Control-Allow-Origin: null", async () => {
+    const c = await open();
+    const nonce = nonceOf((await preview(c, "toolu_m")).result.url);
+    const g = await aget(nonce, "js/app.js", { origin: "null", "sec-fetch-dest": "script", "sec-fetch-mode": "cors" });
+    expect(g.status).toBe(200);
+    expect(g.headers["access-control-allow-origin"]).toBe("null");
+    expect(g.headers["access-control-allow-credentials"]).toBeUndefined();
+    c.ws.close();
+  });
+
+  it("the list form and root resolve like the Artifact tool", async () => {
+    const c = await open();
+    const r = await preview(c, "toolu_l");
+    expect(r.result.unavailable).toBeUndefined();
+    const nonce = nonceOf(r.result.url);
+    expect((await aget(nonce, "style.css")).body.toString()).toBe("body{color:red}");
+    expect((await aget(nonce, "img/a.png", { "sec-fetch-dest": "image" })).status).toBe(200);
+    c.ws.close();
+  });
+
+  it("the reply lists what the preview does not serve; removed entries are not listed", async () => {
+    const c = await open();
+    const r = await preview(c, "toolu_m");
+    expect([...r.result.unavailable!].sort()).toEqual([...expectedUnavailable].sort());
+    expect(r.result.unavailable).not.toContain("removed.css");
+    expect(Object.keys((await preview(c, "toolu_s")).result)).not.toContain("unavailable");
+    c.ws.close();
+  });
+
+  it("the page of a multi-file publish allows exactly its nonce directory; a single-file page keeps ARTIFACT_CSP", async () => {
+    const c = await open();
+    const m = await preview(c, "toolu_m");
+    const g = await get(m.result.url);
+    expect(g.status).toBe(200);
+    expect(g.body.toString()).toBe(index);
+    const base = `http://127.0.0.1:${dport()}/artifact/${nonceOf(m.result.url)}/`;
+    const csp = g.headers["content-security-policy"] as string;
+    expect(csp.match(/https?:\/\/[^\s;]+/g)).toEqual(Array(6).fill(base));
+    for (const k of ["script-src", "style-src", "img-src", "font-src", "media-src", "connect-src"]) expect(csp.split("; ").find((x) => x.startsWith(k + " ")), k).toContain(base);
+    expect(csp.replace("frame-ancestors 'self'", "")).not.toContain("'self'");
+    const s = await get((await preview(c, "toolu_s")).result.url);
+    expect(s.headers).toMatchObject(ARTIFACT_HEADERS);
+    c.ws.close();
+  });
+
+  it("ATTACK: paths not named in the call are refused (404), whatever their spelling", async () => {
+    const c = await open();
+    const nonce = nonceOf((await preview(c, "toolu_m")).result.url);
+    const targets = [
+      "secret.txt", "STYLE.CSS", "Style.css", "style.css/", "style.css%00", "img%2Fa.png", "img%2fa.png", "img%5Ca.png", "img\\a.png", "./style.css", "img//a.png",
+      "%2e%2e/secret.txt", "img/..%2f..%2fsecret.txt", "..%5csecret.txt", "%252e%252e%252fsecret.txt", "C:%5CWindows%5Cwin.ini", "copied.css", "removed.css", "missing.css", "link.css", "cfg.json", "../up.css",
+      "far.css", "farup.css", "home.css", "upper.css", "short.css", "farlink.css", "farfile.css", "x.exe", "big.css",
+    ];
+    for (const t of targets) {
+      const r = await aget(nonce, t);
+      expect(r.status, t).toBe(404);
+      expect(r.body.toString(), t).not.toContain(SECRET);
+    }
+    const dots = await get(`/artifact/${nonce}/../${nonce}/secret.txt`, { "sec-fetch-dest": "style" });
+    expect(dots.status).toBe(404);
+    expect(dots.body.toString()).not.toContain(SECRET);
+    c.ws.close();
+  });
+
+  it("ATTACK: a named source outside the cwd and the page's directory is never served (temp dir, home dir, ..-path, symlink inside the cwd, Windows case and 8.3 aliases)", async () => {
+    const c = await open();
+    const r = await preview(c, "toolu_m");
+    const un = r.result.unavailable!;
+    for (const k of ["far.css", "farup.css", "upper.css", "short.css", "farlink.css", "farfile.css", "home.css"]) expect(un, k).toContain(k);
+    const nonce = nonceOf(r.result.url);
+    for (const k of ["far.css", "farup.css", "upper.css", "short.css", "farlink.css", "farfile.css", "home.css"]) {
+      const g = await aget(nonce, k);
+      expect(g.status, k).toBe(404);
+      expect(g.body.toString(), k).not.toContain(SECRET);
+    }
+    c.ws.close();
+  });
+
+  it("ATTACK: the page name serves the page only as an iframe, never an asset", async () => {
+    const c = await open();
+    const m = await preview(c, "toolu_m");
+    const nonce = nonceOf(m.result.url);
+    expect((await aget(nonce, "index.html")).status).toBe(403);
+    const g = await get(`/artifact/${nonce}/index.html`);
+    expect(g.status).toBe(200);
+    expect(g.body.toString()).toBe(index);
+    expect(g.body.toString()).not.toContain(SECRET);
+    c.ws.close();
+  });
+
+  it("ATTACK: an asset GET refuses navigation, frames, a foreign Origin, an unknown Host and POST", async () => {
+    const c = await open();
+    const nonce = nonceOf((await preview(c, "toolu_m")).result.url);
+    for (const dest of ["document", "iframe", "embed", "object"]) expect((await aget(nonce, "style.css", { "sec-fetch-dest": dest })).status, dest).toBe(403);
+    expect((await aget(nonce, "style.css", { "sec-fetch-mode": "navigate" })).status).toBe(403);
+    expect((await aget(nonce, "style.css", { origin: "http://evil.example" })).status).toBe(403);
+    expect((await aget(nonce, "style.css", { host: "evil.example" })).status).toBe(403);
+    expect((await aget(nonce, "style.css", {}, "POST")).status).toBe(405);
+    c.ws.close();
+  });
+
+  it("ATTACK: an asset replaced by a symlink, deleted, grown past the cap or behind a swapped directory after the URL was issued -> 404", async () => {
+    const c = await open();
+    const nonce = nonceOf((await preview(c, "toolu_m")).result.url);
+    const file = join(site, "style.css");
+    const keep = readFileSync(file);
+    expect((await aget(nonce, "style.css")).status).toBe(200);
+    if (canSymlink) {
+      rmSync(file);
+      symlinkSync(farCss, file);
+      const g = await aget(nonce, "style.css");
+      expect(g.status).toBe(404);
+      expect(g.body.toString()).not.toContain(SECRET);
+      rmSync(file);
+      writeFileSync(file, keep);
+    }
+    truncateSync(file, (16 << 20) + 1);
+    expect((await aget(nonce, "style.css")).status).toBe(404);
+    writeFileSync(file, keep);
+    rmSync(file);
+    expect((await aget(nonce, "style.css")).status).toBe(404);
+    writeFileSync(file, keep);
+    if (canJunction) {
+      const other = mkdtempSync(join(tmpdir(), "swap335-"));
+      writeFileSync(join(other, "a.png"), SECRET);
+      const dir = join(site, "img");
+      renameSync(dir, join(site, "img-real"));
+      symlinkSync(other, dir, "junction");
+      const g = await aget(nonce, "img/a.png", { "sec-fetch-dest": "image" });
+      expect(g.status).toBe(404);
+      expect(g.body.toString()).not.toContain(SECRET);
+      rmSync(dir, { recursive: true });
+      renameSync(join(site, "img-real"), dir);
+    }
+    expect((await aget(nonce, "style.css")).status).toBe(200);
+    c.ws.close();
+  });
+
+  it("the same page in two parts gets two nonces with their own files", async () => {
+    const c = await open();
+    const a = (await preview(c, "toolu_m")).result.url;
+    const b = (await preview(c, "toolu_o")).result.url;
+    expect(nonceOf(a)).not.toBe(nonceOf(b));
+    expect((await aget(nonceOf(a), "style.css")).body.toString()).toBe("body{color:red}");
+    expect((await aget(nonceOf(b), "style.css")).body.toString()).toBe("body{color:blue}");
+    c.ws.close();
+  });
+
+  it("assets live and die with the nonce and never cross routes", async () => {
+    const c = await open();
+    const nonce = nonceOf((await preview(c, "toolu_m")).result.url);
+    expect((await get(`/media/${nonce}/style.css`, { "sec-fetch-dest": "style" })).status).toBe(404);
+    expect((await aget(nonce, "style.css")).status).toBe(200);
+    c.ws.close();
+    await expect.poll(async () => (await aget(nonce, "style.css")).status).toBe(404);
+  });
+
+  it("ATTACK (review A1): a page outside the cwd does not make its directory servable", async () => {
+    const c = await open();
+    const r = await preview(c, "toolu_outer");
+    expect(r.type).toBe("reply");
+    expect(r.result.unavailable).toEqual(["sib.css"]);
+    const g = await aget(nonceOf(r.result.url), "sib.css");
+    expect(g.status).toBe(404);
+    expect(g.body.toString()).not.toContain(SECRET);
+    c.ws.close();
+  });
+
+  it("page and supporting files in this session's scratchpad are served; another session's scratchpad and a file outside it are not", async () => {
+    const c = await open();
+    const r = await preview(c, "toolu_sp");
+    expect(r.type).toBe("reply");
+    expect(r.result.unavailable).toEqual(["far.css"]);
+    const nonce = nonceOf(r.result.url);
+    expect((await get(r.result.url)).body.toString()).toBe("<p>scratch</p>");
+    expect((await aget(nonce, "s.css")).body.toString()).toBe("s{x:1}");
+    expect((await aget(nonce, "img/i.png", { "sec-fetch-dest": "image" })).body.toString()).toBe("png-bytes");
+    const o = await preview(c, "toolu_osp");
+    expect(o.type).toBe("reply");
+    expect(o.result.unavailable).toEqual(["s.css"]);
+    expect((await aget(nonceOf(o.result.url), "s.css")).status).toBe(404);
+    c.ws.close();
+  });
+
+  it("ATTACK (review A1): a page outside the cwd inside the cwd to an outside file is not served, also when made after the URL was issued", async () => {
+    if (!canHardLink) return;
+    const c = await open();
+    const r = await preview(c, "toolu_m");
+    expect(r.result.unavailable).toContain("hard.css");
+    const nonce = nonceOf(r.result.url);
+    const g = await aget(nonce, "hard.css");
+    expect(g.status).toBe(404);
+    expect(g.body.toString()).not.toContain(SECRET);
+    // made after the URL was issued: style.css gets a second name
+    const l2 = join(webRoot, "proj", "style-second.css");
+    linkSync(join(site, "style.css"), l2);
+    try {
+      expect((await aget(nonce, "style.css")).status).toBe(404);
+    } finally {
+      rmSync(l2);
+    }
+    expect((await aget(nonce, "style.css")).status).toBe(200);
+    c.ws.close();
+  });
+
+  it("a page the user uploaded previews although the uploads folder is inside the config dir; the rest of the config dir stays refused", async () => {
+    const c = await open();
+    const r = await preview(c, "toolu_up");
+    expect(r.type).toBe("reply");
+    const g = await get(r.result.url);
+    expect(g.status).toBe(200);
+    expect(g.body.toString()).toBe("<p>uploaded</p>");
+    const nonce = nonceOf(r.result.url);
+    expect(r.result.unavailable, JSON.stringify(r.result)).not.toContain("up.css");
+    expect((await aget(nonce, "up.css")).body.toString()).toBe("u{x:1}");
+    expect(r.result.unavailable).toEqual(expect.arrayContaining(["settings.json"]));
+    expect((await aget(nonce, "settings.json")).status).toBe(404);
+    expect((await preview(c, "toolu_cfg")).code).toBe("path_not_allowed");
+    c.ws.close();
+  });
+
+  it("a failed publish has no preview", async () => {
+    const c = await open();
+    expect(await preview(c, "toolu_e")).toMatchObject({ type: "error", code: "unknown_part" });
+    c.ws.close();
+  });
+
+  it("a page inside the daemon config dir is refused (path_not_allowed)", async () => {
+    const c = await open();
+    expect(await preview(c, "toolu_cfg")).toMatchObject({ type: "error", code: "path_not_allowed" });
+    c.ws.close();
   });
 });

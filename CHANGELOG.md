@@ -9,17 +9,20 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 - Settings > Orchestration > Notifications from workers: turn it off and a worker that finishes, needs input or fails no longer sends push, desktop or in-app notifications (its coordinator still hears); a request the coordinator escalates to you still does ([#387](https://github.com/cuonghuunguyen/claude-code-ui/issues/387)).
 - Terminal docked at the bottom by default, under the session view and the side panel; Settings > Terminal or a move of its pane tab puts it back into the side panel. The bottom terminal resizes, maximizes, and has a titlebar toggle ([#354](https://github.com/cuonghuunguyen/claude-code-ui/issues/354)).
 - Movable panes: Changes, Files, Git graph and Terminal are tabs of the side panel or the bottom panel. Move a pane with its tab's context menu (right click, Shift+F10, long press), the panel's ⋯ menu, or drag and drop; the side panel docks left or right; the layout is kept per browser and "Reset layout" restores the default. A moved pane keeps its state and its tab keeps the focus ([#355](https://github.com/cuonghuunguyen/claude-code-ui/issues/355), [#374](https://github.com/cuonghuunguyen/claude-code-ui/issues/374)).
+- Movable panes: the side panel and the bottom panel reopen on the tab selected last after a reload, and on a phone the pane switcher reopens on the last selected pane; "Reset layout" forgets them ([#381](https://github.com/cuonghuunguyen/claude-code-ui/issues/381)).
 - Clean up dialog: remove worktrees and workers in bulk from the palette, a project's or coordinator's menu, with Safe / Has work / Blocked badges, filters and a result summary. Any linked worktree inside the roots can be removed now, also one made by hand or by another tool (not a locked or symlinked one) ([#377](https://github.com/cuonghuunguyen/claude-code-ui/issues/377)).
 - Sidebar context menus: right click, long press or Shift+F10 on a project or worktree row (new session or worktree, Hide inactive sessions, Archive idle sessions older than 1, 7 or 30 days, remove), on a worker row (Close worker, Remove worker… with an option to remove its worktree), on a coordinator or its "N workers" row (Close finished workers, Remove closed workers…) and on any session row (Copy session ID, Close tab) ([#358](https://github.com/cuonghuunguyen/claude-code-ui/issues/358)).
 
 ### Changed
 
+- The artifact preview loads the supporting files of a multi-file publish (CSS, scripts, images, fonts, JSON) that sit in the project or next to the page; files it does not serve are named under the preview ([#335](https://github.com/cuonghuunguyen/claude-code-ui/issues/335)).
 - The "Run session in" chip and menu name the main checkout "Primary worktree" (were "Local" and "Local repository").
 
 ### Fixed
 
 - Files tab: the file tree fills the tab while no file is open, instead of an empty editor area with "Open a file from the tree.".
 - The Changes tab's file list beside the diff can be resized: drag its edge or press ←/→ on it (kept per browser, double click restores the default width).
+- Moving a pane tab on a slow connection: a key pressed before the terminal has loaded no longer lets the terminal take the focus from the control you tabbed to ([#382](https://github.com/cuonghuunguyen/claude-code-ui/issues/382)).
 
 ## 0.6.0 - 2026-10-15
 
