@@ -76,7 +76,7 @@ it("compact: a chip click lists the group's tabs; picking one selects it and the
   const el = await mount(view("a1"));
   await act(async () => chip(el, A).click());
   await settle();
-  expect(items().length).toBe(3); // two tabs and Close group
+  expect(items().length).toBe(2); // two tabs (GH-431: the group actions are in the context menu)
   expect(items()[0]!.textContent).toContain("First");
   expect(items()[0]!.getAttribute("aria-current")).toBe("true");
   expect(items()[1]!.textContent).toContain("Second");
@@ -99,7 +99,7 @@ it("compact, keyboard: ArrowDown opens the menu on its first item, Escape closes
   await act(async () => c.focus());
   await key(c, "ArrowDown");
   await settle();
-  expect(items().length).toBe(3); // two tabs and Close group
+  expect(items().length).toBe(2); // two tabs (GH-431: the group actions are in the context menu)
   expect(document.activeElement).toBe(items()[0]);
   await key(document.activeElement!, "Escape");
   await settle();
@@ -120,7 +120,7 @@ it("compact: a middle click on a menu item closes that tab and keeps the menu", 
   });
   expect(onClose).toHaveBeenCalledWith("a2");
   expect(onSelect).not.toHaveBeenCalled();
-  expect(items().length).toBe(3); // two tabs and Close group
+  expect(items().length).toBe(2); // two tabs (GH-431: the group actions are in the context menu)
 });
 
 it("compact: hovering the chip opens the menu at once, with no opening animation", async () => {
@@ -129,7 +129,7 @@ it("compact: hovering the chip opens the menu at once, with no opening animation
   for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove"]) {
     await act(async () => void c.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, { bubbles: true, pointerType: "mouse" } as PointerEventInit)));
   }
-  expect(items().length).toBe(3); // two tabs and Close group
+  expect(items().length).toBe(2); // two tabs (GH-431: the group actions are in the context menu)
   // The popup fades and scales out on close only: no starting-style that is not the resting look.
   const cls = document.querySelector('[data-testid="tab-group-menu"]')!.className;
   expect(cls).toContain("data-ending-style:opacity-0");
@@ -145,7 +145,7 @@ it("compact: leaving the chip closes the hover menu", async () => {
     for (const type of types) await act(async () => void c.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, { bubbles: true, pointerType: "mouse" } as PointerEventInit)));
   };
   await fire(["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove"]);
-  expect(items().length).toBe(3); // two tabs and Close group
+  expect(items().length).toBe(2); // two tabs (GH-431: the group actions are in the context menu)
   await fire(["pointerout", "pointerleave", "mouseout", "mouseleave"]);
   await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
   expect(items().length).toBe(0);
@@ -252,10 +252,10 @@ it("close group: a middle click on a chip asks to close its tabs; compact does n
   expect(localStorage.getItem("claude-ui.tab-groups-collapsed")).toBeNull();
 });
 
-it("close group: the compact menu ends with Close group after a separator", async () => {
+it("close group: the compact chip's context menu (GH-431) ends with Close group after a separator", async () => {
   const onCloseGroup = vi.fn();
   const el = await mount(<TabsBar {...noop} compact onCloseGroup={onCloseGroup} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
-  await act(async () => chip(el, A).click());
+  await act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   await settle();
   const last = items().at(-1)!;
   expect(last.textContent).toBe("Close group");

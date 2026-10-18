@@ -10,6 +10,7 @@ import { Menu } from "@base-ui/react/menu";
 import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
+import { useNarrow } from "@/lib/use-narrow.ts";
 import { TitleSkeleton } from "@/components/ui/skeleton";
 import { FOCUS_TAB, NEW_TAB, avatarColor, closeMany, closeTab, closeTargets, groupTabs, pinOrder, loadCollapsed, projectName, saveCollapsed, stepNoWrap, type AvatarColor } from "./tabs.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -484,6 +485,40 @@ function GroupCleanup({ X, count: read, onRun }: { X: typeof ContextMenu.Item; c
   );
 }
 
+type ItemC = typeof ContextMenu.Item;
+type GroupActionProps = { X: ItemC; cleanupCount?: () => number; onCleanup?: () => void; onCloseOthers?: () => void; canCloseOthers: boolean; onCloseGroup: () => void };
+
+/** Move group left / right (chip context menus). */
+function GroupMoveItems({ X, move }: { X: ItemC; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void } }) {
+  return (
+    <>
+      <X className={ITEM} disabled={!move.left} onClick={() => move.by(-1)}>
+        Move group left
+      </X>
+      <X className={ITEM} disabled={!move.right} onClick={() => move.by(1)}>
+        Move group right
+      </X>
+    </>
+  );
+}
+
+/** Clean up group, Close other groups, Close group: the group actions of every chip menu that has them (GH-359, GH-378). */
+function GroupActionItems({ X, cleanupCount, onCleanup, onCloseOthers, canCloseOthers, onCloseGroup }: GroupActionProps) {
+  return (
+    <>
+      {onCleanup && <GroupCleanup X={X} count={cleanupCount ?? (() => 0)} onRun={onCleanup} />}
+      {onCloseOthers && (
+        <X className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
+          Close other groups
+        </X>
+      )}
+      <X className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
+        Close group
+      </X>
+    </>
+  );
+}
+
 const COMPAT_MOUSE_MS = 700;
 /** From the next pointerup on, the compat mouse events of that release (mousedown, mouseup, click) outside the cleanup menu are stopped for COMPAT_MOUSE_MS; returns the disposer. */
 function keepMenuOpenAfterRelease(): () => void {
@@ -843,8 +878,11 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   const pathId = useId();
   const shown = collapsed || compact;
   const [open, setOpen] = useState(false);
+  // Compact chip on md and up: its context menu is open (the hover menu stays closed meanwhile).
+  const [ctxOpen, setCtxOpen] = useState(false);
   const keyOpenedAt = useRef(-Infinity);
   const coarse = useTouchPrimary();
+  const narrow = useNarrow();
   const props = {
     "aria-describedby": pathId,
     "aria-label": `${name}${sub ? ` (${sub})` : ""}, ${ids.length} ${ids.length === 1 ? "tab" : "tabs"}${urgent ? `, ${STATUS_LABEL[urgent]}` : ""}`,
@@ -887,12 +925,13 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
       {shown && urgent === "unread" && <span data-dot="unread" className="size-1.5 shrink-0 rounded-full bg-info" aria-hidden />}
     </>
   );
-  if (compact)
+  if (compact) {
     // Compact: a menu button (click, Enter, Space, ArrowDown; hover, at once). A path tooltip would fight the hover menu, so the menu header carries name and path.
-    return (
+    // md and up: the menu lists the tabs only and the group actions are in the chip's context menu (GH-431); below md (tap, no right click) the menu keeps them.
+    const menu = (
       // Not modal: a modal menu opened by the press puts a backdrop over the other chips, and a chip drag could not drop. A drag start closes the menu.
-      <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
-        <Menu.Trigger {...props} openOnHover delay={CHIP_HOVER_DELAY_MS}>
+      <Menu.Root modal={false} open={open && !ctxOpen} onOpenChange={(o) => !ctxOpen && setOpen(o)}>
+        <Menu.Trigger {...props} openOnHover delay={CHIP_HOVER_DELAY_MS} onKeyDown={narrow ? undefined : (e) => openContextMenuFromKey(e, e.currentTarget) && (keyOpenedAt.current = performance.now())}>
           {body}
         </Menu.Trigger>
         <span id={pathId} hidden>{cwd}</span>
@@ -904,21 +943,35 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
                 <span className="truncate text-muted-foreground">{cwd}</span>
               </div>
               <GroupTabRows ids={ids} info={info} rows={rows} />
-              <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
-              {onCleanup && <GroupCleanup X={Menu.Item} count={cleanupCount ?? (() => 0)} onRun={onCleanup} />}
-              {onCloseOthers && (
-                <Menu.Item className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
-                  Close other groups
-                </Menu.Item>
+              {narrow && (
+                <>
+                  <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
+                  <GroupActionItems X={Menu.Item} cleanupCount={cleanupCount} onCleanup={onCleanup} onCloseOthers={onCloseOthers} canCloseOthers={canCloseOthers} onCloseGroup={onCloseGroup} />
+                </>
               )}
-              <Menu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
-                Close group
-              </Menu.Item>
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>
       </Menu.Root>
     );
+    if (narrow) return menu;
+    return (
+      <ContextMenu.Root onOpenChange={(o) => { setCtxOpen(o); if (o) setOpen(false); }}>
+        <ContextMenu.Trigger className="contents" onContextMenu={(e) => swallowKeyFollowup(e, keyOpenedAt)}>
+          {menu}
+        </ContextMenu.Trigger>
+        <ContextMenu.Portal>
+          <ContextMenu.Positioner className="z-50">
+            <ContextMenu.Popup className={cn(POPUP, "max-w-80")} data-testid="tab-group-context-menu">
+              <GroupMoveItems X={ContextMenu.Item} move={move} />
+              <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+              <GroupActionItems X={ContextMenu.Item} cleanupCount={cleanupCount} onCleanup={onCleanup} onCloseOthers={onCloseOthers} canCloseOthers={canCloseOthers} onCloseGroup={onCloseGroup} />
+            </ContextMenu.Popup>
+          </ContextMenu.Positioner>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
+    );
+  }
   return (
     // Right click (long press on touch): the menu the compact chip has, for a chip whose click collapses.
     <ContextMenu.Root>
@@ -940,24 +993,11 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
             <ContextMenu.Item className={ITEM} onClick={onToggle}>
               {collapsed ? "Expand group" : "Collapse group"}
             </ContextMenu.Item>
-            <ContextMenu.Item className={ITEM} disabled={!move.left} onClick={() => move.by(-1)}>
-              Move group left
-            </ContextMenu.Item>
-            <ContextMenu.Item className={ITEM} disabled={!move.right} onClick={() => move.by(1)}>
-              Move group right
-            </ContextMenu.Item>
+            <GroupMoveItems X={ContextMenu.Item} move={move} />
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
             <GroupTabRows ids={ids} info={info} rows={rows} />
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-            {onCleanup && <GroupCleanup X={ContextMenu.Item} count={cleanupCount ?? (() => 0)} onRun={onCleanup} />}
-            {onCloseOthers && (
-              <ContextMenu.Item className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
-                Close other groups
-              </ContextMenu.Item>
-            )}
-            <ContextMenu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
-              Close group
-            </ContextMenu.Item>
+            <GroupActionItems X={ContextMenu.Item} cleanupCount={cleanupCount} onCleanup={onCleanup} onCloseOthers={onCloseOthers} canCloseOthers={canCloseOthers} onCloseGroup={onCloseGroup} />
           </ContextMenu.Popup>
         </ContextMenu.Positioner>
       </ContextMenu.Portal>
