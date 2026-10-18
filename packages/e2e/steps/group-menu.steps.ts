@@ -2,7 +2,9 @@ import { expect, type Page } from "@playwright/test";
 import { Given, Then, When, type Project } from "./fixtures.ts";
 
 // The chip of this scenario's project: earlier scenarios' sessions may still be open tabs on the shared daemon.
-const chipOf = (page: Page, project: Project) => page.locator(`[data-testid="tab-group-chip"][data-group-chip*="${project.name}"]`);
+// Matched on the path's last segment (either separator): a substring could match another scenario's longer name.
+const chipOf = (page: Page, project: Project) =>
+  page.locator(`[data-testid="tab-group-chip"][data-group-chip$="/${project.name}"], [data-testid="tab-group-chip"][data-group-chip$="\\\\${project.name}"]`);
 const ACTIONS = ["tab-group-cleanup", "tab-group-close-others", "tab-group-close"];
 
 // Compact tabs is a per-browser setting (localStorage); seeded before the app loads, as a returning user who switched it on.
@@ -43,10 +45,6 @@ Then("the group menu lists the group's tab rows", async ({ page }) => {
 
 Then("the group menu has no Clean up, Close other groups or Close group", async ({ page }) => {
   for (const id of ACTIONS) await expect(page.getByTestId(id)).toHaveCount(0);
-});
-
-Then("the group menu has Clean up, Close other groups and Close group", async ({ page }) => {
-  for (const id of ACTIONS) await expect(page.getByTestId("tab-group-menu").getByTestId(id)).toBeVisible();
 });
 
 Then("the group context menu has Move group left, Move group right, Clean up group, Close other groups and Close group", async ({ page }) => {
