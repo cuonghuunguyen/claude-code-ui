@@ -10,7 +10,6 @@ import { Menu } from "@base-ui/react/menu";
 import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
-import { useNarrow } from "@/lib/use-narrow.ts";
 import { TitleSkeleton } from "@/components/ui/skeleton";
 import { FOCUS_TAB, NEW_TAB, avatarColor, closeMany, closeTab, closeTargets, groupTabs, pinOrder, loadCollapsed, projectName, saveCollapsed, stepNoWrap, type AvatarColor } from "./tabs.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -819,7 +818,7 @@ type TabRowsProps = { activeId?: string; onSelect: (id: string) => void; onClose
 
 /** The tab rows of a group chip menu (compact dropdown and chip context menu): a select item and a close item per tab (GH-277). */
 function GroupTabRows({ ids, info, rows }: { ids: string[]; info: (id: string) => TabInfo; rows: TabRowsProps }) {
-  // The focused close item is about to unmount: focus goes to the next row's close item, else the previous one's, else Close group.
+  // The focused close item is about to unmount: focus goes to the next row's close item, else the previous one's, else Close group (non-compact context menu only).
   // After the row left the list (setTimeout), as in SwitcherRow: earlier leaves the list's highlight index off by one.
   const close = (id: string, e: { currentTarget: HTMLElement }) => {
     const popup = e.currentTarget.closest<HTMLElement>('[data-testid="tab-group-menu"]');
@@ -878,11 +877,10 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   const pathId = useId();
   const shown = collapsed || compact;
   const [open, setOpen] = useState(false);
-  // Compact chip on md and up: its context menu is open (the hover menu stays closed meanwhile).
+  // Compact chip: its context menu is open (the hover menu stays closed meanwhile).
   const [ctxOpen, setCtxOpen] = useState(false);
   const keyOpenedAt = useRef(-Infinity);
   const coarse = useTouchPrimary();
-  const narrow = useNarrow();
   const props = {
     "aria-describedby": pathId,
     "aria-label": `${name}${sub ? ` (${sub})` : ""}, ${ids.length} ${ids.length === 1 ? "tab" : "tabs"}${urgent ? `, ${STATUS_LABEL[urgent]}` : ""}`,
@@ -927,11 +925,11 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   );
   if (compact) {
     // Compact: a menu button (click, Enter, Space, ArrowDown; hover, at once). A path tooltip would fight the hover menu, so the menu header carries name and path.
-    // md and up: the menu lists the tabs only and the group actions are in the chip's context menu (GH-431); below md (tap, no right click) the menu keeps them.
+    // The menu lists the tabs only; the group actions are in the chip's context menu (GH-431). The chip strip shows from md up only (`hidden md:flex`; below md the switcher shows), so there is no phone variant.
     const menu = (
       // Not modal: a modal menu opened by the press puts a backdrop over the other chips, and a chip drag could not drop. A drag start closes the menu.
       <Menu.Root modal={false} open={open && !ctxOpen} onOpenChange={(o) => !ctxOpen && setOpen(o)}>
-        <Menu.Trigger {...props} openOnHover delay={CHIP_HOVER_DELAY_MS} onKeyDown={narrow ? undefined : (e) => openContextMenuFromKey(e, e.currentTarget) && (keyOpenedAt.current = performance.now())}>
+        <Menu.Trigger {...props} openOnHover delay={CHIP_HOVER_DELAY_MS} onKeyDown={(e) => openContextMenuFromKey(e, e.currentTarget) && (keyOpenedAt.current = performance.now())}>
           {body}
         </Menu.Trigger>
         <span id={pathId} hidden>{cwd}</span>
@@ -943,18 +941,11 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
                 <span className="truncate text-muted-foreground">{cwd}</span>
               </div>
               <GroupTabRows ids={ids} info={info} rows={rows} />
-              {narrow && (
-                <>
-                  <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
-                  <GroupActionItems X={Menu.Item} cleanupCount={cleanupCount} onCleanup={onCleanup} onCloseOthers={onCloseOthers} canCloseOthers={canCloseOthers} onCloseGroup={onCloseGroup} />
-                </>
-              )}
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>
       </Menu.Root>
     );
-    if (narrow) return menu;
     return (
       <ContextMenu.Root onOpenChange={(o) => { setCtxOpen(o); if (o) setOpen(false); }}>
         <ContextMenu.Trigger className="contents" onContextMenu={(e) => swallowKeyFollowup(e, keyOpenedAt)}>

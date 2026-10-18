@@ -23,9 +23,6 @@ afterEach(() => {
   window.matchMedia = realMatchMedia;
 });
 
-const phone = () => {
-  window.matchMedia = ((q: string) => ({ matches: q.includes("width < 48rem") || q.includes("width < 40rem"), media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
-};
 const mount = async (extra: Partial<React.ComponentProps<typeof TabsBar>> = {}) => {
   const el = document.createElement("div");
   document.body.append(el);
@@ -116,6 +113,11 @@ it("AC2 Shift+F10 and the ContextMenu key on a focused compact chip open the con
     await settle();
     expect(byId("tab-group-context-menu")).not.toBeNull();
     expect(byId("tab-group-menu")).toBeNull();
+    expect(byId("tab-group-context-menu")!.contains(document.activeElement)).toBe(true);
+    await act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" })));
+    await settle();
+    expect(byId("tab-group-context-menu")).toBeNull();
+    expect(document.activeElement).toBe(chip(el));
     act(() => root!.unmount());
     document.body.innerHTML = "";
   }
@@ -135,16 +137,11 @@ it("AC3 opening the context menu closes the hover menu, and hovering does not op
   expect(byId("tab-group-context-menu")).not.toBeNull();
 });
 
-it("AC4 below md: the tap menu keeps the group actions and there is no context menu", async () => {
-  phone();
+it("AC4 below md there are no chips: the strip holding them is hidden below md (the switcher shows instead), so the chip menus have no phone variant", async () => {
   const el = await mount();
-  await act(async () => chip(el).click());
-  await settle();
-  expect(rows()).toEqual(["a1", "a2"]);
-  expect(labels()).toEqual(["Clean up group2", "Close other groups", "Close group"]);
-  await rightClick(chip(el));
-  await settle();
-  expect(byId("tab-group-context-menu")).toBeNull();
+  const strip = chip(el).closest<HTMLElement>(".hidden")!;
+  expect(strip.className).toContain("md:flex");
+  expect(el.querySelector(".md\\:hidden")).not.toBeNull(); // the "Switch tab" switcher, shown below md only
 });
 
 it("AC5 a middle click on a compact chip still closes the group", async () => {
@@ -155,4 +152,57 @@ it("AC5 a middle click on a compact chip still closes the group", async () => {
   });
   expect(onCloseGroup).toHaveBeenCalledWith(A, ["a1", "a2"]);
   expect(byId("tab-group-menu")).toBeNull();
+});
+
+it("AC3 a click-opened menu closes when the context menu opens (focus goes into it), and the click menu opens again once the context menu is closed", async () => {
+  const el = await mount();
+  await act(async () => chip(el).click());
+  await settle();
+  expect(byId("tab-group-menu")).not.toBeNull();
+  await rightClick(chip(el));
+  await settle();
+  expect(byId("tab-group-menu")).toBeNull();
+  expect(byId("tab-group-context-menu")!.contains(document.activeElement)).toBe(true);
+  await act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" })));
+  await settle();
+  expect(byId("tab-group-context-menu")).toBeNull();
+  await act(async () => chip(el).click());
+  await settle();
+  expect(byId("tab-group-menu")).not.toBeNull();
+  expect(rows()).toEqual(["a1", "a2"]);
+});
+
+/** A matchMedia whose md query can flip while mounted (use-narrow caches one list per query). */
+const flippable = (narrow: boolean) => {
+  const lists = new Map<string, object>();
+  const listeners = new Set<() => void>();
+  window.matchMedia = ((q: string) => {
+    if (!lists.has(q)) lists.set(q, { get matches() { return narrow && q.includes("width <"); }, media: q, addEventListener: (_: string, f: () => void) => listeners.add(f), removeEventListener: (_: string, f: () => void) => listeners.delete(f) });
+    return lists.get(q);
+  }) as unknown as typeof window.matchMedia;
+  return async (n: boolean) => { narrow = n; await act(async () => listeners.forEach((f) => f())); };
+};
+
+it("crossing md with the context menu open leaves the chip working: no remount, focus kept, the menus keep opening", async () => {
+  const flip = flippable(false);
+  const el = await mount();
+  await act(async () => chip(el).focus());
+  await rightClick(chip(el));
+  await settle();
+  expect(byId("tab-group-context-menu")).not.toBeNull();
+  await flip(true);
+  await settle();
+  await flip(false);
+  await settle();
+  // The chip was neither remounted nor stranded: the open context menu still works and closes, then the click menu opens.
+  expect(byId("tab-group-context-menu")).not.toBeNull();
+  await act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" })));
+  await settle();
+  expect(byId("tab-group-context-menu")).toBeNull();
+  expect(document.activeElement).toBe(chip(el));
+  await act(async () => chip(el).click());
+  await settle();
+  expect(byId("tab-group-menu")).not.toBeNull();
+  expect(labels()).toEqual([]);
+  expect(rows()).toEqual(["a1", "a2"]);
 });
