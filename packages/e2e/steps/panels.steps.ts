@@ -77,15 +77,15 @@ Then("the panel layout is unchanged", async ({ page, memo }) => {
 
 When("I remember to count terminal requests", async ({ page, memo }) => {
   const count = await watchTerminalCreates(page);
-  (memo as Record<string, unknown>).creates = count;
+  memo.creates = count;
 });
 
-Then("the page sent no terminal request since the reload", async ({ memo }) => {
-  const count = (memo as Record<string, unknown>).creates as () => number;
+Then("the page started no new shell since the reload", async ({ memo }) => {
+  const count = memo.creates!;
   expect(count()).toBe(0);
 });
 
-Then("the page sent one terminal request", async ({ memo }) => {
-  const count = (memo as Record<string, unknown>).creates as () => number;
+Then("the page started one new shell", async ({ memo }) => {
+  const count = memo.creates!;
   expect(count()).toBe(1);
 });

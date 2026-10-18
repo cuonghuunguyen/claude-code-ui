@@ -10,7 +10,7 @@ export type Project = { path: string; name: string };
 export type Evidence = { next(): number };
 
 /** Per-scenario scratch for "I note ..." / "... is unchanged" step pairs. */
-export type Memo = { layout?: unknown };
+export type Memo = { layout?: unknown; creates?: () => number };
 
 export const test = base.extend<{ project: Project; evidence: Evidence; memo: Memo }, { daemon: Daemon }>({
   // One daemon per worker: free port, own config dir, API key variables unset, Haiku. Stopped by PID tree.

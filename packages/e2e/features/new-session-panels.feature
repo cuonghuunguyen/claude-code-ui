@@ -40,11 +40,11 @@ Feature: The new-session tab shows the side and bottom panels
     And I start a new Haiku session
     Then the bottom panel is hidden
     And no shell is open
-    And the page sent no terminal request since the reload
+    And the page started no new shell since the reload
     And I capture "no shells after reload"
     When I toggle the terminal from the titlebar
     Then a terminal shows in the bottom panel
-    And the page sent one terminal request
+    And the page started one new shell
     And I capture "one shell after toggle"
 
   Scenario: Narrow screens show no panels on the new-session tab
