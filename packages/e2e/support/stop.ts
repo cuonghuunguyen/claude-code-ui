@@ -35,10 +35,12 @@ export function stopRun(run: string, kill: (pid: number) => void = killTree, cmd
   const done: string[] = [];
   if (!existsSync(run)) throw new Error(`no such run folder: ${run}`);
   const runner = readPid(join(run, "runner.pid"));
-  if (runner) {
+  // A kept runner.pid can outlive its runner and Windows reuses PIDs: kill only a live Playwright runner.
+  if (runner && /playwright/i.test(cmdline(runner))) {
     kill(runner);
     done.push(`runner ${runner}: tree killed`);
-  } else done.push("no runner.pid: runner not killed");
+  } else if (runner) done.push(`runner ${runner}: not a running Playwright runner, left alone`);
+  else done.push("no runner.pid: runner not killed");
   rmSync(join(run, "runner.pid"), { force: true });
   for (const name of readdirSync(run).filter((n) => /^daemon-w\d+\.pid$/.test(n))) {
     const pid = readPid(join(run, name));

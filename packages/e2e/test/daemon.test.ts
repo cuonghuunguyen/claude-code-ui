@@ -173,8 +173,13 @@ describe("stop", () => {
       writeFileSync(join(run, "daemon-w0.pid"), "22");
       writeFileSync(join(run, "daemon-w1.pid"), "33");
       const killed: number[] = [];
-      stopRun(run, (p) => void killed.push(p), (p) => (p === 22 ? `node --roots ${join(run, "projects")}` : "unrelated"));
+      const cmd = (p: number) => (p === 11 ? "node node_modules/@playwright/test/cli.js test --debug=cli" : p === 22 ? `node --roots ${join(run, "projects")}` : "unrelated");
+      stopRun(run, (p) => void killed.push(p), cmd);
       expect(killed).toEqual([11, 22]);
+      writeFileSync(join(run, "runner.pid"), "44");
+      const reused: number[] = [];
+      stopRun(run, (p) => void reused.push(p), cmd);
+      expect(reused).toEqual([]);
       expect(() => stopRun(join(base, "nope"), () => {}, () => "")).toThrow(/no such run/);
     } finally {
       rmSync(base, { recursive: true, force: true });
