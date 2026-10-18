@@ -128,7 +128,10 @@ starting with the RESULT block as before.
 
 Unit tests prove the code does what the author meant. This stage proves the acceptance
 criteria hold for a person clicking through the product. **Fresh worker, never the
-implementer.** Read-only in the worktree except for the scratch folder.
+implementer.** Read-only in the worktree except for the scratch folder, and with
+`acceptance: playwright-bdd` the playbook's scenario and step folders.
+
+Paste the METHOD block that matches the playbook's `acceptance:` value.
 
 `worker_start{name: <key>-ui, cwd: <worktree>, model: "sonnet", mode: "auto"}`
 
@@ -149,7 +152,7 @@ APP
 
 <PLAYBOOK> <SCRATCH SPACE> <FORBIDDEN — plus: do NOT fix what you find, report it>
 
-METHOD
+METHOD (acceptance: playwright — hand-driven)
 - Use the playwright-cli skill (or the playwright MCP) with a session named after your port,
   and drive a real browser. Follow the playbook's Acceptance section for login and test data.
 - NAVIGATE BY UI, LIKE A HUMAN. Start at the app's entry point and click, type, tab and scroll
@@ -162,10 +165,26 @@ METHOD
 - Watch the browser console and network. An unhandled error or a failed request is a finding
   even when the UI looks right.
 
+METHOD (acceptance: playwright-bdd — scripted)
+- Follow the playbook's Acceptance loop: one scenario per claim, written or extended in the
+  playbook's feature folder, steps reused before any is added, run with Commands › e2e on
+  port <assigned port> with evidence in <scratch>/<KEY>/evidence.
+- The human-path rule binds the steps: each scenario starts at the app's entry point and
+  reaches the state under test by clicking, typing and scrolling. No deep links, no API or
+  database seeding, no internal calls.
+- Cover what a user faces: the happy path, plus the empty state, invalid input, a second attempt,
+  navigating back, a refresh mid-flow and the one thing the ticket says used to break, where
+  the claims touch them.
+- Red: attach-debug per the playbook to tell a wrong step from a broken app. Fix a wrong step;
+  a broken app is a failed case for the implementer.
+- Commit only the scenario and step files, as `<KEY>: acceptance scenarios for <claims>`.
+- Look at every captured screenshot; a claim whose capture does not show it is untested.
+
 REPORT
 - <scratch>/<KEY>/ui-acceptance.html: one self-contained file that opens with no server.
-  Verdict and counts at the top; per case, the numbered steps, the screenshots inline
-  (relative src), pass/fail, console and network errors.
+  Verdict and counts at the top; per case, the numbered steps (scripted: the scenario and its
+  feature file), the screenshots inline (relative src), pass/fail, console and network errors.
+  Scripted: also the command that re-runs it and the path of the Playwright HTML report.
 
 <RESULT> stage line: CASES: <passed>/<total>. Any failed case is RESULT: failed.
 ```

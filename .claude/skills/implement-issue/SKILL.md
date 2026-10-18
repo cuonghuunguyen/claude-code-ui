@@ -19,7 +19,7 @@ ci:          none
 base:        main
 branch:      GH-<n>-<slug>   (a prefix added by a worktree tool is fine)
 scratch:     <main checkout>/development-docs/GH-<n>/   ignored by: .gitignore
-acceptance:  playwright
+acceptance:  playwright-bdd
 
 ## Commands
 install:     npm ci
@@ -96,6 +96,9 @@ PID, and fails if anything of the run landed in the real config dir.
 
 Hand-driving `playwright-cli -s=w<port> open` against Commands › app is only for a check a
 scenario cannot express; say why in `notes.md`, and stop it by PID the same way.
+
+Under the coordinator this loop is the stage-2 worker's: it fixes steps, never the app; a
+broken app is a failed case that goes back to the implementer.
 
 ## Traps
 1. **Never `pkill -f` or `killall`.** Other workers run the same command line; kill by PID.

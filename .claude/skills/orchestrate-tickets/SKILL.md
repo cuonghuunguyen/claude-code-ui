@@ -85,7 +85,7 @@ A ticket walks the stages in order and earns each one from the stage before it.
 |---|---|---|---|---|
 | 0 | Plan | fresh worker, creates the worktree | `opus` | `plan.md` written, no code |
 | 1 | Implement + unit tests | fresh worker, in the worktree | `sonnet` | suite green, committed locally |
-| 2 | Acceptance | **fresh** worker, same worktree, real browser | `sonnet` | every case green, screenshots + HTML report |
+| 2 | Acceptance | **fresh** worker, same worktree, real browser | `sonnet` | every case green, screenshots + HTML report (scripted: scenarios committed) |
 | 3 | Push + build watch | coordinator pushes; worker watches CI | `haiku` | build terminal-green |
 | 4 | PR open | coordinator | — | PR exists, description written |
 | 5 | Review | **fresh** worker, read-only, `pr-review` | `opus` | report delivered to the user |
@@ -123,7 +123,9 @@ A ticket walks the stages in order and earns each one from the stage before it.
 Stage 2 in one line, because it is the stage that gets watered down: a **fresh** agent drives a
 real browser, **navigates by UI like a human** (no deep links, no API seeding, no internal
 calls), tests the cases a user actually faces, and screenshots every assertion into an HTML
-report.
+report. With `acceptance: playwright-bdd` every case is a scripted scenario that walks the same
+human path; the worker writes or extends it, commits it, and runs it per the playbook's
+Acceptance loop.
 
 ### Models
 
@@ -154,6 +156,7 @@ to `"$(git rev-parse --git-common-dir)/info/exclude"` (idempotently). Not a lite
   plan.md                  # stage 0
   notes.md                 # implementer's diary
   screenshots/NN-<step>.png
+  evidence/                # stage 2 captures of a scripted run (playwright-bdd)
   ui-acceptance.html       # stage 2 report
   build-<n>.log            # stage 3 excerpt on a red build
   review.html              # stage 5 report copy
@@ -300,7 +303,7 @@ Named **inside worker prompts**, never run in the coordinator's own context.
 | Skill | Stage | Role |
 |---|---|---|
 | `pr-review` | 5 | Full review, HTML artifact, findings never posted. **Required.** |
-| `playwright-cli` (or playwright MCP) | 2 | Human-path acceptance, screenshots, HTML report. **Required** unless `acceptance: none`. |
+| `playwright-cli` (or playwright MCP) | 2 | Human-path acceptance, screenshots, HTML report; with `playwright-bdd`, attaching to a paused scripted run. **Required** unless `acceptance: none`. |
 | CI skill from the adapter (e.g. `jenkins`) | 3 | Watch the build to a terminal state. **Required** when the adapter names one. |
 | `tdd` | 1 | Named in the method block. Soft: note its absence, do not block. |
 | `to-tickets` | pre | Ticket too coarse: a read-only worker slices it. Soft. |

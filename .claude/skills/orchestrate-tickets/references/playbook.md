@@ -41,7 +41,7 @@ ci:          jenkins | github-actions | none          → adapters/<ci>.md
 base:        <ref, e.g. origin/master>
 branch:      <pattern, e.g. <KEY>-<slug>>
 scratch:     <path, e.g. development-docs/<KEY>/>  ignored by: <git exclude | .gitignore>
-acceptance:  playwright | none (<reason>)
+acceptance:  playwright | playwright-bdd | none (<reason>)
 caps:        workers <n>, acceptance <n>              (optional; default 3 and 2)
 
 ## Commands
@@ -49,6 +49,7 @@ install:     <first thing every worker runs in a fresh worktree>
 test:        <full suite>        scoped: <how to run only the tests for a diff>
 typecheck:   <command or —>
 app:         <start command with a port placeholder>   stop: <how>
+e2e:         <run one scripted feature on a given port>   (required for acceptance: playwright-bdd)
 ports:       <range acceptance workers may use>
 
 ## Plan skip rules
@@ -61,7 +62,8 @@ ports:       <range acceptance workers may use>
 <repo conventions: test style, helpers to reuse, files that must change together>
 
 ## Acceptance
-<how a human reaches the app, login, test data, what counts as evidence>
+<how a human reaches the app, login, test data, what counts as evidence;
+ for playwright-bdd: where scenarios and steps live, and the write-run-debug loop>
 
 ## Traps
 <numbered; each one paid for once>
@@ -71,6 +73,10 @@ Rules:
 
 - **`Profile` and `Commands` are required.** A value the drafter could not find is `TODO`, and
   a playbook with a `TODO` in these two sections fails the gate.
+- `acceptance: playwright` is hand-driven: the stage-2 worker clicks through the app with
+  `playwright-cli`. `acceptance: playwright-bdd` is scripted: each case is a Cucumber scenario
+  committed to the repo, run with Commands › e2e, debugged by attaching `playwright-cli` to a
+  `--debug=cli` run; a re-test is a re-run, and the scenario keeps guarding the flow.
 - One adapter per role, named exactly as its file in `adapters/`. A role with no tool is
   `none`, which switches its stage off (`SKILL.md` §1). Nothing else switches a stage off.
 - `states` uses the three logical states the pipeline moves through: `started` (first worker
