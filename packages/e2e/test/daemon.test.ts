@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { daemonEnv, freePort, killCommand, ownerPorts, realConfigDirs, TOKEN_RE } from "../support/daemon.ts";
-import { isolationBreaches } from "../support/isolation.ts";
+import { isolationBreaches, leakedUploads, sessionIds } from "../support/isolation.ts";
 import { runDir, slug } from "../support/paths.ts";
 
 describe("freePort", () => {
@@ -35,6 +35,11 @@ describe("realConfigDirs", () => {
     expect(realConfigDirs({ APPDATA: "/ap" }, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui"), join("/ap", "claude-ui")]);
     expect(realConfigDirs({}, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui")]);
   });
+  it("adds the runner's own XDG_CONFIG_HOME, unless it is the run's", () => {
+    expect(realConfigDirs({ XDG_CONFIG_HOME: "/x" }, "/home/u")).toContain(join("/x", "claude-ui"));
+    expect(realConfigDirs({ XDG_CONFIG_HOME: join("/r", "ui-config"), E2E_RUN_DIR: "/r" }, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui")]);
+    expect(realConfigDirs({ XDG_CONFIG_HOME: join("/home/u", ".config") }, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui")]);
+  });
 });
 
 describe("killCommand", () => {
@@ -52,6 +57,16 @@ describe("daemonEnv", () => {
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(env.KEEP).toBe("1");
+  });
+  it("drops every inherited CLAUDE_UI_* and sets only the ones the test needs", () => {
+    const e = daemonEnv({ CLAUDE_UI_LAN: "1", CLAUDE_UI_ALLOW_BYPASS: "1", CLAUDE_UI_CLAUDE_BIN: "x", CLAUDE_UI_OPEN: "1", OTHER: "o" }, "/run", 5555);
+    expect(Object.keys(e).filter((k) => k.startsWith("CLAUDE_UI_")).sort()).toEqual(["CLAUDE_UI_OPEN", "CLAUDE_UI_ROOTS"]);
+    expect(e.CLAUDE_UI_OPEN).toBe("0");
+    expect(e.OTHER).toBe("o");
+  });
+  it("on Windows gives the daemon its own LOCALAPPDATA (uploads go there); elsewhere leaves it", () => {
+    expect(daemonEnv({ LOCALAPPDATA: "C:\real" }, "/run", 5555, "win32").LOCALAPPDATA).toBe(join("/run", "localappdata"));
+    expect(daemonEnv({ LOCALAPPDATA: "/real" }, "/run", 5555, "linux").LOCALAPPDATA).toBe("/real");
   });
   it("points the config at the run, sets the port and Haiku", () => {
     expect(env.XDG_CONFIG_HOME).toBe(join("/run", "ui-config"));
@@ -79,6 +94,17 @@ describe("paths", () => {
     expect(slug("a".repeat(100)).length).toBe(60);
     expect(slug("The tab switcher stays in the titlebar at 390x844", 30)).not.toBe(slug("The tab switcher stays in the titlebar at 360x780", 30));
     expect(slug("***")).toBe("x");
+  });
+});
+
+describe("uploads guard", () => {
+  const id = "05498d02-3da4-49e5-b033-0b7a21c94ab1";
+  it("reads session ids, lowercase and once", () => {
+    expect(sessionIds(JSON.stringify({ [id.toUpperCase()]: { a: id }, other: "no" }))).toEqual([id]);
+  });
+  it("finds the ids that have a folder, ignoring case", () => {
+    expect(leakedUploads([id, "11111111-1111-1111-1111-111111111111"], [id.toUpperCase(), "x"])).toEqual([id]);
+    expect(leakedUploads([id], ["x"])).toEqual([]);
   });
 });
 

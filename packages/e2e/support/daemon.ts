@@ -5,7 +5,7 @@ import { createServer, connect } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { configHome, daemonConfigDir, projectsRoot } from "./paths.ts";
+import { configHome, daemonConfigDir, localAppData, projectsRoot } from "./paths.ts";
 
 export const REPO_ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 export const DEFAULT_PORT = 4280;
@@ -27,6 +27,10 @@ export type Daemon = {
 export function realConfigDirs(env: NodeJS.ProcessEnv = process.env, home = homedir()): string[] {
   const dirs = [join(home, ".config", "claude-ui")];
   if (env.APPDATA) dirs.push(join(env.APPDATA, "claude-ui"));
+  // The runner's own XDG_CONFIG_HOME is the owner's real config dir, unless it is the run's (a nested run).
+  const own = env.E2E_RUN_DIR ? daemonConfigDir(env.E2E_RUN_DIR) : "";
+  const xdg = env.XDG_CONFIG_HOME ? join(env.XDG_CONFIG_HOME, "claude-ui") : "";
+  if (xdg && xdg !== own && !dirs.includes(xdg)) dirs.push(xdg);
   return dirs;
 }
 
@@ -78,24 +82,37 @@ export function killTree(pid: number): void {
     return;
   }
   // POSIX: the daemon is its own process group (detached); signal the group.
-  for (const sig of ["SIGTERM", "SIGKILL"] as const) {
+  const alive = () => {
     try {
-      process.kill(-pid, sig);
+      process.kill(-pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {}
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  for (let waited = 0; alive() && waited < 3000; waited += 100) Atomics.wait(nap, 0, 0, 100);
+  if (alive())
+    try {
+      process.kill(-pid, "SIGKILL");
     } catch {}
-    if (sig === "SIGTERM") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000);
-  }
 }
 
 /** The daemon's environment: own config dir and port, subscription login only, Haiku. */
-export function daemonEnv(base: NodeJS.ProcessEnv, run: string, port: number): NodeJS.ProcessEnv {
+export function daemonEnv(base: NodeJS.ProcessEnv, run: string, port: number, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
   const env = { ...base };
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
-  delete env.CLAUDE_UI_TAILSCALE;
-  delete env.CLAUDE_UI_HOSTNAME;
+  // Every inherited CLAUDE_UI_* (LAN, bypass, launcher, registry...) stays out; the ones the test needs are set below.
+  for (const key of Object.keys(env)) if (key.startsWith("CLAUDE_UI_")) delete env[key];
   return {
     ...env,
     XDG_CONFIG_HOME: configHome(run),
+    // On Windows the daemon keeps uploads under LOCALAPPDATA whatever XDG_CONFIG_HOME says, and has no option for it (uploads.ts defaultUploadsDir).
+    ...(platform === "win32" ? { LOCALAPPDATA: localAppData(run) } : {}),
     PORT: String(port),
     CLAUDE_UI_OPEN: "0",
     CLAUDE_UI_ROOTS: projectsRoot(run),
@@ -133,6 +150,7 @@ function tail(file: string, lines = 30): string {
 export async function startDaemon(run: string, worker: number, opts: { port?: number; timeoutMs?: number } = {}): Promise<Daemon> {
   mkdirSync(projectsRoot(run), { recursive: true });
   mkdirSync(configHome(run), { recursive: true });
+  mkdirSync(localAppData(run), { recursive: true });
   const port = opts.port ?? (await freePort(ownerPorts()));
   if (ownerPorts().has(port)) throw new Error(`refusing to start a test daemon on ${port}: a real daemon uses it`);
   const log = join(run, `daemon-w${worker}.log`);
@@ -152,13 +170,29 @@ export async function startDaemon(run: string, worker: number, opts: { port?: nu
     state.child = child;
     writeFileSync(pidFile, String(child.pid));
     let exited: number | undefined;
-    child.once("exit", (code) => (exited = code ?? -1));
+    child.once("exit", (code) => {
+      exited = code ?? -1;
+      // A dead daemon's PID may be reused: teardown must not kill it. Remove the file only while it is still this child's.
+      try {
+        if (readFileSync(pidFile, "utf8") === String(child.pid)) rmSync(pidFile, { force: true });
+      } catch {}
+    });
     child.stdout!.on("data", (d: Buffer) => {
       out.push(String(d));
       try {
         appendFileSync(log, d);
       } catch {}
     });
+    try {
+      await ready(out, () => exited);
+    } catch (e) {
+      killTree(child.pid!);
+      throw e;
+    }
+  }
+
+  /** Waits for the pairing URL, then checks the daemon used the scratch config and answers. */
+  async function ready(out: string[], exitedCode: () => number | undefined): Promise<void> {
     const wait = opts.timeoutMs ?? 90_000;
     const end = Date.now() + wait;
     for (;;) {
@@ -167,9 +201,9 @@ export async function startDaemon(run: string, worker: number, opts: { port?: nu
         state.token = m[1]!;
         break;
       }
+      const exited = exitedCode();
       if (exited !== undefined) throw new Error(`the daemon exited (${exited}) before it listened:\n${tail(log)}`);
       if (Date.now() > end) {
-        killTree(child.pid!);
         throw new Error(`no pairing URL within ${wait} ms:\n${tail(log)}`);
       }
       await sleep(200);

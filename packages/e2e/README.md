@@ -30,7 +30,7 @@ Everything after `--` goes to `playwright test`. Environment:
 
 ## What a run does
 
-- Builds the web app, then starts its **own daemon**: a free port, `XDG_CONFIG_HOME=<run>/ui-config`, `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` unset (subscription login only), `ANTHROPIC_MODEL=haiku`, roots `<run>/projects`. The daemon is stopped by PID tree (`taskkill /T /F /PID` on Windows, the process group elsewhere), never by name.
+- Builds the web app, then starts its **own daemon**: a free port, `XDG_CONFIG_HOME=<run>/ui-config`, `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` unset (subscription login only), `ANTHROPIC_MODEL=haiku`, every inherited `CLAUDE_UI_*` unset, on Windows `LOCALAPPDATA=<run>/localappdata` (the daemon keeps uploads there, not under `XDG_CONFIG_HOME`), roots `<run>/projects`. The daemon is stopped by PID tree (`taskkill /T /F /PID` on Windows, the process group elsewhere), never by name.
 - Each scenario gets a scratch project `<run>/projects/<scenario>-r<retry>` whose `.claude/settings.json` sets `permissions.defaultMode` to `default`, so a write asks first whatever your own Claude settings say. The session picks Haiku in the model chooser.
 - A guard fails the run if the run folder shows up in your real claude-ui config (`%APPDATA%\claude-ui`, `~/.config/claude-ui`) or if the daemon did not write its `daemon.json` under `<run>/ui-config`.
 - Claude Code keeps transcripts of the scratch projects in `~/.claude/projects/<encoded path>` (the login lives there); the run does not delete them.
@@ -45,10 +45,10 @@ Everything after `--` goes to `playwright test`. Environment:
 
 ## Debug loop
 
-A paused run you drive with `playwright-cli`. Run it in the background and note the runner PID.
+A paused run you drive with `playwright-cli`. Run it in the background; the runner writes its own PID to `<run>/runner.pid`. The run folder is printed as `e2e run folder: <path>` at the top of `debug.log` (it is `<E2E_SCRATCH or tmp/claude-ui-e2e>/<stamp>-<pid>`, also in `E2E_RUN_DIR` inside the run).
 
 ```sh
-npm run e2e -- permission.feature -g "Deny" --debug=cli > debug.log 2>&1 &    # note the PID
+npm run e2e -- permission.feature -g "Deny" --debug=cli > debug.log 2>&1 &
 # wait for "Debugging Instructions" in debug.log; it prints: playwright-cli attach tw-XXXXXX
 playwright-cli attach tw-XXXXXX
 playwright-cli -s=tw-XXXXXX pause-at permission.steps.ts:17     # a line of a step file; see the Windows caveat below
@@ -61,7 +61,7 @@ playwright-cli -s=tw-XXXXXX step-over                           # or: resume
 - **Windows: `pause-at` takes the bare file name** (`permission.steps.ts:17`), not `steps/permission.steps.ts:17`: the location is matched with `includes` against a backslash path. The line is in a step definition or fixture file, not in the `.feature`.
 - `--debug=cli` does not pause on a failure, it fails and exits. Pause before the failing step.
 - Copy the `### Ran Playwright code` that `playwright-cli` prints into the step.
-- **Stopping:** `playwright-cli -s=tw-XXXXXX close` only detaches; the run stays paused. Kill the runner's tree by PID: `taskkill /T /F /PID <pid>` (Windows), `kill -- -<pgid>` elsewhere (start the run with `setsid`). A hard kill skips the fixture teardown: the daemon dies with the tree on Windows (it watches its parents) and its PID is in `<run>/daemon-w0.pid`; kill that too if it is still there, and delete the run folder.
+- **Stopping:** `playwright-cli -s=tw-XXXXXX close` only detaches; the run stays paused. Kill the runner's tree by the PID in `<run>/runner.pid`: `taskkill /T /F /PID $(cat <run>/runner.pid)` (Windows), `kill -- -$(ps -o pgid= $(cat <run>/runner.pid) | tr -d ' ')` elsewhere (start the run with `setsid`). Never use `$!` from Git Bash: it is an MSYS PID, not a Windows PID, and `taskkill` on it can hit an unrelated process. A hard kill skips the fixture teardown: the daemon dies with the tree on Windows (it watches its parents) and its PID is in `<run>/daemon-w0.pid`; kill that too if it is still there, and delete the run folder.
 - Before you finish, list processes whose command line holds your worktree or run folder and kill your own by PID.
 
 ## Output

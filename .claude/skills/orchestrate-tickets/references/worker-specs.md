@@ -129,7 +129,7 @@ starting with the RESULT block as before.
 Unit tests prove the code does what the author meant. This stage proves the acceptance
 criteria hold for a person clicking through the product. **Fresh worker, never the
 implementer.** Read-only in the worktree except for the scratch folder, and with
-`acceptance: playwright-bdd` the playbook's scenario and step folders.
+`acceptance: playwright-bdd` the playbook's e2e folders (features, steps, support helpers).
 
 Paste the METHOD block that matches the playbook's `acceptance:` value.
 
@@ -177,7 +177,8 @@ METHOD (acceptance: playwright-bdd — scripted)
   the claims touch them.
 - Red: attach-debug per the playbook to tell a wrong step from a broken app. Fix a wrong step;
   a broken app is a failed case for the implementer.
-- Commit only the scenario and step files, as `<KEY>: acceptance scenarios for <claims>`.
+- Commit only files in the playbook's e2e folders (features, steps, support helpers), as
+  `<KEY>: acceptance scenarios for <claims>`.
 - Look at every captured screenshot; a claim whose capture does not show it is untested.
 
 REPORT

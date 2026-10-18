@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { killTree } from "./daemon.ts";
-import { assertIsolated } from "./isolation.ts";
+import { assertIsolated, assertUploadsIsolated } from "./isolation.ts";
 import { evidenceDir, runDir } from "./paths.ts";
 
 export default function globalTeardown() {
@@ -14,9 +14,12 @@ export default function globalTeardown() {
       rmSync(join(run, f), { force: true });
     }
   assertIsolated(run);
-  if (!existsSync(join(run, "ui-config", "claude-ui", "token"))) {
+  // Only a run that started a daemon (a log exists) can tell where the daemon wrote; a run with zero scenarios started none.
+  const started = existsSync(run) && readdirSync(run).some((n) => /^daemon-w\d+\.log$/.test(n));
+  if (started && !existsSync(join(run, "ui-config", "claude-ui", "token"))) {
     throw new Error(`the daemon never wrote its config under ${run}/ui-config: it ran on another config dir`);
   }
+  if (started) assertUploadsIsolated(run);
   console.log(`e2e isolation: ok, nothing of ${run} in the real claude-ui config dirs`);
   // steps/fixtures.ts leaves a marker when a scenario failed (an attempt that a retry saved counts: the folder is kept for the log).
   const passed = !existsSync(join(run, "failed.marker"));

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { expect } from "@playwright/test";
-import { TURN_MS, lastToolCard } from "../support/ui.ts";
+import { TOOL_STATUS, TURN_MS, toolCard } from "../support/ui.ts";
 import { Then, When } from "./fixtures.ts";
 
 When("I allow the permission request", async ({ page }) => {
@@ -20,13 +20,12 @@ Then("the permission request is gone", async ({ page }) => {
   await expect(page.getByTestId("permission-panel")).toBeHidden();
 });
 
-Then("the tool call ended {string}", async ({ page }, status: string) => {
-  await expect(lastToolCard(page)).toHaveAttribute("data-status", status, { timeout: TURN_MS });
+Then("the {string} tool call is {word}", async ({ page }, text: string, outcome: string) => {
+  const status = TOOL_STATUS[outcome];
+  if (!status) throw new Error(`unknown tool call outcome "${outcome}"; use one of ${Object.keys(TOOL_STATUS).join(", ")}`);
+  await expect(toolCard(page, text)).toHaveAttribute("data-status", status, { timeout: TURN_MS });
 });
 
-Then("the tool call is running", async ({ page }) => {
-  await expect(lastToolCard(page)).toHaveAttribute("data-status", "running", { timeout: TURN_MS });
-});
 
 Then("the file {string} exists in the project", async ({ project }, name: string) => {
   await expect.poll(() => existsSync(join(project.path, name)), { timeout: 15_000 }).toBe(true);

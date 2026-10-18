@@ -14,6 +14,8 @@ export function runDir(env: NodeJS.ProcessEnv = process.env, now = new Date(), p
 
 export const configHome = (run: string) => join(run, "ui-config");
 export const daemonConfigDir = (run: string) => join(configHome(run), "claude-ui");
+/** Windows only: the daemon keeps its uploads under LOCALAPPDATA, so the run gets its own. */
+export const localAppData = (run: string) => join(run, "localappdata");
 export const projectsRoot = (run: string) => join(run, "projects");
 export const evidenceDir = (run: string, env: NodeJS.ProcessEnv = process.env) => env.E2E_EVIDENCE_DIR || join(run, "evidence");
 

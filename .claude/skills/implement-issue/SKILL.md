@@ -86,18 +86,23 @@ PID, and fails if anything of the run landed in the real config dir.
    criterion in `notes.md`. For OpenCode parity, put each next to its OpenCode screenshot
    (`<nn>-<what>-claudeui.png` / `-opencode.png`).
 4. Red, or a new step is needed: re-run that one scenario in the background with
-   `-g "<scenario>" --debug=cli`, record the runner PID, wait for `Debugging Instructions`, then
+   `-g "<scenario>" --debug=cli`, wait for `Debugging Instructions`, then
    `playwright-cli attach tw-XXXX` and `playwright-cli -s=tw-XXXX pause-at <file>.steps.ts:<line>`
    (bare file name: a path never matches on Windows). Drive the page from the failing step,
    copy the printed Playwright code into the step or fix the app, stop the run by killing the
    runner's PID tree (`close` only detaches, and a debug run never times out), go to 2.
+   Take the PID from `<run>/runner.pid` (the run folder is printed as `e2e run folder:` at the
+   top of the log, and is `<E2E_SCRATCH>/<stamp>-<pid>`), never from `$!`: in Git Bash that is an
+   MSYS PID, not a Windows one. Windows: `taskkill /T /F /PID $(cat <run>/runner.pid)`;
+   POSIX: `kill -- -$(ps -o pgid= $(cat <run>/runner.pid) | tr -d ' ')` (start the run with `setsid`).
 5. Clean up: every background run stopped, every PID you started killed (plus any in
    `<scratch>/e2e/*/*.pid`), `<scratch>/e2e` deleted. Evidence stays.
 
 Hand-driving `playwright-cli -s=w<port> open` against Commands › app is only for a check a
 scenario cannot express; say why in `notes.md`, and stop it by PID the same way.
 
-Under the coordinator this loop is the stage-2 worker's: it fixes steps, never the app; a
+Under the coordinator this loop is the stage-2 worker's: it edits and commits only
+`packages/e2e/features`, `packages/e2e/steps` and `packages/e2e/support`, never the app; a
 broken app is a failed case that goes back to the implementer.
 
 ## Traps

@@ -11,7 +11,7 @@ Feature: Permission request
   Scenario: Allow runs the command
     When I allow the permission request
     Then the permission request is gone
-    And the tool call ended "done"
+    And the "probe.txt" tool call is finished
     And the file "probe.txt" exists in the project
     And the turn has finished
     And I capture "allowed"
@@ -19,7 +19,7 @@ Feature: Permission request
   Scenario: Deny does not run the command
     When I deny the permission request
     Then the permission request is gone
-    And the tool call ended "denied"
+    And the "probe.txt" tool call is denied
     And the file "probe.txt" does not exist in the project
     And the turn has finished
     And I capture "denied"

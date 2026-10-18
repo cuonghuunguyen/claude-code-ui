@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { REPO_ROOT } from "./daemon.ts";
 import { assertIsolated } from "./isolation.ts";
 import { configHome, evidenceDir, runDir } from "./paths.ts";
@@ -9,6 +10,8 @@ export default function globalSetup() {
   mkdirSync(configHome(run), { recursive: true });
   mkdirSync(evidenceDir(run), { recursive: true });
   assertIsolated(run);
+  // For stopping a paused run: taskkill /T /F /PID $(cat <run>/runner.pid). A Git Bash `$!` is an MSYS PID, not a Windows one.
+  writeFileSync(join(run, "runner.pid"), String(process.pid));
   console.log(`e2e run folder: ${run}`);
   console.log(`e2e evidence:   ${evidenceDir(run)}`);
   if (process.env.E2E_SKIP_BUILD === "1") return;

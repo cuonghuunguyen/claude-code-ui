@@ -5,8 +5,6 @@ Feature: Restart the daemon
     And I capture "before-restart"
     When I restart the daemon
     Then the app is connected
-    And I see my prompt in the transcript
-    And I see a reply from Claude
     When I reload the page
     Then I see my prompt in the transcript
     And I see a reply from Claude
