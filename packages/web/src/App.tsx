@@ -1329,6 +1329,8 @@ export function App() {
   /** The new-session tab, starting in `cwd`: by default the active session's project, else the newest project. */
   function newSession(cwd?: string) {
     setDraftCwd(cwd ?? (activeId && activeId !== NEW_TAB ? sessionOf(activeId)?.cwd : undefined) ?? draftCwd);
+    // A maximized bottom panel would hide the draft.
+    setBottomMax(false);
     open(NEW_TAB);
     // autoFocus works only on the first mount; the tab may be open already, hidden. After the render shows it.
     requestAnimationFrame(() => newPrompt.current?.focus());
@@ -1650,23 +1652,38 @@ export function App() {
   const [hasShells, setHasShells] = useState<Record<string, boolean>>({});
   const [termWanted, setTermWanted] = useState<ReadonlySet<string>>(new Set());
   const [spawnFor, setSpawnFor] = useState<string>();
-  const termAvail = !!panelCwd && (hasShells[panelCwd] === true || termWanted.has(panelCwd));
+  // While a folder's shells are unknown the last known answer stays (no collapse and remount for one terminal.list round trip).
+  const lastAvail = useRef(false);
+  const availKnown = !!panelCwd && (hasShells[panelCwd] !== undefined || termWanted.has(panelCwd));
+  if (availKnown) lastAvail.current = hasShells[panelCwd!] === true || termWanted.has(panelCwd!);
+  const termAvail = availKnown ? lastAvail.current : lastAvail.current && !!panelCwd;
+  const spawnRef = useRef(spawnFor);
+  spawnRef.current = spawnFor;
+  // An active open (the user asked for the terminal) shows it loud (focus on the shell); any other show starts quiet.
+  const activeOpen = useRef(false);
   useEffect(() => {
     if (!panelCwd || status !== "connected") return;
     let live = true;
     client.current!.request<TerminalListResult>({ type: "terminal.list", cwd: panelCwd }).then(
-      (r) => live && setHasShells((h) => ({ ...h, [panelCwd]: !!r.terminals?.length })),
+      (r) => {
+        if (!live) return;
+        const any = !!r.terminals?.length;
+        setHasShells((h) => (h[panelCwd] === any ? h : { ...h, [panelCwd]: any }));
+        // Its shells ended elsewhere (another browser, a daemon restart): no empty terminal for this folder unless an open is pending.
+        if (!any && spawnRef.current !== panelCwd) setTermWanted((w) => (w.has(panelCwd) ? new Set([...w].filter((c) => c !== panelCwd)) : w));
+      },
       () => {},
     );
     return () => void (live = false);
   }, [panelCwd, status]);
-  useEffect(() => setSpawnFor(undefined), [panelCwd]);
+  useEffect(() => (setSpawnFor(undefined), void (activeOpen.current = false)), [panelCwd]);
   const wantTerminal = (cwd: string) => setTermWanted((w) => (w.has(cwd) ? w : new Set(w).add(cwd)));
   /** An active open (Toggle terminal, New terminal, a click on the Terminal pane tab): the terminal shows and starts a shell if the folder has none. */
   const askTerminal = () => {
     if (!panelCwd) return;
     wantTerminal(panelCwd);
     setSpawnFor(panelCwd);
+    activeOpen.current = true;
   };
   // A restored narrow Terminal pane without shells shows the session.
   const pane: Pane = !lg && histPane === "terminal" && !termAvail ? "session" : histPane;
@@ -1708,6 +1725,12 @@ export function App() {
   const [termFocusReq, setTermFocusReq] = useState(0);
   useEffect(() => setTermKeep((k) => termShows || (k && termAreaOpen)), [termShows, termAreaOpen]);
   const termMounted = termShows || (termKeep && termAreaOpen);
+  // Hidden again: a pending open request (spawn, loud show) is void, so a later passive show spawns and focuses nothing.
+  useEffect(() => {
+    if (termMounted) return;
+    setSpawnFor(undefined);
+    activeOpen.current = false;
+  }, [termMounted]);
   useEffect(() => void (!bottomShown && setBottomMax(false)), [bottomShown]);
   const openArea = (a: DockArea, v = true) => (a === "side" ? setPanel(v) : setBottomOpen(v));
   /** Selects the pane and, on wide screens, opens its area. */
@@ -1744,12 +1767,8 @@ export function App() {
   // From a move to the user's next key or pointer press: a terminal that shows because of the move (moved, or next in the area the
   // moved pane left) keeps off the focus. A late (Suspense) mount of a terminal shown by the move is covered by `termMoveShow`.
   // GH-381: a terminal the reload restores as the narrow pane (shown one effect after the first render) keeps off the focus until the first key or pointer press.
-  // GH-430: so does a remembered terminal (open bottom panel, or a remembered Terminal pane): it shows once its folder's shells are known
-  // (terminal.list), after the first render.
-  const [moving, setMoving] = useState(() => {
-    const t = loadPaneTabs();
-    return t.narrow === "terminal" || t.side === "terminal" || t.bottom === "terminal" || loadFlag(TERMINAL_KEY);
-  });
+  // GH-430: a terminal that shows without an active open (a remembered one once terminal.list answers, a session switch) starts quiet too.
+  const [moving, setMoving] = useState(() => loadPaneTabs().narrow === "terminal");
   useEffect(() => {
     if (!moving) return;
     const done = () => setMoving(false);
@@ -1766,7 +1785,7 @@ export function App() {
   const [termShowsBefore, setTermShowsBefore] = useState(termShows);
   if (termShows !== termShowsBefore) {
     setTermShowsBefore(termShows);
-    setTermMoveShow(termShows && moving);
+    setTermMoveShow(termShows && (moving || !activeOpen.current));
   }
   const [termAsk, setTermAsk] = useState(termFocusReq + terminalTick);
   if (termFocusReq + terminalTick !== termAsk) {

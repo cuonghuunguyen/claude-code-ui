@@ -3579,4 +3579,146 @@ describe("GH-430: panels on the new-session tab", () => {
       restore();
     }
   });
+
+  // Review round 1: a remembered terminal never collapses, steals the focus or starts a shell when switching sessions or reloading.
+  describe("review round 1", () => {
+    const wait = (ms: number) => act(async () => new Promise((r) => setTimeout(r, ms)));
+    const focusedN = () => (globalThis as { __termFocused?: number }).__termFocused ?? 0;
+    const T1 = { id: "t1", title: "Terminal 1" };
+    /** terminal.list per folder from `shells` (mutable); `gate` holds every reply back until released. */
+    const lists = (shells: Record<string, { id: string; title: string }[]>) => {
+      const gate: { p?: Promise<void>; release: () => void } = { release: () => {} };
+      return {
+        gate,
+        hold: () => (gate.p = new Promise<void>((r) => (gate.release = () => (gate.p = undefined, r())))),
+        replies: {
+          "terminal.list": async (m: { cwd: string }) => (gate.p && (await gate.p), { terminals: [...(shells[m.cwd] ?? [])] }),
+          "terminal.create": (m: { cwd: string }) => {
+            const t = { id: `n${(shells[m.cwd] ??= []).length + 1}`, title: "Terminal" };
+            shells[m.cwd]!.push(t);
+            return { terminal: t };
+          },
+        },
+      };
+    };
+    const hash = async (id: string) => {
+      await act(async () => {
+        location.hash = `#${id}`;
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      });
+    };
+    const both = { sessions: [session, other], projects: ["/p/demo", "/p/other"] };
+    const bySess = (m: { sessionId: string }) => ({ logEpoch: "e1", session: m.sessionId === OTHER_ID ? other : session });
+
+    it("a session switch to a project whose shells are not listed yet keeps the bottom panel mounted and the focus off the shell", async () => {
+      localStorage.setItem("claude-ui.terminalOpen", "1");
+      const l = lists({ "/p/demo": [T1], "/p/other": [T1] });
+      const restore = await remount({ ...l.replies, "session.list": both, "session.subscribe": bySess });
+      try {
+        await wait(100);
+        const panel = q("bottom-panel");
+        expect(panel).not.toBeNull();
+        const before = focusedN();
+        l.hold();
+        await hash(OTHER_ID);
+        await wait(30);
+        expect(q("bottom-panel")).toBe(panel);
+        l.gate.release();
+        await wait(300);
+        expect(q("bottom-panel")).toBe(panel);
+        expect(focusedN()).toBe(before);
+      } finally {
+        restore();
+      }
+    });
+
+    it("a reload with a remembered terminal: input before terminal.list answers, then the shell shows without the focus", async () => {
+      localStorage.setItem("claude-ui.terminalOpen", "1");
+      const l = lists({ "/p/demo": [T1] });
+      l.hold();
+      const before = focusedN();
+      const restore = await remount({ ...l.replies });
+      try {
+        await wait(50);
+        expect(q("bottom-panel")).toBeNull();
+        await act(async () => void window.dispatchEvent(new PointerEvent("pointerdown")));
+        await press({ key: "a" });
+        l.gate.release();
+        await wait(300);
+        expect(q("bottom-panel")).not.toBeNull();
+        expect(focusedN()).toBe(before);
+      } finally {
+        restore();
+      }
+    });
+
+    it("New session while the bottom panel is maximized shows the draft", async () => {
+      localStorage.setItem("claude-ui.terminalOpen", "1");
+      await rerender();
+      await wait(100);
+      await clickId("dock-maximize");
+      expect(el.querySelector("main")!.className.split(/\s+/)).toContain("hidden");
+      await act(async () => el.querySelector<HTMLElement>('[data-testid="project-new-session"]')!.click());
+      await wait(100);
+      expect(el.querySelector("main")!.className.split(/\s+/)).not.toContain("hidden");
+    });
+
+    it("Ctrl+` twice before the list answers leaves no pending spawn: reopening the side panel starts no shell", async () => {
+      localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+      const l = lists({});
+      l.hold();
+      const restore = await remount({ ...l.replies });
+      sent.length = 0;
+      try {
+        await press({ key: "`", code: "Backquote", ctrlKey: true });
+        await wait(50);
+        await press({ key: "`", code: "Backquote", ctrlKey: true });
+        l.gate.release();
+        await wait(200);
+        await clickId("panel-toggle");
+        await wait(200);
+        expect(sent.filter((m) => m.type === "terminal.create")).toEqual([]);
+      } finally {
+        restore();
+      }
+    });
+
+    it("shells that ended while another folder showed: coming back hides the terminal instead of an empty tab bar", async () => {
+      const shells: Record<string, { id: string; title: string }[]> = { "/p/demo": [T1], "/p/other": [] };
+      const l = lists(shells);
+      const restore = await remount({ ...l.replies, "session.list": both, "session.subscribe": bySess });
+      try {
+        await clickId("terminal-toggle");
+        await wait(100);
+        expect(q("bottom-panel")).not.toBeNull();
+        await hash(OTHER_ID);
+        await wait(100);
+        expect(q("bottom-panel")).toBeNull();
+        shells["/p/demo"] = [];
+        await hash(ID);
+        await wait(200);
+        expect(q("bottom-panel")).toBeNull();
+      } finally {
+        restore();
+      }
+    });
+
+    it("the draft's project chip and a reconnect start no shell", async () => {
+      localStorage.setItem("claude-ui.terminalOpen", "1");
+      const l = lists({});
+      const restore = await remount({ ...l.replies, "session.list": both });
+      sent.length = 0;
+      try {
+        await openNewTab();
+        await pickOption('[data-testid="new-session-tab"] [data-testid="project-chip"]', "Oother/p/other");
+        await wait(100);
+        await act(async () => setStatus("reconnecting"));
+        await act(async () => setStatus("connected"));
+        await wait(100);
+        expect(sent.filter((m) => m.type === "terminal.create")).toEqual([]);
+      } finally {
+        restore();
+      }
+    });
+  });
 });
