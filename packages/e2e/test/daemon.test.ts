@@ -1,7 +1,10 @@
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { daemonEnv, freePort, killCommand, ownerPorts, realConfigDirs, TOKEN_RE } from "../support/daemon.ts";
-import { isolationBreaches, leakedUploads, sessionIds } from "../support/isolation.ts";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { assertUploadsIsolated, isolationBreaches, leakedUploads, sessionIds } from "../support/isolation.ts";
+import { commandLineMentions, stopRun } from "../support/stop.ts";
 import { runDir, slug } from "../support/paths.ts";
 
 describe("freePort", () => {
@@ -65,7 +68,7 @@ describe("daemonEnv", () => {
     expect(e.OTHER).toBe("o");
   });
   it("on Windows gives the daemon its own LOCALAPPDATA (uploads go there); elsewhere leaves it", () => {
-    expect(daemonEnv({ LOCALAPPDATA: "C:\real" }, "/run", 5555, "win32").LOCALAPPDATA).toBe(join("/run", "localappdata"));
+    expect(daemonEnv({ LOCALAPPDATA: "C:\\real" }, "/run", 5555, "win32").LOCALAPPDATA).toBe(join("/run", "localappdata"));
     expect(daemonEnv({ LOCALAPPDATA: "/real" }, "/run", 5555, "linux").LOCALAPPDATA).toBe("/real");
   });
   it("points the config at the run, sets the port and Haiku", () => {
@@ -116,5 +119,65 @@ describe("isolationBreaches", () => {
   });
   it("ignores files that do not mention the run", () => {
     expect(isolationBreaches(run, { "projects.json": "[]" })).toEqual([]);
+  });
+});
+
+describe("assertUploadsIsolated", () => {
+  const id = "05498d02-3da4-49e5-b033-0b7a21c94ab1";
+  const tmp: string[] = [];
+  afterAll(() => tmp.forEach((d) => rmSync(d, { recursive: true, force: true })));
+  const setup = (opts: { sessions: boolean; ownUploads: boolean; realFolders: string[] }) => {
+    const base = mkdtempSync(join(tmpdir(), "e2e-guard-"));
+    tmp.push(base);
+    const run = join(base, "run");
+    const real = join(base, "real");
+    mkdirSync(join(run, "ui-config", "claude-ui"), { recursive: true });
+    mkdirSync(join(real, "claude-ui", "uploads"), { recursive: true });
+    if (opts.sessions) writeFileSync(join(run, "ui-config", "claude-ui", "sessions.json"), JSON.stringify({ [id]: {} }));
+    if (opts.ownUploads) mkdirSync(join(run, "localappdata", "claude-ui", "uploads"), { recursive: true });
+    for (const f of opts.realFolders) mkdirSync(join(real, "claude-ui", "uploads", f));
+    return { run, env: { LOCALAPPDATA: real } };
+  };
+  it("passes when the uploads are under the run and the real folder has none of its sessions", () => {
+    const { run, env } = setup({ sessions: true, ownUploads: true, realFolders: ["11111111-1111-1111-1111-111111111111"] });
+    expect(() => assertUploadsIsolated(run, env, "win32")).not.toThrow();
+  });
+  it("fails when the real folder holds a folder of a session of the run", () => {
+    const { run, env } = setup({ sessions: true, ownUploads: true, realFolders: [id] });
+    expect(() => assertUploadsIsolated(run, env, "win32")).toThrow(/UPLOADS BREACH.*holds/);
+  });
+  it("fails when the run has sessions but no uploads folder of its own", () => {
+    const { run, env } = setup({ sessions: true, ownUploads: false, realFolders: [] });
+    expect(() => assertUploadsIsolated(run, env, "win32")).toThrow(/does not exist/);
+  });
+  it("does nothing without sessions or off Windows", () => {
+    expect(() => assertUploadsIsolated(setup({ sessions: false, ownUploads: false, realFolders: [id] }).run, {}, "win32")).not.toThrow();
+    const { run, env } = setup({ sessions: true, ownUploads: false, realFolders: [id] });
+    expect(() => assertUploadsIsolated(run, env, "linux")).not.toThrow();
+  });
+});
+
+describe("stop", () => {
+  it("matches a command line that holds the run folder in any slash style or case", () => {
+    expect(commandLineMentions(["node main.ts --roots C:", "Tmp", "Run-1", "projects"].join(String.fromCharCode(92)), "c:/tmp/run-1")).toBe(true);
+    expect(commandLineMentions("node main.ts --roots /other/projects", "/tmp/run-1")).toBe(false);
+    expect(commandLineMentions("node main.ts --roots /tmp/run-10/projects", "/tmp/run-1")).toBe(false);
+    expect(commandLineMentions("", "/tmp/run-1")).toBe(false);
+  });
+  it("kills the runner and only the daemons whose command line holds the run, and clears the pid files", () => {
+    const base = mkdtempSync(join(tmpdir(), "e2e-stop-"));
+    try {
+      const run = join(base, "run");
+      mkdirSync(run);
+      writeFileSync(join(run, "runner.pid"), "11");
+      writeFileSync(join(run, "daemon-w0.pid"), "22");
+      writeFileSync(join(run, "daemon-w1.pid"), "33");
+      const killed: number[] = [];
+      stopRun(run, (p) => void killed.push(p), (p) => (p === 22 ? `node --roots ${join(run, "projects")}` : "unrelated"));
+      expect(killed).toEqual([11, 22]);
+      expect(() => stopRun(join(base, "nope"), () => {}, () => "")).toThrow(/no such run/);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

@@ -5,6 +5,7 @@
   "scripts": {
     "e2e": "bddgen && playwright test",
     "steps": "bddgen export",
+    "stop": "node --import tsx support/stop-cli.ts",
     "typecheck": "tsc -p ."
   },
   "devDependencies": {

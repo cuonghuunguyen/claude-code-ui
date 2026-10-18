@@ -6,6 +6,8 @@ import { evidenceDir, runDir } from "./paths.ts";
 
 export default function globalTeardown() {
   const run = runDir();
+  // The runner is ending: its PID must not stay on disk for a later e2e:stop to hit a reused PID.
+  rmSync(join(run, "runner.pid"), { force: true });
   // Fallback when a worker died before its fixture teardown: kill any daemon PID still on disk.
   if (existsSync(run))
     for (const f of readdirSync(run).filter((n) => /^daemon-w\d+\.pid$/.test(n))) {

@@ -101,6 +101,27 @@ export function killTree(pid: number): void {
     } catch {}
 }
 
+/** killTree without blocking the event loop: the group gets SIGTERM, then up to 3 s to go, then SIGKILL (POSIX); Windows kills the tree at once. */
+export async function killTreeAsync(pid: number): Promise<void> {
+  if (process.platform === "win32") return killTree(pid);
+  const alive = () => {
+    try {
+      process.kill(-pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {}
+  for (let waited = 0; alive() && waited < 3000; waited += 100) await sleep(100);
+  if (alive())
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {}
+}
+
 /** The daemon's environment: own config dir and port, subscription login only, Haiku. */
 export function daemonEnv(base: NodeJS.ProcessEnv, run: string, port: number, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
   const env = { ...base };
@@ -186,7 +207,10 @@ export async function startDaemon(run: string, worker: number, opts: { port?: nu
     try {
       await ready(out, () => exited);
     } catch (e) {
-      killTree(child.pid!);
+      // A child that already exited needs no kill (its PID may be reused); either way it is no longer ours to stop.
+      if (exited === undefined) await killTreeAsync(child.pid!);
+      state.child = undefined;
+      rmSync(pidFile, { force: true });
       throw e;
     }
   }
@@ -220,7 +244,7 @@ export async function startDaemon(run: string, worker: number, opts: { port?: nu
     const child = state.child;
     if (!child?.pid) return;
     state.child = undefined;
-    killTree(child.pid);
+    await killTreeAsync(child.pid);
     rmSync(pidFile, { force: true });
     await waitPortClosed(port);
   }

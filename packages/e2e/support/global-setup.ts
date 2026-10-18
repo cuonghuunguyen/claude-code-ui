@@ -10,7 +10,7 @@ export default function globalSetup() {
   mkdirSync(configHome(run), { recursive: true });
   mkdirSync(evidenceDir(run), { recursive: true });
   assertIsolated(run);
-  // For stopping a paused run: taskkill /T /F /PID $(cat <run>/runner.pid). A Git Bash `$!` is an MSYS PID, not a Windows one.
+  // For stopping a paused run: `npm run e2e:stop -- <run>` reads this file. A Git Bash `$!` is an MSYS PID, not a Windows one.
   writeFileSync(join(run, "runner.pid"), String(process.pid));
   console.log(`e2e run folder: ${run}`);
   console.log(`e2e evidence:   ${evidenceDir(run)}`);

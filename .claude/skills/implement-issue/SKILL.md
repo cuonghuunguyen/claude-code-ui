@@ -91,12 +91,13 @@ PID, and fails if anything of the run landed in the real config dir.
    (bare file name: a path never matches on Windows). Drive the page from the failing step,
    copy the printed Playwright code into the step or fix the app, stop the run by killing the
    runner's PID tree (`close` only detaches, and a debug run never times out), go to 2.
-   Take the PID from `<run>/runner.pid` (the run folder is printed as `e2e run folder:` at the
-   top of the log, and is `<E2E_SCRATCH>/<stamp>-<pid>`), never from `$!`: in Git Bash that is an
-   MSYS PID, not a Windows one. Windows: `taskkill /T /F /PID $(cat <run>/runner.pid)`;
-   POSIX: `kill -- -$(ps -o pgid= $(cat <run>/runner.pid) | tr -d ' ')` (start the run with `setsid`).
-5. Clean up: every background run stopped, every PID you started killed (plus any in
-   `<scratch>/e2e/*/*.pid`), `<scratch>/e2e` deleted. Evidence stays.
+   Stop it with `npm run e2e:stop -- <absolute run folder>`: it kills the runner's tree by the PID in
+   `<run>/runner.pid`, then any live daemon of that run (`daemon-w*.pid`, checked against the run
+   folder in its command line). The run folder is printed as `e2e run folder:` at the top of the
+   log (`<E2E_SCRATCH>/<stamp>-<pid>`). Never use `$!` from Git Bash (an MSYS PID, not a Windows
+   one). Manual fallback only: `MSYS_NO_PATHCONV=1 taskkill /T /F /PID <pid from runner.pid>`.
+5. Clean up: every background run stopped (`npm run e2e:stop -- <run>` for each run folder under
+   `<scratch>/e2e`), `<scratch>/e2e` deleted. Evidence stays.
 
 Hand-driving `playwright-cli -s=w<port> open` against Commands › app is only for a check a
 scenario cannot express; say why in `notes.md`, and stop it by PID the same way.
