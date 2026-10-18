@@ -34,6 +34,7 @@ Windows (PowerShell): `$env:PORT=4281; npm start`. `npm run dev` needs a POSIX s
 ```sh
 npm run typecheck
 npm test
+npm run e2e                          # local only: real Claude on Haiku, see packages/e2e/README.md
 ```
 
 Adapter fixtures are recorded from a real SDK session: `npm run record-fixture -w @claude-ui/daemon -- <out.jsonl>`, then replace home paths before committing.
