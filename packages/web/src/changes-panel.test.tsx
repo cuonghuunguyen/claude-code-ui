@@ -958,3 +958,19 @@ it("GH-360 reveal switches to Uncommitted and selects the file (narrow: opens it
   await flush();
   expect(current()).toBe("/p/src/b.ts");
 });
+
+it("AC3: emptyText replaces the session empty message; git modes keep theirs", async () => {
+  const text = "No changes yet. Claude's edits appear here.";
+  await act(async () => root.render(<ChangesPanel client={fakeClient({})} view={view([])} cwd="/p" onOpen={() => {}} sessionId="new" emptyText={text} />));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-empty]")!.textContent).toBe(text);
+  await act(async () => root.render(null));
+  await act(async () => root.render(<ChangesPanel client={fakeClient({})} view={view([])} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-empty]")!.textContent).toBe("No changes in this session yet.");
+  await act(async () => root.render(null));
+  saveDiffMode("uncommitted");
+  await act(async () => root.render(<ChangesPanel client={fakeClient({}, { status: REPO, diff: D([]) })} view={view([])} cwd="/p" onOpen={() => {}} emptyText={text} />));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-empty]")!.textContent).toBe("No uncommitted changes.");
+});

@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
+import { saveDiffMode } from "./diff-mode.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -528,9 +529,9 @@ it("the palette on the new-session tab changes the draft's permission mode, and 
     await openNewTab();
     await press({ key: "k", code: "KeyK", ctrlKey: true });
     expect(paletteRow("Focus prompt")).toBeDefined();
-    // No side panel or terminal on the new-session tab.
-    expect(paletteRow("Toggle side panel")).toBeUndefined();
-    expect(paletteRow("Toggle terminal")).toBeUndefined();
+    // GH-430: the panels show on the new-session tab (wide screens): their commands are listed.
+    expect(paletteRow("Toggle side panel")).toBeDefined();
+    expect(paletteRow("Toggle terminal")).toBeDefined();
     await act(async () => paletteRow("Change permission mode")!.click());
     expect(paletteRow("Bypass permissions")).toBeDefined();
     await act(async () => paletteRow("Plan mode")!.click());
@@ -3260,5 +3261,322 @@ describe("GH-381: remembered dock tabs", () => {
     await act(async () => {});
     expect(q("pane-files")!.getAttribute("aria-selected")).toBe("true");
     width = 1440;
+  });
+});
+
+// GH-430: the new-session tab shows the side and bottom panel of its project (wide screens), so nothing jumps when the first prompt is sent.
+describe("GH-430: panels on the new-session tab", () => {
+  const OTHER_ID = "99999999-2222-3333-4444-555555555555";
+  const other: SessionListItem = { ...session, id: OTHER_ID, cwd: "/p/other", title: "Other" };
+  const NEW_ID = "aaaaaaaa-2222-3333-4444-555555555555";
+  const created: SessionListItem = { ...session, id: NEW_ID, title: "New session", transcript: false };
+  const TWO = { sessions: [session, other], projects: ["/p/demo", "/p/other"] };
+  /** An element is out of sight when it or an ancestor is `hidden` (not `hidden lg:flex`) or `lg:hidden`. */
+  const hiddenBy = (n: Element | null) => {
+    for (let e: Element | null = n; e; e = e.parentElement) {
+      const c = (e.getAttribute("class") ?? "").split(/\s+/);
+      if ((c.includes("hidden") && !c.includes("lg:flex")) || c.includes("lg:hidden")) return true;
+    }
+    return false;
+  };
+  const panelShown = (id: string) => !!q(id) && !hiddenBy(q(id));
+  const callsSince = (n: number, type: string) => sent.slice(n).filter((m) => m.type === type) as Record<string, unknown>[];
+  const sendFirst = async (text: string) => {
+    const box = newPrompt() as HTMLTextAreaElement;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    await act(async () => {
+      setValue.call(box, text);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => void box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" })));
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+  };
+  const hashTo = async (id: string) => {
+    await act(async () => {
+      location.hash = `#${id}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+  };
+  const bySession = (m: { sessionId: string }) => ({ logEpoch: "e1", session: [session, other, created].find((x) => x.id === m.sessionId) ?? session });
+
+  it("AC1: the new-session tab shows the side panel and the remembered bottom terminal; after the first prompt the same panels and panes stay", async () => {
+    localStorage.setItem("claude-ui.terminalOpen", "1");
+    const restore = await remount({
+      "session.list": () => ({ sessions: sent.some((m) => m.type === "session.create") ? [session, created] : [session], projects: ["/p/demo"] }),
+      "session.subscribe": bySession,
+      "session.create": { session: created },
+      "session.prompt": {},
+    });
+    try {
+      await openNewTab();
+      expect(panelShown("side-panel")).toBe(true);
+      expect(panelShown("bottom-panel")).toBe(true);
+      expect(q("bottom-panel")!.querySelector('[data-testid="pane-terminal"]')!.getAttribute("aria-selected")).toBe("true");
+      await pickSide(/changes/i);
+      const side = q("side-panel")!;
+      const term = q("terminal-panel")!;
+      expect(term).not.toBeNull();
+      expect(sideTab()).toMatch(/changes/i);
+      await sendFirst("hello");
+      expect(location.hash).toBe(`#${NEW_ID}`);
+      expect(q("side-panel")).toBe(side);
+      expect(q("terminal-panel")).toBe(term);
+      expect(panelShown("bottom-panel")).toBe(true);
+      expect(q("bottom-panel")!.querySelector('[data-testid="pane-terminal"]')!.getAttribute("aria-selected")).toBe("true");
+      expect(sideTab()).toMatch(/changes/i);
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC2: on the new-session tab Files, Graph and Terminal ask with the draft project's cwd", async () => {
+    const restore = await remount({
+      "session.list": { ...TWO, worktrees: { "/p/other": [{ path: "/p/other", branch: "main", main: true }] } },
+      "terminal.list": (m: { cwd: string }) => ({ terminals: m.cwd === "/p/other" ? [{ id: "t9", title: "Terminal 1" }] : [] }),
+      "git.status": { status: { branch: "main", added: 0, removed: 0, refs: "s1" } },
+      "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } },
+      "git.refs": { refs: "s1" },
+    });
+    try {
+      await openNewTab();
+      const n = sent.length;
+      await pickOption('[data-testid="new-session-tab"] [data-testid="project-chip"]', "Oother/p/other");
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(callsSince(n, "terminal.list")).toContainEqual({ type: "terminal.list", cwd: "/p/other" });
+      expect(callsSince(n, "fs.list")).toContainEqual({ type: "fs.list", path: "/p/other" });
+      // The terminal of that folder shows (it has a shell); the Graph tab is there (a git work tree) and asks for the draft's log.
+      expect(panelShown("side-panel")).toBe(true);
+      expect(q("terminal-panel")).toBeNull();
+      await pickSide(/graph/i);
+      await vi.waitFor(() => expect(callsSince(n, "git.log").some((m) => m.cwd === "/p/other")).toBe(true));
+      expect(callsSince(n, "git.log").every((m) => m.cwd === "/p/other")).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC3: Changes on the new-session tab shows the empty state; Uncommitted asks git.diff for the draft cwd", async () => {
+    await openNewTab();
+    await pickSide(/changes/i);
+    expect(q("changes-empty")!.textContent).toBe("No changes yet. Claude's edits appear here.");
+    // The session's own Changes keeps its message.
+    await act(async () => void (location.hash = `#${ID}`));
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(q("changes-empty")!.textContent).toBe("No changes in this session yet.");
+    saveDiffMode("uncommitted");
+    const restore = await remount({ "git.status": { status: { branch: "main", added: 0, removed: 0, refs: "s1" } }, "git.diff": { diff: { prefix: "", base: "b", files: [] } } });
+    try {
+      await openNewTab();
+      await pickSide(/changes/i);
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(sent.filter((m) => m.type === "git.diff")).toContainEqual({ type: "git.diff", cwd: "/p/demo", base: "head" });
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC4: switching the draft's project chip moves the panels to the new project", async () => {
+    const restore = await remount({ "session.list": TWO });
+    try {
+      await openNewTab();
+      const chip = '[data-testid="new-session-tab"] [data-testid="project-chip"]';
+      const n = sent.length;
+      await pickOption(chip, "Oother/p/other");
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(callsSince(n, "fs.list")).toContainEqual({ type: "fs.list", path: "/p/other" });
+      const m = sent.length;
+      await pickOption(chip, "Ddemo/p/demo");
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(callsSince(m, "fs.list")).toContainEqual({ type: "fs.list", path: "/p/demo" });
+      expect(callsSince(m, "terminal.list").every((c) => c.cwd === "/p/demo")).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC5: on the new-session tab the titlebar side panel and terminal toggles show and work; the palette lists Toggle terminal and Toggle side panel; Ctrl+` toggles the terminal", async () => {
+    await openNewTab();
+    expect(q("panel-toggle")).not.toBeNull();
+    expect(q("terminal-toggle-titlebar")).not.toBeNull();
+    await clickId("terminal-toggle-titlebar");
+    expect(q("terminal-toggle-titlebar")!.getAttribute("aria-pressed")).toBe("true");
+    expect(panelShown("bottom-panel")).toBe(true);
+    expect(q("terminal-panel")).not.toBeNull();
+    await clickId("terminal-toggle-titlebar");
+    expect(q("bottom-panel")).toBeNull();
+    await press({ key: "`", code: "Backquote", ctrlKey: true });
+    expect(panelShown("bottom-panel")).toBe(true);
+    await press({ key: "`", code: "Backquote", ctrlKey: true });
+    expect(q("bottom-panel")).toBeNull();
+    expect(q("panel-toggle")!.getAttribute("aria-expanded")).toBe("true");
+    await clickId("panel-toggle");
+    expect(q("panel-toggle")!.getAttribute("aria-expanded")).toBe("false");
+    await clickId("panel-toggle");
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    expect(paletteRow("Toggle side panel")).toBeDefined();
+    expect(paletteRow("Toggle terminal")).toBeDefined();
+    expect(paletteRow("View changes in popup")).toBeUndefined();
+  });
+
+  it("AC6: a new-session tab in another project shows the draft's project, not the last shown session's", async () => {
+    const restore = await remount({ "session.list": TWO });
+    try {
+      const n = sent.length;
+      await act(async () => el.querySelector<HTMLElement>('[data-cwd="/p/other"] [data-testid="project-new-session"]')!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(el.querySelector('[data-testid="new-session-tab"] [data-testid="project-chip"]')!.getAttribute("title")).toBe("/p/other");
+      expect(callsSince(n, "fs.list")).toContainEqual({ type: "fs.list", path: "/p/other" });
+      expect(callsSince(n, "terminal.list").at(-1)).toEqual({ type: "terminal.list", cwd: "/p/other" });
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC7: below 1024px the new-session tab shows no side or bottom panel and no titlebar toggles", async () => {
+    width = 390;
+    localStorage.setItem("claude-ui.terminalOpen", "1");
+    await rerender();
+    await openNewTab();
+    expect(q("panel-toggle")).toBeNull();
+    expect(q("terminal-toggle-titlebar")).toBeNull();
+    expect(q("bottom-panel")).toBeNull();
+    expect(panelShown("side-panel")).toBe(false);
+    width = 1440;
+  });
+
+  it("AC8: the titlebar terminal toggle uses the terminal icon and the quiet pressed style", async () => {
+    const b = q("terminal-toggle-titlebar")!;
+    expect(b.querySelector("svg.lucide-square-terminal")).not.toBeNull();
+    expect(b.className).toContain("aria-pressed:bg-transparent");
+  });
+
+  /** terminal.list / terminal.create over a list of shells per folder, like the daemon. */
+  const shellsFor = (initial: Record<string, number> = {}) => {
+    const shells: Record<string, { id: string; title: string }[]> = {};
+    for (const [cwd, n] of Object.entries(initial)) shells[cwd] = Array.from({ length: n }, (_, i) => ({ id: `t${i + 1}`, title: `Terminal ${i + 1}` }));
+    return {
+      "terminal.list": (m: { cwd: string }) => ({ terminals: [...(shells[m.cwd] ??= [])] }),
+      "terminal.create": (m: { cwd: string }) => {
+        const l = (shells[m.cwd] ??= []);
+        const t = { id: `n${l.length + 1}`, title: `Terminal ${l.length + 1}` };
+        l.push(t);
+        return { terminal: t };
+      },
+      reset: () => Object.keys(shells).forEach((k) => delete shells[k]),
+    };
+  };
+  const creates = () => sent.filter((m) => m.type === "terminal.create");
+
+  it("AC9: a remembered-open bottom terminal stays hidden after a reload when the folder has no shells; no terminal.create", async () => {
+    localStorage.setItem("claude-ui.terminalOpen", "1");
+    const { reset: _r, ...rest } = shellsFor();
+    const restore = await remount(rest);
+    sent.length = 0;
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(q("bottom-panel")).toBeNull();
+      expect(q("terminal-panel")).toBeNull();
+      expect(creates()).toEqual([]);
+      // The preference is kept: the folder gets shells and the terminal shows again.
+      expect(localStorage.getItem("claude-ui.terminalOpen")).toBe("1");
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC9: with the terminal in the side panel and no shells the side panel shows another pane; its Terminal tab click spawns a shell", async () => {
+    localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+    const { reset: _r, ...rest } = shellsFor();
+    const restore = await remount(rest);
+    sent.length = 0;
+    try {
+      expect(panelShown("side-panel")).toBe(true);
+      expect(paneTab("side-panel", "terminal")).not.toBeNull();
+      expect(paneTab("side-panel", "terminal")!.getAttribute("aria-selected")).toBe("false");
+      expect(q("terminal-panel")).toBeNull();
+      expect(creates()).toEqual([]);
+      await act(async () => paneTab("side-panel", "terminal")!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      expect(paneTab("side-panel", "terminal")!.getAttribute("aria-selected")).toBe("true");
+      expect(q("terminal-panel")).not.toBeNull();
+      expect(creates()).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC9: Toggle terminal, Ctrl+` and New terminal on a folder without shells open the terminal and send one terminal.create", async () => {
+    const { reset, ...rest } = shellsFor();
+    const restore = await remount(rest);
+    sent.length = 0;
+    try {
+      await clickId("terminal-toggle-titlebar");
+      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      expect(q("terminal-panel")).not.toBeNull();
+      expect(creates()).toHaveLength(1);
+      // Hidden and shown again with a shell running: no second shell.
+      await clickId("terminal-toggle-titlebar");
+      await clickId("terminal-toggle-titlebar");
+      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      expect(creates()).toHaveLength(1);
+
+      for (const open of [
+        () => press({ key: "`", code: "Backquote", ctrlKey: true }),
+        async () => {
+          await press({ key: "k", code: "KeyK", ctrlKey: true });
+          await act(async () => paletteRow("New terminal")!.click());
+        },
+      ]) {
+        reset();
+        sent.length = 0;
+        await rerender();
+        await act(async () => new Promise((r) => setTimeout(r, 50)));
+        expect(q("terminal-panel")).toBeNull();
+        await open();
+        await act(async () => new Promise((r) => setTimeout(r, 100)));
+        expect(q("terminal-panel")).not.toBeNull();
+        expect(creates()).toHaveLength(1);
+      }
+    } finally {
+      restore();
+    }
+  }, 20000);
+
+  it("AC9: switching to a session of a project without shells hides the bottom terminal; back to a project with shells shows it", async () => {
+    localStorage.setItem("claude-ui.terminalOpen", "1");
+    const { reset: _r, ...rest } = shellsFor({ "/p/demo": 1 });
+    const restore = await remount({ ...rest, "session.list": TWO, "session.subscribe": bySession });
+    sent.length = 0;
+    try {
+      expect(panelShown("bottom-panel")).toBe(true);
+      await hashTo(OTHER_ID);
+      expect(q("bottom-panel")).toBeNull();
+      await hashTo(ID);
+      expect(panelShown("bottom-panel")).toBe(true);
+      expect(creates()).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC9: moving the Terminal pane on purpose with no shells shows its empty tab bar, no terminal.create", async () => {
+    localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+    const { reset: _r, ...rest } = shellsFor();
+    const restore = await remount(rest);
+    sent.length = 0;
+    try {
+      expect(q("bottom-panel")).toBeNull();
+      const tab = paneTab("side-panel", "terminal")!;
+      await act(async () => void tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+      await act(async () => menuItem("pane-move").click());
+      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      expect(panelShown("bottom-panel")).toBe(true);
+      expect(q("bottom-panel")!.querySelector('[data-testid="terminal-new"]')).not.toBeNull();
+      expect(q("bottom-panel")!.querySelectorAll('[data-testid="terminal-tab"]')).toHaveLength(0);
+      expect(creates()).toEqual([]);
+    } finally {
+      restore();
+    }
   });
 });
