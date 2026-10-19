@@ -56,6 +56,10 @@ npm run docs:preview    # serve that build
 ## Release (owner step)
 
 1. Bump `version` in `packages/claude-ui/package.json`.
-2. `npm ci && npm run typecheck && npm test`.
-3. `npm run pack-check -w claude-code-ui`: builds, packs, installs the tarball in a temp dir, runs `--version` / `--help`, starts it on a free port, expects HTTP 200 on `/` and a WebSocket connect with the pairing token.
-4. `npm publish -w claude-code-ui` (`prepack` rebuilds).
+2. Docs check, against the changelog entries since the last tag (`git log --merges <last tag>..`):
+   - Each user-visible change is described on its feature page in `docs/site/features/` (or a reference page). A feature with no page gets one, and a sidebar entry in `docs/site/.vitepress/config.ts`.
+   - Screenshots of a changed screen are retaken (`npm run docs:shots`).
+   - `npm run docs:build` passes (dead links fail it).
+3. `npm ci && npm run typecheck && npm test`.
+4. `npm run pack-check -w claude-code-ui`: builds, packs, installs the tarball in a temp dir, runs `--version` / `--help`, starts it on a free port, expects HTTP 200 on `/` and a WebSocket connect with the pairing token.
+5. `npm publish -w claude-code-ui` (`prepack` rebuilds).
