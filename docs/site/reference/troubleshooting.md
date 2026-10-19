@@ -1,3 +1,7 @@
+---
+description: Fixes for common claude-code-ui problems (node-pty install errors, pairing, ports, WSL and Docker sides, push, updates) and answers to frequent questions.
+---
+
 # Troubleshooting & FAQ
 
 ## Something is wrong
