@@ -106,6 +106,28 @@ describe("first prompt", () => {
     expect(visible('[data-testid="new-session-tab"]')).toHaveLength(0);
   });
 
+  it("AC1: while the first prompt starts, the side panel shows once (no placeholder footprint) and stays mounted into the session", async () => {
+    const create = defer<unknown>();
+    replies["session.create"] = () => create.promise;
+    replies["session.prompt"] = {};
+    replies["session.subscribe"] = { logEpoch: "e1", seq: 0, session: info, title: "New session" };
+    await mount("#new");
+    const panel = one('[data-testid="side-panel"]')!;
+    expect(panel).toBeTruthy();
+    await type("hello");
+    await enter();
+    expect(visible('[data-testid="starting-session"]')).toHaveLength(1);
+    // The panel itself is the only one; the old empty, aria-hidden footprint card is gone.
+    expect(document.querySelectorAll('[data-testid="side-panel"]')).toHaveLength(1);
+    expect(document.querySelectorAll("main > [aria-hidden]:not(.h-7)")).toHaveLength(0);
+    expect(one('[data-testid="side-panel"]')).toBe(panel);
+    replies["session.list"] = { sessions: [item(NEW, "New session", false)], projects: ["/p/demo"] };
+    await act(async () => create.resolve({ session: info }));
+    await act(async () => {});
+    expect(location.hash).toBe(`#${NEW}`);
+    expect(document.querySelector('[data-testid="side-panel"]')).toBe(panel);
+  });
+
   it("a pending prompt renders markdown like a sent one", async () => {
     replies["session.create"] = () => defer<unknown>().promise;
     await mount("#new");

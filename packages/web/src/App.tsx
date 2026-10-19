@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { Activity, lazy, memo, Suspense, use, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelBottomIcon, PanelLeftIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelLeftIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon, XIcon } from "lucide-react";
 import type {
   ContextUsage,
   CreateResult,
@@ -36,6 +36,7 @@ import type {
   UploadResult,
   GitStatus,
   GitStatusResult,
+  TerminalListResult,
   Worktree,
   WorktreeCreateResult,
   WorktreeStatusResult,
@@ -114,6 +115,7 @@ import { FilesPanel } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore } from "./editor-store.ts";
 import { ChangesPanel } from "./changes-panel.tsx";
+import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
 import { CommandPalette } from "./palette.tsx";
@@ -149,6 +151,8 @@ import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
 type Client = ReturnType<typeof connect>;
+/** What the side and bottom panel show: the shown session, or the new-session tab's project (`key` NEW_TAB, no session). */
+type PanelTarget = { key: string; cwd: string; sessionId?: string };
 
 // The active tab lives in the URL hash, so a reload reopens it.
 const hashTab = () => tabFromHash(location.hash);
@@ -385,7 +389,7 @@ export function App() {
   // GH-381: every selection is also remembered per browser (layout.ts PaneTabs), so a reload reopens on it.
   const [paneHist, setPaneHist] = useState<Record<string, Pane[]>>({});
   const hist = (activeId && paneHist[activeId]) || [];
-  const pane: Pane = hist[0] ?? "session";
+  const histPane: Pane = hist[0] ?? "session";
   // The remembered tabs: read once at load, then updated by this page's own picks only (another browser tab's picks are not followed).
   const [paneTabs, setPaneTabs] = useState(loadPaneTabs);
   const resetPanes = () => (resetLayout(), setPaneTabs({}));
@@ -1302,6 +1306,14 @@ export function App() {
         if (!listed) (listed = true), void refreshList();
       }, () => void (draftUpload.current = rotateDraftToken()));
       setOptimistic((o) => movePending(o, session.id));
+      // GH-430: the panels keep their state across the first prompt: the Changes diff mode and each area's selected pane carry over to the session.
+      const choice = sessionDiffChoice.get(NEW_TAB);
+      if (choice) (sessionDiffChoice.set(session.id, choice), sessionDiffChoice.delete(NEW_TAB));
+      setPaneHist((x) => {
+        if (!x[NEW_TAB]) return x;
+        const { [NEW_TAB]: h, ...rest } = x;
+        return { ...rest, [session.id]: h };
+      });
       setTabs((t) => replaceTab(t, NEW_TAB, session.id));
       open(session.id);
     } catch (e) {
@@ -1317,6 +1329,8 @@ export function App() {
   /** The new-session tab, starting in `cwd`: by default the active session's project, else the newest project. */
   function newSession(cwd?: string) {
     setDraftCwd(cwd ?? (activeId && activeId !== NEW_TAB ? sessionOf(activeId)?.cwd : undefined) ?? draftCwd);
+    // A maximized bottom panel would hide the draft.
+    setBottomMax(false);
     open(NEW_TAB);
     // autoFocus works only on the first mount; the tab may be open already, hidden. After the render shows it.
     requestAnimationFrame(() => newPrompt.current?.focus());
@@ -1593,20 +1607,29 @@ export function App() {
     refocus.current = undefined;
     requestAnimationFrame(() => shownPrompt()?.focus());
   }, [shown?.id]);
-  // The side panel stays mounted while the new-session tab or no tab shows, so its open files survive.
-  const lastShown = useRef<SessionInfo>(undefined);
-  if (shown) lastShown.current = shown;
-  const panelSession = shown ?? lastShown.current;
-  const panelSessionRef = useRef(panelSession);
-  panelSessionRef.current = panelSession;
-  const panelView = panelSession && views[panelSession.id];
+  const draftShown = activeId === NEW_TAB && tabs.includes(NEW_TAB);
+  // The project the config dialogs act on: the shown session's cwd, or the new-session tab's project chip.
+  // A worktree row's New session starts in that worktree (inside the roots), not only in an added project.
+  const startable = [...projects, ...Object.values(worktrees).flatMap((l) => l.filter((w) => !w.outsideRoots).map((w) => w.path))];
+  const draftProject = draftCwd && startable.includes(draftCwd) ? draftCwd : projects[0];
+  // GH-430: the side and bottom panel hang off a panel target: the shown session, or on wide screens the new-session tab's project
+  // (cwd, DOM position and keys stay the same when its first prompt creates the session, so nothing remounts).
+  const panelHost = !!shown || (lg && draftShown && !!draftProject);
+  const target: PanelTarget | undefined = shown ? { key: shown.id, cwd: shown.cwd, sessionId: shown.id } : panelHost ? { key: NEW_TAB, cwd: draftProject! } : undefined;
+  // The panels stay mounted (hidden) while no tab shows (Focus), so their open files survive.
+  const lastTarget = useRef<PanelTarget>(undefined);
+  if (target) lastTarget.current = target;
+  const panelTarget = target ?? lastTarget.current;
+  const panelTargetRef = useRef(panelTarget);
+  panelTargetRef.current = panelTarget;
+  const panelView = panelTarget?.sessionId ? views[panelTarget.sessionId] : undefined;
   // The changes panel needs the Edit/Write calls of the unloaded region: asked once per session (the cursor moves, aux keeps them).
   useEffect(() => {
     const v = panelView;
-    if (!panelSession || !v || !v.older || v.auxEdits || !v.logEpoch) return;
+    if (!panelTarget?.sessionId || !v || !v.older || v.auxEdits || !v.logEpoch) return;
     const { before } = v.older;
     const epoch = v.logEpoch;
-    const id = panelSession.id;
+    const id = panelTarget.sessionId;
     const key = `${id}:${epoch}:${before}`;
     if (editsAsked.current.has(key)) return;
     editsAsked.current.add(key);
@@ -1614,16 +1637,56 @@ export function App() {
       (r) => setViews((vs) => (vs[id]?.logEpoch === epoch ? { ...vs, [id]: withEdits(vs[id]!, before, r.parts) } : vs)),
       () => editsAsked.current.delete(key),
     );
-  }, [panelSession?.id, panelView?.older?.before, panelView?.auxEdits, panelView?.logEpoch]);
+  }, [panelTarget?.sessionId, panelView?.older?.before, panelView?.auxEdits, panelView?.logEpoch]);
   const changedPaths = useMemo(() => (panelView ? sessionChanges(panelView).map((c) => c.path) : []), [panelView?.parts, panelView?.aux]);
   // The pane tab counts the files the changes panel lists (a file created and deleted again is not listed).
   const [listedChanges, setListedChanges] = useState<{ id: string; n: number }>();
-  const changeCount = listedChanges && listedChanges.id === panelSession?.id ? listedChanges.n : changedPaths.length;
+  const changeCount = listedChanges && listedChanges.id === panelTarget?.key ? listedChanges.n : changedPaths.length;
   // The graph tab exists only while the side panel's cwd is a git work tree.
   const [isGit, setIsGit] = useState(false);
   // The cwd whose git status has been answered: the tour waits for it so "Git graph" is not dropped by a status still on its way.
   const [gitChecked, setGitChecked] = useState<string>();
-  const panelCwd = panelSession?.cwd;
+  const panelCwd = panelTarget?.cwd;
+  // GH-430: the terminal shows only where its folder has running shells (`hasShells`, per cwd, from terminal.list) or after an active
+  // open / a deliberate move on this page (`termWanted`); it starts a shell only after an active open (`spawnFor`: the cwd to ensure one for).
+  const [hasShells, setHasShells] = useState<Record<string, boolean>>({});
+  const [termWanted, setTermWanted] = useState<ReadonlySet<string>>(new Set());
+  const [spawnFor, setSpawnFor] = useState<string>();
+  // While a folder's shells are unknown the last known answer stays (no collapse and remount for one terminal.list round trip).
+  const lastAvail = useRef(false);
+  const availKnown = !!panelCwd && (hasShells[panelCwd] !== undefined || termWanted.has(panelCwd));
+  if (availKnown) lastAvail.current = hasShells[panelCwd!] === true || termWanted.has(panelCwd!);
+  const termAvail = availKnown ? lastAvail.current : lastAvail.current && !!panelCwd;
+  const spawnRef = useRef(spawnFor);
+  spawnRef.current = spawnFor;
+  // An active open (the user asked for the terminal) shows it loud (focus on the shell); any other show starts quiet.
+  const activeOpen = useRef(false);
+  useEffect(() => {
+    if (!panelCwd || status !== "connected") return;
+    let live = true;
+    client.current!.request<TerminalListResult>({ type: "terminal.list", cwd: panelCwd }).then(
+      (r) => {
+        if (!live) return;
+        const any = !!r.terminals?.length;
+        setHasShells((h) => (h[panelCwd] === any ? h : { ...h, [panelCwd]: any }));
+        // Its shells ended elsewhere (another browser, a daemon restart): no empty terminal for this folder unless an open is pending.
+        if (!any && spawnRef.current !== panelCwd) setTermWanted((w) => (w.has(panelCwd) ? new Set([...w].filter((c) => c !== panelCwd)) : w));
+      },
+      () => {},
+    );
+    return () => void (live = false);
+  }, [panelCwd, status]);
+  useEffect(() => (setSpawnFor(undefined), void (activeOpen.current = false)), [panelCwd]);
+  const wantTerminal = (cwd: string) => setTermWanted((w) => (w.has(cwd) ? w : new Set(w).add(cwd)));
+  /** An active open (Toggle terminal, New terminal, a click on the Terminal pane tab): the terminal shows and starts a shell if the folder has none. */
+  const askTerminal = () => {
+    if (!panelCwd) return;
+    wantTerminal(panelCwd);
+    setSpawnFor(panelCwd);
+    activeOpen.current = true;
+  };
+  // A restored narrow Terminal pane without shells shows the session.
+  const pane: Pane = !lg && histPane === "terminal" && !termAvail ? "session" : histPane;
   // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
   const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
   useEffect(() => {
@@ -1642,9 +1705,11 @@ export function App() {
   const available = (p: PaneId) => p !== "graph" || isGit;
   /** Narrow: the side column holds every pane. */
   const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? PANE_IDS : []).filter(available);
-  const activeOf = (a: DockArea) => activePane(areaPanes(a), hist, paneTabs[a]);
-  const sideShown = lg && panel && areaPanes("side").length > 0;
-  const bottomShown = lg && bottomOpen && areaPanes("bottom").length > 0;
+  /** The panes of the area that can be selected: the Terminal tab stays listed, but selects only once the terminal is available. */
+  const selectable = (a: DockArea) => areaPanes(a).filter((p) => p !== "terminal" || termAvail);
+  const activeOf = (a: DockArea) => activePane(selectable(a), hist, paneTabs[a]);
+  const sideShown = lg && panel && selectable("side").length > 0;
+  const bottomShown = lg && bottomOpen && selectable("bottom").length > 0;
   /** The pane shows: wide = its area shows it; narrow = it is the pane. */
   const shows = (p: PaneId) => (lg ? (areaOf(layout, p) === "side" ? sideShown : bottomShown) && activeOf(areaOf(layout, p)) === p : p === "files" ? pane === "files" || (pane === "graph" && !isGit) : pane === p && available(p));
   // Bottom panel only, this page only: it takes the whole work area.
@@ -1660,6 +1725,12 @@ export function App() {
   const [termFocusReq, setTermFocusReq] = useState(0);
   useEffect(() => setTermKeep((k) => termShows || (k && termAreaOpen)), [termShows, termAreaOpen]);
   const termMounted = termShows || (termKeep && termAreaOpen);
+  // Hidden again: a pending open request (spawn, loud show) is void, so a later passive show spawns and focuses nothing.
+  useEffect(() => {
+    if (termMounted) return;
+    setSpawnFor(undefined);
+    activeOpen.current = false;
+  }, [termMounted]);
   useEffect(() => void (!bottomShown && setBottomMax(false)), [bottomShown]);
   const openArea = (a: DockArea, v = true) => (a === "side" ? setPanel(v) : setBottomOpen(v));
   /** Selects the pane and, on wide screens, opens its area. */
@@ -1676,6 +1747,8 @@ export function App() {
   const move = (p: PaneId, to: DockArea, before?: PaneId) => {
     const n = movePane(layout, p, to, before);
     if (n !== layout) saveLayout(n);
+    // A Terminal pane moved on purpose shows (its empty tab bar with +) even where the folder has no shells.
+    if (p === "terminal" && panelCwd) wantTerminal(panelCwd);
     // Only a move out of the bottom panel needs the session view and side panel back; a reorder inside it keeps the maximize.
     if (to !== "bottom") setBottomMax(false);
     openArea(to);
@@ -1694,6 +1767,7 @@ export function App() {
   // From a move to the user's next key or pointer press: a terminal that shows because of the move (moved, or next in the area the
   // moved pane left) keeps off the focus. A late (Suspense) mount of a terminal shown by the move is covered by `termMoveShow`.
   // GH-381: a terminal the reload restores as the narrow pane (shown one effect after the first render) keeps off the focus until the first key or pointer press.
+  // GH-430: a terminal that shows without an active open (a remembered one once terminal.list answers, a session switch) starts quiet too.
   const [moving, setMoving] = useState(() => loadPaneTabs().narrow === "terminal");
   useEffect(() => {
     if (!moving) return;
@@ -1711,7 +1785,7 @@ export function App() {
   const [termShowsBefore, setTermShowsBefore] = useState(termShows);
   if (termShows !== termShowsBefore) {
     setTermShowsBefore(termShows);
-    setTermMoveShow(termShows && moving);
+    setTermMoveShow(termShows && (moving || !activeOpen.current));
   }
   const [termAsk, setTermAsk] = useState(termFocusReq + terminalTick);
   if (termFocusReq + terminalTick !== termAsk) {
@@ -1720,13 +1794,13 @@ export function App() {
   }
   /** A pane tab click; on the terminal's tab, the selected one too, the shell takes the focus (docs/spec.md Terminal panel). */
   const selectPane = (p: Pane) => {
-    if (p === "terminal") setTermFocusReq((n) => n + 1);
+    if (p === "terminal") (askTerminal(), setTermFocusReq((n) => n + 1));
     setPane(p);
   };
   const hosts = usePaneHosts();
   useEffect(() => {
-    if (shows("graph") && panelSession) setGraphCwd(panelSession.cwd);
-  }, [shows("graph"), panelSession?.cwd]);
+    if (shows("graph") && panelCwd) setGraphCwd(panelCwd);
+  }, [shows("graph"), panelCwd]);
   const colors = useMemo(() => avatarColors(projects), [projects]);
   const ThemeIcon = { system: MonitorIcon, light: SunIcon, dark: MoonIcon }[theme];
   const upload = (owner: () => UploadOwner, uploadCwd?: string, rotate: () => void = () => {}) => async (file: File) => {
@@ -1758,7 +1832,7 @@ export function App() {
     reveal("files");
   };
   const popFile = useCallback((path?: string, line?: number, opener?: HTMLElement | null) => {
-    const cwd = panelSessionRef.current?.cwd;
+    const cwd = panelTargetRef.current?.cwd;
     if (path && cwd) void editors.open(path, { cwd, line, outside: !inDir(path, cwd) });
     setFileDialog({ opener: opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) });
   }, []);
@@ -1773,7 +1847,6 @@ export function App() {
     setFileTree(true);
     reveal("files");
   };
-  const draftShown = activeId === NEW_TAB && tabs.includes(NEW_TAB);
   const draftModes = permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === pick.model && m.supportsAutoMode) });
   // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
   const draft: StartOptions = { ...pick, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : "default") };
@@ -1783,10 +1856,6 @@ export function App() {
     if (lost) setToast(autoUnavailable(models, d.model));
     setDraft(lost ? { ...d, mode: "default" } : { ...d, mode: d.mode === draft.mode ? pick.mode : d.mode });
   };
-  // The project the config dialogs act on: the shown session's cwd, or the new-session tab's project chip.
-  // A worktree row's New session starts in that worktree (inside the roots), not only in an added project.
-  const startable = [...projects, ...Object.values(worktrees).flatMap((l) => l.filter((w) => !w.outsideRoots).map((w) => w.path))];
-  const draftProject = draftCwd && startable.includes(draftCwd) ? draftCwd : projects[0];
   // The new-session tab's mode comes from the Claude settings of its project, read again each time the tab is shown.
   useEffect(() => {
     if (!draftShown || !draftProject || status !== "connected") return;
@@ -1840,6 +1909,7 @@ export function App() {
   // `id`: the tab just selected, which this render does not show yet.
   const focusShownPrompt = (id = activeId) => {
     if (id !== NEW_TAB) showSession();
+    else setBottomMax(false);
     // After the render: only the shown tab's prompt box has a layout box; in a split only the active split's (never the other one's).
     // A session that just opened (Reopen closed tab, Go to tab N after a reload) has its prompt box once its view loaded: wait for it, up to 1 s.
     const focus = (frames: number) => {
@@ -1851,8 +1921,8 @@ export function App() {
   };
   // Wide: the terminal pane wherever it lives (VS Code: Ctrl+` reveals the view); it shows -> its area hides. Narrow: the terminal pane.
   const toggleTerminal = () => {
-    if (!wide(1024)) return setPane(pane === "terminal" ? "session" : "terminal");
-    if (!inSight("terminal")) return (shows("terminal") && setTermFocusReq((n) => n + 1), reveal("terminal"));
+    if (!wide(1024)) return pane === "terminal" ? setPane("session") : (askTerminal(), setPane("terminal"));
+    if (!inSight("terminal")) return (askTerminal(), shows("terminal") && setTermFocusReq((n) => n + 1), reveal("terminal"));
     openArea(areaOf(layout, "terminal"), false);
     focusShownPrompt();
   };
@@ -1872,6 +1942,7 @@ export function App() {
     cleanUp: Object.values(worktrees).some((l) => l.some((w) => !w.main)) || list.some((x) => x.coordinatorId) ? () => setCleanup({ kind: "all" }) : undefined,
     tabs,
     activeId,
+    panels: panelHost,
     splitRight: lg && isSession(activeId) && canSplitTabs(tabs) ? () => splitTab(activeId!, "row") : undefined,
     splitDown: lg && isSession(activeId) && canSplitTabs(tabs) ? () => splitTab(activeId!, "col") : undefined,
     splitNext: splitShown ? () => (focusSplit(nextSplit(split!, 1)), focusShownPrompt()) : undefined,
@@ -1917,6 +1988,7 @@ export function App() {
     },
     newTerminal: () => {
       if (inSight("terminal")) return setTerminalTick((n) => n + 1);
+      askTerminal();
       // It may be the shown pane already, behind a maximized bottom panel: the shell takes the focus once it is in sight.
       if (shows("terminal")) setTermFocusReq((n) => n + 1);
       reveal("terminal");
@@ -2071,13 +2143,19 @@ export function App() {
 
   // The terminal panel, rendered in one place only: inside the terminal pane's host.
   const terminalPanel = () =>
-    panelSession && (
+    panelTarget && (
       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading terminal…</p>}>
         <TerminalPanel
           client={client.current!}
           status={status}
-          cwd={panelSession.cwd}
+          cwd={panelTarget.cwd}
+          ensure={spawnFor === panelTarget.cwd}
+          onEnsured={() => setSpawnFor(undefined)}
+          onTerminals={(n) => setHasShells((h) => (h[panelTarget.cwd] === n > 0 ? h : { ...h, [panelTarget.cwd]: n > 0 }))}
           onEmpty={() => {
+            // Not wanted any more: its folder shows no terminal until the next active open.
+            setTermWanted((w) => (w.has(panelTarget.cwd) ? new Set([...w].filter((c) => c !== panelTarget.cwd)) : w));
+            setHasShells((h) => ({ ...h, [panelTarget.cwd]: false }));
             if (!lg) return setPane("session");
             // The last terminal closed: the area hides, or shows its other pane.
             const a = areaOf(layout, "terminal");
@@ -2121,14 +2199,14 @@ export function App() {
       <SquareTerminalIcon />
     </IconButton>
   );
-  const resizer = shown && sideShown && <PanelResizer width={panelWidth} onResize={setPanelWidth} side={layout.side} />;
-  const sideStrip = panelSession && lg && drag && shown && !sideShown && (
+  const resizer = panelHost && sideShown && <PanelResizer width={panelWidth} onResize={setPanelWidth} side={layout.side} />;
+  const sideStrip = panelTarget && lg && drag && panelHost && !sideShown && (
     <DropStrip area="side" over={dropAt?.area === "side"} onOver={() => setDropAt({ area: "side" })} onLeave={() => setDropAt(undefined)} onDrop={dropPane("side")} />
   );
   // The side panel (GH-355): its tabs, then the pane hosts it holds; the hosts move between areas without remounting.
-  const sideCol = panelSession && (
+  const sideCol = panelTarget && (
     <div
-      className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!shown ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${sideShown ? "" : "lg:hidden"}`}
+      className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!panelHost ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${sideShown ? "" : "lg:hidden"}`}
       style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
     >
       <section className={`${card} flex-1 ${dropCls("side")}`} id="side-panel" data-testid="side-panel" aria-label="Side panel" data-drop-target={drag && dropAt?.area === "side" ? "" : undefined} ref={sideDropRef}>
@@ -2210,14 +2288,14 @@ export function App() {
           <IconButton className="max-sm:hidden" label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
             <ThemeIcon />
           </IconButton>
-          {shown && (
+          {panelHost && (
             <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={sideEmpty ? "No panes in the side panel" : withKey("Toggle side panel", specOf("panel.toggle"))} disabled={sideEmpty} expanded={panel && !sideEmpty} controls="side-panel" onClick={() => (setBottomMax(false), setPanel((v) => !v))} testId="panel-toggle" command="panel.toggle">
               {layout.side === "left" ? <PanelLeftIcon /> : <PanelRightIcon />}
             </IconButton>
           )}
-          {shown && (
-            <IconButton className="max-lg:hidden" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar" command="terminal.toggle">
-              <PanelBottomIcon />
+          {panelHost && (
+            <IconButton className="max-lg:hidden aria-pressed:bg-transparent aria-pressed:text-faint aria-pressed:shadow-none aria-pressed:hover:bg-accent aria-pressed:hover:text-foreground" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar" command="terminal.toggle">
+              <SquareTerminalIcon />
             </IconButton>
           )}
         </div>
@@ -2449,7 +2527,7 @@ export function App() {
         </aside>
         {sidebar && <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ "--terminal-h": `${terminalHeight}px` } as CSSProperties} data-testid="work-area">
-        <main className={`flex min-h-0 min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-0 ${bottomMax && shown ? "hidden" : ""}`}>
+        <main className={`flex min-h-0 min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-0 ${bottomMax && panelHost ? "hidden" : ""}`}>
           {status === "unauthorized" ? (
             // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
             <div className={`${card} flex-1`}>
@@ -2596,13 +2674,6 @@ export function App() {
                 )}
                 {splitShown && <SplitResizer split={{ ...split!, ratio: drawnRatio }} onResize={(ratio) => setSplitRaw({ ...split!, ratio })} />}
               </div>
-              {!(layout.side === "left" && lg) && (
-                <>
-                  {resizer}
-                  {sideCol}
-                  {sideStrip}
-                </>
-              )}
               {/* Mounted while the tab is open: hidden, it keeps its draft; replaced by the created session, it starts empty next time. */}
               {tabs.includes(NEW_TAB) && (
                 <NewSessionTab
@@ -2626,16 +2697,22 @@ export function App() {
                   onDialog={openDialog}
                   inputRef={newPrompt}
                   connected={status === "connected"}
+                  insert={activeId === NEW_TAB ? insert : undefined}
+                  onInserted={() => setInsert(undefined)}
                 />
               )}
               {activeId === NEW_TAB && !!optimistic[NEW_TAB]?.length && draftProject && (
                 <>
                   {/* The height of the pane tabs row the session card has below lg (28px + the main gap): the prompt does not move when the session shows. */}
                   <div className="h-7 shrink-0 lg:hidden" aria-hidden />
-                  {/* The side panel's footprint (resizer 6px + panel) on wide screens, empty: the prompt does not shift when the session shows it. */}
-                  {layout.side === "left" && sideShown && <div className={`${card} mr-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
                   <StartingSession cwd={draftProject} place={worktreeName(draftProject, worktrees)} pending={optimistic[NEW_TAB]} />
-                  {layout.side === "right" && sideShown && <div className={`${card} ml-1.5 hidden shrink-0 lg:flex`} style={{ width: panelWidth }} aria-hidden />}
+                </>
+              )}
+              {!(layout.side === "left" && lg) && (
+                <>
+                  {resizer}
+                  {sideCol}
+                  {sideStrip}
                 </>
               )}
               {activeId === FOCUS_TAB && (
@@ -2659,7 +2736,7 @@ export function App() {
                   <div className="m-auto text-muted-foreground">Open or create a session to start.</div>
                 </div>
               )}
-              {panelSession && (
+              {panelTarget && (
                 <>
                   {/* The pane contents render here once; each host sits in the slot of the area that holds the pane. */}
                   {createPortal(
@@ -2667,7 +2744,7 @@ export function App() {
                       <FilesPanel
                         client={client.current!}
                         status={status}
-                        cwd={panelSession.cwd}
+                        cwd={panelTarget.cwd}
                         onSend={(mention) => (setInsert(mention), setPane("session"))}
                         onCopy={copyText}
                         onViewer={(path) => popFile(path)}
@@ -2688,26 +2765,42 @@ export function App() {
                     hosts.files,
                   )}
                   {createPortal(
-                    views[panelSession.id] && (
+                    panelTarget.sessionId ? (
+                      views[panelTarget.sessionId] && (
+                        <ChangesPanel
+                          key={panelTarget.sessionId}
+                          hidden={!shows("changes")}
+                          onCount={(n) => setListedChanges({ id: panelTarget.key, n })}
+                          client={client.current!}
+                          view={views[panelTarget.sessionId]!}
+                          cwd={panelTarget.cwd}
+                          onOpen={(path) => (setOpenFile({ path }), reveal("files"))}
+                          sessionId={panelTarget.sessionId}
+                          onPopOut={() => openViewer({ kind: "changes" })}
+                          reveal={changesReveal}
+                        />
+                      )
+                    ) : (
+                      // The new-session tab: no session yet, so nothing was edited; git modes work for the draft's project.
                       <ChangesPanel
-                        key={panelSession.id}
+                        key={NEW_TAB}
                         hidden={!shows("changes")}
-                        onCount={(n) => setListedChanges({ id: panelSession.id, n })}
+                        onCount={(n) => setListedChanges({ id: NEW_TAB, n })}
                         client={client.current!}
-                        view={views[panelSession.id]!}
-                        cwd={panelSession.cwd}
+                        view={EMPTY_VIEW}
+                        cwd={panelTarget.cwd}
                         onOpen={(path) => (setOpenFile({ path }), reveal("files"))}
-                        sessionId={panelSession.id}
-                        onPopOut={() => openViewer({ kind: "changes" })}
+                        sessionId={NEW_TAB}
                         reveal={changesReveal}
+                        emptyText="No changes yet. Claude's edits appear here."
                       />
                     ),
                     hosts.changes,
                   )}
                   {createPortal(
-                    isGit && (shows("graph") || graphCwd === panelSession.cwd) && (
+                    isGit && (shows("graph") || graphCwd === panelTarget.cwd) && (
                       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
-                        <GraphPanel key={panelSession.cwd} hidden={!shows("graph")} client={client.current!} cwd={panelSession.cwd} />
+                        <GraphPanel key={panelTarget.cwd} hidden={!shows("graph")} client={client.current!} cwd={panelTarget.cwd} />
                       </Suspense>
                     ),
                     hosts.graph,
@@ -2726,13 +2819,13 @@ export function App() {
             </>
           )}
         </main>
-        {status !== "unauthorized" && panelSession && bottomShown && (
+        {status !== "unauthorized" && panelTarget && bottomShown && (
           <>
-            {shown && !bottomMax && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
+            {panelHost && !bottomMax && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
             <section
               id="bottom-panel"
               aria-label="Bottom panel"
-              className={`${card} ${!shown ? "hidden" : bottomMax ? "flex-1" : "h-(--terminal-h) max-h-[60vh] min-h-25 flex-none"} ${dropCls("bottom")}`}
+              className={`${card} ${!panelHost ? "hidden" : bottomMax ? "flex-1" : "h-(--terminal-h) max-h-[60vh] min-h-25 flex-none"} ${dropCls("bottom")}`}
               data-testid="bottom-panel"
               data-dock="bottom"
               data-drop-target={drag && dropAt?.area === "bottom" ? "" : undefined}
@@ -2764,7 +2857,7 @@ export function App() {
             </section>
           </>
         )}
-        {status !== "unauthorized" && panelSession && lg && drag && shown && !bottomShown && (
+        {status !== "unauthorized" && panelTarget && lg && drag && panelHost && !bottomShown && (
           <DropStrip area="bottom" over={dropAt?.area === "bottom"} onOver={() => setDropAt({ area: "bottom" })} onLeave={() => setDropAt(undefined)} onDrop={dropPane("bottom")} />
         )}
         </div>
@@ -2890,13 +2983,13 @@ export function App() {
           onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line }), setPane("files"), setPanel(true))}
         />
       )}
-      {panelSession && client.current && (
+      {panelTarget && client.current && (
         <FileDialog
           open={!!fileDialog}
           opener={fileDialog?.opener}
           client={client.current}
           status={status}
-          cwd={panelSession.cwd}
+          cwd={panelTarget.cwd}
           store={editors}
           gitStamp={isGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
           onClose={() => setFileDialog(undefined)}
@@ -3223,6 +3316,8 @@ export function NewSession({
   onDialog,
   inputRef,
   connected = true,
+  insert,
+  onInserted,
 }: {
   projects: string[];
   /** session.list worktrees: the chosen project's ones fill the Run session in chip. */
@@ -3250,6 +3345,9 @@ export function NewSession({
   onDialog?: (dialog: DialogName, arg?: string) => void;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   connected?: boolean;
+  /** Text the panels send to the prompt (a file mention, a quote): GH-430, the panels show on this tab too. */
+  insert?: string;
+  onInserted?: () => void;
 }) {
   const { model, mode, effort } = draft;
   const project = cwd ? projectOf(cwd, worktrees) : "";
@@ -3296,6 +3394,8 @@ export function NewSession({
           autoFocus
           disabled={!cwd}
           inputRef={inputRef}
+          insert={insert}
+          onInserted={onInserted}
         />
       </div>
       {cwd ? (

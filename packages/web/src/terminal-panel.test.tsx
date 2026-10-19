@@ -134,13 +134,15 @@ function fakeClient(running: { id: string; title: string }[] = [], createError?:
 
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 const tabs = () => [...el.querySelectorAll("[data-testid=terminal-tab]")].map((t) => t.textContent);
-const render = (client: ReturnType<typeof fakeClient>, status: ConnectionStatus = "connected", onEmpty = () => {}) =>
-  act(async () => root.render(<TerminalPanel client={client} status={status} cwd="/p" onEmpty={onEmpty} />));
+const render = (client: ReturnType<typeof fakeClient>, status: ConnectionStatus = "connected", onEmpty = () => {}, extra: { ensure?: boolean; onEnsured?: () => void; onTerminals?: (n: number) => void } = {}) =>
+  act(async () => root.render(<TerminalPanel client={client} status={status} cwd="/p" onEmpty={onEmpty} {...extra} />));
 
-it("opens Terminal 1 in the project when none runs, streams its output and sends typed input", async () => {
+it("opens Terminal 1 in the project when none runs and an open is requested (ensure), streams its output and sends typed input", async () => {
   const client = fakeClient();
-  await render(client);
+  const onEnsured = vi.fn();
+  await render(client, "connected", () => {}, { ensure: true, onEnsured });
   await flush();
+  expect(onEnsured).toHaveBeenCalled();
   expect(client.sent()).toContainEqual(expect.objectContaining({ type: "terminal.create", cwd: "/p", cols: 80, rows: 24 }));
   expect(tabs()).toEqual(["Terminal 1"]);
   await act(async () => client.emit({ type: "terminal.output", terminalId: "t1", data: "$ " }));
@@ -258,7 +260,7 @@ it("opens xterm into an unpadded box: FitAddon measures the parent, so padding t
 
 it("switching to another project shows its terminals but spawns no shell; + does; a reconnect to an empty list spawns none", async () => {
   const client = fakeClient();
-  await render(client);
+  await render(client, "connected", () => {}, { ensure: true });
   await flush();
   expect(client.sent().filter((m) => m.type === "terminal.create")).toHaveLength(1);
   await act(async () => root.render(<TerminalPanel client={client} status="connected" cwd="/q" onEmpty={() => {}} />));
@@ -276,7 +278,7 @@ it("switching to another project shows its terminals but spawns no shell; + does
 
 it("shows the daemon's too_many_terminals error", async () => {
   const client = fakeClient([], "at most 8 terminals per browser tab; close one");
-  await render(client);
+  await render(client, "connected", () => {}, { ensure: true });
   await flush();
   expect(el.querySelector("[role=alert]")?.textContent).toBe("at most 8 terminals per browser tab; close one");
 });
@@ -436,4 +438,25 @@ it("showing a panel that stayed mounted hidden gives its shell the focus (Ctrl+`
   expect(xterm.all[0]!.focused).toBe(before);
   await draw(true);
   expect(xterm.all[0]!.focused).toBe(before + 1);
+});
+
+it("AC9: without ensure an empty list spawns no shell; ensure after the empty list spawns one; a folder with shells just settles the request", async () => {
+  const client = fakeClient();
+  const onTerminals = vi.fn();
+  await render(client, "connected", () => {}, { onTerminals });
+  await flush();
+  expect(client.sent().filter((m) => m.type === "terminal.create")).toEqual([]);
+  expect(tabs()).toEqual([]);
+  expect(onTerminals).toHaveBeenLastCalledWith(0);
+  const onEnsured = vi.fn();
+  await render(client, "connected", () => {}, { ensure: true, onEnsured, onTerminals });
+  await flush();
+  expect(client.sent().filter((m) => m.type === "terminal.create")).toHaveLength(1);
+  expect(onEnsured).toHaveBeenCalledTimes(1);
+  expect(onTerminals).toHaveBeenLastCalledWith(1);
+  // Shells exist: ensure starts nothing more.
+  await render(client, "connected", () => {}, { ensure: false });
+  await render(client, "connected", () => {}, { ensure: true, onEnsured });
+  await flush();
+  expect(client.sent().filter((m) => m.type === "terminal.create")).toHaveLength(1);
 });

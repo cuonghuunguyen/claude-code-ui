@@ -9,7 +9,10 @@ export type Project = { path: string; name: string };
 /** Counter shared by the evidence step: names stay unique and sort in capture order. */
 export type Evidence = { next(): number };
 
-export const test = base.extend<{ project: Project; evidence: Evidence }, { daemon: Daemon }>({
+/** Per-scenario scratch for "I note ..." / "... is unchanged" step pairs. */
+export type Memo = { layout?: unknown; creates?: () => number };
+
+export const test = base.extend<{ project: Project; evidence: Evidence; memo: Memo }, { daemon: Daemon }>({
   // One daemon per worker: free port, own config dir, API key variables unset, Haiku. Stopped by PID tree.
   daemon: [
     async ({}, use, workerInfo) => {
@@ -31,6 +34,9 @@ export const test = base.extend<{ project: Project; evidence: Evidence }, { daem
     await use({ path, name });
     // A failed scenario keeps the run folder (daemon log, transcripts' project) for the post-mortem.
     if (testInfo.status !== testInfo.expectedStatus) writeFileSync(join(runDir(), "failed.marker"), `${testInfo.title}\n`, { flag: "a" });
+  },
+  memo: async ({}, use) => {
+    await use({});
   },
   evidence: async ({}, use) => {
     let n = 0;

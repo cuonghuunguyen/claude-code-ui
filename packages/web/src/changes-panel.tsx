@@ -188,6 +188,7 @@ export function ChangesPanel({
   initialChoice,
   onPopOut,
   reveal,
+  emptyText,
 }: {
   client: Client;
   view: SessionView;
@@ -203,6 +204,8 @@ export function ChangesPanel({
   onPopOut?: () => void;
   /** File tree "Show changes": switches to Uncommitted (the tree's git marks) and selects the file; a new `seq` repeats it. */
   reveal?: { path: string; seq: number };
+  /** Replaces "No changes in this session yet." in session mode (the new-session tab has no session yet). */
+  emptyText?: string;
 }) {
   const fresh = useMemo(() => sessionChanges(view), [view.parts, view.aux]);
   // Same calls and results per path: the previous list, so streamed text does not re-parse every diff.
@@ -469,7 +472,7 @@ export function ChangesPanel({
       : `No changes against ${gitRef ? short(gitRef) : "the branch"}.`
     : scope === "project" && sessionRows.length
       ? "No changes inside this project."
-      : "No changes in this session yet.";
+      : (emptyText ?? "No changes in this session yet.");
   const message = gitError ? (
     <p role="alert" className="p-3 text-destructive" data-testid="changes-error">
       {gitError}
