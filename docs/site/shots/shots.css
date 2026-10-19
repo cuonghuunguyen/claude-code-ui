@@ -1,0 +1,3 @@
+/* The app's stylesheet, plus the app's sources for Tailwind to scan (it scans from the Vite root, which is this folder). */
+@import "../../../packages/web/src/index.css";
+@source "../../../packages/web/src";

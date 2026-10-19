@@ -6,5 +6,5 @@
     "types": ["vite/client"],
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["src", "scenes", "vite.config.ts", "vite.scenes.config.ts"]
+  "include": ["src", "vite.config.ts"]
 }

@@ -55,12 +55,12 @@ npm run docs:preview    # serve that build
 
 ### Screenshot scenes
 
-The real web app runs against a scripted fake daemon and Playwright captures it. `packages/web/vite.scenes.config.ts` redirects every import of `src/client.ts` to `packages/web/scenes/fake-client.ts`, which answers requests and pushes events from the scene named in the URL (`scenes.html?scene=<name>`). The normal build is untouched.
+The real web app runs against a scripted fake daemon and Playwright captures it. `docs/site/shots/vite.config.ts` reuses the web app's Vite config and redirects every import of `packages/web/src/client.ts` to `packages/web/src/fake-client.ts` (the one piece that stays in `packages/web`, because it mirrors the API of `client.ts`). The fake is generic: `docs/site/shots/scenes-main.tsx` hands it the replies and events of the scene named in the URL (`scenes.html?scene=<name>`; shared defaults in `shots/defaults.ts`). The normal build is untouched; `npm run typecheck` covers the shots through `docs/site/tsconfig.json`.
 
-- A scene is one file in `packages/web/scenes/scenes/` that exports a `Scene` (`scenes/scene.ts`): its sessions (list entry plus the parts of its timeline), projects, the URL hash to open (`#new`, `#focus`, `#<session id>`), localStorage to seed (layout, selected panes, open tabs), the viewport (default 1440x900), the themes (`light`, add `dark`), optional `replies` for requests the defaults in `fake-client.ts` do not cover, optional Playwright `steps` (open a menu) and an optional `clip` selector. Data is typed against `@claude-ui/protocol`, so a wire change fails `npm run typecheck`.
-- To add one: copy a scene file, register it in `scenes/index.ts` (the key is the PNG name), run `npm run docs:shots <name>` and look at the PNG. A request the fake does not know resolves `{}` and logs `[scene] unhandled request "<type>"`: add a default reply in `fake-client.ts` when the screen needs it.
-- Time is frozen to `NOW` in `scenes/demo.ts`; express timestamps relative to it.
-- Demo data rule: only the invented `demo-shop` / `demo-api` projects from `scenes/demo.ts`, made-up branches and session titles. No real names, paths, usernames or session text.
+- A scene is one file in `docs/site/shots/scenes/` that exports a `Scene` (`shots/scene.ts`): its sessions (list entry plus the parts of its timeline), projects, the URL hash to open (`#new`, `#focus`, `#<session id>`), localStorage to seed (layout, selected panes, open tabs), the viewport (default 1440x900), the themes (`light`, add `dark`), optional `replies` for requests the defaults in `defaults.ts` do not cover, optional Playwright `steps` (open a menu) and an optional `clip` selector. Data is typed against `@claude-ui/protocol`, so a wire change fails `npm run typecheck`.
+- To add one: copy a scene file, register it in `shots/index.ts` (the key is the PNG name), run `npm run docs:shots <name>` and look at the PNG. A request the fake does not know resolves `{}` and logs `[scene] unhandled request "<type>"`: add a default reply in `shots/defaults.ts` when the screen needs it.
+- Time is frozen to `NOW` in `shots/demo.ts`; express timestamps relative to it.
+- Demo data rule: only the invented `demo-shop` / `demo-api` projects from `shots/demo.ts`, made-up branches and session titles. No real names, paths, usernames or session text.
 
 ## Release (owner step)
 
