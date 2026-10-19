@@ -8,6 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./terminal-font.css";
 import { PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import type { connect, ConnectionStatus } from "./client.ts";
 import { TERMINAL_FONT, loadTerminalFont, terminalFontSettled } from "./terminal-font.ts";
 import { leavesTerminal, specOf } from "./keymap.ts";
@@ -55,6 +56,7 @@ export function TerminalPanel({
   ensure = false,
   onEnsured,
   onTerminals,
+  toolbarHost,
 }: {
   client: Client;
   status: ConnectionStatus;
@@ -71,6 +73,8 @@ export function TerminalPanel({
   ensure?: boolean;
   onEnsured?: () => void;
   onTerminals?: (n: number) => void;
+  /** The dock header's toolbar slot (wide screens, terminal shown): the terminal tabs go there instead of a second header row. */
+  toolbarHost?: HTMLElement | null;
 }) {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [activeId, setActiveId] = useState<string>();
@@ -184,44 +188,50 @@ export function TerminalPanel({
     e.currentTarget.querySelectorAll<HTMLElement>("[role=tab]")[to % n]?.focus();
   };
 
+  // WAI-ARIA tabs like tabs-bar.tsx: one tab in the Tab order; arrows, Home and End select and focus.
+  const strip = (
+    <>
+      <div className="flex min-w-0 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Terminals" onKeyDown={onTabKey}>
+        {terminals.map((t) => (
+          <div
+            key={t.id}
+            className={`flex h-7 shrink-0 items-center rounded-md max-md:h-11 ${t.id === activeId ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-accent"}`}
+          >
+            <button
+              role="tab"
+              aria-selected={t.id === activeId}
+              tabIndex={t.id === focusable ? 0 : -1}
+              className="h-full cursor-pointer whitespace-nowrap rounded-md pl-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              onClick={() => ((focusShell.current = true), setActiveId(t.id), setFocusTick((n) => n + 1))}
+              data-testid="terminal-tab"
+            >
+              {t.title}
+            </button>
+            <IconButton
+              label={`Close ${t.title}`}
+              className="size-6 [&_svg]:size-3"
+              onClick={() => {
+                remove(t.id);
+                client.request({ type: "terminal.close", terminalId: t.id }).catch(() => {});
+              }}
+            >
+              <XIcon />
+            </IconButton>
+          </div>
+        ))}
+      </div>
+      <IconButton label={withKey("New terminal", specOf("terminal.new"))} onClick={() => void create()} testId="terminal-new">
+        <PlusIcon />
+      </IconButton>
+    </>
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="terminal">
-      {/* WAI-ARIA tabs like tabs-bar.tsx: one tab in the Tab order; arrows, Home and End select and focus. */}
-      {/* OpenCode terminal-panel-v2: tabs bar 52px, tab text 14px/500. */}
-      <div className="flex h-13 shrink-0 items-center gap-1 border-b px-2 font-[500] text-[14px]">
-        <div className="flex min-w-0 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Terminals" onKeyDown={onTabKey}>
-          {terminals.map((t) => (
-            <div
-              key={t.id}
-              className={`flex h-7 shrink-0 items-center rounded-md max-md:h-11 ${t.id === activeId ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-accent"}`}
-            >
-              <button
-                role="tab"
-                aria-selected={t.id === activeId}
-                tabIndex={t.id === focusable ? 0 : -1}
-                className="h-full cursor-pointer whitespace-nowrap rounded-md pl-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                onClick={() => ((focusShell.current = true), setActiveId(t.id), setFocusTick((n) => n + 1))}
-                data-testid="terminal-tab"
-              >
-                {t.title}
-              </button>
-              <IconButton
-                label={`Close ${t.title}`}
-                className="size-6 [&_svg]:size-3"
-                onClick={() => {
-                  remove(t.id);
-                  client.request({ type: "terminal.close", terminalId: t.id }).catch(() => {});
-                }}
-              >
-                <XIcon />
-              </IconButton>
-            </div>
-          ))}
-        </div>
-        <IconButton label={withKey("New terminal", specOf("terminal.new"))} onClick={() => void create()} testId="terminal-new">
-          <PlusIcon />
-        </IconButton>
-      </div>
+      {toolbarHost ? createPortal(<div className="flex min-w-0 items-center gap-1 border-l pl-2">{strip}</div>, toolbarHost) : (
+        // OpenCode terminal-panel-v2: tabs bar 52px, tab text 14px/500.
+        <div className="flex h-13 shrink-0 items-center gap-1 border-b px-2 font-[500] text-[14px]">{strip}</div>
+      )}
       {error && (
         <p role="alert" className="shrink-0 border-b px-3.5 py-1 text-destructive text-xs">
           {error}
