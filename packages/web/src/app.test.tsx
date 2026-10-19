@@ -684,6 +684,9 @@ it("GH-434: the side panel terminal toggle uses the quiet pressed style", async 
   expect(b().className).toContain("aria-pressed:bg-transparent");
   expect(b().className).toContain("aria-pressed:shadow-none");
   expect(b().className).toContain("aria-pressed:text-faint");
+  expect(b().className).toContain("aria-pressed:hover:bg-accent");
+  // The default pressed fill is replaced, not stacked under the quiet one.
+  expect(b().className).not.toContain("aria-pressed:bg-secondary");
   expect(b().getAttribute("aria-pressed")).toBe("false");
   await clickId("terminal-toggle");
   expect(b().getAttribute("aria-pressed")).toBe("true");

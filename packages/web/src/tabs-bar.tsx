@@ -1225,7 +1225,7 @@ function Tab({
 export const ICON_BUTTON =
   "grid size-7 shrink-0 cursor-pointer place-items-center max-md:size-11 pointer-coarse:size-11 rounded-md text-faint outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-secondary aria-pressed:text-foreground aria-pressed:shadow-[inset_0_-2px_0_var(--foreground)] aria-expanded:bg-secondary aria-expanded:text-foreground aria-expanded:shadow-[inset_0_-2px_0_var(--foreground)] [&_svg]:size-4 aria-disabled:cursor-default aria-disabled:opacity-50 aria-disabled:hover:bg-transparent aria-disabled:hover:text-faint";
 
-/** Pressed state of the titlebar and side panel header toggles: no fill, no shadow, faint icon; hover shows the accent. */
+/** Quiet pressed state of the aria-pressed toggles (sidebar, titlebar terminal, side panel header terminal; not the aria-expanded side panel toggle): no fill, no shadow, faint icon; hover shows the accent. */
 export const QUIET_PRESSED =
   "aria-pressed:bg-transparent aria-pressed:text-faint aria-pressed:shadow-none aria-pressed:hover:bg-accent aria-pressed:hover:text-foreground";
 
