@@ -41,6 +41,8 @@ Right-click a tab for **Close others**, **Pin tab**, **Reveal in sidebar** and m
 
 Each open session is a tab at the top. Tabs are grouped by project, like Chrome tab groups.
 
+![Tabs grouped by project: the demo-shop group open, the demo-api group collapsed to its chip](/screenshots/sessions.png)
+
 | To | Do |
 | --- | --- |
 | Switch tab | Click it, or <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>8</kbd> (<kbd>⌃</kbd> <kbd>1</kbd>…<kbd>8</kbd> on Mac). <kbd>Alt</kbd>+<kbd>9</kbd> goes to the last tab. |

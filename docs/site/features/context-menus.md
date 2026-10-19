@@ -35,6 +35,8 @@ Right-click a group chip (the project name in front of its tabs):
 - **Clean up group** closes the idle tabs of that group.
 - **Close other groups** and **Close group**.
 
+![The right-click menu of a group chip](/screenshots/group-menu.png)
+
 With **Compact tabs** on ([Settings › Tabs](../reference/settings#tabs)), hovering or clicking the chip opens a menu that lists only the group's tabs. The group actions above stay in the chip's right-click menu.
 
 ## Files

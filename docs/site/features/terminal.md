@@ -2,6 +2,8 @@
 
 A real terminal in the session's folder, docked at the bottom of the window by default. It runs on the daemon's computer.
 
+![Two terminals in the bottom panel, the second one showing test output](/screenshots/terminal.png)
+
 ## How to use
 
 1. Press <kbd>Ctrl</kbd>+<kbd>`</kbd> to show or hide the terminal (or the terminal button in the side panel).
