@@ -3400,11 +3400,11 @@ export function NewSession({
       </div>
       {cwd ? (
         // Project chip: Base UI Select like the prompt toolbar pickers; "Open project…" is its last item.
-        <div className="flex flex-wrap items-center justify-center gap-1">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center justify-center gap-1">
         <Select value={project} onValueChange={(v) => (v === OPEN ? onOpenProject() : v && onCwd(v))}>
-          <SelectTrigger aria-label="Project" title={project} data-testid="project-chip" className={`${GHOST} max-md:h-11! text-foreground hover:bg-secondary`}>
+          <SelectTrigger aria-label="Project" title={project} data-testid="project-chip" className={`${GHOST} min-w-0 max-w-full max-md:h-11! text-foreground hover:bg-secondary`}>
             <ProjectAvatar cwd={project} />
-            <span className="font-medium" data-testid="new-project">
+            <span className="min-w-0 truncate font-medium" data-testid="new-project">
               {projectName(project)}
             </span>
             <SideBadge cwd={project} />
@@ -3428,15 +3428,15 @@ export function NewSession({
           </SelectContent>
         </Select>
         {(runIn.length > 1 || (onNewWorktree && runIn.length > 0)) && (
-          <span className="inline-flex items-center gap-1">
+          <span className="inline-flex min-w-0 max-w-full items-center gap-1">
             <span aria-hidden className="select-none text-faint">
               /
             </span>
             {/* OpenCode PromptWorkspaceSelector: "Run session in", Run session in, Primary worktree (OpenCode: Local repository), the worktrees, New worktree. */}
             <Select value={cwd} onValueChange={(v) => (v === NEW_WT ? onNewWorktree?.(project) : v && onCwd(v))}>
-              <SelectTrigger aria-label={`${here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}, Run session in`} title={cwd} data-testid="worktree-chip" className={`${GHOST} max-md:h-11! text-foreground hover:bg-secondary`}>
+              <SelectTrigger aria-label={`${here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}, Run session in`} title={cwd} data-testid="worktree-chip" className={`${GHOST} min-w-0 max-w-full max-md:h-11! text-foreground hover:bg-secondary`}>
                 {here?.main ? <MonitorIcon /> : <GitBranchIcon />}
-                <span className="max-w-50 truncate">{here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}</span>
+                <span className="min-w-0 max-w-50 truncate">{here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}</span>
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-48 max-w-[calc(100vw-2rem)] rounded-md p-0.5 shadow-floating! ring-0">
                 <SelectGroup>
