@@ -28,19 +28,25 @@ State these when they bite.
    ticket branches stay until someone deletes them.
 9. **No conflict detection, no scheduling.** claude-ui runs what it is told. Sequencing is the
    coordinator's job (`planning.md`).
+10. **A worker can die without an event** (until the stall watchdog, GH-418, ships). Its query
+    ends with no turn result, so no notice ever comes, and `worker_list` shows it `idle`,
+    `live: false`, with a `lastActivity` older than your last message to it. Seen after a
+    `worker_send` that arrived together with a background-task notice. Whenever you call
+    `worker_list` for any reason, check every worker you are waiting on for this; then
+    `worker_send` the task again (not an attempt).
 
 ## Machine
 
-10. **One worktree per ticket is a real checkout** plus a dependency install. Cheap on small
+11. **One worktree per ticket is a real checkout** plus a dependency install. Cheap on small
     repos, minutes on large ones.
-11. **Parallel full test suites can produce phantom failures.** A worker can report red for a
+12. **Parallel full test suites can produce phantom failures.** A worker can report red for a
     reason that is not in its diff. Scope parallel runs to the diff, or serialize full ones.
-12. **An acceptance run needs a free port and a real browser.** Two acceptance workers on one
+13. **An acceptance run needs a free port and a real browser.** Two acceptance workers on one
     port collide and both report red. Assign ports.
-13. **Screenshots are the only durable evidence of stage 2**, and they live in an ignored
+14. **Screenshots are the only durable evidence of stage 2**, and they live in an ignored
     folder inside a worktree. If the user wants them after cleanup, say so before anything is
     removed.
-14. **A CI skill needs credentials, not just presence.** Check them in the gate (the adapter
+15. **A CI skill needs credentials, not just presence.** Check them in the gate (the adapter
     says how), or stage 3 fails halfway.
 
 ---
@@ -55,4 +61,4 @@ State these when they bite.
 
 Nothing here deletes a worktree or a branch, and nothing under the scratch folder was ever
 committed, so nothing is lost. Leave the worktrees for the user unless they ask for cleanup,
-and mention limit 13 first if they do. Update the ledger with where each ticket stopped.
+and mention limit 14 first if they do. Update the ledger with where each ticket stopped.

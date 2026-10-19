@@ -101,8 +101,17 @@ METHOD
   command that dies on a missing tool can look exactly like a passing run.
 - Use the tdd skill: a failing test first, where a test is meaningful.
 - Follow the playbook's Implement section.
-- Run the full suite and the typecheck before reporting. A red suite is RESULT: failed, not a
-  caveat in prose.
+- Tests while you work: the playbook's scoped command on the files you touched and the test
+  files that import them. Typecheck before reporting.
+- Before reporting, run the full suite **once**. Judge each failure against BASELINE (below):
+  - listed in BASELINE: pre-existing, not yours. Name it under TESTS and move on.
+  - not listed: run that one test file alone, twice. Red alone → yours, RESULT: failed.
+    Green alone both times → a load flake; list it as `flaky: <test>` and do not count it.
+  Do **not** build a base worktree or re-run the suite on base to compare: the baseline
+  already did that. A failure you can't classify with these two steps is RESULT: failed with
+  the test name, not an investigation.
+BASELINE: <the ledger's baseline list for this batch, or "none recorded">
+- Do not edit CHANGELOG.md unless the playbook says to (it conflicts on every merge).
 - Commit on this worktree's branch: the fix only, scratch excluded, message per the playbook.
 - Write notes.md: decisions, files, per acceptance criterion the evidence, out-of-scope
   findings, and manual steps a UI tester needs.

@@ -79,3 +79,23 @@ it at the top of the ledger.
   it when a fix is needed.
 - Full test suites in parallel can flake on a busy machine. Workers that only need confidence
   in their diff run the playbook's scoped test command.
+
+---
+
+## Test baseline — once per batch, before the first implementer
+
+A red full suite on a shared machine costs an implementer an hour or more if it has to prove
+the failures aren't its own (0.7.0 batch: two implementers spent over 2 hours each re-running
+the suite on base). Prove it once for the whole batch instead:
+
+1. In the first wave, start one `sonnet` worker in the base checkout (no edits, no commit)
+   that runs the playbook's full test command **twice** and reports every failing test with
+   `always` (red in both runs) or `flaky` (red in one).
+2. Write that list in the ledger under `BASELINE (<base sha>)`.
+3. Paste it into every implementer prompt (`worker-specs.md`, the `BASELINE:` line). The
+   implementer judges its suite against it and does not compare against base itself.
+4. Refresh it when base moves by more than a few merges, or when a new failure turns up in
+   two tickets that don't share files. Note the new sha.
+
+Until the baseline reports, implementers still start; they use "none recorded" and the
+isolated re-run rule.

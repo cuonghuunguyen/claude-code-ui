@@ -209,8 +209,11 @@ Reading tickets and PRs is encouraged; the ticket's comments are usually the bet
   say it out loud before starting anything, so the user can override it: tickets sharing a
   file, touching test infrastructure, or needing the same app port get chained. Rules and caps
   in `references/planning.md`. Default caps: **3** live workers, **2** acceptance workers.
-- Write the ledger, start every independent ticket's first stage in one turn, transition each
-  ticket to the playbook's `started` state, then end your turn.
+- **Record a test baseline once per batch** (`references/planning.md` › Test baseline): one
+  worker runs the full suite on base, and every implementer prompt carries its list of
+  pre-existing and flaky failures. No implementer re-proves a red suite against base itself.
+- Write the ledger, start every independent ticket's first stage and the baseline worker in
+  one turn, transition each ticket to the playbook's `started` state, then end your turn.
 
 ---
 

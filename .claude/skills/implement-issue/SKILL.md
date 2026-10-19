@@ -63,8 +63,17 @@ Also plan first when the issue changes the protocol or part model, or `docs/spec
   44px touch targets below `md`, focus, no horizontal scroll at 390px). Focused checks:
   `python3 .claude/skills/ui-ux-pro-max/scripts/search.py "<query>" --domain ux`.
 - Update `docs/spec.md` when behaviour or the wire/part model changes.
-- Finish: `npm run typecheck` and `npm test` (record pass/fail/skip); commit the fix only as
-  `GH-<n>: <what the user now sees>`; `git rebase main`, resolve, `npm ci`, re-run both.
+- While building: the scoped command on the touched test files. Finish: `npm run typecheck`
+  and one full `npm test` (record pass/fail/skip); commit the fix only as
+  `GH-<n>: <what the user now sees>`; `git rebase main`, resolve, `npm ci`, re-run the
+  typecheck and the scoped tests.
+- A full-suite failure outside your diff: check the batch BASELINE, then re-run that file
+  alone (see orchestrate-tickets › worker-specs). Known Windows load flakes: daemon git and
+  server tests timing out, `AttachConsole failed`, `files-panel` breadcrumb, the orchestration
+  `worker_wait`/permission timing tests. Never set up a base worktree just to compare.
+- **Don't edit `CHANGELOG.md` on a ticket branch.** The PR title (`GH-<n>: <what the user now
+  sees>`) is the changelog line; the release step writes `## Unreleased` from the merged PRs.
+  Every parallel branch adding a bullet at the same spot conflicted on every merge.
 - `notes.md`: design decisions, files, per acceptance criterion the evidence (test name,
   scenario name or screenshot), start command and port, manual steps for a UI tester,
   out-of-scope findings (report, do not fix).
