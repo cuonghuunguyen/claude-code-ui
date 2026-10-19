@@ -47,8 +47,9 @@ try {
         await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}" });
         await scene.steps?.(page);
         await page.waitForTimeout(300);
-        const target = scene.clip ? page.locator(scene.clip) : page;
-        await target.screenshot({ path: `${out}${file}` });
+        const clip = scene.clip;
+        const target = typeof clip === "string" ? page.locator(clip) : page;
+        await target.screenshot({ path: `${out}${file}`, ...(clip && typeof clip !== "string" && { clip }) });
         console.log(`${file}${problems.length ? `  (${problems.length} problem${problems.length > 1 ? "s" : ""})` : ""}`);
         for (const p of problems) console.log(`  ${name}: ${p}`);
       } catch (e) {

@@ -27,8 +27,8 @@ export type Scene = {
   terminals?: Record<string, { title: string; output: string }>;
   /** Playwright steps before the capture (open a menu, ...). */
   steps?: (page: Page) => Promise<void>;
-  /** CSS selector to capture instead of the whole viewport. */
-  clip?: string;
+  /** CSS selector (or a rectangle) to capture instead of the whole viewport. */
+  clip?: string | { x: number; y: number; width: number; height: number };
 };
 
 /** The snapshot a paged subscribe replies: state-like parts as heads, the rest as the page. */
