@@ -27,6 +27,18 @@ Right-click a session tab:
 
 The close and pin commands are also in the [command palette](palette) and can be bound in [Keyboard shortcuts](../reference/shortcuts). More ways to close many tabs: [Clean up](clean-up).
 
+## Group chips
+
+Right-click a group chip (the project name in front of its tabs):
+
+- **Move group left** and **Move group right**.
+- **Clean up group** closes the idle tabs of that group.
+- **Close other groups** and **Close group**.
+
+![The right-click menu of a group chip](/screenshots/group-menu.png)
+
+With **Compact tabs** on ([Settings › Tabs](../reference/settings#tabs)), hovering or clicking the chip opens a menu that lists only the group's tabs. The group actions above stay in the chip's right-click menu.
+
 ## Files
 
 The file tree has its own menu, see [Files](files#file-tree-menu).

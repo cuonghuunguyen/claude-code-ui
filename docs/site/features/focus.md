@@ -2,6 +2,8 @@
 
 One page that shows, per session, what needs you, what is working and what finished while you were away. Requests are answered right there.
 
+![The Focus page with two sessions waiting, one working and two finished](/screenshots/focus.png)
+
 ## How to use
 
 1. Open **Focus**: the row at the top of the sidebar, or the pinned **Focus** tab. The number shows how many sessions wait for an answer.

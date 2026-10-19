@@ -2,6 +2,8 @@
 
 The **Files** pane in the side panel: a file tree and a simple editor for the session's folder.
 
+![The file tree with cart.ts open in the editor](/screenshots/files.png)
+
 ## How to use
 
 1. Open the side panel and pick **files** (or press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>).
