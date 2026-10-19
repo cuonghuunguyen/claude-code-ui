@@ -402,3 +402,16 @@ it("/resume alone or with text opens the session search instead of starting a se
   expect(onDialog).toHaveBeenLastCalledWith("resume", "login bug");
   expect(onStart).not.toHaveBeenCalled();
 });
+
+it("a long project name in the project chip truncates and the chip can shrink to the screen", async () => {
+  const long = "/p/a-very-long-project-name-that-does-not-fit-on-a-phone-screen-at-all";
+  const { el } = await render({ projects: [long], cwd: long });
+  const chip = el.querySelector<HTMLElement>('[data-testid="project-chip"]')!;
+  const name = el.querySelector<HTMLElement>('[data-testid="new-project"]')!;
+  const has = (e: Element, c: string) => e.classList.contains(c);
+  expect(has(name, "truncate"), "name truncates").toBe(true);
+  expect(has(name, "min-w-0"), "name can shrink").toBe(true);
+  expect(has(chip, "min-w-0") && has(chip, "max-w-full"), "chip can shrink to the row").toBe(true);
+  expect(has(chip.parentElement!, "min-w-0") && has(chip.parentElement!, "max-w-full"), "row is bounded").toBe(true);
+  expect(chip.getAttribute("title")).toBe(long);
+});
