@@ -816,6 +816,29 @@ const moveFromMenu = async (area: "side" | "bottom") => {
 };
 const paneTab = (area: string, p: string) => q(area)!.querySelector<HTMLElement>(`[data-pane-tab="${p}"]`);
 
+it("GH-438: wide screens put the terminal's tabs in its dock header, in either area; narrow screens keep its own tabs row", async () => {
+  const newIn = (id: string) => q(id)?.querySelector('[data-testid="terminal-new"]') ?? null;
+  const tablistIn = (id: string) => q(id)?.querySelector('[role="tablist"][aria-label="Terminals"]') ?? null;
+  await clickId("terminal-toggle");
+  // The terminal panel is lazy: wait for its chunk.
+  await vi.waitFor(() => expect(q("terminal")).not.toBeNull(), { timeout: 4000 });
+  await act(async () => {});
+  expect(newIn("dock-toolbar-bottom")).not.toBeNull();
+  expect(tablistIn("dock-toolbar-bottom")).not.toBeNull();
+  expect(newIn("terminal")).toBeNull();
+  await moveFromMenu("bottom");
+  expect(newIn("dock-toolbar-side")).not.toBeNull();
+  expect(newIn("terminal")).toBeNull();
+  // Another pane selected in the side panel: the slot is empty, not left with the terminal's tabs.
+  await clickId("pane-files");
+  expect(q("dock-toolbar-side")!.childElementCount).toBe(0);
+  width = 800;
+  await rerender();
+  await clickId("pane-terminal");
+  expect(newIn("terminal")).not.toBeNull();
+  expect(tablistIn("terminal")).not.toBeNull();
+});
+
 it("the side panel docks left from its menu: DOM order side, resizer, session; kept across a reload; Reset layout restores right", async () => {
   const side = () => q("side-panel")!.parentElement!;
   const resizer = () => el.querySelector<HTMLElement>('[role="separator"][aria-label="Resize side panel"]')!;
