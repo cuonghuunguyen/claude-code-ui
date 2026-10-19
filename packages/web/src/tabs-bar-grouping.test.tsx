@@ -236,7 +236,7 @@ it("GH-277 Close group still closes the whole group", async () => {
   const onClose = vi.fn();
   const onCloseGroup = vi.fn();
   const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} onClose={onClose} onCloseGroup={onCloseGroup} />);
-  await act(async () => chip(el, A).click());
+  await act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   await settle();
   await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-group-close"]')!.click());
   expect(onCloseGroup).toHaveBeenCalledWith(A, ["a1", "a2"]);
@@ -284,7 +284,7 @@ it("GH-359 not compact: the chip context menu has Close other groups before Clos
 it("GH-359 compact: the chip menu has Close other groups", async () => {
   const onCloseOtherGroups = vi.fn();
   const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} onCloseOtherGroups={onCloseOtherGroups} />);
-  await act(async () => chip(el, A).click());
+  await act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   await settle();
   await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-group-close-others"]')!.click());
   expect(onCloseOtherGroups).toHaveBeenCalledWith(A);
@@ -292,7 +292,7 @@ it("GH-359 compact: the chip menu has Close other groups", async () => {
 
 it("GH-359 Close other groups is disabled when there is no other group", async () => {
   const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2"]} activeId="a1" info={(id) => INFO2[id]!} onCloseOtherGroups={() => {}} />);
-  await act(async () => chip(el, A).click());
+  await act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   await settle();
   expect(document.querySelector('[data-testid="tab-group-close-others"]')!.getAttribute("aria-disabled")).toBe("true");
 });
@@ -322,7 +322,7 @@ it("GH-378 not compact: the chip context menu has Clean up group before Close ot
 it("GH-378 compact: the chip menu has Clean up group; disabled when the group has nothing to clean", async () => {
   const c = cleanupFor(0);
   const el = await mount(<TabsBar {...noop} compact tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO2[id]!} {...c} />);
-  await act(async () => chip(el, A).click());
+  await act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   await settle();
   const item = document.querySelector<HTMLElement>('[data-testid="tab-group-cleanup"]')!;
   expect(item.getAttribute("aria-disabled")).toBe("true");
