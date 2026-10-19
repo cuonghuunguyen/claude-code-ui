@@ -51,7 +51,16 @@ npm run docs:preview    # serve that build
 
 - One Markdown page per feature in `docs/site/features/`. Keep it short: one-sentence intro, **How to use** steps, a few **Good to know** bullets.
 - `docs/site/reference/shortcuts.md` is generated from `packages/web/src/shortcuts.ts` and `leader.ts` (`npm run docs:shortcuts`, run by `docs:dev` and `docs:build`). Edit the registry, not the page.
-- Screenshots go in `docs/site/public/screenshots/`. Take them against a neutral demo project: no real project names, paths, branches, usernames or session text.
+- Screenshots are generated, not taken by hand: `npm run docs:shots [scene...]` writes `docs/site/public/screenshots/<scene>[-dark].png`.
+
+### Screenshot scenes
+
+The real web app runs against a scripted fake daemon and Playwright captures it. `packages/web/vite.scenes.config.ts` redirects every import of `src/client.ts` to `packages/web/scenes/fake-client.ts`, which answers requests and pushes events from the scene named in the URL (`scenes.html?scene=<name>`). The normal build is untouched.
+
+- A scene is one file in `packages/web/scenes/scenes/` that exports a `Scene` (`scenes/scene.ts`): its sessions (list entry plus the parts of its timeline), projects, the URL hash to open (`#new`, `#focus`, `#<session id>`), localStorage to seed (layout, selected panes, open tabs), the viewport (default 1440x900), the themes (`light`, add `dark`), optional `replies` for requests the defaults in `fake-client.ts` do not cover, optional Playwright `steps` (open a menu) and an optional `clip` selector. Data is typed against `@claude-ui/protocol`, so a wire change fails `npm run typecheck`.
+- To add one: copy a scene file, register it in `scenes/index.ts` (the key is the PNG name), run `npm run docs:shots <name>` and look at the PNG. A request the fake does not know resolves `{}` and logs `[scene] unhandled request "<type>"`: add a default reply in `fake-client.ts` when the screen needs it.
+- Time is frozen to `NOW` in `scenes/demo.ts`; express timestamps relative to it.
+- Demo data rule: only the invented `demo-shop` / `demo-api` projects from `scenes/demo.ts`, made-up branches and session titles. No real names, paths, usernames or session text.
 
 ## Release (owner step)
 
