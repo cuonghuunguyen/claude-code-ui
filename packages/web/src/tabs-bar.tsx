@@ -323,7 +323,7 @@ export function TabsBar({
     // Below md: 44px hit areas, 8px apart (touch-target-size, touch-spacing).
     <div className="flex min-w-0 flex-1 items-center gap-1.5 max-md:gap-2">
       {onHome && (
-        <IconButton className="w-9! max-md:hidden aria-pressed:bg-transparent aria-pressed:shadow-none aria-pressed:text-faint aria-pressed:hover:bg-accent aria-pressed:hover:text-foreground" label="Toggle sidebar" onClick={onHome} pressed={home} testId="tab-home" command="sidebar.toggle">
+        <IconButton className={`w-9! max-md:hidden ${QUIET_PRESSED}`} label="Toggle sidebar" onClick={onHome} pressed={home} testId="tab-home" command="sidebar.toggle">
           <PanelLeftIcon />
         </IconButton>
       )}
@@ -1224,6 +1224,10 @@ function Tab({
 /** The look of an icon button; `aria-disabled` keeps it focusable and its tooltip readable. */
 export const ICON_BUTTON =
   "grid size-7 shrink-0 cursor-pointer place-items-center max-md:size-11 pointer-coarse:size-11 rounded-md text-faint outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-secondary aria-pressed:text-foreground aria-pressed:shadow-[inset_0_-2px_0_var(--foreground)] aria-expanded:bg-secondary aria-expanded:text-foreground aria-expanded:shadow-[inset_0_-2px_0_var(--foreground)] [&_svg]:size-4 aria-disabled:cursor-default aria-disabled:opacity-50 aria-disabled:hover:bg-transparent aria-disabled:hover:text-faint";
+
+/** Pressed state of the titlebar and side panel header toggles: no fill, no shadow, faint icon; hover shows the accent. */
+export const QUIET_PRESSED =
+  "aria-pressed:bg-transparent aria-pressed:text-faint aria-pressed:shadow-none aria-pressed:hover:bg-accent aria-pressed:hover:text-foreground";
 
 export function IconButton({
   label,
