@@ -10,6 +10,10 @@ A **session** is one conversation with Claude in one folder. Sessions run in the
 
 To start in a specific project, use the **+** on that project's row in the sidebar.
 
+On a wide screen (1024px and up), the New session tab already shows the project's side panel and bottom panel, so nothing moves when you send the first message. Files, Graph and Terminal work as in a session, and Changes shows "No changes yet". Picking another project in the prompt box switches the panels to it.
+
+![The New session tab with the Changes panel and a terminal](/screenshots/new-session.png)
+
 ## How to find a session
 
 - Type in **Search sessions** at the top of the sidebar. It matches title, project and branch.
@@ -41,8 +45,10 @@ Each open session is a tab at the top. Tabs are grouped by project, like Chrome 
 | --- | --- |
 | Switch tab | Click it, or <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>8</kbd> (<kbd>⌃</kbd> <kbd>1</kbd>…<kbd>8</kbd> on Mac). <kbd>Alt</kbd>+<kbd>9</kbd> goes to the last tab. |
 | Close a tab | Its **×**, or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>W</kbd> |
-| Close a whole group | Middle-click the group chip |
+| Close a whole group | Middle-click the group chip, or right-click it › **Close group** |
 | Reorder | Drag a tab or a group chip |
+
+With **Compact tabs** on, each group shows only its chip: hover or click it to pick one of its tabs, and right-click it for the group actions ([Context menus](context-menus#group-chips)).
 
 More tab keys (reopen a closed tab, close a group): [Keyboard shortcuts](../reference/shortcuts).
 

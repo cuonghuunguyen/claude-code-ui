@@ -17,7 +17,7 @@ Close or remove many tabs, worktrees and workers at once, with a safety check fo
 2. Pick a rule: idle tabs, finished tabs, tabs of archived or deleted sessions, worker tabs, or tabs not used for 1 hour, 1 day or 7 days. Each rule shows how many tabs it closes.
 3. A **Closed N tabs** toast appears. Click **Undo** to bring them back.
 
-**Clean up group** on a group chip, and the close button on a phone, close the idle tabs of that group.
+To close the idle tabs of one group, right-click its group chip and pick **Clean up group** (see [Context menus](context-menus#group-chips)). On a phone, long press the close button.
 
 ## Good to know
 

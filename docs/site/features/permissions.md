@@ -2,6 +2,9 @@
 
 Before Claude runs a tool (a command, a file edit), it may ask you. This works exactly like Claude Code, with the same rules.
 
+<img class="only-light" src="/screenshots/permissions.png" alt="A permission request for a file edit, with its diff and the Allow and Deny buttons">
+<img class="only-dark" src="/screenshots/permissions-dark.png" alt="A permission request for a file edit, in dark mode">
+
 ## How to answer a permission request
 
 A card appears above the prompt box. It shows the tool and what it wants to do (the command, or a diff for an edit).
