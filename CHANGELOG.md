@@ -2,6 +2,19 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.7.1 - 2026-10-19
+
+### Changed
+
+- New session tab (screens from 1024px): it shows the side panel and the bottom panel of its project, so sending the first message no longer makes the panels (and a remembered terminal) appear at once; Files, Graph and Terminal work as for a session, Changes shows "No changes yet" while its git modes work, and switching the project moves the panels ([#430](https://github.com/cuonghuunguyen/claude-code-ui/issues/430)).
+- Terminal: a terminal remembered as open shows only when its folder has running shells, and a shell starts only when you open the terminal (Toggle terminal, Ctrl+`, New terminal, a click on its tab), never on a reload, a session or project switch or a reconnect; a terminal that shows without being asked for never takes the focus ([#430](https://github.com/cuonghuunguyen/claude-code-ui/issues/430)).
+- Compact tab groups: on desktop the group chip's hover menu lists only the group's tabs; Move group, Clean up group, Close other groups and Close group are in the chip's right-click menu (also Shift+F10, or a long press on a touch tablet) ([#431](https://github.com/cuonghuunguyen/claude-code-ui/issues/431)).
+
+### Fixed
+
+- The titlebar terminal button shows the terminal icon, and it and the side panel's terminal button use the same quiet pressed style as the sidebar toggle instead of a heavy outline, also in dark mode ([#430](https://github.com/cuonghuunguyen/claude-code-ui/issues/430), [#434](https://github.com/cuonghuunguyen/claude-code-ui/issues/434)).
+- Phone: a long project name in the New session tab's project chip ends with "…" instead of being cut off at both screen edges ([#435](https://github.com/cuonghuunguyen/claude-code-ui/issues/435)).
+
 ## 0.7.0 - 2026-10-17
 
 ### Added
