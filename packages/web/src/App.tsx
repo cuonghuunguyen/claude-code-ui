@@ -143,7 +143,7 @@ import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDra
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
 import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type Split, type SplitDir, canSplit as canSplitTabs, followSplit, isSession, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
-import { AvatarColors, IconButton, ProjectAvatar, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
+import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { anySessionRunning, useKeepAwake } from "./keep-awake.ts";
 import { KeepAwakeButton } from "./keep-awake-button.tsx";
@@ -2195,7 +2195,7 @@ export function App() {
   const bottomDropRef = useAreaDrop(dropHandlers("bottom"));
   const dropPane = (a: DockArea) => (p: PaneId) => (setDrag(undefined), setDropAt(undefined), move(p, a));
   const terminalToggle = areaOf(layout, "terminal") !== "side" && (
-    <IconButton label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle" command="terminal.toggle">
+    <IconButton className={QUIET_PRESSED} label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle" command="terminal.toggle">
       <SquareTerminalIcon />
     </IconButton>
   );
@@ -2294,7 +2294,7 @@ export function App() {
             </IconButton>
           )}
           {panelHost && (
-            <IconButton className="max-lg:hidden aria-pressed:bg-transparent aria-pressed:text-faint aria-pressed:shadow-none aria-pressed:hover:bg-accent aria-pressed:hover:text-foreground" label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar" command="terminal.toggle">
+            <IconButton className={`max-lg:hidden ${QUIET_PRESSED}`} label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar" command="terminal.toggle">
               <SquareTerminalIcon />
             </IconButton>
           )}

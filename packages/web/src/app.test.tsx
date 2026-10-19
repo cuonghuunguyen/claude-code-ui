@@ -679,6 +679,19 @@ it("wide screens dock the terminal at the bottom by default, spanning the sessio
   expect(q("work-area")!.contains(q("sidebar"))).toBe(false);
 });
 
+it("GH-434: the side panel terminal toggle uses the quiet pressed style", async () => {
+  const b = () => q("terminal-toggle")!;
+  expect(b().className).toContain("aria-pressed:bg-transparent");
+  expect(b().className).toContain("aria-pressed:shadow-none");
+  expect(b().className).toContain("aria-pressed:text-faint");
+  expect(b().className).toContain("aria-pressed:hover:bg-accent");
+  // The default pressed fill is replaced, not stacked under the quiet one.
+  expect(b().className).not.toContain("aria-pressed:bg-secondary");
+  expect(b().getAttribute("aria-pressed")).toBe("false");
+  await clickId("terminal-toggle");
+  expect(b().getAttribute("aria-pressed")).toBe("true");
+});
+
 it("the titlebar terminal button opens and hides the terminal, pressed while shown", async () => {
   const b = () => q("terminal-toggle-titlebar")!;
   expect(b().getAttribute("aria-pressed")).toBe("false");
