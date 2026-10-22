@@ -225,8 +225,8 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
                   data-testid="create-worktree-branch-row"
                   data-name={b.name}
                 >
-                  <span className="min-w-0 flex-1 truncate font-mono">{b.name}</span>
-                  <span className="shrink-0 text-muted-foreground text-xs">{b.worktree ? `in worktree ${folderOf(b.worktree)}` : branchKind(b)}</span>
+                  <span className="min-w-12 flex-1 truncate font-mono">{b.name}</span>
+                  <span className="min-w-0 max-w-[55%] truncate text-muted-foreground text-xs" title={b.worktree}>{b.worktree ? `in worktree ${folderOf(b.worktree)}` : branchKind(b)}</span>
                 </button>
               ))}
             </div>
