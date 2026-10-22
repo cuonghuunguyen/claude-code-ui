@@ -442,9 +442,19 @@ export function worktreeNameError(name: string): string | undefined {
  * One Claude Code install the daemon reaches: its own (`local`), a WSL distro (`wsl:<distro>`) or a running Docker container (`docker:<name>`), each with its own login,
  * transcripts, settings, MCP servers and plugins. `off`: not started yet (side.start sets it up); `error`: `message` says what to do.
  */
-export type SideInfo = { id: string; label: string; state: "off" | "starting" | "ready" | "error"; message?: string; phase?: SidePhase };
-/** What a starting side is doing (`SideInfo.phase`, only while `state` is `starting`). */
-export type SidePhase = "packing" | "copying" | "installing" | "starting";
+export type SideInfo = {
+  id: string;
+  label: string;
+  state: "off" | "starting" | "ready" | "error";
+  message?: string;
+  phase?: SidePhase;
+  /** Docker, while starting: the install uses the host-assembled bundle (no npm in the container). */
+  bundle?: boolean;
+  /** Docker, while starting or after a failed start: why the install uses npm in the container instead of the bundle. */
+  fallback?: string;
+};
+/** What a starting side is doing (`SideInfo.phase`, only while `state` is `starting`). `downloading`: the hub fetches bundle parts. */
+export type SidePhase = "downloading" | "packing" | "copying" | "installing" | "starting";
 /** The Docker engine as the hub sees it (`ListResult.docker`). */
 export type DockerState = "ok" | "down" | "empty";
 /** `side.start` setup mode: run only what is installed, install when needed (default), install again. */
@@ -452,7 +462,7 @@ export type SideSetup = "never" | "needed" | "force";
 /** `running`/`starting`: the side is up (nothing was run); `installed`: this build is installed (can start); `install`/`update`: setup is needed; `blocked`: see `reason`. */
 export type SideCheckVerdict = "running" | "starting" | "installed" | "install" | "update" | "blocked";
 /** Why a check is blocked. `not_logged_in` is soft: no credentials file, but a login by environment variable cannot be seen, so a setup may still work. */
-export type SideCheckReason = "gone" | "not_running" | "unreachable" | "no_build" | "package_unreadable" | "node_missing" | "node_old" | "build_tools_missing" | "not_logged_in" | "no_writable_path" | "check_failed";
+export type SideCheckReason = "gone" | "not_running" | "unreachable" | "no_build" | "package_unreadable" | "node_missing" | "node_old" | "build_tools_missing" | "unpack_tools_missing" | "not_logged_in" | "no_writable_path" | "check_failed";
 export type SideCheckFacts = {
   reachable: boolean;
   running?: boolean;
@@ -466,6 +476,16 @@ export type SideCheckFacts = {
   installedKey?: string;
   /** Docker: the writable folders among /tmp, /dev/shm and the home folder. */
   writable?: string[];
+  /** Docker: the container's CPU (`uname -m`), C library and glibc version. */
+  target?: { arch: string; libc: "glibc" | "musl" | "unknown"; glibc?: string };
+  /** Docker: how an install gets claude-ui in: the host-assembled bundle, or npm in the container (`reason`: why not the bundle). */
+  install?: { method: "bundle" | "npm"; reason?: string };
+  /** Docker: tools and libraries found (each item of "What this container needs"). */
+  tools?: { tar: boolean; gzip: boolean; npm: boolean; git: boolean; cxxRuntime: boolean };
+  /** Docker: false when the container has no network (`--network none`). */
+  network?: boolean;
+  /** Docker: the installed build carries its own Node.js (a bundle install). */
+  bundled?: boolean;
 };
 /** Reply of `side.check`. `message`: the user's next step in plain words (blocked, install, update). `key`: this claude-ui build. */
 export type SideCheck = { verdict: SideCheckVerdict; reason?: SideCheckReason; message?: string; key: string; facts: SideCheckFacts; phase?: SidePhase };

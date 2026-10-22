@@ -1,6 +1,37 @@
 # Third-party notices
 
-Bundled npm packages: their license texts are in `dist/web/THIRD_PARTY_LICENSES.txt`, generated at build.
+Bundled npm packages: their license texts are in `dist/web/THIRD_PARTY_LICENSES.txt` (web app) and `dist/side/THIRD_PARTY_LICENSES.txt` (packages inlined in the Docker side JS, `dist/side/cli.js`), generated at build. `web-push` (MPL-2.0) is inlined there unmodified; its Source Code Form is the npm package `web-push` of the version named in that file.
+
+## Docker side bundle (downloaded on the user's computer, not shipped in this package)
+
+For a Docker container, claude-code-ui downloads these on the user's computer, checks each against its published checksum and copies them into the container. This package does not contain or re-host any of them.
+
+- **Node.js** (https://nodejs.org), MIT License with third-party components. Its full `LICENSE` is copied into the container next to the binary (`~/.local/share/claude-ui/side/<build>/node/LICENSE`). Its first notice:
+
+  ```
+  Copyright Node.js contributors. All rights reserved.
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to
+  deal in the Software without restriction, including without limitation the
+  rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+  sell copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+  IN THE SOFTWARE.
+  ```
+
+- **node-pty** (https://github.com/microsoft/node-pty), the npm package with its Linux prebuilds, MIT License: the text under "node-pty" below; the package's `LICENSE` is copied into the container with it.
+- **Claude Agent SDK and Claude Code** (`@anthropic-ai/claude-agent-sdk`, `@anthropic-ai/claude-agent-sdk-linux-<arch>`): © Anthropic PBC, under Anthropic's terms (https://code.claude.com/docs/en/legal-and-compliance). Fetched from the npm registry by the user's computer; not redistributed by this project.
 
 ## OpenCode
 
@@ -204,7 +235,7 @@ limitations under the License.
 
 ## node-pty
 
-`packages/daemon/src/terminals.ts` re-implements `WindowsPtyAgent._getConsoleProcessList` from node-pty (https://github.com/microsoft/node-pty) with an added 'error' listener (GH-268). node-pty's license text, as shipped with the package (it carries three copyright holders):
+`packages/daemon/src/terminals.ts` re-implements `WindowsPtyAgent._getConsoleProcessList` from node-pty (https://github.com/microsoft/node-pty) with an added 'error' listener (GH-268); the Docker side bundle carries node-pty too (above). node-pty's license text, as shipped with the package (it carries three copyright holders):
 
 ```
 Copyright (c) 2012-2015, Christopher Jeffrey (https://github.com/chjj/)

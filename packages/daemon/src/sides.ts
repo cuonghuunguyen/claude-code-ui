@@ -15,6 +15,7 @@ import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, t
 import type { Exec } from "./docker-side.ts";
 import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
 import { SideGone } from "./wsl-git.ts";
+import { parseTarget, TARGET_PROBE_LINES, type ContainerTarget } from "./side-bundle.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
 import { logPrefix, MAX_SIDE_LINE_CHARS, parseSideFrame } from "./side-frame.ts";
@@ -35,6 +36,9 @@ export function parseDistros(out: Buffer) {
     .filter((d) => d && !/^(docker-desktop|rancher-desktop)/.test(d));
 }
 
+/** Appended to a failed Docker start that installed with npm: why the bundle was not used. */
+const fallbackNote = (s: { fallback?: string }) => (s.fallback ? `\nclaude-ui used npm in the container because ${s.fallback}.` : "");
+
 /** A side the hub can start. */
 export type SideTarget = { id: string; label: string };
 export const wslSide = (distro: string): SideTarget => ({ id: `wsl:${distro}`, label: `WSL: ${distro}` });
@@ -54,6 +58,8 @@ export function setupMessage(code: string, detail: string, side: string, docker 
       return `${side} needs make, python3 and g++ to build the terminal support (node-pty). Install them there (Debian/Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++), then retry.`;
     case "not_installed":
       return `claude-ui is not installed in ${side} yet. Install it first.`;
+    case "unpack_tools_missing":
+      return `${side} needs ${detail.trim() ? detail.trim().split(/\s+/).join(" and ") : "tar and gzip"} to unpack claude-ui. Install ${detail.trim().includes(" ") ? "them" : "it"} in the container (Debian or Ubuntu: apt-get install -y tar gzip), then retry.`;
     case "install_failed":
       return `Installing claude-ui in ${side} failed${detail ? `: ${detail}` : ""}. Check its network and npm, then retry.`;
     default:
@@ -67,27 +73,31 @@ export function setupMessage(code: string, detail: string, side: string, docker 
  * `key` (version and build), so no registry or unpublished version matters. wsl: `source` is the Windows package folder (read
  * through /mnt; npm packs it); docker: `source` is the tarball's path in the container. Then runs it.
  */
-export function setupScript(source: string, key: string, kind: "wsl" | "docker" = "wsl", mode: SideSetup = "needed") {
+export function setupScript(source: string, key: string, kind: "wsl" | "docker" = "wsl", mode: SideSetup = "needed", bundle?: SideBundle) {
   const docker = kind === "docker";
   // never: only an installed build runs (else `not_installed`, the side stays off); force: installed again whatever is there.
   const never = mode === "never";
+  if (docker && bundle && !never) return bundleScript(source, key, mode, bundle);
   const src = source.replace(/'/g, "");
   return [
     "say() { printf 'CLAUDE_UI_SETUP %s\\n' \"$*\"; exit 3; }",
     ...(docker ? ['nvm="${NVM_DIR:-$HOME/.nvm}/nvm.sh"; [ -s "$nvm" ] && . "$nvm" >/dev/null 2>&1'] : []),
-    "command -v node >/dev/null 2>&1 || say node_missing",
-    "v=$(node -p 'process.versions.node.split(\".\")[0]') || say node_missing",
-    "[ \"$v\" -ge 22 ] || say node_old \"$(node -v)\"",
-    "[ -n \"$ANTHROPIC_API_KEY\" ] || [ -n \"$CLAUDE_CODE_OAUTH_TOKEN\" ] || [ -f \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json\" ] || say not_logged_in",
     'root="$HOME/.local/share/claude-ui/side"',
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
-    ...(docker && !never ? [`src='${src}'`] : []),
     // npm skips an optional dependency it could not fetch: without the SDK's Linux binary (any arch or libc) the side lists no
     // models (no auto mode) and runs no query. Such an install is installed again: into an empty temp folder next to the old
     // install (npm does not fetch a missing optional dependency into an existing node_modules), checked there (dist/cli.js and the
     // binary), then swapped in. On any failure the old install stays (disk: both exist while npm runs).
     'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
+    // Docker: a bundle install of this build carries its own Node.js; running it needs none in the container (force reinstalls with npm: it does).
+    ...(docker && mode !== "force" ? ['if [ -x "$dir/node/bin/node" ] && [ -f "$cli" ] && sdk "$dir"; then :; else'] : []),
+    "command -v node >/dev/null 2>&1 || say node_missing",
+    "v=$(node -p 'process.versions.node.split(\".\")[0]') || say node_missing",
+    "[ \"$v\" -ge 22 ] || say node_old \"$(node -v)\"",
+    ...(docker && mode !== "force" ? ["fi"] : []),
+    LOGIN_CHECK,
+    ...(docker && !never ? [`src='${src}'`] : []),
     ...(never
       ? ['if [ ! -f "$cli" ] || ! sdk "$dir"; then say not_installed; fi']
       : [
@@ -125,9 +135,66 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     "fi",
     ]),
     ...(docker && !never ? ['rm -f "$src" 2>/dev/null'] : []),
-    ...(docker ? ['[ -n "$CLAUDE_UI_ROOTS" ] || case "$PWD" in /|"$HOME"|"$HOME"/*) export CLAUDE_UI_ROOTS="$HOME" ;; *) export CLAUDE_UI_ROOTS="$HOME:$PWD" ;; esac'] : []),
-    "printf 'CLAUDE_UI_PHASE %s\\n' starting",
-    'exec node "$cli" --side',
+    ...(docker ? RUN_DOCKER : ["printf 'CLAUDE_UI_PHASE %s\\n' starting", 'exec node "$cli" --side']),
+  ].join("\n");
+}
+
+/** A Docker side's bundle (side-bundle.ts): its target and the names inside it. */
+export type SideBundle = { target: "linux-x64" | "linux-arm64"; nodeDir: string; claudePackage: string };
+
+const LOGIN_CHECK = "[ -n \"$ANTHROPIC_API_KEY\" ] || [ -n \"$CLAUDE_CODE_OAUTH_TOKEN\" ] || [ -f \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json\" ] || say not_logged_in";
+/** Roots, then the side runs on its own Node.js when the install carries one (a bundle install), else on the container's. */
+const RUN_DOCKER = [
+  '[ -n "$CLAUDE_UI_ROOTS" ] || case "$PWD" in /|"$HOME"|"$HOME"/*) export CLAUDE_UI_ROOTS="$HOME" ;; *) export CLAUDE_UI_ROOTS="$HOME:$PWD" ;; esac',
+  "printf 'CLAUDE_UI_PHASE %s\\n' starting",
+  'if [ -x "$dir/node/bin/node" ]; then exec "$dir/node/bin/node" "$cli" --side; fi',
+  'exec node "$cli" --side',
+];
+
+/**
+ * Docker setup from the host-assembled bundle (`source`: the bundle tar in the container): needs sh, tar and gzip, no Node.js, npm,
+ * network or build tools. Unpacks into a temp folder next to the old install (Node.js binary and license, node-pty with only this
+ * target's prebuild, the Claude Code binary package, the Agent SDK package, the side JS), checks that it starts on its own Node.js, then swaps it in like
+ * the npm install. An install of this build that carries its Node.js is kept (needed); force unpacks again.
+ */
+function bundleScript(source: string, key: string, mode: SideSetup, b: SideBundle) {
+  const q = (v: string) => `'${v.replace(/'/g, "")}'`;
+  return [
+    "say() { printf 'CLAUDE_UI_SETUP %s\\n' \"$*\"; exit 3; }",
+    LOGIN_CHECK,
+    'root="$HOME/.local/share/claude-ui/side"',
+    `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
+    'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
+    `src=${q(source)}; nd=${q(b.nodeDir)}; cp=${q(b.claudePackage)}; tg=${q(b.target)}`,
+    'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
+    mode === "force" ? "if true; then" : 'if [ ! -f "$cli" ] || ! sdk "$dir" || [ ! -x "$dir/node/bin/node" ]; then',
+    '  [ -f "$src" ] || say install_failed "the claude-ui bundle was not copied in"',
+    "  printf 'CLAUDE_UI_PHASE %s\\n' installing",
+    "  { command -v tar && command -v gzip; } >/dev/null 2>&1 || { rm -f \"$src\"; say unpack_tools_missing \"$(for t in tar gzip; do command -v $t >/dev/null 2>&1 || printf '%s ' $t; done)\"; }",
+    '  new="$root/.new-$$"; old="$root/.old-$$"',
+    '  fail() { rm -rf "$new"; rm -f "$src"; say install_failed "$1"; }',
+    '  rm -rf "$new"; mkdir -p "$new/b" || fail "no folder could be made in $root"',
+    '  tar -xf "$src" -C "$new/b" 2>/dev/null || fail "the bundle could not be unpacked (is the disk full?)"',
+    '  rm -f "$src"',
+    '  mkdir -p "$new/node/bin" "$new/node_modules/@anthropic-ai" "$new/b/pty" "$new/b/claude" "$new/b/sdk" || fail "no folder could be made in $root"',
+    '  (cd "$new/b" && tar -xzf node.tar.gz "$nd/bin/node" "$nd/LICENSE") 2>/dev/null && mv "$new/b/$nd/bin/node" "$new/node/bin/node" && mv "$new/b/$nd/LICENSE" "$new/node/LICENSE" || fail "Node.js could not be unpacked"',
+    '  tar -xzf "$new/b/node-pty.tgz" -C "$new/b/pty" 2>/dev/null && mv "$new/b/pty/package" "$new/node_modules/node-pty" || fail "node-pty could not be unpacked"',
+    // Only this target's prebuild stays (the package also carries Windows and macOS builds).
+    '  for p in "$new/node_modules/node-pty/prebuilds"/*; do [ "${p##*/}" = "$tg" ] || rm -rf "$p"; done',
+    '  tar -xzf "$new/b/claude.tgz" -C "$new/b/claude" 2>/dev/null && mv "$new/b/claude/package" "$new/node_modules/@anthropic-ai/$cp" || fail "Claude Code could not be unpacked"',
+    '  tar -xzf "$new/b/sdk.tgz" -C "$new/b/sdk" 2>/dev/null && mv "$new/b/sdk/package" "$new/node_modules/@anthropic-ai/claude-agent-sdk" || fail "the Claude Agent SDK could not be unpacked"',
+    '  mv "$new/b/app" "$new/node_modules/claude-code-ui" || fail "the claude-ui files could not be unpacked"',
+    '  rm -rf "$new/b"',
+    '  [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] && [ -f "$new/node_modules/@anthropic-ai/claude-agent-sdk/package.json" ] && sdk "$new" || fail "the bundle is incomplete"',
+    // The new install must run on its own Node.js (a missing library shows here) before it replaces the old one.
+    "  e=$(\"$new/node/bin/node\" \"$new/node_modules/claude-code-ui/dist/cli.js\" --version 2>&1 >/dev/null) || fail \"the new install does not start: $(printf '%s' \"$e\" | tail -n 2 | tr '\\n' ' ')\"",
+    '  if [ -e "$dir" ]; then mv "$dir" "$old" || fail "the old install could not be moved aside"; fi',
+    '  mv "$new" "$dir" || { rm -rf "$dir" "$new"; [ -e "$old" ] && mv "$old" "$dir"; say install_failed "the new install could not be moved in"; }',
+    '  rm -rf "$old"',
+    '  for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || rm -rf "$d"; done',
+    "fi",
+    'rm -f "$src" 2>/dev/null',
+    ...RUN_DOCKER,
   ].join("\n");
 }
 
@@ -151,10 +218,16 @@ export function checkScript(key: string, kind: "wsl" | "docker", source = "") {
     "{ command -v g++ || command -v c++; } >/dev/null 2>&1 && emit cxx 1 || emit cxx 0",
     '[ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" ] && emit credentials 1 || emit credentials 0',
     ...(docker
-      ? [`w=; wr() { [ -d "$1" ] && [ -w "$1" ] && w="$w\${w:+,}$2"; }; wr /tmp /tmp; wr /dev/shm /dev/shm; wr "$HOME" '$HOME'; emit writable "$w"`]
+      ? [
+          `w=; wr() { [ -d "$1" ] && [ -w "$1" ] && w="$w\${w:+,}$2"; }; wr /tmp /tmp; wr /dev/shm /dev/shm; wr "$HOME" '$HOME'; emit writable "$w"`,
+          // The bundle's target (arch, libc, libstdc++) and the other items of "What this container needs".
+          ...TARGET_PROBE_LINES.slice(1),
+          "for t in tar gzip git npm; do command -v $t >/dev/null 2>&1 && emit $t 1 || emit $t 0; done",
+        ]
       : [`src=$(wslpath -u '${source.replace(/'/g, "")}' 2>/dev/null) && [ -f "$src/dist/cli.js" ] && emit package 1 || emit package 0`]),
     'root="$HOME/.local/share/claude-ui/side"',
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
+    ...(docker ? ['[ -x "$dir/node/bin/node" ] && emit bundled 1 || emit bundled 0'] : []),
     'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
     // Same test as the setup script: a build without the SDK's Linux binary is not installed.
     'if [ -f "$dir/node_modules/claude-code-ui/dist/cli.js" ] && sdk "$dir"; then emit installed current',
@@ -178,6 +251,10 @@ type Checked = {
   writable?: string[];
   installed: "current" | "other" | "none";
   installedKey?: string;
+  /** Docker: the container's target, tools and whether this build's install carries its own Node.js. */
+  target?: ContainerTarget;
+  tools?: { tar: boolean; gzip: boolean; npm: boolean; git: boolean; cxxRuntime: boolean };
+  bundled?: boolean;
 };
 
 /** The `CLAUDE_UI_CHECK` lines of a check script's output (other lines are shell start-up noise); undefined when the script did not get to its last line. */
@@ -201,6 +278,8 @@ export function parseCheck(out: string): Checked | undefined {
     ...(kv.has("writable") && { writable: kv.get("writable")!.split(",").filter(Boolean) }),
     installed: inst,
     ...(kv.get("installedKey") && { installedKey: kv.get("installedKey") }),
+    ...(kv.has("arch") && { target: parseTarget(out), tools: { tar: flag("tar"), gzip: flag("gzip"), npm: flag("npm"), git: flag("git"), cxxRuntime: flag("cxxrt") } }),
+    ...(kv.has("bundled") && { bundled: flag("bundled") }),
   };
 }
 
@@ -228,6 +307,8 @@ export function checkMessage(reason: SideCheckReason, side: string, o: { docker?
       return `${side} needs ${d || "make, python3 and g++"} to install the terminal support. Install ${d ? "it" : "them"} there (Debian or Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++). Then check again.`;
     case "not_logged_in":
       return o.docker ? `Claude does not look logged in to ${side}. Run claude login in the container, or copy your ~/.claude/.credentials.json into it. If it logs in with an API key or token, you can install anyway.` : `Claude does not look logged in to ${side}. Run claude login there. If it logs in with an API key or token, you can install anyway.`;
+    case "unpack_tools_missing":
+      return `${side} needs ${d || "tar and gzip"} to unpack claude-ui. Install ${d.includes(" and ") || !d ? "them" : "it"} in the container (Debian or Ubuntu: apt-get install -y tar gzip). Then check again.`;
     case "no_writable_path":
       return `${side} has no folder claude-ui can be put in: /tmp, /dev/shm and the home folder are read-only. Start the container with a writable /tmp (docker run --tmpfs /tmp), then check again.`;
     case "check_failed":
@@ -240,9 +321,10 @@ export function checkMessage(reason: SideCheckReason, side: string, o: { docker?
  * build tools, the package unreadable), then an installed side (starting it needs no login), then the soft block (no credentials
  * file: an environment login cannot be seen; only when an install or update is needed). `cpUsable` (Docker): whether `docker cp` can write; with a writable folder one of the two copies the package in.
  */
-export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker"; name?: string; build: boolean; checked: Checked; cpUsable?: boolean }): SideCheck {
+export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker"; name?: string; build: boolean; checked: Checked; cpUsable?: boolean; install?: { method: "bundle" | "npm"; reason?: string }; network?: boolean }): SideCheck {
   const { checked: c, key, label } = o;
   const docker = o.kind === "docker";
+  const bundleInstall = docker && o.install?.method === "bundle";
   const nodeOk = c.node ? nodeMajor(c.node) >= 22 : undefined;
   const facts: SideCheckFacts = {
     reachable: true,
@@ -253,16 +335,30 @@ export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker
     installed: c.installed,
     ...(c.installedKey && { installedKey: c.installedKey }),
     ...(c.writable && { writable: c.writable }),
+    ...(c.target && { target: { arch: c.target.arch, libc: c.target.libc, ...(c.target.glibc && { glibc: c.target.glibc }) } }),
+    ...(docker && o.install && { install: o.install }),
+    ...(c.tools && { tools: c.tools }),
+    ...(o.network !== undefined && { network: o.network }),
+    ...(c.bundled !== undefined && { bundled: c.bundled }),
   };
-  const blocked = (reason: SideCheckReason, detail?: string): SideCheck => ({ verdict: "blocked", reason, message: checkMessage(reason, label, { docker, detail, name: o.name }), key, facts });
+  // A Node.js or build-tools block on the npm path says why the bundle is not used.
+  const why = docker && o.install?.method === "npm" && o.install.reason ? ` (claude-ui installs with npm here: ${o.install.reason}.)` : "";
+  const blocked = (reason: SideCheckReason, detail?: string): SideCheck => ({ verdict: "blocked", reason, message: checkMessage(reason, label, { docker, detail, name: o.name }) + (reason === "node_missing" || reason === "node_old" || reason === "build_tools_missing" ? why : ""), key, facts });
   const needsInstall = c.installed !== "current";
+  // The container's Node.js matters only when the side runs on it: not for a bundle install, nor for an installed build that carries its own.
+  const ownNode = docker && (needsInstall ? bundleInstall : !!c.bundled);
   if (!o.build) return blocked("no_build");
-  if (!c.node) return blocked("node_missing");
-  if (!nodeOk) return blocked("node_old", c.node);
+  if (!ownNode && !c.node) return blocked("node_missing");
+  if (!ownNode && !nodeOk) return blocked("node_old", c.node);
   if (needsInstall) {
     if (docker && o.cpUsable === false && c.writable && c.writable.length === 0) return blocked("no_writable_path");
-    const missing = [!c.make && "make", !c.python3 && "python3", !c.cxx && "g++"].filter(Boolean) as string[];
-    if (missing.length) return blocked("build_tools_missing", missing.join(", "));
+    if (bundleInstall) {
+      const gone = [c.tools && !c.tools.tar && "tar", c.tools && !c.tools.gzip && "gzip"].filter(Boolean) as string[];
+      if (gone.length) return blocked("unpack_tools_missing", gone.join(" and "));
+    } else {
+      const missing = [!c.make && "make", !c.python3 && "python3", !c.cxx && "g++"].filter(Boolean) as string[];
+      if (missing.length) return blocked("build_tools_missing", missing.join(", "));
+    }
     if (!docker && c.packageVisible === false) return blocked("package_unreadable");
   }
   // Installed (this build, complete): nothing to set up, so a missing credentials file (an environment login is invisible) does not block it.
@@ -347,7 +443,8 @@ const within = (p: string, dir: string) => p === dir || p.startsWith(dir.endsWit
 export function createSides(opts: {
   /** Static sides (WSL distros). */
   targets: SideTarget[];
-  spawn: (id: string, o: { setup: SideSetup; phase: (p: SidePhase) => void }) => SideProcess | Promise<SideProcess>;
+  /** `install`: a Docker start says how it installs: the bundle, or npm in the container and why (`fallback`). */
+  spawn: (id: string, o: { setup: SideSetup; phase: (p: SidePhase) => void; install?: (i: { bundle: true } | { fallback: string }) => void }) => SideProcess | Promise<SideProcess>;
   /** Read-only look at a side that is not running (`side.check`); this claude-ui's build key is `key`. */
   check?: (id: string) => Promise<SideCheck>;
   key?: () => string;
@@ -479,6 +576,8 @@ export function createSides(opts: {
     if (s.state === "ready") return Promise.resolve();
     if (s.starting) return s.starting;
     delete s.phase;
+    delete s.bundle;
+    delete s.fallback;
     Object.assign(s, { state: "starting", message: undefined });
     changed();
     spans.set(s, { top: perf.span("side.start") });
@@ -486,14 +585,23 @@ export function createSides(opts: {
       let proc: SideProcess;
       const spawning = perf.span("side.spawn", spans.get(s)?.top);
       try {
-        proc = await opts.spawn(s.id, { setup, phase: (p) => setPhase(s, p) });
+        proc = await opts.spawn(s.id, {
+          setup,
+          phase: (p) => setPhase(s, p),
+          install: (i) => {
+            if (s.state !== "starting") return;
+            if ("bundle" in i) s.bundle = true;
+            else (delete s.bundle, (s.fallback = i.fallback));
+            changed();
+          },
+        });
         spawning.end();
         const o = spans.get(s);
         if (o) o.frame = perf.span("side.firstFrame", o.top);
       } catch (e) {
         spawning.end();
         const raw = (e as Error).message;
-        const message = raw.startsWith(s.label) ? raw : `${s.label}: ${raw}`;
+        const message = (raw.startsWith(s.label) ? raw : `${s.label}: ${raw}`) + fallbackNote(s);
         delete s.phase;
         Object.assign(s, { state: "error", message, proc: undefined });
         changed();
@@ -542,6 +650,8 @@ export function createSides(opts: {
         if (f.kind === "ready") {
           endSpans(s, false);
           delete s.phase;
+          delete s.bundle;
+          delete s.fallback;
           clashed.delete(s.id);
           Object.assign(s, { state: "ready", message: undefined });
           started.add(s.id);
@@ -572,10 +682,10 @@ export function createSides(opts: {
           .trim()
           .slice(0, 300);
         const message =
-          setupError ??
+          (setupError ??
           (wasReady
             ? `${s.label} stopped (exit code ${code})${code && tail ? `: ${tail}` : ""}. Retry to start it again.`
-            : `${s.label} could not start (exit code ${code})${tail ? `: ${tail}` : ""}.`);
+            : `${s.label} could not start (exit code ${code})${tail ? `: ${tail}` : ""}.`)) + (wasReady ? "" : fallbackNote(s));
         // Nothing installed and none asked for (setup `never`): the side is as it was before, not failed.
         const notInstalled = !wasReady && setupCode === "not_installed";
         delete s.phase;
@@ -724,7 +834,7 @@ export function createSides(opts: {
 
   return {
     /** Every side, local first. */
-    list: (): SideInfo[] => [{ id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" }, ...[...sides.values()].map(({ id, label, state, message, phase }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }) }))],
+    list: (): SideInfo[] => [{ id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" }, ...[...sides.values()].map(({ id, label, state, message, phase, bundle, fallback }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }), ...(bundle && state === "starting" && { bundle }), ...(fallback && (state === "starting" || state === "error") && { fallback }) }))],
     docker: () => opts.dockerState?.(),
     has: (id: string) => sides.has(id),
     check,
