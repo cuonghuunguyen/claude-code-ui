@@ -454,10 +454,10 @@ describe("worktrees", () => {
     expect(el.querySelector('[data-path="/home/u/orca/web/fix"] [data-testid="worktree-outside"]')).toBeNull();
   });
 
-  it("a git project has New worktree: click creates with a generated name, Shift+click asks for a name; a non-git project has none", async () => {
+  it("a git project has Create worktree: click opens the modal (quick false), Shift+click creates at once (quick true); a non-git project has none", async () => {
     const { el, onNewWorktree } = await render(props);
     const btn = () => el.querySelector<HTMLElement>('[data-testid="session-group"][data-cwd="/home/u/web"] [data-testid="project-new-worktree"]')!;
-    expect(btn().getAttribute("aria-label")).toBe("New worktree in web (Shift+click to name it)");
+    expect(btn().getAttribute("aria-label")).toBe("Create worktree in web (Shift+click: new worktree with a generated name)");
     await act(async () => btn().click());
     expect(onNewWorktree).toHaveBeenLastCalledWith("/home/u/web", false);
     await act(async () => void btn().dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true })));
@@ -645,10 +645,10 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     expect(trigger.className).toContain("max-md:size-11");
     await act(async () => trigger.click());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-new-worktree"]')!.click());
-    expect(onNewWorktree).toHaveBeenCalledWith("/home/u/web", false);
+    expect(onNewWorktree).toHaveBeenCalledWith("/home/u/web", true);
     await act(async () => g.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
-    await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-new-worktree-named"]')!.click());
-    expect(onNewWorktree).toHaveBeenLastCalledWith("/home/u/web", true);
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-create-worktree"]')!.click());
+    expect(onNewWorktree).toHaveBeenLastCalledWith("/home/u/web", false);
     await act(async () => g.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-remove"]')!.click());
     expect(onRemove).toHaveBeenCalledWith("/home/u/web");

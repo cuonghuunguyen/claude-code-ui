@@ -53,7 +53,7 @@ describe("groupEntries", () => {
   const ids = (e: MenuEntry[]) => e.map((x) => (x.kind === "sep" ? "-" : x.kind === "label" ? "label" : x.id));
   it("project: new, worktree, hide, archive, remove", () => {
     const e = groupEntries({ ...base, newSession: () => {}, newWorktree: () => {}, tail: { id: "g-remove", label: "Remove from list (files stay)", onSelect: () => {} } });
-    expect(ids(e)).toEqual(["g-new-session", "g-new-worktree", "g-new-worktree-named", "-", "g-hide-inactive", "label", "g-archive-1", "g-archive-7", "g-archive-30", "-", "g-remove"]);
+    expect(ids(e)).toEqual(["g-new-session", "g-new-worktree", "g-create-worktree", "-", "g-hide-inactive", "label", "g-archive-1", "g-archive-7", "g-archive-30", "-", "g-remove"]);
     expect(e.find((x) => x.kind === "item" && x.id === "g-archive-1")).toMatchObject({ disabled: true, label: "1 day (0)…" });
     expect(e.find((x) => x.kind === "item" && x.id === "g-archive-7")).toMatchObject({ disabled: false, label: "7 days (7)…" });
   });

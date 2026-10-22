@@ -41,7 +41,7 @@ import type {
   WorktreeCreateResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
-import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type SearchHit, type SettingsResult, worktreeNameError } from "@claude-ui/protocol";
+import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type SearchHit, type SettingsResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -66,7 +66,7 @@ import { NotificationStack, useNotifications, type CardItem } from "./notificati
 import { cardText, describeCard, IN_APP_EVENT, loadInApp, type Card } from "./notify.ts";
 import { McpDialog } from "./mcp-dialog.tsx";
 import { SkillsDialog } from "./skills-dialog.tsx";
-import { SettingsDialog } from "./settings-dialog.tsx";
+import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { PluginsDialog } from "./plugins-dialog.tsx";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
@@ -78,6 +78,7 @@ import { confirmNames, daysLabel } from "./sidebar-menus.ts";
 import { resumeSearchText, byRow, inProject, keepsBranch, patchSession, projectCwd, projectOf, removableWorktree, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
 import { BLOCK_TEXT, type CleanupScope } from "./cleanup.ts";
 import { CleanupDialog } from "./cleanup-dialog.tsx";
+import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
@@ -481,9 +482,8 @@ export function App() {
   const removed = useRef<{ next?: string }>(undefined);
   // Worktree being created for the new-session tab (`project`: the repository's project cwd); `error` once it failed.
   const [worktreeJob, setWorktreeJob] = useState<{ project: string; error?: string }>();
-  // Project whose "New worktree" name dialog is open, and the typed name.
-  const [naming, setNaming] = useState<string>();
-  const [wtName, setWtName] = useState("");
+  // Project whose Create worktree modal is open (GH-447).
+  const [creatingWt, setCreatingWt] = useState<string>();
   // Worktree waiting for the Remove confirmation; kept while the dialog fades out.
   const [removingWt, setRemovingWt] = useState<{ project: string; path: string; branch: string; text: string }>();
   const lastRemovingWt = useRef(removingWt);
@@ -1366,13 +1366,13 @@ export function App() {
   }
 
   /** Creates a worktree of `project`'s repository and opens the new-session tab in it (prompt held until git is done). */
-  async function newWorktree(project: string, name?: string) {
+  async function newWorktree(project: string) {
     if (worktreeJob && !worktreeJob.error) return;
     setError(undefined);
     setWorktreeJob({ project });
     newSession(project);
     try {
-      const { path } = await client.current!.request<WorktreeCreateResult>({ type: "worktree.create", cwd: project, ...(name && { name }) });
+      const { path } = await client.current!.request<WorktreeCreateResult>({ type: "worktree.create", cwd: project });
       await refreshList();
       setDraftCwd((d) => (d === project ? path : d));
       setWorktreeJob(undefined);
@@ -1387,7 +1387,7 @@ export function App() {
     try {
       const st = await client.current!.request<WorktreeStatusResult>({ type: "worktree.status", cwd: project, path });
       if (st.safety === "blocked") return setError(`Worktree ${st.branch} cannot be removed: ${BLOCK_TEXT[st.blocked!]}`);
-      setRemovingWt({ project, path, branch: st.branch, text: removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[project], path) }) });
+      setRemovingWt({ project, path, branch: st.branch, text: removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[project], path, st) }) });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1401,13 +1401,16 @@ export function App() {
       setError((e as Error).message);
     }
   }
-  const nameError = wtName.trim() ? worktreeNameError(wtName.trim()) : undefined;
-  const createNamed = () => {
-    if (naming === undefined || nameError) return;
-    const p = naming;
-    setNaming(undefined);
-    void newWorktree(p, wtName.trim() || undefined);
-  };
+  /** Settings opened at one group (the Create worktree modal's "Open Settings › Jira"). */
+  const openSettingsGroup = (id: string) => (saveSettingsGroup(id), setSettingsOpen(true));
+  /** Create worktree modal done: a new-session tab in the new worktree. */
+  async function openInWorktree(project: string, path: string) {
+    setCreatingWt(undefined);
+    setError(undefined);
+    newSession(project);
+    await refreshList();
+    setDraftCwd((d) => (d === project ? path : d));
+  }
 
   /** session.setModel, session.setPermissionMode, session.setEffort: the reply carries the new SessionInfo. */
   async function configure(msg: Extract<Request, { type: "session.setModel" | "session.setPermissionMode" | "session.setEffort" }>) {
@@ -1938,7 +1941,7 @@ export function App() {
   };
   const reopen = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs).tab;
   const commands = appCommands({
-    newWorktree: canWorktree ? () => (setWtName(""), setNaming(gitProject)) : undefined,
+    newWorktree: canWorktree ? () => setCreatingWt(gitProject) : undefined,
     cleanUp: Object.values(worktrees).some((l) => l.some((w) => !w.main)) || list.some((x) => x.coordinatorId) ? () => setCleanup({ kind: "all" }) : undefined,
     tabs,
     activeId,
@@ -2354,35 +2357,13 @@ export function App() {
         }}
         testId="remove-project"
       />
-      <ConfirmDialog
-        open={naming !== undefined}
-        title="New worktree"
-        description={`A new branch in ${projectName(naming ?? "")}/.claude/worktrees. Leave the name empty for a generated one.`}
-        confirm="Create"
-        confirmDisabled={!!nameError}
-        onConfirm={createNamed}
-        onCancel={() => setNaming(undefined)}
-        testId="new-worktree"
-      >
-        <label className="flex flex-col gap-1 text-sm">
-          New worktree name
-          <input
-            value={wtName}
-            onChange={(e) => setWtName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && (e.preventDefault(), createNamed())}
-            placeholder="e.g. my-feature"
-            maxLength={64}
-            autoFocus
-            aria-invalid={!!nameError}
-            aria-describedby="new-worktree-hint"
-            className="h-9 rounded-md bg-secondary/60 px-2 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11"
-            data-testid="new-worktree-name"
-          />
-          <span id="new-worktree-hint" className={nameError ? "text-destructive text-xs" : "text-muted-foreground text-xs"} data-testid="new-worktree-hint">
-            {nameError || "Only letters, numbers, dots, hyphens, and underscores"}
-          </span>
-        </label>
-      </ConfirmDialog>
+      <CreateWorktreeDialog
+        project={creatingWt}
+        request={(m) => client.current!.request(m)}
+        onClose={() => setCreatingWt(undefined)}
+        onCreated={(project, r) => void openInWorktree(project, r.path)}
+        onJiraSettings={() => (setCreatingWt(undefined), openSettingsGroup("jira"))}
+      />
       <ConfirmDialog
         open={removingWorker !== undefined}
         title={`Remove worker ${lastRemovingWorker.current?.name ?? ""}?`}
@@ -2495,7 +2476,7 @@ export function App() {
               onOpen={open}
               onNew={newSession}
               onRemove={setRemoving}
-              onNewWorktree={(cwd, named) => (setDrawer(false), named ? (setWtName(""), setNaming(cwd)) : void newWorktree(cwd))}
+              onNewWorktree={(cwd, quick) => (setDrawer(false), quick ? void newWorktree(cwd) : setCreatingWt(cwd))}
               onRemoveWorktree={askRemoveWorktree}
               onCleanUp={(scope) => (setDrawer(false), setCleanup(scope))}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}

@@ -29,18 +29,21 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}" } };
   const calls: Request[] = [];
+  let jiraToken = false;
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
     if (failGet && msg.type === "settings.get") throw new Error("daemon unreachable");
     if (msg.type === "settings.set") {
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) } };
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) } };
     }
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
-    return { settings, ...(daemon && { daemon }) };
+    if (msg.type === "jira.token") jiraToken = msg.token !== null;
+    if (msg.type === "jira.test") return { user: "Ann Example" };
+    return { settings, ...(daemon && { daemon }), jiraToken };
   });
   const el = document.createElement("div");
   const prompt = document.createElement("textarea");
@@ -274,7 +277,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups: Timeline first, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "About"]);
+  expect(ids).toEqual(["Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "Jira", "About"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
 });
 
@@ -287,6 +290,44 @@ it("lists Performance after Usage limits and before About: a switch sends its pa
   expect(q("perf-section")).toBeTruthy();
   await act(async () => sw.click());
   expect(calls.find((c) => c.type === "settings.set")).toMatchObject({ patch: { performance: { monitor: false } } });
+});
+
+it("Jira (GH-447): URL, email for Cloud only, template; the token is write-only with Token set, Replace and Clear; Test connection names the user", async () => {
+  const { q, pick, calls } = await render();
+  await pick("jira");
+  const set = async (id: string, v: string) => {
+    const input = (q(id) as HTMLInputElement);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  };
+  expect(q("settings-jira-email")).toBeNull();
+  expect((q("settings-jira-test") as HTMLButtonElement).disabled).toBe(true);
+  await set("settings-jira-url", "https://acme.atlassian.net");
+  expect(calls.filter((c) => c.type === "settings.set").at(-1)).toEqual({ type: "settings.set", patch: { jira: { url: "https://acme.atlassian.net" } } });
+  expect(q("settings-jira-email")).not.toBeNull();
+  await set("settings-jira-email", "ann@example.com");
+  expect(calls.filter((c) => c.type === "settings.set").at(-1)).toMatchObject({ patch: { jira: { email: "ann@example.com" } } });
+  const token = (q("settings-jira-token") as HTMLInputElement);
+  expect(token.type).toBe("password");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(token, "tok-123");
+    token.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => q("settings-jira-token-save")!.click());
+  expect(calls.find((c) => c.type === "jira.token")).toEqual({ type: "jira.token", token: "tok-123" });
+  expect(q("settings-jira-token-set")!.textContent).toBe("Token set");
+  expect(q("settings-jira")!.textContent).not.toContain("tok-123");
+  await act(async () => q("settings-jira-token-replace")!.click());
+  expect(q("settings-jira-token")).not.toBeNull();
+  await act(async () => q("settings-jira-token-cancel")!.click());
+  await act(async () => q("settings-jira-test")!.click());
+  expect(q("settings-jira-test-result")!.textContent).toBe("Connected as Ann Example");
+  await act(async () => q("settings-jira-token-clear")!.click());
+  expect(calls.filter((c) => c.type === "jira.token").at(-1)).toEqual({ type: "jira.token", token: null });
+  expect(q("settings-jira-token-set")).toBeNull();
 });
 
 it("the Keyboard section's Customize button opens the shortcuts dialog", async () => {

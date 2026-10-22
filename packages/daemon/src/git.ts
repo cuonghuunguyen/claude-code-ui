@@ -2,7 +2,7 @@
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
-import { GIT_LOG_MAX_LIMIT, worktreeNameError, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult } from "@claude-ui/protocol";
+import { BRANCH_MAX, branchFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult } from "@claude-ui/protocol";
 import { runGit } from "./git-runner.ts";
 import { foreignPointer } from "./remote-path.ts";
 
@@ -369,10 +369,41 @@ const ADJECTIVES = ["brave", "calm", "clever", "eager", "fancy", "gentle", "happ
 const NOUNS = ["badger", "beacon", "cedar", "comet", "dolphin", "falcon", "forest", "glacier", "harbor", "island", "lantern", "meadow", "otter", "panda", "pebble", "river", "robin", "summit", "tiger", "valley", "willow", "wolf", "yarrow", "zebra"];
 const pick = (l: string[]) => l[Math.floor(Math.random() * l.length)]!;
 
+/** Git config key of the Created branch mark (ADR 0005): a branch claude-ui created for a new worktree; removal deletes it. */
+const createdKey = (branch: string) => `branch.${branch}.claudeUiCreated`;
+const CONFIG_TRIES = 5;
+/**
+ * Marks `branch` a Created branch, right after `git branch` under the repository lock. A held `config.lock` (another git
+ * writing the config) is retried; on failure the create still succeeds without the mark, with a warning.
+ */
+async function markCreated(main: string, branch: string): Promise<void> {
+  for (let i = 1; ; i++) {
+    try {
+      await run(main, ["config", "--type=bool", "--", createdKey(branch), "true"]);
+      return;
+    } catch (e) {
+      if (i < CONFIG_TRIES && /config\.lock|could not lock/i.test((e as Error).message)) {
+        await new Promise((r) => setTimeout(r, 50 * i));
+        continue;
+      }
+      console.warn(`worktree: ${createdKey(branch)} not set, the branch stays when its worktree is deleted: ${(e as Error).message}`);
+      return;
+    }
+  }
+}
+/** A Created branch: marked in git config, or a legacy `worktree-*` branch of a claude-ui before the mark. */
+async function isCreated(main: string, branch: string): Promise<boolean> {
+  if (branch.startsWith("worktree-")) return true;
+  return (await g(main, ["config", "--type=bool", "--get", "--", createdKey(branch)]).catch(() => "")) === "true";
+}
+
 export type CreateWorktreeOptions = {
+  /** The folder; default: `branch` with `/` replaced by `-`, else generated. */
   name?: string;
-  /** Default `worktree-<name>`. GH-79 part 5: an explicit branch name. */
+  /** Default `worktree-<name>`. GH-79 part 5 / GH-447: an explicit new branch name (may contain `/`). */
   branch?: string;
+  /** GH-447 Branch source: check out this existing branch (`refs/heads/x`, or `refs/remotes/<remote>/x` as a new local `x` tracking it); no name, branch or base. */
+  checkout?: string;
   /** Default: origin/<default> after a fetch (see docs/spec.md "Worktrees"). GH-79 part 5: an explicit start point. */
   base?: string;
   /** Roots predicate: the main checkout and the new path must pass it. */
@@ -396,8 +427,10 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
     const rdir = real(dir);
     if (rdir !== dir) throw new WorktreeError("cwd_not_allowed", ".claude/worktrees is a link; refusing to create worktrees through it");
 
+    if (o.checkout !== undefined) return checkoutIn(main, rdir, o);
     const free = async (n: string) => !exists(join(rdir, n)) && !(await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${o.branch ?? `worktree-${n}`}`));
-    let name = o.name;
+    if (o.branch !== undefined && (!o.branch || o.branch.startsWith("-") || o.branch.length > BRANCH_MAX)) throw new WorktreeError("bad_name", `Not a valid branch name: ${o.branch}`);
+    let name = o.name ?? (o.branch !== undefined ? branchFolder(o.branch) : undefined);
     if (name !== undefined) {
       const bad = worktreeNameError(name);
       if (bad) throw new WorktreeError("bad_name", bad);
@@ -443,6 +476,7 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
       if (await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${branch}`)) throw new WorktreeError("exists", `Branch ${branch} already exists`);
       throw e;
     }
+    await markCreated(main, branch);
     try {
       await run(main, ["worktree", "add", "--quiet", "--", path, branch]);
     } catch (e) {
@@ -452,6 +486,12 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
       throw e;
     }
 
+    return finishCreate(main, path, branch, settings, o, true);
+  });
+}
+
+/** After `git worktree add`: `symlinkDirectories`, the info/exclude line, the caller's step (rolled back when it throws). */
+async function finishCreate(main: string, path: string, branch: string, settings: ReturnType<typeof worktreeSettings>, o: CreateWorktreeOptions, ours: boolean): Promise<{ path: string; branch: string }> {
     // `worktree.symlinkDirectories`: each entry relative, inside the repository, existing; anything else is skipped with a warning.
     const dirs = Array.isArray(settings.symlinkDirectories) ? settings.symlinkDirectories : [];
     for (const d of dirs) {
@@ -486,12 +526,113 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
         o.onCreated({ path, branch });
       } catch (e) {
         await run(main, ["worktree", "remove", "--force", "--", path]).catch((x) => console.warn(`worktree: rollback of ${path} failed: ${x.message}`));
-        await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: rollback of branch ${branch} failed: ${x.message}`));
+        if (ours) await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: rollback of branch ${branch} failed: ${x.message}`));
         await run(main, ["worktree", "prune"]).catch(() => {});
         throw e;
       }
     return { path, branch };
-  });
+}
+
+/** Branch source Branch: `git worktree add` of an existing branch; a remote-only one first gets a local branch of the same name tracking it. Never marked. */
+async function checkoutIn(main: string, rdir: string, o: CreateWorktreeOptions): Promise<{ path: string; branch: string }> {
+  if (o.name !== undefined || o.branch !== undefined || o.base !== undefined) throw bad("checkout takes no name, branch or base");
+  const ref = await checkBranchRef(main, o.checkout);
+  const m = /^refs\/(heads|remotes)\/(.+)$/.exec(ref)!;
+  const remote = m[1] === "remotes";
+  // refs/remotes/<remote>/<x>: the remote is the longest configured remote name the ref starts with.
+  let branch = m[2]!;
+  if (remote) {
+    const remotes = (await run(main, ["remote"]).catch(() => "")).split("\n").filter(Boolean).sort((a, b) => b.length - a.length);
+    const r = remotes.find((x) => branch.startsWith(`${x}/`));
+    if (!r) throw bad("Unknown remote branch");
+    branch = branch.slice(r.length + 1);
+    if (!branch || branch === "HEAD") throw bad("Unknown remote branch");
+    if (await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${branch}`)) throw new WorktreeError("exists", `Branch ${branch} already exists locally: pick it from the list`);
+  }
+  const holder = (await repoOf(main)).list.find((w) => w.branch === branch);
+  if (holder) throw new WorktreeError("exists", `Branch ${branch} is checked out in worktree ${basename(holder.path)}`);
+  const name = branchFolder(branch);
+  const bad1 = worktreeNameError(name);
+  if (bad1) throw new WorktreeError("bad_name", `Folder ${name}: ${bad1}`);
+  const path = join(rdir, name);
+  if (exists(path)) throw new WorktreeError("exists", `${name} already exists`);
+  if (!o.allowed(path)) throw new WorktreeError("cwd_not_allowed", "The new worktree would be outside the allowed roots");
+  const settings = worktreeSettings(o.claudeDir, main);
+  if (remote) {
+    try {
+      await run(main, ["branch", "--track", "--", branch, ref]);
+    } catch (e) {
+      if (await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${branch}`)) throw new WorktreeError("exists", `Branch ${branch} already exists`);
+      throw e;
+    }
+  }
+  try {
+    await run(main, ["worktree", "add", "--quiet", "--", path, branch]);
+  } catch (e) {
+    if (remote) await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: branch ${branch} of a failed checkout kept: ${x.message}`));
+    if (exists(path)) throw new WorktreeError("exists", `${name} already exists`);
+    throw e;
+  }
+  // A local branch the user had stays on rollback; a tracking branch this call made goes.
+  return finishCreate(main, path, branch, settings, o, remote);
+}
+
+/** The default start point as the Base picker shows it (no fetch): `origin/<default>`, else `HEAD`. */
+async function defaultBaseName(main: string, claudeDir: string): Promise<string> {
+  if (worktreeSettings(claudeDir, main).baseRef === "head") return "HEAD";
+  const head = await g(main, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).catch(() => "");
+  return head ? shortRef(head) : "HEAD";
+}
+
+export type ListBranchesOptions = { allowed: (p: string) => boolean; claudeDir: string; fetch?: boolean };
+/**
+ * Local and remote branches of `cwd`'s repository for the Create worktree modal (newest commit first, one row per name; `origin`
+ * preferred for the remote), each with the worktree it is checked out in. `fetch`: `git fetch --prune origin` first (2 min); a
+ * failure (offline) lists the local refs with `fetchError`.
+ */
+export async function listBranches(cwd: string, o: ListBranchesOptions): Promise<WorktreeBranchesResult> {
+  const { main, list } = await repoOf(cwd);
+  if (!o.allowed(main) || (await gitEscapes(main, o.allowed))) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  let fetchError: string | undefined;
+  let fetched = false;
+  if (o.fetch) {
+    const remotes = (await g(main, ["remote"]).catch(() => "")).split("\n");
+    if (remotes.includes("origin"))
+      try {
+        await run(main, ["fetch", "--quiet", "--prune", "origin"], 120_000);
+        fetched = true;
+      } catch (e) {
+        fetchError = (e as Error).message;
+      }
+  }
+  const remotes = (await g(main, ["remote"]).catch(() => "")).split("\n").filter(Boolean).sort((a, b) => b.length - a.length);
+  const refs = (await g(main, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", `--count=${MAX_BRANCHES}`, "refs/heads", "refs/remotes"])).split("\n").filter(Boolean);
+  const holders = new Map(list.filter((w) => w.branch).map((w) => [w.branch!, w.path] as const));
+  const rows = new Map<string, BranchRow>();
+  for (const ref of refs) {
+    let name: string;
+    if (ref.startsWith("refs/heads/")) name = ref.slice(11);
+    else {
+      const rest = ref.slice(13);
+      const r = remotes.find((x) => rest.startsWith(`${x}/`));
+      if (!r) continue;
+      name = rest.slice(r.length + 1);
+      if (!name || name === "HEAD") continue;
+      const row = rows.get(name);
+      if (row?.remote?.startsWith("refs/remotes/origin/") && r !== "origin") continue;
+      if (row) row.remote = ref;
+      else rows.set(name, { name, local: false, remote: ref });
+      continue;
+    }
+    const row = rows.get(name);
+    if (row) row.local = true;
+    else rows.set(name, { name, local: true });
+  }
+  for (const row of rows.values()) {
+    const at = row.local ? holders.get(row.name) : undefined;
+    if (at) row.worktree = at;
+  }
+  return { branches: [...rows.values()], defaultBase: await defaultBaseName(main, o.claudeDir), ...(fetched && { fetched }), ...(fetchError && { fetchError }) };
 }
 
 /** The linked worktree `path` (as requested) of `list`; not_worktree for an unknown path or the main worktree. */
@@ -526,7 +667,7 @@ export type RemoveOptions = {
 };
 
 /**
- * Removes a linked worktree inside the roots (made by this app, by hand or by another tool): directory, then its `worktree-*` branch, then prune.
+ * Removes a linked worktree inside the roots (made by this app, by hand or by another tool): directory, then its Created branch (marked, or legacy `worktree-*`), then prune.
  * Refused: the main worktree, a locked one, a symlink path, one whose git dirs are outside the roots. `deleteBranch`: a kept branch goes with `-d` (git refuses an unmerged one: `branchKept`).
  */
 export async function removeWorktree(cwd: string, path: string, allowed: (path: string) => boolean, o: RemoveOptions = {}): Promise<WorktreeRemoveResult> {
@@ -553,7 +694,7 @@ export async function removeWorktree(cwd: string, path: string, allowed: (path: 
     const detached = !(await gok(w.path, "symbolic-ref", "-q", "HEAD"));
     await run(main, ["worktree", "remove", "--force", "--", w.path]);
     let branchKept: string | undefined;
-    if (w.branch?.startsWith("worktree-")) await run(main, ["branch", "-D", "--", w.branch]).catch((e) => console.warn(`worktree: branch ${w.branch} kept: ${e.message}`));
+    if (w.branch && !detached && (await isCreated(main, w.branch))) await run(main, ["branch", "-D", "--", w.branch]).catch((e) => console.warn(`worktree: branch ${w.branch} kept: ${e.message}`));
     else if (o.deleteBranch && w.branch && !detached) await run(main, ["branch", "-d", "--", w.branch]).catch((e) => void (branchKept = e.message));
     await run(main, ["worktree", "prune"]).catch(() => {});
     return branchKept ? { branchKept } : {};
@@ -601,7 +742,7 @@ async function statusOf(main: string, w: Listed, requested: string, allowed: (p:
   // Per file (-uall) and NUL separated (-z: names needing quotes stay exact). Ignored directories git reports whole (node_modules/, build output) are not counted.
   const { uncommitted, untracked, ignored } = parseStatus(await g(w.path, ["status", "--porcelain", "-z", "--ignored=matching", "-uall"]));
   const detached = !(await gok(w.path, "symbolic-ref", "-q", "HEAD"));
-  const keeps = !detached && !w.branch?.startsWith("worktree-");
+  const keeps = !detached && !(w.branch && (await isCreated(main, w.branch)));
   let commits = 0;
   if (detached) commits = await count(w.path, ["HEAD", "--not", "--branches", "--remotes"]);
   else if (!keeps) commits = await count(w.path, ["HEAD", "--not", `--exclude=${w.branch}`, "--branches", "--remotes"]);
@@ -621,7 +762,7 @@ async function statusOf(main: string, w: Listed, requested: string, allowed: (p:
   else ahead = await count(w.path, ["HEAD", "--not", `--exclude=${w.branch}`, "--branches", "--remotes"]);
   const branchMerged = keeps && refs.length > 0 && (await count(w.path, [`refs/heads/${w.branch}`, "--not", ...refs])) === 0;
   const t = Number(await g(w.path, ["log", "-1", "--format=%ct", "HEAD"]).catch(() => "")) * 1000;
-  return classify({ uncommitted, untracked, commits, ahead, ignored, branch: name, branchMerged, ...(t > 0 && { headTime: t }), running: 0, ...(blocked && { blocked }) });
+  return classify({ uncommitted, untracked, commits, ahead, ignored, branch: name, branchMerged, ...(t > 0 && { headTime: t }), running: 0, ...(blocked && { blocked }), ...(!detached && !keeps && { createdBranch: true as const }) });
 }
 
 /** What removing `path` loses and whether it may (WorktreeStatusResult). `allowed`: the roots check; sessions are the caller's. */

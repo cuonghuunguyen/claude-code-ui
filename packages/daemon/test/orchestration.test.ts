@@ -565,6 +565,8 @@ describe("orchestration", () => {
     expect(runsOf(w.sessionId)[0]!.texts).toEqual(["build"]);
     expect(git(path, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "main~1"));
     expect(git(path, "branch", "--show-current")).toBe("feat-a");
+    // A Created branch (ADR 0005): deleting the worktree deletes it.
+    expect(git(repo, "config", "--type=bool", "--get", "branch.feat-a.claudeUiCreated")).toBe("true");
     expect((await call(coord, "worker_list")).workers.map((x: { cwd: string }) => x.cwd)).toEqual([path]);
     const list = (await c.request({ type: "session.list" })).result;
     expect(list.projects).toContain(repo);

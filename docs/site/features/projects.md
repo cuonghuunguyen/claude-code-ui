@@ -19,9 +19,17 @@ A **project** is a folder you work in. New sessions start in a project.
 
 A **worktree** is an extra git checkout of the same repository, on its own branch. Use one to let Claude work on a branch without touching your main checkout.
 
-1. Hover the project row and click **New worktree** (or run "New worktree…" in the [command palette](palette)).
-2. claude-code-ui creates it in `.claude/worktrees/` of the repository and shows it under the project.
-3. Start sessions in it like in any project.
+### Create a worktree
+
+1. Hover the project row and click the branch-plus button **Create worktree** (or run "New worktree…" in the [command palette](palette), or pick **Create worktree…** in the project menu).
+2. Pick where its branch comes from:
+   - **Ticket**: pick a Jira ticket (your open tickets show first; type a key, words of the summary or paste the ticket URL). The branch name comes from the ticket, e.g. `bugfix/PRJ-123-login-fails`; you can edit it. If a branch with the key exists already, **Check out** it instead. Set up Jira in [Settings › Jira](../reference/settings#jira).
+   - **Branch**: check out an existing local or remote branch. A remote-only branch gets a local branch of the same name that tracks it. A branch that is checked out in another worktree cannot be picked.
+   - **Name**: type any name. `Fix Login Ü` becomes the branch `fix-login-u`; `feat/x` stays `feat/x`.
+3. For a new branch, **Base** picks the start point (default: the remote default branch, e.g. `origin/main`).
+4. The modal shows the branch and its folder (`.claude/worktrees/<branch with / replaced by ->`). Click **Create**. A new session tab opens in the worktree.
+
+**Shift+click** the button, or pick **New worktree** in the project menu, to create one at once with a generated name.
 
 The **Run session in** chip of a new session calls the main checkout **Primary worktree**.
 
@@ -41,4 +49,5 @@ To remove many at once, see [Clean up](clean-up). To remove one, click its trash
 - You can only open folders inside the allowed **roots** (default: your home folder). See [`--roots`](../reference/cli).
 - Folders that only have sessions from the `claude` CLI show as **recent projects** until you open them.
 - Worktrees under `.claude/worktrees/` can be removed from here, and so can any linked worktree inside the roots (not a locked or symlinked one), also one made by hand. Before it removes one, it tells you how many uncommitted changes and commits you would lose.
+- Removing a worktree deletes the branch claude-code-ui created for it (from **Ticket**, **Name**, a generated name or a worker). A branch you checked out with **Branch**, or made yourself, stays; [Clean up](clean-up) offers to delete it when it is merged.
 - With WSL or Docker, **Open project** also lets you pick a side. See [WSL & Docker](wsl-docker).

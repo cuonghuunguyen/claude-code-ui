@@ -153,8 +153,8 @@ export function SessionList({
   onNew: (cwd: string) => void;
   /** Removes the project from the list; files stay. */
   onRemove: (cwd: string) => void;
-  /** New worktree in the project's repository; `named`: Shift+click, ask for a name. */
-  onNewWorktree?: (cwd: string, named: boolean) => void;
+  /** New worktree in the project's repository: the Create worktree modal; `quick`: Shift+click or menu "New worktree", at once with a generated name. */
+  onNewWorktree?: (cwd: string, quick: boolean) => void;
   /** Remove a linked worktree inside the roots that is not locked (the app confirms first). */
   onRemoveWorktree?: (project: string, path: string) => void;
   /** Opens the Clean up dialog (GH-377) for a project's repository or a coordinator's workers. */
@@ -269,7 +269,7 @@ export function SessionList({
     groupEntries({
       ...menuBase(() => groupSessions(baseGroup(g.cwd) ?? g), projectName(g.cwd), prefix),
       newSession: () => onNew(g.cwd),
-      newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (named) => onNewWorktree(g.cwd, named) : undefined,
+      newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (quick) => onNewWorktree(g.cwd, quick) : undefined,
       cleanUp: onCleanUp && (() => onCleanUp({ kind: "project", cwd: g.cwd })),
       tail: { id: `${prefix}remove`, label: "Remove from list (files stay)", onSelect: () => onRemove(g.cwd) },
     });
@@ -552,7 +552,7 @@ export function SessionList({
                 {/* OpenCode project row actions: shown on hover or focus; always on touch screens (no hover there), any width. */}
                 <span className="absolute inset-y-0 right-0.5 flex items-center gap-0.5 opacity-100 transition-opacity group-focus-within/project:opacity-100 group-hover/project:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100">
                   {onNewWorktree && !narrow && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) && (
-                    <IconButton label={`New worktree in ${projectName(g.cwd)} (Shift+click to name it)`} onClick={(e) => onNewWorktree(g.cwd, e.shiftKey)} testId="project-new-worktree" className="size-6">
+                    <IconButton label={`Create worktree in ${projectName(g.cwd)} (Shift+click: new worktree with a generated name)`} onClick={(e) => onNewWorktree(g.cwd, e.shiftKey)} testId="project-new-worktree" className="size-6">
                       <GitBranchPlusIcon />
                     </IconButton>
                   )}

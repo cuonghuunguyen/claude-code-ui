@@ -27,6 +27,18 @@ _Avoid_: workspace, folder (folder = any directory in the folder browser)
 A linked git worktree of a project's repository, identified by its directory. The repository's own checkout is the main worktree. Its sessions show under the project without adding it.
 _Avoid_: workspace, sandbox
 
+**Branch source**:
+Where a new worktree's branch comes from: a Ticket (new branch named from it), an existing Branch (local or remote, checked out as is) or a free Name (new branch). The three tabs of the Create worktree modal.
+_Avoid_: worktree type, origin
+
+**Ticket**:
+A Jira work item a new worktree's branch is named from.
+_Avoid_: issue, work item, story
+
+**Created branch**:
+A branch claude-ui created for a new worktree, marked `branch.<name>.claudeUiCreated = true` in git config (ADR 0005). Deleting the worktree deletes it; any other branch stays unless the user asks.
+_Avoid_: owned branch, temp branch
+
 **Turn**:
 One user prompt and everything it causes, ending with a turn result or an interrupt. Waiting for a permission request is part of the running turn.
 _Avoid_: exchange, round
