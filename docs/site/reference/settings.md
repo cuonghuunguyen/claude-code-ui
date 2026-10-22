@@ -4,7 +4,7 @@ Open **Settings** with <kbd>Ctrl</kbd>+<kbd>,</kbd> (<kbd>⌘</kbd> <kbd>,</kbd>
 
 ![The Settings dialog](/screenshots/settings.png)
 
-Most settings are **kept in this browser** only. Orchestration, Usage limits (except the ring) and desktop notifications are saved in the daemon and apply to every browser.
+Most settings are **kept in this browser** only. Orchestration, Usage limits (except the ring), Jira and desktop notifications are saved in the daemon and apply to every browser.
 
 ## Timeline
 
@@ -79,6 +79,18 @@ Lets a session start and steer worker sessions. Off by default. **Notifications 
 | --- | --- |
 | Continue automatically after a usage limit resets | Sends "continue" to a session that the plan limit stopped, once the limit resets. |
 | Usage ring shows | Highest usage, Session (5 h) or Weekly. Kept in this browser. |
+
+## Jira
+
+One Jira connection for the **Ticket** tab of [Create worktree](../features/projects#create-a-worktree).
+
+| Setting | Does |
+| --- | --- |
+| Jira URL | Cloud: `https://<site>.atlassian.net`. Data Center or Server: the address of your Jira. |
+| Email | Your Atlassian account email. Only for Jira Cloud. |
+| API token / Personal access token | Cloud: an API token from id.atlassian.com › Security › API tokens. Data Center or Server: a personal access token from your Jira profile. Saved on the daemon's computer only (`secrets.json`), never shown again: the row then says **Token set**, with **Replace** and **Clear**. |
+| Branch template | How a ticket names its branch. Default `{type}/{key}-{summary}`: `{type}` is `bugfix` for a Bug, `feature` for a Story, Task or New Feature, else empty; `{key}` is the ticket key; `{summary}` is the summary, shortened. |
+| Test connection | Shows "Connected as *your name*" or the error. |
 
 ## About
 

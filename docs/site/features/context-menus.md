@@ -8,7 +8,7 @@ Right-click (or long press, or <kbd>Shift</kbd>+<kbd>F10</kbd> on the focused ro
 
 | Row | Items |
 | --- | --- |
-| Project | New session, New worktree, New worktree (named)…, Hide inactive sessions, Archive idle sessions older than 1, 7 or 30 days, Clean up…, Remove from list (files stay) |
+| Project | New session, New worktree (at once, generated name), Create worktree…, Hide inactive sessions, Archive idle sessions older than 1, 7 or 30 days, Clean up…, Remove from list (files stay) |
 | Worktree | New session, Hide inactive sessions, the same archive items, Delete worktree… |
 | Session | Rename, Archive, Copy session ID, Close tab, Delete… |
 | Worker | Close worker, Remove worker… (with an option to remove its worktree too) |
