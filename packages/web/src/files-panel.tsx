@@ -486,7 +486,7 @@ export function FilesPanel({
                 <FileBaseContext value={previewBase}>
                   <FileLinkContext value={openLink}>
                     <FileImageContext value={imageUrl}>
-                      <MessageResponse mode="static" {...FILE_LINK_PROPS}>
+                      <MessageResponse mode="static" tableMaxHeight={0} {...FILE_LINK_PROPS}>
                         {previewDoc}
                       </MessageResponse>
                     </FileImageContext>
