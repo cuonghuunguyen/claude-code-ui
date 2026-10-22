@@ -435,10 +435,6 @@ export function App() {
   // GH-355: wide screens place each pane in the side or the bottom panel; narrow screens keep the pane switcher.
   const layout = useLayout();
   const lg = useMinWidth(1024);
-  // Each dock header's toolbar slot: the terminal puts its tabs there (one header row, not two).
-  const [dockBars, setDockBars] = useState<Record<DockArea, HTMLDivElement | null>>({ side: null, bottom: null });
-  const sideBarRef = useCallback((n: HTMLDivElement | null) => setDockBars((b) => (b.side === n ? b : { ...b, side: n })), []);
-  const bottomBarRef = useCallback((n: HTMLDivElement | null) => setDockBars((b) => (b.bottom === n ? b : { ...b, bottom: n })), []);
   // Split view (GH-356): two session tabs side by side or stacked; `activeId` stays the current session and the active split shows it.
   const [splitRaw, setSplitRaw] = useState(loadSplit);
   const split = followSplit(splitRaw, activeId, tabs);
@@ -2171,7 +2167,6 @@ export function App() {
           shown={shows("terminal")}
           focusReq={termFocusReq}
           quiet={moving || termMoveShow}
-          toolbarHost={lg && shows("terminal") ? dockBars[areaOf(layout, "terminal")] : undefined}
         />
       </Suspense>
     );
@@ -2226,7 +2221,6 @@ export function App() {
           onFlipSide={() => saveLayout(flipSide(layout))}
           onReset={resetPanes}
           extra={terminalToggle}
-          toolbarRef={sideBarRef}
           {...dragProps}
         />
         {areaPanes("side").map((p) => (
@@ -2846,7 +2840,6 @@ export function App() {
                 onMove={move}
                 onReset={resetPanes}
                 {...dragProps}
-                toolbarRef={bottomBarRef}
                 extra={
                   <>
                     <IconButton label={bottomMax ? "Restore panel" : "Maximize panel"} pressed={bottomMax} onClick={() => setBottomMax((m) => !m)} testId="dock-maximize">

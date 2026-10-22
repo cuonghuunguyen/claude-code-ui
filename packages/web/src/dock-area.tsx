@@ -108,7 +108,6 @@ export function DockHeader({
   dropAt,
   onDrag,
   onDropAt,
-  toolbarRef,
 }: {
   area: DockArea;
   panes: PaneId[];
@@ -125,8 +124,6 @@ export function DockHeader({
   dropAt?: DropAt;
   onDrag: (p?: PaneId) => void;
   onDropAt: (d?: DropAt) => void;
-  /** Slot right of the pane tabs where the active pane puts its own controls (the terminal's tabs), so it needs no second header row. */
-  toolbarRef?: (n: HTMLDivElement | null) => void;
 }) {
   const other: DockArea = area === "side" ? "bottom" : "side";
   // A menu that moved a pane does not return the focus (Base UI `finalFocus` false): App focuses the moved tab once the move is
@@ -202,7 +199,6 @@ export function DockHeader({
           </ContextMenu.Root>
         ))}
       </div>
-      <div ref={toolbarRef} className="flex min-w-0 items-center empty:hidden" data-testid={`dock-toolbar-${area}`} />
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {extra}
         <Menu.Root {...opening(menuKb.root)}>
