@@ -1,11 +1,20 @@
 // App-wide settings (docs/spec.md "Settings"): settings.json in the config dir, shared by the daemons of one user like projects.json.
 // A new setting = a field in `Settings`, `DEFAULTS` and `CHECKS`; the store, the wire messages and the dialog's patch need no change.
 import { createJsonFile } from "./json-file.ts";
-import { WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
+import { DEFAULT_BRANCH_TEMPLATE, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE } };
 
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string };
+const jiraUrl = (v: unknown) => {
+  if (typeof v !== "string" || v.length > 500) return false;
+  try {
+    const u = new URL(v);
+    return (u.protocol === "https:" || u.protocol === "http:") && !u.username && !u.password && !u.search && !u.hash;
+  } catch {
+    return false;
+  }
+};
 const bool = (label: string): Check => ({ valid: (v) => typeof v === "boolean", label, rule: "on or off" });
 /** Per field: is `v` valid. A stored field that fails falls back to its default; a patched one is refused with "<label> must be <rule>". */
 const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
@@ -19,6 +28,11 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
   usageLimit: { autoContinue: bool("Continue automatically after a usage limit resets") },
   notifications: { desktop: bool("Desktop notifications") },
   performance: { monitor: bool("Performance monitor") },
+  jira: {
+    url: { valid: (v) => v === "" || jiraUrl(v), label: "Jira URL", rule: "empty or an http(s) address without user name or password" },
+    email: { valid: (v) => typeof v === "string" && v.length <= 254 && !/[\s]/.test(v), label: "Jira email", rule: "an email address" },
+    template: { valid: (v) => typeof v === "string" && v.length >= 1 && v.length <= 200 && !/[\0-\x1f]/.test(v), label: "Branch template", rule: "1 to 200 characters" },
+  },
 };
 const checks = CHECKS as Record<string, Record<string, Check>>;
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);

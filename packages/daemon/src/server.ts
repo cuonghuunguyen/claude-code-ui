@@ -16,7 +16,9 @@ import { createEntry, deleteEntry, duplicateFile, renameEntry, type FsOpsContext
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
-import { createWorktree, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, isHash, classify, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createJira, JiraError } from "./jira.ts";
+import { createSecrets, type Secrets } from "./secrets.ts";
+import { createWorktree, listBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, isHash, classify, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
@@ -277,6 +279,10 @@ export function createDaemon(opts: {
   projects?: Projects;
   /** App-wide settings (settings.json); in memory when omitted. Readers call `get()` each time. */
   appSettings?: AppSettings;
+  /** Write-only secrets (secrets.json, GH-447: the Jira token); in memory when omitted. */
+  secrets?: Secrets;
+  /** Test seam (GH-447): the fetch of the Jira client. */
+  jiraFetch?: typeof fetch;
   /** Test seam (GH-164): delays of auto-continue.ts. */
   autoContinue?: { graceMs?: number; gapMs?: number; retryMs?: number };
   listCache?: boolean;
@@ -375,6 +381,10 @@ export function createDaemon(opts: {
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
+  const secrets = opts.secrets ?? createSecrets();
+  const jira = createJira({ config: () => appSettings.get().jira, token: () => secrets.jiraToken(), ...(opts.jiraFetch && { fetch: opts.jiraFetch }) });
+  /** `settings.get` / `settings.set` / `jira.token` reply: the settings, the daemon, whether a Jira token is saved (never the token). */
+  const settingsReply = (settings = appSettings.get()) => ({ settings, daemon: daemonInfo(), jiraToken: !!secrets.jiraToken() });
   // The monitor follows the `performance.monitor` setting: on start, on settings.set, and on its 10 s tick (another daemon's change to off).
   const perfMon = opts.perf ?? createPerf({ version: opts.buildInfo?.version, poll: () => appSettings.get().performance.monitor });
   setPerf(perfMon);
@@ -537,7 +547,7 @@ export function createDaemon(opts: {
   };
 
   /** New worktree of `cwd`'s repository (roots enforced); other clients refresh their list. */
-  const createIn = async (cwd: string, o: Pick<CreateWorktreeOptions, "name" | "branch" | "base" | "onCreated"> = {}) => {
+  const createIn = async (cwd: string, o: Pick<CreateWorktreeOptions, "name" | "branch" | "base" | "checkout" | "onCreated"> = {}) => {
     // The new path is no project: a session created in it (worker_start) must not add it.
     const r = await createWorktree(cwd, { ...o, allowed: (p) => inRoots(real(p) ?? p), claudeDir, onCreated: (r) => { worktreePaths.add(r.path); o.onCreated?.(r); } });
     broadcast({ type: "sessions.changed" });
@@ -1779,14 +1789,35 @@ export function createDaemon(opts: {
           perfMon.clear();
           return reply({});
         case "settings.get":
-          return reply({ settings: appSettings.get(), daemon: daemonInfo() });
+          return reply(settingsReply());
+        case "jira.token": {
+          if (msg.token !== null && typeof msg.token !== "string") return fail("bad_settings", "token must be a string or null");
+          try {
+            secrets.setJiraToken(msg.token === null ? null : msg.token.trim());
+          } catch (err) {
+            return fail("bad_settings", (err as Error).message);
+          }
+          const r = settingsReply();
+          broadcast({ type: "settings_changed", settings: r.settings, jiraToken: r.jiraToken });
+          return reply(r);
+        }
+        case "jira.test":
+        case "jira.search": {
+          if (msg.type === "jira.search" && msg.text !== undefined && (typeof msg.text !== "string" || msg.text.length > 500)) return fail("bad_request", "text must be a string of at most 500 characters");
+          try {
+            return reply(msg.type === "jira.test" ? await jira.test() : { tickets: await jira.search(msg.text) });
+          } catch (e) {
+            if (e instanceof JiraError) return fail(e.code, e.message);
+            throw e;
+          }
+        }
         case "settings.set": {
           try {
             const settings = appSettings.set(msg.patch);
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
             perfMon.setEnabled(settings.performance.monitor);
-            broadcast({ type: "settings_changed", settings });
-            return reply({ settings, daemon: daemonInfo() });
+            broadcast({ type: "settings_changed", settings, jiraToken: !!secrets.jiraToken() });
+            return reply(settingsReply(settings));
           } catch (err) {
             return fail("bad_settings", (err as Error).message);
           }
@@ -1935,12 +1966,24 @@ export function createDaemon(opts: {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }
+        case "worktree.branches": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (msg.fetch !== undefined && typeof msg.fetch !== "boolean") return fail("bad_request", "fetch must be a boolean");
+          try {
+            return reply(await listBranches(cwd, { allowed: (p) => inRoots(real(p) ?? p), claudeDir, fetch: msg.fetch === true }));
+          } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
         case "worktree.create":
         case "worktree.status":
         case "worktree.remove": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (msg.type === "worktree.create" && msg.name !== undefined && typeof msg.name !== "string") return fail("bad_name", "name must be a string");
+          if (msg.type === "worktree.create" && msg.branch !== undefined && typeof msg.branch !== "string") return fail("bad_name", "branch must be a string");
+          if (msg.type === "worktree.create" && ((msg.base !== undefined && typeof msg.base !== "string") || (msg.checkout !== undefined && typeof msg.checkout !== "string"))) return fail("bad_request", "base and checkout must be strings");
           if (msg.type !== "worktree.remove" && (await gitOutside(cwd))) return fail("cwd_not_allowed", "The repository is outside the allowed roots");
           // A path that is itself a link is refused before `allowed` resolves it; git.ts checks the path git registers too.
           if (msg.type !== "worktree.create" && typeof msg.path === "string" && isAbsolute(msg.path) && !refused(msg.path) && lstatSync(msg.path, { throwIfNoEntry: false })?.isSymbolicLink()) return fail("not_removable", "The worktree path is a symbolic link");
@@ -1952,7 +1995,7 @@ export function createDaemon(opts: {
             if (x !== undefined && !(x && typeof x === "object" && ["uncommitted", "ahead", "ignored"].every((k) => Number.isInteger(x[k]) && (x[k] as number) >= 0))) return fail("bad_request", "expect must hold counts uncommitted, ahead and ignored");
           }
           try {
-            if (msg.type === "worktree.create") return reply(await createIn(cwd, { name: msg.name || undefined }));
+            if (msg.type === "worktree.create") return reply(await createIn(cwd, { name: msg.name || undefined, ...(msg.branch !== undefined && { branch: msg.branch }), ...(msg.base && { base: msg.base }), ...(msg.checkout !== undefined && { checkout: msg.checkout }) }));
             if (msg.type === "worktree.status") {
               const st = await worktreeStatus(cwd, msg.path, (p) => inRoots(real(p) ?? p));
               const running = [...sessions.values()].filter((s) => inDir(s.cwd, path!) && ["running", "needs_input"].includes(s.info().state)).length;

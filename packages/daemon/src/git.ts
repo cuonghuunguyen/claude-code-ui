@@ -2,7 +2,7 @@
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
-import { GIT_LOG_MAX_LIMIT, worktreeNameError, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult } from "@claude-ui/protocol";
+import { BRANCH_MAX, branchFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult } from "@claude-ui/protocol";
 import { runGit } from "./git-runner.ts";
 import { foreignPointer } from "./remote-path.ts";
 
@@ -398,9 +398,12 @@ async function isCreated(main: string, branch: string): Promise<boolean> {
 }
 
 export type CreateWorktreeOptions = {
+  /** The folder; default: `branch` with `/` replaced by `-`, else generated. */
   name?: string;
-  /** Default `worktree-<name>`. GH-79 part 5: an explicit branch name. */
+  /** Default `worktree-<name>`. GH-79 part 5 / GH-447: an explicit new branch name (may contain `/`). */
   branch?: string;
+  /** GH-447 Branch source: check out this existing branch (`refs/heads/x`, or `refs/remotes/<remote>/x` as a new local `x` tracking it); no name, branch or base. */
+  checkout?: string;
   /** Default: origin/<default> after a fetch (see docs/spec.md "Worktrees"). GH-79 part 5: an explicit start point. */
   base?: string;
   /** Roots predicate: the main checkout and the new path must pass it. */
@@ -424,8 +427,10 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
     const rdir = real(dir);
     if (rdir !== dir) throw new WorktreeError("cwd_not_allowed", ".claude/worktrees is a link; refusing to create worktrees through it");
 
+    if (o.checkout !== undefined) return checkoutIn(main, rdir, o);
     const free = async (n: string) => !exists(join(rdir, n)) && !(await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${o.branch ?? `worktree-${n}`}`));
-    let name = o.name;
+    if (o.branch !== undefined && (!o.branch || o.branch.startsWith("-") || o.branch.length > BRANCH_MAX)) throw new WorktreeError("bad_name", `Not a valid branch name: ${o.branch}`);
+    let name = o.name ?? (o.branch !== undefined ? branchFolder(o.branch) : undefined);
     if (name !== undefined) {
       const bad = worktreeNameError(name);
       if (bad) throw new WorktreeError("bad_name", bad);
@@ -481,6 +486,12 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
       throw e;
     }
 
+    return finishCreate(main, path, branch, settings, o, true);
+  });
+}
+
+/** After `git worktree add`: `symlinkDirectories`, the info/exclude line, the caller's step (rolled back when it throws). */
+async function finishCreate(main: string, path: string, branch: string, settings: ReturnType<typeof worktreeSettings>, o: CreateWorktreeOptions, ours: boolean): Promise<{ path: string; branch: string }> {
     // `worktree.symlinkDirectories`: each entry relative, inside the repository, existing; anything else is skipped with a warning.
     const dirs = Array.isArray(settings.symlinkDirectories) ? settings.symlinkDirectories : [];
     for (const d of dirs) {
@@ -515,12 +526,113 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
         o.onCreated({ path, branch });
       } catch (e) {
         await run(main, ["worktree", "remove", "--force", "--", path]).catch((x) => console.warn(`worktree: rollback of ${path} failed: ${x.message}`));
-        await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: rollback of branch ${branch} failed: ${x.message}`));
+        if (ours) await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: rollback of branch ${branch} failed: ${x.message}`));
         await run(main, ["worktree", "prune"]).catch(() => {});
         throw e;
       }
     return { path, branch };
-  });
+}
+
+/** Branch source Branch: `git worktree add` of an existing branch; a remote-only one first gets a local branch of the same name tracking it. Never marked. */
+async function checkoutIn(main: string, rdir: string, o: CreateWorktreeOptions): Promise<{ path: string; branch: string }> {
+  if (o.name !== undefined || o.branch !== undefined || o.base !== undefined) throw bad("checkout takes no name, branch or base");
+  const ref = await checkBranchRef(main, o.checkout);
+  const m = /^refs\/(heads|remotes)\/(.+)$/.exec(ref)!;
+  const remote = m[1] === "remotes";
+  // refs/remotes/<remote>/<x>: the remote is the longest configured remote name the ref starts with.
+  let branch = m[2]!;
+  if (remote) {
+    const remotes = (await run(main, ["remote"]).catch(() => "")).split("\n").filter(Boolean).sort((a, b) => b.length - a.length);
+    const r = remotes.find((x) => branch.startsWith(`${x}/`));
+    if (!r) throw bad("Unknown remote branch");
+    branch = branch.slice(r.length + 1);
+    if (!branch || branch === "HEAD") throw bad("Unknown remote branch");
+    if (await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${branch}`)) throw new WorktreeError("exists", `Branch ${branch} already exists locally: pick it from the list`);
+  }
+  const holder = (await repoOf(main)).list.find((w) => w.branch === branch);
+  if (holder) throw new WorktreeError("exists", `Branch ${branch} is checked out in worktree ${basename(holder.path)}`);
+  const name = branchFolder(branch);
+  const bad1 = worktreeNameError(name);
+  if (bad1) throw new WorktreeError("bad_name", `Folder ${name}: ${bad1}`);
+  const path = join(rdir, name);
+  if (exists(path)) throw new WorktreeError("exists", `${name} already exists`);
+  if (!o.allowed(path)) throw new WorktreeError("cwd_not_allowed", "The new worktree would be outside the allowed roots");
+  const settings = worktreeSettings(o.claudeDir, main);
+  if (remote) {
+    try {
+      await run(main, ["branch", "--track", "--", branch, ref]);
+    } catch (e) {
+      if (await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${branch}`)) throw new WorktreeError("exists", `Branch ${branch} already exists`);
+      throw e;
+    }
+  }
+  try {
+    await run(main, ["worktree", "add", "--quiet", "--", path, branch]);
+  } catch (e) {
+    if (remote) await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: branch ${branch} of a failed checkout kept: ${x.message}`));
+    if (exists(path)) throw new WorktreeError("exists", `${name} already exists`);
+    throw e;
+  }
+  // A local branch the user had stays on rollback; a tracking branch this call made goes.
+  return finishCreate(main, path, branch, settings, o, remote);
+}
+
+/** The default start point as the Base picker shows it (no fetch): `origin/<default>`, else `HEAD`. */
+async function defaultBaseName(main: string, claudeDir: string): Promise<string> {
+  if (worktreeSettings(claudeDir, main).baseRef === "head") return "HEAD";
+  const head = await g(main, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).catch(() => "");
+  return head ? shortRef(head) : "HEAD";
+}
+
+export type ListBranchesOptions = { allowed: (p: string) => boolean; claudeDir: string; fetch?: boolean };
+/**
+ * Local and remote branches of `cwd`'s repository for the Create worktree modal (newest commit first, one row per name; `origin`
+ * preferred for the remote), each with the worktree it is checked out in. `fetch`: `git fetch --prune origin` first (2 min); a
+ * failure (offline) lists the local refs with `fetchError`.
+ */
+export async function listBranches(cwd: string, o: ListBranchesOptions): Promise<WorktreeBranchesResult> {
+  const { main, list } = await repoOf(cwd);
+  if (!o.allowed(main) || (await gitEscapes(main, o.allowed))) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  let fetchError: string | undefined;
+  let fetched = false;
+  if (o.fetch) {
+    const remotes = (await g(main, ["remote"]).catch(() => "")).split("\n");
+    if (remotes.includes("origin"))
+      try {
+        await run(main, ["fetch", "--quiet", "--prune", "origin"], 120_000);
+        fetched = true;
+      } catch (e) {
+        fetchError = (e as Error).message;
+      }
+  }
+  const remotes = (await g(main, ["remote"]).catch(() => "")).split("\n").filter(Boolean).sort((a, b) => b.length - a.length);
+  const refs = (await g(main, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", `--count=${MAX_BRANCHES}`, "refs/heads", "refs/remotes"])).split("\n").filter(Boolean);
+  const holders = new Map(list.filter((w) => w.branch).map((w) => [w.branch!, w.path] as const));
+  const rows = new Map<string, BranchRow>();
+  for (const ref of refs) {
+    let name: string;
+    if (ref.startsWith("refs/heads/")) name = ref.slice(11);
+    else {
+      const rest = ref.slice(13);
+      const r = remotes.find((x) => rest.startsWith(`${x}/`));
+      if (!r) continue;
+      name = rest.slice(r.length + 1);
+      if (!name || name === "HEAD") continue;
+      const row = rows.get(name);
+      if (row?.remote?.startsWith("refs/remotes/origin/") && r !== "origin") continue;
+      if (row) row.remote = ref;
+      else rows.set(name, { name, local: false, remote: ref });
+      continue;
+    }
+    const row = rows.get(name);
+    if (row) row.local = true;
+    else rows.set(name, { name, local: true });
+  }
+  for (const row of rows.values()) {
+    const at = row.local ? holders.get(row.name) : undefined;
+    if (at) row.worktree = at;
+  }
+  return { branches: [...rows.values()], defaultBase: await defaultBaseName(main, o.claudeDir), ...(fetched && { fetched }), ...(fetchError && { fetchError }) };
 }
 
 /** The linked worktree `path` (as requested) of `list`; not_worktree for an unknown path or the main worktree. */

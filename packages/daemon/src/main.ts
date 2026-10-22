@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
 import { HELP, PHONE_HINT, USAGE_HINT, autoOpen, parseCli } from "./cli.ts";
 import { createSettings } from "./settings.ts";
+import { createSecrets } from "./secrets.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
@@ -78,7 +79,7 @@ const lanIps = lan ? Object.values(networkInterfaces()).flat().filter((a) => a &
 // The installed package ships the web build as dist/web beside this file; a source checkout builds packages/web/dist.
 const bundledWeb = new URL("./web", import.meta.url);
 const webRoot = fileURLToPath(existsSync(bundledWeb) ? bundledWeb : new URL("../../web/dist", import.meta.url));
-const state = { uploadDir: defaultUploadsDir(), settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }) };
+const state = { uploadDir: defaultUploadsDir(), settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }), secrets: createSecrets({ file: join(configDir(), "secrets.json") }) };
 
 if (side) {
   // A fresh container has no ~/.config: the hub's loadToken creates the config dir, a side has none.

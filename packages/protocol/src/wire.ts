@@ -117,6 +117,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "settings.get" }
   /** Sets only the fields in `patch`; reply `{settings}`, error `bad_settings` for an invalid value. Broadcasts `settings_changed`. */
   | { type: "settings.set"; patch: SettingsPatch }
+  /** Saves (string) or clears (null) the Jira token in secrets.json; write-only. Reply SettingsResult; broadcasts `settings_changed`. Error `bad_settings`. */
+  | { type: "jira.token"; token: string | null }
+  /** Test connection with the saved Jira settings and token. Reply `{user}` (display name); errors jira_not_configured, jira_auth, jira_unreachable, jira_failed. */
+  | { type: "jira.test" }
+  /** Ticket tab: no `text` = my open tickets (20); a key or ticket URL = that ticket; other text = summary search. Reply JiraSearchResult; errors as `jira.test`. */
+  | { type: "jira.search"; text?: string }
   /** Performance data of this daemon (docs/spec.md "Performance monitor"); reply PerfReport. */
   | { type: "perf.report" }
   /** Empties the performance store; reply {}. */
@@ -207,8 +213,15 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string }
   /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */
   | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[] }
-  /** Creates `<repo>/.claude/worktrees/<name>` on branch `worktree-<name>` (docs/spec.md "Worktrees"); no `name`: a generated one. Reply WorktreeCreateResult. Broadcasts `sessions.changed`. */
-  | { type: "worktree.create"; cwd: string; name?: string }
+  /**
+   * Creates a worktree in `<repo>/.claude/worktrees/` (docs/spec.md "Worktrees"). `name` only: folder `<name>` on branch `worktree-<name>`; nothing: a generated
+   * name. `branch` (GH-447, may contain `/`): a new Created branch, folder = `branch` with `/` → `-`; `base`: its start point (a commit-ish, the Base picker
+   * sends a full ref), default the "Worktrees" base rule. `checkout`: an existing branch (`refs/heads/x`, or `refs/remotes/<remote>/x` as a new local
+   * `x` tracking it), not marked; no name, branch or base with it. Reply WorktreeCreateResult. Broadcasts `sessions.changed`.
+   */
+  | { type: "worktree.create"; cwd: string; name?: string; branch?: string; base?: string; checkout?: string }
+  /** Local and remote branches for the Create worktree modal (GH-447); `fetch`: `git fetch --prune origin` first. Reply WorktreeBranchesResult. */
+  | { type: "worktree.branches"; cwd: string; fetch?: boolean }
   /** What removing `path` loses and whether it may be removed (docs/spec.md "Worktrees"); reply WorktreeStatusResult. */
   | { type: "worktree.status"; cwd: string; path: string }
   /**
@@ -330,7 +343,7 @@ export type ServerMessage =
   /** The terminal's shell exited (or it was closed); sent to every attached connection. The terminal is gone. */
   | { type: "terminal.exit"; terminalId: string; exitCode: number }
   /** To every connection of this daemon after `settings.set`. */
-  | { type: "settings_changed"; settings: Settings }
+  | { type: "settings_changed"; settings: Settings; jiraToken?: boolean }
   /** On connect: this daemon runs older code than is on disk (a source checkout changed after the start, or a newer install waits for a restart). `note` says which. */
   | { type: "daemon_stale"; note: string }
   /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes. `reloadFailed`: set when plugins were reloaded: the sessions whose reload failed (empty: none; restart banners then clear). */
@@ -420,6 +433,16 @@ export type ListResult = {
  */
 export type Worktree = { path: string; branch?: string; main: boolean; outsideRoots?: boolean; locked?: true };
 export type WorktreeCreateResult = { path: string; branch: string };
+/** One branch name of `worktree.branches`: `local` (refs/heads), `remote` (full ref, `origin` preferred), `worktree`: the path it is checked out in. */
+export type BranchRow = { name: string; local: boolean; remote?: string; worktree?: string };
+/**
+ * `defaultBase`: the start point a new branch gets without a base, as text (`origin/main`, `HEAD`). `fetched`: the fetch ran;
+ * `fetchError`: it failed (offline), the list holds the local refs.
+ */
+export type WorktreeBranchesResult = { branches: BranchRow[]; defaultBase: string; fetched?: boolean; fetchError?: string };
+/** A Jira ticket row of the Ticket tab. */
+export type JiraTicket = { key: string; type: string; summary: string; status: string };
+export type JiraSearchResult = { tickets: JiraTicket[] };
 /** Why a worktree cannot be removed now. */
 export type WorktreeBlock = "locked" | "symlink" | "outside_roots" | "sessions_running" | "removing" | "contains_worktree";
 /**
@@ -587,10 +610,12 @@ export type WorkerModeSetting = (typeof WORKER_MODES)[number];
 export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
   /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */
   performance: { monitor: boolean };
+  /** Ticket tab of the Create worktree modal (GH-447): one Jira connection; `email` for Cloud only; the token is in secrets.json, never here. */
+  jira: { url: string; email: string; template: string };
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
-export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true } };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
 export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */
