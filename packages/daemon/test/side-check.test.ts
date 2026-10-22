@@ -21,7 +21,7 @@ describe("checkScript", () => {
   for (const kind of ["wsl", "docker"] as const) {
     it(`${kind}: only reads: no install, copy, write, redirect into a file, key names or file contents`, () => {
       const s = checkScript(KEY, kind, "C:\\pkg");
-      for (const bad of [/\bnpm\b/, /\brm\b/, /\bmv\b/, /\bmkdir\b/, /\bcp\b/, /\bcat\b/, /\btee\b/, /\btouch\b/, /\bchmod\b/, /\bpack\b/, /ANTHROPIC|OAUTH|TOKEN|API_KEY/, /\benv\b|\bprintenv\b/, /node "?\$cli|--side|exec node/]) expect(s).not.toMatch(bad);
+      for (const bad of [/\bnpm\s+\w/, /\brm\b/, /\bmv\b/, /\bmkdir\b/, /\bcp\b/, /\bcat\b/, /\btee\b/, /\btouch\b/, /\bchmod\b/, /\bpack\b/, /ANTHROPIC|OAUTH|TOKEN|API_KEY/, /\benv\b|\bprintenv\b/, /node "?\$cli|--side|exec node/]) expect(s).not.toMatch(bad);
       // Redirects only into /dev/null or other file descriptors.
       for (const m of s.matchAll(/\d?>>?\s*([^\s;&|)]+)/g)) expect(m[1]).toMatch(/^(\/dev\/null|&\d)$/);
       expect(s).not.toMatch(/<\s*[^\s(]/);
@@ -61,6 +61,10 @@ describe("parseCheck", () => {
   it("no node, an empty writable list and the WSL package flag", () => {
     expect(parseCheck(out(["node=none", "make=0", "python3=0", "cxx=0", "credentials=0", "package=0", "installed=none"]))).toEqual({ make: false, python3: false, cxx: false, credentials: false, packageVisible: false, installed: "none" });
     expect(parseCheck(out(["node=22.1.0", "writable=", "installed=current"]))!.writable).toEqual([]);
+  });
+  it("docker: target, tools and the own-Node flag", () => {
+    const r = parseCheck(out(["node=none", "arch=aarch64", "libc=glibc", "glibc=2.36", "cxxrt=1", "tar=1", "gzip=0", "git=1", "npm=0", "bundled=1", "installed=current"]))!;
+    expect(r).toMatchObject({ target: { arch: "aarch64", libc: "glibc", glibc: "2.36", cxxRuntime: true }, tools: { tar: true, gzip: false, git: true, npm: false, cxxRuntime: true }, bundled: true });
   });
   it("is undefined without the last line (the script did not finish) or without any line", () => {
     expect(parseCheck(out(["node=22.4.0", "make=1"]))).toBeUndefined();
@@ -108,6 +112,25 @@ describe("verdictOf", () => {
     expect(r.facts).toEqual({ reachable: true, running: true, node: "22.4.0", nodeOk: true, buildTools: { make: true, python3: true, cxx: true }, credentialsFile: true, installed: "other", installedKey: "0.4.0-1", writable: ["/tmp"] });
     for (const reason of ["gone", "not_running", "unreachable", "no_build", "package_unreadable", "node_missing", "node_old", "build_tools_missing", "not_logged_in", "no_writable_path", "check_failed"] as const)
       for (const docker of [true, false]) expect(checkMessage(reason, "X", { docker, detail: "d", name: "n" }), reason).not.toMatch(/docker cp|docker exec|\bcp\b|stream|exec/i);
+  });
+
+  it("docker bundle path: no Node.js or build tools needed; tar and gzip are; an own-Node install runs without Node.js", () => {
+    const B = { kind: "docker" as const, install: { method: "bundle" as const } };
+    const tools = { tar: true, gzip: true, npm: false, git: false, cxxRuntime: true };
+    expect(verdict({ node: undefined, make: false, python3: false, cxx: false, tools }, B).verdict).toBe("install");
+    expect(verdict({ node: "18.0.0", tools }, B).verdict).toBe("install");
+    const noTar = verdict({ node: undefined, tools: { ...tools, tar: false, gzip: false } }, B);
+    expect([noTar.reason, noTar.message]).toEqual(["unpack_tools_missing", expect.stringContaining("tar and gzip")]);
+    // Installed with its own Node.js: starts without the container's; installed by npm: needs it.
+    expect(verdict({ node: undefined, installed: "current", bundled: true }, { kind: "docker", install: { method: "npm", reason: "r" } }).verdict).toBe("installed");
+    expect(verdict({ node: undefined, installed: "current", bundled: false }, B).reason).toBe("node_missing");
+  });
+
+  it("docker npm path: the Node.js block says why the bundle is not used; facts carry target, tools, network and method", () => {
+    const r = verdict({ node: undefined, target: { arch: "x86_64", libc: "musl", cxxRuntime: true }, tools: { tar: true, gzip: true, npm: false, git: true, cxxRuntime: true } }, { kind: "docker", install: { method: "npm", reason: "the container uses musl" }, network: false });
+    expect(r.reason).toBe("node_missing");
+    expect(r.message).toContain("claude-ui installs with npm here: the container uses musl.");
+    expect(r.facts).toMatchObject({ target: { arch: "x86_64", libc: "musl" }, install: { method: "npm", reason: "the container uses musl" }, tools: { git: true, npm: false }, network: false });
   });
 
   it("every reason has a short plain message and the not-logged-in one is soft (offers installing anyway)", () => {
@@ -349,6 +372,33 @@ describe("side.check in the hub", () => {
     createSides({ targets: [wslSide("A")], saved: ["wsl:A"], spawn: async (_id, o) => (auto.push(o.setup), fakeReady()) });
     await Promise.resolve();
     expect(auto).toEqual(["never"]);
+  });
+
+  it("a Docker start shows the bundle or the npm fallback and its reason; a failed npm install says why npm was used", async () => {
+    const out = new PassThrough();
+    const exit = new EventEmitter();
+    const sides = createSides({
+      targets: [dockerSide("dev"), dockerSide("b")],
+      key: () => KEY,
+      spawn: (id, o) => {
+        o.install?.(id === "docker:b" ? { bundle: true } : { fallback: "the container uses musl (for example Alpine); the bundle needs glibc" });
+        o.phase(id === "docker:b" ? "downloading" : "packing");
+        return { stdin: new PassThrough(), stdout: id === "docker:b" ? new PassThrough() : out, stderr: new PassThrough(), kill: () => {}, on: (e, l) => (id === "docker:b" ? undefined : exit.on(e, l)) };
+      },
+    });
+    const started = sides.start("docker:dev").catch((e: Error) => e.message);
+    void sides.start("docker:b").catch(() => {});
+    await new Promise((r) => setTimeout(r, 5));
+    expect(sides.list().find((s) => s.id === "docker:dev")).toMatchObject({ state: "starting", phase: "packing", fallback: expect.stringContaining("musl") });
+    expect(sides.list().find((s) => s.id === "docker:b")).toMatchObject({ state: "starting", phase: "downloading", bundle: true });
+    expect(sides.list().find((s) => s.id === "docker:b")!.fallback).toBeUndefined();
+    out.write("CLAUDE_UI_SETUP node_missing\n");
+    await new Promise((r) => setTimeout(r, 5));
+    exit.emit("exit", 3);
+    const msg = await started;
+    expect(msg).toContain("Node.js 22 or newer is not installed");
+    expect(msg).toContain("claude-ui used npm in the container because the container uses musl");
+    expect(sides.list().find((s) => s.id === "docker:dev")).toMatchObject({ state: "error", fallback: expect.stringContaining("musl") });
   });
 
   it("a not_installed exit puts the side back to off (not error) and the phase shows while starting", async () => {

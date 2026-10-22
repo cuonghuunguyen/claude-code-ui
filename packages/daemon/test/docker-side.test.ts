@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
@@ -86,7 +87,7 @@ describe("docker sides", () => {
     const cacheDir = dir("cache-");
     const n = fakeNpm();
     const f = fake({ inspect: { code: 0, stdout: "true\n" }, exec: { code: 0, stdout: "/tmp/claude-ui-side-0.2.0-1.tgz\n" } });
-    const run = (key: string) => prepareDockerSide({ name: "dev", pkgDir, key, cacheDir, exec: f.exec, npm: n.npm });
+    const run = (key: string) => prepareDockerSide({ name: "dev", pkgDir, key, cacheDir, exec: f.exec, npm: n.npm }).then((r) => r.path);
     expect(await run("0.2.0-1")).toBe("/tmp/claude-ui-side-0.2.0-1.tgz");
     expect(n.calls).toEqual([["npm", "pack", pkgDir, "--ignore-scripts", "--pack-destination", join(cacheDir, "0.2.0-1.partial"), "--loglevel=error"]]);
     expect(f.calls.some((c) => c[1] === "cp")).toBe(false);
@@ -105,7 +106,7 @@ describe("docker sides", () => {
 
   it("a read-only root file system with a tmpfs /tmp: the tarball goes to /tmp", async () => {
     const f = fake({ inspect: { code: 0, stdout: "true\n" }, exec: { code: 0, stdout: "/tmp/claude-ui-side-k.tgz\n" } });
-    expect(await prepareDockerSide({ name: "esaca", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec: f.exec, npm: fakeNpm().npm })).toBe("/tmp/claude-ui-side-k.tgz");
+    expect((await prepareDockerSide({ name: "esaca", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec: f.exec, npm: fakeNpm().npm })).path).toBe("/tmp/claude-ui-side-k.tgz");
   });
 
   it("when /tmp is not writable it tries /dev/shm, then $HOME, and answers with the path that took the tarball", async () => {
@@ -119,7 +120,7 @@ describe("docker sides", () => {
       return dirArg === "HOME" ? { code: 0, stdout: "/home/esaca/claude-ui-side-k.tgz\n", stderr: "" } : { code: 1, stdout: "", stderr: `sh: 1: cannot create ${dirArg}/claude-ui-side-k.tgz: Read-only file system
 ` };
     };
-    expect(await prepareDockerSide({ name: "esaca", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec, npm: fakeNpm().npm })).toBe("/home/esaca/claude-ui-side-k.tgz");
+    expect((await prepareDockerSide({ name: "esaca", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec, npm: fakeNpm().npm })).path).toBe("/home/esaca/claude-ui-side-k.tgz");
     expect(tried).toEqual(["/tmp", "/dev/shm", "HOME"]);
   });
 
@@ -139,7 +140,7 @@ describe("docker sides", () => {
   describe("docker cp first, docker exec stdin as the fallback", () => {
     const cps = (f: { calls: string[][] }) => f.calls.filter((c) => c[1] === "cp");
     const mountCalls = (f: { calls: string[][] }) => f.calls.filter((c) => isMounts(c.slice(1)));
-    const go = (f: { exec: Exec }, cacheDir = dir("cache-")) => prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir, exec: f.exec, npm: fakeNpm().npm });
+    const go = (f: { exec: Exec }, cacheDir = dir("cache-")) => prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir, exec: f.exec, npm: fakeNpm().npm }).then((r) => r.path);
 
     it("the check prints only the needed fields, never the environment", async () => {
       const f = fake({ inspect: { code: 0, stdout: "true\n" }, mounts: { code: 0, stdout: WRITABLE } });
@@ -213,7 +214,7 @@ describe("docker sides", () => {
         if (args[0] === "inspect") return { code: 0, stdout: isMounts(args) ? RO_ROOT : "true\n", stderr: "" };
         return args[args.length - 3] === "/tmp" ? { code: 4, stdout: "", stderr: "size mismatch: wrote 1 of 3 bytes to /tmp/x\n" } : { code: 0, stdout: "/dev/shm/x.tgz\n", stderr: "" };
       };
-      expect(await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec, npm: fakeNpm().npm })).toBe("/dev/shm/x.tgz");
+      expect((await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec, npm: fakeNpm().npm })).path).toBe("/dev/shm/x.tgz");
       const ex = calls.filter((c) => c[1] === "exec");
       expect(ex.map((c) => c[c.length - 3])).toEqual(["/tmp", "/dev/shm"]);
       expect(ex[0]![ex[0]!.length - 1]).toBe("3"); // the tarball is "tgz"
@@ -226,7 +227,7 @@ describe("docker sides", () => {
     const cacheDir = dir("cache-");
     const n = fakeNpm();
     const f = fake({ inspect: { code: 0, stdout: "true\n" }, exec: { code: 0, stdout: "/tmp/x.tgz\n" } });
-    const run = (name: string) => prepareDockerSide({ name, pkgDir, key: "0.2.0-1", cacheDir, exec: f.exec, npm: n.npm });
+    const run = (name: string) => prepareDockerSide({ name, pkgDir, key: "0.2.0-1", cacheDir, exec: f.exec, npm: n.npm }).then((r) => r.path);
     await Promise.all([run("a"), run("b")]);
     expect(n.calls).toHaveLength(1);
   });
@@ -302,13 +303,13 @@ describe("checkDockerSide (side.check of a container)", () => {
     expect(await run({ inspect: { code: null } }).result).toMatchObject({ verdict: "blocked", reason: "unreachable" });
   });
 
-  it("a running container: inspect, the mounts inspect and one docker exec of the check script; nothing is packed, copied or written", async () => {
+  it("a running container: inspect, the mounts and network inspects and one docker exec of the check script; nothing is packed, copied or written", async () => {
     const r = run({ exec: { code: 0, stdout: out(ALL) } });
     expect(await r.result).toMatchObject({ verdict: "install", key: "0.5.0-1", facts: { reachable: true, running: true, node: "22.4.0", installed: "none", writable: ["/tmp"] } });
     const kinds = r.f.calls.map((c) => c[1]);
-    expect(kinds).toEqual(["inspect", "inspect", "exec"]);
+    expect(kinds).toEqual(["inspect", "inspect", "inspect", "exec"]);
     expect(r.f.calls.some((c) => c[1] === "cp")).toBe(false);
-    const exec = r.f.calls[2]!;
+    const exec = r.f.calls[3]!;
     expect(exec.slice(0, 4)).toEqual(["docker", "exec", "dev", "sh"]);
     expect(exec).not.toContain("-i");
     expect(exec[5]).toContain("CLAUDE_UI_CHECK");
@@ -350,7 +351,7 @@ describe("checkDockerSide (side.check of a container)", () => {
     const cacheDir = join(dir("prep-"), "cache");
     const f = fake({ inspect: { code: 0, stdout: "true\n" } });
     const n = fakeNpm();
-    expect(await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir, exec: f.exec, npm: n.npm, setup: "never" })).toBe("");
+    expect((await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir, exec: f.exec, npm: n.npm, setup: "never" })).path).toBe("");
     expect(f.calls).toEqual([["docker", "inspect", "-f", "{{.State.Running}}", "dev"]]);
     expect(n.calls).toEqual([]);
     expect(existsSync(cacheDir)).toBe(false);
@@ -358,5 +359,83 @@ describe("checkDockerSide (side.check of a container)", () => {
     const g = fake({ inspect: { code: 0, stdout: "true\n" }, mounts: { code: 0, stdout: WRITABLE }, cp: { code: 0 } });
     await prepareDockerSide({ name: "dev", pkgDir: pkg(), key: "k", cacheDir, exec: g.exec, npm: fakeNpm().npm, onPhase: (p) => phases.push(p) });
     expect(phases).toEqual(["packing", "copying"]);
+  });
+});
+
+describe("prepareDockerSide: the host-assembled bundle", () => {
+  const probeOut = (arch: string, libc = "glibc") => ["arch=" + arch, "libc=" + libc, "glibc=2.36", "cxxrt=1"].map((l) => `CLAUDE_UI_CHECK ${l}`).join("\n");
+  const sideBuildPkg = (withSide = true) => {
+    const d = pkg();
+    if (withSide) {
+      mkdirSync(join(d, "dist", "side"));
+      writeFileSync(join(d, "dist", "side", "cli.js"), "side");
+      writeFileSync(join(d, "dist", "side", "side.json"), JSON.stringify({ sdk: "0.3.1" }));
+    }
+    return d;
+  };
+  const sha = (b: string) => createHash("sha256").update(b).digest("hex");
+  const parts = () => [{ file: "node.tar.gz", label: "Node.js", url: "https://n/node", sha256: sha("node") }];
+  const okFetch = (async () => new Response("node")) as unknown as typeof fetch;
+  const offline = (async () => {
+    throw new TypeError("fetch failed");
+  }) as unknown as typeof fetch;
+  function docker(arch = "x86_64", libc = "glibc") {
+    const calls: string[][] = [];
+    const exec: Exec = async (_cmd, args) => {
+      calls.push(args);
+      if (args[0] === "inspect") return { code: 0, stdout: isMounts(args) ? WRITABLE : "true\n", stderr: "" };
+      if (args[0] === "exec" && args.some((a) => a.includes("uname -m"))) return { code: 0, stdout: probeOut(arch, libc), stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    return { calls, exec };
+  }
+  const go = (o: { arch?: string; libc?: string; fetch?: typeof fetch; cacheRoot?: string; withSide?: boolean }) => {
+    const d = docker(o.arch, o.libc);
+    const phases: string[] = [];
+    const installs: unknown[] = [];
+    const cacheRoot = o.cacheRoot ?? dir("side-cache-");
+    const result = prepareDockerSide({ name: "dev", pkgDir: sideBuildPkg(o.withSide), key: "1.0.0-1", cacheDir: dir("cache-"), exec: d.exec, npm: fakeNpm().npm, onPhase: (p) => phases.push(p), onInstall: (i) => installs.push(i), bundle: { cacheRoot, version: "1.0.0", fetch: o.fetch ?? okFetch, parts } });
+    return { ...d, phases, installs, result, cacheRoot };
+  };
+
+  it("x86_64 glibc: downloads, packs and copies one tar; the second container downloads nothing", async () => {
+    const a = go({});
+    const r = await a.result;
+    expect(r.path).toBe("/tmp/claude-ui-side-1.0.0-1.tar");
+    expect(r.bundle).toEqual({ target: "linux-x64", nodeDir: expect.stringMatching(/^node-v[\d.]+-linux-x64$/), claudePackage: "claude-agent-sdk-linux-x64" });
+    expect(a.phases).toEqual(["downloading", "packing", "copying"]);
+    expect(a.installs).toEqual([{ bundle: true }]);
+    expect(existsSync(join(a.cacheRoot, "1.0.0", "linux-x64", "node.tar.gz"))).toBe(true);
+    // The assembled tar is removed after the copy.
+    expect(readdirSync(join(a.cacheRoot, "1.0.0", ".tmp"))).toEqual([]);
+    const b = go({ cacheRoot: a.cacheRoot, fetch: offline });
+    expect((await b.result).bundle?.target).toBe("linux-x64");
+    expect(b.phases).toEqual(["packing", "copying"]);
+  });
+
+  it("aarch64 picks the arm64 bundle", async () => {
+    expect((await go({ arch: "aarch64" }).result).bundle?.target).toBe("linux-arm64");
+  });
+
+  it("musl, no side build, or offline with an empty cache: the npm tarball, with the reason", async () => {
+    for (const [o, why] of [
+      [{ libc: "musl" }, /musl/],
+      [{ withSide: false }, /no container bundle/],
+      [{ fetch: offline }, /could not download Node\.js.*no verified copy/],
+    ] as const) {
+      const g = go(o);
+      const r = await g.result;
+      expect(r.bundle).toBeUndefined();
+      expect(r.path).toMatch(/\.tgz$/);
+      expect(g.installs).toEqual([{ fallback: expect.stringMatching(why) }]);
+      expect(g.phases.slice(-2)).toEqual(["packing", "copying"]);
+    }
+  });
+
+  it("an older version's cached parts are removed", async () => {
+    const cacheRoot = dir("side-cache-");
+    mkdirSync(join(cacheRoot, "0.9.0", "linux-x64"), { recursive: true });
+    await go({ cacheRoot }).result;
+    expect(readdirSync(cacheRoot).sort()).toEqual(["1.0.0"]);
   });
 });
