@@ -369,6 +369,34 @@ const ADJECTIVES = ["brave", "calm", "clever", "eager", "fancy", "gentle", "happ
 const NOUNS = ["badger", "beacon", "cedar", "comet", "dolphin", "falcon", "forest", "glacier", "harbor", "island", "lantern", "meadow", "otter", "panda", "pebble", "river", "robin", "summit", "tiger", "valley", "willow", "wolf", "yarrow", "zebra"];
 const pick = (l: string[]) => l[Math.floor(Math.random() * l.length)]!;
 
+/** Git config key of the Created branch mark (ADR 0005): a branch claude-ui created for a new worktree; removal deletes it. */
+const createdKey = (branch: string) => `branch.${branch}.claudeUiCreated`;
+const CONFIG_TRIES = 5;
+/**
+ * Marks `branch` a Created branch, right after `git branch` under the repository lock. A held `config.lock` (another git
+ * writing the config) is retried; on failure the create still succeeds without the mark, with a warning.
+ */
+async function markCreated(main: string, branch: string): Promise<void> {
+  for (let i = 1; ; i++) {
+    try {
+      await run(main, ["config", "--type=bool", "--", createdKey(branch), "true"]);
+      return;
+    } catch (e) {
+      if (i < CONFIG_TRIES && /config\.lock|could not lock/i.test((e as Error).message)) {
+        await new Promise((r) => setTimeout(r, 50 * i));
+        continue;
+      }
+      console.warn(`worktree: ${createdKey(branch)} not set, the branch stays when its worktree is deleted: ${(e as Error).message}`);
+      return;
+    }
+  }
+}
+/** A Created branch: marked in git config, or a legacy `worktree-*` branch of a claude-ui before the mark. */
+async function isCreated(main: string, branch: string): Promise<boolean> {
+  if (branch.startsWith("worktree-")) return true;
+  return (await g(main, ["config", "--type=bool", "--get", "--", createdKey(branch)]).catch(() => "")) === "true";
+}
+
 export type CreateWorktreeOptions = {
   name?: string;
   /** Default `worktree-<name>`. GH-79 part 5: an explicit branch name. */
@@ -443,6 +471,7 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
       if (await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${branch}`)) throw new WorktreeError("exists", `Branch ${branch} already exists`);
       throw e;
     }
+    await markCreated(main, branch);
     try {
       await run(main, ["worktree", "add", "--quiet", "--", path, branch]);
     } catch (e) {
@@ -526,7 +555,7 @@ export type RemoveOptions = {
 };
 
 /**
- * Removes a linked worktree inside the roots (made by this app, by hand or by another tool): directory, then its `worktree-*` branch, then prune.
+ * Removes a linked worktree inside the roots (made by this app, by hand or by another tool): directory, then its Created branch (marked, or legacy `worktree-*`), then prune.
  * Refused: the main worktree, a locked one, a symlink path, one whose git dirs are outside the roots. `deleteBranch`: a kept branch goes with `-d` (git refuses an unmerged one: `branchKept`).
  */
 export async function removeWorktree(cwd: string, path: string, allowed: (path: string) => boolean, o: RemoveOptions = {}): Promise<WorktreeRemoveResult> {
@@ -553,7 +582,7 @@ export async function removeWorktree(cwd: string, path: string, allowed: (path: 
     const detached = !(await gok(w.path, "symbolic-ref", "-q", "HEAD"));
     await run(main, ["worktree", "remove", "--force", "--", w.path]);
     let branchKept: string | undefined;
-    if (w.branch?.startsWith("worktree-")) await run(main, ["branch", "-D", "--", w.branch]).catch((e) => console.warn(`worktree: branch ${w.branch} kept: ${e.message}`));
+    if (w.branch && !detached && (await isCreated(main, w.branch))) await run(main, ["branch", "-D", "--", w.branch]).catch((e) => console.warn(`worktree: branch ${w.branch} kept: ${e.message}`));
     else if (o.deleteBranch && w.branch && !detached) await run(main, ["branch", "-d", "--", w.branch]).catch((e) => void (branchKept = e.message));
     await run(main, ["worktree", "prune"]).catch(() => {});
     return branchKept ? { branchKept } : {};
@@ -601,7 +630,7 @@ async function statusOf(main: string, w: Listed, requested: string, allowed: (p:
   // Per file (-uall) and NUL separated (-z: names needing quotes stay exact). Ignored directories git reports whole (node_modules/, build output) are not counted.
   const { uncommitted, untracked, ignored } = parseStatus(await g(w.path, ["status", "--porcelain", "-z", "--ignored=matching", "-uall"]));
   const detached = !(await gok(w.path, "symbolic-ref", "-q", "HEAD"));
-  const keeps = !detached && !w.branch?.startsWith("worktree-");
+  const keeps = !detached && !(w.branch && (await isCreated(main, w.branch)));
   let commits = 0;
   if (detached) commits = await count(w.path, ["HEAD", "--not", "--branches", "--remotes"]);
   else if (!keeps) commits = await count(w.path, ["HEAD", "--not", `--exclude=${w.branch}`, "--branches", "--remotes"]);

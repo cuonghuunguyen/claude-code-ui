@@ -212,7 +212,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** What removing `path` loses and whether it may be removed (docs/spec.md "Worktrees"); reply WorktreeStatusResult. */
   | { type: "worktree.status"; cwd: string; path: string }
   /**
-   * `git worktree remove --force` of a linked worktree inside the roots (not main, not locked, not a symlink), then `git branch -D` for a `worktree-*` branch,
+   * `git worktree remove --force` of a linked worktree inside the roots (not main, not locked, not a symlink), then `git branch -D` for a Created branch (git config `branch.<name>.claudeUiCreated`, or legacy `worktree-*`; ADR 0005),
    * `git branch -d` for another one only with `deleteBranch`; `expectSafe`: refused with `stale` unless status is still safe; `expect`: refused with `stale` when the current status has more uncommitted files, commits ahead or ignored files than listed (checked before and after the sessions and terminals close). Transcripts stay.
    * Reply WorktreeRemoveResult. Broadcasts `sessions.changed`.
    */
@@ -424,8 +424,8 @@ export type WorktreeCreateResult = { path: string; branch: string };
 export type WorktreeBlock = "locked" | "symlink" | "outside_roots" | "sessions_running" | "removing" | "contains_worktree";
 /**
  * `uncommitted`: changed and untracked files (ignored not); `untracked`: the untracked part of it; `commits`: commits only this worktree's branch
- * (or detached HEAD) holds, 0 when the branch is kept (not `worktree-*`); `ahead`: commits of HEAD in neither the base branch nor the upstream
- * (nor a same-name remote branch); `branchMerged`: a kept branch (not `worktree-*`, not detached) has no commit outside base or upstream (`git branch -d` may delete it);
+ * (or detached HEAD) holds, 0 when the branch is kept (not a Created branch); `ahead`: commits of HEAD in neither the base branch nor the upstream
+ * (nor a same-name remote branch); `branchMerged`: a kept branch (not a Created branch, not detached) has no commit outside base or upstream (`git branch -d` may delete it);
  * `ignored`: ignored files that removal deletes (ignored directories git reports as a whole are not counted); `headTime`: ms of HEAD's committer date; `running`: its sessions that run or need input. `safety`: "blocked" when `blocked` is set, else
  * "has_work" when `uncommitted` or `ahead`, else "safe".
  */
