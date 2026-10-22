@@ -452,7 +452,7 @@ export type WorktreeBlock = "locked" | "symlink" | "outside_roots" | "sessions_r
  * `ignored`: ignored files that removal deletes (ignored directories git reports as a whole are not counted); `headTime`: ms of HEAD's committer date; `running`: its sessions that run or need input. `safety`: "blocked" when `blocked` is set, else
  * "has_work" when `uncommitted` or `ahead`, else "safe".
  */
-export type WorktreeStatusResult = { uncommitted: number; untracked: number; commits: number; ahead: number; ignored: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock };
+export type WorktreeStatusResult = { uncommitted: number; untracked: number; commits: number; ahead: number; ignored: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock; /** GH-447: the branch is a Created branch (ADR 0005); removal deletes it. */ createdBranch?: true };
 /** `branchKept`: why a kept branch the caller asked to delete stays (git's message). */
 export type WorktreeRemoveResult = { branchKept?: string };
 /** Claude Code's worktree name rule; undefined when `name` is valid. */

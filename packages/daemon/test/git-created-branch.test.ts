@@ -59,7 +59,10 @@ describe("Created branch marker", () => {
     const r = await createWorktree(main, { ...opts, name: "w", branch: "w" });
     commit(r.path, "1.txt");
     commit(r.path, "2.txt");
-    expect(await worktreeStatus(main, r.path, () => true)).toMatchObject({ commits: 2, branchMerged: false, branch: "w" });
+    expect(await worktreeStatus(main, r.path, () => true)).toMatchObject({ commits: 2, branchMerged: false, branch: "w", createdBranch: true });
+    const keep = join(main, ".claude", "worktrees", "keep");
+    run(main, "worktree", "add", "-q", "-b", "keep", keep);
+    expect((await worktreeStatus(main, keep, () => true)).createdBranch).toBeUndefined();
   });
 
   it.skipIf(process.platform === "win32")("a held config.lock: retried; still held, the create succeeds without the marker and warns", async () => {

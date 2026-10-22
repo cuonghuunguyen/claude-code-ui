@@ -369,4 +369,6 @@ it("removeWorktreeText adds 'Branch <b> stays.' for a kept branch; keepsBranch t
   expect(removeWorktreeText({ uncommitted: 1, commits: 0, branch: "feat" }, { keepsBranch: true })).toBe("You have 1 uncommitted file on feat. All will be lost if you remove. Branch feat stays.");
   const l = [{ path: "/a", branch: "feat", main: false }, { path: "/b", branch: "worktree-b", main: false }, { path: "/c", branch: "abc1234", main: false }];
   expect([keepsBranch(l, "/a"), keepsBranch(l, "/b"), keepsBranch(l, "/c"), keepsBranch(undefined, "/a")]).toEqual([true, false, false, false]);
+  // A Created branch (GH-447) of any name goes with its worktree.
+  expect(keepsBranch(l, "/a", { createdBranch: true })).toBe(false);
 });

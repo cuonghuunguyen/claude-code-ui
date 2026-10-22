@@ -26,6 +26,7 @@ import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { KeyTipsRow } from "./key-tip.tsx";
 import { ChevronLeftIcon } from "lucide-react";
+import { JiraSection } from "./jira-settings.tsx";
 
 const GROUP_KEY = "claude-ui.settingsGroup";
 const loadGroup = () => {
@@ -35,7 +36,8 @@ const loadGroup = () => {
     return undefined;
   }
 };
-const saveGroup = (id: string) => {
+/** Settings opens at this group next time (also the Create worktree modal's "Open Settings › Jira"). */
+export const saveGroup = (id: string) => {
   try {
     localStorage.setItem(GROUP_KEY, id);
   } catch {
@@ -207,6 +209,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const [error, setError] = useState<string>();
   const [daemon, setDaemon] = useState<SettingsResult["daemon"]>();
   const [saving, setSaving] = useState(false);
+  const [jiraToken, setJiraToken] = useState(false);
   // "Show only active sessions": the sidebar's own per-browser setting (its options menu writes it too).
   const [onlyActive, setOnlyActive] = useState(() => loadSidebarView().onlyActive);
   const [layout, setLayout] = useState(() => loadSidebarView().layout);
@@ -237,7 +240,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     if (!open) return;
     let live = true;
     ask.current<SettingsResult>({ type: "settings.get" }).then(
-      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setError(undefined), setDraft({})),
+      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setJiraToken(!!r.jiraToken), setError(undefined), setDraft({})),
       (e: Error) => live && setError(e.message),
     );
     return () => void (live = false);
@@ -249,6 +252,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       const r = await ask.current<SettingsResult>({ type: "settings.set", patch });
       setSettings(r.settings);
       setDaemon(r.daemon);
+      setJiraToken(!!r.jiraToken);
       setError(undefined);
       if (field) setDraft(({ [field]: _, ...rest }) => rest);
     } catch (e) {
@@ -259,6 +263,8 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   };
 
   const [pick, setPick] = useState(loadGroup);
+  // Every way of opening Settings shows the stored group (one set while it was closed included).
+  useEffect(() => void (open && setPick(loadGroup())), [open]);
   // Below md: false shows the list of groups, true the settings of the selected group.
   const [drilled, setDrilled] = useState(false);
   useEffect(() => void (open && setDrilled(false)), [open]);
@@ -571,6 +577,10 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(onRestartGuide ? [{ id: "guide", title: "Guide", body: <GuideSection onRestart={onRestartGuide} /> }] : []),
     // A section the daemon does not know (an older daemon lacks `performance`) is left out.
     ...SECTIONS.filter((sec) => !settings || settings[sec.id]).map((sec) => ({ id: sec.id, title: sec.title, body: sec.id === "usageLimit" ? <>{daemonSection(sec)}<UsageRingRow /></> : sec.id === "performance" ? <>{daemonSection(sec)}<PerformanceSection request={request} /></> : daemonSection(sec) })),
+    // GH-447: an older daemon has no `jira` settings: no group.
+    ...(settings?.jira
+      ? [{ id: "jira", title: "Jira", body: <JiraSection jira={settings.jira} tokenSet={jiraToken} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setError(undefined))} onError={setError} /> }]
+      : []),
     { id: "about", title: "About", body: <AboutSection daemonVersion={daemon?.version} /> },
   ];
   const selected = groups.find((g) => g.id === pick) ?? groups[0]!;

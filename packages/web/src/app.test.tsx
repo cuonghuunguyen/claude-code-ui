@@ -1581,7 +1581,7 @@ describe("worktrees", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
 
-  it("New worktree from the sidebar opens the new-session tab held, then in the new worktree", async () => {
+  it("Shift+click on Create worktree creates at once with a generated name: the new-session tab held, then in the new worktree", async () => {
     let done!: (r: unknown) => void;
     const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main] } };
     const restore = await remount({
@@ -1590,7 +1590,7 @@ describe("worktrees", () => {
     });
     const from = sent.length;
     try {
-      await act(async () => el.querySelector<HTMLElement>('[data-testid="project-new-worktree"]')!.click());
+      await act(async () => void el.querySelector<HTMLElement>('[data-testid="project-new-worktree"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true })));
       expect(sent.slice(from).filter((m) => m.type === "worktree.create")).toEqual([{ type: "worktree.create", cwd: "/p/demo" }]);
       expect(el.querySelector('[data-testid="external-turn"]')?.textContent).toBe("Creating worktree…");
       replies["session.list"] = { ...listed, worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] } };
@@ -1652,18 +1652,34 @@ describe("worktrees", () => {
     }
   });
 
-  it("the name dialog: an invalid name disables Create with the rule; Enter creates the valid one", async () => {
-    const restore = await remount({ "session.list": { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main] } }, "worktree.create": { path: "/p/demo/.claude/worktrees/my-feature", branch: "worktree-my-feature" } });
+  it("Create worktree: click opens the modal; Create sends the normalized branch and opens a new session tab in the worktree; Shift+click and the palette", async () => {
+    const made = "/p/demo/.claude/worktrees/fix-login-u";
+    const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main] } };
+    const restore = await remount({
+      "session.list": listed,
+      "settings.get": { settings: { jira: { url: "", email: "", template: "{type}/{key}-{summary}" } }, jiraToken: false },
+      "worktree.branches": { branches: [{ name: "main", local: true, worktree: "/p/demo" }], defaultBase: "HEAD" },
+      "worktree.create": { path: made, branch: "fix-login-u" },
+    });
     const from = sent.length;
     try {
-      await act(async () => void el.querySelector<HTMLElement>('[data-testid="project-new-worktree"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true })));
-      await field("new-worktree-name", "a b");
-      expect(document.querySelector<HTMLButtonElement>('[data-testid="new-worktree-confirm"]')!.disabled).toBe(true);
-      expect(document.querySelector('[data-testid="new-worktree-hint"]')?.textContent).toBe("Only letters, numbers, dots, hyphens, and underscores");
-      await field("new-worktree-name", "my-feature");
-      expect(document.querySelector<HTMLButtonElement>('[data-testid="new-worktree-confirm"]')!.disabled).toBe(false);
-      await press({ key: "Enter" }, document.querySelector('[data-testid="new-worktree-name"]')!);
-      expect(sent.slice(from).filter((m) => m.type === "worktree.create")).toEqual([{ type: "worktree.create", cwd: "/p/demo", name: "my-feature" }]);
+      await act(async () => el.querySelector<HTMLElement>('[data-testid="project-new-worktree"]')!.click());
+      await act(async () => {});
+      expect(document.querySelector('[data-testid="create-worktree"]')).not.toBeNull();
+      expect(sent.slice(from).filter((m) => m.type === "worktree.create")).toEqual([]);
+      await field("create-worktree-name", "Fix Login Ü");
+      replies["session.list"] = { ...listed, worktrees: { "/p/demo": [main, { path: made, branch: "fix-login-u", main: false }] } };
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="create-worktree-confirm"]')!.click());
+      await act(async () => {});
+      await act(async () => {});
+      expect(sent.slice(from).filter((m) => m.type === "worktree.create")).toEqual([{ type: "worktree.create", cwd: "/p/demo", branch: "fix-login-u" }]);
+      expect(document.querySelector('[data-testid="create-worktree"]')).toBeNull();
+      expect(el.querySelector('[data-testid="worktree-chip"]')?.textContent).toContain("fix-login-u");
+      // The palette opens the same modal.
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      await act(async () => paletteRow("New worktree…")!.click());
+      await act(async () => {});
+      expect(document.querySelector('[data-testid="create-worktree"]')).not.toBeNull();
     } finally {
       restore();
     }

@@ -762,7 +762,7 @@ async function statusOf(main: string, w: Listed, requested: string, allowed: (p:
   else ahead = await count(w.path, ["HEAD", "--not", `--exclude=${w.branch}`, "--branches", "--remotes"]);
   const branchMerged = keeps && refs.length > 0 && (await count(w.path, [`refs/heads/${w.branch}`, "--not", ...refs])) === 0;
   const t = Number(await g(w.path, ["log", "-1", "--format=%ct", "HEAD"]).catch(() => "")) * 1000;
-  return classify({ uncommitted, untracked, commits, ahead, ignored, branch: name, branchMerged, ...(t > 0 && { headTime: t }), running: 0, ...(blocked && { blocked }) });
+  return classify({ uncommitted, untracked, commits, ahead, ignored, branch: name, branchMerged, ...(t > 0 && { headTime: t }), running: 0, ...(blocked && { blocked }), ...(!detached && !keeps && { createdBranch: true as const }) });
 }
 
 /** What removing `path` loses and whether it may (WorktreeStatusResult). `allowed`: the roots check; sessions are the caller's. */

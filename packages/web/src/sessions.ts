@@ -32,13 +32,14 @@ export function externalWorktree(list: Worktree[], w: Worktree) {
   return !(p.startsWith(dir) && p.length > dir.length && !p.slice(dir.length).includes("/"));
 }
 
-/** The branch of the listed worktree `path` stays after removal: not `worktree-*` and not a detached HEAD (listed as the short hash). */
-export function keepsBranch(list: Worktree[] | undefined, path: string) {
+/** The branch of the listed worktree `path` stays after removal: not a Created branch (`st.createdBranch`, legacy `worktree-*`) and not a detached HEAD (listed as the short hash). */
+export function keepsBranch(list: Worktree[] | undefined, path: string, st?: Pick<WorktreeStatusResult, "createdBranch">) {
+  if (st?.createdBranch) return false;
   const b = list?.find((w) => w.path === path)?.branch;
   return !!b && !b.startsWith("worktree-") && !/^[0-9a-f]{7}$/.test(b);
 }
 
-/** Remove worktree confirmation text (Claude Code CLI wording). `keepsBranch`: the branch is not `worktree-*` and stays. */
+/** Remove worktree confirmation text (Claude Code CLI wording). `keepsBranch`: the branch is not a Created branch and stays. */
 export function removeWorktreeText({ uncommitted, commits, branch }: Pick<WorktreeStatusResult, "uncommitted" | "commits" | "branch">, o: { keepsBranch?: boolean } = {}) {
   const lost = [uncommitted && `${uncommitted} uncommitted ${uncommitted === 1 ? "file" : "files"}`, commits && `${commits} ${commits === 1 ? "commit" : "commits"}`].filter(Boolean);
   const text = lost.length ? `You have ${lost.join(" and ")} on ${branch}. All will be lost if you remove.` : "Clean up the worktree directory.";
