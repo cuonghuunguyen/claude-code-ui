@@ -2,7 +2,7 @@
 // (Cloud only) and branch template in settings.json, the token in secrets.json. Auth by URL: `*.atlassian.net` = Cloud (email + API
 // token, Basic, /rest/api/3), else Data Center / Server (personal access token, Bearer, /rest/api/2). The token never leaves this module
 // except in the Authorization header to the configured base URL; no error message carries it.
-import { jiraIsCloud, jiraKeyOf, type JiraTicket } from "@claude-ui/protocol";
+import { jiraIsCloud, jiraKeyOf, MY_OPEN_JQL, type JiraTicket } from "@claude-ui/protocol";
 
 export type JiraErrorCode = "jira_not_configured" | "jira_auth" | "jira_unreachable" | "jira_failed";
 export class JiraError extends Error {
@@ -11,14 +11,26 @@ export class JiraError extends Error {
   }
 }
 
-export const MY_OPEN_JQL = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC";
 const ROWS = 20;
 const FIELDS = "summary,issuetype,status";
 /** Characters of Jira's text search syntax (Lucene) and JQL quoting; typed text keeps only words. */
 const SPECIAL = /[+\-&|!(){}[\]^~*?\\:"'/]/g;
 
+/**
+ * A JQL query split into its condition and its ORDER BY clause (the last `order by` outside quoted values), so typed text
+ * can be ANDed to the condition: `(cond) AND summary ~ "…" ORDER BY …`.
+ */
+export function splitJql(jql: string): { where: string; order?: string } {
+  const blanked = jql.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, (m) => " ".repeat(m.length));
+  const all = [...blanked.matchAll(/\border\s+by\b/gi)];
+  const at = all.at(-1)?.index;
+  if (at === undefined) return { where: jql.trim() };
+  return { where: jql.slice(0, at).trim(), order: jql.slice(at).replace(/^order\s+by\s*/i, "").trim() || undefined };
+}
+
 export type JiraDeps = {
-  config: () => { url: string; email: string };
+  /** `jql`: the Ticket filter of Settings › Jira; blank = MY_OPEN_JQL. */
+  config: () => { url: string; email: string; jql?: string };
   token: () => string | undefined;
   fetch?: typeof fetch;
   timeoutMs?: number;
@@ -71,18 +83,25 @@ export function createJira(d: JiraDeps) {
       if (!me) throw new JiraError("jira_failed", "Jira has no /myself here: check the base URL");
       return { user: str(me.displayName) || "(no name)" };
     },
-    /** No text: my open tickets; a key or ticket URL: that ticket; other text: tickets whose summary has its words. */
+    /**
+     * No text: the Ticket filter's tickets (default: my open ones); a key or ticket URL: that ticket, filter or not; other text:
+     * tickets whose summary has its words, inside the Ticket filter when one is set.
+     */
     async search(text = ""): Promise<JiraTicket[]> {
       const t = text.trim();
-      if (!t) return search(MY_OPEN_JQL);
+      const filter = d.config().jql?.trim() || "";
+      if (!t) return search(filter || MY_OPEN_JQL);
       const key = jiraKeyOf(t);
       if (key) {
         const r = (await get(`issue/${encodeURIComponent(key)}?fields=${FIELDS}`)) as Raw | null;
         return r ? [ticketOf(r)] : [];
       }
       const words = t.replace(SPECIAL, " ").split(/\s+/).filter((w) => w && !/^(and|or|not)$/i.test(w));
-      if (!words.length) return search(MY_OPEN_JQL);
-      return search(`summary ~ "${words.join(" ")}*" ORDER BY updated DESC`);
+      if (!words.length) return search(filter || MY_OPEN_JQL);
+      const summary = `summary ~ "${words.join(" ")}*"`;
+      if (!filter) return search(`${summary} ORDER BY updated DESC`);
+      const { where, order } = splitJql(filter);
+      return search(`${where ? `(${where}) AND ` : ""}${summary} ORDER BY ${order ?? "updated DESC"}`);
     },
   };
 }

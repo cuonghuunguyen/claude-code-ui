@@ -2,7 +2,7 @@
 // URL, email and branch template are daemon settings (settings.json); the token is write-only (secrets.json): this page only
 // learns whether one is set, with Replace and Clear.
 import { useState } from "react";
-import { jiraIsCloud, type Settings, type SettingsPatch, type SettingsResult } from "@claude-ui/protocol";
+import { jiraIsCloud, MY_OPEN_JQL, type Settings, type SettingsPatch, type SettingsResult } from "@claude-ui/protocol";
 import { LoaderCircleIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Request } from "./client.ts";
@@ -23,7 +23,7 @@ const INPUT = "h-8 w-full rounded-md border bg-background px-2 text-sm outline-n
 const ROW = "flex flex-col gap-1 border-t py-2";
 
 export function JiraSection({ jira, tokenSet, saving, save, request, onResult, onError }: Props) {
-  const [draft, setDraft] = useState<Partial<Record<"url" | "email" | "template", string>>>({});
+  const [draft, setDraft] = useState<Partial<Record<"url" | "email" | "template" | "jql", string>>>({});
   const [replacing, setReplacing] = useState(false);
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -31,18 +31,18 @@ export function JiraSection({ jira, tokenSet, saving, save, request, onResult, o
   const url = draft.url ?? jira.url;
   const cloud = jiraIsCloud(url);
 
-  const commit = (k: "url" | "email" | "template") => {
+  const commit = (k: "url" | "email" | "template" | "jql") => {
     const v = draft[k];
     if (v === undefined) return;
     setTest(undefined);
     void save({ jira: { [k]: v.trim() } }).then(() => setDraft(({ [k]: _, ...rest }) => rest));
   };
-  const field = (k: "url" | "email" | "template", label: string, hint: string, o: { type?: string; placeholder?: string } = {}) => (
+  const field = (k: "url" | "email" | "template" | "jql", label: string, hint: string, o: { type?: string; placeholder?: string } = {}) => (
     <label className={ROW}>
       <span className="text-sm">{label}</span>
       <input
         type={o.type ?? "text"}
-        value={draft[k] ?? jira[k]}
+        value={draft[k] ?? jira[k] ?? ""}
         placeholder={o.placeholder}
         onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))}
         onBlur={() => commit(k)}
@@ -135,6 +135,7 @@ export function JiraSection({ jira, tokenSet, saving, save, request, onResult, o
         </span>
       </div>
       {field("template", "Branch template", "{type}: bugfix for a Bug, feature for a Story, Task or New Feature, else empty. {key}: the ticket key. {summary}: the summary, shortened.")}
+      {field("jql", "Ticket filter (JQL)", "The tickets the Create worktree modal lists, e.g. project = ABC AND statusCategory != Done. Typed text searches inside it. Empty: your open tickets.", { placeholder: MY_OPEN_JQL })}
       <div className="flex flex-wrap items-center gap-2 border-t py-2">
         <Button variant="outline" size="sm" className="cursor-pointer max-md:h-11" disabled={busy || !jira.url || !tokenSet} onClick={() => void testConnection()} data-testid="settings-jira-test">
           {busy && <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" aria-hidden />}

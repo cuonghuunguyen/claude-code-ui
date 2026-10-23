@@ -52,6 +52,26 @@ describe("createJira", () => {
     expect((await j.search("dark")).map((t) => t.key)).toEqual(["PRJ-2"]);
   });
 
+  it("Ticket filter (JQL): lists its tickets with its order; text searches inside it; a key ignores it", async () => {
+    fake = await fakeJira({ auth: `Bearer ${TOKEN}`, issues: ISSUES });
+    let jql = "project = OTH order by created ASC";
+    const j = createJira({ config: () => ({ url: fake!.url, email: "", jql }), token: () => TOKEN });
+    const last = () => new URL(fake!.requests.at(-1)!.path, "http://x").searchParams.get("jql");
+    expect((await j.search()).map((t) => t.key)).toEqual(["OTH-9"]);
+    expect(last()).toBe("project = OTH order by created ASC");
+    expect((await j.search("login")).map((t) => t.key)).toEqual(["OTH-9"]);
+    expect(last()).toBe('(project = OTH) AND summary ~ "login*" ORDER BY created ASC');
+    expect((await j.search("PRJ-1")).map((t) => t.key)).toEqual(["PRJ-1"]);
+    // ORDER BY inside a quoted value is not the order clause; no order clause: newest first.
+    jql = 'project = OTH AND summary !~ "sort order by x"';
+    await j.search("audit");
+    expect(last()).toBe('(project = OTH AND summary !~ "sort order by x") AND summary ~ "audit*" ORDER BY updated DESC');
+    // Blank filter: the default (my open tickets; text searches every ticket).
+    jql = "  ";
+    expect((await j.search()).map((t) => t.key)).toEqual(["PRJ-1", "PRJ-2"]);
+    expect((await j.search("login")).map((t) => t.key).sort()).toEqual(["OTH-9", "PRJ-1", "PRJ-3"]);
+  });
+
   it("errors: not configured, wrong token (401/403), unreachable, other HTTP failures; none carries the token", async () => {
     expect(await code(createJira({ config: () => ({ url: "", email: "" }), token: () => TOKEN }).search())).toBe("jira_not_configured");
     expect(await code(createJira({ config: () => ({ url: "https://jira.example.com", email: "" }), token: () => undefined }).search())).toBe("jira_not_configured");

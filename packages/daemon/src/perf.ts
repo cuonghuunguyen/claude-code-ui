@@ -16,7 +16,7 @@ export const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "session.edits", "session.ids", "session.interrupt", "session.list", "session.media", "session.page", "session.prompt", "session.rename", "session.rewind", "session.rewindPreview", "session.setEffort",
   "session.setModel", "session.setPermissionMode", "session.stopSubagent", "session.subscribe", "session.unsubscribe", "sessions.search", "settings.get", "settings.set",
   "side.check", "side.start", "skills.list", "skills.setState", "terminal.attach", "terminal.close", "terminal.create", "terminal.detach", "terminal.input", "terminal.list",
-  "terminal.resize", "update.install", "update.restart", "worker.close", "worker.remove", "worktree.branches", "worktree.create", "worktree.remove", "worktree.status",
+  "terminal.resize", "update.install", "update.restart", "worker.close", "worker.remove", "worktree.branches", "worktree.create", "worktree.pr", "worktree.remove", "worktree.status",
 ]);
 const CMDS = new Set(["git", "claude", "node", "docker", "wsl", "powershell", "tailscale", "npm", "sh", "bash", "cmd", "taskkill", "osascript", "notify-send"]);
 export const GIT_SUBS = ["status", "log", "show", "diff", "diff-tree", "rev-parse", "worktree", "for-each-ref", "branch", "cat-file", "ls-files", "symbolic-ref", "merge-base", "rev-list", "config", "check-ignore", "grep"] as const;

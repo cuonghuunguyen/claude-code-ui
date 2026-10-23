@@ -121,7 +121,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "jira.token"; token: string | null }
   /** Test connection with the saved Jira settings and token. Reply `{user}` (display name); errors jira_not_configured, jira_auth, jira_unreachable, jira_failed. */
   | { type: "jira.test" }
-  /** Ticket tab: no `text` = my open tickets (20); a key or ticket URL = that ticket; other text = summary search. Reply JiraSearchResult; errors as `jira.test`. */
+  /** Ticket tab: no `text` = the Ticket filter's tickets (`settings.jira.jql`, default my open ones; 20); a key or ticket URL = that ticket; other text = summary search (inside the Ticket filter when set). Reply JiraSearchResult; errors as `jira.test`. */
   | { type: "jira.search"; text?: string }
   /** Performance data of this daemon (docs/spec.md "Performance monitor"); reply PerfReport. */
   | { type: "perf.report" }
@@ -222,6 +222,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "worktree.create"; cwd: string; name?: string; branch?: string; base?: string; checkout?: string }
   /** Local and remote branches for the Create worktree modal (GH-447); `fetch`: `git fetch --prune origin` first. Reply WorktreeBranchesResult. */
   | { type: "worktree.branches"; cwd: string; fetch?: boolean }
+  /** A pasted pull request link (GitHub, GitLab, Bitbucket Server) of `cwd`'s origin: the origin branches at its head commit. Reply PullRequestBranchesResult; errors pr_other_repo, pr_not_found, pr_unsupported, git_failed. */
+  | { type: "worktree.pr"; cwd: string; url: string }
   /** What removing `path` loses and whether it may be removed (docs/spec.md "Worktrees"); reply WorktreeStatusResult. */
   | { type: "worktree.status"; cwd: string; path: string }
   /**
@@ -439,6 +441,8 @@ export type BranchRow = { name: string; local: boolean; remote?: string; worktre
  * `defaultBase`: the start point a new branch gets without a base, as text (`origin/main`, `HEAD`). `fetched`: the fetch ran;
  * `fetchError`: it failed (offline), the list holds the local refs.
  */
+/** `worktree.pr`: the pull request number and the origin branch names at its head (empty: merged and deleted, or pushed over). */
+export type PullRequestBranchesResult = { number: number; branches: string[] };
 export type WorktreeBranchesResult = { branches: BranchRow[]; defaultBase: string; fetched?: boolean; fetchError?: string };
 /** A Jira ticket row of the Ticket tab. */
 export type JiraTicket = { key: string; type: string; summary: string; status: string };
@@ -610,7 +614,7 @@ export type Settings = { orchestration: { enabled: boolean; workerCap: number; c
   /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */
   performance: { monitor: boolean };
   /** Ticket tab of the Create worktree modal (GH-447): one Jira connection; `email` for Cloud only; the token is in secrets.json, never here. */
-  jira: { url: string; email: string; template: string };
+  jira: { url: string; email: string; template: string; /** Ticket filter: the JQL of the Ticket tab's list and text search; "" = my open tickets. */ jql: string };
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */

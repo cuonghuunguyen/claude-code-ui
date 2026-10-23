@@ -8,7 +8,8 @@ const fields = (i: FakeIssue) => ({ key: i.key, fields: { summary: i.summary, is
 
 /**
  * `auth`: the exact Authorization header it accepts (else 401). `/myself` gives `user`; search understands the default
- * JQL (assignee = currentUser() AND statusCategory != Done), `summary ~ "…"` and nothing else; `/issue/<key>` finds one.
+ * JQL (assignee = currentUser() AND statusCategory != Done), `summary ~ "…"`, `project = <KEY>` (any mix of them) and nothing else;
+ * `/issue/<key>` finds one.
  */
 export async function fakeJira(o: { auth: string; user?: string; issues: FakeIssue[]; status?: number }): Promise<FakeJira> {
   const requests: FakeJira["requests"] = [];
@@ -33,13 +34,18 @@ export async function fakeJira(o: { auth: string; user?: string; issues: FakeIss
     if ((m[1] === "3" && rest === "search/jql") || (m[1] === "2" && rest === "search")) {
       const jql = url.searchParams.get("jql") ?? "";
       const max = Number(url.searchParams.get("maxResults") ?? 50);
-      let hits: FakeIssue[];
+      let hits = o.issues;
+      let known = false;
       const text = /summary ~ "((?:[^"\\]|\\.)*)"/.exec(jql)?.[1];
       if (text !== undefined) {
+        known = true;
         const words = text.replace(/\*$/, "").toLowerCase().split(/\s+/).filter(Boolean);
-        hits = o.issues.filter((i) => words.every((w) => i.summary.toLowerCase().includes(w)));
-      } else if (jql.includes("assignee = currentUser()") && jql.includes("statusCategory != Done")) hits = o.issues.filter((i) => i.mine && !i.done);
-      else return json(400, { errorMessages: [`unsupported jql ${jql}`] });
+        hits = hits.filter((i) => words.every((w) => i.summary.toLowerCase().includes(w)));
+      }
+      const project = /project = ([A-Z][A-Z0-9]*)/.exec(jql)?.[1];
+      if (project) (known = true), (hits = hits.filter((i) => i.key.startsWith(`${project}-`)));
+      if (jql.includes("assignee = currentUser()") && jql.includes("statusCategory != Done")) (known = true), (hits = hits.filter((i) => i.mine && !i.done));
+      if (!known) return json(400, { errorMessages: [`unsupported jql ${jql}`] });
       return json(200, { issues: hits.slice(0, max).map(fields) });
     }
     return json(404, { errorMessages: ["no such resource"] });

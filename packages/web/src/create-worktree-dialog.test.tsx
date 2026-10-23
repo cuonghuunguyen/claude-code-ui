@@ -34,13 +34,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function mount(o: { jira?: boolean; fetchError?: string; createError?: string } = {}) {
+function mount(o: { jira?: boolean; jql?: string; noTickets?: boolean; fetchError?: string; createError?: string } = {}) {
   const calls: Request[] = [];
   const request = vi.fn(async (m: Request) => {
     calls.push(m);
     if (m.type === "worktree.branches") return { branches: BRANCHES, defaultBase: "origin/main", ...(m.fetch && (o.fetchError ? { fetchError: o.fetchError } : { fetched: true })) };
-    if (m.type === "settings.get") return { settings: { jira: o.jira ? { url: "https://acme.atlassian.net", email: "a@b.c", template: "{type}/{key}-{summary}" } : { url: "", email: "", template: "{type}/{key}-{summary}" } }, jiraToken: !!o.jira };
-    if (m.type === "jira.search") return { tickets: m.text ? TICKETS.filter((t) => t.key === m.text || t.summary.toLowerCase().includes(m.text!.toLowerCase())) : TICKETS };
+    if (m.type === "settings.get") return { settings: { jira: o.jira ? { url: "https://acme.atlassian.net", email: "a@b.c", template: "{type}/{key}-{summary}", jql: o.jql ?? "" } : { url: "", email: "", template: "{type}/{key}-{summary}" } }, jiraToken: !!o.jira };
+    if (m.type === "worktree.pr") {
+      if (m.url.includes("/other/")) throw new Error("Pull request #9 is in acme/other on github.com, not in this repository");
+      return m.url.includes("/pull/2") ? { number: 2, branches: ["feature/PRJ-2-old-try"] } : { number: 7, branches: ["feat/remote"] };
+    }
+    if (m.type === "jira.search") return { tickets: o.noTickets ? [] : m.text ? TICKETS.filter((t) => t.key === m.text || t.summary.toLowerCase().includes(m.text!.toLowerCase())) : TICKETS };
     if (m.type === "worktree.create") {
       if (o.createError) throw new Error(o.createError);
       const branch = "branch" in m && m.branch ? m.branch : (m.checkout ?? "").replace(/^refs\/(heads|remotes\/origin)\//, "");
@@ -90,10 +94,13 @@ it("Name: the normalized branch and its folder show live; Create sends the branc
 it("Base picker lists local and remote branches with the default first; the choice goes with Create", async () => {
   const { calls } = mount();
   await flush();
-  const opts = [...q<HTMLSelectElement>("create-worktree-base")!.options].map((o) => o.textContent);
+  expect(q("create-worktree-base")!.textContent).toContain("Default (origin/main)");
+  await click(q("create-worktree-base"));
+  const opts = [...document.querySelectorAll("[role=option]")].map((o) => o.textContent);
   expect(opts).toEqual(["Default (origin/main)", "main", "busy", "origin/main", "origin/feat/remote", "origin/feature/PRJ-2-old-try"]);
+  await click(q("create-worktree-base-refs/remotes/origin/feat/remote"));
+  expect(q("create-worktree-base")!.textContent).toContain("origin/feat/remote");
   await type("create-worktree-name", "x");
-  await type("create-worktree-base", "refs/remotes/origin/feat/remote");
   await click(q("create-worktree-confirm"));
   expect(calls.find((c) => c.type === "worktree.create")).toMatchObject({ branch: "x", base: "refs/remotes/origin/feat/remote" });
 });
@@ -162,6 +169,18 @@ it("Ticket: opens on my tickets when Jira is set up; picking one prefills the te
   expect(calls.find((c) => c.type === "worktree.create")).toEqual({ type: "worktree.create", cwd: R, branch: "bugfix/PRJ-1-safari-login" });
 });
 
+it("Ticket: an empty list names the Ticket filter when one is set, else my open tickets", async () => {
+  mount({ jira: true, noTickets: true, jql: "project = ABC" });
+  await flush();
+  await flush();
+  expect(q("create-worktree-tickets")!.textContent).toBe("No tickets match the Ticket filter");
+  act(() => root?.unmount());
+  mount({ jira: true, noTickets: true });
+  await flush();
+  await flush();
+  expect(q("create-worktree-tickets")!.textContent).toBe("No open tickets assigned to you");
+});
+
 it("Ticket: typed text searches after a pause; the existing branch of PRJ-2 checks out instead", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   const { calls } = mount({ jira: true });
@@ -177,4 +196,72 @@ it("Ticket: typed text searches after a pause; the existing branch of PRJ-2 chec
   expect(q("create-worktree-existing")!.textContent).toContain("feature/PRJ-2-old-try");
   await click(q("create-worktree-checkout-existing"));
   expect(calls.find((c) => c.type === "worktree.create")).toEqual({ type: "worktree.create", cwd: R, checkout: "refs/remotes/origin/feature/PRJ-2-old-try" });
+});
+
+const rowNames = () => [...document.querySelectorAll<HTMLElement>('[data-testid="create-worktree-branch-row"]')].map((r) => r.dataset.name);
+const branchTab = async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const m = mount();
+  await flush();
+  await click(q("create-worktree-tab-branch"));
+  return m;
+};
+
+it("Branch: a pasted pull request link lists and selects the origin branch at its head", async () => {
+  const { calls } = await branchTab();
+  await type("create-worktree-filter", "https://github.com/acme/app/pull/7/files");
+  expect(q("create-worktree-pr")!.textContent).toContain("Looking up");
+  await act(async () => void vi.advanceTimersByTime(400));
+  await flush();
+  expect(calls.find((c) => c.type === "worktree.pr")).toEqual({ type: "worktree.pr", cwd: R, url: "https://github.com/acme/app/pull/7/files" });
+  expect(q("create-worktree-pr")!.textContent).toBe("Pull request #7: feat/remote");
+  expect(rowNames()).toEqual(["feat/remote"]);
+  expect(q("create-worktree-branch")!.textContent).toBe("feat/remote");
+  await click(q("create-worktree-confirm"));
+  expect(calls.find((c) => c.type === "worktree.create")).toEqual({ type: "worktree.create", cwd: R, checkout: "refs/remotes/origin/feat/remote" });
+});
+
+it("Branch: a pull request of another repository shows the error; a pasted ticket link or key lists the branches with its key", async () => {
+  await branchTab();
+  await type("create-worktree-filter", "https://github.com/acme/other/pull/9");
+  await act(async () => void vi.advanceTimersByTime(400));
+  await flush();
+  expect(q("create-worktree-pr")!.getAttribute("role")).toBe("alert");
+  expect(q("create-worktree-pr")!.textContent).toContain("not in this repository");
+  expect(rowNames()).toEqual([]);
+  await type("create-worktree-filter", "https://jira.example.com/browse/prj-2");
+  expect(q("create-worktree-pr")).toBeNull();
+  expect(rowNames()).toEqual(["feature/PRJ-2-old-try"]);
+  expect(q("create-worktree-branch")!.textContent).toBe("feature/PRJ-2-old-try");
+  await type("create-worktree-filter", "PRJ-20");
+  expect(rowNames()).toEqual([]);
+});
+
+it("Ticket: a pasted pull request link finds the ticket its branch names, and offers that branch", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const { calls } = mount({ jira: true });
+  await flush();
+  await flush();
+  await type("create-worktree-ticket-search", "https://github.com/acme/app/pull/2");
+  await act(async () => void vi.advanceTimersByTime(400));
+  await flush();
+  await flush();
+  expect(calls.find((c) => c.type === "worktree.pr")).toMatchObject({ url: "https://github.com/acme/app/pull/2" });
+  expect(calls.filter((c) => c.type === "jira.search").at(-1)).toEqual({ type: "jira.search", text: "PRJ-2" });
+  const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="create-worktree-ticket-row"]')];
+  expect(rows.map((r) => r.dataset.key)).toEqual(["PRJ-2"]);
+  await click(rows[0]!);
+  expect(q("create-worktree-existing")!.textContent).toContain("feature/PRJ-2-old-try");
+});
+
+it("Ticket: a pull request whose branch names no key says so", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  mount({ jira: true });
+  await flush();
+  await flush();
+  await type("create-worktree-ticket-search", "https://github.com/acme/app/pull/7");
+  await act(async () => void vi.advanceTimersByTime(400));
+  await flush();
+  await flush();
+  expect(document.body.textContent).toContain("The branch of pull request #7 (feat/remote) names no ticket key");
 });

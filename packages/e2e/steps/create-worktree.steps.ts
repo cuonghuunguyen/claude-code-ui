@@ -100,7 +100,8 @@ Then("the modal shows branch {string} in folder {string}", async ({ page }, bran
 });
 
 When("I choose the base {string}", async ({ page }, ref: string) => {
-  await page.getByTestId("create-worktree-base").selectOption(ref);
+  await page.getByTestId("create-worktree-base").click();
+  await page.getByTestId(`create-worktree-base-${ref || "default"}`).click();
 });
 
 When("I confirm the modal", async ({ page }) => {

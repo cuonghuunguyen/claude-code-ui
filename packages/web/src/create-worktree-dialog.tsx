@@ -1,13 +1,14 @@
 // Create worktree modal (GH-447, docs/spec.md "Worktrees"): a new worktree's branch from a Jira Ticket, an existing Branch or a free Name.
 // The daemon creates it (`worktree.create`); errors (a taken folder or branch: `exists`) show here and the modal stays open.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { branchFolder, branchNameError, normalizeBranchName, ticketBranchName, type BranchRow, type JiraSearchResult, type JiraTicket, type SettingsResult, type WorktreeBranchesResult, type WorktreeCreateResult } from "@claude-ui/protocol";
+import { branchFolder, branchNameError, normalizeBranchName, ticketBranchName, type BranchRow, jiraKeyInBranch, type JiraSearchResult, type JiraTicket, type PullRequestBranchesResult, type SettingsResult, type WorktreeBranchesResult, type WorktreeCreateResult } from "@claude-ui/protocol";
 import { LoaderCircleIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
-import { baseOptions, branchKind, branchWithKey, checkoutRef, filterBranches, folderOf, saveSource, SOURCES, storedSource, type Source } from "./create-worktree.ts";
+import { baseOptions, branchesWithKey, branchKind, branchWithKey, checkoutRef, pasteOf, filterBranches, folderOf, saveSource, SOURCES, storedSource, type Source } from "./create-worktree.ts";
 import { isImeKey } from "./ime.ts";
 import { projectName } from "./tabs.ts";
 
@@ -34,7 +35,7 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
   const ask = useRef(request);
   ask.current = request;
   const [picked, setPicked] = useState<Source | undefined>(storedSource);
-  const [jira, setJira] = useState<{ ready: boolean; template: string }>();
+  const [jira, setJira] = useState<{ ready: boolean; template: string; filter: boolean }>();
   const source: Source = picked ?? (jira?.ready ? "ticket" : "name");
   const [branches, setBranches] = useState<BranchRow[]>();
   const [defaultBase, setDefaultBase] = useState<string>();
@@ -44,6 +45,8 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
   const [name, setName] = useState("");
   const [filter, setFilter] = useState("");
   const [row, setRow] = useState<string>();
+  /** The Branch filter's pull request link, looked up: its origin branches, or the error. */
+  const [pr, setPr] = useState<{ url: string; result?: PullRequestBranchesResult; error?: string }>();
   const [query, setQuery] = useState("");
   const [tickets, setTickets] = useState<JiraTicket[]>();
   const [ticketError, setTicketError] = useState<string>();
@@ -64,8 +67,8 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
       () => {},
     ).finally(() => live && setFetching(false));
     ask.current<SettingsResult>({ type: "settings.get" }).then(
-      (r) => live && setJira({ ready: !!r.settings.jira?.url && !!r.jiraToken, template: r.settings.jira?.template || "{type}/{key}-{summary}" }),
-      () => live && setJira({ ready: false, template: "" }),
+      (r) => live && setJira({ ready: !!r.settings.jira?.url && !!r.jiraToken, template: r.settings.jira?.template || "{type}/{key}-{summary}", filter: !!r.settings.jira?.jql?.trim() }),
+      () => live && setJira({ ready: false, template: "", filter: false }),
     );
     return () => void (live = false);
   }, [project]);
@@ -76,7 +79,17 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
     let live = true;
     setSearching(true);
     const t = setTimeout(() => {
-      ask.current<JiraSearchResult>({ type: "jira.search", ...(query.trim() && { text: query.trim() }) }).then(
+      // A pull request link: the ticket its branch names.
+      const paste = pasteOf(query);
+      const text =
+        paste.kind === "pr"
+          ? ask.current<PullRequestBranchesResult>({ type: "worktree.pr", cwd: project, url: paste.url }).then((r) => {
+              const key = r.branches.map(jiraKeyInBranch).find(Boolean);
+              if (!key) throw new Error(r.branches.length ? `The branch of pull request #${r.number} (${r.branches.join(", ")}) names no ticket key` : `No branch of origin is at the head of pull request #${r.number}`);
+              return key;
+            })
+          : Promise.resolve(query.trim());
+      text.then((t) => ask.current<JiraSearchResult>({ type: "jira.search", ...(t && { text: t }) })).then(
         (r) => live && (setTickets(r.tickets), setTicketError(undefined)),
         (e: Error) => live && (setTickets(undefined), setTicketError(e.message)),
       ).finally(() => live && setSearching(false));
@@ -85,7 +98,26 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
       live = false;
       clearTimeout(t);
     };
-  }, [source, jira?.ready, query]);
+  }, [source, jira?.ready, query, project]);
+
+  // Branch filter: a pasted pull request link is looked up on origin (debounced like the ticket search).
+  const paste = useMemo(() => pasteOf(filter), [filter]);
+  const prUrl = source === "branch" && paste.kind === "pr" ? paste.url : undefined;
+  useEffect(() => {
+    if (!prUrl) return;
+    let live = true;
+    setPr({ url: prUrl });
+    const t = setTimeout(() => {
+      ask.current<PullRequestBranchesResult>({ type: "worktree.pr", cwd: project, url: prUrl }).then(
+        (result) => live && setPr({ url: prUrl, result }),
+        (e: Error) => live && setPr({ url: prUrl, error: e.message }),
+      );
+    }, SEARCH_DELAY);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [prUrl, project]);
 
   const choose = (s: Source, focus = false) => {
     setPicked(s);
@@ -127,20 +159,43 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
   };
   const enter = (e: KeyboardEvent<HTMLInputElement>) => e.key === "Enter" && !isImeKey(e.nativeEvent) && (e.preventDefault(), void create());
 
-  const shownRows = useMemo(() => filterBranches(branches ?? [], filter), [branches, filter]);
+  const prNow = prUrl && pr?.url === prUrl ? pr : undefined;
+  const shownRows = useMemo(() => {
+    const rows = branches ?? [];
+    if (paste.kind === "pr") return prNow?.result ? rows.filter((r) => prNow.result!.branches.includes(r.name)) : [];
+    if (paste.kind === "key") return branchesWithKey(rows, paste.key);
+    return filterBranches(rows, filter);
+  }, [branches, filter, paste, prNow]);
+  // A pasted link or key that matches one free branch selects it.
+  const only = paste.kind !== "words" && shownRows.length === 1 && !shownRows[0]!.worktree ? shownRows[0]!.name : undefined;
+  useEffect(() => void (only && setRow(only)), [only]);
+  const prNote = !prNow
+    ? undefined
+    : prNow.error
+      ? { error: true, text: prNow.error }
+      : !prNow.result
+        ? { error: false, text: "Looking up the pull request on origin…" }
+        : !prNow.result.branches.length
+          ? { error: false, text: `No branch of origin is at the head of pull request #${prNow.result.number}: merged and deleted, or pushed over.` }
+          : { error: false, text: `Pull request #${prNow.result.number}: ${prNow.result.branches.join(", ")}${prNow.result.branches.some((b) => !branches?.some((r) => r.name === b)) ? " (not fetched yet: wait for the fetch from origin)" : ""}` };
   const options = useMemo(() => baseOptions(branches ?? []), [branches]);
+  const baseLabel = (v: string | null) => (v ? (options.find((o) => o.value === v)?.label ?? v) : `Default (${defaultBase ?? "…"})`);
   const basePicker = (
-    <label className="flex flex-col gap-1 text-sm">
-      Base
-      <select value={base} onChange={(e) => setBase(e.target.value)} className={INPUT} data-testid="create-worktree-base">
-        <option value="">Default ({defaultBase ?? "…"})</option>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div className="flex flex-col gap-1 text-sm">
+      <span id="create-worktree-base-label">Base</span>
+      <Select value={base} onValueChange={(v) => setBase(v ?? "")}>
+        <SelectTrigger aria-labelledby="create-worktree-base-label" className="w-full min-w-0 data-[size=default]:h-8 max-md:data-[size=default]:h-11" data-testid="create-worktree-base">
+          <SelectValue className="min-w-0 truncate">{baseLabel}</SelectValue>
+        </SelectTrigger>
+        <SelectContent alignItemWithTrigger={false} className="max-h-72">
+          {[{ value: "", label: baseLabel(null) }, ...options].map((o) => (
+            <SelectItem key={o.value} value={o.value} data-testid={`create-worktree-base-${o.value || "default"}`} className="max-md:min-h-11">
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
   const result = (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-md bg-secondary/50 px-3 py-2 text-xs" data-testid="create-worktree-result">
@@ -206,12 +261,17 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
         )}
         {source === "branch" && (
           <>
-            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter branches" aria-label="Filter branches" autoFocus className={INPUT} data-testid="create-worktree-filter" />
+            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter, or paste a pull request or ticket link" aria-label="Filter branches" autoFocus className={INPUT} data-testid="create-worktree-filter" />
+            {prNote && (
+              <p role={prNote.error ? "alert" : "status"} className={cn("text-xs", prNote.error ? "text-destructive" : "text-muted-foreground")} data-testid="create-worktree-pr">
+                {prNote.text}
+              </p>
+            )}
             {fetching && <p className="text-muted-foreground text-xs" data-testid="create-worktree-fetching">Fetching from origin…</p>}
             {fetchError && <p className="text-muted-foreground text-xs" data-testid="create-worktree-offline">Could not fetch from origin; showing the branches known locally.</p>}
             <div role="listbox" aria-label="Branches" className="flex max-h-60 flex-col overflow-y-auto rounded-md border" data-testid="create-worktree-branches">
               {!branches && <p className="px-3 py-2 text-muted-foreground text-sm">Loading…</p>}
-              {branches && !shownRows.length && <p className="px-3 py-2 text-muted-foreground text-sm">No branches</p>}
+              {branches && !shownRows.length && !(prNow && !prNow.result) && <p className="px-3 py-2 text-muted-foreground text-sm">No branches</p>}
               {shownRows.map((b) => (
                 <button
                   key={b.name}
@@ -245,11 +305,11 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
             </p>
           ) : (
             <>
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Key, text or ticket URL" aria-label="Search tickets" autoFocus className={INPUT} data-testid="create-worktree-ticket-search" />
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Key, text, ticket or pull request link" aria-label="Search tickets" autoFocus className={INPUT} data-testid="create-worktree-ticket-search" />
               {ticketError && <Banner kind="error">{ticketError}</Banner>}
               <div role="listbox" aria-label="Tickets" className="flex max-h-48 flex-col overflow-y-auto rounded-md border" data-testid="create-worktree-tickets">
                 {searching && !tickets && <p className="px-3 py-2 text-muted-foreground text-sm">Searching…</p>}
-                {tickets && !tickets.length && <p className="px-3 py-2 text-muted-foreground text-sm">{query.trim() ? "No tickets found" : "No open tickets assigned to you"}</p>}
+                {tickets && !tickets.length && <p className="px-3 py-2 text-muted-foreground text-sm">{query.trim() ? "No tickets found" : jira.filter ? "No tickets match the Ticket filter" : "No open tickets assigned to you"}</p>}
                 {tickets?.map((t) => (
                   <button
                     key={t.key}

@@ -29,7 +29,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" } };
   const calls: Request[] = [];
   let jiraToken = false;
   const request = vi.fn(async (msg: Request) => {
@@ -310,6 +310,9 @@ it("Jira (GH-447): URL, email for Cloud only, template; the token is write-only 
   expect(q("settings-jira-email")).not.toBeNull();
   await set("settings-jira-email", "ann@example.com");
   expect(calls.filter((c) => c.type === "settings.set").at(-1)).toMatchObject({ patch: { jira: { email: "ann@example.com" } } });
+  expect((q("settings-jira-jql") as HTMLInputElement).placeholder).toBe("assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC");
+  await set("settings-jira-jql", " project = ABC ");
+  expect(calls.filter((c) => c.type === "settings.set").at(-1)).toEqual({ type: "settings.set", patch: { jira: { jql: "project = ABC" } } });
   const token = (q("settings-jira-token") as HTMLInputElement);
   expect(token.type).toBe("password");
   await act(async () => {

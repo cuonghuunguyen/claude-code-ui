@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createWorktree, listBranches, removeWorktree } from "../src/git.ts";
+import { createWorktree, listBranches, pullRequestBranches, removeWorktree } from "../src/git.ts";
 
 const C = ["-c", "user.name=t", "-c", "user.email=t@t"];
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
@@ -143,5 +143,28 @@ describe("listBranches", () => {
     const { main, opts } = origin();
     expect(await code(listBranches(main, { allowed: () => false, claudeDir: opts.claudeDir }))).toBe("cwd_not_allowed");
     expect(existsSync(main)).toBe(true);
+  });
+});
+
+describe("pullRequestBranches: a pasted pull request link", () => {
+  /** origin's configured URL is a GitHub address that `insteadOf` sends to the local bare repo; PR 5 heads at feat/remote. */
+  function withPr() {
+    const o = origin();
+    const sha = out(o.s, "rev-parse", "feat/remote");
+    run(join(o.dir, "o.git"), "update-ref", "refs/pull/5/head", sha);
+    run(o.main, "remote", "set-url", "origin", "https://github.com/acme/app.git");
+    run(o.main, "config", "url." + join(o.dir, "o.git") + ".insteadOf", "https://github.com/acme/app.git");
+    return o;
+  }
+  it("names the origin branches at the pull request's head", async () => {
+    const { main } = withPr();
+    expect(await pullRequestBranches(main, "https://github.com/Acme/app/pull/5/files", { allowed: () => true })).toEqual({ number: 5, branches: ["feat/remote"] });
+  });
+  it("another repository, an unknown number, a host without refs, other text", async () => {
+    const { main } = withPr();
+    const o = { allowed: () => true };
+    expect(await code(pullRequestBranches(main, "https://github.com/acme/other/pull/5", o))).toBe("pr_other_repo");
+    expect(await code(pullRequestBranches(main, "https://github.com/acme/app/pull/6", o))).toBe("pr_not_found");
+    expect(await code(pullRequestBranches(main, "https://github.com/acme/app/issues/5", o))).toBe("bad_request");
   });
 });

@@ -2,7 +2,7 @@
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
-import { BRANCH_MAX, branchFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult } from "@claude-ui/protocol";
+import { BRANCH_MAX, branchFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
 import { runGit } from "./git-runner.ts";
 import { foreignPointer } from "./remote-path.ts";
 
@@ -288,7 +288,7 @@ export async function listWorktrees(cwd: string): Promise<Worktree[] | null> {
 
 // ---- Worktree create / remove (docs/spec.md "Worktrees") ----
 
-export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "bad_request" | "not_found" | "too_large" | "busy" | "stale" | "remote_not_allowed";
+export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "bad_request" | "not_found" | "too_large" | "busy" | "stale" | "remote_not_allowed" | "pr_other_repo" | "pr_not_found" | "pr_unsupported";
 export class WorktreeError extends Error {
   constructor(readonly code: WorktreeErrorCode, message: string, readonly size?: number) {
     super(message);
@@ -633,6 +633,37 @@ export async function listBranches(cwd: string, o: ListBranchesOptions): Promise
     if (at) row.worktree = at;
   }
   return { branches: [...rows.values()], defaultBase: await defaultBaseName(main, o.claudeDir), ...(fetched && { fetched }), ...(fetchError && { fetchError }) };
+}
+
+/**
+ * A pasted pull request link: the branches of `origin` whose head is the pull request's head commit. One `git ls-remote origin`
+ * (30 s, git's own credentials, no prompt) reads the host's pull request ref (GitHub `refs/pull/<n>/head`, GitLab
+ * `refs/merge-requests/<n>/head`, Bitbucket Server `refs/pull-requests/<n>/from`) and every branch head. The link must name
+ * `origin`'s repository (its configured URL, before `insteadOf`).
+ */
+export async function pullRequestBranches(cwd: string, text: string, o: { allowed: (p: string) => boolean }): Promise<PullRequestBranchesResult> {
+  const link = pullRequestOf(text);
+  if (!link) throw new WorktreeError("bad_request", "Not a pull request link");
+  const { main } = await repoOf(cwd);
+  if (!o.allowed(main) || (await gitEscapes(main, o.allowed))) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  const remote = await g(main, ["config", "--get", "remote.origin.url"]).catch(() => "");
+  if (!remote) throw new WorktreeError("pr_other_repo", "This repository has no origin remote");
+  if (!isRemoteOf(link, remote)) {
+    const r = remoteRepoOf(remote);
+    throw new WorktreeError("pr_other_repo", `Pull request #${link.number} is in ${link.repo} on ${link.host}, not in this repository${r ? ` (${r.path} on ${r.host})` : ""}`);
+  }
+  if (!link.refs.length) throw new WorktreeError("pr_unsupported", `${link.host} publishes no pull request refs: paste the branch name instead`);
+  const out = await run(main, ["ls-remote", "origin", ...link.refs, "refs/heads/*"]);
+  const heads = new Map<string, string[]>();
+  let head: string | undefined;
+  for (const line of out.split("\n")) {
+    const [sha, ref] = line.trim().split(/\s+/);
+    if (!sha || !ref) continue;
+    if (link.refs.includes(ref)) head = sha;
+    else if (ref.startsWith("refs/heads/")) heads.set(sha, [...(heads.get(sha) ?? []), ref.slice(11)]);
+  }
+  if (!head) throw new WorktreeError("pr_not_found", `origin has no pull request #${link.number}`);
+  return { number: link.number, branches: heads.get(head) ?? [] };
 }
 
 /** The linked worktree `path` (as requested) of `list`; not_worktree for an unknown path or the main worktree. */

@@ -90,6 +90,7 @@ One Jira connection for the **Ticket** tab of [Create worktree](../features/proj
 | Email | Your Atlassian account email. Only for Jira Cloud. |
 | API token / Personal access token | Cloud: an API token from id.atlassian.com › Security › API tokens. Data Center or Server: a personal access token from your Jira profile. Saved on the daemon's computer only (`secrets.json`), never shown again: the row then says **Token set**, with **Replace** and **Clear**. |
 | Branch template | How a ticket names its branch. Default `{type}/{key}-{summary}`: `{type}` is `bugfix` for a Bug, `feature` for a Story, Task or New Feature, else empty; `{key}` is the ticket key; `{summary}` is the summary, shortened. |
+| Ticket filter (JQL) | The tickets the Ticket tab lists, e.g. `project = ABC AND statusCategory != Done`. Typed text searches inside it; a key or ticket URL ignores it. Empty: your open tickets. |
 | Test connection | Shows "Connected as *your name*" or the error. |
 
 ## About

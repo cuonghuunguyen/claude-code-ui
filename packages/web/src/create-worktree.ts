@@ -1,5 +1,5 @@
 // Create worktree modal logic (GH-447, docs/spec.md "Worktrees"): Branch source choice, branch rows, Base picker options.
-import type { BranchRow } from "@claude-ui/protocol";
+import { jiraKeyOf, pullRequestOf, type BranchRow, type PullRequestLink } from "@claude-ui/protocol";
 
 export type Source = "ticket" | "branch" | "name";
 export const SOURCES: { id: Source; title: string }[] = [
@@ -34,6 +34,19 @@ export function filterBranches(rows: BranchRow[], text: string): BranchRow[] {
   const words = text.toLowerCase().split(/\s+/).filter(Boolean);
   return words.length ? rows.filter((r) => words.every((w) => r.name.toLowerCase().includes(w))) : rows;
 }
+
+/** What the Branch filter or Ticket search holds: a pull request link, a Jira key or ticket link, or words. */
+export type Paste = { kind: "pr"; url: string; link: PullRequestLink } | { kind: "key"; key: string } | { kind: "words" };
+export function pasteOf(text: string): Paste {
+  const t = text.trim();
+  const link = t ? pullRequestOf(t) : undefined;
+  if (link) return { kind: "pr", url: t, link };
+  const key = t ? jiraKeyOf(t) : undefined;
+  return key ? { kind: "key", key } : { kind: "words" };
+}
+
+/** Rows whose name holds the ticket key as a whole word, any case. */
+export const branchesWithKey = (rows: BranchRow[], key: string): BranchRow[] => rows.filter((r) => branchWithKey([r], key));
 
 /** Base picker: local branches, then remote branches (full refs as values). */
 export function baseOptions(rows: BranchRow[]): { value: string; label: string }[] {

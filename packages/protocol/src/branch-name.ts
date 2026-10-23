@@ -93,6 +93,9 @@ export function jiraKeyOf(text: string): string | undefined {
 }
 
 /** Jira Cloud (`*.atlassian.net`: email + API token, Basic) or else Data Center / Server (personal access token, Bearer). */
+/** The Ticket tab's list when Settings › Jira has no Ticket filter. */
+export const MY_OPEN_JQL = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC";
+
 export function jiraIsCloud(base: string): boolean {
   try {
     return new URL(base).hostname.toLowerCase().endsWith(".atlassian.net");
