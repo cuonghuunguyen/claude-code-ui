@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { Exec } from "../src/docker-side.ts";
 import { checkWslSide, setupScript } from "../src/sides.ts";
+import { NODE } from "../src/side-bundle.ts";
 import { partsIdOf, prepareWslSide, probeArgs } from "../src/wsl-side.ts";
 
 const made: string[] = [];
@@ -78,13 +79,36 @@ describe("prepareWslSide", () => {
   it("musl, no side build, or offline with an empty cache: npm, with the reason", async () => {
     for (const [o, why] of [
       [{ libc: "musl" }, /musl/],
-      [{ withSide: false }, /no container bundle/],
+      [{ withSide: false }, /no distro bundle/],
       [{ fetch: offline }, /could not download Node\.js.*no verified copy/],
     ] as const) {
       const g = go(o);
       expect(await g.result).toBeUndefined();
       expect(g.installs).toEqual([{ fallback: expect.stringMatching(why) }]);
     }
+  });
+
+  it("a probe wsl.exe could not run is told apart from a distro the bundle does not cover; reasons use the word distro", async () => {
+    for (const [r, why] of [
+      [{ code: null, stdout: "", stderr: "" }, "the distro did not answer the target probe (no answer in time)"],
+      [{ code: 1, stdout: "", stderr: "W\0S\0L\0 failed.\n" }, "the distro did not answer the target probe (WSL failed)"],
+      [{ code: 1, stdout: "", stderr: "" }, "the distro did not answer the target probe (exit code 1)"],
+    ] as const) {
+      const installs: unknown[] = [];
+      const exec: Exec = async () => r;
+      expect(await prepareWslSide({ distro: "U", pkgDir: sideBuildPkg(), exec, onInstall: (i) => installs.push(i), bundle: { cacheRoot: dir("wsl-cache-"), version: "1.0.0", fetch: okFetch, parts } })).toBeUndefined();
+      expect(installs).toEqual([{ fallback: why }]);
+    }
+    for (const [arch, libc] of [["armv7l", "glibc"], ["x86_64", "musl"]] as const) {
+      const g = go({ arch, libc });
+      await g.result;
+      expect(JSON.stringify(g.installs)).toMatch(/the distro/);
+      expect(JSON.stringify(g.installs)).not.toMatch(/container/);
+    }
+  });
+
+  it("the parts id includes the Node.js checksum", () => {
+    expect(partsIdOf("linux-x64", "1")).toContain(NODE.sha256["linux-x64"]);
   });
 
   it("never: nothing is probed or downloaded", async () => {
@@ -175,8 +199,10 @@ describe.skipIf(!hasTools)("the WSL bundle script, run", () => {
   const TARGET = "linux-x64";
   const NODE_DIR = `node-v24.22.1-${TARGET}`;
   /** A fake world: cached parts (tarballs made with tar), a side build, a HOME and a fake wslpath. */
-  function world() {
-    const base = dir("wsl-run-");
+  function world(weird = false) {
+    // weird: an apostrophe, a space and double quotes in every path the script is given
+    const base = weird ? join(dir("wsl-run-"), "O'Brien \"x\" y") : dir("wsl-run-");
+    mkdirSync(base, { recursive: true });
     const src = join(base, "src");
     const partsDir = join(base, "cache", "1.0.0", TARGET);
     const sideDir = join(base, "pkg", "dist", "side");
@@ -285,5 +311,35 @@ describe.skipIf(!hasTools)("the WSL bundle script, run", () => {
     expect(r.out).toMatch(/^CLAUDE_UI_SETUP install_failed .*Agent SDK could not be unpacked/m);
     expect(r.entries).toEqual(["1.0.0-1"]);
     expect(w.hostFiles()).toEqual(before);
+  });
+
+  it("paths with an apostrophe, a space and double quotes work (escaped, not stripped)", () => {
+    const w = world(true);
+    const r = w.run("1.0.0-1", "needed");
+    expect(r.status, r.out).not.toBe(3);
+    expect(r.out).toContain("side started");
+    expect(existsSync(join(installed(w.root, "1.0.0-1"), "node/bin/node"))).toBe(true);
+  });
+
+  it("a candidate for reuse without the SDK binary is not linked: the parts are unpacked", () => {
+    const w = world();
+    w.run("1.0.0-1", "needed");
+    rmSync(join(installed(w.root, "1.0.0-1"), `node_modules/@anthropic-ai/claude-agent-sdk-${TARGET}`), { recursive: true });
+    const r = w.run("1.0.0-2", "needed");
+    expect(r.out).toContain("side started");
+    expect(r.entries).toEqual(["1.0.0-2"]);
+    expect(existsSync(join(installed(w.root, "1.0.0-2"), `node_modules/@anthropic-ai/claude-agent-sdk-${TARGET}/claude`))).toBe(true);
+  });
+
+  it("a reused install that does not start is dropped and the parts are unpacked once", () => {
+    const w = world();
+    w.run("1.0.0-1", "needed");
+    // Starts for the candidate test (--version alone) but not with the side's cli.js.
+    writeFileSync(join(installed(w.root, "1.0.0-1"), "node/bin/node"), '#!/bin/sh\n[ "$#" -le 1 ] && exit 0\nexit 1\n', { mode: 0o755 });
+    const r = w.run("1.0.0-2", "needed");
+    expect(r.out).toContain("side started");
+    expect(r.out).not.toContain("install_failed");
+    expect(r.entries).toEqual(["1.0.0-2"]);
+    expect(readFileSync(join(installed(w.root, "1.0.0-2"), "node/bin/node"), "utf8")).toContain("exec");
   });
 });

@@ -4,14 +4,14 @@
 import { join } from "node:path";
 import type { SideSetup, SidePhase } from "@claude-ui/protocol";
 import { execRun, safeKey, type BundleSource, type Exec } from "./docker-side.ts";
-import { claudePackage, ensureParts, installMethodOf, NODE, nodeDirName, parseTarget, partsFor, pruneCache, PTY, sideBuild, TARGET_PROBE } from "./side-bundle.ts";
+import { claudePackage, ensureParts, installMethodOf, NODE, nodeDirName, parseTarget, partsFor, pruneCache, PTY, sideBuild, TARGET_PROBE, type BundleTarget } from "./side-bundle.ts";
 import type { SideBundle } from "./sides.ts";
 
 /** The target probe in plain sh (no login shell: nothing of the user's profile runs); base64 keeps quotes and newlines off the Windows command line. */
 export const probeArgs = (distro: string) => ["-d", distro, "--exec", "sh", "-c", `echo ${Buffer.from(TARGET_PROBE).toString("base64")} | base64 -d | sh`];
 
 /** What the parts are (Node.js, node-pty with its integrity, the SDK, the target): an install made from equal parts has an equal id. */
-export const partsIdOf = (target: string, sdkVersion: string) => `node-${NODE.version}|${PTY.name}-${PTY.version}-${PTY.integrity}|sdk-${sdkVersion}|${target}`;
+export const partsIdOf = (target: BundleTarget, sdkVersion: string) => `node-${NODE.version}-${NODE.sha256[target]}|${PTY.name}-${PTY.version}-${PTY.integrity}|sdk-${sdkVersion}|${target}`;
 
 /**
  * Before `wsl.exe` runs the setup script: probes the distro's target and makes the parts present and verified in the host's cache
@@ -32,7 +32,13 @@ export async function prepareWslSide(o: {
   const exec = o.exec ?? execRun;
   const build = sideBuild(o.pkgDir);
   const probe = build ? await exec("wsl.exe", probeArgs(o.distro), 30_000) : undefined;
-  const m = installMethodOf(probe ? parseTarget(probe.stdout) : undefined, !!build);
+  const target = probe ? parseTarget(probe.stdout) : undefined;
+  if (probe && !target) {
+    // wsl.exe did not run the probe (timeout, no such distro, a failed start): not a distro the bundle does not cover.
+    const err = probe.stderr.replace(/\0/g, "").trim().split(/\r?\n/).pop()?.trim().replace(/\.$/, "");
+    return o.onInstall?.({ fallback: `the distro did not answer the target probe (${probe.code === null ? err || "no answer in time" : err || `exit code ${probe.code}`})` }), undefined;
+  }
+  const m = installMethodOf(target, !!build, "distro");
   if (m.method === "npm") return o.onInstall?.({ fallback: m.reason }), undefined;
   const src = o.bundle;
   const version = safeKey(src.version);

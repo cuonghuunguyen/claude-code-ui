@@ -42,7 +42,8 @@ describe("checkScript", () => {
     expect(d).toContain("nvm.sh");
     expect(d).not.toContain("wslpath");
     const w = checkScript(KEY, "wsl", "C:\\pkg's");
-    expect(w).toContain("wslpath -u 'C:\\pkgs'");
+    // A quote in the path is escaped, not dropped.
+    expect(w).toContain("wslpath -u 'C:\\pkg'\\''s'");
     expect(w).not.toContain("writable");
     expect(w).not.toContain("nvm.sh");
   });

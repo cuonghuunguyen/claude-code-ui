@@ -79,7 +79,7 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
   const never = mode === "never";
   if (docker && bundle && !never) return bundleScript(source, key, mode, bundle);
   if (!docker && bundle?.host && !never) return wslBundleScript(key, mode, bundle, bundle.host);
-  const src = source.replace(/'/g, "");
+  const src = shq(source);
   return [
     "say() { printf 'CLAUDE_UI_SETUP %s\\n' \"$*\"; exit 3; }",
     ...(docker ? ['nvm="${NVM_DIR:-$HOME/.nvm}/nvm.sh"; [ -s "$nvm" ] && . "$nvm" >/dev/null 2>&1'] : []),
@@ -98,14 +98,14 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     "[ \"$v\" -ge 22 ] || say node_old \"$(node -v)\"",
     ...(mode !== "force" ? ["fi"] : []),
     LOGIN_CHECK,
-    ...(docker && !never ? [`src='${src}'`] : []),
+    ...(docker && !never ? [`src=${src}`] : []),
     ...(never
       ? ['if [ ! -f "$cli" ] || ! sdk "$dir"; then say not_installed; fi']
       : [
     mode === "force" ? "if true; then" : 'if [ ! -f "$cli" ] || ! sdk "$dir"; then',
     docker
       ? `  [ -f "$src" ] || say install_failed "the claude-ui package was not copied in"`
-      : `  src=$(wslpath -u '${src}') && [ -f "$src/dist/cli.js" ] || say install_failed "the Windows claude-ui package was not found"`,
+      : `  src=$(wslpath -u ${src}) && [ -f "$src/dist/cli.js" ] || say install_failed "the Windows claude-ui package was not found"`,
     "  printf 'CLAUDE_UI_PHASE %s\\n' installing",
     // node-pty has no Linux prebuilds: npm install compiles it.
     "  { command -v make && command -v python3 && { command -v g++ || command -v c++; }; } >/dev/null 2>&1 || say build_tools_missing",
@@ -149,6 +149,8 @@ export type SideBundle = {
   host?: { partsDir: string; sideDir: string; version: string; partsId: string };
 };
 
+/** `v` as one single-quoted POSIX shell word (a quote inside becomes `'\''`): paths with an apostrophe or a space stay intact. */
+export const shq = (v: string) => `'${v.replace(/'/g, "'\\''")}'`;
 const LOGIN_CHECK = "[ -n \"$ANTHROPIC_API_KEY\" ] || [ -n \"$CLAUDE_CODE_OAUTH_TOKEN\" ] || [ -f \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json\" ] || say not_logged_in";
 /** Roots, then the side runs on its own Node.js when the install carries one (a bundle install), else on the container's. */
 const RUN_DOCKER = [
@@ -195,7 +197,7 @@ function finishLines(before: string[] = []) {
  * the npm install. An install of this build that carries its Node.js is kept (needed); force unpacks again.
  */
 function bundleScript(source: string, key: string, mode: SideSetup, b: SideBundle) {
-  const q = (v: string) => `'${v.replace(/'/g, "")}'`;
+  const q = shq;
   return [
     "say() { printf 'CLAUDE_UI_SETUP %s\\n' \"$*\"; exit 3; }",
     LOGIN_CHECK,
@@ -231,7 +233,7 @@ function bundleScript(source: string, key: string, mode: SideSetup, b: SideBundl
  * Then the side JS (`dist/side`) is copied in like assembleBundle does, started on its own Node.js and swapped in.
  */
 function wslBundleScript(key: string, mode: SideSetup, b: SideBundle, h: NonNullable<SideBundle["host"]>) {
-  const q = (v: string) => `'${v.replace(/'/g, "")}'`;
+  const q = shq;
   const pkg = JSON.stringify({ name: "claude-code-ui", version: h.version, type: "module" });
   return [
     "say() { printf 'CLAUDE_UI_SETUP %s\\n' \"$*\"; exit 3; }",
@@ -241,8 +243,10 @@ function wslBundleScript(key: string, mode: SideSetup, b: SideBundle, h: NonNull
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
     `nd=${q(b.nodeDir)}; cp=${q(b.claudePackage)}; tg=${q(b.target)}; id=${q(h.partsId)}`,
     'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
-    // Another install made from the same parts, hard-linked into $new (any failure: the caller unpacks the parts).
-    `reuse() { for d in "$root"/*; do [ -d "$d" ] ${mode === "force" ? '&& [ "$d" != "$dir" ] ' : ""}&& [ "$(cat "$d/parts.id" 2>/dev/null)" = "$id" ] && [ -x "$d/node/bin/node" ] && "$d/node/bin/node" --version >/dev/null 2>&1 || continue; mkdir -p "$new/node_modules" && cp -al "$d/node" "$new/node" && for m in "$d"/node_modules/* "$d"/node_modules/.[!.]*; do [ -e "$m" ] || continue; [ "\${m##*/}" = claude-code-ui ] || cp -al "$m" "$new/node_modules/" || return 1; done && return 0; return 1; done; return 1; }`,
+    // Another install made from the same parts, hard-linked into $new (any failure: the caller unpacks the parts). The hard links
+    // assume installs are immutable: nothing writes in place inside node/ or node_modules/ after the swap (a new build is a new
+    // folder), so a file shared by two installs never changes under one of them. The candidate must be complete and run.
+    `reuse() { for d in "$root"/*; do [ -d "$d" ] ${mode === "force" ? '&& [ "$d" != "$dir" ] ' : ""}&& [ "$(cat "$d/parts.id" 2>/dev/null)" = "$id" ] && [ -f "$d/node_modules/claude-code-ui/dist/cli.js" ] && [ -f "$d/node_modules/@anthropic-ai/claude-agent-sdk/package.json" ] && sdk "$d" && [ -x "$d/node/bin/node" ] && "$d/node/bin/node" --version >/dev/null 2>&1 || continue; mkdir -p "$new/node_modules" && cp -al "$d/node" "$new/node" && for m in "$d"/node_modules/* "$d"/node_modules/.[!.]*; do [ -e "$m" ] || continue; [ "\${m##*/}" = claude-code-ui ] || cp -al "$m" "$new/node_modules/" || return 1; done && return 0; return 1; done; return 1; }`,
     mode === "force" ? "if true; then" : 'if [ ! -f "$cli" ] || ! sdk "$dir" || [ ! -x "$dir/node/bin/node" ]; then',
     `  pd=$(wslpath -u ${q(h.partsDir)} 2>/dev/null) || say install_failed "the verified claude-ui parts were not found from the distro"`,
     `  sd=$(wslpath -u ${q(h.sideDir)} 2>/dev/null) && [ -f "$sd/cli.js" ] || say install_failed "the claude-ui side files were not found from the distro"`,
@@ -251,14 +255,17 @@ function wslBundleScript(key: string, mode: SideSetup, b: SideBundle, h: NonNull
     '  new="$root/.new-$$"; old="$root/.old-$$"',
     '  fail() { rm -rf "$new"; say install_failed "$1"; }',
     '  rm -rf "$new"; mkdir -p "$new/b" || fail "no folder could be made in $root"',
-    '  reuse || { rm -rf "$new/node" "$new/node_modules"; mkdir -p "$new/b"; }',
-    '  if [ -d "$new/node" ]; then rm -rf "$new/b"; else',
+    // The app: the side JS and its licenses (dist/side without side.json), then package.json.
+    `  app() { mkdir -p "$new/node_modules/claude-code-ui/dist" || return 1; for f in "$sd"/*.js "$sd/THIRD_PARTY_LICENSES.txt"; do [ -f "$f" ] && { cp "$f" "$new/node_modules/claude-code-ui/dist/" || return 1; }; done; printf '%s' ${shq(pkg)} > "$new/node_modules/claude-code-ui/package.json"; }`,
+    // A reused install must start before it is trusted; if not, it is dropped and the parts are unpacked (once).
+    '  reused=; if reuse && app && [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] && sdk "$new" && "$new/node/bin/node" "$new/node_modules/claude-code-ui/dist/cli.js" --version >/dev/null 2>&1; then reused=1; fi',
+    '  if [ -z "$reused" ]; then',
+    '  rm -rf "$new"; mkdir -p "$new/b" || fail "no folder could be made in $root"',
     '  [ -f "$pd/node.tar.gz" ] || fail "the verified claude-ui parts were not found from the distro"',
     ...unpackLines("$pd"),
-    '  rm -rf "$new/b"; fi',
-    '  mkdir -p "$new/node_modules/claude-code-ui/dist" || fail "no folder could be made in $root"',
-    '  for f in "$sd"/*.js "$sd/THIRD_PARTY_LICENSES.txt"; do [ -f "$f" ] && { cp "$f" "$new/node_modules/claude-code-ui/dist/" || fail "the claude-ui files could not be copied"; }; done',
-    `  printf '%s' '${pkg.replace(/'/g, "")}' > "$new/node_modules/claude-code-ui/package.json" || fail "the claude-ui files could not be written"`,
+    '  rm -rf "$new/b"',
+    '  app || fail "the claude-ui files could not be copied"',
+    "  fi",
     ...finishLines(['  printf \'%s\\n\' "$id" > "$new/parts.id" || fail "the new install could not be written"']),
     "fi",
     ...RUN_WSL,
@@ -292,7 +299,7 @@ export function checkScript(key: string, kind: "wsl" | "docker", source = "") {
           "for t in tar gzip git npm; do command -v $t >/dev/null 2>&1 && emit $t 1 || emit $t 0; done",
         ]
       : [
-          `src=$(wslpath -u '${source.replace(/'/g, "")}' 2>/dev/null) && [ -f "$src/dist/cli.js" ] && emit package 1 || emit package 0`,
+          `src=$(wslpath -u ${shq(source)} 2>/dev/null) && [ -f "$src/dist/cli.js" ] && emit package 1 || emit package 0`,
           // Same facts as a container: the bundle needs a covered target, tar and gzip.
           ...TARGET_PROBE_LINES.slice(1),
           "for t in tar gzip git npm; do command -v $t >/dev/null 2>&1 && emit $t 1 || emit $t 0; done",
@@ -459,7 +466,7 @@ export async function checkWslSide(o: { distro: string; pkgDir: string; key: str
     return blockedCheck(o.key, label, r.code === null ? "unreachable" : "check_failed", { detail: r.code === null ? err || "no answer in time" : err || `exit code ${r.code}` });
   }
   // The install method follows the distro's target and whether this build has dist/side (the bundle's JS), like a container's.
-  const m = installMethodOf(checked.target, !!sideBuild(o.pkgDir));
+  const m = installMethodOf(checked.target, !!sideBuild(o.pkgDir), "distro");
   return verdictOf({ key: o.key, label, kind: "wsl", build: hasBuild(o.pkgDir, false), checked, install: m.method === "bundle" ? { method: "bundle" } : m });
 }
 

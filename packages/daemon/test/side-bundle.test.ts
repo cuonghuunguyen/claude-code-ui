@@ -91,6 +91,25 @@ describe("parts", () => {
     expect(phases).toEqual(["downloading"]);
   });
 
+  it("concurrent calls for one folder share one run: one download per part, every caller announced, no .partial left", async () => {
+    const dir = tmp("parts-");
+    const log: string[] = [];
+    const seen: string[] = [];
+    const a = ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch(files, log), onDownload: () => seen.push("a") });
+    const b = ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch(files, log), onDownload: () => seen.push("b") });
+    expect(b).toBe(a);
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(rb).toEqual(ra);
+    expect(seen.sort()).toEqual(["a", "b"]);
+    expect(log.filter((l) => l === "https://n/node.tgz")).toHaveLength(1);
+    expect(log.filter((l) => l === "https://r/claude.tgz")).toHaveLength(1);
+    expect(readdirSync(dir).filter((f) => f.includes(".partial"))).toEqual([]);
+    // A later call after the run is a new run (the memo is released): cached, nothing downloaded.
+    const again: string[] = [];
+    await ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch({}, again) });
+    expect(again).toEqual([]);
+  });
+
   it("a corrupted cached part is downloaded again, never used", async () => {
     const dir = tmp("parts-");
     await ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch(files) });

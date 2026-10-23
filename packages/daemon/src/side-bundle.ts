@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { REGISTRY } from "./update.ts";
@@ -60,22 +60,22 @@ export function parseTarget(out: string): ContainerTarget | undefined {
 }
 
 /** The bundle that runs in a container, or why none does (a plain phrase: "the container uses musl ..."): then the side installs with npm. */
-export function bundleTargetOf(t: Partial<ContainerTarget>): { target: BundleTarget } | { reason: string } {
+export function bundleTargetOf(t: Partial<ContainerTarget>, noun: "container" | "distro" = "container"): { target: BundleTarget } | { reason: string } {
   const arch = t.arch === "x86_64" || t.arch === "amd64" ? "x64" : t.arch === "aarch64" || t.arch === "arm64" ? "arm64" : undefined;
-  if (!arch) return { reason: `the container's CPU (${t.arch || "unknown"}) has no bundle (x86_64 and aarch64 only)` };
-  if (t.libc === "musl") return { reason: "the container uses musl (for example Alpine); the bundle needs glibc" };
-  if (t.libc !== "glibc") return { reason: "the container's C library could not be detected; the bundle needs glibc" };
+  if (!arch) return { reason: `the ${noun}'s CPU (${t.arch || "unknown"}) has no bundle (x86_64 and aarch64 only)` };
+  if (t.libc === "musl") return { reason: `the ${noun} uses musl (for example Alpine); the bundle needs glibc` };
+  if (t.libc !== "glibc") return { reason: `the ${noun}'s C library could not be detected; the bundle needs glibc` };
   const [maj, min] = (t.glibc ?? "").split(".").map(Number);
   if (maj === undefined || min === undefined || Number.isNaN(maj) || Number.isNaN(min) || maj < MIN_GLIBC[0] || (maj === MIN_GLIBC[0] && min < MIN_GLIBC[1]))
-    return { reason: `the container's glibc ${t.glibc || "version is unknown"}${t.glibc ? " is older than" : "; the bundle needs"} ${MIN_GLIBC.join(".")}` };
-  if (!t.cxxRuntime) return { reason: "the container has no libstdc++ (the C++ runtime Node.js needs)" };
+    return { reason: `the ${noun}'s glibc ${t.glibc || "version is unknown"}${t.glibc ? " is older than" : "; the bundle needs"} ${MIN_GLIBC.join(".")}` };
+  if (!t.cxxRuntime) return { reason: `the ${noun} has no libstdc++ (the C++ runtime Node.js needs)` };
   return { target: `linux-${arch}` };
 }
 
 /** Why a container or distro installs with npm when the bundle is not used, or the bundle target. `build`: this claude-ui's dist/side. */
-export function installMethodOf(target: Partial<ContainerTarget> | undefined, build: boolean): { method: "bundle"; target: BundleTarget } | { method: "npm"; reason: string } {
-  if (!build) return { method: "npm", reason: "this claude-ui build has no container bundle (build it again with npm start or npm run build)" };
-  const t = bundleTargetOf(target ?? {});
+export function installMethodOf(target: Partial<ContainerTarget> | undefined, build: boolean, noun: "container" | "distro" = "container"): { method: "bundle"; target: BundleTarget } | { method: "npm"; reason: string } {
+  if (!build) return { method: "npm", reason: `this claude-ui build has no ${noun} bundle (build it again with npm start or npm run build)` };
+  const t = bundleTargetOf(target ?? {}, noun);
   return "target" in t ? { method: "bundle", target: t.target } : { method: "npm", reason: t.reason };
 }
 
@@ -124,8 +124,26 @@ async function download(f: typeof fetch, url: string, to: string) {
  * downloaded (`onDownload` once, before the first download) into a `.partial` file, checked, then renamed. A registry part's
  * integrity comes from the pin or from the registry (kept as `<file>.integrity` so a cached part is checked offline too).
  * Rejects with "could not download <label>" (network) or "<label> ... checksum" (mismatch); a bad file is never kept.
+ * Concurrent calls for the same `dir` (two distros, a distro and a container) share one run: each caller's `onDownload` is
+ * called once when that run starts a download. The `.partial` file name is unique per run.
  */
-export async function ensureParts(o: { dir: string; parts: Part[]; registry?: string; fetch?: typeof fetch; onDownload?: () => void }): Promise<Record<string, string>> {
+export function ensureParts(o: { dir: string; parts: Part[]; registry?: string; fetch?: typeof fetch; onDownload?: () => void }): Promise<Record<string, string>> {
+  const key = resolve(o.dir);
+  const running = inflight.get(key);
+  if (running) {
+    if (running.announced) o.onDownload?.();
+    else if (o.onDownload) running.listeners.push(o.onDownload);
+    return running.promise;
+  }
+  const entry: { announced: boolean; listeners: (() => void)[]; promise: Promise<Record<string, string>> } = { announced: false, listeners: o.onDownload ? [o.onDownload] : [], promise: undefined as never };
+  entry.promise = ensureOnce({ ...o, onDownload: () => ((entry.announced = true), entry.listeners.forEach((l) => l())) }).finally(() => inflight.delete(key));
+  inflight.set(key, entry);
+  return entry.promise;
+}
+const inflight = new Map<string, { announced: boolean; listeners: (() => void)[]; promise: Promise<Record<string, string>> }>();
+let partialSeq = 0;
+
+async function ensureOnce(o: { dir: string; parts: Part[]; registry?: string; fetch?: typeof fetch; onDownload?: () => void }): Promise<Record<string, string>> {
   const f = o.fetch ?? fetch;
   const registry = (o.registry ?? REGISTRY).replace(/\/+$/, "");
   mkdirSync(o.dir, { recursive: true });
@@ -134,6 +152,7 @@ export async function ensureParts(o: { dir: string; parts: Part[]; registry?: st
   for (const p of o.parts) {
     const file = join(o.dir, p.file);
     const saved = join(o.dir, `${p.file}.integrity`);
+    const partial = `${file}.partial-${process.pid}-${++partialSeq}`;
     const known = p.sha256 || p.integrity ? { sha256: p.sha256, integrity: p.integrity } : existsSync(saved) ? { integrity: readFileSync(saved, "utf8").trim() } : undefined;
     if (known && existsSync(file) && (await matches(file, known))) {
       out[p.file] = file;
@@ -155,18 +174,17 @@ export async function ensureParts(o: { dir: string; parts: Part[]; registry?: st
           check = { integrity: meta.dist.integrity };
         }
       }
-      rmSync(`${file}.partial`, { force: true });
-      await download(f, url!, `${file}.partial`);
+      await download(f, url!, partial);
     } catch (e) {
-      rmSync(`${file}.partial`, { force: true });
+      rmSync(partial, { force: true });
       throw new Error(`could not download ${p.label} (${(e as Error).message.replace(/\.$/, "")})`);
     }
-    if (!check || !(await matches(`${file}.partial`, check))) {
-      rmSync(`${file}.partial`, { force: true });
+    if (!check || !(await matches(partial, check))) {
+      rmSync(partial, { force: true });
       throw new Error(`the downloaded ${p.label} does not match its checksum; it was not used`);
     }
     rmSync(file, { force: true });
-    renameSync(`${file}.partial`, file);
+    renameSync(partial, file);
     if (!p.sha256 && !p.integrity) writeFileSync(saved, check.integrity!);
     out[p.file] = file;
   }
