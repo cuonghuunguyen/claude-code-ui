@@ -5,8 +5,9 @@ import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DockerState, SideCheck, SideCheckReason, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { blockedCheck, checkScript, dockerExecArgs, hasBuild, parseCheck, verdictOf, type SideBundle } from "./sides.ts";
-import { assembleBundle, bundleTargetOf, claudePackage, ensureParts, nodeDirName, parseTarget, partsFor, pruneCache, sideBuild, TARGET_PROBE, type BundleTarget, type ContainerTarget } from "./side-bundle.ts";
+import { assembleBundle, claudePackage, ensureParts, nodeDirName, parseTarget, partsFor, installMethodOf, pruneCache, sideBuild, TARGET_PROBE } from "./side-bundle.ts";
 import { runCommand, type Runner } from "./update.ts";
+export { installMethodOf };
 
 /** Runs a command without a shell; never rejects. `code` null: not started (ENOENT) or killed by the timeout. `stdinFile`: that file is the command's stdin. */
 export type Exec = (cmd: string, args: string[], timeoutMs?: number, stdinFile?: string) => Promise<{ code: number | null; stdout: string; stderr: string }>;
@@ -105,13 +106,6 @@ async function pack(o: { pkgDir: string; cacheDir: string; label: string; npm?: 
 
 /** Where and how the hub gets the bundle parts (side-bundle.ts). */
 export type BundleSource = { cacheRoot: string; version: string; registry?: string; fetch?: typeof fetch; /** Test seam: the parts to fetch. */ parts?: typeof partsFor };
-
-/** Why a container installs with npm when the bundle is not used, or the bundle target. `build`: this claude-ui's dist/side. */
-export function installMethodOf(target: Partial<ContainerTarget> | undefined, build: boolean): { method: "bundle"; target: BundleTarget } | { method: "npm"; reason: string } {
-  if (!build) return { method: "npm", reason: "this claude-ui build has no container bundle (build it again with npm start or npm run build)" };
-  const t = bundleTargetOf(target ?? {});
-  return "target" in t ? { method: "bundle", target: t.target } : { method: "npm", reason: t.reason };
-}
 
 /**
  * Before `docker exec`: the container must run; this claude-ui goes in as one file. Covered containers (linux x64/arm64, glibc

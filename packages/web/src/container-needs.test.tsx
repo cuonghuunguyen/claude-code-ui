@@ -89,3 +89,28 @@ describe("side panel, Docker", () => {
     expect(document.querySelector('[data-testid="side-fallback"]')!.textContent).toBe("Installing with npm in the container because the container uses musl.");
   });
 });
+
+describe("side panel, WSL", () => {
+  const wsl = (o: Partial<SideInfo> = {}): SideInfo => ({ id: "wsl:U", label: "WSL: U", state: "off", ...o });
+  const noop = { onRun: () => {}, onCheck: () => {} };
+
+  it("a bundle check says Distro, not Container; the npm note says distro", async () => {
+    await mount(<SidePanel side={wsl()} state={{ check: bundleCheck }} {...noop} />);
+    expect([...document.querySelectorAll('[data-testid="side-check-row"]')].map((x) => x.textContent)).toContain("Distrox86_64, glibc 2.36: bundle");
+    await act(async () => root!.render(<SidePanel side={wsl()} state={{ check: { ...muslCheck, verdict: "install", reason: undefined, facts: { ...muslCheck.facts, install: { method: "npm", reason: "the distro uses musl" } } } }} {...noop} />));
+    expect(document.querySelector('[data-testid="side-check-npm"]')!.textContent).toBe("Installs with npm in the distro because the distro uses musl.");
+  });
+
+  it("progress: preparing before the first phase, downloading, unpacking for a bundle, the npm fallback reason; all with the word distro", async () => {
+    const busy = { busy: { mode: "needed" as const } };
+    await mount(<SidePanel side={wsl({ state: "starting" })} state={busy} {...noop} />);
+    expect(document.querySelector('[data-testid="side-progress"]')!.textContent).toMatch(/^Preparing claude-ui…/);
+    await act(async () => root!.render(<SidePanel side={wsl({ state: "starting", phase: "downloading", bundle: true })} state={busy} {...noop} />));
+    expect(document.querySelector('[data-testid="side-progress"]')!.textContent).toMatch(/^Downloading Node\.js and Claude Code…/);
+    await act(async () => root!.render(<SidePanel side={wsl({ state: "starting", phase: "installing", bundle: true })} state={busy} {...noop} />));
+    expect(document.querySelector('[data-testid="side-progress"]')!.textContent).toMatch(/^Unpacking claude-ui in the distro…/);
+    await act(async () => root!.render(<SidePanel side={wsl({ state: "starting", phase: "installing", fallback: "the distro uses musl" })} state={busy} {...noop} />));
+    expect(document.querySelector('[data-testid="side-progress"]')!.textContent).toMatch(/^Installing \(npm, can take minutes\)…/);
+    expect(document.querySelector('[data-testid="side-fallback"]')!.textContent).toBe("Installing with npm in the distro because the distro uses musl.");
+  });
+});

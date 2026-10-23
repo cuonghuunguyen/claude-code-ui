@@ -32,13 +32,13 @@ In 0.5.0 every WSL and Docker side stops about 15 seconds after it starts. This 
 
 ### The side needs Node.js or a login
 
-The Open project dialog says what is missing. A WSL distro needs Node.js 22+ and a Claude login. A Docker container with glibc (Debian, Ubuntu, ...) needs only `sh`, `tar`, `gzip` and a Claude login: claude-code-ui brings Node.js. Open **What this container needs** in the dialog for the list with a ✓ or ✗ per item. See [WSL & Docker](../features/wsl-docker).
+The Open project dialog says what is missing. A WSL distro or Docker container with glibc (Debian, Ubuntu, ...) needs only `sh`, `tar`, `gzip` and a Claude login: claude-code-ui brings Node.js. A WSL distro that installs with npm (musl, see below) needs Node.js 22+, make, python3 and g++. Open **What this container needs** in the dialog for the list with a ✓ or ✗ per item. See [WSL & Docker](../features/wsl-docker).
 
-### A Docker container installs with npm, not the bundle
+### A Docker container or WSL distro installs with npm, not the bundle
 
 The dialog says why. Causes:
 
-- The container uses musl (Alpine) or a CPU other than x86_64 and arm64, has glibc older than 2.28, or has no libstdc++. Use a glibc image, or install Node.js 22+, make, python3 and g++ in the container.
+- The container or distro uses musl (Alpine) or a CPU other than x86_64 and arm64, has glibc older than 2.28, or has no libstdc++. Use a glibc image or distro, or install Node.js 22+, make, python3 and g++ there.
 - Your computer could not download a part (Node.js from nodejs.org, node-pty, the Claude Agent SDK or Claude Code from the npm registry) and has no checked copy in `~/.cache/claude-ui/side`. Check the network or set `CLAUDE_UI_UPDATE_REGISTRY` to a registry mirror, then retry.
 
 A downloaded or cached part that does not match its checksum is never used: it is downloaded again.

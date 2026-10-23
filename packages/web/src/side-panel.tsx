@@ -80,7 +80,7 @@ function fixText(check: SideCheck, label: string): string | undefined {
 const missingTools = (t?: { make: boolean; python3: boolean; cxx: boolean }) => (t ? ([!t.make && "make", !t.python3 && "python3", !t.cxx && "g++"].filter(Boolean) as string[]) : []);
 
 type Row = { name: string; value: string; status: "ok" | "missing" | "na" };
-function rowsOf(c: SideCheck): Row[] {
+function rowsOf(c: SideCheck, docker = true): Row[] {
   const f = c.facts;
   const na = (name: string): Row => ({ name, value: "Not checked", status: "na" });
   if (!f.reachable) return [{ name: "Reachable", value: "No", status: "missing" }, na("Node.js 22+"), na("Build tools"), na("Claude login"), na("claude-ui for this build")];
@@ -91,7 +91,7 @@ function rowsOf(c: SideCheck): Row[] {
   if ((f.install?.method === "bundle" && f.installed !== "current") || (f.installed === "current" && f.bundled)) {
     const t = f.target;
     const target = t ? `${t.arch}, ${t.libc}${t.glibc ? ` ${t.glibc}` : ""}` : "Linux";
-    return [{ name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" }, { name: "Container", value: f.install?.method === "bundle" ? `${target}: bundle` : target, status: "ok" }, login, build];
+    return [{ name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" }, { name: docker ? "Container" : "Distro", value: f.install?.method === "bundle" ? `${target}: bundle` : target, status: "ok" }, login, build];
   }
   return [
     { name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" },
@@ -151,9 +151,10 @@ export function SidePanel({
   const mode = state.busy?.mode ?? "needed";
   const phase = side.phase ?? (state.check?.verdict === "starting" ? state.check.phase : undefined) ?? (mode === "never" ? "starting" : "installing");
   const docker = side.id.startsWith("docker:");
+  const noun = docker ? "container" : "distro";
   // Installing from the bundle only unpacks; npm (WSL, or a Docker fallback) can take minutes.
-  // A Docker install first looks at the container (which install, which parts): no phase yet.
-  const phaseText = docker && !side.phase && mode !== "never" && state.check?.verdict !== "starting" ? "Preparing claude-ui…" : phase === "installing" && docker && side.bundle ? "Unpacking claude-ui in the container…" : PHASE_TEXT[phase];
+  // An install first looks at the container or distro (which install, which parts): no phase yet.
+  const phaseText = !side.phase && mode !== "never" && state.check?.verdict !== "starting" ? "Preparing claude-ui…" : phase === "installing" && side.bundle ? `Unpacking claude-ui in the ${noun}…` : PHASE_TEXT[phase];
   // A failed run puts the focus on Retry.
   useEffect(() => void (state.error && retry.current?.focus()), [state.error]);
   // The button that started a run goes away (a disabled button loses the focus): the region keeps it, unless it is elsewhere in the dialog.
@@ -204,7 +205,7 @@ export function SidePanel({
         ) : null}
         {inProgress && side.fallback ? (
           <p className="text-muted-foreground [overflow-wrap:anywhere]" data-testid="side-fallback">
-            Installing with npm in the container because {side.fallback}.
+            Installing with npm in the {noun} because {side.fallback}.
           </p>
         ) : null}
         {!inProgress && (
@@ -228,7 +229,7 @@ export function SidePanel({
           {check && !state.checking && (
             <div className="flex w-full max-w-md shrink-0 flex-col gap-2 text-left" data-testid="side-check">
               <ul className="flex flex-col gap-1">
-                {rowsOf(check).map((r) => (
+                {rowsOf(check, docker).map((r) => (
                   <li key={r.name} className="flex flex-wrap items-baseline gap-x-2 [overflow-wrap:anywhere]" data-testid="side-check-row" data-status={r.status}>
                     {r.status === "ok" ? <CheckIcon className="size-4 shrink-0 self-center text-success" aria-hidden /> : r.status === "missing" ? <TriangleAlertIcon className="size-4 shrink-0 self-center text-destructive" aria-hidden /> : <MinusIcon className="size-4 shrink-0 self-center text-faint" aria-hidden />}
                     <span className="font-medium">{r.name}</span>
@@ -241,7 +242,7 @@ export function SidePanel({
                 {fix && <p className="select-text text-muted-foreground [overflow-wrap:anywhere]">{fix}</p>}
                 {check.facts.install?.method === "npm" && check.verdict !== "installed" && check.verdict !== "running" && !fix?.includes("installs with npm") && (
                   <p className="select-text text-muted-foreground [overflow-wrap:anywhere]" data-testid="side-check-npm">
-                    Installs with npm in the container{check.facts.install.reason ? ` because ${check.facts.install.reason}` : ""}.
+                    Installs with npm in the {noun}{check.facts.install.reason ? ` because ${check.facts.install.reason}` : ""}.
                   </p>
                 )}
               </div>

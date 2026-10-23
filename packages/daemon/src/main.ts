@@ -16,6 +16,7 @@ import { sideCacheDir } from "./side-bundle.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
 import { runGit, setGitRunner, threadRunner } from "./git-runner.ts";
 import { wslGitRunner } from "./wsl-git.ts";
+import { prepareWslSide } from "./wsl-side.ts";
 import { checkWslSide, createSides, dockerExecArgs, forwardSidePush, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
 import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
@@ -104,6 +105,11 @@ if (side) {
     const sent = await prepareDockerSide({ name, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
     return sideChild(spawn("docker", dockerExecArgs(name, setupScript(sent.path, key, "docker", setup, sent.bundle)), { stdio: "pipe", windowsHide: true }));
   };
+  /** WSL side: a covered distro installs from the host's verified cached parts read through /mnt (no npm, network or compile in the distro), else from npm. */
+  const spawnWsl = async (distro: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void): Promise<SideProcess> => {
+    const bundle = await prepareWslSide({ distro, pkgDir: sidePackage, setup, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
+    return sideChild(spawn("wsl.exe", wslArgs(distro, setupScript(sidePackage, sideKey(), "wsl", setup, bundle)), { stdio: "pipe", windowsHide: true }));
+  };
   let dockerState: DockerState | undefined;
   const sides =
     distros.length || docker
@@ -120,7 +126,7 @@ if (side) {
             dockerState: () => dockerState,
           }),
           // This claude-ui's own package runs in the side: the installed package, or packages/claude-ui of a source checkout (npm start builds it).
-          spawn: (id, { setup, phase, install }) => (id.startsWith("docker:") ? spawnDocker(id.slice("docker:".length), setup, phase, install) : sideChild(spawn("wsl.exe", wslArgs(id.slice("wsl:".length), setupScript(sidePackage, sideKey(), "wsl", setup)), { stdio: "pipe", windowsHide: true }))),
+          spawn: (id, { setup, phase, install }) => (id.startsWith("docker:") ? spawnDocker(id.slice("docker:".length), setup, phase, install) : spawnWsl(id.slice("wsl:".length), setup, phase, install)),
           // side.check: read-only (docker inspect + one docker exec, or one wsl.exe run of the check script).
           key: sideKey,
           check: (id) => (id.startsWith("docker:") ? checkDockerSide({ name: id.slice("docker:".length), pkgDir: sidePackage, key: sideKey() }) : checkWslSide({ distro: id.slice("wsl:".length), pkgDir: sidePackage, key: sideKey(), exec: execRun })),
