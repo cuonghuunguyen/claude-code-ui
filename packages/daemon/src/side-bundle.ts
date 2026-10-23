@@ -72,6 +72,13 @@ export function bundleTargetOf(t: Partial<ContainerTarget>): { target: BundleTar
   return { target: `linux-${arch}` };
 }
 
+/** Why a container or distro installs with npm when the bundle is not used, or the bundle target. `build`: this claude-ui's dist/side. */
+export function installMethodOf(target: Partial<ContainerTarget> | undefined, build: boolean): { method: "bundle"; target: BundleTarget } | { method: "npm"; reason: string } {
+  if (!build) return { method: "npm", reason: "this claude-ui build has no container bundle (build it again with npm start or npm run build)" };
+  const t = bundleTargetOf(target ?? {});
+  return "target" in t ? { method: "bundle", target: t.target } : { method: "npm", reason: t.reason };
+}
+
 /** Where the hub keeps verified parts: `$XDG_CACHE_HOME/claude-ui/side` (default ~/.cache), Windows `%LOCALAPPDATA%\claude-ui\cache\side`. */
 export function sideCacheDir(env: NodeJS.ProcessEnv = process.env, home = homedir(), platform: NodeJS.Platform = process.platform) {
   if (platform === "win32") return join(env.LOCALAPPDATA || join(home, "AppData", "Local"), "claude-ui", "cache", "side");

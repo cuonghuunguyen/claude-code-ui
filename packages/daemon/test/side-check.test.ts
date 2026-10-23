@@ -126,6 +126,31 @@ describe("verdictOf", () => {
     expect(verdict({ node: undefined, installed: "current", bundled: false }, B).reason).toBe("node_missing");
   });
 
+  it("wsl bundle path: no Node.js or build tools needed; tar and gzip are; an own-Node install runs without Node.js; npm path as before", () => {
+    const B = { install: { method: "bundle" as const } };
+    const tools = { tar: true, gzip: true, npm: false, git: false, cxxRuntime: true };
+    const target = { arch: "x86_64", libc: "glibc" as const, glibc: "2.36", cxxRuntime: true };
+    const v = verdict({ node: undefined, make: false, python3: false, cxx: false, tools, target }, B);
+    expect(v.verdict).toBe("install");
+    expect(v.facts).toMatchObject({ install: { method: "bundle" }, target: { arch: "x86_64", libc: "glibc", glibc: "2.36" } });
+    expect(verdict({ node: "18.0.0", tools }, B).verdict).toBe("install");
+    const noTar = verdict({ node: undefined, tools: { ...tools, tar: false, gzip: false } }, B);
+    expect([noTar.reason, noTar.message]).toEqual(["unpack_tools_missing", expect.stringMatching(/tar and gzip.*in the distro/)]);
+    expect(verdict({ node: undefined, installed: "current", bundled: true }, { install: { method: "npm", reason: "r" } }).verdict).toBe("installed");
+    expect(verdict({ node: undefined, installed: "current", bundled: false }, B).reason).toBe("node_missing");
+    // npm (musl, other CPU, no dist/side): Node.js and build tools as before, with the reason.
+    const npm = verdict({ node: undefined }, { install: { method: "npm", reason: "the container uses musl (for example Alpine); the bundle needs glibc" } });
+    expect(npm.reason).toBe("node_missing");
+    expect(npm.message).toContain("claude-ui installs with npm here:");
+    expect(verdict({ make: false }, { install: { method: "npm", reason: "r" } }).reason).toBe("build_tools_missing");
+    expect(verdict({ make: false }).reason).toBe("build_tools_missing");
+  });
+
+  it("wsl check script: reads the target, tar and gzip and whether the install carries its own Node.js", () => {
+    const w = checkScript(KEY, "wsl", "C:\\pkg");
+    for (const part of ["emit arch", "emit cxxrt", "for t in tar gzip git npm", "emit bundled"]) expect(w).toContain(part);
+  });
+
   it("docker npm path: the Node.js block says why the bundle is not used; facts carry target, tools, network and method", () => {
     const r = verdict({ node: undefined, target: { arch: "x86_64", libc: "musl", cxxRuntime: true }, tools: { tar: true, gzip: true, npm: false, git: true, cxxRuntime: true } }, { kind: "docker", install: { method: "npm", reason: "the container uses musl" }, network: false });
     expect(r.reason).toBe("node_missing");

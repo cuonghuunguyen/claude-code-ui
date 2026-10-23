@@ -499,15 +499,15 @@ export type SideCheckFacts = {
   installedKey?: string;
   /** Docker: the writable folders among /tmp, /dev/shm and the home folder. */
   writable?: string[];
-  /** Docker: the container's CPU (`uname -m`), C library and glibc version. */
+  /** Docker or WSL: the container's or distro's CPU (`uname -m`), C library and glibc version. */
   target?: { arch: string; libc: "glibc" | "musl" | "unknown"; glibc?: string };
-  /** Docker: how an install gets claude-ui in: the host-assembled bundle, or npm in the container (`reason`: why not the bundle). */
+  /** Docker or WSL: how an install gets claude-ui in: the host-assembled bundle, or npm in the container or distro (`reason`: why not the bundle). */
   install?: { method: "bundle" | "npm"; reason?: string };
-  /** Docker: tools and libraries found (each item of "What this container needs"). */
+  /** Docker or WSL: tools and libraries found (each item of "What this container needs"). */
   tools?: { tar: boolean; gzip: boolean; npm: boolean; git: boolean; cxxRuntime: boolean };
   /** Docker: false when the container has no network (`--network none`). */
   network?: boolean;
-  /** Docker: the installed build carries its own Node.js (a bundle install). */
+  /** Docker or WSL: the installed build carries its own Node.js (a bundle install). */
   bundled?: boolean;
 };
 /** Reply of `side.check`. `message`: the user's next step in plain words (blocked, install, update). `key`: this claude-ui build. */
