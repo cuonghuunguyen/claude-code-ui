@@ -274,6 +274,7 @@ describe.skipIf(!hasTools)("the WSL bundle script, run", () => {
     expect(existsSync(join(d, "node_modules/claude-code-ui/dist/cli.js"))).toBe(true);
     expect(existsSync(join(d, "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"))).toBe(true);
     expect(readFileSync(join(d, "parts.id"), "utf8").trim()).toBe("id-1");
+    expect(existsSync(join(d, "b"))).toBe(false);
     // Other parts: no reuse, and the parts are gone: the install fails and the old one stays.
     const other = w.run("1.0.0-3", "needed", "id-2");
     expect(other.status).toBe(3);

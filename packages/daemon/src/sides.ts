@@ -258,7 +258,7 @@ function wslBundleScript(key: string, mode: SideSetup, b: SideBundle, h: NonNull
     // The app: the side JS and its licenses (dist/side without side.json), then package.json.
     `  app() { mkdir -p "$new/node_modules/claude-code-ui/dist" || return 1; for f in "$sd"/*.js "$sd/THIRD_PARTY_LICENSES.txt"; do [ -f "$f" ] && { cp "$f" "$new/node_modules/claude-code-ui/dist/" || return 1; }; done; printf '%s' ${shq(pkg)} > "$new/node_modules/claude-code-ui/package.json"; }`,
     // A reused install must start before it is trusted; if not, it is dropped and the parts are unpacked (once).
-    '  reused=; if reuse && app && [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] && sdk "$new" && "$new/node/bin/node" "$new/node_modules/claude-code-ui/dist/cli.js" --version >/dev/null 2>&1; then reused=1; fi',
+    '  reused=; if reuse && app && [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] && sdk "$new" && "$new/node/bin/node" "$new/node_modules/claude-code-ui/dist/cli.js" --version >/dev/null 2>&1; then reused=1; rm -rf "$new/b"; fi',
     '  if [ -z "$reused" ]; then',
     '  rm -rf "$new"; mkdir -p "$new/b" || fail "no folder could be made in $root"',
     '  [ -f "$pd/node.tar.gz" ] || fail "the verified claude-ui parts were not found from the distro"',

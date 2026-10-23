@@ -159,6 +159,8 @@ async function ensureOnce(o: { dir: string; parts: Part[]; registry?: string; fe
       continue;
     }
     if (!announced) (announced = true), o.onDownload?.();
+    // Leftovers of a run that was killed mid-download (unique names, so nothing overwrites them); an hour old: no live run writes it.
+    for (const n of readdirSync(o.dir)) if (n.startsWith(`${p.file}.partial-`) && Date.now() - statSync(join(o.dir, n)).mtimeMs > 3_600_000) rmSync(join(o.dir, n), { force: true });
     let url = p.url;
     let check = known && (p.sha256 || p.integrity) ? known : undefined;
     try {

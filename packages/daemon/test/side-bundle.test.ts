@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -108,6 +108,20 @@ describe("parts", () => {
     const again: string[] = [];
     await ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch({}, again) });
     expect(again).toEqual([]);
+  });
+
+  it("a .partial left by a killed run is removed once it is an hour old; a fresh one stays", async () => {
+    const dir = tmp("parts-");
+    mkdirSync(dir, { recursive: true });
+    const stale = join(dir, "node.tar.gz.partial-1-1");
+    const fresh = join(dir, "node.tar.gz.partial-2-1");
+    writeFileSync(stale, "half");
+    writeFileSync(fresh, "half");
+    const old = new Date(Date.now() - 2 * 3_600_000);
+    utimesSync(stale, old, old);
+    await ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch(files) });
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
   });
 
   it("a corrupted cached part is downloaded again, never used", async () => {
