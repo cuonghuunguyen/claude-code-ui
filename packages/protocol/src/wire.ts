@@ -484,8 +484,8 @@ export type DockerState = "ok" | "down" | "empty";
 export type SideSetup = "never" | "needed" | "force";
 /** `running`/`starting`: the side is up (nothing was run); `installed`: this build is installed (can start); `install`/`update`: setup is needed; `blocked`: see `reason`. */
 export type SideCheckVerdict = "running" | "starting" | "installed" | "install" | "update" | "blocked";
-/** Why a check is blocked. `not_logged_in` is soft: no credentials file, but a login by environment variable cannot be seen, so a setup may still work. */
-export type SideCheckReason = "gone" | "not_running" | "unreachable" | "no_build" | "package_unreadable" | "node_missing" | "node_old" | "build_tools_missing" | "unpack_tools_missing" | "not_logged_in" | "no_writable_path" | "check_failed";
+/** Why a check is blocked. */
+export type SideCheckReason = "gone" | "not_running" | "unreachable" | "no_build" | "package_unreadable" | "node_missing" | "node_old" | "build_tools_missing" | "unpack_tools_missing" | "no_writable_path" | "check_failed";
 export type SideCheckFacts = {
   reachable: boolean;
   running?: boolean;
@@ -493,7 +493,6 @@ export type SideCheckFacts = {
   node?: string;
   nodeOk?: boolean;
   buildTools?: { make: boolean; python3: boolean; cxx: boolean };
-  credentialsFile?: boolean;
   /** This build (`current`), another build (`other`, named by `installedKey`) or nothing. */
   installed: "current" | "other" | "none";
   installedKey?: string;

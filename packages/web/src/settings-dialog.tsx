@@ -633,7 +633,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             </button>
           ))}
         </div>
-        <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${selected.id}`} className={`flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto ${drilled ? "" : "max-md:hidden"}`} data-testid="settings-panel">
+        <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${selected.id}`} className={`flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto pr-3 pl-0.5 ${drilled ? "" : "max-md:hidden"}`} data-testid="settings-panel">
           <button ref={backRef} type="button" onClick={back} className="flex h-11 items-center gap-1 self-start rounded-md pr-3 text-muted-foreground text-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden" data-testid="settings-back">
             <ChevronLeftIcon className="size-4" />
             Settings

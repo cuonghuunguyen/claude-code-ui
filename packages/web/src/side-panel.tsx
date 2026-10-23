@@ -1,5 +1,5 @@
 // The panel of a WSL distro or Docker container that is not ready (Open project): the read-only check result, the one action
-// (Install, Update, Reinstall, Install anyway) and the progress or the failure of that action. It never starts anything by
+// (Install, Update, Reinstall) and the progress or the failure of that action. It never starts anything by
 // itself: the owner calls onRun when a button is pressed (docs/spec.md "Sides").
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon, LoaderCircleIcon, MinusIcon, TriangleAlertIcon } from "lucide-react";
@@ -64,8 +64,6 @@ function fixText(check: SideCheck, label: string): string | undefined {
       return `Node.js ${f.node ?? ""} in ${label} is too old. Install version 22 or newer, then check again.`;
     case "build_tools_missing":
       return `Build tools are missing in ${label}: ${missingTools(f.buildTools).join(", ")}. Install them, then check again.`;
-    case "not_logged_in":
-      return `No Claude login found in ${label}. Log in there (run claude), then check again. If you log in with an environment variable, use Install anyway.`;
     case "unpack_tools_missing":
       return `${label} needs tar and gzip to unpack claude-ui. Install them there, then check again.`;
     case "no_writable_path":
@@ -83,21 +81,19 @@ type Row = { name: string; value: string; status: "ok" | "missing" | "na" };
 function rowsOf(c: SideCheck, docker = true): Row[] {
   const f = c.facts;
   const na = (name: string): Row => ({ name, value: "Not checked", status: "na" });
-  if (!f.reachable) return [{ name: "Reachable", value: "No", status: "missing" }, na("Node.js 22+"), na("Build tools"), na("Claude login"), na("claude-ui for this build")];
+  if (!f.reachable) return [{ name: "Reachable", value: "No", status: "missing" }, na("Node.js 22+"), na("Build tools"), na("claude-ui for this build")];
   const tools = missingTools(f.buildTools);
-  const login: Row = f.credentialsFile === undefined ? na("Claude login") : f.credentialsFile ? { name: "Claude login", value: "Found", status: "ok" } : { name: "Claude login", value: "Not found", status: "missing" };
   const build: Row = f.installed === "current" ? { name: "claude-ui for this build", value: "Installed", status: "ok" } : f.installed === "other" ? { name: "claude-ui for this build", value: "Older build installed", status: "missing" } : { name: "claude-ui for this build", value: "Not installed", status: "missing" };
   // Docker with the bundle (or a build that runs on its own Node.js): the container's Node.js and build tools do not matter.
   if ((f.install?.method === "bundle" && f.installed !== "current") || (f.installed === "current" && f.bundled)) {
     const t = f.target;
     const target = t ? `${t.arch}, ${t.libc}${t.glibc ? ` ${t.glibc}` : ""}` : "Linux";
-    return [{ name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" }, { name: docker ? "Container" : "Distro", value: f.install?.method === "bundle" ? `${target}: bundle` : target, status: "ok" }, login, build];
+    return [{ name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" }, { name: docker ? "Container" : "Distro", value: f.install?.method === "bundle" ? `${target}: bundle` : target, status: "ok" }, build];
   }
   return [
     { name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" },
     f.node === undefined && f.nodeOk === undefined ? na("Node.js 22+") : f.node && f.nodeOk ? { name: "Node.js 22+", value: f.node, status: "ok" } : { name: "Node.js 22+", value: f.node ? `${f.node} (too old)` : "Not installed", status: "missing" },
     !f.buildTools ? na("Build tools") : tools.length ? { name: "Build tools", value: `Missing: ${tools.join(", ")}`, status: "missing" } : { name: "Build tools", value: "Found", status: "ok" },
-    login,
     build,
   ];
 }
@@ -109,7 +105,6 @@ function rowsOf(c: SideCheck, docker = true): Row[] {
  */
 export function actionOf(check: SideCheck, failed: boolean): { label: string; mode: SideSetup } | undefined {
   const v = check.verdict;
-  if (check.reason === "not_logged_in" && (v === "blocked" || v === "install" || v === "update")) return { label: "Install anyway", mode: "needed" };
   if (v === "install") return { label: "Install", mode: "needed" };
   if (v === "update") return { label: "Update", mode: "needed" };
   if (v === "installed" && failed) return { label: "Reinstall", mode: "force" };

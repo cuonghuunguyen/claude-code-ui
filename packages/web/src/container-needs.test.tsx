@@ -20,24 +20,24 @@ const rows = (id: string) => [...document.querySelectorAll(`[data-testid="${id}"
 const bundleCheck: SideCheck = {
   verdict: "install",
   key: "k",
-  facts: { reachable: true, running: true, credentialsFile: true, installed: "none", writable: ["/tmp"], buildTools: { make: false, python3: false, cxx: false }, target: { arch: "x86_64", libc: "glibc", glibc: "2.36" }, install: { method: "bundle" }, tools: { tar: true, gzip: true, npm: false, git: false, cxxRuntime: true }, network: false },
+  facts: { reachable: true, running: true, installed: "none", writable: ["/tmp"], buildTools: { make: false, python3: false, cxx: false }, target: { arch: "x86_64", libc: "glibc", glibc: "2.36" }, install: { method: "bundle" }, tools: { tar: true, gzip: true, npm: false, git: false, cxxRuntime: true }, network: false },
 };
 const muslCheck: SideCheck = {
   verdict: "blocked",
   reason: "node_missing",
   key: "k",
-  facts: { reachable: true, running: true, credentialsFile: true, installed: "none", writable: ["/tmp"], buildTools: { make: false, python3: false, cxx: false }, target: { arch: "x86_64", libc: "musl" }, install: { method: "npm", reason: "the container uses musl (for example Alpine); the bundle needs glibc" }, tools: { tar: true, gzip: true, npm: false, git: true, cxxRuntime: false }, network: true },
+  facts: { reachable: true, running: true, installed: "none", writable: ["/tmp"], buildTools: { make: false, python3: false, cxx: false }, target: { arch: "x86_64", libc: "musl" }, install: { method: "npm", reason: "the container uses musl (for example Alpine); the bundle needs glibc" }, tools: { tar: true, gzip: true, npm: false, git: true, cxxRuntime: false }, network: true },
 };
 
 describe("What this container needs", () => {
   it("without a check: the bundle path, no marks", () => {
     const n = needsOf();
     expect(n.method).toBe("bundle");
-    expect([...n.needed, ...n.notNeeded].every((i) => i.ok === undefined)).toBe(true);
-    expect(n.notNeeded.map((i) => i.name)).toEqual(["Node.js", "npm", "Network access", "Build tools (make, python3, g++)"]);
+    expect(n.needed.every((i) => i.ok === undefined)).toBe(true);
+    expect(n.needed.map((i) => i.name)).toEqual(["sh, tar and gzip", "Linux on x86_64 or arm64 with glibc 2.28+ and libstdc++", "A writable /tmp, /dev/shm or home folder", "git, for the Git panel (optional)"]);
   });
 
-  it("collapsed at first; expands to needed / not needed with a ✓ or ✗ per item after a check (bundle path)", async () => {
+  it("collapsed at first; expands to the needed items with a ✓ or ✗ each after a check; no path sentence, no login (bundle path)", async () => {
     await mount(<ContainerNeeds check={bundleCheck} />);
     const d = document.querySelector<HTMLDetailsElement>('[data-testid="container-needs"]')!;
     expect(d.open).toBe(false);
@@ -48,18 +48,16 @@ describe("What this container needs", () => {
       "true sh, tar and gzip",
       "true Linux on x86_64 or arm64 with glibc 2.28+ and libstdc++",
       "true A writable /tmp, /dev/shm or home folder",
-      "true A Claude login (claude login, or a key in the environment)",
       "false git, for the Git panel (optional)",
     ]);
-    expect(rows("needs-not-needed")).toEqual(["false Node.js", "false npm", "false Network access", "false Build tools (make, python3, g++)"]);
-    expect(document.querySelector('[data-testid="needs-path"]')!.textContent).toMatch(/no Node\.js, npm, network or build tools/);
+    expect(document.querySelector('[data-testid="needs-path"]')).toBeNull();
+    expect(d.textContent).not.toMatch(/login|not needed/i);
   });
 
   it("npm path (musl): rows match the npm install and the reason shows", async () => {
     await mount(<ContainerNeeds check={muslCheck} />);
     expect(rows("needs-needed")[0]).toBe("false Node.js 22 or newer");
     expect(rows("needs-needed")).toContain("true Network access to the npm registry");
-    expect(rows("needs-not-needed")).toEqual(["true tar and gzip"]);
     expect(document.querySelector('[data-testid="needs-path"]')!.textContent).toBe("Claude UI installs with npm inside this container because the container uses musl (for example Alpine); the bundle needs glibc.");
   });
 });
@@ -70,7 +68,7 @@ describe("side panel, Docker", () => {
   it("bundle check: no Node.js or build tools rows; the guide shows; WSL has no guide", async () => {
     await mount(<SidePanel side={side()} state={{ check: bundleCheck }} onRun={() => {}} onCheck={() => {}} />);
     const r = [...document.querySelectorAll('[data-testid="side-check-row"]')].map((x) => x.textContent);
-    expect(r).toEqual(["ReachableYes, running", "Containerx86_64, glibc 2.36: bundle", "Claude loginFound", "claude-ui for this buildNot installed"]);
+    expect(r).toEqual(["ReachableYes, running", "Containerx86_64, glibc 2.36: bundle", "claude-ui for this buildNot installed"]);
     expect(document.querySelector('[data-testid="side-install"]')!.textContent).toBe("Install");
     expect(document.querySelector('[data-testid="container-needs"]')).not.toBeNull();
     root!.unmount();

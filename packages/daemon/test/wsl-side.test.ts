@@ -136,7 +136,7 @@ describe("setupScript for a WSL distro: bundle, npm fallback, never", () => {
       expect(s).toContain('exec "$dir/node/bin/node" "$cli" --side');
       expect(s).toContain("CLAUDE_UI_PHASE %s\\n' installing");
       expect(s).toContain("CLAUDE_UI_PHASE %s\\n' starting");
-      expect(s).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+      expect(s).not.toContain("not_logged_in");
     }
   });
 

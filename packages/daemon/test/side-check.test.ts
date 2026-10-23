@@ -14,7 +14,7 @@ const hasSh = spawnSync("sh", ["-c", "true"]).status === 0;
 const SH = existsSync("/bin/sh") ? "/bin/sh" : "sh";
 const KEY = "0.5.0-1700";
 
-const base = { make: true, python3: true, cxx: true, credentials: true, installed: "none" as "current" | "other" | "none", node: "22.4.0" as string | undefined };
+const base = { make: true, python3: true, cxx: true, installed: "none" as "current" | "other" | "none", node: "22.4.0" as string | undefined };
 const verdict = (checked: Partial<Parameters<typeof verdictOf>[0]["checked"]>, o: Partial<Parameters<typeof verdictOf>[0]> = {}) => verdictOf({ key: KEY, label: "WSL: Ubuntu", kind: "wsl", build: true, checked: { ...base, ...checked }, ...o });
 
 describe("checkScript", () => {
@@ -56,11 +56,11 @@ describe("checkScript", () => {
 describe("parseCheck", () => {
   const out = (lines: string[]) => lines.map((l) => `CLAUDE_UI_CHECK ${l}`).join("\n");
   it("reads every fact and skips shell noise", () => {
-    const r = parseCheck(`Welcome to Ubuntu\n${out(["node=22.4.0", "make=1", "python3=0", "cxx=1", "credentials=1", "writable=/tmp,/dev/shm", "installed=other", "installedKey=0.4.0-1"])}\nmotd\r\n`);
-    expect(r).toEqual({ node: "22.4.0", make: true, python3: false, cxx: true, credentials: true, writable: ["/tmp", "/dev/shm"], installed: "other", installedKey: "0.4.0-1" });
+    const r = parseCheck(`Welcome to Ubuntu\n${out(["node=22.4.0", "make=1", "python3=0", "cxx=1", "writable=/tmp,/dev/shm", "installed=other", "installedKey=0.4.0-1"])}\nmotd\r\n`);
+    expect(r).toEqual({ node: "22.4.0", make: true, python3: false, cxx: true, writable: ["/tmp", "/dev/shm"], installed: "other", installedKey: "0.4.0-1" });
   });
   it("no node, an empty writable list and the WSL package flag", () => {
-    expect(parseCheck(out(["node=none", "make=0", "python3=0", "cxx=0", "credentials=0", "package=0", "installed=none"]))).toEqual({ make: false, python3: false, cxx: false, credentials: false, packageVisible: false, installed: "none" });
+    expect(parseCheck(out(["node=none", "make=0", "python3=0", "cxx=0", "package=0", "installed=none"]))).toEqual({ make: false, python3: false, cxx: false, packageVisible: false, installed: "none" });
     expect(parseCheck(out(["node=22.1.0", "writable=", "installed=current"]))!.writable).toEqual([]);
   });
   it("docker: target, tools and the own-Node flag", () => {
@@ -85,13 +85,9 @@ describe("verdictOf", () => {
       ["old node", { node: "20.11.0" }, {}, "blocked", "node_old"],
       ["tools missing", { make: false, cxx: false }, {}, "blocked", "build_tools_missing"],
       ["tools missing but installed", { make: false, installed: "current" }, {}, "installed", undefined],
-      ["no credentials", {}, {}, "blocked", "not_logged_in"],
-      ["no credentials but update needed", { installed: "other" }, {}, "blocked", "not_logged_in"],
-      ["no credentials but installed", { installed: "current" }, {}, "installed", undefined],
       ["package unreadable", { packageVisible: false }, {}, "blocked", "package_unreadable"],
       ["package unreadable but installed", { packageVisible: false, installed: "current" }, {}, "installed", undefined],
       ["old node beats tools", { node: "18.0.0", make: false }, {}, "blocked", "node_old"],
-      ["tools beat login", { make: false, credentials: false }, {}, "blocked", "build_tools_missing"],
       ["docker: nothing writable", { writable: [] }, { kind: "docker", cpUsable: false }, "blocked", "no_writable_path"],
       ["docker: cp works, nothing writable for a stream", { writable: [] }, { kind: "docker", cpUsable: true }, "install", undefined],
       ["docker: cp unknown, nothing writable", { writable: [] }, { kind: "docker" }, "install", undefined],
@@ -99,8 +95,7 @@ describe("verdictOf", () => {
       ["docker: nothing writable but installed", { writable: [], installed: "current" }, { kind: "docker", cpUsable: false }, "installed", undefined],
     ];
     for (const [name, checked, o, v, reason] of table) {
-      const creds = name.startsWith("no credentials") ? { credentials: false } : {};
-      const r = verdict({ ...checked, ...creds }, o);
+      const r = verdict(checked, o);
       expect([name, r.verdict, r.reason]).toEqual([name, v, reason]);
       expect(r.key).toBe(KEY);
       expect(Object.keys(r.facts)).not.toContain("copy");
@@ -110,8 +105,8 @@ describe("verdictOf", () => {
 
   it("facts carry what was seen; the message never names the copy method", () => {
     const r = verdict({ installed: "other", installedKey: "0.4.0-1", writable: ["/tmp"] }, { kind: "docker", label: "Docker: dev", name: "dev", cpUsable: true });
-    expect(r.facts).toEqual({ reachable: true, running: true, node: "22.4.0", nodeOk: true, buildTools: { make: true, python3: true, cxx: true }, credentialsFile: true, installed: "other", installedKey: "0.4.0-1", writable: ["/tmp"] });
-    for (const reason of ["gone", "not_running", "unreachable", "no_build", "package_unreadable", "node_missing", "node_old", "build_tools_missing", "not_logged_in", "no_writable_path", "check_failed"] as const)
+    expect(r.facts).toEqual({ reachable: true, running: true, node: "22.4.0", nodeOk: true, buildTools: { make: true, python3: true, cxx: true }, installed: "other", installedKey: "0.4.0-1", writable: ["/tmp"] });
+    for (const reason of ["gone", "not_running", "unreachable", "no_build", "package_unreadable", "node_missing", "node_old", "build_tools_missing", "no_writable_path", "check_failed"] as const)
       for (const docker of [true, false]) expect(checkMessage(reason, "X", { docker, detail: "d", name: "n" }), reason).not.toMatch(/docker cp|docker exec|\bcp\b|stream|exec/i);
   });
 
@@ -159,8 +154,7 @@ describe("verdictOf", () => {
     expect(r.facts).toMatchObject({ target: { arch: "x86_64", libc: "musl" }, install: { method: "npm", reason: "the container uses musl" }, tools: { git: true, npm: false }, network: false });
   });
 
-  it("every reason has a short plain message and the not-logged-in one is soft (offers installing anyway)", () => {
-    expect(checkMessage("not_logged_in", "WSL: Ubuntu")).toMatch(/install anyway/);
+  it("every reason has a short plain message", () => {
     expect(checkMessage("node_old", "WSL: Ubuntu", { detail: "20.1.0" })).toContain("20.1.0");
     expect(checkMessage("not_running", "Docker: dev", { docker: true, name: "dev" })).toContain("docker start dev");
     expect(blockedCheck(KEY, "X", "gone").facts).toEqual({ reachable: false, installed: "none" });
@@ -235,7 +229,8 @@ describe.skipIf(!hasSh || process.platform === "win32")("the check and setup scr
 
   it("nothing installed: install", () => {
     const c = check({});
-    expect(c.parsed).toMatchObject({ node: "22.4.0", make: true, python3: true, cxx: true, credentials: true, installed: "none" });
+    expect(c.parsed).toMatchObject({ node: "22.4.0", make: true, python3: true, cxx: true, installed: "none" });
+    expect(c.out).not.toContain("credentials");
     // Home is reported as the text $HOME, never as its value.
     expect(c.parsed!.writable).toContain("$HOME");
     expect(c.out).not.toContain(c.home);
@@ -254,11 +249,10 @@ describe.skipIf(!hasSh || process.platform === "win32")("the check and setup scr
     expect(c.parsed!.installedKey).toBeUndefined();
     expect(c.unchanged).toBe(true);
   });
-  it("no node, old node, no tools, no credentials", () => {
+  it("no node, old node, no tools", () => {
     expect(check({ node: false }).parsed!.node).toBeUndefined();
     expect(check({ node: "20.11.0" }).parsed!.node).toBe("20.11.0");
     expect(check({ tools: false }).parsed).toMatchObject({ make: false, python3: false, cxx: false });
-    expect(check({ credentials: false }).parsed!.credentials).toBe(false);
   });
   it("leaves the whole HOME tree (paths, sizes, mtimes) as it was, and never prints the credentials", () => {
     for (const o of [{}, { install: "other" as const }, { install: "current" as const }, { credentials: false }, { node: false as const }]) {

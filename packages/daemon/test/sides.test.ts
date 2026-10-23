@@ -139,7 +139,8 @@ describe("sides", () => {
 
   it("the docker setup script runs in plain sh: the tarball, no wslpath, roots from the working dir", () => {
     const s = setupScript("/tmp/claude-ui-side-0.2.0-1.tgz", "0.2.0-1", "docker");
-    for (const part of ["src='/tmp/claude-ui-side-0.2.0-1.tgz'", 'CLAUDE_UI_ROOTS="$HOME:$PWD"', "say build_tools_missing", "CLAUDE_CODE_OAUTH_TOKEN", 'exec node "$cli" --side', 'rm -f "$src"']) expect(s).toContain(part);
+    for (const part of ["src='/tmp/claude-ui-side-0.2.0-1.tgz'", 'CLAUDE_UI_ROOTS="$HOME:$PWD"', "say build_tools_missing", 'exec node "$cli" --side', 'rm -f "$src"']) expect(s).toContain(part);
+    expect(s).not.toContain("not_logged_in");
     for (const part of ["wslpath", "<(", "[[", "--install-links", "-exec"]) expect(s).not.toContain(part);
     expect(dockerExecArgs("dev", s)).toEqual(["exec", "-i", "dev", "sh", "-c", s]);
     if (hasSh) expect(spawnSync("sh", ["-n", "-c", s]).status).toBe(0);
@@ -315,7 +316,6 @@ describe("sides", () => {
   });
 
   it("setup errors in a container name the container's next step", () => {
-    expect(setupMessage("not_logged_in", "", "Docker: dev", true)).toBe("Claude is not logged in to Docker: dev. Run claude login in the container or copy your ~/.claude/.credentials.json into it (or start it with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN set), then retry.");
     expect(setupMessage("node_missing", "", "Docker: dev", true)).toBe("Node.js 22 or newer is not installed in Docker: dev. Use an image with Node.js 22+ (e.g. node:22) or install it in the container, then retry.");
     expect(setupMessage("build_tools_missing", "", "WSL: Ubuntu")).toBe("WSL: Ubuntu needs make, python3 and g++ to build the terminal support (node-pty). Install them there (Debian/Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++), then retry.");
   });
