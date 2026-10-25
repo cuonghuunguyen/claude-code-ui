@@ -116,7 +116,7 @@ import { FilesPanel } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
 import { defaultRepo, repoDir, useRepos, type RepoTarget } from "./repos.ts";
-import type { RepoList } from "./repo-choice.ts";
+import { repoProjectKey, type RepoList } from "./repo-choice.ts";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
@@ -1707,8 +1707,8 @@ export function App() {
   const repoTarget: RepoTarget | null | undefined = repos === undefined || repos === null || !panelCwd ? undefined : repo ? { path: repo.path, dir: repoDir(panelCwd, repo.rel) } : null;
   // The Graph keeps the default repository until it gets the selector (#391); Changes resolves the remembered choice itself.
   // Panes: the pane owner session's cwd replaces panelCwd here (the choice is kept per owner project).
-  const repoProjectKey = panelCwd ? projectOf(panelCwd, worktrees) : undefined;
-  const repoList: RepoList | undefined = panelCwd && repos && repoProjectKey ? { list: repos, truncated: reposTruncated, projectKey: repoProjectKey } : undefined;
+  const repoKey = repoProjectKey(panelCwd, worktrees, listLoaded);
+  const repoList: RepoList | undefined = panelCwd && repos && repoKey ? { list: repos, truncated: reposTruncated, projectKey: repoKey } : undefined;
   const isGit = repos ? !!repo : gitProbe;
   const ownGit = repos ? repos.some((r) => r.kind === "main" && !r.outsideRoots) : isGit;
   const reposAnswered = repos !== undefined;

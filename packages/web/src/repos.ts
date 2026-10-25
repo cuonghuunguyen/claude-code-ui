@@ -9,17 +9,7 @@ type Client = ReturnType<typeof connect>;
 /** A repository the git panes read: `path` the canonical top for requests, `dir` the same top spelled from the session cwd for row paths. */
 export type RepoTarget = { path: string; dir: string };
 
-/** The top spelled from `cwd`: "" is `cwd`, a ".." segment strips one segment of it. */
-export function repoDir(cwd: string, rel: string): string {
-  let dir = cwd;
-  for (const seg of rel.split("/").filter(Boolean)) {
-    if (seg === "..") {
-      const up = dir.replace(/[\\/]+$/, "").replace(/[\\/][^\\/]*$/, "");
-      dir = up || dir.slice(0, 1);
-    } else dir = joinPath(dir, seg);
-  }
-  return dir;
-}
+export { repoDir } from "./paths.ts";
 
 /** The project's default repository: the cwd's own, else the first root the daemon may read. The Graph shows it until it gets the selector. */
 export const defaultRepo = (repos: GitRepo[]): GitRepo | undefined => resolveRepoChoice(repos, undefined);

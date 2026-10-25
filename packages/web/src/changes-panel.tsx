@@ -346,7 +346,10 @@ export function ChangesPanel({
           const n = r.status?.files ?? 0;
           setDirty((d) => ({ repo: gitCwd, files: { ...(d.repo === gitCwd ? d.files : {}), [sub.path]: n } }));
         },
-        () => {},
+        // The submodule cannot be read now (deinitialised, refused): its earlier count is stale.
+        () => {
+          if (live && seq === probeSeq.current) setDirty((d) => ({ repo: gitCwd, files: { ...(d.repo === gitCwd ? d.files : {}), [sub.path]: 0 } }));
+        },
       ),
     );
     return () => void (live = false);

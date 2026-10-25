@@ -27,3 +27,15 @@ export const withSep = (dir: string) => (dir.endsWith(sepOf(dir)) || (isWinPath(
 
 /** `rel` ("/"-separated, as fs.search answers) under absolute `dir`, in `dir`'s separators. */
 export const joinPath = (dir: string, rel: string) => withSep(dir) + (isWinPath(dir) ? rel.replace(/\//g, "\\") : rel);
+
+/** The top spelled from `cwd`: "" is `cwd`, a ".." segment strips one segment of it. */
+export function repoDir(cwd: string, rel: string): string {
+  let dir = cwd;
+  for (const seg of rel.split("/").filter(Boolean)) {
+    if (seg === "..") {
+      const up = dir.replace(/[\\/]+$/, "").replace(/[\\/][^\\/]*$/, "");
+      dir = up || dir.slice(0, 1);
+    } else dir = joinPath(dir, seg);
+  }
+  return dir;
+}

@@ -1,16 +1,21 @@
 // The repository a project's Changes pane shows (docs/spec.md "Repository selector"): per browser, per project, `rel` relative to the owner cwd.
 import { useCallback, useSyncExternalStore } from "react";
-import { repoTree, type GitRepo, type GitReposResult } from "@claude-ui/protocol";
-import { repoDir, type RepoTarget } from "./repos.ts";
+import { repoTree, type GitRepo, type GitReposResult, type Worktree } from "@claude-ui/protocol";
+import { repoDir } from "./paths.ts";
+import type { RepoTarget } from "./repos.ts";
+import { projectOf } from "./sessions.ts";
 
 const KEY = "claude-ui.repoChoice";
 export const REPO_CHOICE_MAX = 200;
 // Storage blocked: the choices last while the page is open.
 let memory: Record<string, string> | undefined;
+// A write failed (quota): memory is newer than the stored value.
+let writeFailed = false;
 const listeners = new Set<() => void>();
 
 /** Insertion order = write order; only string values are kept. */
 function readAll(): Record<string, string> {
+  if (writeFailed && memory) return memory;
   try {
     const v: unknown = JSON.parse(localStorage.getItem(KEY) ?? "{}");
     if (!v || typeof v !== "object" || Array.isArray(v)) return {};
@@ -18,6 +23,12 @@ function readAll(): Record<string, string> {
   } catch {
     return memory ?? {};
   }
+}
+
+/** Tests: forgets what this page kept in memory. */
+export function forgetRepoChoices(): void {
+  memory = undefined;
+  writeFailed = false;
 }
 
 export function getRepoChoice(projectKey: string): string | undefined {
@@ -35,8 +46,10 @@ export function setRepoChoice(projectKey: string, rel: string): void {
   memory = all;
   try {
     localStorage.setItem(KEY, JSON.stringify(all));
+    writeFailed = false;
   } catch {
-    // See `memory`.
+    // See `writeFailed`.
+    writeFailed = true;
   }
   listeners.forEach((l) => l());
 }
@@ -74,6 +87,9 @@ export function resolveRepoChoice(list: GitRepo[], stored: string | undefined): 
 
 /** The selector shows for 2+ repositories, or when the own repository is not listed (a lone nested one is still a choice). */
 export const selectorVisible = (list: GitRepo[]): boolean => list.length > 0 && (list.length >= 2 || !list.some((r) => r.kind === "main"));
+
+/** The key of a pane's remembered choice: the owner cwd's project. None until the worktree list is known (a linked worktree would key under its own path). */
+export const repoProjectKey = (cwd: string | undefined, worktrees: Record<string, Worktree[]>, listLoaded: boolean): string | undefined => (cwd && listLoaded ? projectOf(cwd, worktrees) : undefined);
 
 /** `git.repos` of the pane's cwd; `projectKey` keys the remembered choice (the owner session's project). */
 export type RepoList = { list: GitRepo[] | null | undefined; truncated?: GitReposResult["truncated"]; projectKey: string };

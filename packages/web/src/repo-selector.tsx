@@ -48,7 +48,16 @@ function RepoTree({ list, truncated, selected, onSelect, limit, close }: { list:
     onSelect(r.repo.rel);
     close();
   };
-  const toggle = (path: string, open: boolean) => setCollapsed((c) => (open ? new Set([...c].filter((p) => p !== path)) : new Set(c).add(path)));
+  const toggle = (path: string, open: boolean) => {
+    setCollapsed((c) => (open ? new Set([...c].filter((p) => p !== path)) : new Set(c).add(path)));
+    // Collapsing hides the focused row below it: the collapsed row keeps the focus.
+    if (!open) {
+      const at = rows.findIndex((r) => r.repo.path === path);
+      let end = at + 1;
+      while (at >= 0 && end < rows.length && rows[end]!.depth > rows[at]!.depth) end++;
+      if (index > at && index < end) goTo(path);
+    }
+  };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const row = rows[index];
@@ -88,7 +97,8 @@ function RepoTree({ list, truncated, selected, onSelect, limit, close }: { list:
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "ArrowDown" && rows[0]) (e.preventDefault(), goTo(rows[Math.min(index, rows.length - 1)]!.repo.path));
-              else e.stopPropagation();
+              // ←/→ move the caret here; the Changes list's ←/→ cycle must not see them. Esc must reach the popover.
+              else if (e.key === "ArrowLeft" || e.key === "ArrowRight") e.stopPropagation();
             }}
             placeholder="Filter repositories"
             aria-label="Filter repositories"

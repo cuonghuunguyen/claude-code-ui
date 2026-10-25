@@ -3,7 +3,7 @@ import type { GitRepo } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { getRepoChoice, REPO_CHOICE_MAX, resolveRepoChoice, selectorVisible, setRepoChoice, useRepoChoice, useSelectedRepo, type RepoList } from "./repo-choice.ts";
+import { forgetRepoChoices, getRepoChoice, REPO_CHOICE_MAX, repoProjectKey, resolveRepoChoice, selectorVisible, setRepoChoice, useRepoChoice, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const KEY = "claude-ui.repoChoice";
@@ -14,9 +14,7 @@ const sub = r("libs/lib", "submodule");
 afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
-  // Memory of a blocked-storage test must not leak: write through working storage.
-  setRepoChoice("reset", "");
-  localStorage.clear();
+  forgetRepoChoices();
 });
 
 it("resolveRepoChoice returns the stored rel when listed and usable", () => {
@@ -66,6 +64,17 @@ it("storage blocked: getItem/setItem throw, the choice lasts in memory", () => {
   expect(getRepoChoice("/p")).toBeUndefined();
   expect(() => setRepoChoice("/p", "libs/lib")).not.toThrow();
   expect(getRepoChoice("/p")).toBe("libs/lib");
+});
+
+it("setItem failing while getItem works keeps the choice in memory for the session", () => {
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new Error("quota");
+  });
+  setRepoChoice("/p", "libs/lib");
+  expect(getRepoChoice("/p")).toBe("libs/lib");
+  setRepoChoice("/q", "web");
+  expect(getRepoChoice("/p")).toBe("libs/lib");
+  expect(getRepoChoice("/q")).toBe("web");
 });
 
 it("a corrupt stored value reads as no choice", () => {
@@ -138,4 +147,12 @@ it("an unresolvable stored value is kept", async () => {
   expect(getRepoChoice("/p")).toBe("libs/lib");
   expect(localStorage.getItem(KEY)).toBe(before);
   await act(async () => root.render(null));
+});
+
+it("repoProjectKey waits for the worktree list and maps a linked worktree to its project", () => {
+  const wt = { "/p": [{ path: "/p", branch: "main", main: true }, { path: "/wt", branch: "x", main: false }] };
+  expect(repoProjectKey("/wt", {}, false)).toBeUndefined();
+  expect(repoProjectKey(undefined, wt, true)).toBeUndefined();
+  expect(repoProjectKey("/wt", wt, true)).toBe("/p");
+  expect(repoProjectKey("/other", wt, true)).toBe("/other");
 });

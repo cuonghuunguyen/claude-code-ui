@@ -1206,6 +1206,22 @@ describe("repository selector", () => {
     expect(rows()).toEqual(["Modified libs/lib/a.txt, +1 -0"]);
   });
 
+  it("rows of the previous repository are not shown while the new repository's reply is pending", async () => {
+    saveDiffMode("uncommitted");
+    let release = () => {};
+    const slow = new Promise<void>((r) => (release = r));
+    const client = fakeClient(files, { diffs, at, defer: (cwd) => (cwd === "/p/libs/lib" ? slow : undefined) });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    expect(rows()).toEqual(["Modified x.ts, +1 -1"]);
+    await pickRepo("libs/lib");
+    expect(rows()).toEqual([]);
+    expect(el.querySelector("[data-testid=changes-loading]")).not.toBeNull();
+    await act(async () => release());
+    await flush();
+    expect(rows()).toEqual(["Modified libs/lib/a.txt, +1 -1", "Modified libs/lib/pic.png"]);
+  });
+
   it("a reply for the previous repository is dropped after a switch", async () => {
     saveDiffMode("uncommitted");
     let release = () => {};
@@ -1241,6 +1257,19 @@ describe("submodule and nested repository rows", () => {
     expect(el.querySelector("[data-testid=submodule-badge]")).not.toBeNull();
     expect(el.querySelector("[data-testid=submodule-dirty]")!.textContent).toBe(": modified content (2 files)");
     expect(el.querySelector("[data-testid=submodule-detail]")!.textContent).toBe("Submodule libs/lib: modified content (2 files)");
+  });
+
+  it("a failing submodule probe clears its previous modified content row", async () => {
+    saveDiffMode("uncommitted");
+    let n = 0;
+    const client = fakeClient({}, { diff: D([]), statuses: { "/p/libs/lib": dirtyStatus(3) }, statusDefer: () => (++n > 1 ? Promise.reject(new Error("not_git")) : undefined) });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    expect(rows()).toEqual(["Modified libs/lib, submodule, modified content"]);
+    await act(async () => el.querySelector<HTMLElement>('[aria-label="Reload from disk"]')!.click());
+    await flush();
+    expect(gitCalls(client, "git.status")).toHaveLength(2);
+    expect(rows()).toEqual([]);
   });
 
   it("a clean submodule (files 0 or no status) gets no row", async () => {

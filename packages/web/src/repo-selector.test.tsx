@@ -184,3 +184,37 @@ it("←/→ inside the tree do not reach the document listener", async () => {
   document.removeEventListener("keydown", seen);
   expect(seen).not.toHaveBeenCalled();
 });
+
+const many = (n: number) => [main, ...Array.from({ length: n }, (_, i) => R(`m${i}`, "nested", "/p"))];
+
+it("Escape in the filter field closes the selector and focus returns to the trigger", async () => {
+  await show({ list: many(11), selected: main });
+  await open();
+  const input = document.querySelector<HTMLInputElement>("[data-testid=repo-filter]")!;
+  expect(document.activeElement).toBe(input);
+  await key("Escape", input);
+  await flush();
+  expect(document.querySelector("[role=tree]")).toBeNull();
+  expect(document.activeElement).toBe(trigger());
+});
+
+it("←/→ in the filter field do not reach the document listener", async () => {
+  await show({ list: many(11), selected: main });
+  await open();
+  const input = document.querySelector<HTMLInputElement>("[data-testid=repo-filter]")!;
+  const seen = vi.fn();
+  document.addEventListener("keydown", seen);
+  await key("ArrowLeft", input);
+  document.removeEventListener("keydown", seen);
+  expect(seen).not.toHaveBeenCalled();
+});
+
+it("a chevron click that hides the focused row moves focus to the collapsed row", async () => {
+  await show({ selected: deep });
+  await open();
+  expect(document.activeElement).toBe(rows()[3]);
+  await act(async () => rows()[2]!.querySelector<HTMLElement>("[data-testid=repo-chevron]")!.click());
+  await flush();
+  expect(rows()).toHaveLength(3);
+  expect(document.activeElement).toBe(rows()[2]);
+});
