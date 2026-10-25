@@ -1,7 +1,7 @@
 // The file tree as data (docs/spec.md "Layout", Side panel): visible rows, keyboard moves, type-ahead and git marks. No React.
-import type { FsEntry } from "@claude-ui/protocol";
+import type { FsEntry, GitRepo } from "@claude-ui/protocol";
 import type { GitRow } from "./git-changes.ts";
-import { baseName, inDir, isWinPath, joinPath } from "./paths.ts";
+import { baseName, inDir, isWinPath, joinPath, repoDir } from "./paths.ts";
 
 export type DirState = FsEntry[] | { error: string } | "loading";
 export type TreeModel = { dirs: Record<string, DirState>; expanded: ReadonlySet<string> };
@@ -129,18 +129,29 @@ export function typeAhead(rows: Row[], from: number, buffer: string): number {
   return -1;
 }
 
-/** Marks of the changed files under `cwd` (keys: `pathKey`) and of the folders above them: D over M (also R) over A (also untracked). */
+/** Marks of the changed files under `cwd` (keys: `pathKey`) and of the folders above them: D over M (also R) over A (also untracked). A gitlink row (a moved submodule) marks its own folder like a file. */
 export function gitMarks(rows: GitRow[], cwd: string): { files: Map<string, Mark>; dirs: Map<string, DirMark> } {
   const files = new Map<string, Mark>();
   const dirs = new Map<string, DirMark>();
   const rank: Record<DirMark, number> = { A: 1, M: 2, D: 3 };
+  const base = trimSep(cwd);
+  const win = isWinPath(cwd);
+  const prefix = base + "/";
+  // Rows of one folder share their ancestors: spelled and keyed once per folder.
+  const chains = new Map<string, string[]>();
+  const chainOf = (path: string) => {
+    const at = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    const folder = path.slice(0, at);
+    let chain = chains.get(folder);
+    if (!chain) chains.set(folder, (chain = ancestors(path, cwd).map(pathKey)));
+    return chain;
+  };
   for (const r of rows) {
-    if (!inDir(r.path, cwd) || r.path.length <= trimSep(cwd).length) continue;
+    if (r.path.length <= base.length || !(win ? inDir(r.path, cwd) : r.path.startsWith(prefix))) continue;
     const mark: Mark = r.kind === "A" && r.untracked ? "U" : r.kind;
     files.set(pathKey(r.path), mark);
     const d: DirMark = mark === "D" ? "D" : mark === "M" || mark === "R" ? "M" : "A";
-    for (const dir of ancestors(r.path, cwd)) {
-      const k = pathKey(dir);
+    for (const k of chainOf(r.path)) {
       const cur = dirs.get(k);
       if (!cur || rank[d] > rank[cur]) dirs.set(k, d);
     }
@@ -170,4 +181,61 @@ export function dropPaths(m: TreeModel, path: string): TreeModel {
   const dirs: Record<string, DirState> = {};
   for (const [k, v] of Object.entries(m.dirs)) if (!under(k, path)) dirs[k] = v;
   return { dirs, expanded: new Set([...m.expanded].filter((p) => !under(p, path))) };
+}
+
+/** A repository's git.diff rows; `dir` its top spelled from the cwd. */
+export type RepoRead = { dir: string; rows: GitRow[] };
+
+/**
+ * The rows each read owns: a row inside a listed repository folder nested in the read's own is dropped (the innermost repository wins);
+ * at that folder itself only a gitlink row stays (a moved submodule), so the parent's untracked entry ("inner/") goes. `listed`: every
+ * listed repository top spelled from the cwd, outsideRoots included.
+ */
+export function ownRows(reads: RepoRead[], listed: string[]): GitRow[] {
+  const out: GitRow[] = [];
+  for (const read of reads) {
+    const win = isWinPath(read.dir);
+    const sep = win ? "\\" : "/";
+    const key = (p: string) => (win ? p.replace(/\//g, "\\").toLowerCase() : p);
+    const dir = key(trimSep(read.dir)) + sep;
+    const inner = listed.map((x) => key(trimSep(x))).filter((x) => x.startsWith(dir));
+    for (const r of read.rows) {
+      if (!inner.length) {
+        out.push(r);
+        continue;
+      }
+      const p = key(trimSep(r.path));
+      if (!inner.some((x) => p === x ? !r.submodule : p.startsWith(x + sep))) out.push(r);
+    }
+  }
+  return out;
+}
+
+/** Marks of several repositories (docs/spec.md "Layout"): `gitMarks` over `ownRows`. */
+export const repoMarks = (reads: RepoRead[], listed: string[], cwd: string) => gitMarks(ownRows(reads, listed), cwd);
+
+/** Listed nested repositories and submodules by their folder (`pathKey` of the top spelled from the cwd); the cwd's own repository has no row. */
+export function repoFolders(list: GitRepo[], cwd: string): Map<string, GitRepo> {
+  const out = new Map<string, GitRepo>();
+  for (const r of list) if (r.kind !== "main" && r.rel !== "" && !r.rel.startsWith("..")) out.set(pathKey(repoDir(cwd, r.rel)), r);
+  return out;
+}
+
+/** The innermost listed, readable repository whose folder holds `path` (or is `path`). */
+export function repoOfPath(path: string, list: GitRepo[], cwd: string): GitRepo | undefined {
+  let best: { r: GitRepo; len: number } | undefined;
+  for (const r of list) {
+    if (r.outsideRoots) continue;
+    const dir = repoDir(cwd, r.rel);
+    if (under(path, dir) && (!best || dir.length > best.len)) best = { r, len: dir.length };
+  }
+  return best?.r;
+}
+
+/** The accessible label and tooltip of a repository folder's icon. */
+export function repoIconText(repo: GitRepo, name: string): { label: string; title: string } {
+  const kind = repo.kind === "submodule" ? "submodule" : "repository";
+  const out = repo.outsideRoots ? " outside the allowed folders" : "";
+  const label = `${repo.kind === "submodule" ? "Submodule" : "Repository"} ${name}${repo.branch ? `, branch ${repo.branch}` : ""}${out && `,${out}`}`;
+  return { label, title: `${repo.branch ? `${repo.branch} · ` : ""}${kind}${out && ` ·${out}`}` };
 }
