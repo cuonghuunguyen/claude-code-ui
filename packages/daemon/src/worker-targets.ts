@@ -61,10 +61,12 @@ async function allEntries(d: TargetDeps): Promise<Entry[]> {
   const projectPaths = new Set(own);
   const seen = new Set<string>();
   const out: Entry[] = [];
-  for (const projectPath of own) {
+  const lists = await Promise.all(own.map((p) => d.worktrees(p)));
+  for (const [i, projectPath] of own.entries()) {
     const project = basename(projectPath);
-    const rows = await d.worktrees(projectPath);
-    const main = rows?.find((w) => w.main);
+    const rows = lists[i];
+    // The project's own row: the main checkout, or its own entry when the project is itself a linked worktree.
+    const main = rows?.find((w) => w.path === projectPath || w.path === d.allowed(projectPath)) ?? rows?.find((w) => w.main);
     const base = { project, projectPath };
     const flags = (path: string) => ({ ...(d.removing(path) ? { removing: true as const } : {}) });
     if (!seen.has(projectPath)) {
@@ -157,7 +159,10 @@ export async function resolveTarget(a: TargetInput, d: TargetDeps): Promise<Reso
     hit = found;
   } else {
     const linked = pool.filter((e) => !e.main);
-    const hits = linked.filter((e) => e.worktree === w);
+    const named = linked.filter((e) => e.worktree === w);
+    const hits = named.filter((e) => !e.outsideRoots && !e.removing);
+    // Only an unlisted worktree has the name: say why it cannot be used.
+    if (hits.length === 0 && named.length === 1) hits.push(named[0]!);
     if (hits.length === 0) throw new TargetError(`No worktree named ${w}${scope ? ` in project ${scope.project}` : ""}. Worktrees: ${names(linked.filter((e) => !e.outsideRoots && !e.removing).map((e) => e.worktree!))}. worker_targets lists them.`, "unknown");
     if (hits.length > 1) throw new TargetError(`Worktree name ${w} matches ${hits.length} worktrees: ${hits.map((e) => e.path).join(", ")}. Give project, or the path.`, "ambiguous");
     hit = hits[0]!;

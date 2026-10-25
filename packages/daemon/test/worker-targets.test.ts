@@ -122,3 +122,39 @@ describe("targetLabel", () => {
     expect(targetLabel({ kind: "cwd", cwd: "/z" })).toBe(" in /z");
   });
 });
+
+describe("review fixes", () => {
+  const mk = (r: Record<string, Worktree[] | undefined>, extra: Partial<TargetDeps> = {}): TargetDeps => ({ ...deps, projects: () => Object.keys(r), worktrees: async (p) => r[p], ...extra });
+
+  it("a name lookup ignores worktrees outside the roots or being removed when a listed one matches", async () => {
+    const d = mk({ "/r/p": [main("/r/p"), wt("/r/p/.claude/worktrees/fix", "fix"), wt("/out/fix", "fix2", { outsideRoots: true })], "/r/q": [main("/r/q"), wt("/r/q/.claude/worktrees/gone/fix", "fix3")] });
+    expect(await resolveTarget({ worktree: "fix" }, d)).toMatchObject({ kind: "worktree", cwd: "/r/p/.claude/worktrees/fix" });
+    // removing(): "/gone" paths
+    expect(await resolveTarget({ worktree: "fix", project: "p" }, d)).toMatchObject({ kind: "worktree" });
+  });
+  it("a name that only an unlisted worktree has gives its outside or removing error", async () => {
+    const d = mk({ "/r/p": [main("/r/p"), wt("/out/only", "only", { outsideRoots: true }), wt("/r/p/.claude/worktrees/gone", "gone")] });
+    expect(await code(resolveTarget({ worktree: "only" }, d))).toMatch(/^outside:/);
+    expect(await code(resolveTarget({ worktree: "gone" }, d))).toMatch(/^removing:/);
+  });
+  it("a project that is a linked worktree takes branch and locked from its own row", async () => {
+    const d = mk({ "/r/lw": [main("/r/main"), wt("/r/lw", "lwb", { locked: true })] });
+    expect((await listTargets(d))[0]).toMatchObject({ path: "/r/lw", branch: "lwb", locked: true, main: true });
+    const d2 = mk({ "/r/lw": [main("/r/main"), wt("/r/lw", "lwb")] });
+    expect((await listTargets(d2))[0]!.locked).toBeUndefined();
+  });
+  it("reads the worktree lists of all projects in parallel", async () => {
+    let live = 0;
+    let peak = 0;
+    const d = mk({ "/r/a": undefined, "/r/b": undefined, "/r/c": undefined }, {
+      worktrees: async () => {
+        peak = Math.max(peak, ++live);
+        await new Promise((r) => setTimeout(r, 10));
+        live--;
+        return undefined;
+      },
+    });
+    expect((await listTargets(d)).length).toBe(3);
+    expect(peak).toBe(3);
+  });
+});
