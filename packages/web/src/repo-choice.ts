@@ -1,9 +1,11 @@
 // The repository a project's Changes pane shows (docs/spec.md "Repository selector"): per browser, per project, `rel` relative to the owner cwd.
 import { useCallback, useSyncExternalStore } from "react";
 import { repoTree, type GitRepo, type GitReposResult, type Worktree } from "@claude-ui/protocol";
-import { repoDir } from "./paths.ts";
-import type { RepoTarget } from "./repos.ts";
+import { baseName, repoDir } from "./paths.ts";
 import { projectOf } from "./sessions.ts";
+
+/** A repository the git panes read: `path` the canonical top for requests, `dir` the same top spelled from the session cwd for row paths. */
+export type RepoTarget = { path: string; dir: string };
 
 const KEY = "claude-ui.repoChoice";
 export const REPO_CHOICE_MAX = 200;
@@ -57,7 +59,13 @@ export function setRepoChoice(projectKey: string, rel: string): void {
 export function subscribeRepoChoice(l: () => void): () => void {
   listeners.add(l);
   // Another tab of this browser changed a choice.
-  const onStorage = (e: StorageEvent) => (e.key === KEY || e.key === null) && l();
+  const onStorage = (e: StorageEvent) => {
+    if (e.key !== KEY && e.key !== null) return;
+    // The other tab's successful write is newer than what a failed write kept here.
+    writeFailed = false;
+    memory = undefined;
+    l();
+  };
   window.addEventListener("storage", onStorage);
   return () => {
     listeners.delete(l);
@@ -84,6 +92,9 @@ export function resolveRepoChoice(list: GitRepo[], stored: string | undefined): 
     list.find(usable)
   );
 }
+
+/** The repository's name in Graph result lines: its path relative to the cwd, or its folder name for the own repository (also one above the cwd). */
+export const repoLabel = (r: GitRepo): string => (r.rel && !r.rel.startsWith("..") ? r.rel : baseName(r.path));
 
 /** The selector shows for 2+ repositories, or when the own repository is not listed (a lone nested one is still a choice). */
 export const selectorVisible = (list: GitRepo[]): boolean => list.length > 0 && (list.length >= 2 || !list.some((r) => r.kind === "main"));

@@ -3,7 +3,7 @@ import type { GitRepo } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { forgetRepoChoices, getRepoChoice, REPO_CHOICE_MAX, repoProjectKey, resolveRepoChoice, selectorVisible, setRepoChoice, useRepoChoice, useSelectedRepo, type RepoList } from "./repo-choice.ts";
+import { forgetRepoChoices, getRepoChoice, REPO_CHOICE_MAX, repoLabel, repoProjectKey, resolveRepoChoice, selectorVisible, setRepoChoice, subscribeRepoChoice, useRepoChoice, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const KEY = "claude-ui.repoChoice";
@@ -75,6 +75,26 @@ it("setItem failing while getItem works keeps the choice in memory for the sessi
   setRepoChoice("/q", "web");
   expect(getRepoChoice("/p")).toBe("libs/lib");
   expect(getRepoChoice("/q")).toBe("web");
+});
+
+it("a storage event after a failed write reads the other tab's value", () => {
+  const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new Error("quota");
+  });
+  const un = subscribeRepoChoice(() => {});
+  setRepoChoice("/p", "libs/lib");
+  expect(getRepoChoice("/p")).toBe("libs/lib");
+  set.mockRestore();
+  localStorage.setItem(KEY, JSON.stringify({ "/p": "web" }));
+  window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+  expect(getRepoChoice("/p")).toBe("web");
+  un();
+});
+
+it("repoLabel: rel for nested and submodules, folder name for the own repository and one above the cwd", () => {
+  expect(repoLabel(r("libs/lib", "submodule"))).toBe("libs/lib");
+  expect(repoLabel({ path: "/home/u/demo", rel: "", kind: "main" })).toBe("demo");
+  expect(repoLabel({ path: "/home/u", rel: "../..", kind: "main" })).toBe("u");
 });
 
 it("a corrupt stored value reads as no choice", () => {
