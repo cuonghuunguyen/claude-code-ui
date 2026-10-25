@@ -99,7 +99,7 @@ Sending a user message while a turn runs; it is injected into the running turn i
 _Avoid_: queueing (different behavior)
 
 **Queued message**:
-A message held by the daemon and sent as a new turn when the session is next idle.
+A message or bash mode command held by the daemon and sent (run) when the session is next idle.
 _Avoid_: followup, pending prompt
 
 **Checkpoint**:
