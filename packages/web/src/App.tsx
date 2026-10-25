@@ -72,6 +72,7 @@ import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
+import { copyFailText } from "./copy-text.ts";
 import { noteRefs } from "./git-refs.ts";
 import { agentLinks, NO_LINKS, sameLinks, workerState, type AgentLinks } from "./workers.ts";
 import { confirmNames, daysLabel } from "./sidebar-menus.ts";
@@ -1062,7 +1063,7 @@ export function App() {
 
   /** Copies to the clipboard, which the browser offers on HTTPS and localhost only. */
   function copyText(text: string | undefined, what: string) {
-    const fail = () => setToast("Copy failed: the browser allows the clipboard only on HTTPS or localhost");
+    const fail = () => setToast(copyFailText(text));
     if (!text || !navigator.clipboard) return fail();
     navigator.clipboard.writeText(text).then(() => setToast(`Copied ${what}`), fail);
   }
@@ -2489,6 +2490,7 @@ export function App() {
           {status !== "unauthorized" && <FocusRow count={waitingN} active={activeId === FOCUS_TAB} onOpen={() => open(FOCUS_TAB)} />}
           {status !== "unauthorized" && (
             <SessionList
+              onCopy={copyText}
               list={list}
               projects={projects}
               worktrees={worktrees}

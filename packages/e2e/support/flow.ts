@@ -30,8 +30,15 @@ export async function openProject(page: Page, path: string): Promise<void> {
   const input = page.getByTestId("folder-input");
   // The dialog starts inside its single root once the folder list arrives and overwrites the input then: type after that.
   await expect(input).not.toHaveValue("");
-  await input.fill(path.endsWith(sep) ? path : path + sep);
-  await expect(page.getByTestId("open-folder")).toHaveText(`Open ${basename(path)}`);
+  const typed = path.endsWith(sep) ? path : path + sep;
+  // A late folder-list answer can overwrite the input after it was filled (the dialog then opens the parent folder): fill again until the value holds.
+  await expect(async () => {
+    await input.fill(typed);
+    await expect(page.getByTestId("open-folder")).toHaveText(`Open ${basename(path)}`);
+    await page.waitForTimeout(400);
+    await expect(input).toHaveValue(typed, { timeout: 1_000 });
+    await expect(page.getByTestId("open-folder")).toHaveText(`Open ${basename(path)}`, { timeout: 1_000 });
+  }).toPass({ timeout: 30_000 });
   await page.getByTestId("open-folder").click();
   await expect(dialog).toBeHidden();
 }

@@ -8,6 +8,18 @@ A browser UI that drives Claude Agent SDK sessions running in a local daemon. Fu
 The local process that owns all sessions, runs the SDK, and serves browsers over WebSocket. Single source of truth.
 _Avoid_: server, backend
 
+**Hub**:
+The Daemon the browser connects to. It routes each request to itself or to the Side that owns the session, terminal or path.
+_Avoid_: main daemon, host daemon
+
+**Side**:
+A Daemon run with `--side` inside a WSL distro or a Docker container, reached by the Hub over stdio. Never the side panel.
+_Avoid_: remote, node, side panel (different thing)
+
+**Relay**:
+A self-hosted server that forwards traffic between browsers and the Hubs of its users, one hostname per Hub. Session content crosses it end-to-end encrypted only.
+_Avoid_: proxy, tunnel service, gateway
+
 **Client command**:
 A `claude-ui <command>` (status, open, sessions, projects, workers) that asks the running Daemon from a terminal and exits. It never starts a Daemon and never creates the token. It finds the Daemon through `daemon.json` in the config dir.
 _Avoid_: CLI session, remote control
@@ -141,7 +153,7 @@ _Avoid_: inbox, queue page
 
 **Side panel**:
 The dock area on the right or left of the session view; its tabs are panes (Changes, Files, Git graph, Terminal).
-_Avoid_: sidebar (the project and session list)
+_Avoid_: sidebar (the project and session list), side (a Side is a Daemon)
 
 **Files tab**:
 The side-panel pane with the file tree and the editor tabs.
