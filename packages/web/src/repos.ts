@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { GitRepo, GitReposResult } from "@claude-ui/protocol";
 import type { connect, RequestError } from "./client.ts";
 import { joinPath } from "./paths.ts";
+import { resolveRepoChoice } from "./repo-choice.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -20,8 +21,8 @@ export function repoDir(cwd: string, rel: string): string {
   return dir;
 }
 
-/** The repository the panes show until a selector exists: the first entry the daemon may read (own, else the first root). */
-export const defaultRepo = (repos: GitRepo[]): GitRepo | undefined => repos.find((r) => !r.outsideRoots);
+/** The project's default repository: the cwd's own, else the first root the daemon may read. The Graph shows it until it gets the selector. */
+export const defaultRepo = (repos: GitRepo[]): GitRepo | undefined => resolveRepoChoice(repos, undefined);
 
 /**
  * `git.repos` of `cwd`. undefined while unknown; null when the daemon cannot answer with a list (an older daemon replies without
