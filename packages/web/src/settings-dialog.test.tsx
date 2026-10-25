@@ -29,16 +29,18 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+  let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
     if (failGet && msg.type === "settings.get") throw new Error("daemon unreachable");
     if (msg.type === "settings.set") {
+      if (refuse) throw new Error(refuse);
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) } };
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) } };
     }
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
     if (msg.type === "jira.token") jiraToken = msg.token !== null;
@@ -85,7 +87,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const pick = async (group: string) => void (await act(async () => q(`settings-group-${group}`)!.click()));
-  return { calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onRestartGuide };
+  return { refuse: (m: string) => void (refuse = m), calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onRestartGuide };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -277,7 +279,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups: Timeline first, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "Jira", "About"]);
+  expect(ids).toEqual(["Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "Git", "Jira", "About"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
 });
 
@@ -615,4 +617,94 @@ it("Screen switches write the store; the sub-switch is held while the main one i
     Object.defineProperty(window, "isSecureContext", { value: undefined, configurable: true });
     localStorage.removeItem("claude-ui.keepAwake");
   }
+});
+
+it("Settings › Git shows the nine settings with VS Code's labels and defaults; the parent-folders hint names the difference", async () => {
+  const { q, pick } = await render();
+  await pick("git");
+  expect(q("settings-git-intro")?.textContent).toContain("Same settings as VS Code's Git extension");
+  const label = (k: string) => document.querySelector(`label[for="settings-git-${k}"]`)?.textContent ?? q(`settings-git-${k}`)?.querySelector("[id$=-label]")?.textContent;
+  expect(["autoRepositoryDetection", "repositoryScanMaxDepth", "repositoryScanIgnoredFolders", "scanRepositories", "ignoredRepositories", "detectSubmodules", "detectSubmodulesLimit", "ignoreSubmodules", "openRepositoryInParentFolders"].map(label)).toEqual(["Auto repository detection", "Repository scan max depth", "Repository scan ignored folders", "Scan repositories", "Ignored repositories", "Detect submodules", "Detect submodules limit", "Ignore submodules", "Open repository in parent folders"]);
+  expect(q("settings-git-autoRepositoryDetection")?.textContent).toContain("true");
+  expect((q("settings-git-repositoryScanMaxDepth") as HTMLInputElement).value).toBe("1");
+  expect(q("settings-git-repositoryScanIgnoredFolders")?.querySelectorAll('[data-testid$="-item"]')).toHaveLength(1);
+  expect(q("settings-git-repositoryScanIgnoredFolders")?.textContent).toContain("node_modules");
+  expect(q("settings-git-scanRepositories")?.querySelectorAll('[data-testid$="-item"]')).toHaveLength(0);
+  expect(q("settings-git-detectSubmodules")?.getAttribute("aria-checked")).toBe("true");
+  expect(q("settings-git-ignoreSubmodules")?.getAttribute("aria-checked")).toBe("false");
+  expect((q("settings-git-detectSubmodulesLimit") as HTMLInputElement).value).toBe("10");
+  expect(q("settings-git-openRepositoryInParentFolders")?.textContent).toContain("always");
+  expect(document.getElementById("settings-git-openRepositoryInParentFolders-hint")?.textContent).toContain("VS Code: prompt");
+});
+
+it("Auto repository detection saves true/false as booleans and subFolders as a string", async () => {
+  const { q, pick, calls } = await render();
+  await pick("git");
+  const choose = async (v: string) => {
+    await act(async () => q("settings-git-autoRepositoryDetection")!.click());
+    await act(async () => document.querySelector<HTMLElement>(`[data-testid="settings-git-autoRepositoryDetection-${v}"]`)!.click());
+    return calls.filter((c) => c.type === "settings.set").at(-1);
+  };
+  expect(await choose("false")).toEqual({ type: "settings.set", patch: { git: { autoRepositoryDetection: false } } });
+  expect(await choose("subFolders")).toEqual({ type: "settings.set", patch: { git: { autoRepositoryDetection: "subFolders" } } });
+  expect(await choose("true")).toEqual({ type: "settings.set", patch: { git: { autoRepositoryDetection: true } } });
+});
+
+const typeInto = async (el: HTMLInputElement, v: string) => {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, v);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+const key = async (el: HTMLElement, k: string) => void (await act(async () => el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }))));
+
+it("a list setting adds, edits and removes an item, saving the whole array each time", async () => {
+  const { q, pick, calls } = await render();
+  await pick("git");
+  const id = "settings-git-repositoryScanIgnoredFolders";
+  const sets = () => calls.filter((c) => c.type === "settings.set");
+  await act(async () => q(`${id}-add`)!.click());
+  await typeInto(q(`${id}-input`) as HTMLInputElement, "dist");
+  await key(q(`${id}-input`)!, "Enter");
+  expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { git: { repositoryScanIgnoredFolders: ["node_modules", "dist"] } } });
+  expect(q(`${id}-input`)).toBeNull();
+  await act(async () => q(`${id}`)!.querySelectorAll<HTMLElement>(`[data-testid="${id}-edit"]`)[0]!.click());
+  expect((q(`${id}-input`) as HTMLInputElement).value).toBe("node_modules");
+  await typeInto(q(`${id}-input`) as HTMLInputElement, "vendor");
+  await act(async () => q(`${id}-ok`)!.click());
+  expect(sets().at(-1)).toMatchObject({ patch: { git: { repositoryScanIgnoredFolders: ["vendor", "dist"] } } });
+  await act(async () => q(`${id}`)!.querySelectorAll<HTMLElement>(`[data-testid="${id}-remove"]`)[0]!.click());
+  expect(sets().at(-1)).toMatchObject({ patch: { git: { repositoryScanIgnoredFolders: ["dist"] } } });
+  const n = sets().length;
+  await act(async () => q(`${id}-add`)!.click());
+  await typeInto(q(`${id}-input`) as HTMLInputElement, "zzz");
+  await key(q(`${id}-input`)!, "Escape");
+  expect(q(`${id}-input`)).toBeNull();
+  await act(async () => q(`${id}-add`)!.click());
+  await act(async () => q(`${id}-cancel`)!.click());
+  expect(sets()).toHaveLength(n);
+});
+
+it("a refused list entry keeps the input open and shows the daemon's message", async () => {
+  const { q, pick, refuse } = await render();
+  await pick("git");
+  const id = "settings-git-scanRepositories";
+  refuse("Scan repositories must be at most 50 relative paths without .. or .git, of at most 260 characters");
+  await act(async () => q(`${id}-add`)!.click());
+  await typeInto(q(`${id}-input`) as HTMLInputElement, "../x");
+  await act(async () => q(`${id}-ok`)!.click());
+  expect(q(`${id}-input`)).not.toBeNull();
+  expect(q("settings-dialog")?.textContent).toContain("Scan repositories must be");
+});
+
+it("list buttons are 44px below md", async () => {
+  const { q, pick } = await render();
+  await pick("git");
+  const id = "settings-git-repositoryScanIgnoredFolders";
+  expect(q(`${id}-edit`)!.className).toContain("max-md:size-11");
+  expect(q(`${id}-remove`)!.className).toContain("max-md:size-11");
+  expect(q(`${id}-add`)!.className).toContain("max-md:h-11");
+  await act(async () => q(`${id}-add`)!.click());
+  expect(q(`${id}-ok`)!.className).toContain("max-md:h-11");
+  expect(q(`${id}-input`)!.className).toContain("max-md:h-11");
 });

@@ -614,11 +614,31 @@ export type ConfigScope = "local" | "user" | "project";
 /** `orchestration.workerMode`: the permission mode of a new worker when the coordinator names none; `coordinator` = the coordinator's own mode. */
 export const WORKER_MODES = ["coordinator", "default", "acceptEdits", "plan", "auto"] as const;
 export type WorkerModeSetting = (typeof WORKER_MODES)[number];
+/** `git.autoRepositoryDetection` values (VS Code's git extension). */
+export const AUTO_REPOSITORY_DETECTION = [true, false, "subFolders", "openEditors"] as const;
+/** `git.openRepositoryInParentFolders` values (VS Code's git extension). */
+export const PARENT_FOLDER_MODES = ["always", "never", "prompt"] as const;
 export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
   /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */
   performance: { monitor: boolean };
   /** Ticket tab of the Create worktree modal (GH-447): one Jira connection; `email` for Cloud only; the token is in secrets.json, never here. */
   jira: { url: string; email: string; template: string; /** Ticket filter: the JQL of the Ticket tab's list and text search; "" = my open tickets. */ jql: string };
+  /** Settings › Git (VS Code's git extension settings, same names and values; openRepositoryInParentFolders defaults to always and prompt behaves as always). */
+  git: {
+    autoRepositoryDetection: boolean | "subFolders" | "openEditors";
+    /** -1..10, -1 = no limit. */
+    repositoryScanMaxDepth: number;
+    repositoryScanIgnoredFolders: string[];
+    /** Relative to the project cwd. */
+    scanRepositories: string[];
+    /** Absolute, or relative to the project cwd. */
+    ignoredRepositories: string[];
+    detectSubmodules: boolean;
+    /** 0..100. */
+    detectSubmodulesLimit: number;
+    ignoreSubmodules: boolean;
+    openRepositoryInParentFolders: (typeof PARENT_FOLDER_MODES)[number];
+  };
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */

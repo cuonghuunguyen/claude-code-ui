@@ -26,6 +26,7 @@ import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { KeyTipsRow } from "./key-tip.tsx";
 import { ChevronLeftIcon } from "lucide-react";
+import { ListSetting } from "./list-setting.tsx";
 import { JiraSection } from "./jira-settings.tsx";
 
 const GROUP_KEY = "claude-ui.settingsGroup";
@@ -159,7 +160,7 @@ function ScreenSection() {
   );
 }
 
-type Row = { key: string; label: string; hint: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "select"; options: { value: string; label: string }[] });
+type Row = { key: string; label: string; hint: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "select"; options: { value: string; label: string }[]; parse?: (v: string) => unknown });
 const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
   {
     id: "orchestration",
@@ -196,6 +197,21 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
     title: "Performance",
     rows: [
       { key: "monitor", kind: "switch", label: "Performance monitor", hint: "Measures responsiveness on this computer. Durations and counts only; nothing leaves this computer. Off stops all measuring." },
+    ],
+  },
+  {
+    id: "git",
+    title: "Git",
+    rows: [
+      { key: "autoRepositoryDetection", kind: "select", label: "Auto repository detection", hint: "Configures when repositories should be automatically detected. true: Scan for both subfolders of the current opened folder and parent folders of open files. subFolders: Scan for subfolders of the currently opened folder. openEditors: Scan for parent folders of open files. false: Disable automatic repository scanning.", options: ["true", "false", "subFolders", "openEditors"].map((v) => ({ value: v, label: v })), parse: (v) => (v === "true" ? true : v === "false" ? false : v) },
+      { key: "repositoryScanMaxDepth", kind: "number", min: -1, max: 10, label: "Repository scan max depth", hint: "Controls the depth used when scanning workspace folders for Git repositories when Auto repository detection is set to true or subFolders. Can be set to -1 for no limit." },
+      { key: "repositoryScanIgnoredFolders", kind: "list", label: "Repository scan ignored folders", hint: "List of folders that are ignored while scanning for Git repositories when Auto repository detection is set to true or subFolders." },
+      { key: "scanRepositories", kind: "list", label: "Scan repositories", hint: "List of paths to search for Git repositories in. Relative to the project folder." },
+      { key: "ignoredRepositories", kind: "list", label: "Ignored repositories", hint: "List of Git repositories to ignore." },
+      { key: "detectSubmodules", kind: "switch", label: "Detect submodules", hint: "Controls whether to automatically detect Git submodules." },
+      { key: "detectSubmodulesLimit", kind: "number", min: 0, max: 100, label: "Detect submodules limit", hint: "Controls the limit of Git submodules detected." },
+      { key: "ignoreSubmodules", kind: "switch", label: "Ignore submodules", hint: "Ignore modifications to submodules in the file tree." },
+      { key: "openRepositoryInParentFolders", kind: "select", label: "Open repository in parent folders", hint: "Control whether a repository in parent folders of workspaces or open files should be opened. Default always (VS Code: prompt); prompt behaves as always here until a prompt exists.", options: ["always", "never", "prompt"].map((v) => ({ value: v, label: v })) },
     ],
   },
 ];
@@ -246,7 +262,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     return () => void (live = false);
   }, [open, changed]);
 
-  const save = async (patch: SettingsPatch, field?: string) => {
+  const save = async (patch: SettingsPatch, field?: string, rethrow = false) => {
     setSaving(true);
     try {
       const r = await ask.current<SettingsResult>({ type: "settings.set", patch });
@@ -257,6 +273,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       if (field) setDraft(({ [field]: _, ...rest }) => rest);
     } catch (e) {
       setError((e as Error).message);
+      if (rethrow) throw e;
     } finally {
       setSaving(false);
     }
@@ -278,10 +295,16 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       <h3 id={`settings-${sec.id}`} className="pb-1 font-medium text-[13px] text-muted-foreground">
         {sec.title}
       </h3>
+      {sec.id === "git" && (
+        <p className="pb-1 text-muted-foreground text-xs" data-testid="settings-git-intro">
+          Same settings as VS Code's Git extension; they apply to every project.
+        </p>
+      )}
       {sec.rows.map((row) => {
         const id = `settings-${sec.id}-${row.key}`;
         const value = (settings[sec.id] as Record<string, unknown>)[row.key];
         const patch = (v: unknown) => ({ [sec.id]: { [row.key]: v } }) as SettingsPatch;
+        if (row.kind === "list") return <ListSetting key={row.key} id={id} label={row.label} hint={row.hint} value={value as string[]} saving={saving} onSave={(next) => save(patch(next), undefined, true)} />;
         return (
           <div key={row.key} className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
             <div className="min-w-0 flex-1">
@@ -291,7 +314,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             {row.kind === "switch" ? (
               <Switch on={value === true} label={row.label} held={saving} onToggle={(on) => void save(patch(on))} title={row.label} describedBy={`${id}-hint`} testId={id} />
             ) : row.kind === "select" ? (
-              <Select value={String(value)} onValueChange={(v) => v && void save(patch(v))}>
+              <Select value={String(value)} onValueChange={(v) => v && void save(patch(row.parse ? row.parse(v) : v))}>
                 <SelectTrigger id={id} aria-describedby={`${id}-hint`} aria-label={row.label} data-testid={id} className="w-44 max-md:data-[size=default]:h-11">
                   <SelectValue>{(v: string) => row.options.find((o) => o.value === v)?.label ?? v}</SelectValue>
                 </SelectTrigger>
