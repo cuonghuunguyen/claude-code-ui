@@ -221,11 +221,13 @@ describe("PartIndex", () => {
     expect(index.planOf("p1", ["/nowhere"])).toBeUndefined();
   });
 
-  it("planOf: the call's own plan, else the newest plan-file Write before it; an empty-input call without a file has none", () => {
+  it("planOf: the newest plan-file Write before the call, else the call's own plan; an empty-input call without a file has none", () => {
     const file = (id: string, content: string) => call(id, "Write", { file_path: "C:\\Users\\u\\.claude\\plans\\p.md", content });
     const { index } = build([user(1), file("w0", "old"), file("w1", "# File plan"), call("p1", "ExitPlanMode", {}), call("p2", "ExitPlanMode", { plan: "own" }), file("w2", "later")]);
     expect(index.planOf("p1")).toBe("# File plan");
-    expect(index.planOf("p2")).toBe("own");
+    // The file wins: the CLI filled `plan` from the file before an Edit of the same message ran.
+    expect(index.planOf("p2")).toBe("# File plan");
+    expect(build([user(1), call("p2", "ExitPlanMode", { plan: "own" })]).index.planOf("p2")).toBe("own");
     expect(index.planOf("not-yet")).toBe("later");
     expect(build([user(1), call("p1", "ExitPlanMode", {})]).index.planOf("p1")).toBeUndefined();
   });

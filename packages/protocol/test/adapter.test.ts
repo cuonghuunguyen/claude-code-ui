@@ -742,7 +742,7 @@ describe("adapter byCoordinator", () => {
 });
 
 describe("ExitPlanMode with an empty input (Claude Code 2.1.294: the plan is in a plan file)", () => {
-  it("planOfCall reads the plan from the newest plan-file Write before the call; an own plan wins; no source gives undefined", async () => {
+  it("planOfCall reads the plan from the newest plan-file Write before the call; the file wins over an own plan, which counts without a plan-file Write; no source gives undefined", async () => {
     const { planOfCall } = await import("../src/index.ts");
     const parts = run(fixture("plan-file-exit.jsonl"));
     const at = parts.findIndex((p) => p.type === "tool_call" && p.tool === "ExitPlanMode");
@@ -751,7 +751,9 @@ describe("ExitPlanMode with an empty input (Claude Code 2.1.294: the plan is in 
     expect(planOfCall(parts, at)).toContain("1. Create hello.txt with the content hi.");
     expect(planOfCall(parts, 0)).toBeUndefined();
     const own = parts.map((p, i) => (i === at ? ({ ...p, input: { plan: "own" } } as Part) : p));
-    expect(planOfCall(own, at)).toBe("own");
+    expect(planOfCall(own, at)).toContain("1. Create hello.txt with the content hi.");
+    const ownOnly = own.filter((p) => !(p.type === "tool_call" && p.tool === "Write"));
+    expect(planOfCall(ownOnly, ownOnly.findIndex((p) => p.type === "tool_call" && p.tool === "ExitPlanMode"))).toBe("own");
     expect(planOfCall(parts.filter((p) => !(p.type === "tool_call" && p.tool === "Write")), at - 1)).toBeUndefined();
   });
 
@@ -768,6 +770,31 @@ describe("ExitPlanMode with an empty input (Claude Code 2.1.294: the plan is in 
     const unfinished = parts.map((p) => (p.type === "tool_call" && p.tool === "MultiEdit" ? ({ ...p, status: "error" } as Part) : p));
     expect(planOfCall(unfinished, at)).toContain("# Plan");
     expect(planOfCall(unfinished, at)).toContain("3. Delete nothing.");
+  });
+
+  it("planOfCall: an Edit of the plan file in the same message as ExitPlanMode wins over the call's own input.plan, which the CLI read before the Edit ran", async () => {
+    const { planOfCall } = await import("../src/index.ts");
+    // As a view keeps them: one part per id, at its first position, in its newest version.
+    const all = run(fixture("plan-file-same-message.jsonl"));
+    const parts = [...new Map(all.map((p) => [p.id, p])).keys()].map((id) => [...all].reverse().find((p) => p.id === id)!);
+    expect(parts.find((p) => p.type === "tool_call" && p.tool === "Edit")).toMatchObject({ status: "done" });
+    const at = parts.findIndex((p) => p.type === "tool_call" && p.tool === "ExitPlanMode");
+    expect((parts[at] as { input: { plan: string } }).input.plan).not.toContain("ZEBRA-7731");
+    // The Edit's result after the ExitPlanMode tool_use (as the CLI sends it), and before it.
+    expect(planOfCall(parts, at)).toContain("2. ZEBRA-7731 verify hello.txt.");
+    const result = parts.find((p) => p.type === "tool_result" && p.toolUseId === "toolu_plan_edit")!;
+    const before = [...parts.slice(0, at).filter((p) => p !== result), result, ...parts.slice(at).filter((p) => p !== result)];
+    expect(planOfCall(before, at + 1)).toContain("2. ZEBRA-7731 verify hello.txt.");
+    // Without planFilePath the newest plan-file Write is the file.
+    const noPath = parts.map((p, i) => (i === at ? ({ ...p, input: { plan: (p as { input: { plan: string } }).input.plan } } as Part) : p));
+    expect(planOfCall(noPath, at)).toContain("2. ZEBRA-7731 verify hello.txt.");
+    // The Write is not in the parts (file written by an earlier session): the own plan with the Edits of the same message applied.
+    const noWrite = parts.filter((p) => !(p.type === "tool_call" && p.tool === "Write"));
+    expect(planOfCall(noWrite, at - 1)).toContain("2. ZEBRA-7731 verify hello.txt.");
+    expect(planOfCall(noWrite, at - 1)).toContain("1. Create hello.txt with the content hi.");
+    // Before the Edit's result the Edit is not applied; it is once the result is in.
+    const running = parts.map((p) => (p.type === "tool_call" && p.tool === "Edit" ? ({ ...p, status: "running" } as Part) : p));
+    expect(planOfCall(running, at)).not.toContain("ZEBRA-7731");
   });
 
   it("plan folders: the session's folders decide (CLAUDE_CONFIG_DIR, plansDirectory, Windows slashes); without them .claude/plans", async () => {

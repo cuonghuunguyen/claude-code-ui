@@ -53,8 +53,8 @@ const inputText = (input: unknown) => {
 /** ExitPlanMode's plan (markdown), shown with Claude Code's plan approval options. */
 const planOf = (part: PermissionRequest) => {
   if (part.tool !== "ExitPlanMode") return undefined;
-  // The daemon's `plan` is display data for a request whose input has none (the CLI keeps the plan in a file).
-  const plan = (part.input as { plan?: unknown } | null)?.plan || part.plan;
+  // The daemon's `plan` is display data (the plan file folded as the Plan pane does: planOfCall); the CLI's input has none or a plan read before an Edit of the same message ran.
+  const plan = part.plan || (part.input as { plan?: unknown } | null)?.plan;
   return typeof plan === "string" && plan ? plan : undefined;
 };
 

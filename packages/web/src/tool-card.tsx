@@ -85,7 +85,7 @@ export function useExpanded(id: string, force = false) {
 
 /** `awaiting`: the call waits for a permission answer, so the card is held open; except an Edit/Write with a diff,
  *  which stays collapsed because the permission panel shows that diff (GH-86); a click still expands it. */
-export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: ToolResult; awaiting?: boolean }) {
+export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; result?: ToolResult; awaiting?: boolean; /** An ExitPlanMode call's plan (planOfPart); absent: its `input.plan`. */ plan?: string }) {
   const range = call.tool === "Read" ? readRange(call.input, result?.output) : "";
   const stats = useMemo(() => diffStats(call.tool, call.input), [call.tool, call.input]);
   const artifact = ARTIFACT_TOOLS.has(call.tool);
@@ -94,7 +94,7 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
   const path = artifact ? "" : field(call.input, "file_path") || field(call.input, "notebook_path");
   const openViewer = use(ViewerContext);
   const cwd = use(CwdContext);
-  const target = openViewer && cardTarget(call);
+  const target = openViewer && cardTarget(call, plan);
   const showPlan = use(PlanTabContext);
   const decided = call.coordinator && (call.coordinator.decision === "allow" ? "Approved by coordinator" : "Denied by coordinator");
   const header = (
@@ -136,7 +136,7 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
             <span className="font-medium">{decided}:</span> {call.coordinator!.reason}
           </p>
         )}
-        <ToolBody call={call} result={result} />
+        <ToolBody call={call} result={result} plan={plan} />
       </ToolContent>
     </Tool>
   );
@@ -213,7 +213,7 @@ function ReadImage({ partId, index, m, alt }: { partId: string; index: number; m
   return loads ? <MediaPlaceholder failed={failed} retry={retry} label={alt} className="h-52 w-full max-w-sm" /> : null;
 }
 
-export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult }) {
+export function ToolBody({ call, result, plan: folded }: { call: ToolCall; result?: ToolResult; /** An ExitPlanMode call's plan (planOfPart). */ plan?: string }) {
   const output = result && <Lines id={call.id} text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} />;
   switch (call.tool) {
     case "Bash":
@@ -298,7 +298,7 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
       return <ArtifactBody call={call} result={result} />;
     case "ExitPlanMode": {
       // The plan as the approval panel shows it; the JSON view until the input has streamed in.
-      const plan = field(call.input, "plan");
+      const plan = folded || field(call.input, "plan");
       if (!plan) break;
       return (
         <div className="space-y-2">

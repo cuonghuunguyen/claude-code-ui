@@ -868,10 +868,16 @@ export class Session {
     return this.opts.planDirs?.(this.cwd);
   }
 
-  /** Claude Code 2.1.294 asks to leave plan mode with an empty input: the plan is in a file the model wrote. The request carries it as display data (`plan`); `input` stays what the CLI sent, as it is what goes back on Approve (a changed plan input would make the CLI rewrite its plan file). */
+  /**
+   * The plan the approval request shows (display data `plan`; the Plan pane and the plan card use it for this call). The CLI fills `input.plan` from its plan
+   * file when the call runs, so after an Edit of the same message ran: that wins. Without it (Claude Code 2.1.294 also asks with an empty input) the plan-file
+   * fold (planOfCall), which may miss an Edit whose result has not streamed in yet. `input` stays what the CLI sent, as it is what goes back on Approve (a
+   * changed plan input would make the CLI rewrite its plan file).
+   */
   private planField(tool: string, toolUseId: string, input: unknown): { plan?: string } {
-    if (tool !== "ExitPlanMode" || (typeof (input as { plan?: unknown } | null)?.plan === "string" && (input as { plan: string }).plan)) return {};
-    const plan = this.index.planOf(toolUseId, this.planDirs());
+    if (tool !== "ExitPlanMode") return {};
+    const own = (input as { plan?: unknown } | null)?.plan;
+    const plan = typeof own === "string" && own ? own : this.index.planOf(toolUseId, this.planDirs());
     return plan ? { plan } : {};
   }
 

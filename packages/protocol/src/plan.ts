@@ -46,26 +46,38 @@ function applyCall(text: string, call: Call): string {
   return call.tool === "MultiEdit" && Array.isArray(input.edits) ? (input.edits as Replace[]).reduce(apply, text) : apply(text, input);
 }
 
+const isWriteOf = (p: Part, path: string): p is Call => p.type === "tool_call" && p.tool === "Write" && p.status === "done" && filePath(p) === path && typeof (p.input as { content?: unknown } | null)?.content === "string";
+
 /**
- * The plan text of the ExitPlanMode call at `parts[at]`: its own `input.plan`, else the plan file the model kept it in (Claude Code 2.1.294 calls
- * ExitPlanMode with an empty input): the newest finished plan-file `Write` before the call, with every later `Edit` / `MultiEdit` of that file applied in order
- * (the CLI has the model revise the plan with Edit). Undefined when the part is no ExitPlanMode call or no source carries the plan.
+ * The plan text of the ExitPlanMode call at `parts[at]`, as the CLI reads it from its plan file when the call runs: the newest finished `Write` of the plan file
+ * before the call (the call's `input.planFilePath`, else any plan file), with every later finished `Edit` / `MultiEdit` of that file applied in order (the CLI has
+ * the model revise the plan with Edit). Without that Write: the call's own `input.plan` (Claude Code 2.1.294 calls ExitPlanMode with an empty input, and fills
+ * `plan` from the file when it emits the message, so before an Edit of the same message ran), with the Edits of the call's message applied. Undefined when the
+ * part is no ExitPlanMode call or no source carries the plan.
  */
 export function planOfCall(parts: readonly Part[], at: number, dirs?: readonly string[]): string | undefined {
   const call = parts[at];
   if (call?.type !== "tool_call" || call.tool !== "ExitPlanMode") return undefined;
-  const own = (call.input as { plan?: unknown } | null)?.plan;
-  if (typeof own === "string" && own) return own;
-  for (let i = at - 1; i >= 0; i--) {
-    const w = parts[i]!;
-    if (!isPlanFileWrite(w, dirs)) continue;
-    const path = filePath(w)!;
-    let text = (w.input as { content: string }).content;
-    for (let j = i + 1; j < at; j++) {
+  const input = call.input as { plan?: unknown; planFilePath?: unknown } | null;
+  const given = typeof input?.planFilePath === "string" && input.planFilePath ? input.planFilePath : undefined;
+  const edited = (text: string, path: string, from: number) => {
+    for (let j = from; j < at; j++) {
       const e = parts[j]!;
       if (isEditOf(e, path)) text = applyCall(text, e);
     }
     return text;
+  };
+  for (let i = at - 1; i >= 0; i--) {
+    const w = parts[i]!;
+    if (!(given ? isWriteOf(w, given) : isPlanFileWrite(w, dirs))) continue;
+    const write = w as Call;
+    return edited((write.input as { content: string }).content, filePath(write)!, i + 1);
   }
-  return undefined;
+  const own = input?.plan;
+  if (typeof own !== "string" || !own) return undefined;
+  if (!given) return own;
+  // The call's message: the tool calls right before it (their results come after the message).
+  let from = at;
+  while (from > 0 && parts[from - 1]!.type === "tool_call") from--;
+  return edited(own, given, from);
 }

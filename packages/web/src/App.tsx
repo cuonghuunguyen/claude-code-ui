@@ -99,7 +99,7 @@ import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext } from "./file-links.tsx";
-import { PlanTabContext, ViewerContext, isFileTarget, latestPlan, useOpenViewer, type ViewerState } from "./viewer.ts";
+import { PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
@@ -4753,7 +4753,7 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
     case "assistant_text":
       return <AssistantText text={part.text} streaming={part.streaming} />;
     case "tool_call":
-      return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} />;
+      return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} plan={planOfPart(view, part)} />;
     case "subagent":
       return (
         <SubagentGroup part={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.id)} onOpen={openRun && (() => openRun(part.id))}>

@@ -878,14 +878,14 @@ describe("Session questions", () => {
 
   describe("ExitPlanMode with an empty input (Claude Code 2.1.294: the plan is in a plan file)", () => {
     const recorded = () => readFileSync(new URL("../../protocol/test/fixtures/plan-file-exit.jsonl", import.meta.url), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    const asking = async (extra: unknown[] = []) => {
+    const asking = async (extra: unknown[] = [], input: object = {}) => {
       const messages = [...recorded().slice(0, 2), ...extra, recorded()[2]];
       const query = ({ prompt, options }: { prompt: AsyncIterable<unknown>; options: { canUseTool: Function } }) =>
         Object.assign(
           (async function* () {
             for await (const _ of prompt) {
               yield* messages;
-              permissionResults.push(await options.canUseTool("ExitPlanMode", {}, { signal: new AbortController().signal, toolUseID: "toolu_plan_exit", requestId: "r" }));
+              permissionResults.push(await options.canUseTool("ExitPlanMode", input, { signal: new AbortController().signal, toolUseID: "toolu_plan_exit", requestId: "r" }));
             }
           })(),
           { supportedCommands: async () => [] },
@@ -910,6 +910,14 @@ describe("Session questions", () => {
       const done = { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_plan_edit", content: "ok" }] }, parent_tool_use_id: null, session_id: "x", uuid: randomUUID() };
       const { req } = await asking([edit, done]);
       expect(req.plan).toContain("3. Delete nothing.");
+    });
+
+    it("the plan the CLI read from its file when the call ran wins over the fold (an Edit of the same message whose result has not streamed in yet)", async () => {
+      const edit = { type: "assistant", message: { role: "assistant", id: "msg_e", type: "message", content: [{ type: "tool_use", id: "toolu_plan_edit", name: "Edit", input: { file_path: "/home/user/.claude/plans/plan-only-write-a-quiet-fox.md", old_string: "2. Check the file.", new_string: "2. ZEBRA-7731." } }] }, parent_tool_use_id: null, session_id: "x", uuid: randomUUID() };
+      const input = { plan: "# Plan\n\n1. Create hello.txt with the content hi.\n2. ZEBRA-7731.", planFilePath: "/home/user/.claude/plans/plan-only-write-a-quiet-fox.md" };
+      const { req } = await asking([edit], input);
+      expect(req.plan).toBe(input.plan);
+      expect(req.input).toEqual(input);
     });
 
     it("Approve sends the original input back, not the displayed plan (the CLI would rewrite its plan file)", async () => {
