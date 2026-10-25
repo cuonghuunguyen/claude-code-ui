@@ -76,6 +76,8 @@ export function groupEntries(o: {
   setOnlyActive: (on: boolean) => void;
   archiveCount: (days: number) => number;
   onArchive: (days: number) => void;
+  /** Copy path (GH-456): the folder path as its side sees it, the row tooltip. */
+  copyPath?: () => void;
   /** "Clean up…" (GH-377): the Clean up dialog scoped to this project. */
   cleanUp?: () => void;
   /** Last section (Remove from list, Delete worktree…). */
@@ -88,6 +90,7 @@ export function groupEntries(o: {
     const nw = o.newWorktree;
     e.push({ kind: "item", id: `${p}new-worktree`, label: "New worktree", onSelect: () => nw(true) }, { kind: "item", id: `${p}create-worktree`, label: "Create worktree…", onSelect: () => nw(false) });
   }
+  if (o.copyPath) e.push({ kind: "sep" }, { kind: "item", id: `${p}copy-path`, label: "Copy path", onSelect: o.copyPath });
   if (!o.archivedView) {
     e.push({ kind: "sep" }, { kind: "check", id: `${p}hide-inactive`, label: "Hide inactive sessions", checked: o.onlyActive, onChange: o.setOnlyActive }, { kind: "label", label: "Archive idle sessions older than" });
     for (const d of ARCHIVE_DAYS) {
