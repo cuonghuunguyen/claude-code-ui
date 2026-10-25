@@ -53,6 +53,10 @@ Then("I see a permission request whose title contains {string}", async ({ page }
   await expect(page.getByTestId("permission-panel")).toContainText(text, { timeout: TURN_MS });
 });
 
+Then("no permission request is shown", async ({ page }) => {
+  await expect(page.getByTestId("permission-panel")).toHaveCount(0);
+});
+
 Then("the sidebar lists the worker {string}", async ({ page, project: { name: project } }, name: string) => {
   await expect(async () => {
     await revealWorkers(page, project, name);

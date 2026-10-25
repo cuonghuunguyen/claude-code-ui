@@ -204,15 +204,14 @@ describe("worker tree: orchestration for workers", () => {
     expect(await call(t.o, "C", "worker_close", { name: "impl" })).toEqual({ name: "impl", closed: true });
   });
 
-  it("worker_remove of a worker with a live descendant at depth 2 is a tool error", async () => {
+  it("worker_remove of a worker with a descendant at depth 2 is a tool error naming its path", async () => {
     const t = setup(undefined, { maxDepth: 3 });
     const [, , , W3] = tree(t, 3);
+    W3.live = false;
     t.sessions.get("W2").live = false;
     const r = await call(t.o, "C", "worker_remove", { name: "impl" });
-    expect(r.error).toMatch(/Close them first/);
     expect(r.error).toMatch(/rev\/w3/);
-    W3.live = false;
-    expect(await call(t.o, "C", "worker_remove", { name: "impl" })).toEqual({ name: "impl", removed: true });
+    expect(r.error).toMatch(/Remove them first/);
   });
 
   it("the idle close keeps a worker coordinator whose worker works", () => {
@@ -380,5 +379,65 @@ describe("worker tree: list and read", () => {
     await tick();
     const ev = (await call(t.o, "C", "worker_wait", { timeoutMs: 0 })).events[0];
     expect(ev).toMatchObject({ name: "impl", type: "permission", tier: "high", mayAnswer: false });
+  });
+});
+
+describe("worker tree: limits are refused before the card", () => {
+  const sdk = { name: "orchestration", source: "sdk" };
+  const pre = (t: ReturnType<typeof setup>, id: string, input: object = start("x"), tool = "mcp__orchestration__worker_start") => t.o.preflight(id, tool, input as never, sdk);
+
+  it("preflight names the depth limit, the children limit and the worker cap; none when under them", () => {
+    const t = setup(undefined, { maxChildren: 1, workerCap: 10 });
+    tree(t); // C <- W1 <- W2, maxDepth 2
+    expect(pre(t, "W2")).toMatch(/Maximum tree depth/);
+    expect(pre(t, "C")).toMatch(/Maximum workers per coordinator/); // W1 is C's live child
+    t.settings.workerCap = 2;
+    t.settings.maxChildren = 4;
+    expect(pre(t, "C")).toMatch(/Maximum workers\)/); // W1 and W2 run
+    t.settings.workerCap = 10;
+    expect(pre(t, "C")).toBeUndefined();
+    expect(pre(t, "W1")).toBeUndefined();
+  });
+
+  it("preflight ignores other tools and other servers", () => {
+    const t = setup(undefined, { maxDepth: 1 });
+    tree(t, 1);
+    expect(pre(t, "W1", start("x"), "mcp__orchestration__worker_list")).toBeUndefined();
+    expect(t.o.preflight("W1", "mcp__orchestration__worker_start", start("x") as never, { name: "other", source: "stdio" })).toBeUndefined();
+  });
+
+  it("the handler repeats the refusal for a call that preflight refused, even if the limit lifted meanwhile", async () => {
+    const t = setup(undefined, { maxDepth: 1 });
+    tree(t, 1);
+    const msg = pre(t, "W1", start("x"));
+    expect(msg).toMatch(/Maximum tree depth/);
+    t.settings.maxDepth = 3; // lifted between the refusal and the call
+    expect((await call(t.o, "W1", "worker_start", start("x"))).error).toBe(msg);
+    expect(await call(t.o, "W1", "worker_start", start("x"))).toMatchObject({ name: "x" }); // one-shot
+  });
+
+  it("the cheap limits are checked before the agent lookup starts a CLI", async () => {
+    const t = setup(undefined, { maxDepth: 1 });
+    tree(t, 1);
+    expect((await call(t.o, "W1", "worker_start", start("x", { agent: "implementer" }))).error).toMatch(/Maximum tree depth/);
+    expect(t.agentCalls).toEqual([]);
+    const full = setup(undefined, { maxChildren: 1 });
+    full.sessions.set("C", fakeSession("C"));
+    await call(full.o, "C", "worker_start", start("a"));
+    expect((await call(full.o, "C", "worker_start", start("b", { agent: "implementer" }))).error).toMatch(/Maximum workers per coordinator/);
+    expect(full.agentCalls).toEqual([]);
+  });
+});
+
+describe("worker tree: remove of a parent", () => {
+  it("worker_remove of a worker with any worker below it, live or not, is refused until they are removed", async () => {
+    const t = setup(undefined, { maxDepth: 3 });
+    const [, , W2] = tree(t, 2);
+    W2.live = false;
+    const r = await call(t.o, "C", "worker_remove", { name: "impl" });
+    expect(r.error).toMatch(/has workers below it: rev/);
+    expect(await t.o.userOp("remove", "W1")).toMatchObject({ code: "has_workers" });
+    expect(await call(t.o, "W1", "worker_remove", { name: "rev" })).toEqual({ name: "rev", removed: true });
+    expect(await call(t.o, "C", "worker_remove", { name: "impl" })).toEqual({ name: "impl", removed: true });
   });
 });

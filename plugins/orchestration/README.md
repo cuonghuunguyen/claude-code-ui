@@ -11,6 +11,8 @@ claude plugin install orchestration@claude-ui
 
 Development from a checkout: `claude plugin marketplace add <path of the checkout>` or `claude --plugin-dir plugins/orchestration`. Validate: `claude plugin validate --strict .` and `claude plugin validate --strict plugins/orchestration`.
 
+The repo's `.claude/settings.json` lists `orchestration@claude-ui` in `enabledPlugins` with the marketplace `cuonghuunguyen/claude-code-ui` as a GitHub source: that loads the plugin from GitHub (the merged default branch), **not** from the local checkout. To test local edits use the local marketplace add or `--plugin-dir` above.
+
 An installed plugin is a copy: a change reaches users after it is merged and `claude plugin update` runs.
 
 ## Agent types
@@ -22,7 +24,7 @@ An installed plugin is a copy: a change reaches users after it is merged and `cl
 | `orchestration:ui-tester` | sonnet | Verifies a commit through the real UI with screenshots |
 | `orchestration:reviewer` | opus | Read-only review of a commit with `pr-review` (`disallowedTools`: Edit, Write, NotebookEdit) |
 
-No agent file declares `tools:` (a tool list drops the orchestration MCP tools) or `permissionMode` (the mode comes from `worker_start`). The input of every role is the HANDOFF block (`skills/orchestrate-tickets/references/handoff.md`).
+No agent file declares `tools:` (a tool list drops the orchestration MCP tools) or `permissionMode`: an SDK probe (SDK 0.3.285, CLI 2.1.294) showed that `permissionMode` in an agent file is ignored for a main-thread agent (the session mode is the `worker_start` mode, or `default` when none is given), so the mode ceiling cannot be raised by an agent file. The planner, ui-tester and reviewer have `mcp__orchestration__worker_start` in `disallowedTools`: only the implementer starts workers. The input of every role is the HANDOFF block (`skills/orchestrate-tickets/references/handoff.md`).
 
 Start one with the claude-ui `worker_start` tool: `agent: "orchestration:reviewer"` (a bare name works when it is unique). An explicit `model` wins over the agent's model.
 

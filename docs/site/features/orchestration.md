@@ -60,6 +60,7 @@ Or use the Plugins dialog. The reviewer needs the `pr-review` skill; acceptance 
 
 - A worker is a normal session. You can open it, type in it and answer its requests yourself. The first answer wins.
 - A worker in a more permissive mode than its coordinator needs your OK on the `worker_start` card.
-- `worker_close` and `worker_remove` refuse a worker that has running workers of its own.
+- `worker_close` refuses a worker that has running workers of its own; `worker_remove` refuses a worker that has any worker below it (remove those first).
+- A `worker_start` over a limit asks you nothing: the worker gets the error at once.
 - High-tier requests are always yours. The coordinator can still stop or close the worker.
 - Workers count toward your plan usage like any session.

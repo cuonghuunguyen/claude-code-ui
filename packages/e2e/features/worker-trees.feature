@@ -65,9 +65,8 @@ Feature: Workers start workers of their own, within the tree limits
     When I allow the permission request
     Then the sidebar lists the worker "parent"
     When I open the worker "parent"
-    Then I see a permission request whose title contains "started by worker parent"
-    When I allow the permission request
     Then the "worker_start" tool card failed
     And the "worker_start" tool card shows an error that names the depth limit
+    And no permission request is shown
     And the sidebar does not list the worker "parent › child"
     And I capture "depth limit"

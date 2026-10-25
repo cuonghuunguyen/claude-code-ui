@@ -47,6 +47,11 @@ describe("orchestration plugin", () => {
     expect(disallowed).toEqual(expect.arrayContaining(["Edit", "Write", "NotebookEdit"]));
   });
 
+  it("only the implementer can start workers: the others have worker_start disallowed", () => {
+    for (const role of ["planner", "reviewer", "ui-tester"]) expect(agent(role).front.disallowedTools!.split(",").map((s) => s.trim()), role).toContain("mcp__orchestration__worker_start");
+    for (const role of ["implementer"]) expect(agent(role).front).not.toHaveProperty("disallowedTools");
+  });
+
   it("no agent sets permissionMode", () => {
     for (const role of Object.keys(ROLES)) expect(agent(role).front).not.toHaveProperty("permissionMode");
   });

@@ -2,10 +2,11 @@
 name: planner
 description: Plans one ticket without writing code. Start it with a HANDOFF block (role planner) when a ticket is ambiguous, cross-package or changes a protocol, spec or data model.
 model: opus
+disallowedTools: mcp__orchestration__worker_start
 ---
 # Role: planner
 
-You plan one ticket and write `<report-dir>/plan.md`. You write no product code and make no commit.
+You plan one ticket and write `<report-dir>/plan.md`. You write no product code and make no commit. You start no workers (`worker_start` is off): only the implementer does.
 
 ## Input
 

@@ -270,6 +270,16 @@ describe("workers", () => {
     expect(top.map((x) => x.id)).toEqual(["c1"]);
   });
 
+  it("nestWorkers keeps a worker's workers right under it, whatever the sibling names sort like", () => {
+    const coord = { ...item("c1", "/p/web", 9), coordinator: true as const };
+    const a = { ...w("w1", "c1", "a"), coordinator: true as const };
+    const ay = w("w2", "c1", "a ");
+    const kid = w("g1", "w1", "z");
+    const { workers } = nestWorkers([coord, ay, kid, a], false);
+    // Compared as one string, "a " sorts between "a" and "a › z" (collation order of the separator is locale dependent).
+    expect(workers.get("c1")!.map((x) => x.workerName)).toEqual(["a", "a › z", "a "]);
+  });
+
   it("groupByCwd keeps a coordinator whose worker's name or title matches the search", () => {
     const coord = { ...item("c", "/p/web", 9, "Plan"), coordinator: true as const };
     const wk = w("w1", "c", "builder");

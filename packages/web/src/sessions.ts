@@ -141,6 +141,8 @@ export function nestWorkers(items: SessionListItem[], archived: boolean) {
   const nested = (s: SessionListItem) => !!s.coordinatorId && byId.has(s.coordinatorId);
   const top: SessionListItem[] = [];
   const workers = new Map<string, SessionListItem[]>();
+  /** The name chain of each nested row, to sort by segment: a child stays right under its parent. */
+  const chains = new Map<SessionListItem, string[]>();
   for (const s of items) {
     if (s.archived !== archived || !nested(s)) {
       top.push(s);
@@ -154,9 +156,20 @@ export function nestWorkers(items: SessionListItem[], archived: boolean) {
       root = byId.get(root.coordinatorId!)!;
     }
     const row = chain.length > 1 ? { ...s, workerName: chain.join(" › ") } : s;
+    chains.set(row, chain);
     workers.set(root.id, [...(workers.get(root.id) ?? []), row]);
   }
-  for (const l of workers.values()) l.sort((a, b) => (a.workerName ?? a.title).localeCompare(b.workerName ?? b.title));
+  // Segment by segment; a prefix (the parent) first.
+  const bySegments = (a: SessionListItem, b: SessionListItem) => {
+    const x = chains.get(a)!;
+    const y = chains.get(b)!;
+    for (let i = 0; i < Math.min(x.length, y.length); i++) {
+      const d = x[i]!.localeCompare(y[i]!);
+      if (d) return d;
+    }
+    return x.length - y.length;
+  };
+  for (const l of workers.values()) l.sort(bySegments);
   return { top, workers };
 }
 

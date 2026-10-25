@@ -506,6 +506,24 @@ describe("orchestration", () => {
       expect(part.input.name).toBe("x");
       await c.request({ type: "permission.respond", requestId: e.requestId, decision: "deny" });
     });
+    it("a worker_start over a limit shows no card: the call runs and the tool refuses it", async () => {
+      enable({ maxChildren: 1 });
+      try {
+        const coord = await coordinator();
+        await call(coord, "worker_start", { name: "lim1", cwd: dirB, prompt: "x" });
+        await c.request({ type: "session.subscribe", sessionId: coord, sinceSeq: 1e9 });
+        await c.request({ type: "session.prompt", sessionId: coord, text: start({ name: "lim2", cwd: dirC, prompt: "p" }) });
+        await new Promise((r) => setTimeout(r, 300));
+        const reply = await until(() => c.inbox.map((m) => (m.type === "event" && m.sessionId === coord && m.part.type === "assistant_text" ? m.part.text : "")).find((t) => t.startsWith("perm: {") && t.includes("updatedInput")));
+        expect(JSON.parse(reply.slice(6)).behavior).toBe("allow");
+        expect(c.inbox.some((m) => m.type === "event" && m.sessionId === coord && m.part.type === "permission_request" && (m.part.input as { name?: string }).name === "lim2")).toBe(false);
+        expect((await call(coord, "worker_start", { name: "lim2", cwd: dirC, prompt: "p" })).error).toMatch(/Maximum workers per coordinator/);
+      } finally {
+        enable({ maxChildren: 4 });
+        const links = JSON.parse(readFileSync(settingsFile, "utf8")) as Record<string, { coordinatorId?: string; name?: string }>;
+        for (const l of Object.values(links)) if (l.name === "lim1") await call(l.coordinatorId!, "worker_close", { name: "lim1" }).catch(() => 0);
+      }
+    });
     it("shows the resulting mode, and the user's approval fixes it", async () => {
       enable();
       const coord = await coordinator(dirA, "sonnet");

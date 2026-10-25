@@ -91,7 +91,7 @@ class ToolError extends Error {
 /** The web app's text for errors whose tool text names tools. */
 const USER_TEXT: Record<string, string> = {
   session_running: "The worker is running or waiting for input: close it first",
-  has_workers: "The worker has running workers of its own: close them first",
+  has_workers: "The worker has workers of its own: wait for them, or remove them first",
 };
 const ok = (v: unknown): Result => ({ content: [{ type: "text", text: JSON.stringify(v, null, 1) }] });
 const fail = (message: string): Result => ({ content: [{ type: "text", text: message }], isError: true });
@@ -265,6 +265,14 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (hits.length > 1) throw new ToolError(`Agent type ${given} is ambiguous: ${hits.join(", ")}. Use the qualified name.`);
     throw new ToolError(`Unknown agent type ${given}. Agent types here: ${list.slice(0, 50).join(", ") || "none"}.`);
   };
+  /** The sync limits of a worker_start by `c`: worker cap, tree depth, children (the name check is the handler's). Throws a ToolError. */
+  const checkLimits = (c: string) => {
+    checkCap();
+    checkDepth(c);
+    checkChildren(c);
+  };
+  /** worker_start calls refused by `preflight` before their card: the handler repeats the refusal (one shot), `${coordinator}\0${name}` -> message. Bounded. */
+  const refused = new Map<string, string>();
   /** Every worker below `c`, any depth, as { id, name, path, depth }. */
   const descendants = (c: string) => {
     const out: { id: string; name: string; path: string; coordinator?: string; depth: number }[] = [];
@@ -467,8 +475,9 @@ export function createOrchestration(deps: OrchestrationDeps) {
     refuseHeldElsewhere(w, n);
     const busy = `Worker ${n} is still running or waiting for input. Close it with worker_close first, then call worker_remove.`;
     if (["running", "needs_input"].includes(deps.sessions.get(w.id)?.info().state ?? "")) throw new ToolError(busy, "session_running");
-    const live = descendants(w.id).filter((d) => starting.has(d.id) || deps.sessions.get(d.id)?.liveQuery());
-    if (live.length) throw new ToolError(`Worker ${n} has live workers below it: ${live.map((d) => d.path).join(", ")}. Close them first.`, "has_workers");
+    // Any worker below, live or not: removing the parent would leave their links pointing at a deleted session, out of every tool's reach.
+    const below = descendants(w.id);
+    if (below.length) throw new ToolError(`Worker ${n} has workers below it: ${below.map((d) => d.path).join(", ")}. Remove them first (worker_remove from the worker that started them, or in the web app).`, "has_workers");
     const err = await deps.remove(w.id);
     if (err) throw new ToolError(err.code === "session_running" ? busy : `Worker ${n} was not removed: ${err.message}`, err.code);
   }
@@ -496,18 +505,24 @@ export function createOrchestration(deps: OrchestrationDeps) {
         },
         async (a) => {
           const coordinator = cur();
+          const refusal = refused.get(`${coordinator}\0${a.name}`);
+          if (refusal !== undefined) {
+            refused.delete(`${coordinator}\0${a.name}`);
+            throw new ToolError(refusal);
+          }
           try {
             checkShape(a);
           } catch (e) {
             throw asToolError(e);
           }
+          // The cheap checks first (no git, no CLI); repeated below after the awaits, where a parallel call may have taken the place.
+          if (workers(coordinator).some((w) => w.name === a.name)) throw new ToolError(`A worker named ${a.name} exists already.`);
+          checkLimits(coordinator);
           const t = await target(a);
           const agent = a.agent ? await resolveAgent(a.agent, targetDir(t)) : undefined;
           const key = `${coordinator}\0${a.name}`;
           if (reserved.has(key) || workers(coordinator).some((w) => w.name === a.name)) throw new ToolError(`A worker named ${a.name} exists already.`);
-          checkCap();
-          checkDepth(coordinator);
-          checkChildren(coordinator);
+          checkLimits(coordinator);
           const model = normModel(a.model);
           const known = deps.models();
           if (unknownModel(model)) throw new ToolError(`Unknown model ${a.model}. Valid values: ${known.map((r) => r.value).join(", ")}.`);
@@ -902,6 +917,23 @@ export function createOrchestration(deps: OrchestrationDeps) {
       })();
     },
     tools,
+    /**
+     * Before the worker_start card: the message when the call is over a limit (worker cap, tree depth, children), so the user is not
+     * asked for a call that cannot start. The caller lets the call run: the handler repeats the refusal as its tool error.
+     */
+    preflight(sessionId: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }): string | undefined {
+      if (mcpServer?.source !== "sdk" || mcpServer.name !== SERVER || tool !== `mcp__${SERVER}__worker_start` || typeof input.name !== "string") return undefined;
+      const id = resolve(sessionId);
+      try {
+        checkLimits(id);
+      } catch (e) {
+        if (!(e instanceof ToolError)) throw e;
+        refused.set(`${id}\0${input.name}`, e.message);
+        if (refused.size > 200) refused.delete(refused.keys().next().value!);
+        return e.message;
+      }
+      return undefined;
+    },
     /** A deleted session leaves no state behind. */
     forget(id: string) {
       for (const m of [bindings, queues, aliases, epochs, lastText, lastActivity] as Map<string, unknown>[]) m.delete(id);

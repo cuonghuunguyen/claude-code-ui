@@ -105,6 +105,8 @@ type SessionOpts = Partial<SessionSettings> & {
   tier?: typeof tierAsync;
   /** Whether the session is a worker (linked to a coordinator): its CLI runs with the shell cwd pinned, which lets read-only git be `low` (risk-tier.ts). */
   worker?: (id: string) => boolean;
+  /** The message when a tool call is refused before any card (orchestration.ts preflight); the call then runs and the tool returns its own error. */
+  preflight?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => string | undefined;
   permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => PermissionCard | Promise<PermissionCard | undefined> | undefined;
 };
 
@@ -836,6 +838,8 @@ export class Session {
     const policy = this.opts.toolPolicy?.(tool, mcpServer);
     if (policy === "allow") return Promise.resolve({ behavior: "allow", updatedInput: input });
     if (policy === "no_rules") suggestions = [];
+    // A call over a limit shows no card: it runs and the tool refuses it with its own error (a card would stall an unattended run).
+    if (this.opts.preflight?.(this.id, tool, input, mcpServer) !== undefined) return { behavior: "allow", updatedInput: input };
     const made = this.opts.permissionCard?.(this.id, tool, input, mcpServer);
     const card = made instanceof Promise ? await made : made;
     // The SDK may abort while the card's git read runs.
