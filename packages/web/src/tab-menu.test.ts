@@ -72,3 +72,10 @@ it("GH-395 a pane tab menu has move, close, pin, Move Plan to side/bottom panel,
   expect(flat.find((e) => e.id === "moveSide")!.testId).toBe("tab-menu-moveSide");
   expect(flat.find((e) => e.id === "goToSession")!.testId).toBe("tab-menu-goToSession");
 });
+
+it("GH-396 a Git graph tab menu says Move Git graph to side / bottom panel and has Split right and Split down disabled", () => {
+  const flat = tabMenuSections({ ...all, pane: { label: "Git graph" }, split: { can: true } }).flat();
+  expect(flat.map((e) => e.label)).toContain("Move Git graph to side panel");
+  expect(flat.map((e) => e.label)).toContain("Move Git graph to bottom panel");
+  expect(flat.filter((e) => e.disabled).map((e) => e.id)).toEqual(["splitRight", "splitDown"]);
+});
