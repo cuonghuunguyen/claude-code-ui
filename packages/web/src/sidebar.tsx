@@ -135,6 +135,7 @@ export function SessionList({
   reveal: revealSeq,
   openTabs,
   onWorkers,
+  onCopy,
   onArchiveIdle,
 }: {
   list: SessionListItem[];
@@ -175,6 +176,8 @@ export function SessionList({
   openTabs?: ReadonlySet<string>;
   /** Close finished / Remove closed workers of a coordinator: the worker ids (the app confirms removals). */
   onWorkers?: (ids: string[], action: "close" | "remove", coordinator: { id: string; title: string }) => void;
+  /** Copy path of a project or worktree row; the app copies and toasts. */
+  onCopy?: (text: string, what: string) => void;
   /** Archive idle sessions older than `days` in `where` (a project or worktree name); the app confirms first. */
   onArchiveIdle?: (ids: string[], where: string, days: number) => void;
 }) {
@@ -269,6 +272,7 @@ export function SessionList({
     groupEntries({
       ...menuBase(() => groupSessions(baseGroup(g.cwd) ?? g), projectName(g.cwd), prefix),
       newSession: () => onNew(g.cwd),
+      copyPath: onCopy && (() => onCopy(g.cwd, "path")),
       newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (quick) => onNewWorktree(g.cwd, quick) : undefined,
       cleanUp: onCleanUp && (() => onCleanUp({ kind: "project", cwd: g.cwd })),
       tail: { id: `${prefix}remove`, label: "Remove from list (files stay)", onSelect: () => onRemove(g.cwd) },
@@ -278,6 +282,7 @@ export function SessionList({
     groupEntries({
       ...menuBase(() => (baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path) ?? r).sessions, label, prefix),
       newSession: r.outsideRoots ? undefined : () => onNew(r.path),
+      copyPath: onCopy && (() => onCopy(r.path, "path")),
       tail: onRemoveWorktree && removableWorktree(worktrees?.[g.cwd] ?? [], r) ? { id: `${prefix}remove`, label: "Delete worktree…", onSelect: () => onRemoveWorktree(g.cwd, r.path) } : undefined,
     });
   const activeSession = list.find((s) => s.id === activeId);
