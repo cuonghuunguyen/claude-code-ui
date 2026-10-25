@@ -789,8 +789,8 @@ export class Session {
   }
 
   /** Shows the queued messages and why they are paused (prompt-queue.ts). */
-  setQueue(items: { id: string; text: string; images: string[]; bash?: true }[], held: { reason: "usage_limit" | "not_live"; until?: number } | undefined) {
-    const next = { items: items.map((i) => ({ id: i.id, text: i.text, imageCount: i.images.length, ...(i.bash && { bash: true as const }) })), ...(held && { held }) };
+  setQueue(items: { id: string; text: string; images: string[]; bash?: true; error?: string }[], held: { reason: "usage_limit" | "not_live"; until?: number } | undefined) {
+    const next = { items: items.map((i) => ({ id: i.id, text: i.text, imageCount: i.images.length, ...(i.bash && { bash: true as const }), ...(i.error && { error: i.error }) })), ...(held && { held }) };
     if (JSON.stringify(next) === JSON.stringify(this.queueShown)) return;
     this.queueShown = next;
     this.emit({ type: "prompt_queue", id: "prompt_queue", ...next });

@@ -113,3 +113,10 @@ it("bashWait disables Send now of bash rows only, with the reason as title; clic
   await click(prompt);
   expect(onSendNow).toHaveBeenCalledWith("b");
 });
+
+it("GH-443: a failed bash item shows why it did not run", async () => {
+  const el = await render(<QueueChips items={[{ ...item("a", "ls"), bash: true, error: "outside the allowlisted roots: /x" }, item("b", "ok")]} onSendNow={() => {}} onEdit={() => {}} onDelete={() => {}} />);
+  const rows = el.querySelectorAll("li");
+  expect(rows[0]!.textContent).toContain("Not run: outside the allowlisted roots: /x");
+  expect(rows[1]!.textContent).not.toContain("Not run");
+});

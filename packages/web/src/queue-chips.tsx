@@ -63,7 +63,7 @@ export function QueueChips({
           const label = (item.bash ? "! " : "") + item.text.slice(0, 40);
           const waits = !!item.bash && !!bashWait;
           return (
-            <li key={item.id} className="flex min-h-9 min-w-0 items-center gap-1 max-md:min-h-11 pointer-coarse:min-h-11">
+            <li key={item.id} className="flex min-h-9 min-w-0 flex-wrap items-center gap-1 max-md:min-h-11 pointer-coarse:min-h-11">
               {item.bash && (
                 <span aria-hidden className="shrink-0 pl-2 font-mono text-muted-foreground">
                   !
@@ -90,6 +90,11 @@ export function QueueChips({
               <button type="button" data-action="delete" className={BTN} aria-label={`Delete: ${label}`} title="Delete" onClick={() => run("delete", i, item.id)}>
                 <XIcon aria-hidden />
               </button>
+              {item.error && (
+                <p role="alert" className="basis-full px-2 pb-1 text-destructive text-xs">
+                  Not run: {item.error}
+                </p>
+              )}
             </li>
           );
         })}

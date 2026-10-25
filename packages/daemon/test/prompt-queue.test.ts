@@ -5,11 +5,11 @@ type Err = { code: string; message: string } | undefined;
 function setup() {
   const st = { ready: true, result: undefined as Err };
   const sent: { id: string; text: string; bash?: true }[] = [];
-  const shown: { id: string; texts: string[]; held: unknown; items: { text: string; bash?: true }[] }[] = [];
+  const shown: { id: string; texts: string[]; held: unknown; items: { text: string; bash?: true; error?: string }[] }[] = [];
   const q = createPromptQueue({
     ready: () => st.ready,
     send: async (id, item) => (sent.push({ id, text: item.text, ...(item.bash && { bash: true as const }) }), st.result),
-    show: (id, items, held) => shown.push({ id, texts: items.map((i) => i.text), held, items: items.map((i) => ({ text: i.text, ...(i.bash && { bash: true as const }) })) }),
+    show: (id, items, held) => shown.push({ id, texts: items.map((i) => i.text), held, items: items.map((i) => ({ text: i.text, ...(i.bash && { bash: true as const }), ...(i.error && { error: i.error }) })) }),
   });
   return { q, st, sent, shown };
 }
@@ -21,6 +21,32 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("prompt queue", () => {
+  it("sending() is true while a send or a Send now is in flight", async () => {
+    let done!: () => void;
+    const q = createPromptQueue({ ready: () => true, send: () => new Promise((r) => (done = () => r(undefined))), show: () => {} });
+    expect(q.sending("s")).toBe(false);
+    q.enqueue("s", { text: "a", images: [] });
+    await flush();
+    expect(q.sending("s")).toBe(true);
+    done();
+    await flush();
+    expect(q.sending("s")).toBe(false);
+  });
+
+  it("a failed bash item carries the reason as item.error; a retryable refusal does not", async () => {
+    const { q, st, shown } = setup();
+    st.result = { code: "cwd_not_allowed", message: "outside the allowlisted roots: /x" };
+    q.enqueue("s", { text: "ls", images: [], bash: true });
+    await flush();
+    expect(q.items("s")[0]).toMatchObject({ text: "ls", bash: true, error: "outside the allowlisted roots: /x" });
+    expect(shown.at(-1)!.items[0]).toMatchObject({ error: "outside the allowlisted roots: /x" });
+    const { q: q2, st: st2 } = setup();
+    st2.result = { code: "external_turn", message: "x" };
+    q2.enqueue("s", { text: "ls", images: [], bash: true });
+    await flush();
+    expect(q2.items("s")[0]!.error).toBeUndefined();
+  });
+
   it("a bash item keeps its flag through enqueue, show, take and send", async () => {
     const { q, st, sent, shown } = setup();
     st.ready = false;

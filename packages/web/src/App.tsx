@@ -3654,6 +3654,8 @@ export function SessionPane({
     return () => window.removeEventListener("keydown", onEsc);
   }, [escStops, active]);
   const [rewinding, setRewinding] = useState<string>();
+  /** A rewind request is in flight (the daemon takes no shell command meanwhile). */
+  const [rewindRunning, setRewindRunning] = useState(false);
   // Palette Rewind: the timeline scrolls to the message first (it can be outside the rendered window), then its panel opens.
   const [reveal, setReveal] = useState<{ key: string }>();
   useEffect(() => {
@@ -3827,7 +3829,12 @@ export function SessionPane({
                       // Images a snapshot or page left out load before the rewind (it drops the prompt from the daemon). One that fails to load
                       // stops the rewind with a notice in the panel: the image would be lost for good.
                       const images = mode === "code" ? [] : await restoreImages(prompt.images, prompt.id, onMedia);
-                      await onRewind(prompt.id, mode);
+                      setRewindRunning(true);
+                      try {
+                        await onRewind(prompt.id, mode);
+                      } finally {
+                        setRewindRunning(false);
+                      }
                       setRewinding(undefined);
                       // Conversation modes: the original prompt goes back into the prompt box.
                       if (mode !== "code") setDraft({ text: prompt.text, images });
@@ -3865,10 +3872,12 @@ export function SessionPane({
             items={view.queue?.items ?? []}
             held={view.queue?.held}
             bashWait={
-              view.externalTurn
+              view.externalTurn || view.working
                 ? "Runs when the terminal CLI turn ends"
-                : shellRunning
-                  ? "Runs when the running shell command ends"
+                : rewindRunning
+                  ? "Runs when the rewind ends"
+                  : shellRunning
+                    ? "Runs when the running shell command ends"
                   : turnRunning || isClearing
                     ? "A shell command cannot steer a turn: it runs when the turn ends"
                     : undefined
@@ -4386,7 +4395,7 @@ function PromptBox({
         aria-label={bash ? "Shell command" : label}
         className={`field-sizing-content max-h-[min(240px,40dvh)] min-h-[calc(2lh+1.5rem)] max-sm:min-h-[calc(1lh+1.5rem)] w-full resize-none bg-transparent pt-4 pb-2 text-sm outline-none pointer-coarse:text-base ${bash ? "pr-4 pl-8 font-mono" : "px-4"}`}
         rows={phone ? 1 : 2}
-        placeholder={bash ? (running ? "Run a shell command when the turn ends (Esc to exit)" : "Run a shell command (Esc to exit)") : placeholder}
+        placeholder={bash ? (running || blocked ? "Queue a shell command: it runs when the current work ends" : "Run a shell command (Esc to exit)") : placeholder}
         autoFocus={autoFocus}
         disabled={disabled}
         value={text}
@@ -4425,6 +4434,7 @@ function PromptBox({
         onSend={() => send()}
         onQueue={onQueue && (() => send(text, "queue"))}
         sendMode={bash && running ? "queue" : sendMode}
+        shell={bash}
         onStop={() => onInterrupt?.()}
         // Not on touch screens: focusing the prompt box there opens the soft keyboard (OpenCode leaves focus on the page).
         onFocusLost={() => !window.matchMedia?.("(pointer: coarse)").matches && input.current?.focus()}

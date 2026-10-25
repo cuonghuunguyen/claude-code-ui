@@ -1184,3 +1184,15 @@ it("GH-443: bash chip Send now is disabled while a turn runs, enabled when idle"
   await act(async () => void idle.click());
   expect(onSendQueued).toHaveBeenCalledWith("q1");
 });
+
+it("GH-443: bash chip Send now is also disabled while a terminal CLI turn or other background work shows (idle, working)", async () => {
+  const view = applyEvent(queueView([{ id: "q1", text: "ls", imageCount: 0, bash: true }], "idle"), { type: "event", sessionId: "s1", seq: 2, part: { type: "session_state", id: "session_state", state: "idle", working: true } });
+  const { el } = await render({}, view);
+  expect((el.querySelector('[aria-label="Send now: ! ls"]') as HTMLElement).getAttribute("aria-disabled")).toBe("true");
+});
+
+it("GH-443: the bash placeholder while busy is accurate (no Esc to exit: Esc stops the turn)", async () => {
+  const { box } = await render({ onBash: async () => {}, onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  await key(box, { key: "!" });
+  expect(box.placeholder).toBe("Queue a shell command: it runs when the current work ends");
+});

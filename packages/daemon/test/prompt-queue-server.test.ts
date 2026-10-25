@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import type { Part, ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
+import { Session } from "../src/session.ts";
 import { createSettings } from "../src/settings.ts";
 import { clearQuery, clearState, closedQueries, fakeQuery, interruptQuery, limitQuery, limitState, permissionQuery } from "./fake-query.ts";
 
@@ -36,7 +37,7 @@ async function harness(query: unknown, extra: Partial<Parameters<typeof createDa
   type C = Awaited<ReturnType<typeof client>>;
   const parts = (c: C, id: string) => c.inbox.filter((m: any) => m.type === "event" && m.sessionId === id).map((m: any) => m.part as Part);
   const texts = (c: C, id: string) => parts(c, id).filter((p) => p.type === "user_text").map((p: any) => p.text as string);
-  const queue = (c: C, id: string) => parts(c, id).filter((p) => p.type === "prompt_queue").map((p: any) => p as { items: { id: string; text: string; imageCount: number; bash?: true }[]; held?: { reason: string; until?: number } });
+  const queue = (c: C, id: string) => parts(c, id).filter((p) => p.type === "prompt_queue").map((p: any) => p as { items: { id: string; text: string; imageCount: number; bash?: true; error?: string }[]; held?: { reason: string; until?: number } });
   const lastQueue = (c: C, id: string) => queue(c, id).at(-1);
   async function session(c: C, dir2 = dir) {
     const id = ((await c.request({ type: "session.create", cwd: dir2 })).result as any).session.id as string;
@@ -413,6 +414,51 @@ describe.skipIf(process.platform === "win32")("queued bash commands", { timeout:
     rmSync(gone, { recursive: true });
     expect(await c.request({ type: "session.bash", sessionId: id, command: "echo hi" })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
     expect(h.lastQueue(c, id)?.items ?? []).toEqual([]);
+    c.ws.close();
+  });
+
+  it("session.bash while the queue sends a prompt (sync pending) queues behind it, in submit order", async () => {
+    const gates: (() => void)[] = [];
+    const real = Session.prototype.sync;
+    let gated = false;
+    const spy = vi.spyOn(Session.prototype, "sync").mockImplementation(async function (this: Session) {
+      if (gated) await new Promise<void>((r) => gates.push(r));
+      return real.call(this);
+    });
+    try {
+      const h = await harness(fakeQuery);
+      const c = await h.client();
+      const id = await h.session(c);
+      gated = true;
+      await c.request({ type: "session.enqueue", sessionId: id, text: "p1" });
+      await vi.waitFor(() => expect(gates.length).toBe(1));
+      const bash = c.request({ type: "session.bash", sessionId: id, command: "echo b1" });
+      await sleep(150);
+      // Release the newest wait first: without the fix the command's own sync would win the race.
+      while (gates.length) gates.pop()!();
+      gated = false;
+      const r = await bash;
+      expect(r.result.itemId).toEqual(expect.any(String));
+      await vi.waitFor(() => expect(bashParts(h, c, id).some((p) => p.status === "done" && p.stdout === "b1\n")).toBe(true), { timeout: 5000 });
+      const kinds = h.parts(c, id).flatMap((p: any) => (p.type === "user_text" ? ["t"] : p.type === "bash" && p.status === "running" ? ["b"] : []));
+      expect(kinds).toEqual(["t", "b"]);
+      c.ws.close();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a queued bash item that fails stays at the head with its error on the chip", async () => {
+    const h = await harness(permissionQuery);
+    const c = await h.client();
+    const gone = join(h.dir, "gone2");
+    mkdirSync(gone);
+    const id = await h.session(c, gone);
+    const allow = await busy(h, c, id);
+    expect((await c.request({ type: "session.bash", sessionId: id, command: "echo x" })).result.itemId).toEqual(expect.any(String));
+    rmSync(gone, { recursive: true });
+    await allow();
+    await vi.waitFor(() => expect(h.lastQueue(c, id)!.items[0]).toMatchObject({ text: "echo x", bash: true, error: expect.stringContaining("allowlisted") }), { timeout: 5000 });
     c.ws.close();
   });
 });

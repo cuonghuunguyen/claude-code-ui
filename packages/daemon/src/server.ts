@@ -1687,7 +1687,8 @@ export function createDaemon(opts: {
           const s = await find(msg.sessionId);
           if (!s) return;
           if (typeof msg.command !== "string" || !msg.command.trim()) return fail("bad_command", "empty command");
-          const err = await runBash(s, msg.command);
+          // A send of the queue is in flight (a prompt awaiting its sync): the command goes behind it, in submit order.
+          const err = queue.sending(s.id) ? { code: "session_busy", message: "queue sending" } : await runBash(s, msg.command);
           if (err?.code === "session_busy" || err?.code === "external_turn") {
             const r = queue.enqueue(s.id, { text: msg.command.trim(), images: [], bash: true });
             return typeof r === "string" ? reply({ itemId: r }) : fail(r.code, r.message);
