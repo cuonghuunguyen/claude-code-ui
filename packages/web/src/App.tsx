@@ -2619,7 +2619,7 @@ export function App() {
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
                         onQueue={(text, images) => queueRequest({ type: "session.enqueue", sessionId: s.id, text, images })}
-                        onDequeue={(itemId) => queueRequest<{ text: string; images: string[] }>({ type: "session.dequeue", sessionId: s.id, itemId })}
+                        onDequeue={(itemId) => queueRequest<{ text: string; images: string[]; bash?: boolean }>({ type: "session.dequeue", sessionId: s.id, itemId })}
                         onSendQueued={(itemId) => queueRequest({ type: "session.sendQueued", sessionId: s.id, itemId })}
                         onCancelContinue={() => client.current!.request({ type: "session.cancelContinue", sessionId: s.id }).catch((e) => setError((e as Error).message))}
                         onInterrupt={() =>
@@ -3597,7 +3597,7 @@ export function SessionPane({
   /** Queues a message for when the session is idle (Alt+Enter, send menu); rejects when it was not queued. */
   onQueue?: (text: string, images: string[]) => Promise<unknown>;
   /** Removes a queued message and resolves to its text and images (Edit, Delete); rejects with code unknown_item when it was already sent. */
-  onDequeue?: (itemId: string) => Promise<{ text: string; images: string[] }>;
+  onDequeue?: (itemId: string) => Promise<{ text: string; images: string[]; bash?: boolean }>;
   /** Send now: steers the queued message into the running turn, or starts a turn when idle. */
   onSendQueued?: (itemId: string) => Promise<unknown>;
   /** Bash mode (`!`): runs a shell command in the session cwd; rejects when it was not run. */
@@ -3685,7 +3685,7 @@ export function SessionPane({
   );
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
   // A queued message taken back (Edit) or an error of a chip action: the prompt box shows it once per key.
-  const [takeBack, setTakeBack] = useState<{ key: string; text: string; images: string[]; error?: string }>();
+  const [takeBack, setTakeBack] = useState<{ key: string; text: string; images: string[]; bash?: boolean; error?: string }>();
   const chipAction = (id: string, how: "edit" | "delete" | "send") => {
     const fail = (e: Error) => {
       // Delete and Send now of an item that is gone: nothing to report, nothing to change in the box.
@@ -3694,7 +3694,7 @@ export function SessionPane({
       setTakeBack({ key: pendingKey(), text: "", images: [], error: gone ? "Already sent" : `${how === "send" ? "Send now" : how === "edit" ? "Edit" : "Delete"} failed: ${e.message}` });
     };
     if (how === "send") return void onSendQueued?.(id).catch(fail);
-    void onDequeue?.(id).then((r) => how === "edit" && setTakeBack({ key: pendingKey(), text: r.text, images: r.images }), fail);
+    void onDequeue?.(id).then((r) => how === "edit" && setTakeBack({ key: pendingKey(), text: r.text, images: r.images, bash: r.bash }), fail);
   };
   const prompt = useRef<HTMLTextAreaElement>(null);
   const dock = useRef<HTMLDivElement>(null);
@@ -3862,6 +3862,15 @@ export function SessionPane({
           <QueueChips
             items={view.queue?.items ?? []}
             held={view.queue?.held}
+            bashWait={
+              view.externalTurn
+                ? "Runs when the terminal CLI turn ends"
+                : shellRunning
+                  ? "Runs when the running shell command ends"
+                  : turnRunning || isClearing
+                    ? "A shell command cannot steer a turn: it runs when the turn ends"
+                    : undefined
+            }
             onSendNow={(id) => chipAction(id, "send")}
             onEdit={(id) => chipAction(id, "edit")}
             onDelete={(id) => chipAction(id, "delete")}
@@ -3991,7 +4000,7 @@ function PromptBox({
   /** Given (session view): Alt+Enter and the send menu queue the message instead of steering; rejects when it was not queued. */
   onQueue?: (text: string, images: string[]) => Promise<unknown>;
   /** A queued message taken back: its text goes before the typed text, its images in front; `error` only shows. Handled once per `key`. */
-  takeBack?: { key: string; text: string; images: string[]; error?: string };
+  takeBack?: { key: string; text: string; images: string[]; bash?: boolean; error?: string };
   /** Given: `!` at the start of the box enters bash mode, Enter runs the command; rejects when it was not run. Not on the new-session tab. */
   onBash?: (command: string) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
@@ -4113,6 +4122,15 @@ function PromptBox({
     if (takeBack.error) return setSendError(takeBack.error);
     // Only an item that was really returned (text or images) goes back into the box.
     if (!takeBack.text && !takeBack.images.length) return;
+    if (takeBack.bash) {
+      // A bash item: an empty box becomes bash mode; typed prose never runs as a shell command.
+      if (!text && !images.length) {
+        setBash(true);
+        restore(takeBack.text);
+      } else restore(bash ? takeBack.text : `!${takeBack.text}`);
+      input.current?.focus();
+      return;
+    }
     restore(takeBack.text);
     setImages((cur) => [...takeBack.images, ...cur]);
     input.current?.focus();
@@ -4138,7 +4156,7 @@ function PromptBox({
   const send = (t = text, how: "send" | "queue" = enterHow) => {
     if (bash) {
       const command = t.trim();
-      if (!command || blocked) return;
+      if (!command || (blocked && !onQueue)) return;
       setSendError(undefined);
       onBash!(command).catch((e: Error) => {
         restore(t);
@@ -4366,7 +4384,7 @@ function PromptBox({
         aria-label={bash ? "Shell command" : label}
         className={`field-sizing-content max-h-[min(240px,40dvh)] min-h-[calc(2lh+1.5rem)] max-sm:min-h-[calc(1lh+1.5rem)] w-full resize-none bg-transparent pt-4 pb-2 text-sm outline-none pointer-coarse:text-base ${bash ? "pr-4 pl-8 font-mono" : "px-4"}`}
         rows={phone ? 1 : 2}
-        placeholder={bash ? "Run a shell command (Esc to exit)" : placeholder}
+        placeholder={bash ? (running ? "Run a shell command when the turn ends (Esc to exit)" : "Run a shell command (Esc to exit)") : placeholder}
         autoFocus={autoFocus}
         disabled={disabled}
         value={text}
@@ -4404,7 +4422,7 @@ function PromptBox({
         hasInput={!disabled && !blocked && (!!text.trim() || images.length > 0)}
         onSend={() => send()}
         onQueue={onQueue && (() => send(text, "queue"))}
-        sendMode={sendMode}
+        sendMode={bash && running ? "queue" : sendMode}
         onStop={() => onInterrupt?.()}
         // Not on touch screens: focusing the prompt box there opens the soft keyboard (OpenCode leaves focus on the page).
         onFocusLost={() => !window.matchMedia?.("(pointer: coarse)").matches && input.current?.focus()}

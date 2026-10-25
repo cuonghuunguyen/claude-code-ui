@@ -18,6 +18,7 @@ export function heldText(held: Held): string {
 export function QueueChips({
   items,
   held,
+  bashWait,
   onSendNow,
   onEdit,
   onDelete,
@@ -25,6 +26,8 @@ export function QueueChips({
 }: {
   items: QueuedPrompt[];
   held?: Held;
+  /** Why a bash item cannot run now (Send now is disabled with it as tooltip); undefined = it can. */
+  bashWait?: string;
   onSendNow: (id: string) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
@@ -57,14 +60,28 @@ export function QueueChips({
       </span>
       <ul ref={list} className={`flex min-w-0 flex-col ${items.length > 3 ? "max-h-40 overflow-y-auto" : ""}`}>
         {items.map((item, i) => {
-          const label = item.text.slice(0, 40);
+          const label = (item.bash ? "! " : "") + item.text.slice(0, 40);
+          const waits = !!item.bash && !!bashWait;
           return (
             <li key={item.id} className="flex min-h-9 min-w-0 items-center gap-1 max-md:min-h-11 pointer-coarse:min-h-11">
-              <span className="min-w-0 flex-1 truncate px-2" title={item.text}>
+              {item.bash && (
+                <span aria-hidden className="shrink-0 pl-2 font-mono text-muted-foreground">
+                  !
+                </span>
+              )}
+              <span className={`min-w-0 flex-1 truncate ${item.bash ? "font-mono" : "px-2"}`} title={item.text}>
                 {item.text}
               </span>
               {item.imageCount > 0 && <span className="shrink-0 rounded-md bg-secondary px-1.5 text-muted-foreground text-xs">+{item.imageCount} {item.imageCount === 1 ? "image" : "images"}</span>}
-              <button type="button" data-action="send" className={BTN} aria-label={`Send now: ${label}`} title="Send now (steer)" onClick={() => run("send", i, item.id)}>
+              <button
+                type="button"
+                data-action="send"
+                className={`${BTN} aria-disabled:cursor-not-allowed aria-disabled:opacity-50`}
+                aria-label={`Send now: ${label}`}
+                aria-disabled={waits || undefined}
+                title={waits ? bashWait : item.bash ? "Run now" : "Send now (steer)"}
+                onClick={() => !waits && run("send", i, item.id)}
+              >
                 <ArrowUpIcon aria-hidden />
               </button>
               <button type="button" data-action="edit" className={BTN} aria-label={`Edit: ${label}`} title="Edit (back into the prompt box)" onClick={() => run("edit", i, item.id)}>
