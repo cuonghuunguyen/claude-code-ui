@@ -110,3 +110,28 @@ Feature: Plan pane
     Then the plan card shows a plan
     And the Plan tab shows the plan of the plan card
     And I capture "plan-restored"
+
+  Scenario: Approving a plan lets Claude go on and does not mark the plan as edited
+    Given a Haiku session in Plan mode with a plan waiting for approval
+    When I remember the plan of the approval panel
+    And I approve the plan with "Yes, manually approve edits"
+    Then the permission request is gone
+    And the session leaves Plan mode
+    And Claude goes on after the approval
+    And the ExitPlanMode card is finished and not marked as edited by me
+    And the ExitPlanMode card shows the plan I approved
+    And I capture "approved"
+
+  Scenario: A plan revised with Edit shows its revised step in the approval panel and the Plan tab
+    Given a Haiku session in Plan mode whose plan file is drafted
+    When I ask to revise step 2 with the marker and to submit the plan
+    Then the approval panel shows the revised step
+    And the Plan tab shows the revised step
+    And I capture "revised-plan"
+
+  Scenario: Move plan to main area from the palette without a plan shows a toast
+    Given a Haiku session with one finished reply
+    When I run "Move plan to main area" from the command palette
+    Then a toast says "Plan moved to the main area"
+    And there is no plan tab
+    And I capture "palette-no-plan"

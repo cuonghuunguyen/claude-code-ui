@@ -267,3 +267,95 @@ Then("the Plan tab shows the plan of the plan card", async ({ page }) => {
   expect(fromCard.length).toBeGreaterThan(0);
   expect(norm(await page.getByTestId("plan-pane").textContent())).toContain(fromCard);
 });
+
+// --- Approval, revised plan, palette without a plan ---
+const REVISE_TOKEN = "ZEBRA-7731";
+let planBeforeAnswer = "";
+const approvalPanel = (page: Page) => page.getByTestId("permission-panel").filter({ visible: true }).first();
+const exitCard = (page: Page) => page.getByTestId("tool-card").filter({ hasText: /^\s*ExitPlanMode/ }).first();
+
+When("I remember the plan of the approval panel", async ({ page }) => {
+  planBeforeAnswer = norm(await approvalPanel(page).getByTestId("plan").textContent());
+  expect(planBeforeAnswer.length).toBeGreaterThan(0);
+});
+
+When("I approve the plan with {string}", async ({ page }, label: string) => {
+  await approvalPanel(page).getByRole("button", { name: label, exact: true }).click();
+});
+
+Then("the session leaves Plan mode", async ({ page }) => {
+  const settings = page.getByTestId("session-settings");
+  const phone = await settings.isVisible();
+  if (phone) await settings.click();
+  await expect(page.getByTestId("mode-select")).not.toHaveAttribute("aria-label", /^Plan mode/, { timeout: TURN_MS });
+  if (phone) await page.keyboard.press("Escape");
+});
+
+Then("Claude goes on after the approval", async ({ page }) => {
+  // Something follows the ExitPlanMode card: a reply, another tool call or a new request.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const cards = [...document.querySelectorAll('[data-testid="tool-card"]')];
+          const at = cards.findIndex((c) => /^\s*ExitPlanMode/.test(c.textContent ?? ""));
+          const after = cards.slice(at + 1).length > 0;
+          const replies = document.querySelectorAll('[data-testid="assistant-text"]').length > 0;
+          const asks = document.querySelectorAll('[data-testid="permission-panel"]').length > 0;
+          return after || replies || asks;
+        }),
+      { timeout: TURN_MS },
+    )
+    .toBe(true);
+});
+
+Then("the ExitPlanMode card is finished and not marked as edited by me", async ({ page }) => {
+  const card = exitCard(page);
+  await expect(card).toHaveAttribute("data-status", "done", { timeout: TURN_MS });
+  expect(norm(await card.textContent())).not.toMatch(/edited by (you|user)/i);
+  await expect(page.getByText(/edited by (you|the user|user)/i)).toHaveCount(0);
+});
+
+Then("the ExitPlanMode card shows the plan I approved", async ({ page }) => {
+  const card = exitCard(page);
+  if ((await card.getByTestId("plan").count()) === 0) await card.getByRole("button", { name: /^ExitPlanMode/ }).click();
+  expect(norm(await card.getByTestId("plan").textContent())).toContain(planBeforeAnswer);
+});
+
+Given("a Haiku session in Plan mode whose plan file is drafted", async ({ page, daemon, project }) => {
+  await openApp(page, daemon);
+  await openProject(page, project.path);
+  await prepareHaikuSession(page, project.name);
+  await chooseMode(page, "Plan mode");
+  await sendPrompt(
+    page,
+    "Plan only. Write a two-step markdown plan (create hello.txt containing hi; verify it) to your plan file with the Write tool. Do not call ExitPlanMode yet. Then reply with the single word: drafted.",
+  );
+  await expect(page.locator('[data-testid="tool-card"]').filter({ hasText: /^\s*Write/ }).first()).toBeVisible({ timeout: TURN_MS });
+  await expect(page.locator('[data-testid="send"][data-state="idle"]').last()).toBeVisible({ timeout: TURN_MS });
+});
+
+When("I ask to revise step 2 with the marker and to submit the plan", async ({ page }) => {
+  await sendPrompt(
+    page,
+    `Edit your plan file with the Edit tool: replace the text of step 2 with exactly "${REVISE_TOKEN} verify hello.txt". Do not rewrite the file. Then call ExitPlanMode with no other tool in between.`,
+  );
+  await expect(page.getByTestId("permission-panel")).toBeVisible({ timeout: TURN_MS });
+});
+
+Then("the approval panel shows the revised step", async ({ page }) => {
+  await expect(approvalPanel(page).getByTestId("plan")).toContainText(REVISE_TOKEN, { timeout: TURN_MS });
+});
+
+Then("the Plan tab shows the revised step", async ({ page }) => {
+  await side(page).getByTestId("pane-plan").click();
+  await expect(page.getByTestId("plan-pane")).toContainText(REVISE_TOKEN);
+});
+
+When("I run {string} from the command palette", async ({ page }, title: string) => {
+  await page.keyboard.press("Control+k");
+  const palette = page.getByTestId("palette");
+  await expect(palette).toBeVisible();
+  await palette.getByRole("combobox").or(palette.locator("input")).first().fill(title);
+  await palette.getByRole("option", { name: new RegExp(`^${title}`, "i") }).first().click();
+});
