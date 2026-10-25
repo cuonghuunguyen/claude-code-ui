@@ -920,6 +920,24 @@ describe("orchestration", () => {
     expect((await call(coord, "worker_read", { name: "rm1" })).error).toMatch(/No worker named rm1/);
   });
 
+  it("the web app removes a worker whose coordinator was removed", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "orph", cwd: dirB, prompt: "hold" });
+    await until(() => runsOf(w.sessionId)[0]?.texts.length);
+    await call(coord, "worker_close", { name: "orph" });
+    // A daemon that does not have the coordinator at all (as after the coordinator was removed): the link alone resolves the worker.
+    const other = await start();
+    try {
+      const oc = await client((other.address() as AddressInfo).port);
+      expect(JSON.parse(readFileSync(settingsFile, "utf8"))[w.sessionId]).toMatchObject({ coordinatorId: coord, name: "orph" });
+      expect(await oc.request({ type: "worker.remove", sessionId: w.sessionId })).toMatchObject({ type: "reply" });
+      expect(JSON.parse(readFileSync(settingsFile, "utf8"))[w.sessionId]).toBeUndefined();
+    } finally {
+      other.close();
+    }
+  });
+
   it("worker_remove refuses a running worker and tells the coordinator to close it first", async () => {
     enable();
     const coord = await coordinator();
@@ -1218,6 +1236,27 @@ describe("orchestration", () => {
     const [a, b] = await Promise.all([call(coord, "worker_answer", { name: "race", id: q.requestId, answer: "pnpm" }), ans(q.requestId)]);
     expect([!a.error, b.result?.settled === true].filter(Boolean)).toHaveLength(1);
     expect(c.inbox.filter((m) => m.type === "event" && m.sessionId === w.sessionId && m.part.type === "question" && m.part.id === q.id && m.part.settled)).toHaveLength(1);
+  });
+
+  it("Notifications from workers off covers a worker's worker; an escalated request still pushes", async () => {
+    enable({ workerNotifications: false });
+    try {
+      const coord = await coordinator();
+      const mid = await call(coord, "worker_start", { name: "mid", cwd: dirB, prompt: "x" });
+      // The middle worker starts its own worker (depth 2): its events go to the middle worker.
+      const deep = await call(mid.sessionId, "worker_start", { name: "deep", cwd: dirC, prompt: "ask" });
+      expect(deep.name).toBe("deep");
+      const q = await pendingQ(deep.sessionId);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(pushes.filter((p) => p.sessionId === deep.sessionId)).toEqual([]);
+      expect(await call(mid.sessionId, "worker_escalate", { name: "deep", id: q.requestId, reason: "scope: nested?" })).toEqual({ name: "deep", escalated: q.requestId });
+      await until(() => pushes.find((p) => p.sessionId === deep.sessionId && p.body.includes("Escalated by coordinator: scope: nested?")));
+    } finally {
+      enable({ workerNotifications: true });
+      // Live workers count toward the cap of every later test of this file: the deep one first (close of a worker with a waiting worker is refused).
+      const links = JSON.parse(readFileSync(settingsFile, "utf8")) as Record<string, { coordinatorId?: string; name?: string }>;
+      for (const n of ["deep", "mid"]) for (const l of Object.values(links)) if (l.name === n) await call(l.coordinatorId!, "worker_close", { name: n }).catch(() => 0);
+    }
   });
 
   it("worker_escalate keeps the worker Needs input, marks the question escalated with its reason and pushes even while the coordinator's tab is focused; worker_wait no longer returns it", async () => {
