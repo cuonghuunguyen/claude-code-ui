@@ -91,10 +91,28 @@ it("a storage event after a failed write reads the other tab's value", () => {
   un();
 });
 
+it("a storage event keeps this tab's unsaved choices of other projects and takes the other tab's values", () => {
+  const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new Error("quota");
+  });
+  const un = subscribeRepoChoice(() => {});
+  setRepoChoice("/p", "libs/lib");
+  setRepoChoice("/q", "web");
+  set.mockRestore();
+  localStorage.setItem(KEY, JSON.stringify({ "/p": "api", "/r": "x" }));
+  window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+  expect(getRepoChoice("/p")).toBe("api");
+  expect(getRepoChoice("/q")).toBe("web");
+  expect(getRepoChoice("/r")).toBe("x");
+  un();
+});
+
 it("repoLabel: rel for nested and submodules, folder name for the own repository and one above the cwd", () => {
   expect(repoLabel(r("libs/lib", "submodule"))).toBe("libs/lib");
   expect(repoLabel({ path: "/home/u/demo", rel: "", kind: "main" })).toBe("demo");
   expect(repoLabel({ path: "/home/u", rel: "../..", kind: "main" })).toBe("u");
+  expect(repoLabel({ path: "/home/u", rel: "..", kind: "main" })).toBe("u");
+  expect(repoLabel({ path: "/p/x", rel: "..cache", kind: "nested" })).toBe("..cache");
 });
 
 it("a corrupt stored value reads as no choice", () => {

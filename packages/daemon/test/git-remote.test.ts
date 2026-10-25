@@ -423,13 +423,22 @@ describe("remote operations per repository (GH-391)", () => {
 
   it.skipIf(!posix)("fetches of a superproject and its submodule run at once; two on the same repository are busy", async () => {
     const f = superWithSub();
-    setGitRunner((o) => (o.args.includes("fetch") ? new Promise((r) => setTimeout(r, 400)).then(() => threadRunner(o)) : threadRunner(o)));
+    // Each fetch waits in the runner until the test releases it: no timing involved.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let started = 0;
+    setGitRunner((o) => (o.args.includes("fetch") ? (started++, gate.then(() => threadRunner(o))) : threadRunner(o)));
+    const until2 = async () => {
+      for (let i = 0; i < 400 && started < 2; i++) await new Promise((r) => setTimeout(r, 10));
+    };
     const a = gitFetch(f.sup, { allowed: f.inside });
-    await new Promise((r) => setTimeout(r, 100));
     const b = gitFetch(f.sub, { allowed: f.inside });
-    await new Promise((r) => setTimeout(r, 100));
+    await until2();
+    // Both reached their runner at the same time: neither lock blocked the other.
+    expect(started).toBe(2);
     await expect(gitFetch(f.sub, { allowed: f.inside })).rejects.toMatchObject({ code: "busy" });
     await expect(gitFetch(f.sup, { allowed: f.inside })).rejects.toMatchObject({ code: "busy" });
+    release();
     await expect(a).resolves.toBeTruthy();
     await expect(b).resolves.toBeTruthy();
   });

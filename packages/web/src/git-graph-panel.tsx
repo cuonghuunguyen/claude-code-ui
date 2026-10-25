@@ -13,7 +13,7 @@ import { FileIcon } from "./file-icon.tsx";
 import { pathKey } from "./file-tree-model.ts";
 import { readFailure } from "./files.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
-import { BranchMenu, type RemoteRequest } from "./git-branch-menu.tsx";
+import { BranchMenu, ofRepo, type RemoteRequest } from "./git-branch-menu.tsx";
 import { runRemoteOp, dismissRemoteResult, useRemoteOp } from "./git-remote-ops.ts";
 import { joinPath } from "./paths.ts";
 import { RepoSelector } from "./repo-selector.tsx";
@@ -184,7 +184,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
     freshNext.current = true;
     setReload((n) => n + 1);
   }, [settled]);
-  const of = (x: string) => (repoName ? `${x} of ${repoName}` : x);
+  const of = (x: string) => ofRepo(x, repoName);
   const filter = (skip: number) => ({ type: "git.log" as const, cwd, ...ex, skip, limit: PAGE, ...(ref !== ALL && { ref }), ...(q.author && { author: q.author }), ...(q.text && { text: q.text }) });
 
   useEffect(() => {
@@ -388,10 +388,14 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   );
 }
 
-/** Graph pane (docs/spec.md "Layout", Graph tab): the selected repository of the project (repository selector shared with Changes); one GraphPanel per repository path. */
-export function GraphPane({ client, cwd, hidden = false, repos, onRefresh }: { client: Client; cwd: string; hidden?: boolean; repos?: RepoList; onRefresh?: () => void }) {
-  const { repo, target, choose } = useSelectedRepo(repos, cwd);
+/**
+ * Graph pane (docs/spec.md "Layout", Graph tab): the selected repository of the project (repository selector shared with Changes); one GraphPanel per repository path.
+ * `repos`: undefined while the repository list or the project key is not known yet (nothing is read, "Loading graph…"); null when the daemon has no list (an older one: the cwd is read as is).
+ */
+export function GraphPane({ client, cwd, hidden = false, repos, onRefresh }: { client: Client; cwd: string; hidden?: boolean; repos?: RepoList | null; onRefresh?: () => void }) {
+  const { repo, target, choose } = useSelectedRepo(repos ?? undefined, cwd);
   const list = repos?.list ?? undefined;
+  if (repos === undefined) return <p className={cn("m-auto text-muted-foreground text-sm", hidden && "hidden")}>Loading graph…</p>;
   const shown = !!list && selectorVisible(list);
   const at = target?.path ?? cwd;
   return (
@@ -403,7 +407,7 @@ export function GraphPane({ client, cwd, hidden = false, repos, onRefresh }: { c
       hidden={hidden}
       onRefresh={onRefresh}
       repoName={shown && repo ? repoLabel(repo) : undefined}
-      toolbar={shown && list ? <RepoSelector list={list} truncated={repos!.truncated} selected={repo} onSelect={choose} className="h-8" /> : undefined}
+      toolbar={shown && list ? <RepoSelector list={list} truncated={repos?.truncated} selected={repo} onSelect={choose} className="h-8" /> : undefined}
       repos={list}
       onShowRepo={list ? choose : undefined}
     />
@@ -439,7 +443,9 @@ function Details({ detail: d, refs, loaded, onSelect, onFile, wrap, showRepo, on
         {d.files.length} {d.files.length === 1 ? "file" : "files"} changed
       </p>
       <ul className="flex flex-col">
-        {d.files.map((f) => f.submodule ? (
+        {d.files.map((f) => {
+          const target = f.submodule ? showRepo?.(f) : undefined;
+          return f.submodule ? (
           <li key={f.path}>
             <div className="flex min-h-11 flex-wrap items-center gap-1.5 px-1 md:min-h-7" title={f.path} data-testid="commit-submodule">
               <KindBadge kind={f.status} />
@@ -453,9 +459,9 @@ function Details({ detail: d, refs, loaded, onSelect, onFile, wrap, showRepo, on
                   </>
                 )}
               </span>
-              {onShowRepo && showRepo?.(f) !== undefined && (
-                <Button size="sm" variant="outline" className="max-md:h-11" onClick={() => onShowRepo(showRepo(f)!)} data-testid="show-repo-graph">
-                  Show graph of {showRepo(f)}
+              {onShowRepo && target !== undefined && (
+                <Button size="sm" variant="outline" className="max-md:h-11" onClick={() => onShowRepo(target)} data-testid="show-repo-graph">
+                  Show graph of {target}
                 </Button>
               )}
             </div>
@@ -474,7 +480,8 @@ function Details({ detail: d, refs, loaded, onSelect, onFile, wrap, showRepo, on
               {f.added !== undefined && <StatsText stats={{ added: f.added, removed: f.removed ?? 0 }} />}
             </button>
           </li>
-        ))}
+        );
+        })}
       </ul>
       {d.truncated && <p className="text-muted-foreground text-xs">List cut at 3000 files</p>}
     </div>

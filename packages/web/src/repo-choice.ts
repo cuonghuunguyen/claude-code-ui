@@ -61,9 +61,17 @@ export function subscribeRepoChoice(l: () => void): () => void {
   // Another tab of this browser changed a choice.
   const onStorage = (e: StorageEvent) => {
     if (e.key !== KEY && e.key !== null) return;
-    // The other tab's successful write is newer than what a failed write kept here.
-    writeFailed = false;
-    memory = undefined;
+    // The other tab's values are newer than the ones a failed write kept here; choices only kept here (other projects) stay.
+    if (writeFailed && memory) {
+      let stored: Record<string, string> = {};
+      try {
+        const v: unknown = JSON.parse(localStorage.getItem(KEY) ?? "{}");
+        if (v && typeof v === "object" && !Array.isArray(v)) stored = Object.fromEntries(Object.entries(v).filter((x): x is [string, string] => typeof x[1] === "string"));
+      } catch {
+        // Unreadable: memory stays as it is.
+      }
+      memory = { ...Object.fromEntries(Object.entries(memory).filter(([k]) => !(k in stored))), ...stored };
+    }
     l();
   };
   window.addEventListener("storage", onStorage);
@@ -94,7 +102,7 @@ export function resolveRepoChoice(list: GitRepo[], stored: string | undefined): 
 }
 
 /** The repository's name in Graph result lines: its path relative to the cwd, or its folder name for the own repository (also one above the cwd). */
-export const repoLabel = (r: GitRepo): string => (r.rel && !r.rel.startsWith("..") ? r.rel : baseName(r.path));
+export const repoLabel = (r: GitRepo): string => (r.rel && r.rel !== ".." && !r.rel.startsWith("../") ? r.rel : baseName(r.path));
 
 /** The selector shows for 2+ repositories, or when the own repository is not listed (a lone nested one is still a choice). */
 export const selectorVisible = (list: GitRepo[]): boolean => list.length > 0 && (list.length >= 2 || !list.some((r) => r.kind === "main"));

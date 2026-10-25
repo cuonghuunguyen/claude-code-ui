@@ -12,6 +12,8 @@ export type RemoteRequest = { type: "git.fetch"; cwd: string; exact?: true } | {
 type Kind = "push" | "force" | "pull";
 type Entry = { ref: string; info?: GitBranchInfo; error?: string };
 
+/** "<text> of <repo>" while the repository is named (the Graph shows the repository selector), else the text. */
+export const ofRepo = (text: string, repoName?: string) => (repoName ? `${text} of ${repoName}` : text);
 const MAX_TARGETS = 5;
 const name = (ref: string) => ref.replace(/^refs\/heads\//, "");
 const base = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
@@ -28,7 +30,7 @@ const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
  * pointer, else the local branches of the row under it, else `fallback()` (keyboard: the selected commit's).
  */
 export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, fallback, children }: { client: Client; cwd: string; exact?: boolean; repoName?: string; busy: boolean; onRun: (msg: RemoteRequest, done: string, running: string) => void; fallback: () => string[]; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }> }) {
-  const of = (t: string) => (repoName ? `${t} of ${repoName}` : t);
+  const of = (t: string) => ofRepo(t, repoName);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [dialog, setDialog] = useState<{ kind: Kind; info: GitBranchInfo }>();
   const gen = useRef(0);

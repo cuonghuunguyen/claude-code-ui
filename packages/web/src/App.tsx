@@ -2962,11 +2962,7 @@ export function App() {
                   {createPortal(
                     isGit && (shows("graph") || graphCwd === panelTarget.cwd) && (
                       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
-                        {repos === undefined || (repos !== null && !repoList) ? (
-                          <p className="m-auto text-muted-foreground text-sm">Loading graph…</p>
-                        ) : (
-                          <GraphPane hidden={!shows("graph")} client={client.current!} cwd={panelTarget.cwd} repos={repoList} onRefresh={reloadRepos} />
-                        )}
+                        <GraphPane hidden={!shows("graph")} client={client.current!} cwd={panelTarget.cwd} repos={repos === null ? null : repoList} onRefresh={reloadRepos} />
                       </Suspense>
                     ),
                     hosts.graph,

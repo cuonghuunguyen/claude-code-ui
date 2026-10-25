@@ -633,6 +633,19 @@ it("GraphPane: no selector for only the own repository; with 2+ the filter row s
   expect(el.querySelector("[data-testid=graph-filter-text]")!.closest("div")!.firstElementChild).toBe(selectorEl());
 });
 
+it("GraphPane: without a repository list yet it says Loading graph… and reads nothing; null (an older daemon) reads the cwd without exact", async () => {
+  const c = fake(history(3));
+  await act(async () => root.render(<GraphPane client={c} cwd="/p" />));
+  await flush();
+  expect(el.textContent).toContain("Loading graph…");
+  expect(c.sent).toEqual([]);
+  await act(async () => root.render(<GraphPane client={c} cwd="/p" repos={null} />));
+  await flush();
+  expect(el.textContent).not.toContain("Loading graph…");
+  expect(logs(c)[0]).toMatchObject({ cwd: "/p" });
+  expect(logs(c)[0]).not.toHaveProperty("exact");
+});
+
 it("GraphPane: picking libs/lib remounts the panel for it: git.log of lib, branch filter back to HEAD", async () => {
   const c = fake(history(3));
   await mountPane(c, [own, lib]);
