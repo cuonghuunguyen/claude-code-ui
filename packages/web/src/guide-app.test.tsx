@@ -39,7 +39,7 @@ const reset = () => {
     "fs.search": { paths: [] },
     "git.status": { status: null },
     "terminal.list": { terminals: [] },
-    "settings.get": { settings: { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false } } },
+    "settings.get": { settings: { orchestration: { enabled: false, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false } } },
   });
 };
 vi.mock("@xterm/xterm", () => ({

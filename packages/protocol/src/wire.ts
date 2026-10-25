@@ -132,9 +132,9 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.archive"; sessionId: string; archived: boolean }
   /** Removes the transcript. Refused while a turn runs or input is pending: stop it first. */
   | { type: "session.delete"; sessionId: string }
-  /** Web app Close worker (docs/spec.md "Orchestration"): as `worker_close` for the worker's own coordinator. Reply `{}`; errors not_worker, unknown_worker, unknown_session, held_elsewhere, stop_timeout. */
+  /** Web app Close worker (docs/spec.md "Orchestration"): as `worker_close` for the worker's own coordinator. Reply `{}`; errors not_worker, unknown_worker, unknown_session, held_elsewhere, stop_timeout, has_workers. */
   | { type: "worker.close"; sessionId: string }
-  /** Web app Remove worker: as `worker_remove` (session and transcript deleted, link dropped, worktree kept). Reply `{}`; errors not_worker, unknown_worker, held_elsewhere, session_running, delete_failed. Broadcasts `sessions.changed`. */
+  /** Web app Remove worker: as `worker_remove` (session and transcript deleted, link dropped, worktree kept). Reply `{}`; errors not_worker, unknown_worker, held_elsewhere, session_running, has_workers, delete_failed. Broadcasts `sessions.changed`. */
   | { type: "worker.remove"; sessionId: string }
   /** Without `path`: the allowlisted roots (of `side`). */
   | { type: "fs.list"; path?: string }
@@ -636,7 +636,7 @@ export type WorkerModeSetting = (typeof WORKER_MODES)[number];
 export const AUTO_REPOSITORY_DETECTION = [true, false, "subFolders", "openEditors"] as const;
 /** `git.openRepositoryInParentFolders` values (VS Code's git extension). */
 export const PARENT_FOLDER_MODES = ["always", "never", "prompt"] as const;
-export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
+export type Settings = { orchestration: { enabled: boolean; workerCap: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
   /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */
   performance: { monitor: boolean };
   /** Ticket tab of the Create worktree modal (GH-447): one Jira connection; `email` for Cloud only; the token is in secrets.json, never here. */

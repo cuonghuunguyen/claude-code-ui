@@ -121,12 +121,16 @@ The session setting that decides what happens before a tool runs: ask (default),
 _Avoid_: approval mode, auto-approve
 
 **Coordinator**:
-A session that started a worker. While orchestration is on in Settings, every session but a worker gets the daemon's `worker_*` tools to start and drive worker sessions.
+A session that started a worker; a worker that starts a worker is also a coordinator. While orchestration is on in Settings, every session gets the daemon's `worker_*` tools to start and drive worker sessions. **Root coordinator**: a coordinator that is not a worker.
 _Avoid_: orchestrator, manager, parent session
 
 **Worker**:
-A session a coordinator started with `worker_start`, linked to it by name in `sessions.json`. A normal session in every other way.
+A session a coordinator started with `worker_start`, linked to it by name in `sessions.json`. A normal session in every other way. May start workers of its own (**Worker tree**).
 _Avoid_: child session, subagent (different thing: a subagent run lives inside one session)
+
+**Worker tree**:
+A root coordinator, its workers, their workers, linked by `coordinatorId`; depth = hops to the root coordinator. Limited by Settings Maximum tree depth and Maximum workers per coordinator.
+_Avoid_: hierarchy, manager chain
 
 **Escalation**:
 A coordinator hands a worker's pending question or permission request to the user (`worker_escalate`); only the user answers it then. The coordinator can still stop or close the worker, which cancels it.
