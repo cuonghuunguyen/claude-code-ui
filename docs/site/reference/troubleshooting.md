@@ -30,9 +30,9 @@ Start on another port: `claude-ui --port 4281`.
 
 In 0.5.0 every WSL and Docker side stops about 15 seconds after it starts. This is a known bug: [#263](https://github.com/cuonghuunguyen/claude-code-ui/issues/263). **Retry** starts it again, but it stops again. Windows and local projects are not affected.
 
-### The side needs Node.js or a login
+### The side needs Node.js or build tools
 
-The Open project dialog says what is missing. A WSL distro or Docker container with glibc (Debian, Ubuntu, ...) needs only `sh`, `tar`, `gzip` and a Claude login: claude-code-ui brings Node.js. A WSL distro that installs with npm (musl, see below) needs Node.js 22+, make, python3 and g++. Open **What this container needs** in the dialog for the list with a ✓ or ✗ per item. See [WSL & Docker](../features/wsl-docker).
+The Open project dialog says what is missing. A WSL distro or Docker container with glibc (Debian, Ubuntu, ...) needs only `sh`, `tar` and `gzip` (a WSL distro also `bash`): claude-code-ui brings Node.js. A WSL distro that installs with npm (musl, see below) needs Node.js 22+, make, python3 and g++. Open **What this container needs** in the dialog for the list with a ✓ or ✗ per item. The dialog does not check the Claude login: a session started without one says so. See [WSL & Docker](../features/wsl-docker).
 
 ### A Docker container or WSL distro installs with npm, not the bundle
 

@@ -8,7 +8,7 @@ A real terminal in the session's folder, docked at the bottom of the window by d
 
 1. Press <kbd>Ctrl</kbd>+<kbd>`</kbd> to show or hide the terminal (or the terminal button in the side panel).
 2. Type commands like in any terminal.
-3. Click **+** (**New terminal**, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd>) for another one. Each gets a tab in the panel's header: Terminal 1, Terminal 2…
+3. Click **+** (**New terminal**, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd>) for another one. Each gets a tab in the row above the terminal: Terminal 1, Terminal 2…
 
 ## Which shell
 

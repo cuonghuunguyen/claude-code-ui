@@ -2,6 +2,21 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.8.0 - 2026-10-25
+
+### Added
+
+- Create worktree modal: the project row's branch-plus button, "Create worktree…" in the project menu and "New worktree…" in the palette open a modal with three branch sources. **Ticket** picks a Jira ticket and names the branch after it (or checks out an existing branch with its key), **Branch** checks out an existing local or remote branch, **Name** takes any name. A new branch starts from a **Base** (default: the remote default branch). Shift+click, or "New worktree" in the project menu, still creates one at once ([#447](https://github.com/cuonghuunguyen/claude-code-ui/issues/447)).
+- Create worktree: paste a pull request link (GitHub, GitLab, Bitbucket Server) to list the branch it was opened from, or a ticket link or key to list the branches named after the ticket ([#447](https://github.com/cuonghuunguyen/claude-code-ui/issues/447)).
+- Settings › Jira: Jira URL, email, an API token or personal access token (kept on the daemon's computer only, in `secrets.json`, never shown again), a branch template and a Ticket filter (JQL) for the tickets the Ticket tab lists. Works with Jira Cloud and Data Center ([#447](https://github.com/cuonghuunguyen/claude-code-ui/issues/447)).
+
+### Changed
+
+- Docker containers on Linux x86_64 or arm64 with glibc 2.28+ install from a bundle your computer assembles: Node.js, the terminal support, the Claude Agent SDK and Claude Code are downloaded once, checked against their published checksums and cached in `~/.cache/claude-ui/side`. The container needs no Node.js, npm, network or build tools (`--network none` works). Other containers (Alpine, other CPUs) install with npm as before, and the dialog says why. Open project shows **What this container needs** with a ✓ or ✗ per item ([#446](https://github.com/cuonghuunguyen/claude-code-ui/issues/446)).
+- WSL distros with the same requirements install from the same checked parts, read from the cache on Windows: no npm, network or compile in the distro. A first install takes about 10 to 15 seconds, a new build with the same parts about a second. Musl distros install with npm as before.
+- WSL and Docker: the side check no longer looks for a Claude login. A session started without a login says so. The Open project dialog drops the login row and **Install anyway**.
+- Deleting a worktree deletes every branch claude-ui created for it (marked in git config), not only `worktree-*` branches ([#447](https://github.com/cuonghuunguyen/claude-code-ui/issues/447)).
+
 ## 0.7.1 - 2026-10-19
 
 ### Changed
