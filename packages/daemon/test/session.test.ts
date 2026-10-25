@@ -325,6 +325,39 @@ describe("Session", () => {
     expect(closed).toBe(before);
   });
 
+  it("an async permission card: the request waits for it and shows its title", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const permissionCard = () => gate.then(() => ({ input: { x: 1 }, title: "Card title" }));
+    const s = new Session("/tmp", { query: permissionQuery as never, permissionCard });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("run");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
+    release();
+    await until(events, (e) => e.part.type === "permission_request");
+    expect(events.find((e) => e.part.type === "permission_request")!.part).toMatchObject({ title: "Card title", input: { x: 1 } });
+  });
+
+  it("an abort while the permission card resolves denies without a pending request", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const permissionCard = () => gate.then(() => ({ input: {}, title: "late" }));
+    const s = new Session("/tmp", { query: permissionQuery as never, permissionCard });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    const before = aborts.length;
+    s.prompt("run");
+    await until(events, (e) => e.part.type === "tool_call");
+    await new Promise((r) => setTimeout(r, 30));
+    aborts[before]!.abort();
+    release();
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
+    expect(permissionResults.at(-1)).toMatchObject({ behavior: "deny", message: "Request cancelled" });
+  });
+
   it("session-scoped grants are re-applied when the query resumes; saved rules are not", async () => {
     const s = new Session("/tmp", { query: permissionQuery as never, uploadDir: () => "/tmp/up" });
     const events: Event[] = [];

@@ -51,8 +51,9 @@ Jenkins job here, it belongs in an adapter or a playbook.
    to turn it on (claude-ui Settings → Orchestration) and start the coordinator from the
    claude-ui web app, in a project on the same side (Windows, WSL, container) as the repos.
    A coordinator starts workers on its own side only.
-2. **The repo is a claude-ui project.** `worker_start` with `repo` only accepts a project the
-   user added. If it is not one, ask the user to add it in the web app.
+2. **The repo is a claude-ui project.** `worker_start` with `project` (or `repo`) only accepts a
+   project the user added; `worker_targets` lists them. If it is not one, ask the user to add it
+   in the web app.
 3. **The playbook exists and is complete.** Find it (`references/playbook.md`). No playbook, or
    one with `TODO` left in it: draft or finish it with the user before anything else runs.
 4. **Every tool the playbook needs is present.** The playbook's Profile names one adapter per
@@ -203,8 +204,8 @@ Reading tickets and PRs is encouraged; the ticket's comments are usually the bet
 - **The acceptance criteria are the stage-2 script.** Extract their user-visible claims before
   dispatching; each becomes one case the acceptance worker proves by clicking.
 - **One ticket, one worktree, one branch** named by the playbook (default `<KEY>-<slug>`). The
-  first worker of a ticket creates it with `worker_start{repo, branch, base}`; every later
-  stage starts with `worker_start{cwd: <worktree>}`.
+  first worker of a ticket creates it with `worker_start{project, branch, base}`; every later
+  stage starts with `worker_start{worktree: <folder name>, project}`.
 - **claude-ui infers no conflicts and schedules nothing.** Decide the sequencing yourself and
   say it out loud before starting anything, so the user can override it: tickets sharing a
   file, touching test infrastructure, or needing the same app port get chained. Rules and caps
