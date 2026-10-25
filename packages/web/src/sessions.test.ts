@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { activeOnly, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
+import { activeOnly, isWorkerKey, loadExpandedWorkers, saveExpandedWorkers, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
   id,
@@ -311,6 +311,18 @@ describe("sidebar actions (GH-152)", () => {
     const { groups, workers } = view();
     expect(collapseKeys(groups, workers, false)).toEqual(["/r", "worktree:/r", "worktree:/r/.claude/worktrees/wt", "/zeta", "coordinator:c1"]);
     expect(collapseKeys(groups, workers, true).at(-1)).toBe("archived:coordinator:c1");
+  });
+
+  it("isWorkerKey tells worker group keys from project and worktree keys; expanded workers persist apart from the collapsed set", () => {
+    expect(["coordinator:c1", "archived:coordinator:c1"].map(isWorkerKey)).toEqual([true, true]);
+    expect(["/r", "worktree:/r", "/home/coordinator:x"].map(isWorkerKey)).toEqual([false, false, false]);
+    expect(loadExpandedWorkers().size).toBe(0);
+    saveExpandedWorkers(new Set(["coordinator:c1"]));
+    expect([...loadExpandedWorkers()]).toEqual(["coordinator:c1"]);
+    expect(localStorage.getItem("claude-ui.collapsed")).toBeNull();
+    localStorage.setItem("claude-ui.expandedWorkers", "{bad");
+    expect(loadExpandedWorkers().size).toBe(0);
+    localStorage.clear();
   });
 
   it("revealKeys: the keys that hide a session, undefined for an unknown one", () => {

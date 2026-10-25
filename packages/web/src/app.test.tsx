@@ -2294,6 +2294,7 @@ describe("GH-358 sidebar menus", () => {
   });
   const mount = async (sessions: SessionListItem[], worktrees: Record<string, unknown[]> = {}) => {
     replies["session.list"] = { sessions, projects: ["/p/demo"], worktrees };
+    localStorage.setItem("claude-ui.expandedWorkers", JSON.stringify([`coordinator:${ID}`]));
     act(() => root.unmount());
     root = createRoot(el);
     await act(async () => root.render(<App />));
