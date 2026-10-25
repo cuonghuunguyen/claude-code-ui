@@ -1,13 +1,13 @@
 // Materialized view of a session's event log (docs/spec.md "Event log and sequence numbers", paged subscribe): the same fold the
 // client's applyEvent does, kept so the daemon can send whole-turn pages instead of replaying every delta.
-import { isAttention, PAGE_PARTS, PAGE_TURNS, TIMELINE_EXCLUDED } from "@claude-ui/protocol";
+import { isAttention, isPlanFileWrite, planOfCall, PAGE_PARTS, PAGE_TURNS, TIMELINE_EXCLUDED } from "@claude-ui/protocol";
 import type { Event, Part, PosPart, SessionState, TimelinePage } from "@claude-ui/protocol";
 
 type Entry = { part: Part; pos: number; seq: number };
 const HEAD_TYPES = new Set<Part["type"]>(["session_state", "commands", "context_usage", "external_turn", "auto_continue", "prompt_queue", "todo_update"]);
 const EDIT_TOOLS = new Set(["Edit", "Write"]);
 
-const isPlanCall = (p: Part): boolean => p.type === "tool_call" && p.tool === "ExitPlanMode" && typeof (p.input as { plan?: unknown } | null)?.plan === "string" && !!(p.input as { plan: string }).plan;
+const isPlanCall = (p: Part): boolean => p.type === "tool_call" && p.tool === "ExitPlanMode";
 
 export class PartIndex {
   private order: string[] = [];
@@ -119,14 +119,31 @@ export class PartIndex {
     return this.byId.get(id)?.pos;
   }
 
-  /** Parts before `beforePos` that whole-session features need: subagents, turn results, running background Bash calls, the newest ExitPlanMode call with a plan. */
+  /** Parts before `beforePos` that whole-session features need: subagents, turn results, running background Bash calls, the newest ExitPlanMode call and the newest plan-file Write. */
   aux(beforePos: number): PosPart[] {
-    let plan: string | undefined;
-    for (let i = this.order.length - 1; i >= 0 && plan === undefined; i--) {
+    // The newest plan call, and the newest plan-file Write (recent CLIs call ExitPlanMode with an empty input).
+    const keep = new Set<string>();
+    let call = false;
+    let file = false;
+    for (let i = this.order.length - 1; i >= 0 && !(call && file); i--) {
       const e = this.byId.get(this.order[i]!)!;
-      if (e.pos < beforePos && isPlanCall(e.part)) plan = e.part.id;
+      if (e.pos >= beforePos) continue;
+      if (!call && isPlanCall(e.part)) (keep.add(e.part.id), (call = true));
+      else if (!file && isPlanFileWrite(e.part)) (keep.add(e.part.id), (file = true));
     }
-    return this.scan(beforePos, (p) => p.id === plan || p.type === "subagent" || p.type === "turn_result" || (p.type === "tool_call" && p.tool === "Bash" && p.status === "running" && (p.input as { run_in_background?: unknown } | null)?.run_in_background === true));
+    return this.scan(beforePos, (p) => keep.has(p.id) || p.type === "subagent" || p.type === "turn_result" || (p.type === "tool_call" && p.tool === "Bash" && p.status === "running" && (p.input as { run_in_background?: unknown } | null)?.run_in_background === true));
+  }
+
+  /** The plan of the ExitPlanMode call `toolUseId` (its own, else the newest plan-file Write before it; before the whole log when the call is not indexed yet). */
+  planOf(toolUseId: string): string | undefined {
+    const parts = this.order.map((id) => this.byId.get(id)!.part);
+    const at = parts.findIndex((p) => p.type === "tool_call" && p.toolUseId === toolUseId);
+    if (at >= 0) return planOfCall(parts, at);
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i]!;
+      if (isPlanFileWrite(p)) return (p.input as { content: string }).content;
+    }
+    return undefined;
   }
 
   /** Edit/Write calls before `beforePos` and their results. */

@@ -3797,6 +3797,16 @@ describe("GH-395 Plan pane", () => {
     }
   });
 
+  it("the Plan tab shows the plan the model wrote to its plan file when ExitPlanMode has an empty input (Claude Code 2.1.294)", async () => {
+    await sendPart(ID, 1, { type: "tool_call", id: "w", toolUseId: "w", tool: "Write", input: { file_path: "/home/user/.claude/plans/p.md", content: "# Plan from the file" }, status: "done" });
+    expect(sideTabs()).not.toContain("pane-plan");
+    await sendPart(ID, 2, planPart("exit", ""));
+    await sendPart(ID, 3, { ...planPart("exit", ""), input: {} });
+    expect(sideTabs()).toContain("pane-plan");
+    await pickSide(/plan/i);
+    expect(q("plan-pane")!.textContent).toContain("Plan from the file");
+  });
+
   it("Go to request in the Plan pane focuses the plan permission panel of the session", async () => {
     await sendPart(ID, 1, planPart());
     await sendPart(ID, 2, permPart);

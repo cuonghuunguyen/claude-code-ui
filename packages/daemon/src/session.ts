@@ -842,7 +842,7 @@ export class Session {
               requestId,
               toolUseId: toolUseID,
               tool,
-              input: card?.input ?? input,
+              input: card?.input ?? this.withPlan(tool, toolUseID, input),
               ...(title ? { title } : {}),
               suggestions: tool === "ExitPlanMode" && !suggestions.length ? [ACCEPT_EDITS] : suggestions,
               settled: false,
@@ -855,6 +855,13 @@ export class Session {
       signal.addEventListener("abort", () => this.cancel(requestId, "Request cancelled"), { once: true });
     });
   };
+
+  /** Claude Code 2.1.294 asks to leave plan mode with an empty input: the plan is in the call (the web UI shows it) or in the plan file the model wrote, so the request carries it for the approval panel. */
+  private withPlan(tool: string, toolUseId: string, input: unknown): unknown {
+    if (tool !== "ExitPlanMode" || (typeof (input as { plan?: unknown } | null)?.plan === "string" && (input as { plan: string }).plan)) return input;
+    const plan = this.index.planOf(toolUseId);
+    return plan ? { ...(input as object | null), plan } : input;
+  }
 
   /** A low tier request is sent again with `tier: "low"` once its tier is read (the Focus page offers Always allow only then); high or unknown stays unmarked. A later read that says otherwise sends it again without the mark. */
   private markLowTier(requestId: string) {

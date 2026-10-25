@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -841,6 +841,28 @@ describe("Session questions", () => {
     expect(req).toMatchObject({ tool: "ExitPlanMode", input: plan, suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }] });
     s.respond(req.requestId, { decision: "allow_always" });
     await vi.waitFor(() => expect(permissionResults.at(-1)).toMatchObject({ behavior: "allow", updatedPermissions: [{ type: "setMode", mode: "acceptEdits" }] }));
+  });
+
+  it("ExitPlanMode with an empty input (Claude Code 2.1.294) asks with the plan the model wrote to its plan file", async () => {
+    const messages = readFileSync(new URL("../../protocol/test/fixtures/plan-file-exit.jsonl", import.meta.url), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const query = ({ prompt, options }: { prompt: AsyncIterable<unknown>; options: { canUseTool: Function } }) =>
+      Object.assign(
+        (async function* () {
+          for await (const _ of prompt) {
+            yield* messages;
+            permissionResults.push(await options.canUseTool("ExitPlanMode", {}, { signal: new AbortController().signal, toolUseID: "toolu_plan_exit", requestId: "r" }));
+          }
+        })(),
+        { supportedCommands: async () => [] },
+      );
+    const s = new Session("/tmp", { query: query as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("go");
+    await until(events, (e) => e.part.type === "permission_request");
+    const req = events.find((e) => e.part.type === "permission_request")!.part as Extract<Event["part"], { type: "permission_request" }>;
+    expect((req.input as { plan: string }).plan).toContain("1. Create hello.txt with the content hi.");
+    s.respond(req.requestId, { decision: "deny" });
   });
 
   // Review round 2: the CLI restores the mode active before plan mode unless told otherwise, so each answer names its mode.

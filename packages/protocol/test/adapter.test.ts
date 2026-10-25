@@ -740,3 +740,18 @@ describe("adapter byCoordinator", () => {
     expect(a.byCoordinator("nope", "allow", "r")).toEqual([]);
   });
 });
+
+describe("ExitPlanMode with an empty input (Claude Code 2.1.294: the plan is in a plan file)", () => {
+  it("planOfCall reads the plan from the newest plan-file Write before the call; an own plan wins; no source gives undefined", async () => {
+    const { planOfCall } = await import("../src/index.ts");
+    const parts = run(fixture("plan-file-exit.jsonl"));
+    const at = parts.findIndex((p) => p.type === "tool_call" && p.tool === "ExitPlanMode");
+    expect(at).toBeGreaterThan(0);
+    expect((parts[at] as { input: unknown }).input).toEqual({});
+    expect(planOfCall(parts, at)).toContain("1. Create hello.txt with the content hi.");
+    expect(planOfCall(parts, 0)).toBeUndefined();
+    const own = parts.map((p, i) => (i === at ? ({ ...p, input: { plan: "own" } } as Part) : p));
+    expect(planOfCall(own, at)).toBe("own");
+    expect(planOfCall(parts.filter((p) => !(p.type === "tool_call" && p.tool === "Write")), at - 1)).toBeUndefined();
+  });
+});

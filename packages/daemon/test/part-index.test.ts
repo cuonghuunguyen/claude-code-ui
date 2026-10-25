@@ -192,14 +192,21 @@ describe("PartIndex", () => {
     expect(ids.filter((id) => !id.startsWith("r"))).toEqual(["sa", "p2"]);
   });
 
-  it("aux skips an ExitPlanMode call without a plan string and calls inside the page", () => {
-    const { index } = build([user(1), call("p1", "ExitPlanMode", { plan: "kept" }), call("p0", "ExitPlanMode", {}), call("p00", "ExitPlanMode", { plan: "" }), ...turns(12, 2), call("p3", "ExitPlanMode", { plan: "inside page" })]);
+  it("aux carries the newest ExitPlanMode call whatever its input, and the newest plan-file Write; not calls inside the page", () => {
+    const file = (id: string, content: string) => call(id, "Write", { file_path: "/home/user/.claude/plans/p.md", content });
+    const { index } = build([user(1), file("w0", "old"), file("w1", "# File plan"), call("w2", "Write", { file_path: "/p/a.txt", content: "x" }), call("p1", "ExitPlanMode", {}), ...turns(12, 2), call("p3", "ExitPlanMode", { plan: "inside page" })]);
     const cursor = index.lastPage().older!;
     const ids = index.aux(cursor.pos).map((x) => x.part.id);
-    expect(ids).toContain("p1");
-    expect(ids).not.toContain("p0");
-    expect(ids).not.toContain("p00");
-    expect(ids).not.toContain("p3");
+    expect(ids.filter((id) => !id.startsWith("r"))).toEqual(["w1", "p1"]);
+  });
+
+  it("planOf: the call's own plan, else the newest plan-file Write before it; an empty-input call without a file has none", () => {
+    const file = (id: string, content: string) => call(id, "Write", { file_path: "C:\\Users\\u\\.claude\\plans\\p.md", content });
+    const { index } = build([user(1), file("w0", "old"), file("w1", "# File plan"), call("p1", "ExitPlanMode", {}), call("p2", "ExitPlanMode", { plan: "own" }), file("w2", "later")]);
+    expect(index.planOf("p1")).toBe("# File plan");
+    expect(index.planOf("p2")).toBe("own");
+    expect(index.planOf("not-yet")).toBe("later");
+    expect(build([user(1), call("p1", "ExitPlanMode", {})]).index.planOf("p1")).toBeUndefined();
   });
 
   it("pageFrom starts at the turn of the given id; over the cap or unknown gives undefined", () => {

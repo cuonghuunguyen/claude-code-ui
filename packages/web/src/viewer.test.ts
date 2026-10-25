@@ -1,4 +1,5 @@
-import type { Part } from "@claude-ui/protocol";
+import { readFileSync } from "node:fs";
+import { createAdapter, type Part } from "@claude-ui/protocol";
 import { expect, it } from "vitest";
 import { applyEvent, emptySession, type ToolCall } from "./store.ts";
 import { cardTarget, isFileTarget, latestPlan, latestPlanCall, planWaiting } from "./viewer.ts";
@@ -55,3 +56,24 @@ it("planWaiting is true only for an unsettled ExitPlanMode permission request", 
   expect(planWaiting(view([perm("Bash", false)]))).toBe(false);
   expect(planWaiting(view([]))).toBe(false);
 });
+
+
+{
+  const recorded = () => {
+    const adapter = createAdapter();
+    const lines = readFileSync(new URL("../../protocol/test/fixtures/plan-file-exit.jsonl", import.meta.url), "utf8").trim().split("\n");
+    return lines.flatMap((l) => adapter.convert(JSON.parse(l) as never));
+  };
+  it("latestPlan reads the plan file the model wrote when ExitPlanMode came with an empty input (recorded Claude Code 2.1.294 shape)", () => {
+    const v = view(recorded());
+    expect(latestPlan(v)).toContain("1. Create hello.txt with the content hi.");
+    expect(latestPlanCall(v)?.tool).toBe("ExitPlanMode");
+    expect(planWaiting(v)).toBe(false);
+  });
+  it("latestPlan falls back to the approval request's plan when the call has none and no plan file was written", () => {
+    const parts = recorded().filter((p) => !(p.type === "tool_call" && p.tool === "Write"));
+    const req = { type: "permission_request", id: "perm", requestId: "r", toolUseId: "toolu_plan_exit", tool: "ExitPlanMode", input: { plan: "# From the request" }, suggestions: [], settled: false } as Part;
+    expect(latestPlan(view(parts))).toBeUndefined();
+    expect(latestPlan(view([...parts, req]))).toBe("# From the request");
+  });
+}

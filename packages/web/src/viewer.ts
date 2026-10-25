@@ -1,4 +1,5 @@
 // Popup viewer targets (docs/spec.md "Session view UX"): what a card or a palette command opens.
+import { planOfCall } from "@claude-ui/protocol";
 import { createContext, useCallback, useRef } from "react";
 import type { SessionView, ToolCall } from "./store.ts";
 import { pendingPermission, wholeParts } from "./store.ts";
@@ -19,21 +20,27 @@ export function cardTarget(call: ToolCall): ViewerTarget | undefined {
   return undefined;
 }
 
-/** The newest ExitPlanMode call with a plan (loaded parts and aux), undefined when none. */
-export function latestPlanCall(view: SessionView): ToolCall | undefined {
+/** The newest ExitPlanMode call whose plan is known, with the plan: its own `input.plan`, else the plan file the model wrote (Claude Code 2.1.294 calls it with an empty input). Loaded parts and aux. */
+function findPlan(view: SessionView): { call?: ToolCall; plan: string } | undefined {
   const parts = wholeParts(view);
   for (let n = parts.length - 1; n >= 0; n--) {
     const p = parts[n];
-    if (p?.type === "tool_call" && p.tool === "ExitPlanMode") {
-      const plan = (p.input as { plan?: unknown } | null)?.plan;
-      if (typeof plan === "string" && plan) return p;
-    }
+    if (p?.type !== "tool_call" || p.tool !== "ExitPlanMode") continue;
+    const plan = planOfCall(parts, n);
+    if (plan) return { call: p, plan };
+  }
+  // The approval request carried the plan while the call did not (and no plan file Write was seen).
+  for (let n = parts.length - 1; n >= 0; n--) {
+    const p = parts[n];
+    const plan = p?.type === "permission_request" && p.tool === "ExitPlanMode" ? (p.input as { plan?: unknown } | null)?.plan : undefined;
+    if (typeof plan === "string" && plan) return { plan };
   }
   return undefined;
 }
+export const latestPlanCall = (view: SessionView): ToolCall | undefined => findPlan(view)?.call;
 
-/** The newest ExitPlanMode plan of the session (loaded parts and aux), undefined when none. */
-export const latestPlan = (view: SessionView): string | undefined => (latestPlanCall(view)?.input as { plan?: string } | undefined)?.plan;
+/** The newest ExitPlanMode plan of the session, undefined when none. */
+export const latestPlan = (view: SessionView): string | undefined => findPlan(view)?.plan;
 
 /** The plan approval waits for an answer. */
 export const planWaiting = (view: SessionView): boolean => pendingPermission(view)?.tool === "ExitPlanMode";
