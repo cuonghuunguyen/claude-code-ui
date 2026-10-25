@@ -12,6 +12,10 @@ Default five labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for
 
 Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 
+## Talking to the user about tickets
+
+Never refer to a ticket by ID alone (`#455`, `GH-455`). Name it by its title or a short description of it. An ID may follow in parentheses, never stand alone. Applies to chat, tables, lists and status reports.
+
 ## Before every push: scan for internal and personal data
 
 This repo is public. Before `git push`, scan the added lines of the outgoing commits (`git diff origin/<base>...HEAD | grep '^+'`): code, tests, fixtures, docs, commit messages.
