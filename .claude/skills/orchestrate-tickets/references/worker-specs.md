@@ -40,7 +40,7 @@ RESULT
 
 ## 0. Plan worker — `opus`, creates the worktree
 
-`worker_start{name: <key>-plan, repo, branch, base, model: "opus", mode: "auto"}`
+`worker_start{name: <key>-plan, project, branch, base, model: "opus", mode: "auto"}`
 
 ```
 TICKET: <KEY> — <summary>
@@ -77,8 +77,8 @@ WRITE <scratch>/<KEY>/plan.md so the implementer needs no exploration:
 
 ## 1. Implementation worker — `sonnet`
 
-After a plan: `worker_start{name: <key>-impl, cwd: <worktree>, model: "sonnet", mode: "auto"}`.
-Plan skipped: it creates the worktree with `repo`/`branch`/`base` instead.
+After a plan: `worker_start{name: <key>-impl, worktree: <folder>, project, model: "sonnet", mode: "auto"}`.
+Plan skipped: it creates the worktree with `project`/`branch`/`base` instead.
 
 ```
 TICKET: <KEY> — <summary>
@@ -142,7 +142,7 @@ implementer.** Read-only in the worktree except for the scratch folder, and with
 
 Paste the METHOD block that matches the playbook's `acceptance:` value.
 
-`worker_start{name: <key>-ui, cwd: <worktree>, model: "sonnet", mode: "auto"}`
+`worker_start{name: <key>-ui, worktree: <folder>, project, model: "sonnet", mode: "auto"}`
 
 ```
 TICKET: <KEY> — <summary>
@@ -205,7 +205,7 @@ REPORT
 
 A build watch is a long poll. Start it; do not run it in the coordinator's context.
 
-`worker_start{name: <key>-ci, cwd: <worktree>, model: "haiku", mode: "auto"}`
+`worker_start{name: <key>-ci, worktree: <folder>, project, model: "haiku", mode: "auto"}`
 
 ```
 BRANCH: <remote branch>   (already pushed)
@@ -230,7 +230,7 @@ METHOD
 **Fresh agent, mandatory.** Fresh agent, not a fresh checkout: point it at the implementer's
 worktree, which sits on the PR head with dependencies installed.
 
-`worker_start{name: <key>-review, cwd: <worktree>, model: "opus", mode: "auto"}`
+`worker_start{name: <key>-review, worktree: <folder>, project, model: "opus", mode: "auto"}`
 
 ```
 PR:     <url, or "local branch <branch> against <base>" when the playbook delivers no PR>
@@ -274,7 +274,7 @@ writes `<scratch>/<KEY>/slices.md`. You read it and plan one ticket per slice, c
 
 ## 6. Playbook drafter — `sonnet`, read-only
 
-`worker_start{name: <repo>-playbook, cwd: <main checkout>, model: "sonnet", mode: "auto"}`
+`worker_start{name: <repo>-playbook, project, model: "sonnet", mode: "auto"}`
 
 ```
 STAGE: Draft a ticket playbook for this repo. Read-only except your scratch folder.

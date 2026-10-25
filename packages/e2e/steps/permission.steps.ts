@@ -34,3 +34,7 @@ Then("the file {string} exists in the project", async ({ project }, name: string
 Then("the file {string} does not exist in the project", async ({ project }, name: string) => {
   expect(existsSync(join(project.path, name))).toBe(false);
 });
+
+Then("I see a question request", async ({ page }) => {
+  await expect(page.getByTestId("question-panel")).toBeVisible({ timeout: TURN_MS });
+});

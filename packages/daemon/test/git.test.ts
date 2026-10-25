@@ -1556,6 +1556,17 @@ describe("submodule rows", { timeout: 90_000 }, () => {
     expect(await gitStatus(r.dir)).toMatchObject({ added: 1, removed: 0, files: 3 });
   });
 
+  it.skipIf(process.platform === "win32")("a tab in a file name keeps its line counts in gitStatus and gitDiff", async () => {
+    const r = subRepo();
+    const name = "t\tab.txt";
+    put(r.dir, name, "1\n");
+    sh(r.dir, "add", name);
+    sh(r.dir, "commit", "-qm", "tab");
+    put(r.dir, name, "1\n2\n3\n");
+    expect(await gitStatus(r.dir)).toMatchObject({ added: 2, removed: 0, files: 1 });
+    expect((await gitDiff(r.dir, { base: "head", allowed: all }))!.files).toContainEqual({ status: "M", path: name, added: 2, removed: 0 });
+  });
+
   it("gitFileAt and gitBlobRef refuse a gitlink path with bad_request", async () => {
     const r = subRepo();
     expect(await code(gitFileAt(r.dir, r.added, "libs/lib", all, 1000))).toBe("bad_request");

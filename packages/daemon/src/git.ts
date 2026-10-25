@@ -985,8 +985,10 @@ function parseNumstat(z: string): Map<string, { added?: number; removed?: number
   const stats = new Map<string, { added?: number; removed?: number }>();
   const m = z.split("\0");
   for (let i = 0; i < m.length && m[i]; i++) {
-    const [a, r, p] = m[i]!.split("\t");
-    let path = p!;
+    const [a, r, ...rest] = m[i]!.split("\t");
+    // -z paths are not quoted: a tab in the name stays in the path.
+    const p = rest.join("\t");
+    let path = p;
     if (p === "") {
       i += 2;
       path = m[i]!;

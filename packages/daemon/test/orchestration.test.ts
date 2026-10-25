@@ -259,6 +259,7 @@ describe("orchestration", () => {
     const sdk = { name: "orchestration", source: "sdk" };
     expect(toolPolicy("mcp__orchestration__worker_wait", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_send", sdk)).toBe("allow");
+    expect(toolPolicy("mcp__orchestration__worker_targets", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_start", sdk)).toBe("no_rules");
     expect(toolPolicy("mcp__orchestration__worker_wait", { name: "orchestration", source: "user" })).toBeUndefined();
     expect(toolPolicy("mcp__orchestration__worker_wait", undefined)).toBeUndefined();
@@ -335,8 +336,8 @@ describe("orchestration", () => {
       const input = { name: "sm1", cwd: dirB, prompt: "p", model: "sonnet" };
       // Without the user's card a mode above the coordinator's is refused.
       expect((await call(coord, "worker_start", input)).error).toMatch(/needs the user's worker_start card/);
-      const card = startCard(coord, input)!;
-      expect(card.title).toBe("Start worker sm1 in auto mode");
+      const card = (await startCard(coord, input))!;
+      expect(card.title).toMatch(/^Start worker sm1 in auto mode/);
       expect(card.input).toMatchObject({ mode: "auto" });
       card.onAllow!();
       const w = await call(coord, "worker_start", input);
@@ -354,11 +355,11 @@ describe("orchestration", () => {
       const coord = await coordinator(dirA, "sonnet");
       const w = await call(coord, "worker_start", { name: "sm2", cwd: dirB, prompt: "p", mode: "plan" });
       expect(w.mode).toBe("plan");
-      expect(startCard(coord, { name: "sm2b", mode: "plan" })!.title).toBe("Start worker sm2b in plan mode");
+      expect((await startCard(coord, { name: "sm2b", mode: "plan" }))!.title).toBe("Start worker sm2b in plan mode");
       enable({ workerMode: "coordinator" });
       const d = await call(coord, "worker_start", { name: "sm3", cwd: dirB, prompt: "p" });
       expect(d.mode).toBe("default");
-      expect(startCard(coord, { name: "sm3b" })!.title).toBe("Start worker sm3b in default mode");
+      expect((await startCard(coord, { name: "sm3b" }))!.title).toBe("Start worker sm3b in default mode");
       await setMode(coord, "acceptEdits");
       expect((await call(coord, "worker_start", { name: "sm4", cwd: dirB, prompt: "p" })).mode).toBe("acceptEdits");
     } finally {
@@ -481,7 +482,7 @@ describe("orchestration", () => {
       const coord = await coordinator(dirA, "sonnet");
       const input = { name: "ca", cwd: dirB, prompt: "p", model: "sonnet", mode: "auto" };
       const card = await cardOf(coord, start(input));
-      expect(card.title).toBe("Start worker ca in auto mode");
+      expect(card.title).toMatch(/^Start worker ca in auto mode/);
       await c.request({ type: "permission.respond", requestId: card.requestId, decision: "allow" });
       await until(async () => (await state(coord)) === "idle");
       expect((await call(coord, "worker_start", input)).mode).toBe("auto");
@@ -509,7 +510,7 @@ describe("orchestration", () => {
       await c.request({ type: "session.setPermissionMode", sessionId: coord, mode: "acceptEdits" });
       const card = await cardOf(coord, start({ name: "w", cwd: dirB, prompt: "p", model: "sonnet" }));
       expect(card.input.mode).toBe("acceptEdits");
-      expect(card.title).toBe("Start worker w in acceptEdits mode");
+      expect(card.title).toMatch(/^Start worker w in acceptEdits mode/);
       await c.request({ type: "session.setPermissionMode", sessionId: coord, mode: "default" });
       await c.request({ type: "permission.respond", requestId: card.requestId, decision: "allow" });
       const reply = await until(() => c.inbox.map((m) => (m.type === "event" && m.sessionId === coord && m.part.type === "assistant_text" ? m.part.text : "")).find((t) => t.startsWith("perm: {") && t.includes("updatedInput")));
@@ -591,15 +592,132 @@ describe("orchestration", () => {
     expect(await err({ repo, branch: "a/b" })).toMatch(/Worktree not created/);
     expect(await err({ repo, branch: "x.lock" })).toMatch(/Worktree not created/);
     expect(await err({ repo, branch: "taken" })).toMatch(/already exists/);
-    expect(await err({ repo })).toMatch(/needs branch/);
-    expect(await err({ cwd: dirB, repo, branch: "x" })).toMatch(/Give cwd, or repo/);
-    expect(await err({ cwd: dirB, branch: "x" })).toMatch(/go with repo/);
-    expect(await err({})).toMatch(/Give cwd, or repo/);
+    expect(await err({ cwd: dirB, repo, branch: "x" })).toMatch(/Give one target/);
+    expect(await err({ cwd: dirB, branch: "x" })).toMatch(/go with project/);
+    expect(await err({})).toMatch(/Give one target/);
     expect(git(repo, "worktree", "list").split("\n")).toHaveLength(1);
     expect(git(repo, "branch", "--format=%(refname:short)")).toBe("main\ntaken");
     expect(existsSync(join(repo, ".claude", "worktrees")) ? readdirSync(join(repo, ".claude", "worktrees")) : []).toEqual([]);
     expect((await call(coord, "worker_list")).workers).toEqual([]);
     expect(runs.filter((r) => String(r.options.cwd).startsWith(join(repo, ".claude")))).toEqual([]);
+  });
+
+  describe("worker targets (GH-457)", () => {
+    const addWt = (repo: string, name: string) => {
+      git(repo, "worktree", "add", "-q", join(repo, ".claude", "worktrees", name), "-b", name);
+      return join(repo, ".claude", "worktrees", name);
+    };
+    const open = async (dir: string) => (await c.request({ type: "project.open", cwd: dir }), dir);
+    const targets = async (coord: string, a: object = {}) => (await call(coord, "worker_targets", a)).targets as { project: string; worktree?: string; path: string; branch?: string; main: boolean; locked?: boolean; sessions: { sessionId: string; state: string; worker?: string; yours?: boolean }[] }[];
+
+    it.skipIf(process.platform === "win32")("worker_targets lists added projects and their worktrees with live sessions; worker_list stays the coordinator's workers", async () => {
+      enable();
+      const repo = await open(gitRepo(join(root, "gt-a")));
+      const notAdded = gitRepo(join(root, "gt-np"));
+      const wt = addWt(repo, "feat-1");
+      const coord = await coordinator();
+      const w = await call(coord, "worker_start", { name: "t1", worktree: "feat-1", project: "gt-a", prompt: "p" });
+      expect(w).toMatchObject({ cwd: wt, project: "gt-a", worktree: "feat-1" });
+      const list = await targets(coord);
+      expect(list.some((e) => e.path === notAdded)).toBe(false);
+      const main = list.find((e) => e.path === repo)!;
+      expect(main).toMatchObject({ project: "gt-a", main: true, branch: "main" });
+      expect(main.worktree).toBeUndefined();
+      const feat = list.find((e) => e.path === wt)!;
+      expect(feat).toMatchObject({ project: "gt-a", worktree: "feat-1", branch: "feat-1", main: false });
+      expect(feat.sessions).toEqual([expect.objectContaining({ sessionId: w.sessionId, worker: "t1", yours: true })]);
+      expect(main.sessions.some((x) => x.sessionId === w.sessionId)).toBe(false);
+      expect((await targets(coord, { project: "gt-a" })).length).toBe(2);
+      expect((await call(coord, "worker_list")).workers).toHaveLength(1);
+      await closeAll();
+    });
+
+    it.skipIf(process.platform === "win32")("worker_start by worktree name starts in that worktree; by project name in the main checkout; project + branch creates a worktree", async () => {
+      enable();
+      const repo = await open(gitRepo(join(root, "gt-b")));
+      const wt = addWt(repo, "feat-b");
+      const coord = await coordinator();
+      const a = await call(coord, "worker_start", { name: "b1", worktree: "feat-b", prompt: "p" });
+      expect(a).toMatchObject({ cwd: wt, project: "gt-b", worktree: "feat-b" });
+      const b = await call(coord, "worker_start", { name: "b2", project: "gt-b", prompt: "p" });
+      expect(b).toMatchObject({ cwd: repo, project: "gt-b" });
+      expect(b.worktree).toBeUndefined();
+      const r = await call(coord, "worker_start", { name: "b3", repo, prompt: "p" });
+      expect(r.cwd).toBe(repo);
+      const n = await call(coord, "worker_start", { name: "b4", project: "gt-b", branch: "feat-2", prompt: "p" });
+      const path = join(repo, ".claude", "worktrees", "feat-2");
+      expect(n).toMatchObject({ cwd: path, project: "gt-b", worktree: "feat-2", branch: "feat-2" });
+      expect(git(repo, "config", "--type=bool", "--get", "branch.feat-2.claudeUiCreated")).toBe("true");
+      for (const [x, cwd] of [[a, wt], [b, repo], [r, repo], [n, path]] as const) expect((await workerRun(x)).cwd).toBe(cwd);
+      await closeAll();
+    });
+
+    it.skipIf(process.platform === "win32")("an ambiguous or unknown project or worktree name is a tool error naming the candidates; nothing is started", async () => {
+      enable();
+      mkdirSync(join(root, "x1"));
+      mkdirSync(join(root, "x2"));
+      const r1 = await open(gitRepo(join(root, "x1", "dup")));
+      const r2 = await open(gitRepo(join(root, "x2", "dup")));
+      const w1 = addWt(r1, "same");
+      const w2 = addWt(r2, "same");
+      const coord = await coordinator();
+      const err = async (a: object) => (await call(coord, "worker_start", { name: "amb", prompt: "p", ...a })).error as string;
+      const p = await err({ project: "dup" });
+      expect(p).toContain(r1);
+      expect(p).toContain(r2);
+      const w = await err({ worktree: "same" });
+      expect(w).toContain(w1);
+      expect(w).toContain(w2);
+      expect((await startCard(coord, { name: "amb", prompt: "p", worktree: "same", project: r2 }))!.title).toBe("Start worker amb in default mode in worktree same of project dup");
+      expect(await err({ worktree: "nope" })).toMatch(/No worktree named nope\. Worktrees: .*same/);
+      expect(await err({ project: "nope" })).toMatch(/No project named nope.*dup/);
+      expect((await call(coord, "worker_list")).workers).toEqual([]);
+      expect(runs.filter((x) => x.options.cwd === w1)).toEqual([]);
+      expect(git(r1, "worktree", "list").split("\n")).toHaveLength(2);
+    });
+
+    it.skipIf(process.platform === "win32")("a worktree outside the roots or being removed is a tool error; nothing is started", async () => {
+      enable();
+      const repo = await open(gitRepo(join(root, "gt-o")));
+      const out = join(outside, "wt-out");
+      git(repo, "worktree", "add", "-q", out, "-b", "wt-out");
+      const wt = addWt(repo, "rm-me");
+      const coord = await coordinator();
+      expect((await targets(coord)).some((e) => e.path === out)).toBe(false);
+      for (const worktree of ["wt-out", out]) expect((await call(coord, "worker_start", { name: "o", worktree, prompt: "p" })).error).toMatch(/outside the daemon's allowed roots/);
+      const bin = mkdtempSync(join(tmpdir(), "slowgit-"));
+      const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+      writeFileSync(join(bin, "git"), `#!/bin/sh\ncase "$*" in *"worktree remove"*) sleep 1;; esac\nexec ${realGit} "$@"\n`, { mode: 0o755 });
+      const path = process.env.PATH;
+      process.env.PATH = `${bin}:${path}`;
+      try {
+        const removed = c.request({ type: "worktree.remove", cwd: repo, path: wt });
+        await new Promise((r) => setTimeout(r, 300));
+        expect((await targets(coord)).some((e) => e.path === wt)).toBe(false);
+        expect((await call(coord, "worker_start", { name: "r", worktree: "rm-me", prompt: "p" })).error).toMatch(/being removed/);
+        expect((await removed).type).toBe("reply");
+      } finally {
+        process.env.PATH = path;
+      }
+      expect((await call(coord, "worker_list")).workers).toEqual([]);
+      expect(runs.filter((x) => x.options.cwd === wt || x.options.cwd === out)).toEqual([]);
+    });
+
+    it.skipIf(process.platform === "win32")("the card names the project and the worktree; a target that does not resolve says the call will fail", async () => {
+      enable();
+      const repo = await open(gitRepo(join(root, "gt-c")));
+      const wt = addWt(repo, "feat-3");
+      const coord = await coordinator();
+      const title = async (input: object) => (await startCard(coord, { name: "cc", prompt: "p", ...input }))!.title;
+      expect(await title({ worktree: "feat-3" })).toBe("Start worker cc in default mode in worktree feat-3 of project gt-c");
+      expect(await title({ cwd: wt })).toBe("Start worker cc in default mode in worktree feat-3 of project gt-c");
+      expect(await title({ project: "gt-c" })).toBe("Start worker cc in default mode in project gt-c");
+      expect(await title({ project: "gt-c", branch: "nb" })).toBe("Start worker cc in default mode in a new worktree nb of project gt-c");
+      expect(await title({ cwd: outside })).toMatch(/^Start worker cc: cwd is not a directory inside the daemon's allowed roots: .*, the call will fail$/);
+      const bad = (await startCard(coord, { name: "cc", prompt: "p", worktree: "nope" }))!;
+      expect(bad.title).toMatch(/^Start worker cc: No worktree named nope.*, the call will fail$/);
+      expect(bad.onAllow).toBeUndefined();
+    });
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("worker_start: when the session cannot be created, the worktree and branch are removed and no worker exists", async () => {

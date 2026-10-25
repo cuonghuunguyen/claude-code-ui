@@ -554,8 +554,8 @@ export const MAX_TERMINAL_INPUT_BYTES = 64 * 1024;
 /**
  * `branch`: short commit hash on a detached HEAD. `added`/`removed`: lines changed in tracked files against HEAD.
  * `refs`: opaque stamp of the repository's refs (file stats of HEAD, packed-refs, refs folders, worktree HEADs); changes when a branch, tag, HEAD or packed refs change. Compare for equality only.
+ * `files`: tracked files changed against HEAD (binary and moved submodules included; a submodule with only uncommitted changes is not counted). `added`/`removed` leave submodules out.
  */
-/** `files`: tracked files changed against HEAD (binary and moved submodules included; a submodule with only uncommitted changes is not counted). `added`/`removed` leave submodules out. */
 export type GitStatus = { branch: string; added: number; removed: number; files?: number; refs?: string };
 /** `refs` null outside a git work tree. */
 /** A repository of `git.repos`. */

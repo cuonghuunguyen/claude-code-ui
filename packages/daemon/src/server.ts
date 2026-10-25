@@ -563,6 +563,12 @@ export function createDaemon(opts: {
   const removing = new Set<string>();
   const inDir = (cwd: string, p: string) => cwd === p || cwd.startsWith(p.endsWith(sep) ? p : p + sep);
   const isRemoving = (cwd: string) => [...removing].some((p) => inDir(cwd, p));
+  /** An added project's worktrees with real paths, `outsideRoots` marked; undefined for a non-git project or a subfolder of a repository (listed as a non-git project). */
+  const projectWorktrees = async (cwd: string): Promise<Worktree[] | undefined> => {
+    const found = (await worktreesOf(cwd))?.map((w) => ({ ...w, path: real(w.path) ?? w.path }));
+    if (!found?.some((w) => w.path === (real(cwd) ?? cwd))) return undefined;
+    return found.map((w) => (inRoots(w.path) ? w : { ...w, outsideRoots: true }));
+  };
   /** Refused while a session in it runs or needs input; idle live sessions and its terminals close first (transcripts stay). */
   const removeIn = async (cwd: string, path: string, o: { expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored: number }; deleteBranch?: boolean }) => {
     const marked: string[] = [];
@@ -807,7 +813,9 @@ export function createDaemon(opts: {
       const id = opts.sides?.pathSide(path);
       return id && id !== LOCAL_SIDE ? opts.sides!.list().find((s) => s.id === id)?.label : undefined;
     },
-    isProject: (path) => projects.has(path),
+    projects: () => projects.list([]).filter((cwd) => allowed(cwd)),
+    worktrees: (cwd) => projectWorktrees(cwd),
+    removing: (path) => isRemoving(path),
     createWorktree: (repo, o) => createIn(repo, o),
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
@@ -949,9 +957,8 @@ export function createDaemon(opts: {
     const worktrees: Record<string, Worktree[]> = {};
     await Promise.all(
       open.map(async (cwd) => {
-        const found = (await worktreesOf(cwd))?.map((w) => ({ ...w, path: real(w.path) ?? w.path }));
-        // A subfolder of a repository (mono/pa, a folder of a dotfiles home) is no worktree: listed as a non-git project.
-        if (found?.some((w) => w.path === (real(cwd) ?? cwd))) worktrees[cwd] = found.map((w) => (inRoots(w.path) ? w : { ...w, outsideRoots: true }));
+        const l = await projectWorktrees(cwd);
+        if (l) worktrees[cwd] = l;
       }),
     );
     worktreePaths = new Set(Object.values(worktrees).flatMap((l) => l.filter((w) => !w.outsideRoots).map((w) => w.path)));
