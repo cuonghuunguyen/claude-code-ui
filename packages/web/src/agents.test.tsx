@@ -332,6 +332,7 @@ const withWorkers = () => (replies["session.list"] = listOf(coordinatorItem, wor
 const sendTo = (sessionId: string, part: Part) => act(async () => emit({ type: "event", sessionId, seq: ++seq, part }));
 /** Mounts with the workers listed; a subscribed running worker replays its session_state, as the daemon does. */
 async function mountWorkers(hash = `#${ID}`) {
+  localStorage.setItem("claude-ui.expandedWorkers", JSON.stringify([`coordinator:${ID}`]));
   withWorkers();
   await mount(hash);
   await sendTo(W1, { type: "session_state", id: "session_state", state: "running" });

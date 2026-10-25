@@ -1438,6 +1438,39 @@ describe("WSL projects opened by their UNC path", () => {
     expect(files.length).toBeGreaterThan(0);
     expect(files.every((f) => f === "wsl.exe")).toBe(true);
   });
+
+  // Same fake distro: a nested repository (own .git) and a submodule (gitdir file into the superproject) are read like the superproject.
+  // gitLog needs the host file system (`topIn` reads `.git` on the UNC share), which a Linux harness cannot fake: not covered here.
+  it.skipIf(process.platform === "win32")("gitStatus of a nested repository and of a submodule (gitdir file) under a UNC WSL cwd reads through the WSL runner", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "wslnest-")));
+    const cm = (d: string, m: string) => run(d, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", m);
+    run(dir, "init", "-q", "-b", "main", "lib.git", "--bare");
+    run(dir, "clone", "-q", "lib.git", "libA");
+    cm(join(dir, "libA"), "lib subject");
+    run(join(dir, "libA"), "push", "-q", "origin", "main");
+    run(dir, "init", "-q", "-b", "main", "sup");
+    const sup = join(dir, "sup");
+    cm(sup, "super subject");
+    run(sup, "-c", "protocol.file.allow=always", "submodule", "add", "-q", join(dir, "lib.git"), "libs/lib");
+    run(sup, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "add lib");
+    run(sup, "init", "-q", "-b", "main", "inner");
+    cm(join(sup, "inner"), "inner subject");
+    const files: (string | undefined)[] = [];
+    const local = (o: GitRunOptions) =>
+      new Promise<{ stdout: Buffer; stderr: string }>((ok, fail) => {
+        files.push(o.file);
+        execFile("bash", o.args.slice(4), { encoding: "buffer" }, (err, stdout, stderr) => (err ? fail(Object.assign(err, { stderr: String(stderr) })) : ok({ stdout, stderr: String(stderr) })));
+      });
+    setGitRunner(wslGitRunner({ local }));
+    vi.spyOn(process, "cwd").mockReturnValue(realpathSync(tmpdir()));
+    const inner = await gitStatus(unc(join(sup, "inner")));
+    expect(inner).toMatchObject({ branch: "main" });
+    // A submodule is detached at the superproject's gitlink: the status names its short hash.
+    const lib = await gitStatus(unc(join(sup, "libs", "lib")));
+    expect(lib?.branch).toMatch(/^[0-9a-f]{7}$|^main$/);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.every((f) => f === "wsl.exe")).toBe(true);
+  });
 });
 
 describe("submodule rows", { timeout: 90_000 }, () => {

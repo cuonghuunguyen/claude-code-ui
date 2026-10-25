@@ -175,6 +175,9 @@ export async function resolveTarget(a: TargetInput, d: TargetDeps): Promise<Reso
 const strip = (e: Entry): Target => listed([{ ...e, outsideRoots: undefined, removing: undefined } as Entry])[0]!;
 
 /** Card suffix: " in worktree w of project p" | " in project p" | " in a new worktree b of project p" | " in <cwd>". */
+/** The folder the project config (agents, plugins) of a target comes from: the main checkout for a new branch, else the target folder. */
+export const targetDir = (r: Resolved): string => (r.kind === "new" ? r.projectPath : r.cwd);
+
 export function targetLabel(r: Resolved): string {
   switch (r.kind) {
     case "worktree":

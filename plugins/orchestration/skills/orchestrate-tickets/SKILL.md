@@ -34,6 +34,8 @@ Jenkins job here, it belongs in an adapter or a playbook.
 
 | File | Load it when |
 |---|---|
+| `references/tree-flow.md` | Before the first worker call when the plugin's agent types are installed (the default flow). Who starts which stage, join, fix loop. |
+| `references/handoff.md` | Writing the prompt of a tree-flow stage worker: the fixed HANDOFF block. |
 | `references/workers.md` | Before the first worker call. Tools, events, the RESULT contract, modes, the ledger. |
 | `references/playbook.md` | Preflight: finding the repo's playbook, or drafting one when it has none. |
 | `references/worker-specs.md` | Writing any worker prompt. All templates live there. |
@@ -56,7 +58,13 @@ Jenkins job here, it belongs in an adapter or a playbook.
    in the web app.
 3. **The playbook exists and is complete.** Find it (`references/playbook.md`). No playbook, or
    one with `TODO` left in it: draft or finish it with the user before anything else runs.
-4. **Every tool the playbook needs is present.** The playbook's Profile names one adapter per
+4. **The agent types exist (tree flow).** This skill ships in the `orchestration` plugin, which
+   also ships the agent types `orchestration:planner`, `orchestration:implementer`,
+   `orchestration:ui-tester` and `orchestration:reviewer`. `worker_start` with an `agent` that is
+   not installed is refused with the list of agent types: if it is, tell the user to install the
+   plugin (`claude plugin install orchestration@claude-ui`) or use the hub flow (below). The tree
+   flow needs Settings → Orchestration → Maximum tree depth ≥ 2 (default 2).
+5. **Every tool the playbook needs is present.** The playbook's Profile names one adapter per
    role; each adapter file has a "Gate" line with a cheap read-only check. Run every check.
    Plus the skills the stages name: `pr-review` (review), `playwright-cli` or the playwright
    MCP (acceptance, unless the playbook says `acceptance: none`), `tdd` (soft).
@@ -82,15 +90,19 @@ starts workers without asking. Their choice, not yours (`references/workers.md`)
 
 A ticket walks the stages in order and earns each one from the stage before it.
 
-| # | Stage | Who | Model | Advances on |
-|---|---|---|---|---|
-| 0 | Plan | fresh worker, creates the worktree | `opus` | `plan.md` written, no code |
-| 1 | Implement + unit tests | fresh worker, in the worktree | `sonnet` | suite green, committed locally |
-| 2 | Acceptance | **fresh** worker, same worktree, real browser | `sonnet` | every case green, screenshots + HTML report (scripted: scenarios committed) |
-| 3 | Push + build watch | coordinator pushes; worker watches CI | `haiku` | build terminal-green |
-| 4 | PR open | coordinator | — | PR exists, description written |
-| 5 | Review | **fresh** worker, read-only, `pr-review` | `opus` | report delivered to the user |
+| # | Stage | Who | Started by (tree flow) | Model | Advances on |
+|---|---|---|---|---|---|
+| 0 | Plan | fresh worker `orchestration:planner`, creates the worktree | root | `opus` | `plan.md` written, no code |
+| 1 | Implement + unit tests | fresh worker `orchestration:implementer`, in the worktree | root | `sonnet` | suite green, committed locally |
+| 2 | Acceptance | **fresh** worker `orchestration:ui-tester`, same worktree, real browser | implementer | `sonnet` | every case green, screenshots + HTML report (scripted: scenarios committed) |
+| 3 | Push + build watch | coordinator pushes (tree flow: the implementer, when the playbook allows); worker watches CI | implementer | `haiku` | build terminal-green |
+| 4 | PR open | root coordinator | root | — | PR exists, description written |
+| 5 | Review | **fresh** worker `orchestration:reviewer`, read-only, `pr-review` | implementer | `opus` | report delivered to the user |
 
+Tree flow (default with the plugin): the root starts planner and implementer only; the
+implementer starts ui-tester and reviewer itself, runs the fix loop and the join, and reports
+one RESULT (`references/tree-flow.md`). Every stage worker gets the HANDOFF block
+(`references/handoff.md`) as its whole prompt. Hub flow: see the section at the end.
 - **Stage 0 is skipped** only when every skip rule in `references/planning.md` holds. When in
   doubt, plan. An implementer that finds the ticket bigger than judged returns `blocked` with
   "needs plan", and stage 0 runs.
@@ -274,6 +286,16 @@ delivered to the user.
 
 ---
 
+### Tree flow: what changes in this loop
+
+The root handles events of planner and implementer only; ui-tester and reviewer report to the
+implementer. The root moves a ticket on evidence, never on the implementer's word alone:
+`worker_list{tree: true}` shows no live worker below the implementer, `worker_read <impl>/<reviewer>`
+agrees with the reviewer's RESULT, and the report files and `<report-dir>/ledger.md` exist.
+`worker_close` of an implementer with a running or waiting worker is refused: wait.
+
+---
+
 ## 6. Coordinator boundaries
 
 - **Never edit code, run the build, or commit.** Workers do. The ledger is the one file you
@@ -317,3 +339,14 @@ Name a skill as an instruction ("use the tdd skill"), not as a `/slash` command.
 
 Grilling skills are human-in-the-loop by design. They belong to planning with the user present,
 **never** inside an unattended worker.
+
+---
+
+## Hub flow (without agent types)
+
+For a session that does not have the plugin's agent types (or Maximum tree depth 1): the root
+coordinator starts every stage itself, with no `agent`, using the full templates in
+`references/worker-specs.md`. Stages, models, the loop in §5 and the review rules above hold
+unchanged; the table's "Started by" column reads "root" for every row, the ui-tester and
+reviewer get a worker-spec prompt instead of a HANDOFF block, and a red stage goes back to the
+implementer with `worker_send` as described in §1. This flow needs no plugin agent file.

@@ -1927,27 +1927,70 @@ it("a workspace folder that holds repositories shows the Graph tab; the graph re
   }
 });
 
-it("ChangesPanel reads the repository chosen for the project; the Graph keeps the default repository (until its own selector)", async () => {
+it("Changes and Graph show the repository chosen for the project; a pick in either switches both", async () => {
   localStorage.setItem("claude-ui.diffMode", "uncommitted");
   localStorage.setItem("claude-ui.repoChoice", JSON.stringify({ "/p/demo": "web" }));
   const restore = await remount({ "git.repos": { repos: [api, web] }, "git.status": { status: null }, "git.diff": { diff: { prefix: "", base: "b".repeat(40), files: [] } }, "git.refs": { refs: "s1" }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } });
   try {
-    await pickSide(/changes/i);
-    await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    const wait = () => act(async () => void (await new Promise((r) => setTimeout(r, 50))));
     const gits = sent as { type: string; cwd?: string; exact?: boolean }[];
+    const last = (t: string) => gits.filter((m) => m.type === t).at(-1);
+    const selectors = () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] [data-testid=repo-selector]')];
+    const pick = async (trigger: HTMLElement, rel: string) => {
+      await act(async () => trigger.click());
+      await act(async () => document.querySelector<HTMLElement>(`[role=treeitem][data-rel="${rel}"]`)!.click());
+      await wait();
+    };
+    await pickSide(/changes/i);
+    await wait();
     expect(gits.filter((m) => m.type === "git.diff")).toMatchObject([{ cwd: "/p/demo/web", exact: true }]);
     expect(el.querySelector("[data-testid=repo-selector]")!.getAttribute("aria-label")).toBe("Repository: web, branch main");
+    gits.length = 0;
     await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-graph"]')!.click());
     // The graph chunk loads lazily.
-    for (let i = 0; i < 40 && !gits.some((m) => m.type === "git.log"); i++) await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
-    const logs = gits.filter((m) => m.type === "git.log");
-    expect(logs.length).toBeGreaterThan(0);
-    for (const l of logs) expect(l).toMatchObject({ cwd: "/p/demo/api", exact: true });
+    for (let i = 0; i < 40 && !gits.some((m) => m.type === "git.log"); i++) await wait();
+    expect(gits.filter((m) => m.type === "git.log").length).toBeGreaterThan(0);
+    for (const l of gits.filter((m) => m.type === "git.log")) expect(l).toMatchObject({ cwd: "/p/demo/web", exact: true });
+    const graphSel = () => el.querySelector<HTMLElement>("[data-testid=graph-panel] [data-testid=repo-selector]")!;
+    expect(graphSel().getAttribute("aria-label")).toBe("Repository: web, branch main");
+    await pick(graphSel(), "api");
+    expect(last("git.log")).toMatchObject({ cwd: "/p/demo/api", exact: true });
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-changes"]')!.click());
+    await wait();
+    expect(selectors().some((s) => s.getAttribute("aria-label") === "Repository: api, branch main")).toBe(true);
+    expect(last("git.diff")).toMatchObject({ cwd: "/p/demo/api", exact: true });
+    const changesSel = selectors().find((s) => !s.closest("[data-testid=graph-panel]"))!;
+    await pick(changesSel, "web");
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-graph"]')!.click());
+    await wait();
+    expect(last("git.log")).toMatchObject({ cwd: "/p/demo/web", exact: true });
   } finally {
     restore();
     localStorage.removeItem("claude-ui.diffMode");
     localStorage.removeItem("claude-ui.repoChoice");
     for (const k of ["git.status", "git.refs", "git.log", "git.repos", "git.diff"]) delete replies[k];
+  }
+});
+
+it("the Graph shows Loading graph… until the session list is loaded, then mounts once", async () => {
+  const saved = replies["session.list"];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const list = { sessions: [session], projects: ["/p/demo"] };
+  const restore = await remount({ "session.list": async () => (await gate, list), "git.repos": { repos: [api, web] }, "git.status": { status: null }, "git.refs": { refs: "s1" }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } });
+  try {
+    const gits = sent as { type: string; skip?: number }[];
+    gits.length = 0;
+    release();
+    for (let i = 0; i < 40 && !el.querySelector('[data-testid="side-panel"] [data-testid="pane-graph"]'); i++) await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-graph"]')!.click());
+    for (let i = 0; i < 40 && !gits.some((m) => m.type === "git.log"); i++) await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    await act(async () => void (await new Promise((r) => setTimeout(r, 100))));
+    expect(gits.filter((m) => m.type === "git.log" && !m.skip)).toHaveLength(1);
+  } finally {
+    restore();
+    replies["session.list"] = saved;
+    for (const k of ["git.status", "git.refs", "git.log", "git.repos"]) delete replies[k];
   }
 });
 
@@ -2251,6 +2294,7 @@ describe("GH-358 sidebar menus", () => {
   });
   const mount = async (sessions: SessionListItem[], worktrees: Record<string, unknown[]> = {}) => {
     replies["session.list"] = { sessions, projects: ["/p/demo"], worktrees };
+    localStorage.setItem("claude-ui.expandedWorkers", JSON.stringify([`coordinator:${ID}`]));
     act(() => root.unmount());
     root = createRoot(el);
     await act(async () => root.render(<App />));

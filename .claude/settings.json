@@ -1,5 +1,14 @@
 {
   "enabledPlugins": {
-    "mattpocock-skills@claude-plugins-official": true
+    "mattpocock-skills@claude-plugins-official": true,
+    "orchestration@claude-ui": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-ui": {
+      "source": {
+        "source": "github",
+        "repo": "cuonghuunguyen/claude-code-ui"
+      }
+    }
   }
 }

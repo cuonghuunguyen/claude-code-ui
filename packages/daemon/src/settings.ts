@@ -3,7 +3,7 @@
 import { createJsonFile } from "./json-file.ts";
 import { AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
 
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string };
 const jiraUrl = (v: unknown) => {
@@ -27,7 +27,9 @@ const intIn = (label: string, min: number, max: number): Check => ({ valid: (v) 
 const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
   orchestration: {
     enabled: bool("Enable orchestration"),
-    workerCap: { valid: (v) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 20, label: "Maximum workers", rule: "a whole number from 1 to 20" },
+    workerCap: intIn("Maximum workers", 1, 20),
+    maxDepth: intIn("Maximum tree depth", 1, 5),
+    maxChildren: intIn("Maximum workers per coordinator", 1, 20),
     coordinatorPermissions: bool("Coordinator may answer permission requests"),
     workerMode: { valid: (v) => (WORKER_MODES as readonly unknown[]).includes(v), label: "Worker mode", rule: `one of ${WORKER_MODES.join(", ")}` },
     workerNotifications: bool("Notifications from workers"),
