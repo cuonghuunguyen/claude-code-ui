@@ -64,7 +64,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "artifact.preview"; sessionId: string; partId: string }
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
-  /** Bash mode: runs `command` with the user's shell in the session cwd (idle only); output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. */
+  /** Bash mode: runs `command` with the user's shell in the session cwd; output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. Idle: runs, reply `{}`. Busy (turn, pending input, rewind, shell command, terminal CLI turn): queued as a bash item (`prompt_queue`), reply `{ itemId }`; error `queue_full`. */
   | { type: "session.bash"; sessionId: string; command: string }
   | { type: "session.setModel"; sessionId: string; model: string }
   /** Applies from the next turn on (`setPermissionMode()`); the session's start option before its query runs. */
@@ -84,9 +84,9 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.cancelContinue"; sessionId: string }
   /** Queues a message: sent as a prompt when the session is next idle (docs/spec.md "Queued messages"). Reply `{ itemId }`; errors bad_prompt, bad_images, queue_full, session_not_live. */
   | { type: "session.enqueue"; sessionId: string; text: string; images?: string[] }
-  /** Removes a queued message (Delete, Edit); reply `{ text, images }`; error unknown_item. */
+  /** Removes a queued message (Delete, Edit); reply `{ text, images, bash? }`; error unknown_item. */
   | { type: "session.dequeue"; sessionId: string; itemId: string }
-  /** Send now: removes the item and sends it like session.prompt (steers a running turn); reply `{}`; errors unknown_item and the session.prompt codes (the item stays queued on failure). */
+  /** Send now: removes the item and sends it like session.prompt (steers a running turn); reply `{}`; errors unknown_item and the session.prompt codes (the item stays queued on failure). A bash item while busy: error `session_busy`. */
   | { type: "session.sendQueued"; sessionId: string; itemId: string }
   /** Stop agent: stops one running subagent run (`subagentId` = its subagent part id); the turn goes on. `unknown_subagent` when none runs. */
   | { type: "session.stopSubagent"; sessionId: string; subagentId: string }

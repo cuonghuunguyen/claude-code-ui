@@ -752,8 +752,8 @@ export function createDaemon(opts: {
     send: async (id, item) => {
       const s = sessions.get(id);
       if (!s) return { code: "session_not_live", message: `no session ${id}` };
-      const err = await sendPrompt(s, item.text, item.images);
-      if (!err) autoContinue.cancel(id);
+      const err = item.bash ? await runBash(s, item.text) : await sendPrompt(s, item.text, item.images);
+      if (!err && !item.bash) autoContinue.cancel(id);
       return err;
     },
     show: (id, items, held) => sessions.get(id)?.setQueue(items, held),
@@ -792,6 +792,23 @@ export function createDaemon(opts: {
     } catch (err) {
       return { code: "prompt_failed", message: (err as Error).message };
     }
+  }
+
+  /** session.bash's checks and run; the reason when the command does not run now. `session_busy`/`external_turn`: it can be queued. */
+  async function runBash(s: Session, command: string): Promise<{ code: string; message: string } | undefined> {
+    if (!allowed(s.cwd)) return { code: "cwd_not_allowed", message: `outside the allowlisted roots: ${s.cwd}` };
+    const notLive = () => ({ code: "session_not_live", message: `session ${s.id} is ${s.info().state}` });
+    if (!s.isLive()) return notLive();
+    if (s.info().state === "idle") await s.sync();
+    if (!s.isLive()) return notLive();
+    if (s.externalTurnRunning()) return { code: "external_turn", message: "A terminal CLI turn is running in this session" };
+    if (!s.takesQueued()) return { code: "session_busy", message: "A shell command cannot run during a turn; it runs when the turn ends" };
+    try {
+      s.bash(command);
+    } catch (e) {
+      return { code: "bash_failed", message: (e as Error).message };
+    }
+    autoContinue.cancel(s.id);
   }
 
   const orchestration = createOrchestration({
@@ -1650,35 +1667,32 @@ export function createDaemon(opts: {
           const s = sessions.get(msg.sessionId);
           if (!s) return fail("unknown_item", "queued message not found (already sent?)");
           const item = queue.take(s.id, msg.itemId);
-          return item ? reply({ text: item.text, images: item.images }) : fail("unknown_item", "queued message not found (already sent?)");
+          return item ? reply({ text: item.text, images: item.images, ...(item.bash && { bash: true }) }) : fail("unknown_item", "queued message not found (already sent?)");
         }
         case "session.sendQueued": {
           const s = sessions.get(msg.sessionId);
           if (!s || !queue.items(s.id).some((i) => i.id === msg.itemId)) return fail("unknown_item", "queued message not found (already sent?)");
+          const bash = queue.items(s.id).find((i) => i.id === msg.itemId)?.bash;
           const err = await queue.sendNow(s.id, msg.itemId);
           // A refused Send now (any reason) leaves a scheduled auto-continue alone.
           if (err) return fail(err.code, err.message);
-          autoContinue.cancel(s.id);
-          queue.release(s.id);
+          // A shell command does not end a usage-limit pause; only a prompt does (runBash cancelled the auto-continue).
+          if (!bash) {
+            autoContinue.cancel(s.id);
+            queue.release(s.id);
+          }
           return reply({});
         }
         case "session.bash": {
           const s = await find(msg.sessionId);
           if (!s) return;
-          autoContinue.cancel(s.id);
           if (typeof msg.command !== "string" || !msg.command.trim()) return fail("bad_command", "empty command");
-          if (!allowed(s.cwd)) return fail("cwd_not_allowed", `outside the allowlisted roots: ${s.cwd}`);
-          const notLive = () => fail("session_not_live", `session ${s.id} is ${s.info().state}`);
-          if (!s.isLive()) return notLive();
-          if (s.info().state === "idle") await s.sync();
-          if (!s.isLive()) return notLive();
-          if (s.externalTurnRunning()) return fail("external_turn", "A terminal CLI turn is running in this session");
-          try {
-            s.bash(msg.command);
-          } catch (e) {
-            return fail("bash_failed", (e as Error).message);
+          const err = await runBash(s, msg.command);
+          if (err?.code === "session_busy" || err?.code === "external_turn") {
+            const r = queue.enqueue(s.id, { text: msg.command.trim(), images: [], bash: true });
+            return typeof r === "string" ? reply({ itemId: r }) : fail(r.code, r.message);
           }
-          return reply({});
+          return err ? fail(err.code, err.message) : reply({});
         }
         case "session.setModel": {
           const s = await find(msg.sessionId);

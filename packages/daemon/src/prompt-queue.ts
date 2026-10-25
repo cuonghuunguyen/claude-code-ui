@@ -1,8 +1,8 @@
-// Queued messages (docs/spec.md "Queued messages"): per-session list of prompts the daemon sends, one per turn, when the session is next idle.
+// Queued messages (docs/spec.md "Queued messages"): per-session list of prompts and bash mode commands the daemon sends, one per turn, when the session is next idle.
 import { randomUUID } from "node:crypto";
 
 export const MAX_QUEUED = 20;
-export type QueueItem = { id: string; text: string; images: string[] };
+export type QueueItem = { id: string; text: string; images: string[]; bash?: true };
 export type QueueHeld = { reason: "usage_limit" | "not_live"; until?: number };
 type Err = { code: string; message: string };
 type Entry = { items: QueueItem[]; held?: QueueHeld; timer?: NodeJS.Timeout; inflight: boolean; /** Send nows running: like inflight, no kick sends meanwhile. */ now: number };
@@ -10,7 +10,7 @@ type Entry = { items: QueueItem[]; held?: QueueHeld; timer?: NodeJS.Timeout; inf
 export function createPromptQueue(o: {
   /** The session takes a prompt as a new turn now. */
   ready: (id: string) => boolean;
-  /** Sends the item like session.prompt; the reason when it is not taken. */
+  /** Sends the item like session.prompt (a bash item runs like session.bash); the reason when it is not taken. */
   send: (id: string, item: QueueItem) => Promise<Err | undefined>;
   show: (id: string, items: QueueItem[], held: QueueHeld | undefined) => void;
 }) {
@@ -40,7 +40,7 @@ export function createPromptQueue(o: {
 
   return {
     /** The new item's id, or the reason it is refused. */
-    enqueue(id: string, item: { text: string; images: string[] }): string | Err {
+    enqueue(id: string, item: { text: string; images: string[]; bash?: true }): string | Err {
       const e = entry(id);
       if (e.items.length >= MAX_QUEUED) return { code: "queue_full", message: `at most ${MAX_QUEUED} queued messages` };
       const full = { id: randomUUID(), ...item };
