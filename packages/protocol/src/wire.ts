@@ -165,10 +165,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Text files only; `mtime` (ms) identifies the disk version. */
   | { type: "fs.read"; path: string }
   /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). */
-  /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). With `hash` (and `cwd`): the file at that commit, `path` relative to the repository top as in git.fileAt, at most 32 MiB. A side's file or commit is served by the hub (bytes read with media.read). */
-  | { type: "fs.media"; path: string; cwd?: string; hash?: string }
+  /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). With `hash` (and `cwd`): the file at that commit, `path` relative to the repository top as in git.fileAt, at most 32 MiB (a gitlink path: `bad_request` "Submodule: open its repository"; `exact` applies with `hash` only). A side's file or commit is served by the hub (bytes read with media.read). */
+  | { type: "fs.media"; path: string; cwd?: string; hash?: string; exact?: true }
   /** Bytes of a media file, or of the file at a commit (`cwd` + `hash`, as fs.media): `length` at most 1 MiB, 0 for only size, mtime and type. The hub reads a side's media with it for GET /media. Reply MediaReadResult. */
-  | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number }
+  | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number; exact?: true }
   /** Overwrites an existing file. Fails with `conflict` when `baseMtime` is given and the disk version differs. */
   | { type: "fs.write"; path: string; content: string; baseMtime?: number }
   /** New empty file, or folder with `dir` (one level: the parent must exist). Fails `exists`, `bad_name`, `path_not_allowed`. Reply FsPathResult. */
@@ -193,26 +193,29 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "terminal.resize"; terminalId: string; cols: number; rows: number }
   /** Kills the shell. */
   | { type: "terminal.close"; terminalId: string }
-  /** Status bar: branch and diff size of `cwd` (a session's cwd, inside the roots). */
-  | { type: "git.status"; cwd: string }
+  /**
+   * Status bar: branch and diff size of `cwd` (a session's cwd, inside the roots).
+   * `exact` (every git.* message below and `fs.media` / `media.read` with `hash`): refused with `not_git` "Not a repository top" unless `cwd` is its repository's top (an uninitialised submodule folder would answer for the superproject).
+   */
+  | { type: "git.status"; cwd: string; exact?: true }
   /** The refs stamp of `cwd`'s repository (as `GitStatus.refs`), from file stats only (no git process, never waits for a graph read). Reply GitRefsResult. */
-  | { type: "git.refs"; cwd: string }
+  | { type: "git.refs"; cwd: string; exact?: true }
   /** Commit graph page (docs/spec.md "Layout"): `skip` commits already loaded; `ref` a full ref name (refs/heads/… or refs/remotes/…) or `HEAD`, else all refs; `author`/`text` case-insensitive substrings; `fresh`: skip the daemon's page and branch caches (the Refresh button). Reply GitLogResult. */
-  | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean }
+  | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean; exact?: true }
   /** Reply GitCommitResult. */
-  | { type: "git.commit"; cwd: string; hash: string }
-  /** File text at a commit (`path` relative to the repository top). Same limits and error codes as fs.read (too_large, binary, not_utf8), not_found when absent. Reply `{ content }`. */
-  | { type: "git.fileAt"; cwd: string; hash: string; path: string }
+  | { type: "git.commit"; cwd: string; hash: string; exact?: true }
+  /** File text at a commit (`path` relative to the repository top). Same limits and error codes as fs.read (too_large, binary, not_utf8), not_found when absent, `bad_request` "Submodule: open its repository" for a gitlink (submodule) path. Reply `{ content }`. */
+  | { type: "git.fileAt"; cwd: string; hash: string; path: string; exact?: true }
   /** Changes tab git modes (docs/spec.md "Layout"): the working tree (staged, unstaged, untracked) against HEAD (`base: "head"`) or against the merge base of HEAD and `ref` (`base: "branch"`; full ref under refs/heads or refs/remotes; omitted: the default branch). Reply GitDiffResult. */
-  | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string }
+  | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string; exact?: true }
   /** Graph tab Fetch: `git fetch --all` in `cwd`'s repository (docs/spec.md "Layout", Graph tab). Reply GitRemoteResult; `remote` null outside a git work tree. */
-  | { type: "git.fetch"; cwd: string }
+  | { type: "git.fetch"; cwd: string; exact?: true }
   /** Branch menu data (docs/spec.md "Layout", Graph tab): where push/pull go and the exact git argv of each; `ref` a full refs/heads/ name. Reply GitBranchResult. */
-  | { type: "git.branch"; cwd: string; ref: string }
+  | { type: "git.branch"; cwd: string; ref: string; exact?: true }
   /** Push `ref` as `git.branch` showed it; `local`: the sha shown; `argv`: the git command shown in the dialog (the daemon runs it only when it computes the same, else `stale`); `lease`: force push with --force-with-lease=<remoteRef>:<lease>. Reply GitRemoteResult. */
-  | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string }
+  | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; exact?: true }
   /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */
-  | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[] }
+  | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; exact?: true }
   /**
    * Creates a worktree in `<repo>/.claude/worktrees/` (docs/spec.md "Worktrees"). `name` only: folder `<name>` on branch `worktree-<name>`; nothing: a generated
    * name. `branch` (GH-447, may contain `/`): a new Created branch, folder = `branch` with `/` → `-`; `base`: its start point (a commit-ish, the Base picker
@@ -549,8 +552,9 @@ export const MAX_TERMINAL_INPUT_BYTES = 64 * 1024;
 /**
  * `branch`: short commit hash on a detached HEAD. `added`/`removed`: lines changed in tracked files against HEAD.
  * `refs`: opaque stamp of the repository's refs (file stats of HEAD, packed-refs, refs folders, worktree HEADs); changes when a branch, tag, HEAD or packed refs change. Compare for equality only.
+ * `files`: tracked files changed against HEAD (binary and moved submodules included; a submodule with only uncommitted changes is not counted). `added`/`removed` leave submodules out.
  */
-export type GitStatus = { branch: string; added: number; removed: number; refs?: string };
+export type GitStatus = { branch: string; added: number; removed: number; files?: number; refs?: string };
 /** `refs` null outside a git work tree. */
 export type GitRefsResult = { refs: string | null };
 /** `status` null outside a git work tree. */
@@ -564,8 +568,8 @@ export type GitCommit = { hash: string; parents: string[]; author: string; email
 export type GitLog = { commits: GitCommit[]; more: boolean; branches?: string[]; refs?: string; head?: string };
 /** `log` null outside a git work tree. */
 export type GitLogResult = { log: GitLog | null };
-/** `added`/`removed` undefined for a binary file. `oldPath`: renamed from. `untracked`: not in the index (status A; git.diff only). */
-export type GitFileChange = { status: "A" | "D" | "M" | "R"; path: string; oldPath?: string; added?: number; removed?: number; untracked?: boolean };
+/** `added`/`removed` undefined for a binary file. `oldPath`: renamed from. `untracked`: not in the index (status A; git.diff only). `submodule`: a gitlink (mode 160000) row; `from`/`to`: full commit recorded on the before/after side (absent: not a gitlink there, or unknown: the working-tree side). Such rows have no `added`/`removed`. */
+export type GitFileChange = { status: "A" | "D" | "M" | "R"; path: string; oldPath?: string; added?: number; removed?: number; untracked?: boolean; submodule?: { from?: string; to?: string } };
 /** `message`: full message. `refs`: always `[]` from `git.commit` (no decoration: slow with thousands of refs); the client shows the refs of the commit from `git.log`. `truncated`: more than 3000 files changed, list cut. */
 export type GitCommitDetail = GitCommit & { message: string; committer: string; committerTime: number; files: GitFileChange[]; truncated?: boolean };
 export type GitCommitResult = { commit: GitCommitDetail };

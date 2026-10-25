@@ -3,7 +3,7 @@ import { memo, useCallback, type ReactElement, useEffect, useMemo, useRef, useSt
 import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, GitRemoteResult, FsReadResult } from "@claude-ui/protocol";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { MultiFileDiff } from "@pierre/diffs/react";
-import { ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon, LoaderCircleIcon, RotateCwIcon, SearchIcon, TagIcon, XIcon } from "lucide-react";
+import { ArchiveIcon, ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon, LoaderCircleIcon, RotateCwIcon, SearchIcon, TagIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -419,7 +419,23 @@ function Details({ detail: d, refs, loaded, onSelect, onFile, wrap }: { wrap: (e
         {d.files.length} {d.files.length === 1 ? "file" : "files"} changed
       </p>
       <ul className="flex flex-col">
-        {d.files.map((f) => (
+        {d.files.map((f) => f.submodule ? (
+          <li key={f.path}>
+            <div className="flex min-h-11 items-center gap-1.5 px-1 md:min-h-7" title={f.path} data-testid="commit-submodule">
+              <KindBadge kind={f.status} />
+              <ArchiveIcon className="size-4 shrink-0" aria-hidden />
+              <span className="min-w-0 flex-1 truncate">
+                Submodule {f.path}
+                {f.submodule.to && (
+                  <>
+                    {" → "}
+                    <span className="font-mono">{f.submodule.to.slice(0, 7)}</span>
+                  </>
+                )}
+              </span>
+            </div>
+          </li>
+        ) : (
           <li key={f.path}>
             <button
               onClick={() => onFile(f)}

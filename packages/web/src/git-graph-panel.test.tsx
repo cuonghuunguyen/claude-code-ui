@@ -205,6 +205,19 @@ it("a rename reads the parent side from the old path; an unchanged rename shows 
   expect(c.sent.filter((m) => m.type === "git.fileAt").map((m) => `${m.hash === hash(3) ? "commit" : "parent"}:${m.path}`)).toEqual(["parent:old.ts", "commit:moved.ts"]);
 });
 
+it("a submodule entry in commit details reads \"Submodule <path> → <short>\" and requests no diff", async () => {
+  const c = fake(history(3), [{ status: "M", path: "libs/lib", submodule: { from: hash(1), to: hash(2) } }, { status: "M", path: "src/m.ts", added: 1, removed: 1 }]);
+  await mount(c);
+  await select(0);
+  const sub = el.querySelector<HTMLElement>("[data-testid=commit-submodule]")!;
+  expect(sub.textContent).toContain(`Submodule libs/lib → ${hash(2).slice(0, 7)}`);
+  expect(el.querySelector("button[data-testid=commit-submodule]")).toBeNull();
+  expect(el.querySelectorAll("[data-testid=commit-file]")).toHaveLength(1);
+  await act(async () => sub.click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.fileAt")).toEqual([]);
+});
+
 it("an unchanged rename shows a notice instead of a diff", async () => {
   const c = fake(history(3), [{ status: "R", oldPath: "old.ts", path: "moved.ts" }]);
   vi.mocked(c.request).mockImplementation(async (m: Req) => (m.type === "git.fileAt" ? { content: "same" } : m.type === "git.commit" ? { commit: detail(history(3)[0]!, [{ status: "R", oldPath: "old.ts", path: "moved.ts" }]) } : { log: { commits: history(3), more: false, branches: [] } }));

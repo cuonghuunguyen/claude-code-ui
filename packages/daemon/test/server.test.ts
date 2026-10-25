@@ -1101,6 +1101,55 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "nope" })).toMatchObject({ code: "not_found" });
   });
 
+  describe("submodule folders and gitlink paths (GH-388)", () => {
+    /** A repo under webRoot with gitlinks libs/lib and libs/lib.png (never initialised: empty folder). */
+    function gitlinkRepo() {
+      const repo = join(webRoot, `gl-${randomUUID().slice(0, 8)}`);
+      mkdirSync(join(repo, "libs", "lib"), { recursive: true });
+      const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" }).trim();
+      git("init", "-q", "-b", "main");
+      writeFileSync(join(repo, "t.txt"), "hi\n");
+      git("add", ".");
+      git("commit", "-q", "-m", "first");
+      const id = git("rev-parse", "HEAD");
+      for (const p of ["libs/lib", "libs/lib.png"]) git("update-index", "--add", "--cacheinfo", `160000,${id},${p}`);
+      git("commit", "-q", "-m", "gitlinks");
+      return { repo, hash: git("rev-parse", "HEAD") };
+    }
+
+    it("git requests with exact answer only for a repository top; without exact an uninitialised submodule folder answers for the superproject", async () => {
+      const c = await client();
+      const { repo, hash } = gitlinkRepo();
+      const sub = join(repo, "libs", "lib");
+      const base = { cwd: sub, exact: true };
+      const msgs: Record<string, unknown>[] = [
+        { type: "git.status" },
+        { type: "git.refs" },
+        { type: "git.log" },
+        { type: "git.diff", base: "head" },
+        { type: "git.commit", hash },
+        { type: "git.fileAt", hash, path: "t.txt" },
+        { type: "git.fetch" },
+        { type: "git.branch", ref: "refs/heads/main" },
+        { type: "git.push", ref: "refs/heads/main", local: hash, argv: ["push"] },
+        { type: "git.pull", ref: "refs/heads/main", local: hash, argv: ["pull"] },
+        { type: "fs.media", hash, path: "x.png" },
+      ];
+      for (const m of msgs) expect(await c.request({ ...m, ...base }), String(m.type)).toMatchObject({ code: "not_git", message: "Not a repository top" });
+      expect(await c.request({ type: "git.status", cwd: repo, exact: true })).toMatchObject({ result: { status: { branch: "main" } } });
+      expect(await c.request({ type: "git.diff", cwd: repo, base: "head", exact: true })).toMatchObject({ result: { diff: { prefix: "" } } });
+      expect(await c.request({ type: "git.diff", cwd: sub, base: "head" })).toMatchObject({ result: { diff: { prefix: "libs/lib/" } } });
+    });
+
+    it("git.fileAt and fs.media {hash} on a gitlink path are bad_request \"Submodule: open its repository\"", async () => {
+      const c = await client();
+      const { repo, hash } = gitlinkRepo();
+      const bad = { code: "bad_request", message: "Submodule: open its repository" };
+      expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "libs/lib" })).toMatchObject(bad);
+      expect(await c.request({ type: "fs.media", cwd: repo, hash, path: "libs/lib.png" })).toMatchObject(bad);
+    });
+  });
+
   describe.skipIf(process.platform === "win32")("a .git that leaves the roots (GH-290)", () => {
     /** An outer repository outside the roots with one commit; a project in the roots whose .git is a symlink to it or a gitdir file. */
     const outer = () => {

@@ -18,7 +18,7 @@ import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, isHash, classify, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
@@ -1415,15 +1415,19 @@ export function createDaemon(opts: {
         end();
       }
     };
+    const NOT_TOP = "Not a repository top";
+    /** `exact: true` and `cwd` is not its repository's top (an uninitialised submodule folder would answer for the superproject). Both sides canonical. */
+    const notTop = async (m: { exact?: unknown }, cwd: string) => m.exact === true && (await gitTopOf(cwd)) !== cwd;
     /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
     type MediaFail = { code: string; message: string; size?: number };
     /** media.read and fs.media {hash}: a piece of a media file or of a file at a commit, with the roots and extension checks. */
-    const readMedia = async (m: { path: unknown; cwd?: unknown; hash?: unknown; offset: number; length: number }): Promise<MediaReadResult | MediaFail> => {
+    const readMedia = async (m: { path: unknown; cwd?: unknown; hash?: unknown; exact?: unknown; offset: number; length: number }): Promise<MediaReadResult | MediaFail> => {
       if (typeof m.path !== "string") return { code: "bad_request", message: "path must be a string" };
       const mime = mediaType(m.path);
       if (m.hash !== undefined) {
         const cwd = allowed(m.cwd);
         if (!cwd) return { code: "cwd_not_allowed", message: `outside the allowlisted roots: ${String(m.cwd)}` };
+        if (await notTop(m, cwd)) return { code: "not_git", message: NOT_TOP };
         if (!mime) return { code: "unsupported_type", message: `not an image, video or audio file: ${m.path}` };
         const key = `${cwd}\0${String(m.hash)}\0${m.path}`;
         try {
@@ -1465,7 +1469,7 @@ export function createDaemon(opts: {
     const isPiece = (o: unknown, l: unknown) => Number.isSafeInteger(o) && (o as number) >= 0 && Number.isSafeInteger(l) && (l as number) >= 0 && (l as number) <= MEDIA_CHUNK;
     /** fs.media of a side's file or commit: the side checks it (media.read, length 0); the hub issues its own URL and reads the bytes from the side per GET. */
     const sideMedia = async (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>): Promise<ServerMessage> => {
-      const args = { path: msg.path, ...(msg.hash !== undefined && { cwd: msg.cwd, hash: msg.hash }) };
+      const args = { path: msg.path, ...(msg.hash !== undefined && { cwd: msg.cwd, hash: msg.hash, ...(msg.exact === true && { exact: true }) }) };
       const ask = (offset: number, length: number) => call({ type: "media.read", reqId: "", ...args, offset, length } as ClientMessage);
       const head = await ask(0, 0);
       if (head.type !== "reply") return { ...head, reqId: msg.reqId } as ServerMessage;
@@ -1917,11 +1921,13 @@ export function createDaemon(opts: {
         case "git.status": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           return reply({ status: await statusOf(cwd) });
         }
         case "git.refs": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           return reply({ refs: await gitRefs(cwd, (p) => inRoots(real(p) ?? p)) });
         }
         case "git.log":
@@ -1930,6 +1936,7 @@ export function createDaemon(opts: {
         case "git.fileAt": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           const inside = (p: string) => inRoots(real(p) ?? p);
           // No filter text in the log (it may hold a secret).
           try {
@@ -1949,6 +1956,7 @@ export function createDaemon(opts: {
         case "git.fetch": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           const inside = (p: string) => inRoots(real(p) ?? p);
           // Output and URLs are never logged.
           try {
@@ -1962,6 +1970,7 @@ export function createDaemon(opts: {
         case "git.pull": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           const inside = (p: string) => inRoots(real(p) ?? p);
           try {
             if (msg.type === "git.branch") return reply({ branch: await gitBranch(cwd, msg.ref, { allowed: inside }) });
