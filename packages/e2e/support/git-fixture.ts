@@ -78,3 +78,12 @@ export function makeSuperproject(repo: string, state: SubmoduleState): Submodule
   }
   return { first, second };
 }
+
+/** Makes `dir/<name>` a repository with one commit `subject` holding `file`; `edit` leaves an uncommitted change in it. */
+export function makeNestedRepo(dir: string, name: string, subject: string, edit = false): void {
+  const repo = join(dir, name);
+  mkdirSync(repo, { recursive: true });
+  git(repo, "init", "-b", "main");
+  commit(repo, "a.txt", "1\n", subject);
+  if (edit) writeFileSync(join(repo, "a.txt"), "1\nedited\n");
+}
