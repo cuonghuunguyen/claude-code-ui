@@ -1287,13 +1287,10 @@ export async function listRepos(cwd: string, o: ListReposOptions): Promise<GitRe
   const found = new Map<string, RepoEntry>();
   const truncated: NonNullable<GitReposResult["truncated"]> = {};
   const ignored = await Promise.all(cfg.ignoredRepositories.map((e) => resolve(cwd, e)).filter((p) => !o.refused?.(p)).map(realAsync));
+  let full = false;
   const add = async (dir: string, kind: GitRepo["kind"], parent?: string): Promise<void> => {
-    if (truncated.scan === "count") return;
+    if (full) return;
     if (!(await lstat(join(dir, ".git")).then(() => true, () => false))) return;
-    if (found.size >= caps.count) {
-      truncated.scan = "count";
-      return;
-    }
     const top = await realAsync(dir);
     const have = found.get(top);
     if (have) {
@@ -1308,6 +1305,11 @@ export async function listRepos(cwd: string, o: ListReposOptions): Promise<GitRe
       outside = escapesRoots(r, o.allowed);
     }
     if (ignored.some((i) => sameName(i, top))) return;
+    if (found.size >= caps.count) {
+      full = true;
+      truncated.scan ??= "count";
+      return;
+    }
     found.set(top, { path: top, kind, ...(parent && { parent }), ...(outside && { outsideRoots: true as const }), ...(r !== "foreign" && { own: r.own }) });
   };
 
@@ -1317,6 +1319,7 @@ export async function listRepos(cwd: string, o: ListReposOptions): Promise<GitRe
   const auto = cfg.autoRepositoryDetection;
   if (auto === true || auto === "subFolders") {
     const start = now();
+    let timedOut = false;
     let seen = 0;
     const max = cfg.repositoryScanMaxDepth;
     const queue = [{ dir: cwd, depth: 0 }];
@@ -1324,6 +1327,7 @@ export async function listRepos(cwd: string, o: ListReposOptions): Promise<GitRe
       const { dir, depth } = queue[i]!;
       if (max !== -1 && depth >= max) continue;
       if (now() - start > caps.ms) {
+        timedOut = true;
         truncated.scan ??= "time";
         break;
       }
@@ -1333,14 +1337,17 @@ export async function listRepos(cwd: string, o: ListReposOptions): Promise<GitRe
       seen += list.length;
       if (seen > caps.entries) truncated.scan ??= "entries";
       for (const e of room >= list.length ? list : list.slice(0, Math.max(room, 0))) {
-        if (now() - start > caps.ms) truncated.scan ??= "time";
-        if (truncated.scan === "time" || truncated.scan === "count") break;
+        if (now() - start > caps.ms) {
+          timedOut = true;
+          truncated.scan ??= "time";
+        }
+        if (timedOut || full) break;
         if (!e.isDirectory() || sameName(e.name, ".git") || cfg.repositoryScanIgnoredFolders.some((n) => sameName(n, e.name))) continue;
         const child = join(dir, e.name);
         queue.push({ dir: child, depth: depth + 1 });
         await add(child, "nested");
       }
-      if (truncated.scan) break;
+      if (truncated.scan || full) break;
     }
     for (const entry of cfg.scanRepositories) {
       const p = resolve(cwd, entry);

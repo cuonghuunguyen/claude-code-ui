@@ -251,6 +251,28 @@ describe("listRepos", () => {
     expect(reads).toBeLessThan(80);
   });
 
+  it("the time cap stops the scan inside a folder that is also over the entries cap (the first reason stays)", async () => {
+    const d = tmp();
+    for (let i = 0; i < 300; i++) fakeRepo(join(d, `r${String(i).padStart(3, "0")}`));
+    let reads = 0;
+    const r = await list(d, {}, { now: () => (reads++, reads * 100), caps: { entries: 250, ms: 2_000, count: 50 } });
+    expect(r.truncated).toEqual({ scan: "entries" });
+    expect(reads).toBeLessThan(40);
+    expect(r.repos.length).toBeLessThan(30);
+  });
+
+  it("count is reported only when a repository that would be listed is dropped", async () => {
+    const d = tmp();
+    for (let i = 0; i < 3; i++) fakeRepo(join(d, `r${i}`));
+    const caps = { entries: 20_000, ms: 2_000, count: 3 };
+    expect((await list(d, {}, { caps })).truncated).toBeUndefined();
+    fakeRepo(join(d, "r3"));
+    expect((await list(d, {}, { caps })).truncated).toEqual({ scan: "count" });
+    expect((await list(d, { ignoredRepositories: ["r3"] }, { caps })).truncated).toBeUndefined();
+    mkdirSync(join(d, "plain"));
+    expect((await list(d, { ignoredRepositories: ["r3"] }, { caps })).truncated).toBeUndefined();
+  });
+
   it("a folder over the entries cap keeps the repositories found up to the cap", async () => {
     const d = tmp();
     for (let i = 0; i < 10; i++) fakeRepo(join(d, `r${i}`));
