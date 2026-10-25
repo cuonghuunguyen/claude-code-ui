@@ -1037,3 +1037,45 @@ describe("a moved submodule", () => {
     expect(noSubmoduleRead(client)).toEqual([]);
   });
 });
+
+it("with a repo, git requests go to repo.path with exact and rows lie under repo.dir; no git.status", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: null, diff: D([{ status: "M", path: "x.ts", added: 1, removed: 1 }, { status: "R", path: "n.ts", oldPath: "o.ts", added: 0, removed: 0 }]), at: { [`${BASE}:x.ts`]: "a\n", [`${BASE}:o.ts`]: "same\n" } };
+  const client = fakeClient({ "/p/ws/api/x.ts": "b\n", "/p/ws/api/n.ts": "same\n" }, git);
+  await act(async () => root.render(panel(client, { cwd: "/p/ws", repo: { path: "/real/ws/api", dir: "/p/ws/api" } })));
+  await flush();
+  expect(rows()).toEqual(["Renamed api/n.ts, +0 -0", "Modified api/x.ts, +1 -1"]);
+  expect(gitCalls(client, "git.status")).toEqual([]);
+  expect(gitCalls(client, "git.diff")).toEqual([{ type: "git.diff", cwd: "/real/ws/api", exact: true, base: "head" }]);
+  expect(gitCalls(client, "git.fileAt")).toContainEqual({ type: "git.fileAt", cwd: "/real/ws/api", exact: true, hash: BASE, path: "o.ts" });
+  expect(client.calls.mock.calls.map((a) => (a[0] as { path?: string }).path)).toContain("/p/ws/api/n.ts");
+});
+
+it("with a repo, the branch mode log and image reads carry exact", async () => {
+  saveDiffMode("branch");
+  const git = { diff: D([{ status: "M", path: "pic.png", added: 0, removed: 0 }], { ref: "refs/heads/main" }) };
+  const client = fakeClient({}, git);
+  await act(async () => root.render(panel(client, { cwd: "/p/ws", repo: { path: "/p/ws/api", dir: "/p/ws/api" } })));
+  await flush();
+  const media = gitCalls(client, "fs.media").find((m) => m.hash);
+  expect(media).toMatchObject({ cwd: "/p/ws/api", exact: true, hash: BASE });
+});
+
+it("repo null shows only Session changes", async () => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({}, { status: REPO });
+  await act(async () => root.render(panel(client, { repo: null })));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-not-git]")).not.toBeNull();
+  expect(gitCalls(client, "git.diff")).toEqual([]);
+  expect(gitCalls(client, "git.status")).toEqual([]);
+});
+
+it("Reload from disk calls onReload", async () => {
+  const client = fakeClient({});
+  const onReload = vi.fn();
+  await act(async () => root.render(panel(client, { onReload })));
+  await flush();
+  await act(async () => (el.querySelector<HTMLButtonElement>("button[aria-label='Reload from disk']")!.click(), undefined));
+  expect(onReload).toHaveBeenCalledTimes(1);
+});

@@ -760,3 +760,30 @@ it("the command block wraps at spaces (a long -c prefix is not cut mid-word)", a
   await act(async () => byId("git-push-cancel").click());
   await flush();
 });
+
+it("exact: every git request carries exact: true, and Refresh calls onRefresh", async () => {
+  const c = fake(withRefs(), FILES);
+  const onRefresh = vi.fn();
+  await act(async () => root.render(<GraphPanel client={c} cwd="/p/api" exact onRefresh={onRefresh} />));
+  await flush();
+  await select(0);
+  await act(async () => fileBtn(2).click());
+  await flush();
+  await menuAt(chip("refs/heads/feat"));
+  await act(async () => byId("branch-fetch").click());
+  await flush();
+  await act(async () => el.querySelector<HTMLElement>("button[aria-label=Refresh]")!.click());
+  await flush();
+  const types = new Set(c.sent.map((m) => m.type));
+  for (const t of ["git.log", "git.commit", "git.fileAt", "git.fetch", "git.branch"]) expect(types.has(t)).toBe(true);
+  const refs = c.sent.filter((m) => m.type.startsWith("git.") && m.type !== "git.status");
+  expect(refs.length).toBeGreaterThan(5);
+  for (const m of refs) expect(m).toMatchObject({ cwd: "/p/api", exact: true });
+  expect(onRefresh).toHaveBeenCalledTimes(1);
+});
+
+it("without exact no request carries it", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  expect(c.sent.some((m) => "exact" in m)).toBe(false);
+});

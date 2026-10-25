@@ -114,7 +114,8 @@ import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { inDir, joinPath, relPath } from "./paths.ts";
 import { FilesPanel } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
-import { createEditorStore } from "./editor-store.ts";
+import { createEditorStore, useEditorStore } from "./editor-store.ts";
+import { defaultRepo, repoDir, useRepos, type RepoTarget } from "./repos.ts";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
@@ -464,6 +465,11 @@ export function App() {
   const [viewer, setViewer] = useState<ViewerState>();
   // File dialog: the Files tab's editor state in a modal (Pop out, Read cards, file references); it closes when another tab shows, like the viewer.
   const [editors] = useState(() => createEditorStore(() => client.current));
+  // `git.repos` (GH-389): asked again after a session list or settings change (seq), and fresh after Reload from disk / Refresh.
+  const [reposSeq, setReposSeq] = useState(0);
+  const [reposFresh, setReposFresh] = useState(0);
+  const editorTabs = useEditorStore(editors).tabs;
+  const openFiles = useMemo(() => Object.keys(editorTabs), [editorTabs]);
   const [fileDialog, setFileDialog] = useState<{ opener: HTMLElement | null }>();
   useEffect(() => (setViewer(undefined), setFileDialog(undefined)), [activeId]);
   const quickOpener = useRef<Element>(null);
@@ -1085,11 +1091,12 @@ export function App() {
         }
       },
       onSessionsChanged: (m) => {
+        setReposSeq((n) => n + 1);
         if (m.deleted) forget(m.deleted, true);
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false)),
+      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       onConfigChanged: (m) => {
@@ -1646,7 +1653,7 @@ export function App() {
   const [listedChanges, setListedChanges] = useState<{ id: string; n: number }>();
   const changeCount = listedChanges && listedChanges.id === panelTarget?.key ? listedChanges.n : changedPaths.length;
   // The graph tab exists only while the side panel's cwd is a git work tree.
-  const [isGit, setIsGit] = useState(false);
+  const [gitProbe, setIsGit] = useState(false);
   // The cwd whose git status has been answered: the tour waits for it so "Git graph" is not dropped by a status still on its way.
   const [gitChecked, setGitChecked] = useState<string>();
   const panelCwd = panelTarget?.cwd;
@@ -1692,17 +1699,26 @@ export function App() {
   const pane: Pane = !lg && histPane === "terminal" && !termAvail ? "session" : histPane;
   // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
   const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
+  const { repos } = useRepos(client.current, panelCwd, { connected: status === "connected", openFiles, seq: reposSeq, fresh: reposFresh });
+  const repo = repos ? defaultRepo(repos) : undefined;
+  const repoTarget: RepoTarget | null | undefined = repos === undefined || repos === null || !panelCwd ? undefined : repo ? { path: repo.path, dir: repoDir(panelCwd, repo.rel) } : null;
+  const isGit = repos ? !!repo : gitProbe;
+  const ownGit = repos ? repos.some((r) => r.kind === "main" && !r.outsideRoots) : isGit;
+  const reposAnswered = repos !== undefined;
+  useEffect(() => void (panelCwd && reposAnswered && repos !== null && setGitChecked(panelCwd)), [panelCwd, repos]);
+  const reloadRepos = () => setReposFresh((n) => n + 1);
+  const fallback = repos === null;
   useEffect(() => {
     if (!panelCwd) return;
     if (knownGit) return void (setIsGit(true), setGitChecked(panelCwd));
-    if (status !== "connected") return;
+    if (status !== "connected" || !fallback) return;
     let live = true;
     client.current!.request<GitStatusResult>({ type: "git.status", cwd: panelCwd }).then(
       (r) => live && (noteRefs(panelCwd, r.status?.refs), setIsGit(!!r.status), setGitChecked(panelCwd)),
       () => live && (setIsGit(false), setGitChecked(panelCwd)),
     );
     return () => void (live = false);
-  }, [panelCwd, status, knownGit]);
+  }, [panelCwd, status, knownGit, fallback]);
   // The Graph panel stays mounted (hidden) after its first visit, so coming back shows the loaded list at once.
   const [graphCwd, setGraphCwd] = useState<string>();
   const available = (p: PaneId) => p !== "graph" || isGit;
@@ -2739,7 +2755,7 @@ export function App() {
                         watch={changedPaths}
                         showTree={fileTree}
                         onToggleTree={() => setFileTree((v) => !v)}
-                        gitStamp={isGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
+                        gitStamp={ownGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
                         visible={inSight("files")}
                       />
                     </div>,
@@ -2759,6 +2775,8 @@ export function App() {
                           sessionId={panelTarget.sessionId}
                           onPopOut={() => openViewer({ kind: "changes" })}
                           reveal={changesReveal}
+                          repo={repoTarget}
+                          onReload={reloadRepos}
                         />
                       )
                     ) : (
@@ -2773,6 +2791,8 @@ export function App() {
                         onOpen={(path) => (setOpenFile({ path }), reveal("files"))}
                         sessionId={NEW_TAB}
                         reveal={changesReveal}
+                        repo={repoTarget}
+                        onReload={reloadRepos}
                         emptyText="No changes yet. Claude's edits appear here."
                       />
                     ),
@@ -2781,7 +2801,11 @@ export function App() {
                   {createPortal(
                     isGit && (shows("graph") || graphCwd === panelTarget.cwd) && (
                       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
-                        <GraphPanel key={panelTarget.cwd} hidden={!shows("graph")} client={client.current!} cwd={panelTarget.cwd} />
+                        {repos === undefined ? (
+                          <p className="m-auto text-muted-foreground text-sm">Loading graph…</p>
+                        ) : (
+                          <GraphPanel key={repoTarget?.path ?? panelTarget.cwd} hidden={!shows("graph")} client={client.current!} cwd={repoTarget?.path ?? panelTarget.cwd} exact={!!repoTarget} onRefresh={reloadRepos} />
+                        )}
                       </Suspense>
                     ),
                     hosts.graph,
@@ -2960,6 +2984,7 @@ export function App() {
           cwd={viewer?.cwd ?? shown.cwd}
           view={viewer ? views[viewer.sessionId] : undefined}
           sessionId={viewer?.sessionId}
+          repo={(viewer?.cwd ?? shown.cwd) === panelCwd ? repoTarget : undefined}
           onClose={() => setViewer(undefined)}
           onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line }), setPane("files"), setPanel(true))}
         />
@@ -2972,7 +2997,7 @@ export function App() {
           status={status}
           cwd={panelTarget.cwd}
           store={editors}
-          gitStamp={isGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
+          gitStamp={ownGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
           onClose={() => setFileDialog(undefined)}
           onSend={(m) => (setFileDialog(undefined), setInsert(m), setPane("session"))}
           onCopy={copyText}

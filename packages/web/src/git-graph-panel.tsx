@@ -115,7 +115,9 @@ type Page = { commits: GitCommit[]; rows: GraphRow[]; state: GraphState };
 const NO_PAGE: Page = { commits: [], rows: [], state: emptyGraph() };
 
 /** `hidden`: the tab is not showing; the panel stays mounted and keeps its list (docs/spec.md "Layout", Graph tab). */
-export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cwd: string; hidden?: boolean }) {
+/** `exact`: `cwd` is a repository top from `git.repos` (every request carries `exact: true`); `onRefresh`: Refresh also re-reads the repository list. */
+export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefresh }: { client: Client; cwd: string; hidden?: boolean; exact?: boolean; onRefresh?: () => void }) {
+  const ex = exact ? { exact: true as const } : {};
   const narrow = useNarrow();
   const dark = useDark();
   const ROW = narrow ? 44 : 28;
@@ -151,7 +153,7 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
     wasHidden.current = hidden;
     if (!returned) return;
     let live = true;
-    client.request<GitRefsResult>({ type: "git.refs", cwd }).then(
+    client.request<GitRefsResult>({ type: "git.refs", cwd, ...ex }).then(
       (r) => {
         if (!live) return;
         noteRefs(cwd, r.refs ?? undefined);
@@ -190,7 +192,7 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
         setReload((n) => n + 1);
       });
   };
-  const filter = (skip: number) => ({ type: "git.log" as const, cwd, skip, limit: PAGE, ...(ref !== ALL && { ref }), ...(q.author && { author: q.author }), ...(q.text && { text: q.text }) });
+  const filter = (skip: number) => ({ type: "git.log" as const, cwd, ...ex, skip, limit: PAGE, ...(ref !== ALL && { ref }), ...(q.author && { author: q.author }), ...(q.text && { text: q.text }) });
 
   useEffect(() => {
     const id = ++gen.current;
@@ -275,7 +277,7 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
     setFile(undefined);
     if (!selected) return;
     let live = true;
-    client.request<GitCommitResult>({ type: "git.commit", cwd, hash: selected }).then(
+    client.request<GitCommitResult>({ type: "git.commit", cwd, ...ex, hash: selected }).then(
       (r) => live && setDetail(r.commit),
       (e: RequestError) => live && setDetailError(e.message),
     );
@@ -311,10 +313,10 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
           </SelectContent>
         </Select>
         <input type="search" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Author" aria-label="Author" className={cn(INPUT, "w-32 flex-none")} data-testid="graph-filter-author" />
-        <Button size="icon-sm" variant="ghost" className="max-md:size-11 aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={!!op || notGit} onClick={() => runRemote({ type: "git.fetch", cwd }, "Fetched all remotes", "Fetching all remotes…")} title="Fetch all remotes" aria-label="Fetch" aria-busy={!!op} data-testid="graph-fetch">
+        <Button size="icon-sm" variant="ghost" className="max-md:size-11 aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={!!op || notGit} onClick={() => runRemote({ type: "git.fetch", cwd, ...ex }, "Fetched all remotes", "Fetching all remotes…")} title="Fetch all remotes" aria-label="Fetch" aria-busy={!!op} data-testid="graph-fetch">
           {op ? <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" /> : <CloudDownloadIcon />}
         </Button>
-        <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => ((freshNext.current = true), setReload((n) => n + 1))} title="Refresh" aria-label="Refresh">
+        <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => ((freshNext.current = true), setReload((n) => n + 1), onRefresh?.())} title="Refresh" aria-label="Refresh">
           <RotateCwIcon />
         </Button>
       </div>
@@ -356,7 +358,7 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
               </p>
             )}
             {!error && !commits.length && !loading && <p className="m-auto p-4 text-muted-foreground">{filtered || (ref !== ALL && ref !== HEAD) ? "No commits match." : "No commits yet."}</p>}
-            <BranchMenu client={client} cwd={cwd} busy={!!op} onRun={runRemote} fallback={() => commits[index]?.refs.filter((r) => r.startsWith("refs/heads/")) ?? []}>
+            <BranchMenu client={client} cwd={cwd} exact={exact} busy={!!op} onRun={runRemote} fallback={() => commits[index]?.refs.filter((r) => r.startsWith("refs/heads/")) ?? []}>
             <div
               ref={scroller}
               role="listbox"
@@ -381,7 +383,7 @@ export function GraphPanel({ client, cwd, hidden = false }: { client: Client; cw
             <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l", file ? "@max-2xl:max-h-3/4 @2xl:w-3/5" : "@max-2xl:max-h-1/2 @2xl:w-80", "shrink-0")} data-testid="commit-details">
               {detailError && <p className="p-3 text-destructive">{detailError}</p>}
               {!detail && !detailError && <p className="p-3 text-muted-foreground">Loading…</p>}
-              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} busy={!!op} onRun={runRemote} fallback={() => refs.filter((r) => r.startsWith("refs/heads/"))}>{el}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
+              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} busy={!!op} onRun={runRemote} fallback={() => refs.filter((r) => r.startsWith("refs/heads/"))}>{el}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
             </div>
           )}
         </div>
@@ -457,13 +459,13 @@ function Details({ detail: d, refs, loaded, onSelect, onFile, wrap }: { wrap: (e
 }
 
 /** The diff of one file of a commit: parent side and commit side from git.fileAt (an added file asks only the commit side). */
-function FileView({ detail: d, file: f, client, cwd, dark, narrow, onBack }: { detail: GitCommitDetail; file: GitFileChange; client: Client; cwd: string; dark: boolean; narrow: boolean; onBack: () => void }) {
+function FileView({ detail: d, file: f, client, cwd, ex, dark, narrow, onBack }: { detail: GitCommitDetail; file: GitFileChange; client: Client; cwd: string; ex: { exact?: true }; dark: boolean; narrow: boolean; onBack: () => void }) {
   const [sides, setSides] = useState<{ before: string; after: string }>();
   const [err, setErr] = useState<{ text: string; notice: boolean }>();
   const [drawn, setDrawn] = useState(false);
   useEffect(() => {
     let live = true;
-    const read = (hash: string, path: string) => client.request<FsReadResult>({ type: "git.fileAt", cwd, hash, path }).then((r) => r.content);
+    const read = (hash: string, path: string) => client.request<FsReadResult>({ type: "git.fileAt", cwd, ...ex, hash, path }).then((r) => r.content);
     Promise.all([f.status === "A" || !d.parents[0] ? "" : read(d.parents[0], f.oldPath ?? f.path), f.status === "D" ? "" : read(d.hash, f.path)]).then(
       ([before, after]) => live && setSides({ before, after }),
       (e: RequestError) => live && setErr(readFailure(e)),

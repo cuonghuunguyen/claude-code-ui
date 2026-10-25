@@ -19,6 +19,7 @@ import { gitEol, gitRows } from "./git-changes.ts";
 import { mediaKind, readFailure, textFailure } from "./files.ts";
 import { ImageDiff, type ImagePane } from "./image-diff.tsx";
 import { filePath } from "./tools.ts";
+import type { RepoTarget } from "./repos.ts";
 
 type Client = ReturnType<typeof connect>;
 export type DiffStyle = "unified" | "split";
@@ -191,6 +192,8 @@ export function ChangesPanel({
   onPopOut,
   reveal,
   emptyText,
+  repo,
+  onReload,
 }: {
   client: Client;
   view: SessionView;
@@ -208,6 +211,10 @@ export function ChangesPanel({
   reveal?: { path: string; seq: number };
   /** Replaces "No changes in this session yet." in session mode (the new-session tab has no session yet). */
   emptyText?: string;
+  /** From `git.repos` (App): git requests go to `repo.path` with `exact`, rows lie under `repo.dir`; null: no repository (Session changes only); undefined: the session cwd's own repository (`git.status` check), as before. */
+  repo?: RepoTarget | null;
+  /** Reload from disk also asks `git.repos` again. */
+  onReload?: () => void;
 }) {
   const fresh = useMemo(() => sessionChanges(view), [view.parts, view.aux]);
   // Same calls and results per path: the previous list, so streamed text does not re-parse every diff.
@@ -249,15 +256,21 @@ export function ChangesPanel({
     if (sessionId) sessionDiffChoice.set(sessionId, c);
   };
   // undefined while unknown: the git modes stay selectable until the daemon says otherwise.
-  const [git, setGit] = useState<boolean>();
+  const [probed, setGit] = useState<boolean>();
+  const git = repo !== undefined ? repo !== null : probed;
+  const known = repo !== undefined;
   useEffect(() => {
+    if (known) return;
     let live = true;
     client.request<GitStatusResult>({ type: "git.status", cwd }).then(
       (r) => live && setGit(r.status !== null),
       () => {},
     );
     return () => void (live = false);
-  }, [client, cwd]);
+  }, [client, cwd, known]);
+  const gitCwd = repo?.path ?? cwd;
+  const ex = repo ? { exact: true as const } : {};
+  const dir = repo?.dir ?? cwd;
   const effective: DiffMode = git === false ? "session" : mode;
   const gitMode = effective !== "session";
   const refChoice = choice?.ref;
@@ -271,11 +284,11 @@ export function ChangesPanel({
     if (!gitMode || hidden) return;
     let live = true;
     const seq = ++diffSeq.current;
-    client.request<GitDiffResult>({ type: "git.diff", cwd, base: effective === "uncommitted" ? "head" : "branch", ...(refChoice && { ref: refChoice }) }).then(
+    client.request<GitDiffResult>({ type: "git.diff", cwd: gitCwd, ...ex, base: effective === "uncommitted" ? "head" : "branch", ...(refChoice && { ref: refChoice }) }).then(
       (r) => {
         // A reply of an older read (another mode, branch or reload since) is dropped.
         if (!live || seq !== diffSeq.current) return;
-        if (r.diff === null) return setGit(false);
+        if (r.diff === null) return known ? setGd({ mode: effective, error: "Not a repository" }) : setGit(false);
         setGd({ mode: effective, diff: r.diff });
         if (r.diff.branches) setBranches(r.diff.branches);
         setGen((n) => n + 1);
@@ -284,15 +297,15 @@ export function ChangesPanel({
         if (!live || seq !== diffSeq.current) return;
         setGd({ mode: effective, error: e.message });
         // No branch list without a diff ("No default branch: pick one"): the graph's first page has it.
-        if (effective === "branch") client.request<GitLogResult>({ type: "git.log", cwd, limit: 1 }).then((l) => live && l.log?.branches && setBranches(l.log.branches), () => {});
+        if (effective === "branch") client.request<GitLogResult>({ type: "git.log", cwd: gitCwd, ...ex, limit: 1 }).then((l) => live && l.log?.branches && setBranches(l.log.branches), () => {});
       },
     );
     return () => void (live = false);
-  }, [client, cwd, effective, refChoice, reload, view.state, key, hidden]);
+  }, [client, gitCwd, known, effective, refChoice, reload, view.state, key, hidden]);
   const gitDiff = gd.mode === effective ? gd.diff : undefined;
   const gitError = gitMode && gd.mode === effective ? gd.error : undefined;
   const gitLoading = gitMode && gd.mode !== effective;
-  const gitList = useMemo(() => (gitDiff ? gitRows(gitDiff, cwd) : []), [gitDiff, cwd]);
+  const gitList = useMemo(() => (gitDiff ? gitRows(gitDiff, dir) : []), [gitDiff, dir]);
 
   // Sides of the git modes, read for the files on screen only: the before side from the base commit, the after side from the disk.
   type Side = { base?: string; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; image?: { before?: ImagePane; after?: ImagePane } };
@@ -302,7 +315,7 @@ export function ChangesPanel({
   const chooseScope = (s: DiffScope) => (setScope(s), saveDiffScope(s));
   const sessionShown = useMemo(() => (scope === "project" ? sessionRows.filter((r) => inDir(r.path, cwd)) : sessionRows), [sessionRows, scope, cwd]);
   const gitFull = useMemo<Row[]>(() => {
-    const root = gitDiff ? repoRoot(cwd, gitDiff.prefix) : cwd;
+    const root = gitDiff ? repoRoot(dir, gitDiff.prefix) : dir;
     return gitList.map((r) => {
       const s = sides[r.path];
       const ok = s && s.base === gitDiff?.base;
@@ -315,7 +328,7 @@ export function ChangesPanel({
         ...(ok && !r.submodule && { before: s.before, after: s.after, error: s.error, notice: s.notice, image: s.image }),
       };
     });
-  }, [gitList, sides, gitDiff, cwd]);
+  }, [gitList, sides, gitDiff, cwd, dir]);
   const rows = gitMode ? gitFull : sessionShown;
   const outside = gitMode ? 0 : sessionRows.length - sessionShown.length;
   const total = rows.reduce((t, r) => ({ added: t.added + (r.stats?.added ?? 0), removed: t.removed + (r.stats?.removed ?? 0) }), { added: 0, removed: 0 });
@@ -369,12 +382,12 @@ export function ChangesPanel({
             (e: RequestError): ImagePane => ({ error: readFailure(e).text, notice: readFailure(e).notice }),
           );
         Promise.all([
-          r.kind === "A" || !d.base ? undefined : pane(client.request<FsMediaResult>({ type: "fs.media", cwd, hash: d.base, path: r.oldPath ?? r.rel })),
+          r.kind === "A" || !d.base ? undefined : pane(client.request<FsMediaResult>({ type: "fs.media", cwd: gitCwd, ...ex, hash: d.base, path: r.oldPath ?? r.rel })),
           r.kind === "D" ? undefined : pane(client.request<FsMediaResult>({ type: "fs.media", path: r.path })),
         ]).then(([before, after]) => setSides((x) => ({ ...x, [r.path]: { base: d.base, image: { before, after } } })));
         continue;
       }
-      const fileAt = (hash: string, path: string) => client.request<FsReadResult>({ type: "git.fileAt", cwd, hash, path }).then((x) => x.content);
+      const fileAt = (hash: string, path: string) => client.request<FsReadResult>({ type: "git.fileAt", cwd: gitCwd, ...ex, hash, path }).then((x) => x.content);
       Promise.all([
         r.kind === "A" || !d.base ? "" : fileAt(d.base, r.oldPath ?? r.rel),
         r.kind === "D" ? "" : client.request<FsReadResult>({ type: "fs.read", path: r.path }).then((x) => x.content),
@@ -391,7 +404,7 @@ export function ChangesPanel({
         },
       );
     }
-  }, [client, cwd, gitDiff, gitList, wantedKey, gen]);
+  }, [client, gitCwd, gitDiff, gitList, wantedKey, gen]);
   // A listed file changed on disk (Bash, another tool): the list and the sides are read again.
   useEffect(() => (gitMode ? client.onFsChanged((m) => gitList.some((r) => r.path === m.path) && setReload((n) => n + 1)) : undefined), [client, gitMode, gitList]);
   // Previous/next file like OpenCode's review toolbar: cycles the listed files, also on ←/→ while focus is not in a text field.
@@ -583,7 +596,7 @@ export function ChangesPanel({
                   <Maximize2Icon />
                 </Button>
               )}
-              <Button size="icon-sm" variant="ghost" className="size-11" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
+              <Button size="icon-sm" variant="ghost" className="size-11" onClick={() => (setReload((n) => n + 1), onReload?.())} title="Reload from disk" aria-label="Reload from disk">
                 <RotateCwIcon />
               </Button>
             </div>
@@ -619,7 +632,7 @@ export function ChangesPanel({
                 <Maximize2Icon />
               </Button>
             )}
-            <Button size="icon-sm" variant="ghost" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
+            <Button size="icon-sm" variant="ghost" onClick={() => (setReload((n) => n + 1), onReload?.())} title="Reload from disk" aria-label="Reload from disk">
               <RotateCwIcon />
             </Button>
             <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Diff view">
