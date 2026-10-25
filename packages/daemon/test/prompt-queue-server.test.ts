@@ -441,7 +441,8 @@ describe.skipIf(process.platform === "win32")("queued bash commands", { timeout:
       expect(r.result.itemId).toEqual(expect.any(String));
       await vi.waitFor(() => expect(bashParts(h, c, id).some((p) => p.status === "done" && p.stdout === "b1\n")).toBe(true), { timeout: 5000 });
       const kinds = h.parts(c, id).flatMap((p: any) => (p.type === "user_text" ? ["t"] : p.type === "bash" && p.status === "running" ? ["b"] : []));
-      expect(kinds).toEqual(["t", "b"]);
+      // A running command re-emits its part with partial output: count the command once.
+      expect(kinds.filter((k, i) => k !== kinds[i - 1])).toEqual(["t", "b"]);
       c.ws.close();
     } finally {
       spy.mockRestore();
