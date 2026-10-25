@@ -49,7 +49,7 @@ export function planOfPart(view: SessionView, call: ToolCall): string | undefine
   return planAt(view, parts, parts.findIndex((p) => p.id === call.id));
 }
 
-/** The newest ExitPlanMode call whose plan is known, with the plan: its own `input.plan`, else the plan file the model wrote (Claude Code 2.1.294 calls it with an empty input). Loaded parts and aux. */
+/** The newest ExitPlanMode call whose plan is known, with the plan by `planAt` (its approval request's plan, else the plan-file fold `planOfCall`, where the file wins over the call's own `input.plan`). Loaded parts and aux. */
 function findPlan(view: SessionView): { call?: ToolCall; plan: string } | undefined {
   const parts = wholeParts(view);
   for (let n = parts.length - 1; n >= 0; n--) {

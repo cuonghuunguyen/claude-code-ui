@@ -156,14 +156,18 @@ The dock area on the right or left of the session view; its tabs are panes (Chan
 _Avoid_: sidebar (the project and session list), side (a Side is a Daemon)
 
 **Pane**:
-Something of one session that the user can show and place: a kind, an owner session. Plan is the first pane that can also be a main-area tab (`plan:<session>`).
+Something of one session that the user can show and place: a kind, an owner session. Plan, Files and Git graph can also be main-area tabs (`plan:<session>`, `files:<session>`, `graph:<session>`).
 _Avoid_: view, panel (a panel is a dock area), widget, document
 
 **Owner session**:
 The session a pane belongs to; a session pane owns itself. It is fixed. Closing the owner's tab does not close its other panes.
 
 **Kind home**:
-Where a pane kind shows in this browser: side panel, bottom panel or main area (`claude-ui.layout`). Changes has no main home.
+Where a pane kind shows in this browser: side panel, bottom panel or main area (`claude-ui.layout`). Files, Git graph and Plan can be main; Changes never.
+
+**Pane identity**:
+What "already open" compares: the owner's folder for Files and Git graph (one tab per project folder), the owner session for Plan.
+_Avoid_: instance
 
 **Main area**:
 The tab strip and the area under it (one tab, or two splits).
@@ -175,7 +179,7 @@ The owner of the active main tab. The dock areas, Changes, Files, Terminal and t
 A single file or artifact shown as its own tab ("Open in tab"). Not in this slice.
 
 **Files tab**:
-The side-panel pane with the file tree and the editor tabs.
+The pane with the file tree and the editor tabs (side panel by default, or a main-area tab "Files · <project>").
 _Avoid_: explorer
 
 **Changes tab**:
