@@ -1270,7 +1270,7 @@ export function parseGitmodules(text: string): { name: string; path: string; url
 }
 
 export const REPO_CAPS = { entries: 20_000, ms: 2_000, count: 50 };
-export type ListReposOptions = { settings: Settings["git"]; openFiles?: string[]; allowed: (p: string) => boolean; caps?: { entries: number; ms: number; count: number }; now?: () => number };
+export type ListReposOptions = { settings: Settings["git"]; openFiles?: string[]; allowed: (p: string) => boolean; refused?: (p: string) => boolean; caps?: { entries: number; ms: number; count: number }; now?: () => number };
 const sameName: (a: string, b: string) => boolean = process.platform === "win32" || process.platform === "darwin" ? (a, b) => a.toLowerCase() === b.toLowerCase() : (a, b) => a === b;
 const byBytes = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const submodulePath = (p: string) => !p.includes("\0") && !isAbsolute(p) && !/^([\\/]|[A-Za-z]:)/.test(p) && p.split(/[\\/]/).every((seg) => seg !== ".." && seg.toLowerCase() !== ".git");
@@ -1286,9 +1286,14 @@ export async function listRepos(cwd: string, o: ListReposOptions): Promise<GitRe
   const cfg = o.settings;
   const found = new Map<string, RepoEntry>();
   const truncated: NonNullable<GitReposResult["truncated"]> = {};
-  const ignored = await Promise.all(cfg.ignoredRepositories.map((e) => realAsync(resolve(cwd, e))));
+  const ignored = await Promise.all(cfg.ignoredRepositories.map((e) => resolve(cwd, e)).filter((p) => !o.refused?.(p)).map(realAsync));
   const add = async (dir: string, kind: GitRepo["kind"], parent?: string): Promise<void> => {
+    if (truncated.scan === "count") return;
     if (!(await lstat(join(dir, ".git")).then(() => true, () => false))) return;
+    if (found.size >= caps.count) {
+      truncated.scan = "count";
+      return;
+    }
     const top = await realAsync(dir);
     const have = found.get(top);
     if (have) {
@@ -1302,11 +1307,7 @@ export async function listRepos(cwd: string, o: ListReposOptions): Promise<GitRe
       if (kind !== "main" && r.own !== r.common) return;
       outside = escapesRoots(r, o.allowed);
     }
-    if (kind !== "main" && ignored.some((i) => sameName(i, top))) return;
-    if (found.size >= caps.count) {
-      truncated.scan ??= "count";
-      return;
-    }
+    if (ignored.some((i) => sameName(i, top))) return;
     found.set(top, { path: top, kind, ...(parent && { parent }), ...(outside && { outsideRoots: true as const }), ...(r !== "foreign" && { own: r.own }) });
   };
 
@@ -1328,17 +1329,18 @@ export async function listRepos(cwd: string, o: ListReposOptions): Promise<GitRe
       }
       const list = await readdir(dir, { withFileTypes: true }).catch(() => undefined);
       if (!list) continue;
+      const room = caps.entries - seen;
       seen += list.length;
-      if (seen > caps.entries) {
-        truncated.scan ??= "entries";
-        break;
-      }
-      for (const e of list) {
+      if (seen > caps.entries) truncated.scan ??= "entries";
+      for (const e of room >= list.length ? list : list.slice(0, Math.max(room, 0))) {
+        if (now() - start > caps.ms) truncated.scan ??= "time";
+        if (truncated.scan === "time" || truncated.scan === "count") break;
         if (!e.isDirectory() || sameName(e.name, ".git") || cfg.repositoryScanIgnoredFolders.some((n) => sameName(n, e.name))) continue;
         const child = join(dir, e.name);
         queue.push({ dir: child, depth: depth + 1 });
         await add(child, "nested");
       }
+      if (truncated.scan) break;
     }
     for (const entry of cfg.scanRepositories) {
       const p = resolve(cwd, entry);

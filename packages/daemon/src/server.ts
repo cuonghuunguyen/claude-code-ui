@@ -1944,7 +1944,7 @@ export function createDaemon(opts: {
           const open = (files ?? []).filter((f) => isAbsolute(f) && !refused(f));
           const settings = appSettings.get().git;
           const key = [cwd, JSON.stringify(settings), [...open].sort().join("\0")].join("\0");
-          return reply(await reposCache.get(key, () => listRepos(cwd, { settings, openFiles: open, allowed: (p) => inRoots(real(p) ?? p) }), msg.fresh === true));
+          return reply(await reposCache.get(key, () => listRepos(cwd, { settings, openFiles: open, refused, allowed: (p) => inRoots(real(p) ?? p) }), msg.fresh === true));
         }
         case "git.log":
         case "git.diff":

@@ -118,12 +118,13 @@ describe("listRepos", () => {
     expect(await rels(d, { autoRepositoryDetection: "openEditors", scanRepositories: ["vendor/deep/lib"] })).toEqual([]);
   });
 
-  it("ignoredRepositories leaves out an absolute and a relative repository root, never the cwd's own repository", async () => {
+  it("ignoredRepositories leaves out an absolute and a relative repository root, and the cwd's own repository too (VS Code)", async () => {
     const d = repo(tmp());
     fakeRepo(join(d, "a"));
     fakeRepo(join(d, "b"));
     fakeRepo(join(d, "c"));
-    expect(await rels(d, { ignoredRepositories: [join(d, "a"), "b", d] })).toEqual(["main:", "nested:c"]);
+    expect(await rels(d, { ignoredRepositories: [join(d, "a"), "b"] })).toEqual(["main:", "nested:c"]);
+    expect(await rels(d, { ignoredRepositories: [d] })).toEqual(["nested:a", "nested:b", "nested:c"]);
   });
 
   it("linked worktrees are never listed; a cwd that is a linked worktree has it as main", async () => {
@@ -231,6 +232,39 @@ describe("listRepos", () => {
     const c = await list(d, {}, { caps: { ...caps, count: 2 } });
     expect(c.truncated).toEqual({ scan: "count" });
     expect(c.repos).toHaveLength(2);
+  });
+
+  it("the clock and the repository count are checked per candidate: the scan stops, with few file calls", async () => {
+    const d = tmp();
+    for (let i = 0; i < 300; i++) fakeRepo(join(d, `r${String(i).padStart(3, "0")}`));
+    let t = 0;
+    const timed = await list(d, {}, { now: () => (t += 100) });
+    expect(timed.truncated).toEqual({ scan: "time" });
+    expect(timed.repos.length).toBeGreaterThan(5);
+    expect(timed.repos.length).toBeLessThan(25);
+    const counted = await list(d, {}, { caps: { entries: 20_000, ms: 2_000, count: 50 } });
+    expect(counted.repos).toHaveLength(50);
+    expect(counted.truncated).toEqual({ scan: "count" });
+    let reads = 0;
+    const clock = () => (reads++, 0);
+    await list(d, {}, { now: clock, caps: { entries: 20_000, ms: 2_000, count: 50 } });
+    expect(reads).toBeLessThan(80);
+  });
+
+  it("a folder over the entries cap keeps the repositories found up to the cap", async () => {
+    const d = tmp();
+    for (let i = 0; i < 10; i++) fakeRepo(join(d, `r${i}`));
+    const r = await list(d, {}, { caps: { entries: 4, ms: 2_000, count: 50 } });
+    expect(r.truncated).toEqual({ scan: "entries" });
+    expect(r.repos.length).toBeGreaterThan(0);
+    expect(r.repos.length).toBeLessThanOrEqual(4);
+  });
+
+  it("an ignoredRepositories entry the server refuses (UNC) is never resolved", async () => {
+    const d = repo(tmp());
+    const seen: string[] = [];
+    await list(d, { ignoredRepositories: ["//unc/share/x", "ok"] }, { refused: (p) => (seen.push(p), p.startsWith("//unc")) });
+    expect(seen).toHaveLength(2);
   });
 
   it("order is the depth-first tree: root, its submodules by path, its nested repositories by path", async () => {
