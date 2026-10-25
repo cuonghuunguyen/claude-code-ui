@@ -95,3 +95,18 @@ Feature: Plan pane
     Then the tab switcher lists a plan row
     And the page has no horizontal scroll
     And I capture "phone-switcher"
+
+  Scenario: The approval panel and the Plan tab show the same plan with the real CLI
+    Given a Haiku session in Plan mode with a plan waiting for approval
+    Then the approval panel shows the plan and Open plan in popup
+    And the Plan tab shows the same plan as the approval panel
+    And I capture "panel-plan"
+
+  Scenario: The plan card and the Plan tab still show the plan after a daemon restart
+    Given a Haiku session in Plan mode with a plan waiting for approval
+    When I restart the daemon
+    Then the app is connected
+    When I reload the page
+    Then the plan card shows a plan
+    And the Plan tab shows the plan of the plan card
+    And I capture "plan-restored"

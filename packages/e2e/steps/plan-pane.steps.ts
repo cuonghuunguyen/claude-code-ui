@@ -232,3 +232,38 @@ When("I keep planning in the first session", async ({ page }) => {
 Then("the focus is inside the permission request", async ({ page }) => {
   await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[data-testid="permission-panel"]'))).toBe(true);
 });
+
+const norm = (s: string | null) => (s ?? "").replace(/\s+/g, " ").trim();
+
+Then("the approval panel shows the plan and Open plan in popup", async ({ page }) => {
+  const panel = page.getByTestId("permission-panel").filter({ visible: true }).first();
+  await expect(panel.getByTestId("plan")).toHaveText(/\S/);
+  await expect(panel.getByTestId("plan").locator("p, ol, ul, li, h1, h2, h3").first()).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Open plan in popup", exact: true })).toBeVisible();
+});
+
+Then("the Plan tab shows the same plan as the approval panel", async ({ page }) => {
+  const panel = page.getByTestId("permission-panel").filter({ visible: true }).first();
+  const fromPanel = norm(await panel.getByTestId("plan").textContent());
+  await side(page).getByTestId("pane-plan").click();
+  await expect(page.getByTestId("plan-pane")).toBeVisible();
+  expect(fromPanel.length).toBeGreaterThan(0);
+  expect(norm(await page.getByTestId("plan-pane").textContent())).toContain(fromPanel);
+});
+
+Then("the plan card shows a plan", async ({ page }) => {
+  const card = page.getByTestId("tool-card").filter({ hasText: /^\s*ExitPlanMode/ }).first();
+  await expect(card).toBeVisible({ timeout: TURN_MS });
+  // Collapsed after a reload: expand it to read the plan.
+  if ((await card.getByTestId("plan").count()) === 0) await card.getByRole("button", { name: /^ExitPlanMode/ }).click();
+  await expect(card.getByTestId("plan")).toHaveText(/\S/);
+});
+
+Then("the Plan tab shows the plan of the plan card", async ({ page }) => {
+  const card = page.getByTestId("tool-card").filter({ hasText: /^\s*ExitPlanMode/ }).first();
+  const fromCard = norm(await card.getByTestId("plan").textContent());
+  await side(page).getByTestId("pane-plan").click();
+  await expect(page.getByTestId("plan-pane")).toBeVisible();
+  expect(fromCard.length).toBeGreaterThan(0);
+  expect(norm(await page.getByTestId("plan-pane").textContent())).toContain(fromCard);
+});
