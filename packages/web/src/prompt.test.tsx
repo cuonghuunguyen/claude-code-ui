@@ -1196,3 +1196,138 @@ it("GH-443: the bash placeholder while busy is accurate (no Esc to exit: Esc sto
   await key(box, { key: "!" });
   expect(box.placeholder).toBe("Queue a shell command: it runs when the current work ends");
 });
+
+// ---- Pasted text (GH-441) ----
+import { collapsePasted, pasteTagId, splitPasted } from "./pasted-text.ts";
+
+const lines200 = Array.from({ length: 200 }, (_, i) => `line-${i + 1}`).join("\n");
+const paste = (box: HTMLTextAreaElement, text: string) => {
+  const e = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(e, "clipboardData", { value: { files: [], getData: () => text } });
+  act(() => void box.dispatchEvent(e));
+  return e;
+};
+const chips = (el: HTMLElement) => el.querySelectorAll('[data-testid="paste-chip"]');
+const userView = (text: string) => applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "user_text", id: "u1", text, images: [] } });
+
+it("paste of 200 lines inserts one token and one chip; the textarea holds only the token", async () => {
+  const d = await render();
+  const e = paste(d.box, lines200);
+  expect(e.defaultPrevented).toBe(true);
+  expect(d.box.value).toBe("[Pasted text #1 +199 lines]");
+  expect(chips(d.el)).toHaveLength(1);
+});
+
+it("paste of one short line stays plain text", async () => {
+  const d = await render();
+  const e = paste(d.box, "hello world");
+  expect(e.defaultPrevented).toBe(false);
+  expect(chips(d.el)).toHaveLength(0);
+});
+
+it("Backspace after a token removes the whole token and its chip", async () => {
+  const d = await render();
+  paste(d.box, lines200);
+  d.box.setSelectionRange(d.box.value.length, d.box.value.length);
+  await key(d.box, { key: "Backspace" });
+  expect(d.box.value).toBe("");
+  expect(chips(d.el)).toHaveLength(0);
+});
+
+it("Remove on a chip removes its token", async () => {
+  const d = await render();
+  await type(d.box, "a ");
+  paste(d.box, lines200);
+  expect(chips(d.el)).toHaveLength(1);
+  await act(async () => d.el.querySelector<HTMLElement>('[aria-label="Remove pasted text #1"]')!.click());
+  expect(d.box.value).toBe("a ");
+  expect(chips(d.el)).toHaveLength(0);
+});
+
+it("two pastes give chips #1 and #2; typing between them keeps both", async () => {
+  const d = await render();
+  paste(d.box, lines200);
+  await type(d.box, `${d.box.value} and `);
+  paste(d.box, "x\ny\nz\nw");
+  expect(d.box.value).toBe("[Pasted text #1 +199 lines] and [Pasted text #2 +3 lines]");
+  expect([...chips(d.el)].map((c) => c.textContent)).toEqual(["Pasted text #1 · 199 lines", "Pasted text #2 · 3 lines"]);
+});
+
+it("send: onPrompt gets the typed text with each paste as a pasted_content block at its position, all 200 lines included; chips clear", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const d = await render({ onPrompt });
+  paste(d.box, lines200);
+  await type(d.box, `${d.box.value} Reply OK`);
+  await key(d.box, { key: "Enter" });
+  const sent = (onPrompt.mock.calls[0] as unknown as [string])[0];
+  expect(sent).toContain(`<pasted_content id="${pasteTagId("s1")}">`);
+  const segs = splitPasted(sent);
+  expect(segs).toHaveLength(2);
+  expect(segs[0]).toMatchObject({ kind: "paste" });
+  expect((segs[0] as { body: string }).body.split("\n")).toHaveLength(200);
+  expect(segs[1]).toEqual({ kind: "text", text: " Reply OK" });
+  expect(d.box.value).toBe("");
+  expect(chips(d.el)).toHaveLength(0);
+});
+
+it("a failed send puts the token text and its chip back", async () => {
+  const onPrompt = vi.fn(() => Promise.reject(new Error("boom")));
+  const d = await render({ onPrompt });
+  paste(d.box, lines200);
+  await key(d.box, { key: "Enter" });
+  await vi.waitFor(() => expect(d.box.value).toBe("[Pasted text #1 +199 lines]"));
+  expect(chips(d.el)).toHaveLength(1);
+});
+
+it("in bash mode a large paste stays plain text", async () => {
+  const d = await render({ onBash: async () => {} });
+  await key(d.box, { key: "!" });
+  const e = paste(d.box, lines200);
+  expect(e.defaultPrevented).toBe(false);
+  expect(chips(d.el)).toHaveLength(0);
+});
+
+const tagged = `Fix this\n\n<pasted_content id="9f3a">\n${lines200}\n</pasted_content id="9f3a">\n\nplease`;
+
+it("user bubble: a pasted_content block shows collapsed with its line count; click expands", async () => {
+  const d = await render({}, userView(tagged));
+  const block = d.$("pasted-block")!;
+  expect(block.textContent).toContain("Pasted text · 199 lines");
+  expect(block.getAttribute("aria-expanded")).toBe("false");
+  expect(d.el.textContent).not.toContain("pasted_content");
+  expect(d.el.textContent).toContain("Fix this");
+  expect(d.el.textContent).toContain("please");
+  await act(async () => block.click());
+  expect(block.getAttribute("aria-expanded")).toBe("true");
+  expect(d.$("pasted-block-body")!.textContent).toContain("line-200");
+});
+
+it("copy action of a bubble copies the text without the tags", async () => {
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  const d = await render({}, userView(tagged));
+  const copy = [...d.el.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent === "Copy message")!;
+  await act(async () => copy.click());
+  const copied = (writeText.mock.calls[0] as unknown as [string])[0];
+  expect(copied).not.toContain("pasted_content");
+  expect(copied).toContain("line-200");
+});
+
+it("draft keeps the chip across a remount", async () => {
+  const first = await render();
+  paste(first.box, lines200);
+  unmount();
+  const second = await render();
+  expect(second.box.value).toBe("[Pasted text #1 +199 lines]");
+  expect(chips(second.el)).toHaveLength(1);
+});
+
+it("rewind puts the prompt back with its chip", async () => {
+  const d = await render({ rewindTo: "u1", onRewindPreview: async () => ({ filesChanged: [], insertions: 0, deletions: 0, conversation: true }) }, userView(tagged));
+  await vi.waitFor(() => expect(d.$("rewind-panel")!.querySelectorAll("button").length).toBeGreaterThan(1));
+  const both = [...d.$("rewind-panel")!.querySelectorAll("button")].find((b) => /conversation/i.test(b.textContent ?? ""))!;
+  await act(async () => both.click());
+  await vi.waitFor(() => expect(d.box.value).toBe("Fix this[Pasted text #1 +199 lines]please"));
+  expect(chips(d.el)).toHaveLength(1);
+  expect(collapsePasted(tagged).pastes[1]).toBe(lines200);
+});

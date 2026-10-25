@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   backspaceToken,
+  cleanTitle,
   collapsePasted,
   deleteToken,
   expandPastes,
@@ -159,5 +160,14 @@ describe("backspaceToken / deleteToken", () => {
     expect(backspaceToken(t, s, s)).toBeUndefined();
     expect(deleteToken(t, e, e)).toBeUndefined();
     expect(backspaceToken(t, s, e)).toBeUndefined();
+  });
+});
+
+describe("cleanTitle", () => {
+  it("shows a block as '[Pasted text +K lines]', also one the title cut off; other titles stay", () => {
+    expect(cleanTitle("Fix this bug")).toBe("Fix this bug");
+    expect(cleanTitle(`Fix${block("9f3a", "a\nb\nc\nd")}\nplease`)).toBe("Fix[Pasted text +3 lines]please");
+    expect(cleanTitle('\n\n<pasted_content id="9f3a">\nline1\nline2\nli')).toBe("[Pasted text]");
+    expect(cleanTitle('Why?\n\n<pasted_content id="9f3a">\nline1')).toBe("Why? [Pasted text]");
   });
 });

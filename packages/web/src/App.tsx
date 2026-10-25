@@ -55,6 +55,8 @@ import { Button } from "@/components/ui/button";
 import { QueueChips } from "./queue-chips.tsx";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
+import { PastedBlock, PasteChips } from "./pasted-text.tsx";
+import { backspaceToken, cleanTitle, collapsePasted, deleteToken, expandPastes, isLargePaste, nextPasteId, normalizePaste, type Pastes, pasteRefs, pasteTagId, pasteToken, prunePastes, splitPasted, stripPasted, summarizePasted } from "./pasted-text.ts";
 import { ArtifactConnectedContext, ArtifactPreviewContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
@@ -579,7 +581,7 @@ export function App() {
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
       const listed = new Set(sessions.map((s) => s.id));
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
-      setList(sessions);
+      setList(sessions.map((s) => ({ ...s, title: cleanTitle(s.title) })));
       if (gen === connGen.current) listFresh.current = true;
       setProjects(projects);
       if (!guideDecided.current) {
@@ -649,7 +651,7 @@ export function App() {
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
       setFailedTabs((f) => (f.has(sessionId) ? new Set([...f].filter((x) => x !== sessionId)) : f));
       setHeirOf((h) => (h[sessionId] ? without(h, sessionId) : h));
-      if (r.title) setTitles((t) => ({ ...t, [sessionId]: r.title }));
+      if (r.title) setTitles((t) => ({ ...t, [sessionId]: cleanTitle(r.title) }));
     } catch (e) {
       // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
       if ((e as RequestError).code === "unknown_session") return forget(sessionId);
@@ -2119,7 +2121,7 @@ export function App() {
       mode: view?.permissionMode ?? shown.permissionMode,
       modes: modesOf(shown.permissionModes, view?.model ?? shown.model, models),
       running: view?.state === "running" || view?.state === "needs_input",
-      prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && i.part.text.startsWith(ORCHESTRATION_NOTICE)) ? [{ id: i.part.id, text: i.part.text }] : [])),
+      prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && i.part.text.startsWith(ORCHESTRATION_NOTICE)) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
     } : undefined,
     models,
     canQuickOpen,
@@ -3925,7 +3927,7 @@ export function SessionPane({
           reveal={reveal}
           sticky={(item) => {
             if (item.kind !== "part" || item.part.type !== "user_text" || (coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE))) return;
-            const { text } = splitUploads(item.part.text);
+            const { text } = splitUploads(summarizePasted(item.part.text));
             const n = item.part.images.length;
             const label = text || `${n} image${n === 1 ? "" : "s"}`;
             return { label, content: n && text ? `${text} (${n} image${n === 1 ? "" : "s"})` : label };
@@ -3973,8 +3975,8 @@ export function SessionPane({
                 index={index}
                 actions={
                   <>
-                    <CopyAction text={item.part.text} />
-                    <QuoteAction text={splitUploads(item.part.text).text} />
+                    <CopyAction text={stripPasted(item.part.text)} />
+                    <QuoteAction text={splitUploads(stripPasted(item.part.text)).text} />
                     {/* No tooltip prop: its trigger renders a button around this button. */}
                     <MessageAction
                       className="pointer-coarse:size-11"
@@ -4068,6 +4070,7 @@ export function SessionPane({
             {view.continueAt !== undefined && <ContinueDock at={view.continueAt} onCancel={() => onCancelContinue?.()} />}
             <PromptBox
               draftKey={session.id}
+              pasteTag={pasteTagId(session.id)}
               cwd={session.cwd}
               commands={view.commands}
               onDialog={onDialog}
@@ -4144,6 +4147,7 @@ function PromptBox({
   onInserted,
   draft,
   draftKey,
+  pasteTag,
   state = "idle",
   onInterrupt,
   usage,
@@ -4190,6 +4194,8 @@ function PromptBox({
   draft?: { text: string; images: string[] };
   /** Keeps the unsent text across a reload (drafts.ts); a `draft` above wins. */
   draftKey?: string;
+  /** Id of the pasted_content blocks sent from this box (4 hex of sha256(session id), like the CLI); none = random per send. */
+  pasteTag?: string;
   /** What the send button shows; default idle. */
   state?: SendState;
   onInterrupt?: () => void;
@@ -4213,8 +4219,13 @@ function PromptBox({
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   const phone = usePhone();
+  // The stored draft holds each pasted text as a pasted_content block (GH-441); the box shows it as a token with a chip.
   const [initialText] = useState(() => (draftKey ? loadDraft(draftKey) : ""));
-  const [text, setText] = useState(initialText);
+  const [initialPaste] = useState(() => collapsePasted(initialText));
+  const [text, setText] = useState(initialPaste.text);
+  const [pastes, setPastes] = useState<Pastes>(initialPaste.pastes);
+  const latest = useRef({ text, pastes });
+  latest.current = { text, pastes };
   const [images, setImages] = useState<string[]>([]);
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState(false);
@@ -4223,7 +4234,10 @@ function PromptBox({
   const [sendError, setSendError] = useState<string>();
   // Bash mode: the text is a shell command, the box looks like OpenCode's shell mode.
   const [bash, setBash] = useState(false);
-  const dropDraft = useDraft(draftKey, text, bash, initialText);
+  const stored = useMemo(() => expandPastes(text, prunePastes(text, pastes), "0000"), [text, pastes]);
+  const dropDraft = useDraft(draftKey, stored, bash, initialText);
+  // A token that was deleted, cut or edited by hand drops its paste.
+  useEffect(() => setPastes((p) => prunePastes(text, p)), [text]);
   // The prompt box covers the dock's bottom 36px (OpenCode prompt lift), only when it directly follows the dock.
   const lift = !!todos && !blocked && !sendError && !images.length;
   const input = useRef<HTMLTextAreaElement>(null);
@@ -4283,7 +4297,11 @@ function PromptBox({
     typed(t, c);
   };
   /** A prompt that was not sent goes back in front of anything typed since, the caret after it. */
-  const restore = (t: string) => {
+  const restore = (given: string) => {
+    // A prompt with pasted_content blocks comes back as tokens and chips, numbered after those already in the box.
+    const back = collapsePasted(given, nextPasteId(latest.current.text, latest.current.pastes));
+    const t = back.text;
+    if (Object.keys(back.pastes).length) setPastes((p) => ({ ...p, ...back.pastes }));
     setText((cur) => (cur ? `${t}\n${cur}` : t));
     placeCaret.current = t.length;
     setCaret(t.length);
@@ -4317,7 +4335,9 @@ function PromptBox({
   }, [takeBack?.key]);
   useEffect(() => {
     if (!draft) return;
-    edit(draft.text);
+    const back = collapsePasted(draft.text);
+    setPastes(back.pastes);
+    edit(back.text);
     setImages(draft.images);
   }, [draft]);
   // Another project: an error about the last one does not apply.
@@ -4333,7 +4353,9 @@ function PromptBox({
   const running = state === "running" || state === "needs_input";
   const enterHow: "send" | "queue" = running && onQueue && sendMode === "queue" ? "queue" : "send";
   const altHow: "send" | "queue" = running && onQueue && sendMode === "queue" ? "send" : "queue";
-  const send = (t = text, how: "send" | "queue" = enterHow) => {
+  const send = (given = text, how: "send" | "queue" = enterHow) => {
+    // Each pasted text goes as the CLI's pasted_content block at its token (GH-441); the bash and dialog paths never hold one.
+    const t = bash ? given : expandPastes(given, pastes, pasteTag ?? pasteTagId());
     if (bash) {
       const command = t.trim();
       if (!command || (blocked && !onQueue)) return;
@@ -4419,7 +4441,22 @@ function PromptBox({
     }
   };
   const onPaste = (e: ClipboardEvent) => {
-    if (![...e.clipboardData.files].some((f) => f.type.startsWith("image/"))) return;
+    if (![...e.clipboardData.files].some((f) => f.type.startsWith("image/"))) {
+      // Claude Code: a large text paste is one numbered chip, not text in the box. A shell command stays literal.
+      const content = bash ? "" : normalizePaste(e.clipboardData.getData("text/plain") ?? "");
+      if (!isLargePaste(content)) return;
+      e.preventDefault();
+      const id = nextPasteId(text, pastes);
+      setPastes((p) => ({ ...p, [id]: content }));
+      const el = e.currentTarget as HTMLTextAreaElement;
+      const token = pasteToken(id, content);
+      // One native edit keeps the textarea's undo stack; setRangeText is the fallback (jsdom, a browser that refuses).
+      if (!(typeof document.execCommand === "function" && document.execCommand("insertText", false, token))) {
+        el.setRangeText(token, el.selectionStart, el.selectionEnd, "end");
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      return;
+    }
     e.preventDefault();
     void attach(e.clipboardData.files);
   };
@@ -4451,6 +4488,15 @@ function PromptBox({
     if (e.key === "Enter" && e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       return send(text, altHow);
+    }
+    // Backspace right after a pasted-text token, Delete right before it: the whole token goes.
+    if (!bash && (e.key === "Backspace" || e.key === "Delete") && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+      const { selectionStart: a, selectionEnd: b } = e.currentTarget;
+      const gone = (e.key === "Backspace" ? backspaceToken : deleteToken)(text, a, b);
+      if (gone) {
+        e.preventDefault();
+        return edit(gone.text, gone.caret);
+      }
     }
     if (pickerOpen) {
       const n = rows;
@@ -4493,6 +4539,15 @@ function PromptBox({
       </p>
     )}
     <ImageStrip images={images} onRemove={(i) => setImages((all) => all.filter((_, j) => j !== i))} />
+    <PasteChips
+      text={text}
+      pastes={pastes}
+      onRemove={(id) => {
+        const r = pasteRefs(text).find((x) => x.id === id);
+        if (r) edit(text.slice(0, r.index) + text.slice(r.index + r.match.length), r.index);
+        input.current?.focus();
+      }}
+    />
     {pickerOpen && !matches?.length && (
       <ul
         id="command-picker"
@@ -4739,8 +4794,8 @@ function PendingMessage({ p, view, index }: { p: Pending; view: SessionView; ind
       pending
       actions={
         <>
-          <CopyAction text={p.text} />
-          <QuoteAction text={splitUploads(p.text).text} />
+          <CopyAction text={stripPasted(p.text)} />
+          <QuoteAction text={splitUploads(stripPasted(p.text)).text} />
           <MessageAction className="pointer-coarse:size-11" title="Rewind" label="Rewind to before this message" disabled>
             <RotateCcwIcon />
           </MessageAction>
@@ -4765,14 +4820,17 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
   const openRun = use(OpenRunContext);
   switch (part.type) {
     case "user_text": {
-      const { text, files } = splitUploads(part.text);
+      // A pasted_content block (GH-441) is a collapsed block in place; attached files come from the typed text around it.
+      const segments = splitPasted(part.text).map((seg) => (seg.kind === "text" ? { ...seg, ...splitUploads(seg.text) } : seg));
+      const files = segments.flatMap((seg) => (seg.kind === "text" ? seg.files : []));
+      const shown = segments.filter((seg) => seg.kind === "paste" || seg.text);
       return (
         <>
-          {(text || part.images.length > 0) && (
+          {(shown.length > 0 || part.images.length > 0) && (
             <Message from="user">
               <MessageContent className="[overflow-wrap:anywhere]">
                 <ImageStrip images={part.images} partId={part.id} />
-                <UserMarkdown text={text} />
+                {shown.map((seg, i) => (seg.kind === "paste" ? <PastedBlock key={i} body={seg.body} /> : <UserMarkdown key={i} text={seg.text} />))}
               </MessageContent>
             </Message>
           )}

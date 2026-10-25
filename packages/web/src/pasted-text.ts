@@ -165,3 +165,9 @@ export function deleteToken(text: string, start: number, end: number): Edit | un
   const r = pasteRefs(text).find((x) => x.index === start);
   return r ? { text: text.slice(0, r.index) + text.slice(r.index + r.match.length), caret: r.index } : undefined;
 }
+
+/** A session title taken from a first prompt: pasted blocks as `[Pasted text +K lines]`; a block the title cut off ends it as `[Pasted text]`. */
+export function cleanTitle(title: string): string {
+  const t = summarizePasted(title).replace(/\s*<pasted_content id="[0-9a-f]{4}">[\s\S]*$/, " [Pasted text]");
+  return t === title ? title : t.trim();
+}

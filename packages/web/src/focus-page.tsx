@@ -10,6 +10,7 @@ import { foldLabel, signalItems } from "./signal.ts";
 import { keyLabels } from "./shortcuts.ts";
 import { useKeymap } from "./keymap.ts";
 import { timeAgo, worktreeName } from "./sessions.ts";
+import { summarizePasted } from "./pasted-text.ts";
 import { awaitingPermission, timeline, type SessionView } from "./store.ts";
 import { Mark, statusText } from "./todo-dock.tsx";
 import { ProjectAvatar } from "./tabs-bar.tsx";
@@ -49,7 +50,7 @@ function RecentContext({ view }: { view: SessionView }) {
         if (item.kind === "fold") return <li key={item.id} className="font-mono text-muted-foreground text-xs">{foldLabel(item.calls)}</li>;
         if (item.kind !== "part") return null;
         const { part } = item;
-        if (part.type === "user_text") return <li key={part.id} className="line-clamp-2 w-fit max-w-full rounded-lg bg-secondary px-2.5 py-1 text-sm [overflow-wrap:anywhere]">{part.text}</li>;
+        if (part.type === "user_text") return <li key={part.id} className="line-clamp-2 w-fit max-w-full rounded-lg bg-secondary px-2.5 py-1 text-sm [overflow-wrap:anywhere]">{summarizePasted(part.text)}</li>;
         if (part.type === "assistant_text") return <li key={part.id} className="line-clamp-4 whitespace-pre-wrap text-sm [overflow-wrap:anywhere]">{part.text}</li>;
         if (part.type === "tool_call") return <li key={part.id} className="truncate font-mono text-destructive text-xs">{part.tool} {toolSummary(part.input)} · {part.status}</li>;
         return part.type === "notice" ? <li key={part.id} className="text-muted-foreground text-xs">{part.text}</li> : null;
