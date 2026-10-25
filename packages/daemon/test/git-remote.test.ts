@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { gitLog, gitRefs } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { endProcessTrees } from "../src/git-runner.ts";
-import { FETCH_ARGS, gitFetch, localRemotePath, redactUrls, remoteConfig, tidy } from "../src/git-remote.ts";
+import { FETCH_ARGS, gitBranch, gitFetch, gitPull, gitPush, localRemotePath, redactUrls, remoteConfig, tidy } from "../src/git-remote.ts";
 
 if (process.platform === "win32") vi.setConfig({ testTimeout: 120_000 });
 const posix = process.platform !== "win32";
@@ -325,5 +325,122 @@ describe("redactUrls", () => {
     const e = await gitFetch(a, { allowed: inside }).then(() => undefined, (x: Error) => x);
     expect(e).toBeDefined();
     expect(e!.message).not.toMatch(/bob|pw9x/);
+  });
+});
+
+// A superproject whose submodule has its own remote; both remotes moved ahead of the clones.
+const PROTO = ["-c", "protocol.file.allow=always"];
+function superWithSub() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "gsub-")));
+  const cfg = join(root, "gitconfig");
+  writeFileSync(cfg, '[submodule]\n\trecurse = true\n[fetch]\n\trecurseSubmodules = true\n[protocol "file"]\n\tallow = always\n');
+  vi.stubEnv("GIT_CONFIG_GLOBAL", cfg);
+  run(root, "init", "-q", "--bare", "-b", "main", "lib.git");
+  run(root, "init", "-q", "--bare", "-b", "main", "super.git");
+  run(root, "clone", "-q", "lib.git", "libA");
+  commit(join(root, "libA"), "lib c1");
+  run(join(root, "libA"), "push", "-q", "origin", "main");
+  run(root, "clone", "-q", "super.git", "sup");
+  const sup = join(root, "sup");
+  commit(sup, "super c1");
+  run(sup, ...PROTO, "submodule", "add", "-q", join(root, "lib.git"), "libs/lib");
+  run(sup, "commit", "-q", "-m", "add lib");
+  run(sup, "push", "-q", "-u", "origin", "main");
+  const sub = join(sup, "libs", "lib");
+  const libC1 = run(sub, "rev-parse", "HEAD");
+  // The submodule's remote moves.
+  commit(join(root, "libA"), "lib c2");
+  run(join(root, "libA"), "push", "-q", "origin", "main");
+  const libC2 = run(join(root, "libA"), "rev-parse", "HEAD");
+  // The superproject's remote moves and points at the new submodule commit.
+  run(root, "clone", "-q", "super.git", "supB");
+  const supB = join(root, "supB");
+  run(supB, ...PROTO, "submodule", "update", "--init", "-q");
+  run(join(supB, "libs", "lib"), "fetch", "-q", "origin");
+  run(join(supB, "libs", "lib"), "checkout", "-q", libC2);
+  run(supB, "commit", "-q", "-am", "move lib");
+  run(supB, "push", "-q", "origin", "main");
+  const supTip = run(supB, "rev-parse", "HEAD");
+  const tracking = (repo: string) => run(repo, "rev-parse", "refs/remotes/origin/main");
+  return { root, sup, sub, supB, libC1, libC2, supTip, tracking, inside: (p: string) => p.startsWith(root) };
+}
+
+describe("remote operations per repository (GH-391)", () => {
+  it.skipIf(!posix)("with the user's submodule.recurse and fetch.recurseSubmodules, a superproject fetch does not enter the submodule", async () => {
+    const f = superWithSub();
+    // Control: the same config makes a plain `git fetch` of a second clone recurse.
+    run(f.root, ...PROTO, "clone", "-q", "--recurse-submodules", "super.git", "supC");
+    const subC = join(f.root, "supC", "libs", "lib");
+    run(subC, "update-ref", "-d", "refs/remotes/origin/main");
+    run(join(f.root, "supC"), "fetch", "-q");
+    const recursed = run(subC, "rev-parse", "--verify", "-q", "refs/remotes/origin/main");
+    expect(recursed).toBe(f.libC2);
+    const argv: string[][] = [];
+    setGitRunner((o) => (o.args.includes("fetch") && argv.push(o.args), threadRunner(o)));
+    await gitFetch(f.sup, { allowed: f.inside });
+    expect(f.tracking(f.sup)).toBe(f.supTip);
+    expect(f.tracking(f.sub)).toBe(f.libC1);
+    expect(argv[0]).toContain("--no-recurse-submodules");
+  });
+
+  it.skipIf(!posix)("a superproject pull does not update or fetch the submodule", async () => {
+    const f = superWithSub();
+    const ref = "refs/heads/main";
+    const info = await gitBranch(f.sup, ref, { allowed: f.inside });
+    expect(info?.pull).toContain("--no-recurse-submodules");
+    await gitPull(f.sup, { ref, local: info!.local, argv: info!.pull!, allowed: f.inside });
+    expect(run(f.sup, "rev-parse", "HEAD")).toBe(f.supTip);
+    expect(run(f.sub, "rev-parse", "HEAD")).toBe(f.libC1);
+    expect(f.tracking(f.sub)).toBe(f.libC1);
+  });
+
+  it.skipIf(!posix)("fetching the submodule itself fetches only its remotes", async () => {
+    const f = superWithSub();
+    await gitFetch(f.sub, { allowed: f.inside });
+    expect(f.tracking(f.sub)).toBe(f.libC2);
+    expect(f.tracking(f.sup)).not.toBe(f.supTip);
+  });
+
+  it.skipIf(!posix)("a nested repository or submodule whose remote is a local folder outside the roots is remote_not_allowed", async () => {
+    const f = superWithSub();
+    const other = realpathSync(mkdtempSync(join(tmpdir(), "gout-")));
+    run(other, "init", "-q", "--bare", "-b", "main", "x.git");
+    run(f.sub, "remote", "set-url", "origin", join(other, "x.git"));
+    await expect(gitFetch(f.sub, { allowed: f.inside })).rejects.toMatchObject({ code: "remote_not_allowed" });
+    const inner = join(f.sup, "tools", "inner");
+    run(f.sup, "init", "-q", "-b", "main", "tools/inner");
+    commit(inner, "inner c1");
+    run(inner, "remote", "add", "origin", join(other, "x.git"));
+    await expect(gitFetch(inner, { allowed: f.inside })).rejects.toMatchObject({ code: "remote_not_allowed" });
+    const ref = "refs/heads/main";
+    run(f.sub, "checkout", "-q", "-B", "main");
+    run(f.sub, "config", "branch.main.remote", "origin");
+    run(f.sub, "config", "branch.main.merge", ref);
+    const info = await gitBranch(f.sub, ref, { allowed: f.inside });
+    if (info?.push) await expect(gitPush(f.sub, { ref, local: info.local, argv: info.push, allowed: f.inside })).rejects.toMatchObject({ code: "remote_not_allowed" });
+    expect(info?.push).toBeTruthy();
+  });
+
+  it.skipIf(!posix)("fetches of a superproject and its submodule run at once; two on the same repository are busy", async () => {
+    const f = superWithSub();
+    setGitRunner((o) => (o.args.includes("fetch") ? new Promise((r) => setTimeout(r, 400)).then(() => threadRunner(o)) : threadRunner(o)));
+    const a = gitFetch(f.sup, { allowed: f.inside });
+    await new Promise((r) => setTimeout(r, 100));
+    const b = gitFetch(f.sub, { allowed: f.inside });
+    await new Promise((r) => setTimeout(r, 100));
+    await expect(gitFetch(f.sub, { allowed: f.inside })).rejects.toMatchObject({ code: "busy" });
+    await expect(gitFetch(f.sup, { allowed: f.inside })).rejects.toMatchObject({ code: "busy" });
+    await expect(a).resolves.toBeTruthy();
+    await expect(b).resolves.toBeTruthy();
+  });
+
+  const WSL = "\\\\wsl$\\Ubuntu\\home\\u\\p\\libs\\lib";
+  it.each([
+    ["gitFetch", () => gitFetch(WSL, { allowed: () => true })],
+    ["gitBranch", () => gitBranch(WSL, "refs/heads/main", { allowed: () => true })],
+    ["gitPush", () => gitPush(WSL, { ref: "refs/heads/main", local: "a".repeat(40), argv: [], allowed: () => true })],
+    ["gitPull", () => gitPull(WSL, { ref: "refs/heads/main", local: "a".repeat(40), argv: [], allowed: () => true })],
+  ])("%s of a nested WSL repository is refused", async (_n, call) => {
+    await expect(call()).rejects.toMatchObject({ code: "bad_request", message: expect.stringMatching(/not supported for WSL projects/) });
   });
 });
