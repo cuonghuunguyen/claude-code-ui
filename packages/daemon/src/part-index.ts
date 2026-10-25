@@ -7,6 +7,8 @@ type Entry = { part: Part; pos: number; seq: number };
 const HEAD_TYPES = new Set<Part["type"]>(["session_state", "commands", "context_usage", "external_turn", "auto_continue", "prompt_queue", "todo_update"]);
 const EDIT_TOOLS = new Set(["Edit", "Write"]);
 
+const isPlanCall = (p: Part): boolean => p.type === "tool_call" && p.tool === "ExitPlanMode" && typeof (p.input as { plan?: unknown } | null)?.plan === "string" && !!(p.input as { plan: string }).plan;
+
 export class PartIndex {
   private order: string[] = [];
   private byId = new Map<string, Entry>();
@@ -117,9 +119,14 @@ export class PartIndex {
     return this.byId.get(id)?.pos;
   }
 
-  /** Parts before `beforePos` that whole-session features need: subagents, turn results, running background Bash calls. */
+  /** Parts before `beforePos` that whole-session features need: subagents, turn results, running background Bash calls, the newest ExitPlanMode call with a plan. */
   aux(beforePos: number): PosPart[] {
-    return this.scan(beforePos, (p) => p.type === "subagent" || p.type === "turn_result" || (p.type === "tool_call" && p.tool === "Bash" && p.status === "running" && (p.input as { run_in_background?: unknown } | null)?.run_in_background === true));
+    let plan: string | undefined;
+    for (let i = this.order.length - 1; i >= 0 && plan === undefined; i--) {
+      const e = this.byId.get(this.order[i]!)!;
+      if (e.pos < beforePos && isPlanCall(e.part)) plan = e.part.id;
+    }
+    return this.scan(beforePos, (p) => p.id === plan || p.type === "subagent" || p.type === "turn_result" || (p.type === "tool_call" && p.tool === "Bash" && p.status === "running" && (p.input as { run_in_background?: unknown } | null)?.run_in_background === true));
   }
 
   /** Edit/Write calls before `beforePos` and their results. */

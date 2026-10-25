@@ -179,6 +179,29 @@ describe("PartIndex", () => {
     expect(index.edits(cursor.pos).map((x) => x.part.id)).toEqual(["e1", "e1:result", "w1"]);
   });
 
+  it("aux carries the newest ExitPlanMode call before the cursor, at most one", () => {
+    const { index } = build([
+      user(1),
+      call("p1", "ExitPlanMode", { plan: "old plan" }),
+      subagent("sa"),
+      call("p2", "ExitPlanMode", { plan: "new plan" }),
+      ...turns(12, 2),
+    ]);
+    const cursor = index.lastPage().older!;
+    const ids = index.aux(cursor.pos).map((x) => x.part.id);
+    expect(ids.filter((id) => !id.startsWith("r"))).toEqual(["sa", "p2"]);
+  });
+
+  it("aux skips an ExitPlanMode call without a plan string and calls inside the page", () => {
+    const { index } = build([user(1), call("p1", "ExitPlanMode", { plan: "kept" }), call("p0", "ExitPlanMode", {}), call("p00", "ExitPlanMode", { plan: "" }), ...turns(12, 2), call("p3", "ExitPlanMode", { plan: "inside page" })]);
+    const cursor = index.lastPage().older!;
+    const ids = index.aux(cursor.pos).map((x) => x.part.id);
+    expect(ids).toContain("p1");
+    expect(ids).not.toContain("p0");
+    expect(ids).not.toContain("p00");
+    expect(ids).not.toContain("p3");
+  });
+
   it("pageFrom starts at the turn of the given id; over the cap or unknown gives undefined", () => {
     const { index } = build(turns(25));
     const from = index.pageFrom("c20", 3000)!;
