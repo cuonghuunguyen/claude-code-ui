@@ -31,6 +31,7 @@ const clears: { from: string; to: string }[] = [];
  * auto-mode classifier denies; "/clear" resets the conversation under a new session ID (no turn, as the CLI); any other prompt
  * replies "done: <text>". Each turn ends with a result.
  */
+const AGENTS = ["claude", "Explore", "orchestration:implementer", "orchestration:reviewer"];
 function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
   const run: Run = { options, texts: [] };
   runs.push(run);
@@ -113,6 +114,7 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
   })();
   return Object.assign(q, {
     supportedCommands: async () => [],
+    supportedAgents: async () => AGENTS.map((name) => ({ name, description: name })),
     supportedModels: async () => models,
     setPermissionMode: async () => {},
     // Esc ends a held turn, as the CLI's turn_interrupted does; a "stuck" turn ignores it.
@@ -1680,6 +1682,37 @@ describe("orchestration", () => {
       await new Promise((r) => setTimeout(r, 20));
       other.close();
       expect((await waiting).error).toMatch(/daemon stopped while waiting/);
+    } finally {
+      other.close();
+    }
+  });
+
+  it("a worker started with an agent runs its query as that agent, also after worker_close and worker_send", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "ag", cwd: dirB, prompt: "x", agent: "implementer" });
+    expect(w).toMatchObject({ name: "ag", agent: "orchestration:implementer" });
+    await until(() => runsOf(w.sessionId)[0]);
+    expect(runsOf(w.sessionId)[0]!.options.agent).toBe("orchestration:implementer");
+    await until(async () => (await state(w.sessionId)) === "idle");
+    await call(coord, "worker_close", { name: "ag" });
+    await call(coord, "worker_send", { name: "ag", text: "again" });
+    await until(() => runsOf(w.sessionId)[1]);
+    expect(runsOf(w.sessionId)[1]!.options.agent).toBe("orchestration:implementer");
+    const plain = await call(coord, "worker_start", { name: "plain", cwd: dirC, prompt: "x" });
+    await until(() => runsOf(plain.sessionId)[0]);
+    expect(runsOf(plain.sessionId)[0]!.options).not.toHaveProperty("agent");
+    expect((await call(coord, "worker_start", { name: "bad", cwd: dirC, prompt: "x", agent: "nope" })).error).toMatch(/Unknown agent type nope/);
+  });
+
+  it("a restarted daemon keeps the agent in sessions.json and worker_list", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "ag2", cwd: dirB, prompt: "x", agent: "reviewer" });
+    const other = await start();
+    try {
+      const listed = await call(coord, "worker_list", {}, {}, other);
+      expect(listed.workers.find((x: { name: string }) => x.name === "ag2")).toMatchObject({ agent: "orchestration:reviewer", sessionId: w.sessionId });
     } finally {
       other.close();
     }

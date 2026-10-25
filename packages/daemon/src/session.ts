@@ -89,6 +89,8 @@ type SessionOpts = Partial<SessionSettings> & {
   transcriptEnd?: (id: string, cwd: string) => Promise<TranscriptEnd>;
   /** MCP servers of each new query of session `id` (orchestration.ts: a coordinator's server); read at every query start. */
   mcpServers?: (id: string) => Options["mcpServers"];
+  /** Agent type the main thread of session `id` runs as (from the worker link); read at every query start. */
+  agent?: (id: string) => string | undefined;
   /**
    * Host policy for a tool call (orchestration.ts, by MCP server source): "allow" runs it without a permission request,
    * "no_rules" asks without "don't ask again" suggestions; none = a normal request.
@@ -275,6 +277,7 @@ export class Session {
     this.backgroundLevel = new Set();
     this.ambientTasks.clear();
     const up = this.opts.uploadDir?.(this.id);
+    const agent = this.opts.agent?.(this.id);
     const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
     const rules = sessionRules(this.grants);
     // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
@@ -313,6 +316,7 @@ export class Session {
         },
         canUseTool: (tool, input, o) => owner.session.canUseTool(tool, input, o),
         mcpServers: this.opts.mcpServers?.(this.id),
+        ...(agent && { agent }),
       },
     }));
     this.resumeAt = undefined;

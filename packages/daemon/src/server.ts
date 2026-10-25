@@ -371,6 +371,7 @@ export function createDaemon(opts: {
     },
     worker: (id: string) => !!settings.get(id)?.coordinatorId,
     mcpServers: (id: string) => orchestration.mcpServers(id),
+    agent: (id: string) => settings.get(id)?.agent,
     toolPolicy: (tool: string, mcpServer?: { name: string; source: string }) => orchestration.toolPolicy(tool, mcpServer),
     permissionCard: (id: string, tool: string, input: Record<string, unknown>, mcp?: { name: string; source: string }) => orchestration.permissionCard(id, tool, input, mcp),
   });
@@ -819,6 +820,7 @@ export function createDaemon(opts: {
     createWorktree: (repo, o) => createIn(repo, o),
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
+    agents: (cwd) => queuedQuery((q) => q.supportedAgents(), opts.query, { cwd, persistSession: false }).then((l) => l.map((a) => a.name)),
     models: () => known,
     remove: async (id) => {
       const err = await deleteSessionById(id);

@@ -10,7 +10,7 @@ import { WorktreeError, type CreateWorktreeOptions } from "./git.ts";
 import type { Tier } from "./risk-tier.ts";
 import type { Session, SessionSettings } from "./session.ts";
 import type { Link, SessionSettingsStore } from "./session-settings.ts";
-import { TargetError, checkShape, listTargets, resolveTarget, targetLabel, type Target, type TargetDeps, type TargetInput } from "./worker-targets.ts";
+import { TargetError, checkShape, listTargets, resolveTarget, targetDir, targetLabel, type Target, type TargetDeps, type TargetInput } from "./worker-targets.ts";
 
 export const SERVER = "orchestration";
 /** Longest `worker_wait`; the coordinator's turn holds its query open meanwhile. */
@@ -23,6 +23,8 @@ const MAX_TEXT = 4000;
 /** Longest worker_read result. */
 const MAX_READ = 20_000;
 const NAME = /^[a-z0-9-]{1,40}$/;
+/** An agent type name: a project or user agent, or a plugin agent as plugin:agent. */
+const AGENT = /^[A-Za-z0-9_.-]{1,100}(:[A-Za-z0-9_.-]{1,100}){0,3}$/;
 /** worker_stop and worker_close wait this long for the worker to leave running / needs_input. */
 const STOP_WAIT_MS = 10_000;
 /** No bypassPermissions or dontAsk from the tool. Absent: the coordinator's mode (bypass gives auto). A mode above the coordinator's passes only through the user's worker_start card (docs/spec.md Orchestration). */
@@ -131,6 +133,8 @@ export type OrchestrationDeps = {
   buildNote?: () => string | undefined;
   /** Deletes a session as the web app's Remove does (session.delete); the error when it cannot. A worker whose transcript is gone is just unlisted. Never touches a worktree or branch. */
   remove: (id: string) => Promise<{ code: string; message: string } | undefined>;
+  /** Agent type names (`supportedAgents()` of a throwaway CLI) available in `cwd`: built-ins, project, user and plugin agents (`plugin:agent`). */
+  agents: (cwd: string) => Promise<string[]>;
   /** Longest wait for a stopped worker to settle (worker_stop, worker_close); default 10 s. */
   stopWaitMs?: number;
 };
@@ -245,6 +249,20 @@ export function createOrchestration(deps: OrchestrationDeps) {
     const max = deps.settings().maxChildren;
     const n = liveChildren(c);
     if (n >= max) throw new ToolError(`Children limit reached: ${n} of your workers run (Settings > Orchestration > Maximum workers per coordinator). Close one with worker_close first.`);
+  };
+  /** The agent type as the CLI knows it: exact name, else the one `*:name` plugin agent. Tool errors for lookup failure, unknown, ambiguous. */
+  const resolveAgent = async (given: string, cwd: string) => {
+    let list: string[];
+    try {
+      list = await deps.agents(cwd);
+    } catch (e) {
+      throw new ToolError(`Agent types could not be read in ${cwd}: ${(e as Error).message}`);
+    }
+    if (list.includes(given)) return given;
+    const hits = list.filter((n) => n.endsWith(`:${given}`));
+    if (hits.length === 1) return hits[0]!;
+    if (hits.length > 1) throw new ToolError(`Agent type ${given} is ambiguous: ${hits.join(", ")}. Use the qualified name.`);
+    throw new ToolError(`Unknown agent type ${given}. Agent types here: ${list.slice(0, 50).join(", ") || "none"}.`);
   };
   /** Every worker below `c`, any depth, as { id, name, path, depth }. */
   const descendants = (c: string) => {
@@ -449,7 +467,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     return [
       def(
         "worker_start",
-        "Start a worker: a new Claude Code session that runs `prompt` as its first turn. Give exactly one target: `worktree` (an existing worktree of an added project, by folder name or path; add `project` when the name is in several projects), `project` alone (the project's main checkout; name = folder name as the sidebar shows it, or path), `project` with `branch` (new branch and folder <project>/.claude/worktrees/<branch>; letters, numbers, . _ -) and optional `base` (a commit or ref; default origin's default branch), or `cwd` (any directory inside the allowed roots). `repo` is an alias of `project`. worker_targets lists projects and worktrees. An unknown or ambiguous name is an error naming the candidates. The result names `project` and `worktree`. `name` is unique among your workers. `mode`: absent = the user's Settings worker mode, or your own permission mode (bypassPermissions gives auto) when that is coordinator; else default (asks before edits and commands), acceptEdits, plan or auto. auto needs a model that supports it, else the worker runs in default and the result says so (modeNote). The user approves this call; the worktree is created only then. daemonNote in the result: the daemon runs older code than is installed (tools or modes may be missing); tell the user. worker_close does not remove the worktree, and Removing the worktree in the web app deletes only worktree-* branches unless the user asks to delete a merged branch: this branch stays after the worktree is gone.",
+        "Start a worker: a new Claude Code session that runs `prompt` as its first turn. Give exactly one target: `worktree` (an existing worktree of an added project, by folder name or path; add `project` when the name is in several projects), `project` alone (the project's main checkout; name = folder name as the sidebar shows it, or path), `project` with `branch` (new branch and folder <project>/.claude/worktrees/<branch>; letters, numbers, . _ -) and optional `base` (a commit or ref; default origin's default branch), or `cwd` (any directory inside the allowed roots). `repo` is an alias of `project`. `agent`: run the worker as an agent type (its system prompt, tools and model): a project or user agent, or a plugin agent as plugin:agent (the bare name works when one plugin agent has it); an unknown name is an error listing the agent types; an explicit `model` wins over the agent type's model. worker_targets lists projects and worktrees. An unknown or ambiguous name is an error naming the candidates. The result names `project` and `worktree`. `name` is unique among your workers. `mode`: absent = the user's Settings worker mode, or your own permission mode (bypassPermissions gives auto) when that is coordinator; else default (asks before edits and commands), acceptEdits, plan or auto. auto needs a model that supports it, else the worker runs in default and the result says so (modeNote). Limits: Settings > Orchestration > Maximum tree depth (workers starting workers) and Maximum workers per coordinator; hitting one is an error. The user approves this call; the worktree is created only then. daemonNote in the result: the daemon runs older code than is installed (tools or modes may be missing); tell the user. worker_close does not remove the worktree, and Removing the worktree in the web app deletes only worktree-* branches unless the user asks to delete a merged branch: this branch stays after the worktree is gone.",
         {
           name,
           cwd: z.string().min(1).max(4096).optional(),
@@ -459,6 +477,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           branch: z.string().min(1).max(64).refine((s) => !s.startsWith("-"), "branch must not start with -").optional(),
           base: z.string().min(1).max(256).refine((s) => !s.startsWith("-"), "base must not start with -").optional(),
           prompt: text("prompt"),
+          agent: z.string().regex(AGENT, "agent must be an agent type name, plugin agents as plugin:agent").optional(),
           model: z.string().trim().min(1).max(100).optional(),
           mode: z.enum(MODES).optional(),
           effort: z.enum(EFFORTS as [string, ...string[]]).optional(),
@@ -471,6 +490,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
             throw asToolError(e);
           }
           const t = await target(a);
+          const agent = a.agent ? await resolveAgent(a.agent, targetDir(t)) : undefined;
           const key = `${coordinator}\0${a.name}`;
           if (reserved.has(key) || workers(coordinator).some((w) => w.name === a.name)) throw new ToolError(`A worker named ${a.name} exists already.`);
           checkCap();
@@ -494,7 +514,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           const link = (dir: string) => {
             s = deps.create(dir, { model, permissionMode: mode, effort: a.effort as SessionSettings["effort"] | undefined });
             try {
-              deps.links.set(s.id, { coordinatorId: cur(), name: a.name, cwd: dir, port: deps.port() });
+              deps.links.set(s.id, { coordinatorId: cur(), name: a.name, cwd: dir, port: deps.port(), ...(agent && { agent }) });
             } catch (e) {
               // No worker without its link: drop the session (the worktree goes with the error, git.ts onCreated).
               try {
@@ -528,7 +548,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           }
           const daemonNote = deps.buildNote?.();
           const where = t.kind === "new" ? { project: t.project, worktree: basename(cwd!) } : { ...(t.entry && { project: t.entry.project }), ...(t.entry && !t.entry.main && { worktree: t.entry.worktree }) };
-          return { name: a.name, sessionId: s!.id, cwd, ...where, ...(branch && { branch }), mode, ...(note && { modeNote: note }), ...(daemonNote && { daemonNote }) };
+          return { name: a.name, sessionId: s!.id, cwd, ...where, ...(branch && { branch }), ...(agent && { agent }), mode, ...(note && { modeNote: note }), ...(daemonNote && { daemonNote }) };
         },
       ),
       def(
@@ -689,7 +709,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           workers: workers(coordinator).map((w) => {
             const s = deps.sessions.get(w.id);
             const at = lastActivity.get(w.id);
-            return { name: w.name, sessionId: w.id, cwd: s?.cwd ?? w.cwd, state: s?.info().state ?? "not_loaded", live: !!s?.liveQuery(), ...(at ? { lastActivity: new Date(at).toISOString() } : {}) };
+            return { name: w.name, sessionId: w.id, ...(linkOf(w.id)?.agent && { agent: linkOf(w.id)!.agent }), cwd: s?.cwd ?? w.cwd, state: s?.info().state ?? "not_loaded", live: !!s?.liveQuery(), ...(at ? { lastActivity: new Date(at).toISOString() } : {}) };
           }),
           ...(daemonNote && { daemonNote }),
         };
@@ -819,9 +839,9 @@ export function createOrchestration(deps: OrchestrationDeps) {
       if (moved?.length) notify(to, moved.at(-1)!);
       const l = linkOf(from);
       if (l?.coordinatorId) {
-        save(() => deps.links.set(to, { coordinatorId: l.coordinatorId, name: l.name, cwd: l.cwd, port: l.port }));
+        save(() => deps.links.set(to, { coordinatorId: l.coordinatorId, name: l.name, cwd: l.cwd, port: l.port, agent: l.agent }));
         // Not delete: the old session keeps its model, mode and effort.
-        save(() => deps.links.set(from, { coordinatorId: undefined, name: undefined, cwd: undefined, port: undefined }));
+        save(() => deps.links.set(from, { coordinatorId: undefined, name: undefined, cwd: undefined, port: undefined, agent: undefined }));
         for (const m of [lastText, lastActivity] as Map<string, unknown>[]) {
           if (m.has(from)) m.set(to, m.get(from));
         }
@@ -857,7 +877,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
           if (e instanceof TargetError && e.code !== "shape") return { input, title: `Start worker ${name}: ${e.message.replace(/\.$/, "")}, the call will fail` };
         }
         const chain = linkOf(sessionId)?.coordinatorId ? chainOf(sessionId) : [];
-        const title = `Start worker ${name} in ${mode} mode${note ? ` (${note})` : ""}${where}${chain.length ? `, started by worker ${chain.join(" › ")}` : ""}`;
+        const as = typeof input.agent === "string" ? ` as ${input.agent}` : "";
+        const title = `Start worker ${name}${as} in ${mode} mode${note ? ` (${note})` : ""}${where}${chain.length ? `, started by worker ${chain.join(" › ")}` : ""}`;
         return { input: (MODES as readonly string[]).includes(wanted) ? { ...input, mode: wanted } : input, title, onAllow: () => void carded.add(`${resolve(sessionId)}\0${name}\0${mode}`) };
       })();
     },

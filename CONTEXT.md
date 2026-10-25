@@ -128,6 +128,10 @@ _Avoid_: orchestrator, manager, parent session
 A session a coordinator started with `worker_start`, linked to it by name in `sessions.json`. A normal session in every other way. May start workers of its own (**Worker tree**).
 _Avoid_: child session, subagent (different thing: a subagent run lives inside one session)
 
+**Agent type**:
+A named role (system prompt, model, tool limits) a session runs as: a project, user or plugin agent; plugin agents are `plugin:agent`. `worker_start {agent}` starts a worker as one.
+_Avoid_: persona, role session. Not a Subagent run.
+
 **Worker tree**:
 A root coordinator, its workers, their workers, linked by `coordinatorId`; depth = hops to the root coordinator. Limited by Settings Maximum tree depth and Maximum workers per coordinator.
 _Avoid_: hierarchy, manager chain

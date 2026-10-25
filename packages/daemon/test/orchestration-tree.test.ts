@@ -28,7 +28,9 @@ type Cfg = { enabled: boolean; workerCap: number; maxDepth: number; maxChildren:
 function setup(links = createSessionSettings(), cfg: Partial<Cfg> = {}) {
   const sessions = new Map<string, any>();
   const prompts: [string, string][] = [];
-  const created: { cwd: string; s: any }[] = [];
+  const created: { cwd: string; s: any; init: any }[] = [];
+  const agentCalls: string[] = [];
+  const agentBox: { list: string[]; fail?: string } = { list: ["claude", "Explore", "orchestration:implementer", "orchestration:reviewer", "a:dup", "b:dup", "local-x"] };
   const settings: Cfg = { enabled: true, workerCap: 10, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, ...cfg };
   const removed: string[] = [];
   const o = createOrchestration({
@@ -36,11 +38,16 @@ function setup(links = createSessionSettings(), cfg: Partial<Cfg> = {}) {
     settings: () => settings as any,
     sessions,
     find: async (id) => sessions.get(id),
-    create: (cwd) => {
+    create: (cwd, init) => {
       const s = fakeSession(`new-${created.length}`);
       sessions.set(s.id, s);
-      created.push({ cwd, s });
+      created.push({ cwd, s, init });
       return s;
+    },
+    agents: async (cwd) => {
+      agentCalls.push(cwd);
+      if (agentBox.fail) throw new Error(agentBox.fail);
+      return agentBox.list;
     },
     prompt: async (s, t) => {
       prompts.push([s.id, t]);
@@ -62,7 +69,7 @@ function setup(links = createSessionSettings(), cfg: Partial<Cfg> = {}) {
     },
     stopWaitMs: 50,
   });
-  return { o, sessions, prompts, links, created, settings, removed };
+  return { o, sessions, prompts, links, created, settings, removed, agentCalls, agentBox };
 }
 
 const turnEnd = { part: { type: "turn_result", id: "r", durationMs: 1, isError: false } } as any;
@@ -240,5 +247,95 @@ describe("worker tree: orchestration for workers", () => {
     expect(t.links.get("W2")?.coordinatorId).toBe("W1b");
     expect(t.links.get("W1b")).toMatchObject({ coordinatorId: "C", name: "impl" });
     expect(t.links.get("W1")?.coordinatorId).toBeUndefined();
+  });
+});
+
+describe("worker tree: agent types", () => {
+  it("agent is resolved, saved in the link and listed", async () => {
+    const t = setup();
+    t.sessions.set("C", fakeSession("C"));
+    const r = await call(t.o, "C", "worker_start", start("impl", { agent: "implementer" }));
+    expect(r).toMatchObject({ name: "impl", agent: "orchestration:implementer" });
+    expect(t.links.get(r.sessionId)?.agent).toBe("orchestration:implementer");
+    const list = await call(t.o, "C", "worker_list");
+    expect(list.workers[0]).toMatchObject({ name: "impl", agent: "orchestration:implementer" });
+  });
+
+  it("an exact agent name wins over a suffix match", async () => {
+    const t = setup();
+    t.sessions.set("C", fakeSession("C"));
+    expect(await call(t.o, "C", "worker_start", start("e", { agent: "Explore" }))).toMatchObject({ agent: "Explore" });
+  });
+
+  it("an unknown agent type is a tool error listing the agent types; nothing starts", async () => {
+    const t = setup();
+    t.sessions.set("C", fakeSession("C"));
+    const r = await call(t.o, "C", "worker_start", start("x", { agent: "nope" }));
+    expect(r.error).toMatch(/Unknown agent type nope/);
+    expect(r.error).toMatch(/orchestration:reviewer/);
+    expect(t.created).toEqual([]);
+    expect(t.links.entries()).toEqual([]);
+  });
+
+  it("an ambiguous bare agent name is a tool error naming the candidates", async () => {
+    const t = setup();
+    t.sessions.set("C", fakeSession("C"));
+    const r = await call(t.o, "C", "worker_start", start("x", { agent: "dup" }));
+    expect(r.error).toMatch(/ambiguous/);
+    expect(r.error).toMatch(/a:dup/);
+    expect(r.error).toMatch(/b:dup/);
+    expect(t.created).toEqual([]);
+  });
+
+  it("a failed agent lookup is a tool error and starts nothing", async () => {
+    const t = setup();
+    t.sessions.set("C", fakeSession("C"));
+    t.agentBox.fail = "timeout";
+    expect((await call(t.o, "C", "worker_start", start("x", { agent: "implementer" }))).error).toMatch(/could not be read/);
+    expect(t.created).toEqual([]);
+  });
+
+  it("an invalid agent name is refused before any lookup", async () => {
+    const t = setup();
+    t.sessions.set("C", fakeSession("C"));
+    expect((await call(t.o, "C", "worker_start", start("x", { agent: "a b;c" }))).error).toMatch(/agent must be an agent type name/);
+    expect(t.agentCalls).toEqual([]);
+  });
+
+  it("an explicit model wins over the agent type; without model the worker gets none", async () => {
+    const t = setup();
+    t.sessions.set("C", fakeSession("C"));
+    await call(t.o, "C", "worker_start", start("a", { agent: "implementer", model: "sonnet" }));
+    await call(t.o, "C", "worker_start", start("b", { agent: "implementer" }));
+    expect(t.created[0]!.init.model).toBe("sonnet");
+    expect(t.created[1]!.init.model).toBeUndefined();
+  });
+
+  it("agent lookup runs in the target folder; a new branch looks in the project", async () => {
+    const t = setup();
+    t.sessions.set("C", fakeSession("C"));
+    await call(t.o, "C", "worker_start", start("a", { agent: "implementer" }));
+    await call(t.o, "C", "worker_start", { name: "b", project: "/repo", branch: "feat", prompt: "go", agent: "implementer" });
+    expect(t.agentCalls).toEqual(["/tmp", "/repo"]);
+  });
+
+  it("an agent check failure does not count a worker; limits are checked after it", async () => {
+    const t = setup(undefined, { maxChildren: 1 });
+    t.sessions.set("C", fakeSession("C"));
+    expect(await call(t.o, "C", "worker_start", start("a", { agent: "implementer" }))).toMatchObject({ name: "a" });
+    expect((await call(t.o, "C", "worker_start", start("b", { agent: "implementer" }))).error).toMatch(/Maximum workers per coordinator/);
+  });
+
+  it("the card names the agent type; /clear keeps the agent in the moved link", async () => {
+    const t = setup();
+    tree(t, 1);
+    t.links.set("W1", { agent: "orchestration:reviewer" });
+    const sdk = { name: "orchestration", source: "sdk" };
+    const card = await t.o.permissionCard("C", "mcp__orchestration__worker_start", start("rev", { agent: "orchestration:reviewer" }), sdk);
+    expect(card!.title).toMatch(/^Start worker rev as orchestration:reviewer in default mode/);
+    t.sessions.set("W1b", fakeSession("W1b"));
+    t.o.handOver("W1", "W1b");
+    expect(t.links.get("W1b")?.agent).toBe("orchestration:reviewer");
+    expect(t.links.get("W1")?.agent).toBeUndefined();
   });
 });
