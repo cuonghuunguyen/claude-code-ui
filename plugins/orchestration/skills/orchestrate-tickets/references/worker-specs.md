@@ -1,5 +1,10 @@
 # Worker prompts
 
+**Tree flow (agent types installed):** a stage worker started with `agent: orchestration:<role>`
+gets the HANDOFF block of `references/handoff.md` as its whole prompt; its role file already
+carries the PLAYBOOK, SCRATCH SPACE, FORBIDDEN and RESULT blocks and the method of its stage. The
+templates below are the **hub flow** (no `agent`): the root writes the full prompt.
+
 A worker prompt is the first user turn of a fresh session. Write it for someone with no memory
 of the coordinator's conversation. Every prompt names five things: the target, the change or
 check, the constraints, what it may edit, and the observable result.

@@ -166,8 +166,10 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
     id: "orchestration",
     title: "Orchestration",
     rows: [
-      { key: "enabled", kind: "switch", label: "Enable orchestration", hint: "Every session (except workers) may start and supervise worker sessions. Applies at a session's next start." },
+      { key: "enabled", kind: "switch", label: "Enable orchestration", hint: "Every session may start and supervise worker sessions, workers too (up to Maximum tree depth). Applies at a session's next start." },
       { key: "workerCap", kind: "number", min: 1, max: 20, label: "Maximum workers", hint: "Worker sessions running at the same time (1 to 20)." },
+      { key: "maxDepth", kind: "number", min: 1, max: 5, label: "Maximum tree depth", hint: "How deep workers may start workers of their own: 1 = only you start workers; 2 = a worker may start its own (e.g. a tester and a reviewer)." },
+      { key: "maxChildren", kind: "number", min: 1, max: 20, label: "Maximum workers per coordinator", hint: "Workers one session (you or a worker) may run at the same time. Maximum workers still counts every worker." },
       {
         key: "workerMode",
         kind: "select",

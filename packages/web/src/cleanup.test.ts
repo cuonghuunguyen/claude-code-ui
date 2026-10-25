@@ -81,6 +81,17 @@ describe("cleanup", () => {
     expect(confirmLabel(3, 1)).toBe("Remove 3 (1 with unsaved work)");
   });
 
+  it("cleanupItems: a ticked worker and its ticked workers are removed bottom-up, so the parent goes too", async () => {
+    const rows = [wk("mid", "closed", { coordinatorId: "root" }), wk("deep", "closed", { coordinatorId: "mid" }), wk("top", "closed", { coordinatorId: "mid" }), wk("solo", "closed")];
+    const sent: { sessionId: string }[] = [];
+    const items = cleanupItems(rows, new Set(rows.map((r) => r.key)), { deleteBranch: new Set() }, (async (m: { sessionId: string }) => void sent.push(m)) as never);
+    for (const i of items) await i.run();
+    const order = sent.map((m) => m.sessionId);
+    expect(order.indexOf("mid")).toBeGreaterThan(order.indexOf("deep"));
+    expect(order.indexOf("mid")).toBeGreaterThan(order.indexOf("top"));
+    expect(order).toHaveLength(4);
+  });
+
   it("cleanupItems: workers before worktrees; expectSafe only for rows Safe at listing; deleteBranch only with branchMerged", async () => {
     const rows = [
       wt("/safe", { status: st({ branchMerged: true }) } as never),

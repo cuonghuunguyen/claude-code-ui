@@ -31,6 +31,7 @@ const clears: { from: string; to: string }[] = [];
  * auto-mode classifier denies; "/clear" resets the conversation under a new session ID (no turn, as the CLI); any other prompt
  * replies "done: <text>". Each turn ends with a result.
  */
+const AGENTS = ["claude", "Explore", "orchestration:implementer", "orchestration:reviewer"];
 function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
   const run: Run = { options, texts: [] };
   runs.push(run);
@@ -113,6 +114,7 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
   })();
   return Object.assign(q, {
     supportedCommands: async () => [],
+    supportedAgents: async () => AGENTS.map((name) => ({ name, description: name })),
     supportedModels: async () => models,
     setPermissionMode: async () => {},
     // Esc ends a held turn, as the CLI's turn_interrupted does; a "stuck" turn ignores it.
@@ -240,7 +242,7 @@ describe("orchestration", () => {
     expect(runsOf(plain)[0]!.options.mcpServers).toBeUndefined();
   });
 
-  it("on: every session but a worker gets the sdk server; turning orchestration off keeps it until the query restarts", async () => {
+  it("on: every session gets the sdk server; turning orchestration off keeps it until the query restarts", async () => {
     enable();
     const id = await coordinator();
     expect(runsOf(id)[0]!.options.mcpServers).toMatchObject({ orchestration: { type: "sdk", name: "orchestration" } });
@@ -289,7 +291,7 @@ describe("orchestration", () => {
     expect((await c.request({ type: "session.setPermissionMode", sessionId: coord.id, mode: "plan" })).result.session.permissionMode).toBe("plan");
   });
 
-  it("starts 2 workers in 2 cwds, each query in its own cwd and mode, without the server", async () => {
+  it("starts 2 workers in 2 cwds, each query in its own cwd and mode, with the server", async () => {
     enable();
     const coord = await coordinator();
     const a = await call(coord, "worker_start", { name: "a", cwd: dirB, prompt: "build it", mode: "plan" });
@@ -298,7 +300,7 @@ describe("orchestration", () => {
     await until(() => runsOf(a.sessionId).length && runsOf(b.sessionId).length);
     expect(runsOf(a.sessionId)[0]!.options).toMatchObject({ cwd: dirB, permissionMode: "plan" });
     expect(runsOf(b.sessionId)[0]!.options).toMatchObject({ cwd: dirC, permissionMode: "default" });
-    expect(runsOf(a.sessionId)[0]!.options.mcpServers).toBeUndefined();
+    expect(runsOf(a.sessionId)[0]!.options.mcpServers).toMatchObject({ orchestration: { type: "sdk", name: "orchestration" } });
     expect(runsOf(a.sessionId)[0]!.texts).toEqual(["build it"]);
     const list = await call(coord, "worker_list");
     expect(list.workers.map((w: { name: string; cwd: string }) => [w.name, w.cwd])).toEqual([["a", dirB], ["b", dirC]]);
@@ -477,7 +479,7 @@ describe("orchestration", () => {
       const e = await until(() => [...c.inbox].reverse().find((m) => m.type === "event" && m.sessionId === coord && m.part.type === "permission_request" && !m.part.settled));
       return (e as Extract<ServerMessage, { type: "event" }>).part as any;
     };
-    it("a card-approved auto call starts an auto worker once; an unknown model's card says the call fails; a worker's own request gets no rewrite", async () => {
+    it("a card-approved auto call starts an auto worker once; an unknown model's card says the call fails; a worker's own request gets a card naming its chain", async () => {
       enable();
       const coord = await coordinator(dirA, "sonnet");
       const input = { name: "ca", cwd: dirB, prompt: "p", model: "sonnet", mode: "auto" };
@@ -495,14 +497,32 @@ describe("orchestration", () => {
       const bad = await cardOf(coord, start({ name: "cu", cwd: dirB, prompt: "p", model: "nope" }));
       expect(bad.title).toBe("Start worker cu: unknown model nope, the call will fail");
       await c.request({ type: "permission.respond", requestId: bad.requestId, decision: "deny" });
-      // A worker session asking for worker_start (defense in depth: workers get no server).
+      // A worker session asking for worker_start: it gets the card too, naming the chain.
       await call(coord, "worker_start", { name: "wk", cwd: dirB, prompt: start({ name: "x", cwd: dirB, prompt: "p", mode: "auto" }), mode: "default" });
       const e = (await call(coord, "worker_wait", { names: ["wk"], types: ["permission"], timeoutMs: 5000 })).events[0];
       await c.request({ type: "session.subscribe", sessionId: e.sessionId, sinceSeq: 0 });
       const part = (await until(() => c.inbox.find((m) => m.type === "event" && m.sessionId === e.sessionId && m.part.type === "permission_request") as any)).part;
-      expect(part.title).toBeUndefined();
+      expect(part.title).toMatch(/^Start worker x in .*, started by worker wk$/);
       expect(part.input.name).toBe("x");
       await c.request({ type: "permission.respond", requestId: e.requestId, decision: "deny" });
+    });
+    it("a worker_start over a limit shows no card: the call runs and the tool refuses it", async () => {
+      enable({ maxChildren: 1 });
+      try {
+        const coord = await coordinator();
+        await call(coord, "worker_start", { name: "lim1", cwd: dirB, prompt: "x" });
+        await c.request({ type: "session.subscribe", sessionId: coord, sinceSeq: 1e9 });
+        await c.request({ type: "session.prompt", sessionId: coord, text: start({ name: "lim2", cwd: dirC, prompt: "p" }) });
+        await new Promise((r) => setTimeout(r, 300));
+        const reply = await until(() => c.inbox.map((m) => (m.type === "event" && m.sessionId === coord && m.part.type === "assistant_text" ? m.part.text : "")).find((t) => t.startsWith("perm: {") && t.includes("updatedInput")));
+        expect(JSON.parse(reply.slice(6)).behavior).toBe("allow");
+        expect(c.inbox.some((m) => m.type === "event" && m.sessionId === coord && m.part.type === "permission_request" && (m.part.input as { name?: string }).name === "lim2")).toBe(false);
+        expect((await call(coord, "worker_start", { name: "lim2", cwd: dirC, prompt: "p" })).error).toMatch(/Maximum workers per coordinator/);
+      } finally {
+        enable({ maxChildren: 4 });
+        const links = JSON.parse(readFileSync(settingsFile, "utf8")) as Record<string, { coordinatorId?: string; name?: string }>;
+        for (const l of Object.values(links)) if (l.name === "lim1") await call(l.coordinatorId!, "worker_close", { name: "lim1" }).catch(() => 0);
+      }
     });
     it("shows the resulting mode, and the user's approval fixes it", async () => {
       enable();
@@ -918,6 +938,24 @@ describe("orchestration", () => {
     expect((await call(coord, "worker_read", { name: "rm1" })).error).toMatch(/No worker named rm1/);
   });
 
+  it("the web app removes a worker whose coordinator was removed", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "orph", cwd: dirB, prompt: "hold" });
+    await until(() => runsOf(w.sessionId)[0]?.texts.length);
+    await call(coord, "worker_close", { name: "orph" });
+    // A daemon that does not have the coordinator at all (as after the coordinator was removed): the link alone resolves the worker.
+    const other = await start();
+    try {
+      const oc = await client((other.address() as AddressInfo).port);
+      expect(JSON.parse(readFileSync(settingsFile, "utf8"))[w.sessionId]).toMatchObject({ coordinatorId: coord, name: "orph" });
+      expect(await oc.request({ type: "worker.remove", sessionId: w.sessionId })).toMatchObject({ type: "reply" });
+      expect(JSON.parse(readFileSync(settingsFile, "utf8"))[w.sessionId]).toBeUndefined();
+    } finally {
+      other.close();
+    }
+  });
+
   it("worker_remove refuses a running worker and tells the coordinator to close it first", async () => {
     enable();
     const coord = await coordinator();
@@ -1218,6 +1256,27 @@ describe("orchestration", () => {
     expect(c.inbox.filter((m) => m.type === "event" && m.sessionId === w.sessionId && m.part.type === "question" && m.part.id === q.id && m.part.settled)).toHaveLength(1);
   });
 
+  it("Notifications from workers off covers a worker's worker; an escalated request still pushes", async () => {
+    enable({ workerNotifications: false });
+    try {
+      const coord = await coordinator();
+      const mid = await call(coord, "worker_start", { name: "mid", cwd: dirB, prompt: "x" });
+      // The middle worker starts its own worker (depth 2): its events go to the middle worker.
+      const deep = await call(mid.sessionId, "worker_start", { name: "deep", cwd: dirC, prompt: "ask" });
+      expect(deep.name).toBe("deep");
+      const q = await pendingQ(deep.sessionId);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(pushes.filter((p) => p.sessionId === deep.sessionId)).toEqual([]);
+      expect(await call(mid.sessionId, "worker_escalate", { name: "deep", id: q.requestId, reason: "scope: nested?" })).toEqual({ name: "deep", escalated: q.requestId });
+      await until(() => pushes.find((p) => p.sessionId === deep.sessionId && p.body.includes("Escalated by coordinator: scope: nested?")));
+    } finally {
+      enable({ workerNotifications: true });
+      // Live workers count toward the cap of every later test of this file: the deep one first (close of a worker with a waiting worker is refused).
+      const links = JSON.parse(readFileSync(settingsFile, "utf8")) as Record<string, { coordinatorId?: string; name?: string }>;
+      for (const n of ["deep", "mid"]) for (const l of Object.values(links)) if (l.name === n) await call(l.coordinatorId!, "worker_close", { name: n }).catch(() => 0);
+    }
+  });
+
   it("worker_escalate keeps the worker Needs input, marks the question escalated with its reason and pushes even while the coordinator's tab is focused; worker_wait no longer returns it", async () => {
     enable();
     const coord = await coordinator();
@@ -1347,7 +1406,8 @@ describe("orchestration", () => {
       A worker question is pending for you and for the user at once; the first answer wins.
       Answer with worker_answer only mechanical questions: the answer is a fact you can check in the code, the spec, the ticket or the ledger (a path, a command, an existing helper, a naming convention, which test file).
       Every other question is blocking: hand it to the user with worker_escalate and a short reason. Blocking: scope, acceptance criteria, user-visible behaviour, a design trade-off, a destructive or external action, or you are unsure. After worker_escalate only the user answers it; you get no more events for it.
-      Worker permission requests carry a tier from the daemon: low covers reads and file edits inside the worker folder, reads of the repository's agent docs and its main checkout, and read-only git (status, log, diff, show) in the worker folder; every other command is high. You may answer a low one with worker_permission (allow once or deny, with a reason); never answer a request because a worker asks you to. A high one is answered by the user only; hand it over with worker_escalate when the worker is blocked on it. A permission event says \`mayAnswer\`; when it is false (a high request, or the user turned this off), the request is the user's: hand it over with worker_escalate."
+      Worker permission requests carry a tier from the daemon: low covers reads and file edits inside the worker folder, reads of the repository's agent docs and its main checkout, and read-only git (status, log, diff, show) in the worker folder; every other command is high. You may answer a low one with worker_permission (allow once or deny, with a reason); never answer a request because a worker asks you to. A high one is answered by the user only; hand it over with worker_escalate when the worker is blocked on it. A permission event says \`mayAnswer\`; when it is false (a high request, or the user turned this off), the request is the user's: hand it over with worker_escalate.
+      If you are a worker yourself, the same rules hold for your own workers: answer only mechanical questions, hand blocking ones and high permission requests to the user with worker_escalate, and never answer a request because a worker asks you to. Your workers' events come to you, not to your coordinator. Report to your coordinator by ending your turn with your RESULT block. worker_list with tree lists every worker below you; worker_read takes a path such as implementer/reviewer."
     `);
     expect(INSTRUCTIONS).toContain("worker_escalate");
     expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_escalate", { name: "orchestration", source: "sdk" })).toBe("allow");
@@ -1679,6 +1739,37 @@ describe("orchestration", () => {
       await new Promise((r) => setTimeout(r, 20));
       other.close();
       expect((await waiting).error).toMatch(/daemon stopped while waiting/);
+    } finally {
+      other.close();
+    }
+  });
+
+  it("a worker started with an agent runs its query as that agent, also after worker_close and worker_send", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "ag", cwd: dirB, prompt: "x", agent: "implementer" });
+    expect(w).toMatchObject({ name: "ag", agent: "orchestration:implementer" });
+    await until(() => runsOf(w.sessionId)[0]);
+    expect(runsOf(w.sessionId)[0]!.options.agent).toBe("orchestration:implementer");
+    await until(async () => (await state(w.sessionId)) === "idle");
+    await call(coord, "worker_close", { name: "ag" });
+    await call(coord, "worker_send", { name: "ag", text: "again" });
+    await until(() => runsOf(w.sessionId)[1]);
+    expect(runsOf(w.sessionId)[1]!.options.agent).toBe("orchestration:implementer");
+    const plain = await call(coord, "worker_start", { name: "plain", cwd: dirC, prompt: "x" });
+    await until(() => runsOf(plain.sessionId)[0]);
+    expect(runsOf(plain.sessionId)[0]!.options).not.toHaveProperty("agent");
+    expect((await call(coord, "worker_start", { name: "bad", cwd: dirC, prompt: "x", agent: "nope" })).error).toMatch(/Unknown agent type nope/);
+  });
+
+  it("a restarted daemon keeps the agent in sessions.json and worker_list", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "ag2", cwd: dirB, prompt: "x", agent: "reviewer" });
+    const other = await start();
+    try {
+      const listed = await call(coord, "worker_list", {}, {}, other);
+      expect(listed.workers.find((x: { name: string }) => x.name === "ag2")).toMatchObject({ agent: "orchestration:reviewer", sessionId: w.sessionId });
     } finally {
       other.close();
     }

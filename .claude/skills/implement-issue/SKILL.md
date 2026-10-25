@@ -125,6 +125,9 @@ broken app is a failed case that goes back to the implementer.
    `~/.config/claude-ui` elsewhere): it adds test projects and sessions to the user's install.
    Always `XDG_CONFIG_HOME=<scratch>/ui-config` (the e2e run does this itself).
 
+## Handoff
+A stage role of the `orchestration` plugin (`orchestration:planner|implementer|ui-tester|reviewer`, skill `orchestration:orchestrate-tickets`) reads this playbook for its repo-specific steps. Its prompt is a HANDOFF block: `report-dir` is the scratch folder `development-docs/GH-<n>/` above; use the one port the handoff sender gave you.
+
 ## Without a coordinator
 Working an issue by hand: run the stages yourself in order (plan when the skip rules in
 `orchestrate-tickets` › `references/planning.md` fail, implement, acceptance), with the model
