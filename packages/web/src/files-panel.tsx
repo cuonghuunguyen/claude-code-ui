@@ -19,6 +19,7 @@ import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
 import { loadLanguage, syntaxStyle } from "./code-theme.ts";
 import { baseName, inDir, relPath } from "./paths.ts";
+import type { RepoList } from "./repo-choice.ts";
 import { MediaView } from "./media-view.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { FILE_LINK_PROPS, FileBaseContext, FileImageContext, FileLinkContext } from "./file-links.tsx";
@@ -46,6 +47,8 @@ export function FilesPanel({
   onCopy,
   onViewer,
   onShowChanges,
+  repos,
+  onShowGraph,
   openPath,
   openLine,
   onOpened,
@@ -71,6 +74,10 @@ export function FilesPanel({
   onViewer?: (path: string) => void;
   /** File tree menu: Show changes. */
   onShowChanges?: (path: string) => void;
+  /** The repositories of the cwd: the tree marks each file with its own repository's status. */
+  repos?: RepoList;
+  /** Show graph on a repository folder (the tree sets the repository selector first). */
+  onShowGraph?: () => void;
   openPath?: string;
   /** With `openPath`: the line to put the cursor on. */
   openLine?: number;
@@ -224,6 +231,8 @@ export function FilesPanel({
             onCopy={onCopy}
             onViewer={dialog ? undefined : onViewer}
             onShowChanges={onShowChanges}
+            repos={repos}
+            onShowGraph={onShowGraph}
             onMention={(p) => onSend(fileMention(p, cwd))}
             onReload={() => setTreeKey((k) => k + 1)}
             onChanged={store.nudge}

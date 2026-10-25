@@ -1774,7 +1774,8 @@ export function App() {
   const repoKey = repoProjectKey(panelCwd, worktrees, listLoaded);
   const repoList: RepoList | undefined = panelCwd && repos && repoKey ? { list: repos, truncated: reposTruncated, projectKey: repoKey } : undefined;
   const isGit = repos ? !!repo : gitProbe;
-  const ownGit = repos ? repos.some((r) => r.kind === "main" && !r.outsideRoots) : isGit;
+  // The Files tab marks files of every listed repository, also when the folder itself is none; the setting changes the moved-submodule marks.
+  const treeStamp = isGit ? `${panelView?.state}|${changedPaths.length}|${ignoreSubmodules}` : undefined;
   const reposAnswered = repos !== undefined;
   useEffect(() => void (panelCwd && reposAnswered && repos !== null && setGitChecked(panelCwd)), [panelCwd, repos]);
   const reloadRepos = () => setReposFresh((n) => n + 1);
@@ -2915,7 +2916,9 @@ export function App() {
                         watch={changedPaths}
                         showTree={fileTree}
                         onToggleTree={() => setFileTree((v) => !v)}
-                        gitStamp={ownGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
+                        gitStamp={treeStamp}
+                        repos={repoList}
+                        onShowGraph={() => reveal("graph")}
                         visible={inSight("files")}
                       />
                     </div>,
@@ -3168,7 +3171,9 @@ export function App() {
           status={status}
           cwd={panelTarget.cwd}
           store={editors}
-          gitStamp={ownGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
+          gitStamp={treeStamp}
+          repos={repoList}
+          onShowGraph={() => (setFileDialog(undefined), reveal("graph"))}
           onClose={() => setFileDialog(undefined)}
           onSend={(m) => (setFileDialog(undefined), setInsert(m), setPane("session"))}
           onCopy={copyText}

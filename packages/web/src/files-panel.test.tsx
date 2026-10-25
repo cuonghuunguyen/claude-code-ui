@@ -658,3 +658,23 @@ it("GH-360 renaming an open file moves its tab; deleting an open clean file clos
   expect(titles().join()).not.toContain("c.ts");
   act(() => root.render(null));
 });
+
+it("GH-392 FilesPanel passes repos to the tree: one git.diff per repository with exact", async () => {
+  const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : { diff: null }));
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const list = [
+    { path: "/p", rel: "", kind: "main" as const },
+    { path: "/p/in", rel: "in", kind: "nested" as const, parent: "/p" },
+  ];
+  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} gitStamp="s" repos={{ list, projectKey: "proj" }} />));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 350))));
+  const diffs = request.mock.calls.map(([m]) => m).filter((m) => m.type === "git.diff");
+  expect(diffs).toEqual([
+    { type: "git.diff", cwd: "/p", base: "head", exact: true },
+    { type: "git.diff", cwd: "/p/in", base: "head", exact: true },
+  ]);
+  act(() => root.render(null));
+});
