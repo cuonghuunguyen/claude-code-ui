@@ -375,6 +375,8 @@ export function App() {
   const [inApp, setInApp] = useState(loadInApp);
   // Settings › Orchestration › Notifications from workers (GH-387): read on connect and from settings_changed.
   const [workerNotices, setWorkerNotices] = useState(true);
+  // Settings › Git: no "modified content" probes of submodules in Changes.
+  const [ignoreSubmodules, setIgnoreSubmodules] = useState(false);
   useEffect(() => {
     const sync = (e: globalThis.Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
     window.addEventListener(IN_APP_EVENT, sync);
@@ -1097,7 +1099,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false)),
+      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       onConfigChanged: (m) => {
@@ -1118,7 +1120,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => setWorkerNotices(r.settings.orchestration.workerNotifications !== false)).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -2781,6 +2783,7 @@ export function App() {
                           onPopOut={() => openViewer({ kind: "changes" })}
                           reveal={changesReveal}
                           repos={repoList}
+                          ignoreSubmodules={ignoreSubmodules}
                           onReload={reloadRepos}
                         />
                       )
@@ -2797,6 +2800,7 @@ export function App() {
                         sessionId={NEW_TAB}
                         reveal={changesReveal}
                         repos={repoList}
+                        ignoreSubmodules={ignoreSubmodules}
                         onReload={reloadRepos}
                         emptyText="No changes yet. Claude's edits appear here."
                       />
@@ -2990,6 +2994,7 @@ export function App() {
           view={viewer ? views[viewer.sessionId] : undefined}
           sessionId={viewer?.sessionId}
           repos={(viewer?.cwd ?? shown.cwd) === panelCwd ? repoList : undefined}
+          ignoreSubmodules={ignoreSubmodules}
           onClose={() => setViewer(undefined)}
           onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line }), setPane("files"), setPanel(true))}
         />

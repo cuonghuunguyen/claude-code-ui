@@ -1951,6 +1951,31 @@ it("ChangesPanel reads the repository chosen for the project; the Graph keeps th
   }
 });
 
+it("settings ignoreSubmodules from settings.get and settings_changed reach ChangesPanel", async () => {
+  localStorage.setItem("claude-ui.diffMode", "uncommitted");
+  const own = { path: "/p/demo", rel: "", kind: "main", branch: "main" };
+  const lib = { path: "/p/demo/libs/lib", rel: "libs/lib", kind: "submodule", parent: "/p/demo", branch: "x" };
+  const probes = () => (sent as { type: string; cwd?: string; exact?: boolean }[]).filter((m) => m.type === "git.status" && m.cwd === lib.path && m.exact);
+  const restore = await remount({
+    "settings.get": { settings: { orchestration: {}, git: { ignoreSubmodules: true } } },
+    "git.repos": { repos: [own, lib] },
+    "git.status": { status: { branch: "main", added: 0, removed: 0, files: 1 } },
+    "git.diff": { diff: { prefix: "", base: "b".repeat(40), files: [] } },
+  });
+  try {
+    await pickSide(/changes/i);
+    await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    expect(probes()).toEqual([]);
+    await act(async () => settingsChanged({ settings: { orchestration: {}, git: { ignoreSubmodules: false } } }));
+    await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    expect(probes().length).toBeGreaterThan(0);
+  } finally {
+    restore();
+    localStorage.removeItem("claude-ui.diffMode");
+    for (const k of ["settings.get", "git.status", "git.repos", "git.diff"]) delete replies[k];
+  }
+});
+
 it("git.repos [] hides the Graph tab even when git.status would answer; without a repos array git.status decides", async () => {
   let restore = await remount({ "git.repos": { repos: [] }, "git.status": { status: { branch: "main", added: 0, removed: 0 } } });
   try {

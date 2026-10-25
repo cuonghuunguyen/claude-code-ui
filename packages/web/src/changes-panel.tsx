@@ -1,7 +1,7 @@
 // Changes tab (docs/spec.md "Layout"): files changed in the session, or in the working tree against HEAD or a branch, each with its diff, like OpenCode's review panel.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
-import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitStatusResult } from "@claude-ui/protocol";
+import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitRepo, GitStatusResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, Maximize2Icon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,12 +14,14 @@ import { useDark } from "./theme.ts";
 import { DIFF_OPTIONS, InputDiff } from "./tool-card.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { inDir, isWinPath, joinPath, relPath } from "./paths.ts";
+import { pathKey } from "./file-tree-model.ts";
+import { repoDir } from "./repos.ts";
 import { DIFF_MODES, loadDiffScope, repoRoot, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
-import { gitEol, gitRows } from "./git-changes.ts";
+import { eachLimited, gitEol, gitRows, type GitRow } from "./git-changes.ts";
 import { mediaKind, readFailure, textFailure } from "./files.ts";
 import { ImageDiff, type ImagePane } from "./image-diff.tsx";
 import { filePath } from "./tools.ts";
-import { RepoSelector } from "./repo-selector.tsx";
+import { RepoIcon, RepoSelector } from "./repo-selector.tsx";
 import { selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -31,10 +33,19 @@ type Disk = { content?: string; deleted?: boolean; error?: string; notice?: bool
 type Row = { path: string; kind: Kind; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; change?: FileChange; oldPath?: string; oldShown?: string;
   /** A gitlink row (git modes): no file to read or diff. */
   submodule?: { from?: string; to?: string };
+  /** A submodule with uncommitted changes in tracked files (`git.status` of it): the files; `dirtyOnly`: its gitlink did not move, so the row exists for this. */
+  dirty?: number;
+  dirtyOnly?: boolean;
+  /** An untracked folder that is a listed nested repository: one row, no files. */
+  nested?: GitRepo;
+  /** The listed, readable repository this row stands for (submodule or nested), `rel` relative to the session cwd: "Show changes in". */
+  repoRel?: string;
   /** A changed image (git modes): shown as images, not a text diff. */
   image?: { before?: ImagePane; after?: ImagePane };
 };
 export type Kind = "A" | "D" | "M" | "R";
+const SUB_PROBES = 10;
+const SUB_PARALLEL = 4;
 const KIND_TITLE = { A: "Added", D: "Deleted", M: "Modified", R: "Renamed" } as const;
 const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info", R: "text-warning" } as const;
 
@@ -194,6 +205,7 @@ export function ChangesPanel({
   reveal,
   emptyText,
   repos,
+  ignoreSubmodules,
   onReload,
 }: {
   client: Client;
@@ -217,6 +229,8 @@ export function ChangesPanel({
    * go (`exact`), rows lie under its top as `cwd` spells it; an empty list: no repository (Session changes only); undefined or `list` unknown: the cwd's own repository (`git.status` check), as before.
    */
   repos?: RepoList;
+  /** Settings › Git › ignoreSubmodules: no "modified content" probes of submodules. */
+  ignoreSubmodules?: boolean;
   /** Reload from disk also asks `git.repos` again. */
   onReload?: () => void;
 }) {
@@ -313,7 +327,54 @@ export function ChangesPanel({
   const gitDiff = gdNow ? gd.diff : undefined;
   const gitError = gitMode && gdNow ? gd.error : undefined;
   const gitLoading = gitMode && !gdNow;
-  const gitList = useMemo(() => (gitDiff ? gitRows(gitDiff, dir) : []), [gitDiff, dir]);
+  // Submodules of the selected repository with uncommitted changes in tracked files: `git.status` of each (git.diff of the superproject does not list them).
+  const subs = useMemo(
+    () => (repos?.list && selectedRepo ? repos.list.filter((r) => r.kind === "submodule" && r.parent === selectedRepo.path && !r.outsideRoots).slice(0, SUB_PROBES) : []),
+    [repos?.list, selectedRepo],
+  );
+  const subsKey = subs.map((r) => r.path).join("\n");
+  const [dirty, setDirty] = useState<{ repo: string; files: Record<string, number> }>({ repo: "", files: {} });
+  const probeSeq = useRef(0);
+  useEffect(() => {
+    if (!gitMode || hidden || ignoreSubmodules || !subs.length) return;
+    let live = true;
+    const seq = ++probeSeq.current;
+    void eachLimited(subs, SUB_PARALLEL, (sub) =>
+      client.request<GitStatusResult>({ type: "git.status", cwd: sub.path, exact: true }).then(
+        (r) => {
+          if (!live || seq !== probeSeq.current) return;
+          const n = r.status?.files ?? 0;
+          setDirty((d) => ({ repo: gitCwd, files: { ...(d.repo === gitCwd ? d.files : {}), [sub.path]: n } }));
+        },
+        () => {},
+      ),
+    );
+    return () => void (live = false);
+  }, [client, gitCwd, gitMode, hidden, ignoreSubmodules, subsKey, effective, refChoice, reload, view.state, key]);
+  const gitList = useMemo<(GitRow & { dirty?: number; dirtyOnly?: boolean; repoRel?: string })[]>(() => {
+    if (!gitDiff) return [];
+    const list = repos?.list;
+    const base: (GitRow & { dirty?: number; dirtyOnly?: boolean; repoRel?: string })[] = gitRows(gitDiff, dir, list ? { top: gitCwd, repos: list } : undefined);
+    if (!list) return base;
+    const listedAt = (path: string) => list.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(path));
+    const out = base.map((r) => {
+      const repo = r.nested ?? (r.submodule ? listedAt(joinPath(gitCwd, r.rel)) : undefined);
+      return repo && !repo.outsideRoots ? { ...r, repoRel: repo.rel } : r;
+    });
+    if (ignoreSubmodules || dirty.repo !== gitCwd) return out;
+    for (const sub of subs) {
+      const n = dirty.files[sub.path] ?? 0;
+      if (n <= 0) continue;
+      const path = repoDir(cwd, sub.rel);
+      const at = out.findIndex((r) => r.submodule && pathKey(r.path) === pathKey(path));
+      if (at >= 0) out[at] = { ...out[at]!, dirty: n };
+      else {
+        const top = selectedRepo?.rel ?? "";
+        out.push({ path, rel: top && sub.rel.startsWith(`${top}/`) ? sub.rel.slice(top.length + 1) : sub.rel, kind: "M", submodule: {}, dirty: n, dirtyOnly: true, repoRel: sub.rel });
+      }
+    }
+    return out;
+  }, [gitDiff, dir, gitCwd, repos?.list, subs, dirty, ignoreSubmodules, cwd, selectedRepo]);
 
   // Sides of the git modes, read for the files on screen only: the before side from the base commit, the after side from the disk.
   type Side = { base?: string; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; image?: { before?: ImagePane; after?: ImagePane } };
@@ -342,8 +403,12 @@ export function ChangesPanel({
         kind: r.kind,
         ...(r.oldPath !== undefined && { oldPath: r.oldPath, oldShown: relPath(joinPath(root, r.oldPath), cwd) }),
         ...(r.submodule && { submodule: r.submodule }),
-        stats: r.stats ?? (ok && !r.submodule ? s.stats : undefined),
-        ...(ok && !r.submodule && { before: s.before, after: s.after, error: s.error, notice: s.notice, image: s.image }),
+        ...(r.nested && { nested: r.nested }),
+        ...(r.dirty && { dirty: r.dirty }),
+        ...(r.dirtyOnly && { dirtyOnly: true }),
+        ...(r.repoRel !== undefined && { repoRel: r.repoRel }),
+        stats: r.stats ?? (ok && !r.submodule && !r.nested ? s.stats : undefined),
+        ...(ok && !r.submodule && !r.nested && { before: s.before, after: s.after, error: s.error, notice: s.notice, image: s.image }),
       };
     });
   }, [gitList, sides, gitDiff, cwd, dir]);
@@ -389,7 +454,7 @@ export function ChangesPanel({
     if (!gitDiff) return;
     const d = gitDiff;
     for (const r of gitList) {
-      if (r.submodule) continue;
+      if (r.submodule || r.nested) continue;
       const id = `${gen}\n${d.base}\n${r.path}`;
       if (!wantedKey.split("\n").includes(r.path) || asked.current.has(id)) continue;
       asked.current.add(id);
@@ -450,7 +515,11 @@ export function ChangesPanel({
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  const label = (r: Row) => `${KIND_TITLE[r.kind]} ${relPath(r.path, cwd)}${r.submodule ? ", submodule" : r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
+  const label = (r: Row) =>
+    r.nested
+      ? `Repository ${relPath(r.path, cwd)}`
+      : `${KIND_TITLE[r.kind]} ${relPath(r.path, cwd)}${r.submodule ? `, submodule${r.dirty ? ", modified content" : ""}` : r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
+  const rowIcon = (r: Row) => (r.nested ? <RepoIcon kind="nested" /> : r.submodule ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={r.path} className="size-4 shrink-0" />);
   const treeRow =
     "flex min-h-11 w-full cursor-pointer items-center gap-1.5 rounded-md pr-2 text-left text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:min-h-7";
   const pad = (depth: number) => ({ paddingLeft: `${depth * 16 + 8}px` });
@@ -484,11 +553,12 @@ export function ChangesPanel({
             data-testid="changed-file"
             data-path={r.path}
           >
-            {r.submodule ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={r.path} className="size-4 shrink-0" />}
+            {rowIcon(r)}
             <span className="min-w-0 flex-1 truncate">{filePath(r.path, cwd).name}</span>
             {r.submodule && <SubmoduleBadge />}
+            {r.nested && <RepoBadge />}
             {/* OpenCode's v2 tree marks added and deleted files; M shows in the diff header only. */}
-            {r.kind !== "M" && <KindBadge kind={r.kind} />}
+            {r.kind !== "M" && !r.nested && <KindBadge kind={r.kind} />}
           </button>
         </li>
       ))}
@@ -703,17 +773,18 @@ export function ChangesPanel({
                     data-testid="changed-file"
                     data-path={path}
                   >
-                    {r.submodule ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={path} className="size-4 shrink-0" />}
+                    {rowIcon(r)}
                     <span className="min-w-0 flex-1 truncate">
                       {dir && <span className="text-muted-foreground">{dir.replace(/\/$/, "")}/</span>}
                       {name}
                     </span>
                     {r.submodule && <SubmoduleBadge />}
-                    {r.kind !== "M" && <span className={cn("shrink-0 text-xs", KIND_COLOR[r.kind])}>{KIND_TITLE[r.kind]}</span>}
+                    {r.nested && <RepoBadge />}
+                    {r.kind !== "M" && !r.nested && <span className={cn("shrink-0 text-xs", KIND_COLOR[r.kind])}>{KIND_TITLE[r.kind]}</span>}
                     {r.stats && <StatsText stats={r.stats} />}
                     {open ? <ChevronDownIcon className="size-4 shrink-0 text-faint" aria-hidden /> : <ChevronRightIcon className="size-4 shrink-0 text-faint" aria-hidden />}
                   </button>
-                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline git={gitMode} branchMode={effective === "branch"} />}
+                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} />}
                 </li>
               );
             })}
@@ -749,7 +820,7 @@ export function ChangesPanel({
             {gitDiff?.truncated && <p className="border-t p-2 text-muted-foreground text-xs">List cut at 3000 files</p>}
           </div>
           <ListResizer list={listRef} width={listWidth} onResize={setListWidth} />
-          {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} branchMode={effective === "branch"} />}
+          {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} />}
         </div>
       )}
     </div>
@@ -773,6 +844,14 @@ export function SubmoduleBadge() {
   );
 }
 
+export function RepoBadge() {
+  return (
+    <span className="shrink-0 rounded bg-secondary px-1 text-[11px] text-muted-foreground" data-testid="repo-badge">
+      repository
+    </span>
+  );
+}
+
 export function KindBadge({ kind }: { kind: Kind }) {
   return (
     <span className={cn("w-4 shrink-0 text-center font-[530] font-mono text-[11px]", KIND_COLOR[kind])} title={KIND_TITLE[kind]} data-testid="change-badge">
@@ -782,7 +861,7 @@ export function KindBadge({ kind }: { kind: Kind }) {
 }
 
 /** `git`: a git mode's file (sides from a commit and the disk, not from the session's calls). `inline`: under its accordion row, which already names the file: only Open in editor above the diff, and no own scroll. */
-function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean; branchMode?: boolean }) {
+function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean; branchMode?: boolean; onShowRepo?: (rel: string) => void }) {
   const { path } = row;
   const dark = useDark();
   // Drawn once the highlighter is loaded (seconds on a first load): until then a loading line.
@@ -798,10 +877,12 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode }: { row: R
   );
   const same = files !== undefined && row.before === row.after;
   const sub = row.submodule;
+  const nested = row.nested;
+  const dirtyText = row.dirty ? `modified content (${row.dirty} ${row.dirty === 1 ? "file" : "files"})` : "";
   return (
     <div className={inline ? "flex flex-col border-t" : "flex min-h-0 min-w-0 flex-1 flex-col"} data-testid="file-diff" data-diff-style={style}>
       {inline ? (
-        !sub && inDir(path, cwd) && (
+        !sub && !nested && inDir(path, cwd) && (
           <div className="flex justify-end px-2 pt-1">
             <Button size="sm" variant="ghost" className="h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
               <SquareArrowOutUpRightIcon /> Open in editor
@@ -810,15 +891,16 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode }: { row: R
         )
       ) : (
         <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3" data-testid="file-diff-header">
-          <KindBadge kind={row.kind} />
-          {sub ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={path} className="size-4 shrink-0" />}
+          {!nested && <KindBadge kind={row.kind} />}
+          {nested ? <RepoIcon kind="nested" /> : sub ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={path} className="size-4 shrink-0" />}
           <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground text-xs" title={path}>
             {row.oldShown ? `${row.oldShown} → ${relPath(path, cwd)}` : relPath(path, cwd)}
           </span>
           {sub && <SubmoduleBadge />}
+          {nested && <RepoBadge />}
           {row.stats && <StatsText stats={row.stats} />}
           {/* The files pane shows only tabs inside cwd, so a file outside it has no Open in editor (OpenCode lists only project files). */}
-          {!sub && inDir(path, cwd) && (
+          {!sub && !nested && inDir(path, cwd) && (
             <Button size="sm" variant="ghost" onClick={() => onOpen(path)} data-testid="open-in-editor">
               <SquareArrowOutUpRightIcon /> Open in editor
             </Button>
@@ -828,17 +910,38 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode }: { row: R
       <div className={cn("text-xs", !inline && "min-h-0 flex-1 overflow-auto p-2")}>
         {sub && (
           <p className="p-2 text-muted-foreground" data-testid="submodule-detail">
-            {sub.from ? (
+            {row.dirtyOnly ? (
+              <>Submodule {relPath(path, cwd)}</>
+            ) : sub.from ? (
               <>
                 Submodule {relPath(path, cwd)}: <span className="font-mono">{sub.from.slice(0, 7)}</span> {branchMode ? "at the merge base" : "in HEAD"}
               </>
             ) : (
               <>Submodule {relPath(path, cwd)}: added</>
             )}
+            {dirtyText && (
+              <span data-testid="submodule-dirty">
+                {row.dirtyOnly ? ": " : " · "}
+                {dirtyText}
+              </span>
+            )}
           </p>
         )}
-        {!sub && row.error && <p role={row.notice ? "status" : undefined} className={cn("p-2", row.notice ? "text-muted-foreground" : "text-destructive")}>{row.error}</p>}
-        {!sub && !row.error && !row.image && (row.after === undefined || (files && !same && !drawn)) && (
+        {nested && (
+          <p className="p-2 text-muted-foreground" data-testid="nested-detail">
+            Nested repository {relPath(path, cwd)}
+            {nested.branch ? ` (${nested.branch})` : ""}
+          </p>
+        )}
+        {row.repoRel !== undefined && onShowRepo && (
+          <div className="px-2 pb-2">
+            <Button size="sm" variant="outline" className="max-md:h-11" onClick={() => onShowRepo(row.repoRel!)} data-testid="show-repo-changes">
+              Show changes in {row.repoRel}
+            </Button>
+          </div>
+        )}
+        {!sub && !nested && row.error && <p role={row.notice ? "status" : undefined} className={cn("p-2", row.notice ? "text-muted-foreground" : "text-destructive")}>{row.error}</p>}
+        {!sub && !nested && !row.error && !row.image && (row.after === undefined || (files && !same && !drawn)) && (
           <p className="p-2 text-muted-foreground" data-testid="diff-loading">
             Loading diff…
           </p>
