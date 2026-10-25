@@ -385,7 +385,8 @@ export type CreateResult = { session: SessionInfo };
  * `seq`: the last event seq when `session` was read; the replayed events up to it are older than `session`.
  */
 /** `title`: as `session.list` titles the session, for a tab opened before (or without) the list. */
-export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo; title: string; snapshot?: Snapshot };
+/** `planDirs`: the folders the session's CLI keeps plan files in (absolute), to find the plan of an ExitPlanMode call written there. */
+export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo; title: string; snapshot?: Snapshot; planDirs?: string[] };
 /** session.setModel, session.setPermissionMode, session.setEffort. */
 export type SetModelResult = { session: SessionInfo };
 /** session.defaultMode. */

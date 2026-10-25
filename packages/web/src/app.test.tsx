@@ -4048,6 +4048,42 @@ describe("GH-395 Plan pane", () => {
     }
   });
 
+  it("A subscribe error of a plan tab's owner ends Loading plan… with a message and is asked again after a reconnect", async () => {
+    let broken = true;
+    const restore = await mountMain({
+      tabs: [REF],
+      hash: `#plan%3A${ID}`,
+      extra: { "session.subscribe": async (m: { sessionId: string }) => (broken ? Promise.reject(Object.assign(new Error("boom"), { code: "failed" })) : bySess(m)) },
+    });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(bodyOf(REF)!.querySelector('[data-testid="plan-failed"]')).not.toBeNull();
+      broken = false;
+      await act(async () => setStatus("reconnecting"));
+      await act(async () => setStatus("connected"));
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(subs(ID).length).toBeGreaterThanOrEqual(2);
+      await sendPart(ID, 1, planPart());
+      expect(bodyOf(REF)!.textContent).toContain("do it");
+      expect(bodyOf(REF)!.querySelector('[data-testid="plan-failed"]')).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Move plan to main area from the palette without a plan says so in a toast", async () => {
+    const restore = await mountMain({ tabs: [ID], layout: JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "plan"], bottom: ["terminal"], main: [] } }) });
+    try {
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Move plan to main area"))!;
+      await act(async () => row.click());
+      expect(toastEl()!.textContent).toContain("Plan moved to the main area");
+      expect(layoutNow()!.areas.main).toEqual(["plan"]);
+    } finally {
+      restore();
+    }
+  });
+
   it("A dropped subscription of a plan tab's owner is asked again after a reconnect", async () => {
     let n = 0;
     const restore = await mountMain({

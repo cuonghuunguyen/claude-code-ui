@@ -1,4 +1,5 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
+import { planDirs } from "./plan-dirs.ts";
 import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
@@ -42,6 +43,12 @@ import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
 import { serveStatic } from "./static.ts";
 import { lastEntryTime, listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
+
+/** The reply field with the folders of the session's plan files (a side's own reply carries its own). */
+const planDirsOf = (s: object) => {
+  const dirs = (s as { planDirs?: () => string[] | undefined }).planDirs?.();
+  return dirs ? { planDirs: dirs } : {};
+};
 
 export { MAX_SETTINGS } from "./session-settings.ts";
 
@@ -360,6 +367,7 @@ export function createDaemon(opts: {
     // The stale-turn check reads only the transcript's tail, not the chain and its subagent runs (GH-239).
     transcriptEnd: (id: string, cwd: string) => transcriptEnd(transcriptFile(projectsDir, transcriptCwd(id, cwd), id)),
     cliTurnRunning: (id: string) => cliTurnRunning(claudeDir, id),
+    planDirs: (cwd: string) => planDirs(claudeDir, cwd),
     // Only the fields this change set: a daemon on another port may have changed the others of the same session (GH-91).
     onSettings: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => saveSettings(() => settings.set(id, s, fields)),
     // /clear: the new session is listed; tabs that show the old one follow its session_cleared part.
@@ -1558,11 +1566,11 @@ export function createDaemon(opts: {
             // Paged, first subscribe or new epoch: a snapshot (last page) instead of the replay; reply, snapshot and subscribe in one synchronous step.
             if (msg.paged === true && since === 0) {
               const { seq, snapshot } = s.snapshot(typeof msg.from === "string" ? msg.from : undefined);
-              reply({ logEpoch, seq, session: s.info(), title: title!, snapshot });
+              reply({ logEpoch, seq, session: s.info(), title: title!, snapshot, ...planDirsOf(s) });
               const stop = s.subscribe(seq, (e) => send(ws, e));
               return keep(stop, mirror(s));
             }
-            reply({ logEpoch, seq: s.seq(), session: s.info(), title: title! });
+            reply({ logEpoch, seq: s.seq(), session: s.info(), title: title!, ...planDirsOf(s) });
             const stop = s.subscribe(since, (e) => send(ws, e));
             return keep(stop, mirror(s));
           } finally {

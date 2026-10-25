@@ -52,8 +52,10 @@ const inputText = (input: unknown) => {
 
 /** ExitPlanMode's plan (markdown), shown with Claude Code's plan approval options. */
 const planOf = (part: PermissionRequest) => {
-  const plan = part.tool === "ExitPlanMode" ? (part.input as { plan?: unknown } | null)?.plan : undefined;
-  return typeof plan === "string" ? plan : undefined;
+  if (part.tool !== "ExitPlanMode") return undefined;
+  // The daemon's `plan` is display data for a request whose input has none (the CLI keeps the plan in a file).
+  const plan = (part.input as { plan?: unknown } | null)?.plan || part.plan;
+  return typeof plan === "string" && plan ? plan : undefined;
 };
 
 /** Dock tray (OpenCode DockTray): actions right-aligned under the dock body. */

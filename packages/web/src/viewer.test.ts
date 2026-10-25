@@ -76,4 +76,18 @@ it("planWaiting is true only for an unsettled ExitPlanMode permission request", 
     expect(latestPlan(view(parts))).toBeUndefined();
     expect(latestPlan(view([...parts, req]))).toBe("# From the request");
   });
+  it("latestPlan applies the later Edit of the plan file and honours the session's plan folders (recorded Write + Edit shape)", () => {
+    const adapter = createAdapter();
+    const lines = readFileSync(new URL("../../protocol/test/fixtures/plan-file-revised.jsonl", import.meta.url), "utf8").trim().split("\n");
+    const parts = lines.flatMap((l) => adapter.convert(JSON.parse(l) as never));
+    const v = view(parts);
+    expect(latestPlan(v)).toContain("3. Delete nothing.");
+    expect(latestPlan(v)).toContain("# Revised plan");
+    expect(latestPlan({ ...v, planDirs: ["/cfg/plans"] })).toBeUndefined();
+    expect(latestPlan({ ...v, planDirs: ["/home/user/.claude/plans"] })).toContain("# Revised plan");
+  });
+  it("latestPlan reads the display plan of the approval request", () => {
+    const req = { type: "permission_request", id: "perm", requestId: "r", toolUseId: "t", tool: "ExitPlanMode", input: {}, plan: "# Display plan", suggestions: [], settled: false } as Part;
+    expect(latestPlan(view([req]))).toBe("# Display plan");
+  });
 }

@@ -11,11 +11,20 @@ type Props = {
   /** Main tab: "Plan · <title>"; dock: "Plan". */
   label: string;
   onGoToRequest: () => void;
+  /** The session's subscribe failed: no view will come on its own. */
+  failed?: boolean;
 };
 
 /** The approval itself stays in the session: this pane only points to it. */
-export const PlanPane = memo(function PlanPane({ view, label, onGoToRequest }: Props) {
-  if (!view) return <p className="m-auto text-muted-foreground text-sm">Loading plan…</p>;
+export const PlanPane = memo(function PlanPane({ view, label, onGoToRequest, failed }: Props) {
+  if (!view)
+    return failed ? (
+      <p className="m-auto text-muted-foreground text-sm" data-testid="plan-failed">
+        Could not load this session.
+      </p>
+    ) : (
+      <p className="m-auto text-muted-foreground text-sm">Loading plan…</p>
+    );
   const plan = latestPlan(view);
   if (!plan)
     return (

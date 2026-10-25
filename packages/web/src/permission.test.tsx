@@ -59,6 +59,18 @@ describe("PermissionPanel", () => {
     expect(html).not.toContain("&quot;plan&quot;");
   });
 
+  it("a plan request with an empty input shows the plan the daemon attached (display data) with its popup button", () => {
+    const part = request({ tool: "ExitPlanMode", input: {}, plan: "## From the plan file", suggestions: [] });
+    const html = renderToStaticMarkup(
+      <ViewerContext value={() => {}}>
+        <PermissionPanel part={part} onRespond={() => {}} />
+      </ViewerContext>,
+    );
+    expect(html).toContain("Claude has written up a plan");
+    expect(html).toContain("From the plan file");
+    expect(html).toContain('data-testid="plan-open"');
+  });
+
   it("the plan has an Open in popup button inside a session tab (ViewerContext), none outside it", () => {
     const part = request({ tool: "ExitPlanMode", input: { plan: "## Plan" }, suggestions: [] });
     expect(renderToStaticMarkup(<PermissionPanel part={part} onRespond={() => {}} />)).not.toContain('data-testid="plan-open"');

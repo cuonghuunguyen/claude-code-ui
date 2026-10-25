@@ -26,13 +26,13 @@ function findPlan(view: SessionView): { call?: ToolCall; plan: string } | undefi
   for (let n = parts.length - 1; n >= 0; n--) {
     const p = parts[n];
     if (p?.type !== "tool_call" || p.tool !== "ExitPlanMode") continue;
-    const plan = planOfCall(parts, n);
+    const plan = planOfCall(parts, n, view.planDirs);
     if (plan) return { call: p, plan };
   }
   // The approval request carried the plan while the call did not (and no plan file Write was seen).
   for (let n = parts.length - 1; n >= 0; n--) {
     const p = parts[n];
-    const plan = p?.type === "permission_request" && p.tool === "ExitPlanMode" ? (p.input as { plan?: unknown } | null)?.plan : undefined;
+    const plan = p?.type === "permission_request" && p.tool === "ExitPlanMode" ? ((p.input as { plan?: unknown } | null)?.plan || p.plan) : undefined;
     if (typeof plan === "string" && plan) return { plan };
   }
   return undefined;

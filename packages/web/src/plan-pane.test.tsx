@@ -56,6 +56,8 @@ describe("PlanPane", () => {
     expect(m.el.querySelector('[data-testid="plan-empty"]')!.textContent).toBe("No plan in this session yet.");
     m.rerender(<PlanPane view={undefined} label="Plan" onGoToRequest={() => {}} />);
     expect(m.el.textContent).toBe("Loading plan…");
+    m.rerender(<PlanPane view={undefined} failed label="Plan" onGoToRequest={() => {}} />);
+    expect(m.el.querySelector('[data-testid="plan-failed"]')!.textContent).toBe("Could not load this session.");
     m.unmount();
   });
 });

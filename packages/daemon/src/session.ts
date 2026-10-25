@@ -85,6 +85,8 @@ type SessionOpts = Partial<SessionSettings> & {
   readTranscript?: (id: string, cwd: string) => Promise<Transcript>;
   /** Whether a terminal CLI process still runs a turn of this session (its own report): the quiet time then ends no external turn. */
   cliTurnRunning?: (id: string) => boolean;
+  /** The folders the CLI keeps plan files in for a session in `cwd` (plan-dirs.ts); absent: `.claude/plans`. */
+  planDirs?: (cwd: string) => string[];
   /** The transcript's size and last main-chain record, read cheaply for the stale-turn check (GH-239). */
   transcriptEnd?: (id: string, cwd: string) => Promise<TranscriptEnd>;
   /** MCP servers of each new query of session `id` (orchestration.ts: a coordinator's server); read at every query start. */
@@ -350,7 +352,7 @@ export class Session {
   /** The paged subscribe snapshot at the current seq (synchronous: subscribe with this seq right after, no event falls between). */
   snapshot(from?: string): { seq: number; snapshot: Snapshot } {
     const page = (from !== undefined && this.index.pageFrom(from, MAX_FROM_PARTS)) || this.index.lastPage();
-    const aux = page.older ? this.index.aux(page.older.pos) : [];
+    const aux = page.older ? this.index.aux(page.older.pos, this.planDirs()) : [];
     return { seq: this.seq(), snapshot: { heads: this.index.heads(), attentionSeq: this.index.attentionSeq, page: { ...page, parts: page.parts.map(omitMedia) }, aux } };
   }
 
@@ -846,7 +848,8 @@ export class Session {
               requestId,
               toolUseId: toolUseID,
               tool,
-              input: card?.input ?? this.withPlan(tool, toolUseID, input),
+              input: card?.input ?? input,
+              ...this.planField(tool, toolUseID, input),
               ...(title ? { title } : {}),
               suggestions: tool === "ExitPlanMode" && !suggestions.length ? [ACCEPT_EDITS] : suggestions,
               settled: false,
@@ -860,11 +863,16 @@ export class Session {
     });
   };
 
-  /** Claude Code 2.1.294 asks to leave plan mode with an empty input: the plan is in the call (the web UI shows it) or in the plan file the model wrote, so the request carries it for the approval panel. */
-  private withPlan(tool: string, toolUseId: string, input: unknown): unknown {
-    if (tool !== "ExitPlanMode" || (typeof (input as { plan?: unknown } | null)?.plan === "string" && (input as { plan: string }).plan)) return input;
-    const plan = this.index.planOf(toolUseId);
-    return plan ? { ...(input as object | null), plan } : input;
+  /** The plan folders of this session's CLI. */
+  planDirs(): string[] | undefined {
+    return this.opts.planDirs?.(this.cwd);
+  }
+
+  /** Claude Code 2.1.294 asks to leave plan mode with an empty input: the plan is in a file the model wrote. The request carries it as display data (`plan`); `input` stays what the CLI sent, as it is what goes back on Approve (a changed plan input would make the CLI rewrite its plan file). */
+  private planField(tool: string, toolUseId: string, input: unknown): { plan?: string } {
+    if (tool !== "ExitPlanMode" || (typeof (input as { plan?: unknown } | null)?.plan === "string" && (input as { plan: string }).plan)) return {};
+    const plan = this.index.planOf(toolUseId, this.planDirs());
+    return plan ? { plan } : {};
   }
 
   /** A low tier request is sent again with `tier: "low"` once its tier is read (the Focus page offers Always allow only then); high or unknown stays unmarked. A later read that says otherwise sends it again without the mark. */

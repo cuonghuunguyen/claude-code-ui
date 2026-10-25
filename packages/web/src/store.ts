@@ -43,6 +43,8 @@ export type SessionView = {
   aux: PosPart[];
   /** `session.edits` of this boundary is merged into `aux`. */
   auxEdits?: boolean;
+  /** The folders the session's CLI keeps plan files in (subscribe reply), to find an ExitPlanMode plan written there. */
+  planDirs?: string[];
   /** The view cannot follow a rewind into the not loaded region: App takes a fresh snapshot. */
   stale?: boolean;
 };
@@ -109,7 +111,7 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
  * The reply's model, mode and effort are current; the replay must not override them with older values (e.g. a long log
  * replays an old plan mode for seconds).
  */
-export function withSubscribe(s: SessionView, { logEpoch, seq, session, snapshot }: Omit<SubscribeResult, "title">): SessionView {
+export function withSubscribe(s: SessionView, { logEpoch, seq, session, snapshot, planDirs }: Omit<SubscribeResult, "title">): SessionView {
   if (snapshot) {
     // A snapshot is authoritative as of `seq`: heads give the state, the page the parts. Nothing is replayed after it.
     let v: SessionView = { ...emptySession(), logEpoch };
@@ -127,12 +129,13 @@ export function withSubscribe(s: SessionView, { logEpoch, seq, session, snapshot
       parts: new Map(page.parts.map((p) => [p.id, p])),
       older: page.older,
       aux: snapshot.aux,
+      planDirs,
       auxEdits: false,
       stale: false,
     };
   }
   const view = s.logEpoch === logEpoch ? s : { ...emptySession(), logEpoch };
-  return { ...view, model: session.model, permissionMode: session.permissionMode, effort: session.effort, settingsSeq: seq };
+  return { ...view, model: session.model, permissionMode: session.permissionMode, effort: session.effort, settingsSeq: seq, planDirs: planDirs ?? view.planDirs };
 }
 
 /** The page before `before` arrived: prepends it. Ignored when the view's cursor moved on (reset, double request). Aux entries the page now holds are dropped. */

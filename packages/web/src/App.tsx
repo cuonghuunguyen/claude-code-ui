@@ -652,6 +652,8 @@ export function App() {
       if ((e as Error).message !== "disconnected") {
         setError((e as Error).message);
         setFailedTabs((f) => (f.has(sessionId) ? f : new Set(f).add(sessionId)));
+        // Asked again by the next follow (a reconnect, another pane tab) instead of waiting on "Loading plan…" for good.
+        if (!viewsRef.current[sessionId]) requested.current.delete(sessionId);
       } else if (!viewsRef.current[sessionId]) requested.current.delete(sessionId); // a dropped request: the next follow asks again; a view is resubscribed on reconnect
     } finally {
       resubscribing.current.delete(sessionId);
@@ -1836,7 +1838,7 @@ export function App() {
       saveLayout(movePane(layout, p, "main"));
       const owner = currentId && isSession(currentId) ? currentId : undefined;
       if (owner && views[owner] && latestPlan(views[owner]!)) openPaneTab(refOf({ kind: "plan", owner }));
-      else focusShownPrompt();
+      else (focusShownPrompt(), setToast("Plan moved to the main area. Its tab opens when the session has a plan."));
       return;
     }
     if (areaOf(layout, p) === "main") {
@@ -2797,7 +2799,7 @@ export function App() {
                 {tabs.filter(isPaneRef).map((ref) => (
                   <Activity key={ref} mode={ref === activeId ? "visible" : "hidden"}>
                     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-pane-tab-body={ref} tabIndex={-1}>
-                      <PlanPane view={views[ownerOf(ref)]} label={tabLabel(ref)} onGoToRequest={() => goToRequest(ownerOf(ref))} />
+                      <PlanPane view={views[ownerOf(ref)]} failed={failedTabs.has(ownerOf(ref))} label={tabLabel(ref)} onGoToRequest={() => goToRequest(ownerOf(ref))} />
                     </div>
                   </Activity>
                 ))}

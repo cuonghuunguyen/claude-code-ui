@@ -754,4 +754,32 @@ describe("ExitPlanMode with an empty input (Claude Code 2.1.294: the plan is in 
     expect(planOfCall(own, at)).toBe("own");
     expect(planOfCall(parts.filter((p) => !(p.type === "tool_call" && p.tool === "Write")), at - 1)).toBeUndefined();
   });
+
+  it("planOfCall applies the later Edit and MultiEdit calls of the plan file in order and ignores other files", async () => {
+    const { planOfCall } = await import("../src/index.ts");
+    const parts = run(fixture("plan-file-revised.jsonl"));
+    const at = parts.findIndex((p) => p.type === "tool_call" && p.tool === "ExitPlanMode");
+    const plan = planOfCall(parts, at)!;
+    expect(plan).toContain("# Revised plan");
+    expect(plan).toContain("1. Create greeting.txt with the content hi.");
+    expect(plan).toContain("3. Delete nothing.");
+    expect(plan).not.toContain("WRONG");
+    // An edit that did not finish does not count.
+    const unfinished = parts.map((p) => (p.type === "tool_call" && p.tool === "MultiEdit" ? ({ ...p, status: "error" } as Part) : p));
+    expect(planOfCall(unfinished, at)).toContain("# Plan");
+    expect(planOfCall(unfinished, at)).toContain("3. Delete nothing.");
+  });
+
+  it("plan folders: the session's folders decide (CLAUDE_CONFIG_DIR, plansDirectory, Windows slashes); without them .claude/plans", async () => {
+    const { isPlanPath } = await import("../src/index.ts");
+    expect(isPlanPath("/home/u/.claude/plans/a.md")).toBe(true);
+    expect(isPlanPath("/home/u/.claude/plans/a.txt")).toBe(false);
+    expect(isPlanPath("/cfg/plans/a.md")).toBe(false);
+    expect(isPlanPath("/cfg/plans/a.md", ["/cfg/plans"])).toBe(true);
+    expect(isPlanPath("/home/u/.claude/plans/a.md", ["/cfg/plans"])).toBe(false);
+    expect(isPlanPath("/w/proj/docs/plans/a.md", ["/w/proj/docs/plans", "/cfg/plans"])).toBe(true);
+    expect(isPlanPath("/cfg/plans/sub/a.md", ["/cfg/plans"])).toBe(false);
+    expect(isPlanPath("C:\\Users\\u\\.claude\\plans\\a.md", ["C:/Users/u/.claude/plans"])).toBe(true);
+  });
 });
+
