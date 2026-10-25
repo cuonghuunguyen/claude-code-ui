@@ -43,6 +43,10 @@ _Avoid_: workspace, sandbox
 A git repository below a project's folder that is not the project's own repository: a submodule (listed in its parent's `.gitmodules` and checked out) or an independent repository with its own `.git`. Found as VS Code finds them (Settings › Git); shown in the repository selector and the file tree marks. Not a Project, not a Worktree.
 _Avoid_: subrepo, child repo, workspace repo
 
+**Selected repository**:
+The one repository of a project that the Changes and Git graph panes show, picked in the repository selector (a tree: own repository > submodules > nested repositories); remembered per project in the browser. Default: the project's own repository.
+_Avoid_: active repository, current repo
+
 **Branch source**:
 Where a new worktree's branch comes from: a Ticket (new branch named from it), an existing Branch (local or remote, checked out as is) or a free Name (new branch). The three tabs of the Create worktree modal.
 _Avoid_: worktree type, origin

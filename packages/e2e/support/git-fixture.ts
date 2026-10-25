@@ -41,7 +41,7 @@ export function makeRepoWithOrigin(repo: string, origin: string): void {
   git(repo, "checkout", "main");
 }
 
-export type SubmoduleState = "moved" | "dirty-only" | "moved-committed";
+export type SubmoduleState = "moved" | "dirty-only" | "moved-committed" | "dirty-with-nested";
 
 /** Short commit names of the inner repository: `first` is the recorded one, `second` the later one. */
 export type SubmoduleShas = { first: string; second: string };
@@ -51,6 +51,8 @@ export type SubmoduleShas = { first: string; second: string };
  * - moved: HEAD records `first`, the inner working tree sits at `second`; plus a normal change in `s.txt`.
  * - dirty-only: HEAD records `first`, the inner repository stays on it with an uncommitted edit of a tracked file.
  * - moved-committed: HEAD itself moved the gitlink from `first` to `second` (the Graph shows that commit).
+ * - dirty-with-nested: like dirty-only, plus a committed `.gitmodules` (so the repository list holds `libs/lib`), a branch `lib-only` in `libs/lib`
+ *   and an untracked embedded repository `inner/` (git prints it as an untracked folder).
  */
 export function makeSuperproject(repo: string, state: SubmoduleState): SubmoduleShas {
   const lib = join(repo, "libs", "lib");
@@ -61,16 +63,23 @@ export function makeSuperproject(repo: string, state: SubmoduleState): Submodule
   commit(lib, "a.txt", "2\n", "lib two");
   const second = git(lib, "rev-parse", "--short", "HEAD");
   git(lib, "checkout", "-q", first);
+  if (state === "dirty-with-nested") git(lib, "branch", "lib-only", second);
   git(repo, "init", "-b", "main");
   writeFileSync(join(repo, ".git", "info", "exclude"), ".claude/\n");
   writeFileSync(join(repo, "s.txt"), "s\n");
-  git(repo, "-c", "advice.addEmbeddedRepo=false", "add", "s.txt", "libs/lib");
+  const added = ["s.txt", "libs/lib"];
+  if (state === "dirty-with-nested") {
+    writeFileSync(join(repo, ".gitmodules"), '[submodule "libs/lib"]\n\tpath = libs/lib\n\turl = ./libs/lib\n');
+    added.push(".gitmodules");
+  }
+  git(repo, "-c", "advice.addEmbeddedRepo=false", "add", ...added);
   git(repo, "commit", "-m", "add libs/lib");
   if (state === "moved") {
     git(lib, "checkout", "-q", second);
     writeFileSync(join(repo, "s.txt"), "s\nmore\n");
-  } else if (state === "dirty-only") {
+  } else if (state === "dirty-only" || state === "dirty-with-nested") {
     writeFileSync(join(lib, "a.txt"), "1\nedited\n");
+    if (state === "dirty-with-nested") makeNestedRepo(repo, "inner", "inner commit", true);
   } else {
     git(lib, "checkout", "-q", second);
     git(repo, "add", "libs/lib");

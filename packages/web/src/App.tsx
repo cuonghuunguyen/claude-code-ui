@@ -117,6 +117,7 @@ import { FilesPanel } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
 import { defaultRepo, repoDir, useRepos, type RepoTarget } from "./repos.ts";
+import { repoProjectKey, type RepoList } from "./repo-choice.ts";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
@@ -375,6 +376,8 @@ export function App() {
   const [inApp, setInApp] = useState(loadInApp);
   // Settings › Orchestration › Notifications from workers (GH-387): read on connect and from settings_changed.
   const [workerNotices, setWorkerNotices] = useState(true);
+  // Settings › Git: no "modified content" probes of submodules in Changes.
+  const [ignoreSubmodules, setIgnoreSubmodules] = useState(false);
   useEffect(() => {
     const sync = (e: globalThis.Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
     window.addEventListener(IN_APP_EVENT, sync);
@@ -1097,7 +1100,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false)),
+      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       onConfigChanged: (m) => {
@@ -1118,7 +1121,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => setWorkerNotices(r.settings.orchestration.workerNotifications !== false)).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -1700,9 +1703,13 @@ export function App() {
   const pane: Pane = !lg && histPane === "terminal" && !termAvail ? "session" : histPane;
   // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
   const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
-  const { repos } = useRepos(client.current, panelCwd, { connected: status === "connected", openFiles, seq: reposSeq, fresh: reposFresh });
+  const { repos, truncated: reposTruncated } = useRepos(client.current, panelCwd, { connected: status === "connected", openFiles, seq: reposSeq, fresh: reposFresh });
   const repo = repos ? defaultRepo(repos) : undefined;
   const repoTarget: RepoTarget | null | undefined = repos === undefined || repos === null || !panelCwd ? undefined : repo ? { path: repo.path, dir: repoDir(panelCwd, repo.rel) } : null;
+  // The Graph keeps the default repository until it gets the selector (#391); Changes resolves the remembered choice itself.
+  // Panes: the pane owner session's cwd replaces panelCwd here (the choice is kept per owner project).
+  const repoKey = repoProjectKey(panelCwd, worktrees, listLoaded);
+  const repoList: RepoList | undefined = panelCwd && repos && repoKey ? { list: repos, truncated: reposTruncated, projectKey: repoKey } : undefined;
   const isGit = repos ? !!repo : gitProbe;
   const ownGit = repos ? repos.some((r) => r.kind === "main" && !r.outsideRoots) : isGit;
   const reposAnswered = repos !== undefined;
@@ -2777,7 +2784,8 @@ export function App() {
                           sessionId={panelTarget.sessionId}
                           onPopOut={() => openViewer({ kind: "changes" })}
                           reveal={changesReveal}
-                          repo={repoTarget}
+                          repos={repoList}
+                          ignoreSubmodules={ignoreSubmodules}
                           onReload={reloadRepos}
                         />
                       )
@@ -2793,7 +2801,8 @@ export function App() {
                         onOpen={(path) => (setOpenFile({ path }), reveal("files"))}
                         sessionId={NEW_TAB}
                         reveal={changesReveal}
-                        repo={repoTarget}
+                        repos={repoList}
+                        ignoreSubmodules={ignoreSubmodules}
                         onReload={reloadRepos}
                         emptyText="No changes yet. Claude's edits appear here."
                       />
@@ -2986,7 +2995,8 @@ export function App() {
           cwd={viewer?.cwd ?? shown.cwd}
           view={viewer ? views[viewer.sessionId] : undefined}
           sessionId={viewer?.sessionId}
-          repo={(viewer?.cwd ?? shown.cwd) === panelCwd ? repoTarget : undefined}
+          repos={(viewer?.cwd ?? shown.cwd) === panelCwd ? repoList : undefined}
+          ignoreSubmodules={ignoreSubmodules}
           onClose={() => setViewer(undefined)}
           onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line }), setPane("files"), setPanel(true))}
         />
