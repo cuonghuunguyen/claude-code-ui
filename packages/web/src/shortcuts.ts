@@ -59,6 +59,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "sidebar.toggle", title: "Toggle sidebar", group: "Panels", key: "mod+b" },
   { id: "panel.toggle", title: "Toggle side panel", group: "Panels", key: "mod+shift+r" },
   { id: "filetree.toggle", title: "Toggle file tree", group: "Panels", key: "mod+\\" },
+  { id: "plan.show", title: "Show plan", group: "Panels" },
   { id: "pane.files", title: "Show files", group: "Panels", key: "mod+shift+e" },
   { id: "pane.changes", title: "Show changes", group: "Panels", key: "mod+shift+g" },
   { id: "pane.graph", title: "Show git graph", group: "Panels", key: "mod+shift+h" },

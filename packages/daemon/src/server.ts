@@ -1,4 +1,5 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
+import { planDirs } from "./plan-dirs.ts";
 import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
@@ -42,6 +43,12 @@ import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
 import { serveStatic } from "./static.ts";
 import { lastEntryTime, listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
+
+/** The reply field with the folders of the session's plan files (a side's own reply carries its own). */
+const planDirsOf = (s: object) => {
+  const dirs = (s as { planDirs?: () => string[] | undefined }).planDirs?.();
+  return dirs ? { planDirs: dirs } : {};
+};
 
 export { MAX_SETTINGS } from "./session-settings.ts";
 
@@ -360,6 +367,7 @@ export function createDaemon(opts: {
     // The stale-turn check reads only the transcript's tail, not the chain and its subagent runs (GH-239).
     transcriptEnd: (id: string, cwd: string) => transcriptEnd(transcriptFile(projectsDir, transcriptCwd(id, cwd), id)),
     cliTurnRunning: (id: string) => cliTurnRunning(claudeDir, id),
+    planDirs: (cwd: string) => planDirs(claudeDir, cwd),
     // Only the fields this change set: a daemon on another port may have changed the others of the same session (GH-91).
     onSettings: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => saveSettings(() => settings.set(id, s, fields)),
     // /clear: the new session is listed; tabs that show the old one follow its session_cleared part.
@@ -753,8 +761,8 @@ export function createDaemon(opts: {
     send: async (id, item) => {
       const s = sessions.get(id);
       if (!s) return { code: "session_not_live", message: `no session ${id}` };
-      const err = await sendPrompt(s, item.text, item.images);
-      if (!err) autoContinue.cancel(id);
+      const err = item.bash ? await runBash(s, item.text) : await sendPrompt(s, item.text, item.images);
+      if (!err && !item.bash) autoContinue.cancel(id);
       return err;
     },
     show: (id, items, held) => sessions.get(id)?.setQueue(items, held),
@@ -793,6 +801,23 @@ export function createDaemon(opts: {
     } catch (err) {
       return { code: "prompt_failed", message: (err as Error).message };
     }
+  }
+
+  /** session.bash's checks and run; the reason when the command does not run now. `session_busy`/`external_turn`: it can be queued. */
+  async function runBash(s: Session, command: string): Promise<{ code: string; message: string } | undefined> {
+    if (!allowed(s.cwd)) return { code: "cwd_not_allowed", message: `outside the allowlisted roots: ${s.cwd}` };
+    const notLive = () => ({ code: "session_not_live", message: `session ${s.id} is ${s.info().state}` });
+    if (!s.isLive()) return notLive();
+    if (s.info().state === "idle") await s.sync();
+    if (!s.isLive()) return notLive();
+    if (s.externalTurnRunning()) return { code: "external_turn", message: "A terminal CLI turn is running in this session" };
+    if (!s.takesQueued()) return { code: "session_busy", message: "A shell command cannot run during a turn; it runs when the turn ends" };
+    try {
+      s.bash(command);
+    } catch (e) {
+      return { code: "bash_failed", message: (e as Error).message };
+    }
+    autoContinue.cancel(s.id);
   }
 
   const orchestration = createOrchestration({
@@ -1560,11 +1585,11 @@ export function createDaemon(opts: {
             // Paged, first subscribe or new epoch: a snapshot (last page) instead of the replay; reply, snapshot and subscribe in one synchronous step.
             if (msg.paged === true && since === 0) {
               const { seq, snapshot } = s.snapshot(typeof msg.from === "string" ? msg.from : undefined);
-              reply({ logEpoch, seq, session: s.info(), title: title!, snapshot });
+              reply({ logEpoch, seq, session: s.info(), title: title!, snapshot, ...planDirsOf(s) });
               const stop = s.subscribe(seq, (e) => send(ws, e));
               return keep(stop, mirror(s));
             }
-            reply({ logEpoch, seq: s.seq(), session: s.info(), title: title! });
+            reply({ logEpoch, seq: s.seq(), session: s.info(), title: title!, ...planDirsOf(s) });
             const stop = s.subscribe(since, (e) => send(ws, e));
             return keep(stop, mirror(s));
           } finally {
@@ -1652,35 +1677,33 @@ export function createDaemon(opts: {
           const s = sessions.get(msg.sessionId);
           if (!s) return fail("unknown_item", "queued message not found (already sent?)");
           const item = queue.take(s.id, msg.itemId);
-          return item ? reply({ text: item.text, images: item.images }) : fail("unknown_item", "queued message not found (already sent?)");
+          return item ? reply({ text: item.text, images: item.images, ...(item.bash && { bash: true }) }) : fail("unknown_item", "queued message not found (already sent?)");
         }
         case "session.sendQueued": {
           const s = sessions.get(msg.sessionId);
           if (!s || !queue.items(s.id).some((i) => i.id === msg.itemId)) return fail("unknown_item", "queued message not found (already sent?)");
+          const bash = queue.items(s.id).find((i) => i.id === msg.itemId)?.bash;
           const err = await queue.sendNow(s.id, msg.itemId);
           // A refused Send now (any reason) leaves a scheduled auto-continue alone.
           if (err) return fail(err.code, err.message);
-          autoContinue.cancel(s.id);
-          queue.release(s.id);
+          // A shell command does not end a usage-limit pause; only a prompt does (runBash cancelled the auto-continue).
+          if (!bash) {
+            autoContinue.cancel(s.id);
+            queue.release(s.id);
+          }
           return reply({});
         }
         case "session.bash": {
           const s = await find(msg.sessionId);
           if (!s) return;
-          autoContinue.cancel(s.id);
           if (typeof msg.command !== "string" || !msg.command.trim()) return fail("bad_command", "empty command");
-          if (!allowed(s.cwd)) return fail("cwd_not_allowed", `outside the allowlisted roots: ${s.cwd}`);
-          const notLive = () => fail("session_not_live", `session ${s.id} is ${s.info().state}`);
-          if (!s.isLive()) return notLive();
-          if (s.info().state === "idle") await s.sync();
-          if (!s.isLive()) return notLive();
-          if (s.externalTurnRunning()) return fail("external_turn", "A terminal CLI turn is running in this session");
-          try {
-            s.bash(msg.command);
-          } catch (e) {
-            return fail("bash_failed", (e as Error).message);
+          // A send of the queue is in flight (a prompt awaiting its sync): the command goes behind it, in submit order.
+          const err = queue.sending(s.id) ? { code: "session_busy", message: "queue sending" } : await runBash(s, msg.command);
+          if (err?.code === "session_busy" || err?.code === "external_turn") {
+            const r = queue.enqueue(s.id, { text: msg.command.trim(), images: [], bash: true });
+            return typeof r === "string" ? reply({ itemId: r }) : fail(r.code, r.message);
           }
-          return reply({});
+          return err ? fail(err.code, err.message) : reply({});
         }
         case "session.setModel": {
           const s = await find(msg.sessionId);

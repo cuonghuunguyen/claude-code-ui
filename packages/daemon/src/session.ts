@@ -85,6 +85,8 @@ type SessionOpts = Partial<SessionSettings> & {
   readTranscript?: (id: string, cwd: string) => Promise<Transcript>;
   /** Whether a terminal CLI process still runs a turn of this session (its own report): the quiet time then ends no external turn. */
   cliTurnRunning?: (id: string) => boolean;
+  /** The folders the CLI keeps plan files in for a session in `cwd` (plan-dirs.ts); absent: `.claude/plans`. */
+  planDirs?: (cwd: string) => string[];
   /** The transcript's size and last main-chain record, read cheaply for the stale-turn check (GH-239). */
   transcriptEnd?: (id: string, cwd: string) => Promise<TranscriptEnd>;
   /** MCP servers of each new query of session `id` (orchestration.ts: a coordinator's server); read at every query start. */
@@ -354,7 +356,7 @@ export class Session {
   /** The paged subscribe snapshot at the current seq (synchronous: subscribe with this seq right after, no event falls between). */
   snapshot(from?: string): { seq: number; snapshot: Snapshot } {
     const page = (from !== undefined && this.index.pageFrom(from, MAX_FROM_PARTS)) || this.index.lastPage();
-    const aux = page.older ? this.index.aux(page.older.pos) : [];
+    const aux = page.older ? this.index.aux(page.older.pos, this.planDirs()) : [];
     return { seq: this.seq(), snapshot: { heads: this.index.heads(), attentionSeq: this.index.attentionSeq, page: { ...page, parts: page.parts.map(omitMedia) }, aux } };
   }
 
@@ -793,8 +795,8 @@ export class Session {
   }
 
   /** Shows the queued messages and why they are paused (prompt-queue.ts). */
-  setQueue(items: { id: string; text: string; images: string[] }[], held: { reason: "usage_limit" | "not_live"; until?: number } | undefined) {
-    const next = { items: items.map((i) => ({ id: i.id, text: i.text, imageCount: i.images.length })), ...(held && { held }) };
+  setQueue(items: { id: string; text: string; images: string[]; bash?: true; error?: string }[], held: { reason: "usage_limit" | "not_live"; until?: number } | undefined) {
+    const next = { items: items.map((i) => ({ id: i.id, text: i.text, imageCount: i.images.length, ...(i.bash && { bash: true as const }), ...(i.error && { error: i.error }) })), ...(held && { held }) };
     if (JSON.stringify(next) === JSON.stringify(this.queueShown)) return;
     this.queueShown = next;
     this.emit({ type: "prompt_queue", id: "prompt_queue", ...next });
@@ -851,6 +853,7 @@ export class Session {
               toolUseId: toolUseID,
               tool,
               input: card?.input ?? input,
+              ...this.planField(tool, toolUseID, input),
               ...(title ? { title } : {}),
               suggestions: tool === "ExitPlanMode" && !suggestions.length ? [ACCEPT_EDITS] : suggestions,
               settled: false,
@@ -863,6 +866,24 @@ export class Session {
       signal.addEventListener("abort", () => this.cancel(requestId, "Request cancelled"), { once: true });
     });
   };
+
+  /** The plan folders of this session's CLI. */
+  planDirs(): string[] | undefined {
+    return this.opts.planDirs?.(this.cwd);
+  }
+
+  /**
+   * The plan the approval request shows (display data `plan`; the Plan pane and the plan card use it for this call). The CLI fills `input.plan` from its plan
+   * file when the call runs, so after an Edit of the same message ran: that wins. Without it (Claude Code 2.1.294 also asks with an empty input) the plan-file
+   * fold (planOfCall), which may miss an Edit whose result has not streamed in yet. `input` stays what the CLI sent, as it is what goes back on Approve (a
+   * changed plan input would make the CLI rewrite its plan file).
+   */
+  private planField(tool: string, toolUseId: string, input: unknown): { plan?: string } {
+    if (tool !== "ExitPlanMode") return {};
+    const own = (input as { plan?: unknown } | null)?.plan;
+    const plan = typeof own === "string" && own ? own : this.index.planOf(toolUseId, this.planDirs());
+    return plan ? { plan } : {};
+  }
 
   /** A low tier request is sent again with `tier: "low"` once its tier is read (the Focus page offers Always allow only then); high or unknown stays unmarked. A later read that says otherwise sends it again without the mark. */
   private markLowTier(requestId: string) {

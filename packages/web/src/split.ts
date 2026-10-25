@@ -1,5 +1,6 @@
 // Split view (docs/spec.md "Split view", GH-356): the session area shows two session tabs side by side or stacked. `activeId` stays the single source of truth for "the current session": the active split always shows it.
 import { FOCUS_TAB, NEW_TAB, closeTab } from "./tabs.ts";
+import { isPaneRef } from "./pane-ref.ts";
 
 export type SplitDir = "row" | "col";
 /** `ids`: session tab per split in screen order (left/top first). `at`: index of the active split. `ratio`: size share of `ids[0]`. `runs`: subagent view per non-active split tab. */
@@ -12,7 +13,7 @@ export const SPLIT_MIN_H = 200;
 export const MIN_RATIO = 0.15;
 export const MAX_RATIO = 0.85;
 
-export const isSession = (id: unknown): id is string => typeof id === "string" && !!id && id !== NEW_TAB && id !== FOCUS_TAB;
+export const isSession = (id: unknown): id is string => typeof id === "string" && !!id && id !== NEW_TAB && id !== FOCUS_TAB && !isPaneRef(id);
 export const clampRatio = (r: number) => (Number.isFinite(r) ? Math.min(MAX_RATIO, Math.max(MIN_RATIO, r)) : 0.5);
 
 /** Ratio for a share of `px` of the container, never leaving a split below `minPx` (when the container allows both). */

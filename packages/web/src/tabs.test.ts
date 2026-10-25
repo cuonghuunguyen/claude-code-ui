@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { FOCUS_TAB, NEW_TAB, keysFinal, avatarColor, avatarColors, closeMany, closeTab, stepNoWrap, groupTabs, loadCollapsed, loadPinned, savePinned, loadTabs, moveGroup, moveGroupTo, moveTab, moveTabIn, openTab, saveCollapsed, staleTabs, replaceTab, saveTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, keysFinal, avatarColor, avatarColors, closeMany, closeTab, stepNoWrap, groupTabs, loadCollapsed, loadPinned, savePinned, loadTabs, moveGroup, moveGroupTo, moveTab, moveTabIn, openTab, saveCollapsed, staleTabs, replaceTab, insertPaneTab, saveTabs, tabFromHash, tabHash } from "./tabs.ts";
 
 describe("tabs", () => {
   it("restored tabs the daemon does not list are stale; the new-session tab always stays", () => {
@@ -255,5 +255,37 @@ describe("GH-359 pinned tabs", () => {
     expect(moveTabIn(["a", "c", "e"], cwd, "c", "a", pin)).toEqual(["a", "c", "e"]);
     expect(moveTabIn(["a", "c", "e"], cwd, "e", "c", pin)).toEqual(["a", "e", "c"]);
     expect(moveTabIn(["a", "c", "e"], cwd, "c", "a")).toEqual(["c", "a", "e"]);
+  });
+});
+
+describe("GH-395 pane tabs", () => {
+  const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
+  const V = "1a2b3c4d-1234-4abc-8def-0123456789ab";
+  const ref = `plan:${U}`;
+  it("staleTabs keeps a plan tab while its owner is known and drops it with its owner", () => {
+    expect(staleTabs([U, ref], new Set([U]))).toEqual([]);
+    expect(staleTabs([ref], new Set([U]))).toEqual([]);
+    expect(staleTabs([ref, NEW_TAB], new Set([V]))).toEqual([ref]);
+  });
+  it("keysFinal waits for the owner session of a plan tab", () => {
+    expect(keysFinal([ref], true, () => false)).toBe(false);
+    expect(keysFinal([ref], true, (id) => id === U)).toBe(true);
+    expect(keysFinal([ref], true, () => false, new Set([U]))).toBe(true);
+  });
+  it("tabFromHash reads #plan%3A<uuid> and #plan:<uuid>; tabHash round-trips", () => {
+    expect(tabHash(ref)).toBe(`#plan%3A${U}`);
+    expect(tabFromHash(tabHash(ref))).toBe(ref);
+    expect(tabFromHash(`#plan:${U}`)).toBe(ref);
+    expect(tabFromHash("#plan%3Anope")).toBeUndefined();
+    expect(tabFromHash("#%E0%A4%A")).toBeUndefined();
+    expect(tabFromHash(`#${U}`)).toBe(U);
+  });
+  it("insertPaneTab puts the tab right of its owner, else at the end of the owner's group, else at the end; unchanged when open", () => {
+    const cwd = (id: string) => ({ [U]: "/a", [V]: "/b", x: "/a", y: "/b", [ref]: "/a" })[id];
+    expect(insertPaneTab(["x", U, "y"], ref, cwd)).toEqual(["x", U, ref, "y"]);
+    expect(insertPaneTab(["x", "y", V], ref, cwd)).toEqual(["x", ref, "y", V]);
+    expect(insertPaneTab(["y", V], ref, cwd)).toEqual(["y", V, ref]);
+    const open = ["x", U, ref];
+    expect(insertPaneTab(open, ref, cwd)).toBe(open);
   });
 });

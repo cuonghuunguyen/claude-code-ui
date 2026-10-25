@@ -150,6 +150,8 @@ export function PromptToolbar(props: {
   onQueue?: () => void;
   /** What Enter and the send button do while a turn runs and `onQueue` is given: the Sending setting. */
   sendMode?: SendMode;
+  /** Bash mode: the send button queues a shell command (no steer). */
+  shell?: boolean;
   onStop: () => void;
   /** The focused send button became disabled (stopped or sent from the keyboard, disconnected): focus goes back to the prompt box. */
   onFocusLost: () => void;
@@ -213,7 +215,7 @@ export function PromptToolbar(props: {
       </div>
       <div className="flex items-end gap-1 pointer-coarse:gap-2">
         {props.usage && <ContextMeter usage={props.usage} stats={props.stats} />}
-        <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onQueue={props.onQueue} sendMode={props.sendMode} onStop={props.onStop} onFocusLost={props.onFocusLost} />
+        <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onQueue={props.onQueue} sendMode={props.sendMode} shell={props.shell} onStop={props.onStop} onFocusLost={props.onFocusLost} />
       </div>
     </div>
   );
@@ -262,7 +264,16 @@ export type SendState = "idle" | "running" | "needs_input" | "disconnected";
 const SEND_BASE = `relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-linear-to-b from-white/20 to-transparent shadow-button-contrast ${FOCUS} disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:size-11 max-md:size-11`;
 
 /** OpenCode send/stop button plus the session state: spinner while running, warning color while Claude waits for an answer. */
-function SendButton({ state, hasInput, onSend, onQueue, sendMode = "steer", onStop, onFocusLost }: { state: SendState; hasInput: boolean; onSend: () => void; onQueue?: () => void; sendMode?: SendMode; onStop: () => void; onFocusLost: () => void }) {
+/** The tooltip above the send button while the box has input and a turn runs: Enter does the setting's action, Alt+Enter the other (none without a queue). A shell command can only queue. */
+export function sendHint({ steer, canQueue, queue, shell }: { steer: boolean; canQueue: boolean; queue: boolean; shell?: boolean }): string {
+  if (!steer || !canQueue) return "";
+  const alt = keyText("alt+enter");
+  const enter = keyText("enter");
+  if (shell) return `${enter} queue the command`;
+  return queue ? `${enter} queue · ${alt} steer` : `${enter} steer · ${alt} queue`;
+}
+
+function SendButton({ state, hasInput, onSend, onQueue, sendMode = "steer", shell, onStop, onFocusLost }: { state: SendState; hasInput: boolean; onSend: () => void; onQueue?: () => void; sendMode?: SendMode; shell?: boolean; onStop: () => void; onFocusLost: () => void }) {
   const ref = useRef<HTMLButtonElement>(null);
   const disabled = state === "disconnected" || (state === "idle" && !hasInput);
   // Chrome blurs a focused button the moment it is disabled, inside React's commit: React drops the event (native listener) and the
@@ -291,9 +302,7 @@ function SendButton({ state, hasInput, onSend, onQueue, sendMode = "steer", onSt
         : [`${state === "running" ? "Claude is working" : "Claude needs your input"}. ${steer ? verb : "Stop"}`, steer ? " (Enter)" : " (Esc)"];
   const Icon = state === "disconnected" ? WifiOffIcon : busy && !steer ? SquareIcon : queue ? ListPlusIcon : ArrowUpIcon;
   // The hint above the button: Enter does the setting's mode, Alt+Enter the other (only when the box can queue).
-  const alt = keyText("alt+enter");
-  const enter = keyText("enter");
-  const hint = steer && onQueue ? (queue ? `${enter} queue · ${alt} steer` : `${enter} steer · ${alt} queue`) : "";
+  const hint = sendHint({ steer, canQueue: !!onQueue, queue, shell });
   const button = (
     <button
       type="button"

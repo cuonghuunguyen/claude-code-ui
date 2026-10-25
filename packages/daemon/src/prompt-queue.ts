@@ -1,8 +1,10 @@
-// Queued messages (docs/spec.md "Queued messages"): per-session list of prompts the daemon sends, one per turn, when the session is next idle.
+// Queued messages (docs/spec.md "Queued messages"): per-session list of prompts and bash mode commands the daemon sends, one per turn, when the session is next idle.
 import { randomUUID } from "node:crypto";
 
 export const MAX_QUEUED = 20;
-export type QueueItem = { id: string; text: string; images: string[] };
+export type QueueItem = { id: string; text: string; images: string[]; bash?: true; /** A bash item that failed to run (why it stays at the head). */ error?: string };
+/** Refusals that pass by themselves: no error on the item. */
+const RETRYABLE = new Set(["session_not_live", "external_turn", "session_busy"]);
 export type QueueHeld = { reason: "usage_limit" | "not_live"; until?: number };
 type Err = { code: string; message: string };
 type Entry = { items: QueueItem[]; held?: QueueHeld; timer?: NodeJS.Timeout; inflight: boolean; /** Send nows running: like inflight, no kick sends meanwhile. */ now: number };
@@ -10,7 +12,7 @@ type Entry = { items: QueueItem[]; held?: QueueHeld; timer?: NodeJS.Timeout; inf
 export function createPromptQueue(o: {
   /** The session takes a prompt as a new turn now. */
   ready: (id: string) => boolean;
-  /** Sends the item like session.prompt; the reason when it is not taken. */
+  /** Sends the item like session.prompt (a bash item runs like session.bash); the reason when it is not taken. */
   send: (id: string, item: QueueItem) => Promise<Err | undefined>;
   show: (id: string, items: QueueItem[], held: QueueHeld | undefined) => void;
 }) {
@@ -31,6 +33,7 @@ export function createPromptQueue(o: {
     const err = await o.send(id, item).catch((x): Err => ({ code: "prompt_failed", message: String(x) }));
     e.inflight = false;
     if (!err) return;
+    if (item.bash && !RETRYABLE.has(err.code)) item.error = err.message;
     e.items.unshift(item);
     if (err.code === "session_not_live") e.held = { reason: "not_live" };
     show(id);
@@ -40,7 +43,7 @@ export function createPromptQueue(o: {
 
   return {
     /** The new item's id, or the reason it is refused. */
-    enqueue(id: string, item: { text: string; images: string[] }): string | Err {
+    enqueue(id: string, item: { text: string; images: string[]; bash?: true }): string | Err {
       const e = entry(id);
       if (e.items.length >= MAX_QUEUED) return { code: "queue_full", message: `at most ${MAX_QUEUED} queued messages` };
       const full = { id: randomUUID(), ...item };
@@ -74,6 +77,8 @@ export function createPromptQueue(o: {
       return err;
     },
     kick,
+    /** A send of the queue is in flight (a command arriving now must queue behind it to keep the submit order). */
+    sending: (id: string) => !!map.get(id) && (map.get(id)!.inflight || map.get(id)!.now > 0),
     /** Pauses sending until `until` (ms) or, without it, until release(). */
     hold(id: string, until?: number) {
       const e = entry(id);

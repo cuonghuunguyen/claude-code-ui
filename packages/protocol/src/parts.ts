@@ -88,6 +88,8 @@ export type Part = { parentId?: string } & (
       toolUseId: string;
       tool: string;
       input: unknown;
+      /** ExitPlanMode: the plan text to show when the CLI's `input` has none (it keeps the plan in a file). Display only: never sent back as the input. */
+      plan?: string;
       title?: string;
       suggestions: PermissionUpdate[];
       settled: boolean;
@@ -177,7 +179,7 @@ export type Part = { parentId?: string } & (
 );
 
 /** A queued message as the clients see it: images are counted, not sent. */
-export type QueuedPrompt = { id: string; text: string; imageCount: number };
+export type QueuedPrompt = { id: string; text: string; imageCount: number; /** Bash mode command (text = command, no `!`); runs like session.bash. */ bash?: true; /** A bash item that failed to run and stays at the head: the reason. */ error?: string };
 
 /** Part types that are not timeline entries: they set session state or edit the order (never in `order`). The daemon's PartIndex skips them; the web store handles each one explicitly in applyEvent. */
 export const TIMELINE_EXCLUDED: ReadonlySet<Part["type"]> = new Set<Part["type"]>([

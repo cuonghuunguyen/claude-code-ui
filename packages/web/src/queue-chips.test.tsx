@@ -89,3 +89,34 @@ it("touch targets are 44px (size-11) below md and on coarse pointers; rows trunc
   expect(b.className).toContain("max-md:size-11");
   expect(el.querySelector("li .truncate")!.getAttribute("title")).toBe("x".repeat(300));
 });
+
+it("a bash item shows ! and monospace text; labels start with ! ", async () => {
+  const el = await render(<QueueChips items={[{ ...item("a", "ls -la"), bash: true }, item("b", "prose")]} onSendNow={() => {}} onEdit={() => {}} onDelete={() => {}} />);
+  const [bashRow, promptRow] = [...el.querySelectorAll("li")];
+  expect(bashRow!.textContent).toMatch(/^!ls -la/);
+  expect(bashRow!.querySelector('[aria-label="Send now: ! ls -la"]')).not.toBeNull();
+  expect(bashRow!.querySelector('[title="ls -la"]')!.className).toContain("font-mono");
+  expect(promptRow!.textContent).not.toContain("!");
+  expect(promptRow!.querySelector('[title="prose"]')!.className).not.toContain("font-mono");
+});
+
+it("bashWait disables Send now of bash rows only, with the reason as title; click does nothing", async () => {
+  const onSendNow = vi.fn();
+  const el = await render(<QueueChips items={[{ ...item("a", "ls"), bash: true }, item("b", "prose")]} bashWait="Runs when the turn ends" onSendNow={onSendNow} onEdit={() => {}} onDelete={() => {}} />);
+  const bash = el.querySelector('[aria-label="Send now: ! ls"]')!;
+  expect(bash.getAttribute("aria-disabled")).toBe("true");
+  expect(bash.getAttribute("title")).toBe("Runs when the turn ends");
+  await click(bash);
+  expect(onSendNow).not.toHaveBeenCalled();
+  const prompt = el.querySelector('[aria-label="Send now: prose"]')!;
+  expect(prompt.getAttribute("aria-disabled")).toBeNull();
+  await click(prompt);
+  expect(onSendNow).toHaveBeenCalledWith("b");
+});
+
+it("GH-443: a failed bash item shows why it did not run", async () => {
+  const el = await render(<QueueChips items={[{ ...item("a", "ls"), bash: true, error: "outside the allowlisted roots: /x" }, item("b", "ok")]} onSendNow={() => {}} onEdit={() => {}} onDelete={() => {}} />);
+  const rows = el.querySelectorAll("li");
+  expect(rows[0]!.textContent).toContain("Not run: outside the allowlisted roots: /x");
+  expect(rows[1]!.textContent).not.toContain("Not run");
+});
