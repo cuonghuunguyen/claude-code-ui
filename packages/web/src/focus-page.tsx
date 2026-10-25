@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionListItem, Worktree } from "@claude-ui/protocol";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, CircleAlertIcon, ClockIcon, CrosshairIcon, HourglassIcon, LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, nextWaiting, QUIET_SHOWN_MS, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
+import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, nextWaiting, QUIET_SHOWN_MS, quietLabel, rowTodos, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionPanel } from "./question.tsx";
 import { foldLabel, signalItems } from "./signal.ts";
@@ -327,7 +327,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
                 <section className="flex flex-col gap-1.5" aria-label="Request">
                   <p className="flex items-center gap-1.5 text-warning text-xs" data-testid="focus-waiting">
                     <CircleAlertIcon className="size-3.5 shrink-0" aria-hidden />
-                    waiting {waitLabel(now - req.since)} · {requestSummary(req.part, session.cwd)}
+                    waiting {waitLabel(now - req.since)}
                   </p>
                   <div ref={card}>
                     {req.part.type === "permission_request" ? (
