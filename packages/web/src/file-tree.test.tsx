@@ -620,6 +620,8 @@ it("GH-394 the file dialog's own tree (no onViewer) has no Open in file dialog i
   await t.render({ onViewer: undefined });
   await ctxMenu(t.row("/p/README.md"));
   expect(menuIds()).toEqual(["open", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
+  await closeMenu();
+  t.unmount();
 });
 
 const wait = (ms = 350) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
@@ -757,5 +759,59 @@ it("GH-392 a restarted read keeps the previous marks until its first reply", asy
   await t.render({ gitStamp: "s2" });
   await wait();
   expect(mark(t, "/q/s.ts")!.textContent).toBe("M");
+  t.unmount();
+});
+
+const runMenu = async (t: ReturnType<typeof setup>, path: string, id: string) => {
+  await ctxMenu(t.row(path));
+  await act(async () => menuItem(id).click());
+  await act(async () => {});
+  if (document.querySelector('[role="menu"]')) await closeMenu();
+};
+
+it("GH-392 Show changes on a repository folder sets the choice to its rel and calls onShowChanges with the folder", async () => {
+  const onShowChanges = vi.fn();
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(), onShowChanges }, { "git.diff": byCwd });
+  await t.render();
+  await act(async () => t.row("/q/tools").click());
+  await runMenu(t, "/q/tools/inner", "repoChanges");
+  expect(getRepoChoice("proj")).toBe("tools/inner");
+  expect(onShowChanges).toHaveBeenCalledWith("/q/tools/inner");
+  t.unmount();
+});
+
+it("GH-392 Show graph on a repository folder sets the choice and calls onShowGraph", async () => {
+  const onShowGraph = vi.fn();
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(), onShowGraph }, { "git.diff": byCwd });
+  await t.render();
+  await act(async () => t.row("/q/libs").click());
+  await runMenu(t, "/q/libs/lib", "repoGraph");
+  expect(getRepoChoice("proj")).toBe("libs/lib");
+  expect(onShowGraph).toHaveBeenCalledTimes(1);
+  t.unmount();
+});
+
+it("GH-392 Show changes on a file inside a nested repository chooses that repository, then reveals the file; on a file of the own repository chooses the own one", async () => {
+  const onShowChanges = vi.fn();
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(), onShowChanges }, { "git.diff": byCwd });
+  await t.render();
+  await wait();
+  await openAll(t);
+  await runMenu(t, "/q/tools/inner/x.ts", "changes");
+  expect(getRepoChoice("proj")).toBe("tools/inner");
+  expect(onShowChanges).toHaveBeenLastCalledWith("/q/tools/inner/x.ts");
+  await runMenu(t, "/q/s.ts", "changes");
+  expect(getRepoChoice("proj")).toBe("");
+  expect(onShowChanges).toHaveBeenLastCalledWith("/q/s.ts");
+  t.unmount();
+});
+
+it("GH-392 an outsideRoots repository folder has the icon but no repository menu items", async () => {
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(), onShowGraph: () => {} }, { "git.diff": byCwd });
+  await t.render();
+  await ctxMenu(t.row("/q/far"));
+  expect(menuIds()).not.toContain("repoChanges");
+  expect(menuIds()).not.toContain("repoGraph");
+  await closeMenu();
   t.unmount();
 });

@@ -5,12 +5,12 @@ import { fileNameError, type FsDeleteResult, type GitRepo, type FsEntry, type Fs
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon, XIcon } from "lucide-react";
 import type { connect, RequestError } from "./client.ts";
 import { FileIcon } from "./file-icon.tsx";
-import { ancestors, dropPaths, gitMarks, moveFocus, movePaths, pathKey, repoFolders, repoIconText, repoMarks, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Editing, type Mark, type RepoRead, type Row } from "./file-tree-model.ts";
+import { ancestors, dropPaths, gitMarks, moveFocus, movePaths, pathKey, repoFolders, repoIconText, repoMarks, repoOfPath, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Editing, type Mark, type RepoRead, type Row } from "./file-tree-model.ts";
 import { nameSelection, opErrorText, treeMenuSections, type TreeCommand, type TreeTarget } from "./file-tree-menu.ts";
 import { eachLimited, gitRows } from "./git-changes.ts";
 import { isImeKey } from "./ime.ts";
 import { isWinPath, joinPath, relPath, repoDir } from "./paths.ts";
-import type { RepoList } from "./repo-choice.ts";
+import { setRepoChoice, type RepoList } from "./repo-choice.ts";
 import { RepoIcon } from "./repo-selector.tsx";
 import { ConfirmDialog, ITEM, POPUP } from "./session-actions.tsx";
 import { openContextMenuFromKey } from "./tab-menu.ts";
@@ -40,7 +40,7 @@ const DIR_STYLE: Record<DirMark, string> = { D: "text-destructive", M: "text-inf
 
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 /** Commands that move focus themselves (an input, a dialog, the editor): the menu does not return it to the row. */
-const MOVES_FOCUS = new Set<TreeCommand>(["open", "viewer", "changes", "mention", "rename", "duplicate", "delete", "newFile", "newFolder"]);
+const MOVES_FOCUS = new Set<TreeCommand>(["open", "viewer", "changes", "repoChanges", "repoGraph", "mention", "rename", "duplicate", "delete", "newFile", "newFolder"]);
 
 const parentOf = (p: string) => {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
@@ -500,7 +500,8 @@ export function FileTree({
   const targetOf = (path: string | undefined): TreeTarget => {
     const r = path === undefined ? undefined : rows.find((x) => x.kind === "entry" && x.entry.path === path);
     if (!r || r.kind !== "entry") return { kind: "root" };
-    return r.entry.isDir ? { kind: "dir", entry: r.entry, expanded: !!r.expanded } : { kind: "file", entry: r.entry, changed: !!marks?.files.get(pathKey(r.entry.path)) };
+    const repo = r.entry.isDir && repos?.list ? folders.get(pathKey(r.entry.path)) : undefined;
+    return r.entry.isDir ? { kind: "dir", entry: r.entry, expanded: !!r.expanded, ...(repo && !repo.outsideRoots && { repo }) } : { kind: "file", entry: r.entry, changed: !!marks?.files.get(pathKey(r.entry.path)) };
   };
   const captureTarget = (target: EventTarget) => {
     const path = (target as HTMLElement).closest<HTMLElement>("[role=treeitem]")?.dataset.path;
@@ -508,6 +509,7 @@ export function FileTree({
     // Right click and long press focus the row (VS Code).
     if (path !== undefined) setFocused(path);
   };
+  const choose = (rel: string) => repos && setRepoChoice(repos.projectKey, rel);
   function run(id: TreeCommand, t: TreeTarget) {
     const path = t.kind === "root" ? cwd : t.entry.path;
     if (MOVES_FOCUS.has(id)) movedFocus.current = true;
@@ -527,8 +529,20 @@ export function FileTree({
         return onOpen(path, { pinned: true, focusEditor: true });
       case "viewer":
         return onViewer?.(path);
-      case "changes":
+      case "changes": {
+        // The file's own repository is the one Changes lists.
+        const own = repos?.list ? repoOfPath(path, repos.list, cwd) : undefined;
+        if (own) choose(own.rel);
         return onShowChanges?.(path);
+      }
+      case "repoChanges":
+        if (t.kind !== "dir" || !t.repo) return;
+        choose(t.repo.rel);
+        return onShowChanges?.(path);
+      case "repoGraph":
+        if (t.kind !== "dir" || !t.repo) return;
+        choose(t.repo.rel);
+        return onShowGraph?.();
       case "mention":
         return onMention?.(path);
       case "copyPath":
@@ -750,7 +764,7 @@ export function FileTree({
             data-testid="tree-menu"
             finalFocus={() => (movedFocus.current ? false : (rowEl(root.current, menuTarget.kind === "root" ? tabPath : menuTarget.entry.path) ?? true))}
           >
-            {treeMenuSections(menuTarget, MAC, !!onViewer).map((section, i) => (
+            {treeMenuSections(menuTarget, MAC, !!onViewer, !!onShowGraph).map((section, i) => (
                 <div key={i} role="none">
                   {i > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
                   {section.map((x) => (
