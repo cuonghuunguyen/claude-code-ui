@@ -218,3 +218,13 @@ it("a chevron click that hides the focused row moves focus to the collapsed row"
   expect(rows()).toHaveLength(3);
   expect(document.activeElement).toBe(rows()[2]);
 });
+
+it("className applies to the wide trigger only", async () => {
+  await show({ className: "h-8" });
+  expect(trigger().className).toContain("h-8");
+  expect(trigger().className).not.toContain("h-7");
+  narrow = true;
+  await show({ className: "h-8" });
+  expect(trigger().className).toContain("h-11");
+  expect(trigger().className).not.toContain("h-8");
+});

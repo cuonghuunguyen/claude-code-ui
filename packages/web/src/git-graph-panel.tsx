@@ -1,6 +1,6 @@
-// Graph tab (docs/spec.md "Layout"): the commit history of the session's repository: lanes, filters, Fetch, details, per-file diff.
-import { memo, useCallback, type ReactElement, useEffect, useMemo, useRef, useState } from "react";
-import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, FsReadResult } from "@claude-ui/protocol";
+// Graph tab (docs/spec.md "Layout"): the commit history of the selected repository: lanes, filters, Fetch, details, per-file diff.
+import { memo, useCallback, type ReactElement, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import type { GitCommit, GitRepo, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, FsReadResult } from "@claude-ui/protocol";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { ArchiveIcon, ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon, LoaderCircleIcon, RotateCwIcon, SearchIcon, TagIcon, XIcon } from "lucide-react";
@@ -10,10 +10,14 @@ import { cn } from "@/lib/utils";
 import type { connect, RequestError } from "./client.ts";
 import { KindBadge, StatsText, useNarrow } from "./changes-panel.tsx";
 import { FileIcon } from "./file-icon.tsx";
+import { pathKey } from "./file-tree-model.ts";
 import { readFailure } from "./files.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
 import { BranchMenu, type RemoteRequest } from "./git-branch-menu.tsx";
 import { runRemoteOp, dismissRemoteResult, useRemoteOp } from "./git-remote-ops.ts";
+import { joinPath } from "./paths.ts";
+import { RepoSelector } from "./repo-selector.tsx";
+import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 import { noteRefs } from "./git-refs.ts";
 import { timeAgo } from "./sessions.ts";
 import { useDark } from "./theme.ts";
@@ -116,8 +120,8 @@ type Page = { commits: GitCommit[]; rows: GraphRow[]; state: GraphState };
 const NO_PAGE: Page = { commits: [], rows: [], state: emptyGraph() };
 
 /** `hidden`: the tab is not showing; the panel stays mounted and keeps its list (docs/spec.md "Layout", Graph tab). */
-/** `exact`: `cwd` is a repository top from `git.repos` (every request carries `exact: true`); `onRefresh`: Refresh also re-reads the repository list. `repoName`: names the repository in remote result and running texts. */
-export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefresh, repoName }: { client: Client; cwd: string; hidden?: boolean; exact?: boolean; onRefresh?: () => void; repoName?: string }) {
+/** `exact`: `cwd` is a repository top from `git.repos` (every request carries `exact: true`); `onRefresh`: Refresh also re-reads the repository list. `repoName`: names the repository in remote result and running texts. `toolbar`: first in the filter row (the repository selector). `repos`, `onShowRepo`: a submodule entry of a commit that the list holds offers "Show graph of <path>". */
+export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefresh, repoName, toolbar, repos, onShowRepo }: { client: Client; cwd: string; hidden?: boolean; exact?: boolean; onRefresh?: () => void; repoName?: string; toolbar?: ReactNode; repos?: GitRepo[]; onShowRepo?: (rel: string) => void }) {
   const ex = exact ? { exact: true as const } : {};
   const narrow = useNarrow();
   const dark = useDark();
@@ -149,6 +153,8 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   // compared with it: the list reloads when they differ, or when either is unknown (an older daemon, a failed request).
   const [loadedRefs, setLoadedRefs] = useState<string>();
   const wasHidden = useRef(hidden);
+  // A panel that mounts hidden (a repository switch made elsewhere) reads nothing until it shows.
+  const started = useRef(false);
   useEffect(() => {
     const returned = wasHidden.current && !hidden;
     wasHidden.current = hidden;
@@ -182,6 +188,8 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   const filter = (skip: number) => ({ type: "git.log" as const, cwd, ...ex, skip, limit: PAGE, ...(ref !== ALL && { ref }), ...(q.author && { author: q.author }), ...(q.text && { text: q.text }) });
 
   useEffect(() => {
+    if (hidden && !started.current) return;
+    started.current = true;
     const id = ++gen.current;
     setLoading(true);
     setError(undefined);
@@ -277,6 +285,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   return (
     <div className={cn("@container min-h-0 flex-1 flex-col", hidden ? "hidden" : "flex")} data-testid="graph-panel">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5 max-md:py-2">
+        {toolbar}
         <label className="relative flex min-w-32 flex-1 items-center">
           <SearchIcon className="pointer-events-none absolute left-2 size-4 text-faint" aria-hidden />
           <input type="search" value={text} onChange={(e) => setText(e.target.value)} placeholder="Text or hash" aria-label="Text or hash" className={cn(INPUT, "pl-8")} data-testid="graph-filter-text" />
@@ -370,7 +379,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
             <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l", file ? "@max-2xl:max-h-3/4 @2xl:w-3/5" : "@max-2xl:max-h-1/2 @2xl:w-80", "shrink-0")} data-testid="commit-details">
               {detailError && <p className="p-3 text-destructive">{detailError}</p>}
               {!detail && !detailError && <p className="p-3 text-muted-foreground">Loading…</p>}
-              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => refs.filter((r) => r.startsWith("refs/heads/"))}>{el}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
+              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details showRepo={(f) => repos?.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(joinPath(cwd, f.path)))?.rel} onShowRepo={onShowRepo} wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => refs.filter((r) => r.startsWith("refs/heads/"))}>{el}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
             </div>
           )}
         </div>
@@ -379,10 +388,32 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   );
 }
 
+/** Graph pane (docs/spec.md "Layout", Graph tab): the selected repository of the project (repository selector shared with Changes); one GraphPanel per repository path. */
+export function GraphPane({ client, cwd, hidden = false, repos, onRefresh }: { client: Client; cwd: string; hidden?: boolean; repos?: RepoList; onRefresh?: () => void }) {
+  const { repo, target, choose } = useSelectedRepo(repos, cwd);
+  const list = repos?.list ?? undefined;
+  const shown = !!list && selectorVisible(list);
+  const at = target?.path ?? cwd;
+  return (
+    <GraphPanel
+      key={at}
+      client={client}
+      cwd={at}
+      exact={!!target}
+      hidden={hidden}
+      onRefresh={onRefresh}
+      repoName={shown && repo ? repoLabel(repo) : undefined}
+      toolbar={shown && list ? <RepoSelector list={list} truncated={repos!.truncated} selected={repo} onSelect={choose} className="h-8" /> : undefined}
+      repos={list}
+      onShowRepo={list ? choose : undefined}
+    />
+  );
+}
+
 const INPUT =
   "h-8 w-full rounded-md bg-secondary/60 pr-2 pl-2 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11";
 
-function Details({ detail: d, refs, loaded, onSelect, onFile, wrap }: { wrap: (el: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }>, refs: string[]) => ReactElement; detail: GitCommitDetail; refs: string[]; loaded: GitCommit[]; onSelect: (h: string) => void; onFile: (f: GitFileChange) => void }) {
+function Details({ detail: d, refs, loaded, onSelect, onFile, wrap, showRepo, onShowRepo }: { showRepo?: (f: GitFileChange) => string | undefined; onShowRepo?: (rel: string) => void; wrap: (el: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }>, refs: string[]) => ReactElement; detail: GitCommitDetail; refs: string[]; loaded: GitCommit[]; onSelect: (h: string) => void; onFile: (f: GitFileChange) => void }) {
   const body = d.message.split("\n").slice(1).join("\n").trim();
   return (
     <div className="flex flex-col gap-2 p-3 text-sm">
@@ -410,7 +441,7 @@ function Details({ detail: d, refs, loaded, onSelect, onFile, wrap }: { wrap: (e
       <ul className="flex flex-col">
         {d.files.map((f) => f.submodule ? (
           <li key={f.path}>
-            <div className="flex min-h-11 items-center gap-1.5 px-1 md:min-h-7" title={f.path} data-testid="commit-submodule">
+            <div className="flex min-h-11 flex-wrap items-center gap-1.5 px-1 md:min-h-7" title={f.path} data-testid="commit-submodule">
               <KindBadge kind={f.status} />
               <ArchiveIcon className="size-4 shrink-0" aria-hidden />
               <span className="min-w-0 flex-1 truncate">
@@ -422,6 +453,11 @@ function Details({ detail: d, refs, loaded, onSelect, onFile, wrap }: { wrap: (e
                   </>
                 )}
               </span>
+              {onShowRepo && showRepo?.(f) !== undefined && (
+                <Button size="sm" variant="outline" className="max-md:h-11" onClick={() => onShowRepo(showRepo(f)!)} data-testid="show-repo-graph">
+                  Show graph of {showRepo(f)}
+                </Button>
+              )}
             </div>
           </li>
         ) : (
