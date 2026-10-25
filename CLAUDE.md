@@ -34,6 +34,6 @@ Every `Agent`/worker dispatch sets `model` explicitly, at every spawn depth. Nev
 - `haiku` never edits code.
 - Escalate one tier after a failed worker result or two review rejects; do not retry on the same model a third time.
 - Unsure between two tiers: pick the lower one when the output is checked by an `opus` review later, the higher one otherwise.
-- Issue work: stages and models in `.claude/skills/orchestrate-tickets/SKILL.md` section 1.
+- Issue work: stages and models in `plugins/orchestration/skills/orchestrate-tickets/SKILL.md` section 1.
 
 Ticket playbook: .claude/skills/implement-issue/SKILL.md

@@ -4,6 +4,11 @@ Stages 3 to 5. Workers commit and stop; **the coordinator delivers**, so one pla
 what reaches the remote and the batch has one answer to "which of these is deliverable". A
 worker that pushes on its own initiative takes that away.
 
+In the tree flow the implementer may run the push and the build watch itself when the
+playbook allows it for a worker, after the join (ui-tester and reviewer green on the same SHA);
+`push: ask` means it asks the user with the question tool and its coordinator escalates the
+question. Opening the pull request always stays with the root coordinator.
+
 Push only after stage 2 is green. The playbook's `push` decides how:
 
 | `push` | Do |
