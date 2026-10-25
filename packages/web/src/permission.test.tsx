@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Event, Part, PermissionUpdate } from "@claude-ui/protocol";
 import { editedInput, PermissionPanel, ruleLabel, type PermissionAnswer } from "./permission.tsx";
-import { ViewerContext, type ViewerTarget } from "./viewer.ts";
+import { PlanTabContext, ViewerContext, type ViewerTarget } from "./viewer.ts";
 import { applyEvent, emptySession, pendingPermission, type PermissionRequest } from "./store.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -74,6 +74,26 @@ describe("PermissionPanel", () => {
     );
     act(() => el.querySelector<HTMLButtonElement>('[data-testid="plan-open"]')!.click());
     expect(opened).toEqual([{ kind: "plan", plan: "## Plan" }]);
+    act(() => root.unmount());
+  });
+
+  it("the plan permission panel shows Open in tab (44 px class on touch) and calls the context; none without provider", () => {
+    const part = request({ tool: "ExitPlanMode", input: { plan: "## Plan" }, suggestions: [] });
+    expect(renderToStaticMarkup(<PermissionPanel part={part} onRespond={() => {}} />)).not.toContain('data-testid="plan-open-tab"');
+    let n = 0;
+    const el = document.createElement("div");
+    const root = createRoot(el);
+    act(() =>
+      root.render(
+        <PlanTabContext value={() => n++}>
+          <PermissionPanel part={part} onRespond={() => {}} />
+        </PlanTabContext>,
+      ),
+    );
+    const btn = el.querySelector<HTMLButtonElement>('[data-testid="plan-open-tab"]')!;
+    expect(btn.className).toContain("pointer-coarse:size-11");
+    act(() => btn.click());
+    expect(n).toBe(1);
     act(() => root.unmount());
   });
 

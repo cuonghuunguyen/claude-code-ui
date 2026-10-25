@@ -3751,3 +3751,81 @@ describe("GH-430: panels on the new-session tab", () => {
     });
   });
 });
+
+describe("GH-395 Plan pane", () => {
+  const OTHER = "99999999-8888-7777-6666-555555555555";
+  const other: SessionListItem = { ...session, id: OTHER, cwd: "/p/demo", title: "Other" };
+  const two = { sessions: [session, other], projects: ["/p/demo"] };
+  const bySess = (m: { sessionId: string }) => ({ logEpoch: "e1", session: m.sessionId === OTHER ? other : session });
+  const hashTo = async (id: string) => {
+    await act(async () => {
+      location.hash = `#${id}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+  };
+  const planPart = (id = "plan1", plan = "# Plan\n\n1. do **it**") => ({ type: "tool_call", id, toolUseId: id, tool: "ExitPlanMode", input: { plan }, status: "done" });
+  const permPart = { type: "permission_request", id: "perm1", requestId: "r1", toolUseId: "plan1", tool: "ExitPlanMode", input: { plan: "# Plan" }, suggestions: [], settled: false };
+  const sendPart = (sessionId: string, seq: number, part: unknown) => act(async () => emit({ type: "event", sessionId, seq, part }));
+  const sideTabs = () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] [data-testid^="pane-"]')].map((b) => b.getAttribute("data-testid"));
+
+  it("the Plan tab appears in the side panel only while the current session has a plan, after Files", async () => {
+    const restore = await remount({ "session.list": two, "session.subscribe": bySess });
+    try {
+      expect(sideTabs()).not.toContain("pane-plan");
+      await sendPart(ID, 1, planPart());
+      const tabs = sideTabs();
+      expect(tabs).toContain("pane-plan");
+      expect(tabs.indexOf("pane-plan")).toBeGreaterThan(tabs.indexOf("pane-files"));
+      await hashTo(OTHER);
+      expect(sideTabs()).not.toContain("pane-plan");
+      await hashTo(ID);
+      expect(sideTabs()).toContain("pane-plan");
+    } finally {
+      restore();
+    }
+  });
+
+  it("the Plan tab appears for a plan only in the snapshot aux", async () => {
+    const withAux = { logEpoch: "e1", session, seq: 1, snapshot: { heads: [], attentionSeq: 0, page: { parts: [] }, aux: [{ part: planPart("old", "# Old call"), pos: 1 }] } };
+    const restore = await remount({ "session.subscribe": withAux });
+    try {
+      expect(sideTabs()).toContain("pane-plan");
+      await pickSide(/plan/i);
+      expect(q("plan-pane")!.textContent).toContain("Old call");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Go to request in the Plan pane focuses the plan permission panel of the session", async () => {
+    await sendPart(ID, 1, planPart());
+    await sendPart(ID, 2, permPart);
+    await pickSide(/plan/i);
+    expect(q("plan-waiting")!.textContent).toContain("Waiting for your answer");
+    // jsdom has no layout: every element counts as visible.
+    const spy = vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as never);
+    try {
+      await clickId("plan-go-to-request");
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(q("permission-panel")!.contains(document.activeElement)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("Open in tab on the ExitPlanMode card reveals the dock Plan tab", async () => {
+    await sendPart(ID, 1, planPart());
+    await pickSide(/changes/i);
+    await clickId("plan-open-tab");
+    expect(sideTab()).toMatch(/plan/i);
+  });
+
+  it("narrow: the pane switcher lists Plan while a plan exists and selecting it shows the plan", async () => {
+    width = 800;
+    await sendPart(ID, 1, planPart());
+    expect(q("pane-plan")).not.toBeNull();
+    await clickId("pane-plan");
+    expect(q("plan-pane")!.textContent).toContain("Plan");
+    expect(q("pane-plan")!.getAttribute("aria-selected")).toBe("true");
+  });
+});

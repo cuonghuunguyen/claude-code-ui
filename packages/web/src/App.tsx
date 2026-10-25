@@ -99,7 +99,7 @@ import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext } from "./file-links.tsx";
-import { ViewerContext, isFileTarget, latestPlan, useOpenViewer, type ViewerState } from "./viewer.ts";
+import { PlanTabContext, ViewerContext, isFileTarget, latestPlan, useOpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
@@ -140,6 +140,7 @@ import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany,
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { type Area, type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, useLayout, useMinWidth, withPane } from "./layout.ts";
+import { PlanPane } from "./plan-pane.tsx";
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
@@ -1641,6 +1642,7 @@ export function App() {
       () => editsAsked.current.delete(key),
     );
   }, [panelTarget?.sessionId, panelView?.older?.before, panelView?.auxEdits, panelView?.logEpoch]);
+  const panelPlan = useMemo(() => (panelView ? latestPlan(panelView) : undefined), [panelView?.parts, panelView?.aux]);
   const changedPaths = useMemo(() => (panelView ? sessionChanges(panelView).map((c) => c.path) : []), [panelView?.parts, panelView?.aux]);
   // The pane tab counts the files the changes panel lists (a file created and deleted again is not listed).
   const [listedChanges, setListedChanges] = useState<{ id: string; n: number }>();
@@ -1689,7 +1691,8 @@ export function App() {
     activeOpen.current = true;
   };
   // A restored narrow Terminal pane without shells shows the session.
-  const pane: Pane = !lg && histPane === "terminal" && !termAvail ? "session" : histPane;
+  const planListed = !!panelPlan && areaOf(layout, "plan") !== "main";
+  const pane: Pane = (!lg && histPane === "terminal" && !termAvail) || (histPane === "plan" && !planListed) ? "session" : histPane;
   // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
   const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
   useEffect(() => {
@@ -1705,8 +1708,8 @@ export function App() {
   }, [panelCwd, status, knownGit]);
   // The Graph panel stays mounted (hidden) after its first visit, so coming back shows the loaded list at once.
   const [graphCwd, setGraphCwd] = useState<string>();
-  // The Plan pane is hosted from the next step on; until then it is never listed.
-  const available = (p: PaneId) => (p === "plan" ? false : p !== "graph" || isGit);
+  // The Plan pane lists only while the current session has a plan and its home is a dock.
+  const available = (p: PaneId) => (p === "plan" ? planListed : p !== "graph" || isGit);
   /** Narrow: the side column holds every pane. */
   const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? PANE_IDS.filter((p) => areaOf(layout, p) !== "main") : []).filter(available);
   /** The panes of the area that can be selected: the Terminal tab stays listed, but selects only once the terminal is available. */
@@ -1847,6 +1850,27 @@ export function App() {
   const openViewer = useOpenViewer(shown, (v) => (isFileTarget(v.target) ? popFile(v.target.path, v.target.line, v.opener) : setViewer(v)));
   /** A path in assistant text (absolute, inside the session cwd): the Files tab opens it at the line. */
   const openFileLink = useCallback((path: string, line?: number) => popFile(path, line), []);
+  /** Plan pane / "Open in tab": reveals the Plan pane of the current session. */
+  const showPlan = () => {
+    if (!shown) return;
+    reveal("plan");
+  };
+  const showPlanRef = useRef(showPlan);
+  showPlanRef.current = showPlan;
+  const showPlanStable = useCallback(() => showPlanRef.current(), []);
+  /** "Go to request": the session of the plan, then the plan approval's first control (the popup button: no answer by accident). */
+  const goToRequest = (sid: string) => {
+    open(sid);
+    showSession();
+    const focus = (frames: number) => {
+      const root = document.getElementById(`split-${sid}`) ?? document;
+      const panel = [...root.querySelectorAll<HTMLElement>('[data-testid="permission-panel"]')].find((e) => e.getClientRects().length > 0);
+      const target = panel?.querySelector<HTMLElement>("button, input");
+      if (target) target.focus();
+      else if (frames > 0) requestAnimationFrame(() => focus(frames - 1));
+    };
+    requestAnimationFrame(() => focus(60));
+  };
   const latest = useMemo(() => (view ? latestPlan(view) : undefined), [view?.parts, view?.aux]);
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
@@ -2523,7 +2547,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal"]} value={pane === "graph" && !isGit ? "files" : pane} onChange={selectPane} changes={changeCount} />
+                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : [])]} value={pane === "graph" && !isGit ? "files" : pane} onChange={selectPane} changes={changeCount} />
                 </div>
               )}
               {layout.side === "left" && lg && (
@@ -2541,6 +2565,7 @@ export function App() {
                 data-split={splitShown ? split!.dir : undefined}
               >
                 <ViewerContext value={openViewer}>
+                <PlanTabContext value={showPlanStable}>
                 <FileLinkContext value={openFileLink}>
                 <QuoteContext value={setInsert}>
                 {tabs.map((id) => {
@@ -2640,6 +2665,7 @@ export function App() {
                 })}
                 </QuoteContext>
                 </FileLinkContext>
+                </PlanTabContext>
                 </ViewerContext>
                 {splitCramped && (
                   <div className="order-first flex shrink-0 items-center gap-2 border-b px-3 py-1 text-muted-foreground text-xs" data-testid="split-hint" role="status">
@@ -2790,6 +2816,14 @@ export function App() {
                       </Suspense>
                     ),
                     hosts.graph,
+                  )}
+                  {createPortal(
+                    areaOf(layout, "plan") !== "main" && panelTarget.sessionId && (
+                      <div className={shows("plan") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+                        <PlanPane view={panelView} label="Plan" onGoToRequest={() => goToRequest(panelTarget.sessionId!)} />
+                      </div>
+                    ),
+                    hosts.plan,
                   )}
                   {createPortal(
                     // Mounted only while it shows: the terminal chunk and the shell focus load on show (GH-354).
