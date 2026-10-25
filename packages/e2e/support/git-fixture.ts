@@ -96,3 +96,12 @@ export function makeNestedRepo(dir: string, name: string, subject: string, edit 
   commit(repo, "a.txt", "1\n", subject);
   if (edit) writeFileSync(join(repo, "a.txt"), "1\nedited\n");
 }
+
+/** Makes `repo` (an existing folder, already holding `.claude/settings.json`) a repository with two commits and a README.md and src/app.ts to open in Files. */
+export function makeRepoWithTwoCommits(repo: string): void {
+  git(repo, "init", "-b", "main");
+  writeFileSync(join(repo, ".git", "info", "exclude"), ".claude/\n");
+  commit(repo, "README.md", "# Fixture\n", "first commit");
+  mkdirSync(join(repo, "src"), { recursive: true });
+  commit(repo, "src/app.ts", "export const app = 1;\n", "second commit");
+}
