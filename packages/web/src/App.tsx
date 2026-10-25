@@ -1961,14 +1961,14 @@ export function App() {
   const showPlanRef = useRef(showPlan);
   showPlanRef.current = showPlan;
   const showPlanStable = useCallback(() => showPlanRef.current(), []);
-  /** "Go to request": the session of the plan, then the plan approval's first control (the popup button: no answer by accident). */
+  /** "Go to request": the session of the plan, then the plan approval's popup button, else its first control (no answer by accident). */
   const goToRequest = (sid: string) => {
     open(sid);
     showSession();
     const focus = (frames: number) => {
       const root = document.getElementById(`split-${sid}`) ?? document;
       const panel = [...root.querySelectorAll<HTMLElement>('[data-testid="permission-panel"]')].find((e) => e.getClientRects().length > 0);
-      const target = panel?.querySelector<HTMLElement>("button, input");
+      const target = panel?.querySelector<HTMLElement>('[data-testid="plan-open"]') ?? panel?.querySelector<HTMLElement>("button, input");
       if (target) target.focus();
       else if (frames > 0) requestAnimationFrame(() => focus(frames - 1));
     };

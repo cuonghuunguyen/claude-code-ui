@@ -3818,6 +3818,7 @@ describe("GH-395 Plan pane", () => {
       await clickId("plan-go-to-request");
       await act(async () => new Promise((r) => setTimeout(r, 50)));
       expect(q("permission-panel")!.contains(document.activeElement)).toBe(true);
+      expect(document.activeElement).toBe(q("plan-open"));
     } finally {
       spy.mockRestore();
     }

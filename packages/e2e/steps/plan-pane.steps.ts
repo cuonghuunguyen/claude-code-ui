@@ -74,7 +74,8 @@ When("I click Go to request in the Plan pane", async ({ page }) => {
 });
 
 Then("{string} has the focus", async ({ page }, name: string) => {
-  await expect(page.getByRole("button", { name, exact: true }).filter({ visible: true }).first()).toBeFocused();
+  // The button of the permission panel: the plan card above it has one of the same name.
+  await expect(page.getByTestId("permission-panel").filter({ visible: true }).first().getByRole("button", { name, exact: true })).toBeFocused();
 });
 
 Then("the permission request is still open", async ({ page }) => {
