@@ -958,7 +958,7 @@ it("dropping a pane on the area body appends it; a session tab drag is not a tar
   await dnd(q("side-panel"), "dragover", data);
   expect(q("side-panel")!.className).toContain("outline-primary");
   await dnd(q("side-panel"), "drop", data);
-  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "terminal"]);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "plan", "terminal"]);
   const other = new Map<string, string>();
   await dnd(q("side-panel"), "dragover", other, ["application/x-claude-ui-tab"]);
   expect(q("side-panel")!.className).not.toContain("outline-primary");
@@ -974,7 +974,7 @@ it("dropping a pane on an area's content (inside a pane host) moves it and fills
   expect(q("side-panel")!.className).toContain("outline-primary");
   expect(q("side-panel")!.hasAttribute("data-drop-target")).toBe(true);
   await dnd(body, "drop", data);
-  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "terminal"]);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "plan", "terminal"]);
 });
 
 /** Terminal in the side panel, Files in a maximized bottom panel: the side panel is hidden behind the maximize. */
@@ -3854,5 +3854,427 @@ describe("GH-430: panels on the new-session tab", () => {
         restore();
       }
     });
+  });
+});
+
+describe("GH-395 Plan pane", () => {
+  const OTHER = "99999999-8888-7777-6666-555555555555";
+  const other: SessionListItem = { ...session, id: OTHER, cwd: "/p/demo", title: "Other" };
+  const two = { sessions: [session, other], projects: ["/p/demo"] };
+  const bySess = (m: { sessionId: string }) => ({ logEpoch: "e1", session: m.sessionId === OTHER ? other : session });
+  const hashTo = async (id: string) => {
+    await act(async () => {
+      location.hash = `#${id}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+  };
+  const planPart = (id = "plan1", plan = "# Plan\n\n1. do **it**") => ({ type: "tool_call", id, toolUseId: id, tool: "ExitPlanMode", input: { plan }, status: "done" });
+  const permPart = { type: "permission_request", id: "perm1", requestId: "r1", toolUseId: "plan1", tool: "ExitPlanMode", input: { plan: "# Plan" }, suggestions: [], settled: false };
+  const sendPart = (sessionId: string, seq: number, part: unknown) => act(async () => emit({ type: "event", sessionId, seq, part }));
+  const sideTabs = () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] [data-testid^="pane-"]')].map((b) => b.getAttribute("data-testid"));
+
+  it("the Plan tab appears in the side panel only while the current session has a plan, after Files", async () => {
+    const restore = await remount({ "session.list": two, "session.subscribe": bySess });
+    try {
+      expect(sideTabs()).not.toContain("pane-plan");
+      await sendPart(ID, 1, planPart());
+      const tabs = sideTabs();
+      expect(tabs).toContain("pane-plan");
+      expect(tabs.indexOf("pane-plan")).toBeGreaterThan(tabs.indexOf("pane-files"));
+      await hashTo(OTHER);
+      expect(sideTabs()).not.toContain("pane-plan");
+      await hashTo(ID);
+      expect(sideTabs()).toContain("pane-plan");
+    } finally {
+      restore();
+    }
+  });
+
+  it("the Plan tab appears for a plan only in the snapshot aux", async () => {
+    const withAux = { logEpoch: "e1", session, seq: 1, snapshot: { heads: [], attentionSeq: 0, page: { parts: [] }, aux: [{ part: planPart("old", "# Old call"), pos: 1 }] } };
+    const restore = await remount({ "session.subscribe": withAux });
+    try {
+      expect(sideTabs()).toContain("pane-plan");
+      await pickSide(/plan/i);
+      expect(q("plan-pane")!.textContent).toContain("Old call");
+    } finally {
+      restore();
+    }
+  });
+
+  it("the Plan tab shows the plan the model wrote to its plan file when ExitPlanMode has an empty input (Claude Code 2.1.294)", async () => {
+    await sendPart(ID, 1, { type: "tool_call", id: "w", toolUseId: "w", tool: "Write", input: { file_path: "/home/user/.claude/plans/p.md", content: "# Plan from the file" }, status: "done" });
+    expect(sideTabs()).not.toContain("pane-plan");
+    await sendPart(ID, 2, planPart("exit", ""));
+    await sendPart(ID, 3, { ...planPart("exit", ""), input: {} });
+    expect(sideTabs()).toContain("pane-plan");
+    await pickSide(/plan/i);
+    expect(q("plan-pane")!.textContent).toContain("Plan from the file");
+  });
+
+  it("Go to request in the Plan pane focuses the plan permission panel of the session", async () => {
+    await sendPart(ID, 1, planPart());
+    await sendPart(ID, 2, permPart);
+    await pickSide(/plan/i);
+    expect(q("plan-waiting")!.textContent).toContain("Waiting for your answer");
+    // jsdom has no layout: every element counts as visible.
+    const spy = vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as never);
+    try {
+      await clickId("plan-go-to-request");
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(q("permission-panel")!.contains(document.activeElement)).toBe(true);
+      expect(document.activeElement).toBe(q("plan-open"));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("Open in tab on the ExitPlanMode card reveals the dock Plan tab", async () => {
+    await sendPart(ID, 1, planPart());
+    await pickSide(/changes/i);
+    await clickId("plan-open-tab");
+    expect(sideTab()).toMatch(/plan/i);
+  });
+
+  it("narrow: the pane switcher lists Plan while a plan exists and selecting it shows the plan", async () => {
+    width = 800;
+    await sendPart(ID, 1, planPart());
+    expect(q("pane-plan")).not.toBeNull();
+    await clickId("pane-plan");
+    expect(q("plan-pane")!.textContent).toContain("Plan");
+    expect(q("pane-plan")!.getAttribute("aria-selected")).toBe("true");
+  });
+
+  // --- the Plan tab in the main area ---
+  const REF = `plan:${ID}`;
+  const REF2 = `plan:${OTHER}`;
+  const MAIN = JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph"], bottom: ["terminal"], main: ["plan"] } });
+  const subs = (id: string) => sent.filter((m) => m.type === "session.subscribe" && (m as unknown as { sessionId: string }).sessionId === id) as unknown as { sessionId: string; background?: boolean }[];
+  const unsubs = (id: string) => sent.filter((m) => m.type === "session.unsubscribe" && (m as unknown as { sessionId: string }).sessionId === id);
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const stripTab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
+  const ctxMenu = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  const menuItem = (id: string) => document.querySelector<HTMLElement>(`[data-testid="tab-menu-${id}"]`)!;
+  const toastEl = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  const undoToast = () => act(async () => [...toastEl()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+  const layoutNow = () => JSON.parse(localStorage.getItem("claude-ui.layout") ?? "null") as { areas: { side: string[]; main: string[] } } | null;
+  const bodyOf = (ref: string) => el.querySelector<HTMLElement>(`[data-pane-tab-body="${ref}"]`);
+  /** Mounts with the stored layout, tabs and hash, and both sessions (the plan of `ID` and `OTHER` come as events). */
+  async function mountMain(opts: { tabs: string[]; hash?: string; layout?: string; pinned?: string[]; list?: typeof two; extra?: Record<string, unknown> }) {
+    localStorage.setItem("claude-ui.layout", opts.layout ?? MAIN);
+    localStorage.setItem("claude-ui.tabs", JSON.stringify(opts.tabs));
+    if (opts.pinned) localStorage.setItem("claude-ui.pinned-tabs", JSON.stringify(opts.pinned));
+    location.hash = opts.hash ?? `#${encodeURIComponent(opts.tabs[0]!)}`;
+    sent.length = 0;
+    return remount({ "session.list": opts.list ?? two, "session.subscribe": bySess, ...opts.extra });
+  }
+  const visible = () => vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as never);
+
+  it("Move to main area from the Plan tab menu opens \"Plan · <title>\" right of its session tab, focused; Open in tab again focuses the same tab", async () => {
+    const restore = await mountMain({ tabs: [ID, OTHER], layout: JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "plan"], bottom: ["terminal"], main: [] } }) });
+    const spy = visible();
+    try {
+      await sendPart(ID, 1, planPart());
+      await act(async () => void el.querySelector('[data-pane-tab="plan"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 4, clientY: 4 })));
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="pane-move-main"]')!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(tabIds()).toEqual([ID, REF, OTHER]);
+      expect(stripTab(REF).textContent).toContain("Plan · Demo");
+      expect(location.hash).toBe(`#plan%3A${ID}`);
+      expect(document.activeElement).toBe(stripTab(REF).querySelector('[role="tab"]'));
+      expect(layoutNow()!.areas.main).toEqual(["plan"]);
+      expect(sideTabs()).not.toContain("pane-plan");
+      // The plan card's Open in tab: the same tab, no second one.
+      await clickId("plan-open-tab");
+      expect(tabIds().filter((t) => t === REF)).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+      restore();
+    }
+  });
+
+  it("Open in tab on the ExitPlanMode card with home main opens the plan tab", async () => {
+    const restore = await mountMain({ tabs: [ID, OTHER] });
+    try {
+      await sendPart(ID, 1, planPart());
+      expect(sideTabs()).not.toContain("pane-plan");
+      await clickId("plan-open-tab");
+      expect(tabIds()).toEqual([ID, REF, OTHER]);
+      expect(bodyOf(REF)!.textContent).toContain("do it");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Activating a plan tab makes its session current: the side panel shows that session's changes; the split is suspended", async () => {
+    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, OTHER], at: 1, ratio: 0.5 }));
+    const restore = await mountMain({ tabs: [ID, OTHER, REF2], hash: `#${ID}` });
+    try {
+      await sendPart(OTHER, 1, { type: "tool_call", id: "e1", toolUseId: "e1", tool: "Edit", input: { file_path: "/p/demo/a.ts", old_string: "a", new_string: "b" }, status: "done" });
+      await sendPart(OTHER, 2, { type: "tool_result", id: "e1:result", toolUseId: "e1", output: "ok", isError: false });
+      expect(q("pane-changes")!.textContent).not.toContain("1");
+      await hashTo(`plan%3A${OTHER}`);
+      expect(location.hash).toBe(`#plan%3A${OTHER}`);
+      expect(q("pane-changes")!.textContent).toContain("1");
+      expect(el.querySelectorAll('[data-testid="split"]')).toHaveLength(0);
+      // The sidebar shows the owner's row as the current one.
+      expect(el.querySelector('[data-testid="sidebar"] [aria-current="page"]')?.textContent).toContain("Other");
+    } finally {
+      restore();
+    }
+  });
+
+  it("A plan tab keeps showing its own session's plan while another session is active", async () => {
+    const restore = await mountMain({ tabs: [ID, OTHER, REF], hash: `#${OTHER}` });
+    try {
+      await sendPart(ID, 1, planPart("a", "# Plan of Demo"));
+      await sendPart(OTHER, 1, planPart("b", "# Plan of Other"));
+      expect(bodyOf(REF)!.textContent).toContain("Plan of Demo");
+      expect(bodyOf(REF)!.textContent).not.toContain("Plan of Other");
+      expect(sideTabs()).not.toContain("pane-plan");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Move Plan to side panel from a plan tab closes all plan tabs with \"Closed 2 Plan tabs\"; Undo restores the main home and the tabs", async () => {
+    const restore = await mountMain({ tabs: [ID, REF, OTHER, REF2], hash: `#plan%3A${ID}` });
+    try {
+      await sendPart(ID, 1, planPart());
+      await sendPart(OTHER, 1, planPart("b"));
+      await ctxMenu(stripTab(REF));
+      await act(async () => menuItem("moveSide").click());
+      expect(toastEl()!.textContent).toContain("Closed 2 Plan tabs");
+      expect(tabIds()).toEqual([ID, OTHER]);
+      expect(layoutNow()?.areas.main ?? []).toEqual([]);
+      expect(sideTabs()).toContain("pane-plan");
+      await undoToast();
+      expect(layoutNow()!.areas.main).toEqual(["plan"]);
+      expect(tabIds()).toEqual([ID, REF, OTHER, REF2]);
+      // No stray close after the Undo.
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(tabIds()).toEqual([ID, REF, OTHER, REF2]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Reset layout returns Plan to the side panel and closes plan tabs", async () => {
+    const restore = await mountMain({ tabs: [ID, REF] });
+    try {
+      await sendPart(ID, 1, planPart());
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Reset layout"))!;
+      await act(async () => row.click());
+      expect(tabIds()).toEqual([ID]);
+      expect(toastEl()!.textContent).toContain("Closed 1 Plan tab");
+      expect(localStorage.getItem("claude-ui.layout")).toBeNull();
+      expect(sideTabs()).toContain("pane-plan");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Reload restores plan tabs, order, pin and the active plan tab from the hash; its owner without a tab is subscribed once with background: true", async () => {
+    const restore = await mountMain({ tabs: [REF], hash: `#plan%3A${ID}`, pinned: [REF] });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(tabIds()).toEqual([REF]);
+      expect(stripTab(REF).hasAttribute("data-pinned")).toBe(true);
+      expect(stripTab(REF).querySelector('[role="tab"]')!.getAttribute("aria-selected")).toBe("true");
+      expect(location.hash).toBe(`#plan%3A${ID}`);
+      // Double subscribe guard: the owner is followed once, without a CLI hold.
+      expect(subs(ID)).toHaveLength(1);
+      expect(subs(ID)[0]!.background).toBe(true);
+      await sendPart(ID, 1, planPart("a", "# Restored plan"));
+      expect(bodyOf(REF)!.textContent).toContain("Restored plan");
+      // A list refresh and a reconnect resubscribe the one view, still in the background.
+      await act(async () => sessionsChanged({}));
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(subs(ID).filter((m) => !m.background)).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("A subscribe error of a plan tab's owner ends Loading plan… with a message and is asked again after a reconnect", async () => {
+    let broken = true;
+    const restore = await mountMain({
+      tabs: [REF],
+      hash: `#plan%3A${ID}`,
+      extra: { "session.subscribe": async (m: { sessionId: string }) => (broken ? Promise.reject(Object.assign(new Error("boom"), { code: "failed" })) : bySess(m)) },
+    });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(bodyOf(REF)!.querySelector('[data-testid="plan-failed"]')).not.toBeNull();
+      broken = false;
+      await act(async () => setStatus("reconnecting"));
+      await act(async () => setStatus("connected"));
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(subs(ID).length).toBeGreaterThanOrEqual(2);
+      await sendPart(ID, 1, planPart());
+      expect(bodyOf(REF)!.textContent).toContain("do it");
+      expect(bodyOf(REF)!.querySelector('[data-testid="plan-failed"]')).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Move plan to main area from the palette without a plan says so in a toast", async () => {
+    const restore = await mountMain({ tabs: [ID], layout: JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "plan"], bottom: ["terminal"], main: [] } }) });
+    try {
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Move plan to main area"))!;
+      await act(async () => row.click());
+      expect(toastEl()!.textContent).toContain("Plan moved to the main area");
+      expect(layoutNow()!.areas.main).toEqual(["plan"]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("A dropped subscription of a plan tab's owner is asked again after a reconnect", async () => {
+    let n = 0;
+    const restore = await mountMain({
+      tabs: [REF],
+      hash: `#plan%3A${ID}`,
+      extra: { "session.subscribe": async (m: { sessionId: string }) => (++n === 1 ? Promise.reject(new Error("disconnected")) : bySess(m)) },
+    });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      await act(async () => setStatus("reconnecting"));
+      await act(async () => setStatus("connected"));
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(subs(ID).length).toBeGreaterThanOrEqual(2);
+      await sendPart(ID, 1, planPart());
+      expect(bodyOf(REF)!.textContent).toContain("do it");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Closing the owner's session tab keeps the plan tab and follows the owner in the background; closing the plan tab then drops a closed owner", async () => {
+    const closedList = { sessions: [{ ...session, state: "closed" as const }, other], projects: ["/p/demo"] };
+    const restore = await mountMain({ tabs: [ID, REF], hash: `#${ID}`, list: closedList as never });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      sent.length = 0;
+      await act(async () => stripTab(ID).querySelector<HTMLElement>('[data-testid="tab-close"]')!.click());
+      expect(tabIds()).toEqual([REF]);
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(unsubs(ID)).toHaveLength(0);
+      expect(subs(ID).every((m) => m.background)).toBe(true);
+      expect(subs(ID).length).toBeGreaterThan(0);
+      await act(async () => stripTab(REF).querySelector<HTMLElement>('[data-testid="tab-close"]')!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(tabIds()).toEqual([]);
+      expect(unsubs(ID).length).toBeGreaterThan(0);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Deleting the session closes its plan tab; a session whose project was removed closes its plan tab", async () => {
+    const restore = await mountMain({ tabs: [ID, REF, OTHER, REF2], hash: `#plan%3A${ID}` });
+    try {
+      await act(async () => sessionsChanged({ deleted: ID }));
+      expect(tabIds()).toEqual([OTHER, REF2]);
+      expect(location.hash).not.toContain(ID);
+      replies["session.list"] = { sessions: [], projects: [] };
+      await act(async () => sessionsChanged({}));
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(tabIds()).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Plan tab menu: Close others, Pin, Go to session; Split right and down are disabled", async () => {
+    const restore = await mountMain({ tabs: [ID, REF, OTHER], hash: `#plan%3A${ID}` });
+    try {
+      await ctxMenu(stripTab(REF));
+      expect(menuItem("splitRight").hasAttribute("data-disabled")).toBe(true);
+      expect(menuItem("splitDown").hasAttribute("data-disabled")).toBe(true);
+      expect(document.querySelector('[data-testid="tab-menu-copyId"]')).toBeNull();
+      await act(async () => menuItem("pin").click());
+      expect(stripTab(REF).hasAttribute("data-pinned")).toBe(true);
+      await ctxMenu(stripTab(REF));
+      await act(async () => menuItem("goToSession").click());
+      expect(location.hash).toBe(`#${ID}`);
+      await ctxMenu(stripTab(REF));
+      await act(async () => menuItem("closeOthers").click());
+      expect(tabIds()).toEqual([REF]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Phone switcher: removing a plan row toasts \"Closed Plan · Demo\" with Undo", async () => {
+    width = 500;
+    const restore = await mountMain({ tabs: [ID, REF], hash: `#${ID}` });
+    try {
+      await act(async () => q("tab-switcher")!.click());
+      const row = [...document.querySelectorAll<HTMLElement>("[role=option]")].find((r) => r.textContent?.includes("Plan · Demo"))!;
+      await act(async () => void row.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true })));
+      expect(toastEl()!.textContent).toContain("Closed Plan · Demo");
+      expect(tabIds()).toEqual([ID]);
+      await undoToast();
+      expect(tabIds()).toEqual([ID, REF]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Narrow: with home main the Plan switcher entry opens and focuses the plan tab; leaving it by Session returns to the session", async () => {
+    width = 800;
+    const restore = await mountMain({ tabs: [ID], hash: `#${ID}` });
+    const spy = visible();
+    try {
+      await sendPart(ID, 1, planPart());
+      expect(q("pane-plan")).not.toBeNull();
+      await clickId("pane-plan");
+      expect(location.hash).toBe(`#plan%3A${ID}`);
+      expect(q("pane-plan")!.getAttribute("aria-selected")).toBe("true");
+      await clickId("pane-session");
+      expect(location.hash).toBe(`#${ID}`);
+    } finally {
+      spy.mockRestore();
+      restore();
+    }
+  });
+
+  it("Stored layout and tabs without plan or main load with the default; a stored plan tab while Plan's home is the side panel closes silently", async () => {
+    const old = JSON.stringify({ side: "left", areas: { side: ["files", "changes", "graph"], bottom: ["terminal"] } });
+    const restore = await mountMain({ tabs: [ID, REF], layout: old });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(tabIds()).toEqual([ID]);
+      expect(toastEl()).toBeNull();
+      await sendPart(ID, 1, planPart());
+      expect(sideTabs().at(-1)).toBe("pane-plan");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Clean up: the archived rule closes a plan tab of an archived owner; Close idle tabs does not", async () => {
+    const archived = { sessions: [{ ...session, archived: true }, other], projects: ["/p/demo"] };
+    const restore = await mountMain({ tabs: [REF, OTHER], hash: `#${OTHER}`, list: archived as never });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      await ctxMenu(stripTab(OTHER));
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-cleanup"]')!.click());
+      const items = () => [...document.querySelectorAll<HTMLElement>('[data-testid="tab-cleanup-menu"] [role="menuitem"]')];
+      const idle = items().find((x) => /idle/i.test(x.textContent ?? ""));
+      if (idle && !idle.hasAttribute("data-disabled")) await act(async () => idle.click());
+      expect(tabIds()).toContain(REF);
+      await ctxMenu(stripTab(OTHER));
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-cleanup"]')!.click());
+      const arch = items().find((x) => /archived/i.test(x.textContent ?? ""))!;
+      await act(async () => arch.click());
+      expect(tabIds()).not.toContain(REF);
+    } finally {
+      restore();
+    }
   });
 });

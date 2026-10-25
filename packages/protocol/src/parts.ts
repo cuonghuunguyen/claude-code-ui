@@ -88,6 +88,8 @@ export type Part = { parentId?: string } & (
       toolUseId: string;
       tool: string;
       input: unknown;
+      /** ExitPlanMode: the plan text to show when the CLI's `input` has none (it keeps the plan in a file). Display only: never sent back as the input. */
+      plan?: string;
       title?: string;
       suggestions: PermissionUpdate[];
       settled: boolean;

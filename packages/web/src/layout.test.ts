@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { DEFAULT_LAYOUT, activePane, areaOf, loadLayout, loadPaneTabs, loadTerminalDock, movePane, parsePaneTabs, parseLayout, rememberPane, resetLayout, saveLayout, saveTerminalDock, useLayout, useMinWidth, useTerminalDock } from "./layout.ts";
+import { DEFAULT_LAYOUT, activePane, areaOf, loadLayout, loadPaneTabs, loadTerminalDock, movePane, parsePaneTabs, parseLayout, rememberPane, resetLayout, saveLayout, saveTerminalDock, withPane, useLayout, useMinWidth, useTerminalDock } from "./layout.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => (vi.restoreAllMocks(), resetLayout(), localStorage.clear()));
@@ -15,23 +15,55 @@ it("parseLayout: bad input reads as the default", () => {
 
 it("parseLayout: appends missing panes, drops unknown and duplicate ones", () => {
   const l = parseLayout('{"side":"left","areas":{"side":["files","zzz","files"],"bottom":["terminal","changes"]}}');
-  expect(l).toEqual({ side: "left", areas: { side: ["files", "graph"], bottom: ["terminal", "changes"] } });
+  expect(l).toEqual({ side: "left", areas: { side: ["files", "graph", "plan"], bottom: ["terminal", "changes"], main: [] } });
   expect(parseLayout('{"side":"top","areas":{}}').side).toBe("right");
 });
 
 it("parseLayout: GH-354 terminalDock=side migrates when no layout is stored", () => {
-  expect(parseLayout(null, "side").areas).toEqual({ side: ["changes", "files", "graph", "terminal"], bottom: [] });
+  expect(parseLayout(null, "side").areas).toEqual({ side: ["changes", "files", "graph", "plan", "terminal"], bottom: [], main: [] });
   expect(parseLayout(null, "bottom")).toEqual(DEFAULT_LAYOUT);
 });
 
 it("movePane: other area end, reorder before, no-op returns the same object", () => {
   const l = DEFAULT_LAYOUT;
-  expect(movePane(l, "files", "bottom").areas).toEqual({ side: ["changes", "graph"], bottom: ["terminal", "files"] });
+  expect(movePane(l, "files", "bottom").areas).toEqual({ side: ["changes", "graph", "plan"], bottom: ["terminal", "files"], main: [] });
   expect(movePane(l, "files", "bottom", "terminal").areas.bottom).toEqual(["files", "terminal"]);
-  expect(movePane(l, "graph", "side", "changes").areas.side).toEqual(["graph", "changes", "files"]);
+  expect(movePane(l, "graph", "side", "changes").areas.side).toEqual(["graph", "changes", "files", "plan"]);
   expect(movePane(l, "files", "side", "graph")).toBe(l);
   expect(movePane(l, "terminal", "bottom")).toBe(l);
   expect(movePane(l, "files", "bottom", "changes").areas.bottom).toEqual(["terminal", "files"]);
+});
+
+it("parseLayout: an old stored layout without plan and main puts Plan at the end of the side panel and main empty", () => {
+  const l = parseLayout('{"side":"right","areas":{"side":["files","changes","graph"],"bottom":["terminal"]}}');
+  expect(l.areas).toEqual({ side: ["files", "changes", "graph", "plan"], bottom: ["terminal"], main: [] });
+});
+
+it("parseLayout keeps plan in main and drops changes and files from main to their default areas", () => {
+  const l = parseLayout('{"side":"right","areas":{"side":[],"bottom":["terminal"],"main":["plan","changes","files"]}}');
+  expect(l.areas.main).toEqual(["plan"]);
+  expect(l.areas.side).toEqual(["changes", "files", "graph"]);
+});
+
+it("movePane to main refuses changes (same object) and moves plan", () => {
+  const l = DEFAULT_LAYOUT;
+  expect(movePane(l, "changes", "main")).toBe(l);
+  const n = movePane(l, "plan", "main");
+  expect(n.areas.main).toEqual(["plan"]);
+  expect(n.areas.side).not.toContain("plan");
+  expect(areaOf(n, "plan")).toBe("main");
+  expect(movePane(n, "plan", "side").areas.side.at(-1)).toBe("plan");
+});
+
+it("withPane does not remember an area for a main-home pane", () => {
+  const l = movePane(DEFAULT_LAYOUT, "plan", "main");
+  expect(withPane({}, "plan", l)).toEqual({ narrow: "plan" });
+  expect(withPane({}, "files", l)).toEqual({ narrow: "files", side: "files" });
+});
+
+it("DEFAULT_LAYOUT has plan after graph in the side panel", () => {
+  expect(DEFAULT_LAYOUT.areas.side).toEqual(["changes", "files", "graph", "plan"]);
+  expect(DEFAULT_LAYOUT.areas.main).toEqual([]);
 });
 
 it("activePane: newest history entry in the area, else files, else first", () => {

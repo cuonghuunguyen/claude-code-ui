@@ -54,3 +54,21 @@ it("GH-356 the split section is last, disabled without a second session, and abs
   expect(last(all).map((x) => x.id)).toEqual(["copyId", "copyCwd", "reveal"]);
   expect(tabMenuSections({ ...all, session: false, split: { can: true } })).toHaveLength(2);
 });
+
+it("GH-395 a pane tab menu has move, close, pin, Move Plan to side/bottom panel, Go to session and disabled split items, no copy/reveal", () => {
+  const sections = tabMenuSections({ ...all, pane: { label: "Plan" }, split: { can: true } });
+  expect(sections.map((x) => x.map((e) => e.label))).toEqual([
+    ["Move left", "Move right"],
+    ["Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab"],
+    ["Pin tab"],
+    ["Move Plan to side panel", "Move Plan to bottom panel"],
+    ["Go to session"],
+    ["Split right", "Split down"],
+  ]);
+  const flat = sections.flat();
+  expect(flat.map((e) => e.id)).not.toContain("copyId");
+  expect(flat.map((e) => e.id)).not.toContain("reveal");
+  expect(flat.filter((e) => e.disabled).map((e) => e.id)).toEqual(["splitRight", "splitDown"]);
+  expect(flat.find((e) => e.id === "moveSide")!.testId).toBe("tab-menu-moveSide");
+  expect(flat.find((e) => e.id === "goToSession")!.testId).toBe("tab-menu-goToSession");
+});
