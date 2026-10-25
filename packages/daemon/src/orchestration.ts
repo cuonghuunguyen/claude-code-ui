@@ -91,7 +91,6 @@ class ToolError extends Error {
 /** The web app's text for errors whose tool text names tools. */
 const USER_TEXT: Record<string, string> = {
   session_running: "The worker is running or waiting for input: close it first",
-  has_workers: "The worker has workers of its own: wait for them, or remove them first",
 };
 const ok = (v: unknown): Result => ({ content: [{ type: "text", text: JSON.stringify(v, null, 1) }] });
 const fail = (message: string): Result => ({ content: [{ type: "text", text: message }], isError: true });
@@ -272,7 +271,9 @@ export function createOrchestration(deps: OrchestrationDeps) {
     checkChildren(c);
   };
   /** worker_start calls refused by `preflight` before their card: the handler repeats the refusal (one shot), `${coordinator}\0${name}` -> message. Bounded. */
-  const refused = new Map<string, string>();
+  const refused = new Map<string, { message: string; at: number }>();
+  /** A refusal nobody consumed (the turn stopped before the tool ran) expires: a later, approved call must not meet it. */
+  const REFUSAL_MS = 30_000;
   /** Every worker below `c`, any depth, as { id, name, path, depth }. */
   const descendants = (c: string) => {
     const out: { id: string; name: string; path: string; coordinator?: string; depth: number }[] = [];
@@ -506,10 +507,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
         async (a) => {
           const coordinator = cur();
           const refusal = refused.get(`${coordinator}\0${a.name}`);
-          if (refusal !== undefined) {
-            refused.delete(`${coordinator}\0${a.name}`);
-            throw new ToolError(refusal);
-          }
+          refused.delete(`${coordinator}\0${a.name}`);
+          if (refusal && Date.now() - refusal.at < REFUSAL_MS) throw new ToolError(refusal.message);
           try {
             checkShape(a);
           } catch (e) {
@@ -814,7 +813,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
         await (op === "close" ? closeWorker : removeWorker)(l.coordinatorId, l.name);
       } catch (e) {
         if (!(e instanceof ToolError)) throw e;
-        return { code: e.code, message: e.code === "stop_timeout" ? `The worker did not stop within ${stopWait / 1000} s; try again` : (USER_TEXT[e.code] ?? e.message) };
+        const text = e.code === "stop_timeout" ? `The worker did not stop within ${stopWait / 1000} s; try again` : e.code === "has_workers" ? (op === "close" ? "The worker has running or waiting workers of its own: wait for them, then close it" : "The worker has workers of its own: remove them first") : (USER_TEXT[e.code] ?? e.message);
+        return { code: e.code, message: text };
       }
       return undefined;
     },
@@ -924,11 +924,13 @@ export function createOrchestration(deps: OrchestrationDeps) {
     preflight(sessionId: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }): string | undefined {
       if (mcpServer?.source !== "sdk" || mcpServer.name !== SERVER || tool !== `mcp__${SERVER}__worker_start` || typeof input.name !== "string") return undefined;
       const id = resolve(sessionId);
+      // A check that passes now clears an older refusal of the same call.
+      refused.delete(`${id}\0${input.name}`);
       try {
         checkLimits(id);
       } catch (e) {
         if (!(e instanceof ToolError)) throw e;
-        refused.set(`${id}\0${input.name}`, e.message);
+        refused.set(`${id}\0${input.name}`, { message: e.message, at: Date.now() });
         if (refused.size > 200) refused.delete(refused.keys().next().value!);
         return e.message;
       }

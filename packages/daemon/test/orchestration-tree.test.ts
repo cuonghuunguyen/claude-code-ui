@@ -1,5 +1,5 @@
 // GH-454: worker trees. Unit level: createOrchestration with fake deps (a worker may start workers, depth and children limits).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createOrchestration } from "../src/orchestration.ts";
 import { createSessionSettings } from "../src/session-settings.ts";
 
@@ -439,5 +439,42 @@ describe("worker tree: remove of a parent", () => {
     expect(await t.o.userOp("remove", "W1")).toMatchObject({ code: "has_workers" });
     expect(await call(t.o, "W1", "worker_remove", { name: "rev" })).toEqual({ name: "rev", removed: true });
     expect(await call(t.o, "C", "worker_remove", { name: "impl" })).toEqual({ name: "impl", removed: true });
+  });
+});
+
+describe("worker tree: a refusal nobody consumed", () => {
+  const sdk = { name: "orchestration", source: "sdk" };
+  const pre = (t: ReturnType<typeof setup>, id: string, name = "x") => t.o.preflight(id, "mcp__orchestration__worker_start", start(name) as never, sdk);
+
+  it("a later preflight that passes clears the stored refusal, so the approved call starts", async () => {
+    const t = setup(undefined, { maxDepth: 1 });
+    tree(t, 1);
+    expect(pre(t, "W1")).toMatch(/Maximum tree depth/); // the turn stops before the tool runs
+    t.settings.maxDepth = 2; // limit lifted; the user approves a card for the same call
+    expect(pre(t, "W1")).toBeUndefined();
+    expect(await call(t.o, "W1", "worker_start", start("x"))).toMatchObject({ name: "x" });
+  });
+
+  it("an unconsumed refusal expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup(undefined, { maxDepth: 1 });
+      tree(t, 1);
+      expect(pre(t, "W1")).toMatch(/Maximum tree depth/);
+      t.settings.maxDepth = 2;
+      vi.setSystemTime(Date.now() + 60_000);
+      expect(await call(t.o, "W1", "worker_start", start("x"))).toMatchObject({ name: "x" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the web app's close and remove messages fit the action", async () => {
+    const t = setup(undefined, { maxDepth: 3 });
+    const [, , W2] = tree(t, 2);
+    W2.state = "running";
+    expect((await t.o.userOp("close", "W1"))!.message).toMatch(/running or waiting workers.*close it/);
+    expect((await t.o.userOp("remove", "W1"))).toMatchObject({ code: "has_workers" });
+    expect((await t.o.userOp("remove", "W1"))!.message).toMatch(/remove them first/);
   });
 });

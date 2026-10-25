@@ -38,8 +38,10 @@ State these when they bite.
 16. **Tree limits are tool errors, not queues.** A worker at Maximum tree depth cannot start
     workers; a coordinator at Maximum workers per coordinator, or the daemon at Maximum workers,
     cannot start another. Close a finished worker first, or ask the user to raise the limit.
-17. **`worker_close` and `worker_remove` refuse a worker with live workers** (`has_workers`):
-    close them from the bottom up, or wait for them to finish.
+17. **`worker_close` refuses a worker with running or waiting workers, `worker_remove` refuses a
+    worker with any worker below it** (`has_workers`): wait for the busy ones before a close;
+    remove the workers below from the bottom up (each by the worker that started it, or the user
+    in the web app) before removing their parent.
 18. **The agent types come from the plugin.** An installed plugin is a copy: a change on a
     branch reaches users after it is merged and the plugin is updated. A role prompt replaces
     Claude Code's default system prompt, so it carries its own working rules.
