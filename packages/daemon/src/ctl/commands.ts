@@ -68,10 +68,23 @@ export async function runClient(cli: Client, io: ClientIo): Promise<number> {
         const workers = l.sessions.filter((s) => s.coordinatorId && s.workerName);
         if (cli.json) return json(workers), 0;
         if (!workers.length) return out("No workers."), 0;
-        const title = (id: string) => l.sessions.find((s) => s.id === id)?.title;
+        const byId = new Map(l.sessions.map((s) => [s.id, s]));
+        const title = (id: string) => byId.get(id)?.title;
+        const depth = (id: string) => {
+          let d = 0;
+          for (let cur = byId.get(id); cur?.coordinatorId && d < 20; d++) cur = byId.get(cur.coordinatorId);
+          return d;
+        };
         const groups = new Map<string, SessionListItem[]>();
         for (const w of workers) groups.set(w.coordinatorId!, [...(groups.get(w.coordinatorId!) ?? []), w]);
-        out([...groups].map(([id, ws]) => `coordinator ${id}${title(id) ? ` ${oneLine(title(id)!)}` : ""}\n${table(["WORKER", "STATE", "ID", "ACTIVITY"], ws.map((w) => [w.workerName!, w.state, w.id, when(w.lastActivity)]))}`).join("\n\n"));
+        // A worker that has workers heads a group too: its header names the worker row it is (and its coordinator).
+        const header = (id: string) => {
+          const me = byId.get(id);
+          const own = me?.coordinatorId && me.workerName ? ` (worker ${me.workerName} of ${me.coordinatorId})` : "";
+          return `coordinator ${id}${title(id) ? ` ${oneLine(title(id)!)}` : ""}${own}`;
+        };
+        const ordered = [...groups].sort(([a], [b]) => depth(a) - depth(b));
+        out(ordered.map(([id, ws]) => `${header(id)}\n${table(["WORKER", "STATE", "ID", "ACTIVITY"], ws.map((w) => [w.workerName!, w.state, w.id, when(w.lastActivity)]))}`).join("\n\n"));
         return 0;
       }
       case "open": {

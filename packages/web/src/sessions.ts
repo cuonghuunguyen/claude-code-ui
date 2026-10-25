@@ -132,14 +132,30 @@ export function groupByCwd(items: SessionListItem[], query = "", projects?: stri
   });
 }
 
-/** Workers (coordinatorId) of a coordinator listed in the same view (archived flag) by coordinator ID, by name; every other session in `top`. */
+/**
+ * Workers (coordinatorId) of a coordinator listed in the same view (archived flag) by coordinator ID, by name; every other session
+ * in `top`. A worker of a worker (depth 2 and more) is listed under the root coordinator in the list, named `parent › child`.
+ */
 export function nestWorkers(items: SessionListItem[], archived: boolean) {
-  const ids = new Set(items.filter((s) => s.archived === archived).map((s) => s.id));
+  const byId = new Map(items.filter((s) => s.archived === archived).map((s) => [s.id, s]));
+  const nested = (s: SessionListItem) => !!s.coordinatorId && byId.has(s.coordinatorId);
   const top: SessionListItem[] = [];
   const workers = new Map<string, SessionListItem[]>();
-  for (const s of items)
-    if (s.coordinatorId && s.archived === archived && ids.has(s.coordinatorId)) workers.set(s.coordinatorId, [...(workers.get(s.coordinatorId) ?? []), s]);
-    else top.push(s);
+  for (const s of items) {
+    if (s.archived !== archived || !nested(s)) {
+      top.push(s);
+      continue;
+    }
+    // Up to the nearest ancestor that is not nested itself (the one shown in the list); a cycle guard ends the walk.
+    const chain = [s.workerName ?? s.title];
+    let root = byId.get(s.coordinatorId!)!;
+    for (let i = 0; i < 20 && nested(root); i++) {
+      chain.unshift(root.workerName ?? root.title);
+      root = byId.get(root.coordinatorId!)!;
+    }
+    const row = chain.length > 1 ? { ...s, workerName: chain.join(" › ") } : s;
+    workers.set(root.id, [...(workers.get(root.id) ?? []), row]);
+  }
   for (const l of workers.values()) l.sort((a, b) => (a.workerName ?? a.title).localeCompare(b.workerName ?? b.title));
   return { top, workers };
 }

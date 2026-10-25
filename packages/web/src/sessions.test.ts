@@ -259,6 +259,17 @@ describe("workers", () => {
     expect(top.map((x) => x.id)).toEqual(["c", "orphan", "arch"]);
   });
 
+  it("nestWorkers lists a worker's worker under the root coordinator as parent › child", () => {
+    const coord = { ...item("c1", "/p/web", 9), coordinator: true as const };
+    const wk1 = { ...w("w1", "c1", "fix-a"), coordinator: true as const };
+    const wk2 = w("g1", "w1", "rev");
+    const wk3 = w("g2", "g1", "deep");
+    const { top, workers } = nestWorkers([coord, wk1, wk2, wk3], false);
+    expect(workers.get("c1")!.map((x) => x.workerName)).toEqual(["fix-a", "fix-a › rev", "fix-a › rev › deep"]);
+    expect(workers.has("w1")).toBe(false);
+    expect(top.map((x) => x.id)).toEqual(["c1"]);
+  });
+
   it("groupByCwd keeps a coordinator whose worker's name or title matches the search", () => {
     const coord = { ...item("c", "/p/web", 9, "Plan"), coordinator: true as const };
     const wk = w("w1", "c", "builder");

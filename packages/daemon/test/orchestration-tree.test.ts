@@ -339,3 +339,46 @@ describe("worker tree: agent types", () => {
     expect(t.links.get("W1")?.agent).toBeUndefined();
   });
 });
+
+describe("worker tree: list and read", () => {
+  it("worker_list tree lists every descendant with its coordinator and depth", async () => {
+    const t = setup();
+    tree(t);
+    const flat = await call(t.o, "C", "worker_list");
+    expect(flat.workers.map((w: any) => w.name)).toEqual(["impl"]);
+    const all = await call(t.o, "C", "worker_list", { tree: true });
+    expect(all.workers.map((w: any) => [w.name, w.path, w.coordinator, w.depth])).toEqual([
+      ["impl", "impl", undefined, 1],
+      ["rev", "impl/rev", "impl", 2],
+    ]);
+  });
+
+  it("worker_read takes a descendant path; an unknown segment names it", async () => {
+    const t = setup();
+    tree(t);
+    expect(await call(t.o, "C", "worker_read", { name: "impl/rev" })).toMatchObject({ name: "impl/rev", state: "idle" });
+    expect((await call(t.o, "C", "worker_read", { name: "impl/zz" })).error).toMatch(/zz is not a worker of impl/);
+    expect((await call(t.o, "C", "worker_read", { name: "nope/rev" })).error).toMatch(/nope is not a worker of you/);
+  });
+
+  it("the other worker tools refuse a path", async () => {
+    const t = setup();
+    tree(t);
+    const args = { name: "impl/rev", text: "x", id: "r", allow: true, reason: "r", answer: "a" };
+    for (const tool of ["worker_send", "worker_answer", "worker_permission", "worker_escalate", "worker_stop", "worker_close", "worker_remove"]) {
+      const r = await call(t.o, "C", tool, args);
+      expect(r.error, tool).toMatch(/Invalid input/);
+    }
+  });
+
+  it("a worker's worker_start reaches its coordinator as a high permission event", async () => {
+    const t = setup();
+    const [, W1] = tree(t, 1);
+    W1.pending.add("q1");
+    W1.permissionTier = async () => "high";
+    t.o.observe(W1, { part: { type: "permission_request", id: "p", requestId: "q1", tool: "mcp__orchestration__worker_start", input: { name: "x" }, settled: false } } as any);
+    await tick();
+    const ev = (await call(t.o, "C", "worker_wait", { timeoutMs: 0 })).events[0];
+    expect(ev).toMatchObject({ name: "impl", type: "permission", tier: "high", mayAnswer: false });
+  });
+});
