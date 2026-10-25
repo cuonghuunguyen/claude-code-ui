@@ -189,10 +189,6 @@ Then("the session tab is active", async ({ page }) => {
   await expect(page.locator(`[data-testid="tab"][data-tab-id="${id}"] [role="tab"]`)).toHaveAttribute("aria-selected", "true");
 });
 
-Then("a toast says {string}", async ({ page }, text: string) => {
-  await expect(toast(page)).toContainText(text);
-});
-
 When("I click Undo in the toast", async ({ page }) => {
   await toast(page).getByRole("button", { name: "Undo" }).click();
 });
