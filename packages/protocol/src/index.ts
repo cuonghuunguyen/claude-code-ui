@@ -7,3 +7,4 @@ export * from "./histogram.ts";
 export * from "./file-name.ts";
 export * from "./branch-name.ts";
 export * from "./pull-request.ts";
+export * from "./repo-tree.ts";

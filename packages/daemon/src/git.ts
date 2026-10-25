@@ -1,15 +1,16 @@
 // Git branch and diff size of a session cwd, for the status bar (`git.status`).
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
-import { BRANCH_MAX, branchFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
+import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { BRANCH_MAX, branchFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
 import { runGit } from "./git-runner.ts";
 import { foreignPointer } from "./remote-path.ts";
 
 // Read-only calls on a repository's own config: no fsmonitor hook (a program from .git/config), no transport (a partial clone's lazy fetch runs core.sshCommand), on any git version.
 const READ_ONLY = ["-c", "core.fsmonitor=false", "-c", "protocol.allow=never"];
-/** Parent reads never start git inside a submodule (`git status` there runs unpinned with the submodule's own config); a moved gitlink still shows. */
+/** Parent reads never start git inside a submodule (`git status` there runs unpinned with the submodule's own config); a moved gitlink still shows. `git.ignoreSubmodules` on: `--ignore-submodules` (a moved gitlink is hidden too). */
 const NO_SUBMODULE_STATUS = "--ignore-submodules=dirty";
+const submoduleFlag = (ignore?: boolean) => (ignore ? "--ignore-submodules" : NO_SUBMODULE_STATUS);
 const readEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_NO_LAZY_FETCH: "1" });
 /** Runs `fn`s with at most `n` running at a time, the rest in arrival order; urgent (graph) calls start before queued normal ones. */
 export function limiter(n: number) {
@@ -43,7 +44,13 @@ type Repo = { top: string; own: string; common: string; alternates: string[] };
 async function repoOf0(cwd: string): Promise<Repo | null> {
   const top = await gitTopOf(cwd);
   if (!top) return null;
-  const dirs = await gitDirsOfAsync(top);
+  const r = await repoRead(top);
+  return r === "foreign" ? null : r;
+}
+/** `"foreign"`: a pointer to another UNC share or a device path, never followed; null: no readable `.git`. */
+async function repoRead(top: string): Promise<Repo | "foreign" | null> {
+  const dirs = await readDotGit(top);
+  if (dirs === "foreign") return dirs;
   if (!dirs) return null;
   const own = await realAsync(dirs.own);
   const common = await realAsync(dirs.common);
@@ -54,7 +61,7 @@ async function repoOf0(cwd: string): Promise<Repo | null> {
       const t = l.trim().replace(/^"(.*)"$/, "$1");
       if (!t || t.startsWith("#")) continue;
       // A UNC alternate to another share, or a device path: no file call (NTLM), the repository counts as unresolved.
-      if (foreignPointer(t, objects)) return null;
+      if (foreignPointer(t, objects)) return "foreign";
       alternates.push(await realAsync(resolve(objects, t)));
     }
   } catch {
@@ -119,18 +126,18 @@ export function gitDirsOf(cwd: string): { own: string; common: string } | undefi
   }
 }
 
-async function gitDirsOfAsync(cwd: string): Promise<{ own: string; common: string } | undefined> {
+async function readDotGit(cwd: string): Promise<{ own: string; common: string } | "foreign" | undefined> {
   const dotGit = join(cwd, ".git");
   try {
     if ((await stat(dotGit)).isDirectory()) return { own: dotGit, common: dotGit };
     const gitdir = /^gitdir:\s*(.+)$/m.exec(await readFile(dotGit, "utf8"))?.[1];
     if (!gitdir) return undefined;
     // A pointer to another UNC share or a device path is never followed (an SMB lookup sends the NTLM hash).
-    if (foreignPointer(gitdir.trim(), cwd)) return undefined;
+    if (foreignPointer(gitdir.trim(), cwd)) return "foreign";
     const own = resolve(cwd, gitdir.trim());
     try {
       const common = (await readFile(join(own, "commondir"), "utf8")).trim();
-      if (foreignPointer(common, own)) return undefined;
+      if (foreignPointer(common, own)) return "foreign";
       return { own, common: resolve(own, common) };
     } catch {
       return { own, common: own };
@@ -138,6 +145,10 @@ async function gitDirsOfAsync(cwd: string): Promise<{ own: string; common: strin
   } catch {
     return undefined;
   }
+}
+async function gitDirsOfAsync(cwd: string): Promise<{ own: string; common: string } | undefined> {
+  const r = await readDotGit(cwd);
+  return r === "foreign" ? undefined : r;
 }
 
 const statOf = async (p: string) => {
@@ -229,7 +240,7 @@ const lru = <V>(max: number) => {
 const lastStatus = new Map<string, GitStatus>();
 
 /** null outside a git work tree. Lines added/removed: staged and unstaged changes of tracked files against HEAD (the empty tree before the first commit). */
-export async function gitStatus(cwd: string): Promise<GitStatus | null> {
+export async function gitStatus(cwd: string, o: { ignoreSubmodules?: boolean } = {}): Promise<GitStatus | null> {
   if (graphActive) {
     const last = lastStatus.get(cwd);
     if (last) return { ...last, refs: await refsStamp(cwd) };
@@ -246,7 +257,7 @@ export async function gitStatus(cwd: string): Promise<GitStatus | null> {
   let added = 0;
   let removed = 0;
   // Binary files have no counts; a gitlink row has none either.
-  const { files, stats } = parseRawNumstat(await git(cwd, "diff", "--no-ext-diff", "--no-textconv", NO_SUBMODULE_STATUS, "--no-abbrev", "-z", "--raw", "--numstat", base).catch(() => ""));
+  const { files, stats } = parseRawNumstat(await git(cwd, "diff", "--no-ext-diff", "--no-textconv", submoduleFlag(o.ignoreSubmodules), "--no-abbrev", "-z", "--raw", "--numstat", base).catch(() => ""));
   for (const f of files) {
     if (f.submodule) continue;
     const c = stats.get(f.path);
@@ -1164,7 +1175,7 @@ async function untrackedLines(top: string, path: string): Promise<number | undef
   }
 }
 
-export type GitDiffOptions = { base: unknown; ref?: unknown; allowed: (p: string) => boolean };
+export type GitDiffOptions = { base: unknown; ref?: unknown; allowed: (p: string) => boolean; ignoreSubmodules?: boolean };
 /** The working tree (staged, unstaged, untracked) against HEAD or a merge base (docs/spec.md "Layout", changes tab); null outside a git work tree. */
 export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff | null> {
   if (o.base !== "head" && o.base !== "branch") throw bad("Invalid base");
@@ -1190,7 +1201,7 @@ export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff |
   const target = base ?? (await g(top, ["hash-object", "-t", "tree", "/dev/null"]));
   const pre = ["diff", "-M", "-z", "--no-ext-diff", "--no-textconv", "--no-color"];
   const [tracked, others] = await Promise.all([
-    g(top, [...pre, NO_SUBMODULE_STATUS, "--no-abbrev", "--raw", "--numstat", target, "--"]),
+    g(top, [...pre, submoduleFlag(o.ignoreSubmodules), "--no-abbrev", "--raw", "--numstat", target, "--"]),
     g(top, ["ls-files", "--others", "--exclude-standard", "-z", "--full-name"]),
   ]);
   const parsed = parseRawNumstat(tracked);
@@ -1210,4 +1221,181 @@ export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff |
   }
   files.sort(byPath);
   return { prefix, ...(base && { base }), ...(ref && { ref }), files: files.slice(0, MAX_COMMIT_FILES), ...(branches && { branches }), ...(cut && { truncated: true }) };
+}
+
+const GITMODULES_MAX = 1024 * 1024;
+const GITMODULES_SECTIONS = 1000;
+function gitConfigValue(raw: string): string {
+  let out = "";
+  let quoted = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i]!;
+    if (c === "\\" && i + 1 < raw.length) {
+      const n = raw[++i]!;
+      out += n === "n" ? "\n" : n === "t" ? "\t" : n === "b" ? "\b" : n;
+    } else if (c === '"') quoted = !quoted;
+    else if (!quoted && (c === "#" || c === ";")) break;
+    else out += c;
+  }
+  return out.trim();
+}
+/**
+ * The submodules a `.gitmodules` names, with git's rules where VS Code's regex parser differs: section and key names are
+ * case-insensitive, quoted values take `\"` and `\\`, `#` and `;` start a comment outside quotes, a trailing `\` continues the
+ * line, the last value of a key wins. Only `[submodule "name"]` sections with a path and a url count.
+ */
+export function parseGitmodules(text: string): { name: string; path: string; url: string }[] {
+  const sections = new Map<string, { path?: string; url?: string }>();
+  let cur: { path?: string; url?: string } | undefined;
+  for (const line0 of text.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
+    const line = line0.trim();
+    if (!line || line[0] === "#" || line[0] === ";") continue;
+    const head = /^\[\s*([^\s\]"]+)\s*(?:"((?:[^"\\]|\\.)*)")?\s*\]/.exec(line);
+    if (head) {
+      if (head[1]!.toLowerCase() === "submodule" && head[2] !== undefined) {
+        const name = head[2].replace(/\\(.)/g, "$1");
+        if (!sections.has(name) && sections.size >= GITMODULES_SECTIONS) cur = undefined;
+        else sections.set(name, (cur = sections.get(name) ?? {}));
+      } else cur = undefined;
+      continue;
+    }
+    const kv = /^([A-Za-z][-A-Za-z0-9]*)\s*=\s*(.*)$/.exec(line);
+    if (!kv || !cur) continue;
+    const k = kv[1]!.toLowerCase();
+    if (k === "path" || k === "url") cur[k] = gitConfigValue(kv[2]!);
+  }
+  return [...sections].flatMap(([name, v]) => (v.path && v.url ? [{ name, path: v.path, url: v.url }] : []));
+}
+
+export const REPO_CAPS = { entries: 20_000, ms: 2_000, count: 50 };
+export type ListReposOptions = { settings: Settings["git"]; openFiles?: string[]; allowed: (p: string) => boolean; caps?: { entries: number; ms: number; count: number }; now?: () => number };
+const sameName: (a: string, b: string) => boolean = process.platform === "win32" || process.platform === "darwin" ? (a, b) => a.toLowerCase() === b.toLowerCase() : (a, b) => a === b;
+const byBytes = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+const submodulePath = (p: string) => !p.includes("\0") && !isAbsolute(p) && !/^([\\/]|[A-Za-z]:)/.test(p) && p.split(/[\\/]/).every((seg) => seg !== ".." && seg.toLowerCase() !== ".git");
+type RepoEntry = { path: string; kind: GitRepo["kind"]; parent?: string; outsideRoots?: true; own?: string };
+
+/**
+ * The repositories of `cwd` as VS Code finds them (docs/spec.md "git.repos"): its own, nested ones from a bounded folder scan,
+ * `scanRepositories`, open files and `.gitmodules`. File system calls only (never a git process); `cwd` is canonical and already allowed.
+ */
+export async function listRepos(cwd: string, o: ListReposOptions): Promise<GitReposResult> {
+  const caps = o.caps ?? REPO_CAPS;
+  const now = o.now ?? Date.now;
+  const cfg = o.settings;
+  const found = new Map<string, RepoEntry>();
+  const truncated: NonNullable<GitReposResult["truncated"]> = {};
+  const ignored = await Promise.all(cfg.ignoredRepositories.map((e) => realAsync(resolve(cwd, e))));
+  const add = async (dir: string, kind: GitRepo["kind"], parent?: string): Promise<void> => {
+    if (!(await lstat(join(dir, ".git")).then(() => true, () => false))) return;
+    const top = await realAsync(dir);
+    const have = found.get(top);
+    if (have) {
+      if (kind === "submodule" && have.kind === "nested") Object.assign(have, { kind, parent });
+      return;
+    }
+    const r = await repoRead(top);
+    if (r === null) return;
+    let outside = r === "foreign";
+    if (r !== "foreign") {
+      if (kind !== "main" && r.own !== r.common) return;
+      outside = escapesRoots(r, o.allowed);
+    }
+    if (kind !== "main" && ignored.some((i) => sameName(i, top))) return;
+    if (found.size >= caps.count) {
+      truncated.scan ??= "count";
+      return;
+    }
+    found.set(top, { path: top, kind, ...(parent && { parent }), ...(outside && { outsideRoots: true as const }), ...(r !== "foreign" && { own: r.own }) });
+  };
+
+  const own = await gitTopOf(cwd);
+  if (own && (own === cwd || cfg.openRepositoryInParentFolders !== "never")) await add(own, "main");
+
+  const auto = cfg.autoRepositoryDetection;
+  if (auto === true || auto === "subFolders") {
+    const start = now();
+    let seen = 0;
+    const max = cfg.repositoryScanMaxDepth;
+    const queue = [{ dir: cwd, depth: 0 }];
+    for (let i = 0; i < queue.length; i++) {
+      const { dir, depth } = queue[i]!;
+      if (max !== -1 && depth >= max) continue;
+      if (now() - start > caps.ms) {
+        truncated.scan ??= "time";
+        break;
+      }
+      const list = await readdir(dir, { withFileTypes: true }).catch(() => undefined);
+      if (!list) continue;
+      seen += list.length;
+      if (seen > caps.entries) {
+        truncated.scan ??= "entries";
+        break;
+      }
+      for (const e of list) {
+        if (!e.isDirectory() || sameName(e.name, ".git") || cfg.repositoryScanIgnoredFolders.some((n) => sameName(n, e.name))) continue;
+        const child = join(dir, e.name);
+        queue.push({ dir: child, depth: depth + 1 });
+        await add(child, "nested");
+      }
+    }
+    for (const entry of cfg.scanRepositories) {
+      const p = resolve(cwd, entry);
+      if (inside(cwd, p) && inside(cwd, await realAsync(p))) await add(p, "nested");
+    }
+  }
+  if (auto === true || auto === "openEditors") {
+    for (const f of o.openFiles ?? []) {
+      const rf = await realAsync(f);
+      if (!inside(cwd, rf)) continue;
+      const t = await gitTopOf(dirname(rf));
+      if (t && inside(cwd, t)) await add(t, "nested");
+    }
+  }
+
+  if (cfg.detectSubmodules) {
+    const done = new Set<string>();
+    for (;;) {
+      const next = [...found.values()].find((e) => !e.outsideRoots && !done.has(e.path));
+      if (!next) break;
+      done.add(next.path);
+      const file = join(next.path, ".gitmodules");
+      const st = await stat(file).catch(() => undefined);
+      if (!st?.isFile() || st.size > GITMODULES_MAX || !inside(next.path, await realAsync(file))) continue;
+      const subs = parseGitmodules(await readFile(file, "utf8").catch(() => ""));
+      if (subs.length > cfg.detectSubmodulesLimit) (truncated.submodules ??= []).push({ repo: next.path, count: subs.length });
+      for (const sub of subs.slice(0, cfg.detectSubmodulesLimit)) {
+        if (!submodulePath(sub.path)) continue;
+        const abs = resolve(next.path, sub.path);
+        if (!inside(next.path, abs) || !inside(next.path, await realAsync(abs))) continue;
+        await add(abs, "submodule", next.path);
+      }
+    }
+  }
+
+  const all = [...found.values()];
+  for (const e of all) {
+    if (e.parent) continue;
+    let best: RepoEntry | undefined;
+    for (const c of all) if (c !== e && inside(c.path, e.path) && (!best || c.path.length > best.path.length)) best = c;
+    if (best && e.kind !== "main") e.parent = best.path;
+  }
+  const kids = (path: string | undefined) => all.filter((e) => e.parent === path).sort((a, b) => (a.kind === "main" ? -1 : b.kind === "main" ? 1 : a.kind === b.kind ? 0 : a.kind === "submodule" ? -1 : 1) || byBytes(a.path, b.path));
+  const ordered: RepoEntry[] = [];
+  const walk = (e: RepoEntry) => {
+    ordered.push(e);
+    for (const c of kids(e.path)) walk(c);
+  };
+  for (const e of all.filter((x) => !x.parent || !found.has(x.parent)).sort((a, b) => (a.kind === "main" ? -1 : b.kind === "main" ? 1 : 0) || byBytes(a.path, b.path))) walk(e);
+
+  const repos: GitRepo[] = [];
+  for (const e of ordered) {
+    let branch: string | undefined;
+    if (!e.outsideRoots && e.own) {
+      const head = (await readFile(join(e.own, "HEAD"), "utf8").catch(() => "")).trim();
+      const ref = /^ref:\s*refs\/heads\/(.+)$/.exec(head)?.[1];
+      branch = ref ?? (/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(head) ? head.slice(0, 7) : undefined);
+    }
+    repos.push({ path: e.path, rel: relative(cwd, e.path).split(sep).join("/"), kind: e.kind, ...(e.parent && { parent: e.parent }), ...(branch && { branch }), ...(e.outsideRoots && { outsideRoots: true as const }) });
+  }
+  return { repos, ...((truncated.scan || truncated.submodules) && { truncated }) };
 }

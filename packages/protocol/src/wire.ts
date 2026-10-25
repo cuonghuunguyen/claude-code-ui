@@ -200,6 +200,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.status"; cwd: string; exact?: true }
   /** The refs stamp of `cwd`'s repository (as `GitStatus.refs`), from file stats only (no git process, never waits for a graph read). Reply GitRefsResult. */
   | { type: "git.refs"; cwd: string; exact?: true }
+  /** Repository list of `cwd` (docs/spec.md "git.repos"): own repository, nested repositories and submodules found as VS Code finds them (Settings › Git), file system only (no git process). `openFiles`: absolute paths of open editor tabs (at most 50). `fresh`: skip the 10 s cache. Reply GitReposResult. */
+  | { type: "git.repos"; cwd: string; openFiles?: string[]; fresh?: true }
   /** Commit graph page (docs/spec.md "Layout"): `skip` commits already loaded; `ref` a full ref name (refs/heads/… or refs/remotes/…) or `HEAD`, else all refs; `author`/`text` case-insensitive substrings; `fresh`: skip the daemon's page and branch caches (the Refresh button). Reply GitLogResult. */
   | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean; exact?: true }
   /** Reply GitCommitResult. */
@@ -556,6 +558,22 @@ export const MAX_TERMINAL_INPUT_BYTES = 64 * 1024;
 /** `files`: tracked files changed against HEAD (binary and moved submodules included; a submodule with only uncommitted changes is not counted). `added`/`removed` leave submodules out. */
 export type GitStatus = { branch: string; added: number; removed: number; files?: number; refs?: string };
 /** `refs` null outside a git work tree. */
+/** A repository of `git.repos`. */
+export type GitRepo = {
+  /** Canonical top. */
+  path: string;
+  /** `path` relative to the request's canonical cwd, `/` separated; "" = the cwd itself, ".." segments above it. */
+  rel: string;
+  /** main: the cwd's own repository; submodule: listed in its parent's `.gitmodules` and checked out; nested: any other repository found by the scan, `scanRepositories` or an open file. */
+  kind: "main" | "submodule" | "nested";
+  /** The listed repository that contains it (the superproject for a submodule). */
+  parent?: string;
+  /** Branch name, or 7 hex characters of a detached HEAD; read from files. */
+  branch?: string;
+  /** Its git dir, alternates or top lie outside the allowed roots: listed, never read or used. */
+  outsideRoots?: true;
+};
+export type GitReposResult = { repos: GitRepo[]; truncated?: { scan?: "entries" | "time" | "count"; submodules?: { repo: string; count: number }[] } };
 export type GitRefsResult = { refs: string | null };
 /** `status` null outside a git work tree. */
 export type GitStatusResult = { status: GitStatus | null };

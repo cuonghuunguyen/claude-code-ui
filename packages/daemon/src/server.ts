@@ -11,6 +11,7 @@ import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages,
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
 import { searchFiles } from "./search.ts";
+import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { createEntry, deleteEntry, duplicateFile, renameEntry, type FsOpsContext } from "./fs-ops.ts";
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
@@ -18,7 +19,7 @@ import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, listRepos, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
@@ -403,7 +404,12 @@ export function createDaemon(opts: {
   });
   const connections = new Set<Conn>();
   const terminals = createTerminals();
-  const broadcast = (m: ServerMessage) => connections.forEach((ws) => send(ws, m));
+  /** `git.repos` replies: dropped whenever the session list or the settings change (docs/spec.md "git.repos"). */
+  const reposCache = createReposCache();
+  const broadcast = (m: ServerMessage) => {
+    if (m.type === "sessions.changed" || m.type === "settings_changed") reposCache.clear();
+    connections.forEach((ws) => send(ws, m));
+  };
   // ponytail: side sessions are not counted; a restart ends their running turns too.
   const updater: Updater | undefined =
     opts.update && createUpdater({ ...opts.update, busy: () => ({ sessions: [...sessions.values()].filter((s) => s.working()).length, terminals: terminals.count() }), broadcast });
@@ -542,7 +548,7 @@ export function createDaemon(opts: {
   const statusReads = new Map<string, ReturnType<typeof gitStatus>>();
   const statusOf = (cwd: string) => {
     let read = statusReads.get(cwd);
-    if (!read) statusReads.set(cwd, (read = gitOutside(cwd).then((out) => (out ? null : gitStatus(cwd))).finally(() => statusReads.delete(cwd))));
+    if (!read) statusReads.set(cwd, (read = gitOutside(cwd).then((out) => (out ? null : gitStatus(cwd, { ignoreSubmodules: appSettings.get().git.ignoreSubmodules }))).finally(() => statusReads.delete(cwd))));
     return read;
   };
 
@@ -1923,6 +1929,16 @@ export function createDaemon(opts: {
           if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           return reply({ refs: await gitRefs(cwd, (p) => inRoots(real(p) ?? p)) });
         }
+        case "git.repos": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          const files = msg.openFiles;
+          if (files !== undefined && (!Array.isArray(files) || files.length > 50 || files.some((f) => typeof f !== "string" || f.length > 4096 || f.includes("\0")))) return fail("bad_request", "openFiles must be at most 50 paths");
+          const open = (files ?? []).filter((f) => isAbsolute(f) && !refused(f));
+          const settings = appSettings.get().git;
+          const key = [cwd, JSON.stringify(settings), [...open].sort().join("\0")].join("\0");
+          return reply(await reposCache.get(key, () => listRepos(cwd, { settings, openFiles: open, allowed: (p) => inRoots(real(p) ?? p) }), msg.fresh === true));
+        }
         case "git.log":
         case "git.diff":
         case "git.commit":
@@ -1934,7 +1950,7 @@ export function createDaemon(opts: {
           // No filter text in the log (it may hold a secret).
           try {
             if (msg.type === "git.log") return reply({ log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, fresh: msg.fresh === true, allowed: inside }) });
-            if (msg.type === "git.diff") return reply({ diff: await gitDiff(cwd, { base: msg.base, ref: msg.ref, allowed: inside }) });
+            if (msg.type === "git.diff") return reply({ diff: await gitDiff(cwd, { base: msg.base, ref: msg.ref, allowed: inside, ignoreSubmodules: appSettings.get().git.ignoreSubmodules }) });
             if (msg.type === "git.commit") {
               const c = await gitShow(cwd, msg.hash, inside);
               return c ? reply({ commit: c }) : fail("not_git", "Not in a git repository");

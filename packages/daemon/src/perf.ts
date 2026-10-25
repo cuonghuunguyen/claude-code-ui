@@ -8,7 +8,7 @@ import { newHistogram, percentile, record, summarize, type Histogram, type PerfD
 
 /** Every ClientMessage type (perf.test.ts checks it against wire.ts); any other request type is counted as "other". */
 export const KNOWN_TYPES: ReadonlySet<string> = new Set([
-  "artifact.preview", "event", "fs.create", "fs.delete", "fs.duplicate", "fs.list", "fs.media", "fs.read", "fs.rename", "fs.search", "fs.upload", "fs.watch", "fs.write", "git.branch", "git.commit", "git.diff", "git.fetch", "git.fileAt", "git.log", "git.pull", "git.push", "git.refs", "git.status", "jira.search", "jira.test", "jira.token",
+  "artifact.preview", "event", "fs.create", "fs.delete", "fs.duplicate", "fs.list", "fs.media", "fs.read", "fs.rename", "fs.search", "fs.upload", "fs.watch", "fs.write", "git.branch", "git.commit", "git.diff", "git.fetch", "git.fileAt", "git.log", "git.pull", "git.push", "git.refs", "git.repos", "git.status", "jira.search", "jira.test", "jira.token",
   "marketplace.add", "marketplace.list", "marketplace.remove", "marketplace.update", "mcp.add", "mcp.authenticate", "mcp.clearAuth", "mcp.list", "mcp.oauthCallback",
   "mcp.reconnect", "mcp.remove", "mcp.toggle", "media.read", "models.list", "perf.clear", "perf.report", "permission.respond", "ping", "plugins.install", "plugins.list", "plugins.reload",
   "plugins.restart", "plugins.setEnabled", "plugins.uninstall", "plugins.update", "project.open", "project.remove", "push.focus", "push.key", "push.subscribe",
