@@ -4278,3 +4278,377 @@ describe("GH-395 Plan pane", () => {
     }
   });
 });
+
+describe("GH-396 Files and Git graph in the main area", () => {
+  const SAME = "99999999-8888-7777-6666-555555555555";
+  const OTHERP = "aaaaaaaa-8888-7777-6666-555555555555";
+  const same: SessionListItem = { ...session, id: SAME, cwd: "/p/demo", title: "Same" };
+  const elsewhere: SessionListItem = { ...session, id: OTHERP, cwd: "/p/other", title: "Elsewhere" };
+  const list3 = { sessions: [session, same, elsewhere], projects: ["/p/demo", "/p/other"], worktrees: { "/p/demo": [{ path: "/p/demo", branch: "main", main: true }], "/p/other": [{ path: "/p/other", branch: "main", main: true }] } };
+  const FILES = `files:${ID}`;
+  const GRAPH = `graph:${ID}`;
+  const FILES_O = `files:${OTHERP}`;
+  const bySess = (m: { sessionId: string }) => ({ logEpoch: "e1", session: [session, same, elsewhere].find((s) => s.id === m.sessionId) ?? session });
+  const gitReplies = { "git.repos": (m: { cwd: string }) => ({ repos: [{ path: m.cwd, rel: "", kind: "main", branch: "main" }] }), "git.status": { status: { branch: "main", added: 0, removed: 0, refs: "s1" } }, "git.refs": { refs: "s1" }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } };
+  const HOME_MAIN = JSON.stringify({ side: "right", areas: { side: ["changes"], bottom: ["terminal"], main: ["plan", "files", "graph"] } });
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const stripTab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
+  const bodyOf = (ref: string) => el.querySelector<HTMLElement>(`[data-pane-tab-body="${ref}"]`);
+  const sideTabs = () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] [data-testid^="pane-"]')].map((b) => b.getAttribute("data-testid"));
+  const toastEl = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  const undoToast = () => act(async () => [...toastEl()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+  const layoutNow = () => JSON.parse(localStorage.getItem("claude-ui.layout") ?? "null") as { areas: { side: string[]; main: string[] } } | null;
+  const hashTo = async (id: string) =>
+    act(async () => {
+      location.hash = `#${id}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+  const settle = () => act(async () => new Promise((r) => setTimeout(r, 40)));
+  const ctx = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  const palette = async (title: string) => {
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith(title));
+    expect(row, title).toBeDefined();
+    await act(async () => row!.click());
+  };
+  const visible = () => vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as never);
+  const E = { key: "E", code: "KeyE", ctrlKey: true, shiftKey: true };
+  const H = { key: "H", code: "KeyH", ctrlKey: true, shiftKey: true };
+  const fsLists = () => (sent as unknown as { type: string; path?: string }[]).filter((m) => m.type === "fs.list");
+  async function mount(o: { tabs: string[]; hash?: string; layout?: string; git?: boolean; list?: unknown; pinned?: string[]; extra?: Record<string, unknown> }) {
+    if (o.layout) localStorage.setItem("claude-ui.layout", o.layout);
+    localStorage.setItem("claude-ui.tabs", JSON.stringify(o.tabs));
+    if (o.pinned) localStorage.setItem("claude-ui.pinned-tabs", JSON.stringify(o.pinned));
+    location.hash = `#${encodeURIComponent(o.hash ?? o.tabs[0]!)}`;
+    sent.length = 0;
+    const undo = await remount({ "session.list": o.list ?? { sessions: [session, same, elsewhere], projects: ["/p/demo", "/p/other"] }, "session.subscribe": bySess, ...(o.git ? gitReplies : {}), ...o.extra });
+    return () => (undo(), void Object.keys(gitReplies).forEach((k) => delete replies[k]));
+  }
+
+  it("Move to main area from the Files dock tab menu opens \"Files · demo\" right of the session tab with the focus; the side panel has no Files tab", async () => {
+    const restore = await mount({ tabs: [ID, SAME] });
+    const spy = visible();
+    try {
+      await ctx(el.querySelector('[data-pane-tab="files"]')!);
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="pane-move-main"]')!.click());
+      await settle();
+      expect(tabIds()).toEqual([ID, FILES, SAME]);
+      expect(stripTab(FILES).textContent).toContain("Files · demo");
+      expect(document.activeElement).toBe(stripTab(FILES).querySelector('[role="tab"]'));
+      expect(sideTabs()).not.toContain("pane-files");
+      expect(layoutNow()!.areas.main).toEqual(["files"]);
+    } finally {
+      spy.mockRestore();
+      restore();
+    }
+  });
+
+  it("Move git graph to main area from the palette opens \"Git graph · demo\"; the stored layout has files and graph in main", async () => {
+    const restore = await mount({ tabs: [ID], git: true, list: list3 });
+    try {
+      await settle();
+      await palette("Move git graph to main area");
+      await settle();
+      expect(tabIds()).toEqual([ID, GRAPH]);
+      expect(stripTab(GRAPH).textContent).toContain("Git graph · demo");
+      await palette("Move files to main area");
+      await settle();
+      expect(layoutNow()!.areas.main).toEqual(["graph", "files"]);
+      expect(tabIds()).toEqual([ID, FILES, GRAPH]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Ctrl+Shift+E with home main opens the current session's Files tab; again focuses the same tab; a second session in the same folder focuses it (one tab per folder); another folder opens a second tab", async () => {
+    const restore = await mount({ tabs: [ID, SAME, OTHERP], layout: HOME_MAIN });
+    try {
+      await press(E);
+      expect(tabIds()).toEqual([ID, FILES, SAME, OTHERP]);
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      await press(E);
+      expect(tabIds().filter((t) => t === FILES)).toHaveLength(1);
+      await hashTo(SAME);
+      await press(E);
+      expect(tabIds().filter((t) => t?.startsWith("files:"))).toEqual([FILES]);
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      await hashTo(OTHERP);
+      await press(E);
+      expect(tabIds().filter((t) => t?.startsWith("files:"))).toEqual([FILES, FILES_O]);
+      expect(stripTab(FILES_O).textContent).toContain("Files · other");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Ctrl+Shift+H with home main opens or focuses the Git graph tab; Ctrl+\\ hides the tree of a Files tab that shows", async () => {
+    const restore = await mount({ tabs: [ID], layout: HOME_MAIN, git: true, list: list3 });
+    try {
+      await settle();
+      await press(H);
+      await settle();
+      expect(tabIds()).toEqual([ID, GRAPH]);
+      await press(H);
+      expect(tabIds().filter((t) => t === GRAPH)).toHaveLength(1);
+      expect(bodyOf(GRAPH)!.querySelector('[data-testid="graph-panel"]')).not.toBeNull();
+      await press(E);
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      expect(bodyOf(FILES)!.querySelector('[data-testid="file-tree"]')).not.toBeNull();
+      await press({ key: "\\", ctrlKey: true });
+      expect(bodyOf(FILES)!.querySelector('[data-testid="file-tree"]')).toBeNull();
+      await press({ key: "\\", ctrlKey: true });
+      expect(bodyOf(FILES)!.querySelector('[data-testid="file-tree"]')).not.toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Quick open and the file popup's Open in editor open the file in the current session's Files tab (openPath reaches only that tab)", async () => {
+    const restore = await mount({ tabs: [ID, SAME, OTHERP], layout: HOME_MAIN });
+    try {
+      replies["fs.search"] = { paths: ["src/app.ts"] };
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const input = document.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "app");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => {});
+      await act(async () => document.querySelector<HTMLElement>('[data-id="file:src/app.ts"]')!.click());
+      await settle();
+      expect(tabIds()).toEqual([ID, FILES, SAME, OTHERP]);
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      expect(sent.some((m) => (m as unknown as { path?: string }).path === "/p/demo/src/app.ts" && m.type === "fs.read")).toBe(true);
+      expect(bodyOf(FILES)!.textContent).toContain("app.ts");
+    } finally {
+      replies["fs.search"] = { paths: [] };
+      restore();
+    }
+  });
+
+  it("Show changes from the Files tab reveals Changes of the tab's owner in the side panel", async () => {
+    const restore = await mount({ tabs: [ID, FILES], layout: HOME_MAIN, hash: FILES });
+    try {
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      await press({ key: "G", code: "KeyG", ctrlKey: true, shiftKey: true });
+      expect(sideTab()).toMatch(/changes/i);
+      expect(sideTabs()).not.toContain("pane-files");
+    } finally {
+      restore();
+    }
+  });
+
+  it("On New session and Focus, Ctrl+Shift+E opens the Files tab of the session shown last; with no session shown yet it toasts \"Open a session to show Files.\"", async () => {
+    const restore = await mount({ tabs: [ID, "new"], layout: HOME_MAIN, hash: ID });
+    try {
+      await settle();
+      await hashTo("new");
+      await press(E);
+      expect(tabIds()).toContain(FILES);
+      expect(location.hash).toBe(`#files%3A${ID}`);
+    } finally {
+      restore();
+    }
+    const restore2 = await mount({ tabs: ["new"], layout: HOME_MAIN, hash: "new", list: { sessions: [], projects: ["/p/demo"] } });
+    try {
+      await press(E);
+      expect(toastEl()!.textContent).toContain("Open a session to show Files.");
+    } finally {
+      restore2();
+    }
+  });
+
+  it("A hidden Files tab keeps its tree and editor tabs: switching to another session's tab and back sends no new fs.list for the open folders and shows the same file", async () => {
+    const restore = await mount({ tabs: [ID, FILES, OTHERP], layout: HOME_MAIN, hash: FILES });
+    try {
+      await settle();
+      replies["fs.search"] = { paths: [] };
+      // Open a file in the tab through the palette's file search.
+      replies["fs.search"] = { paths: ["a.ts"] };
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const input = document.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "a");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => {});
+      await act(async () => document.querySelector<HTMLElement>('[data-id="file:a.ts"]')!.click());
+      await settle();
+      expect(bodyOf(FILES)!.textContent).toContain("a.ts");
+      const before = fsLists().length;
+      await hashTo(OTHERP);
+      expect(bodyOf(FILES)!.className).toContain("hidden");
+      await hashTo(FILES.replace(":", "%3A"));
+      await settle();
+      expect(bodyOf(FILES)!.className).not.toContain("hidden");
+      expect(bodyOf(FILES)!.textContent).toContain("a.ts");
+      expect(fsLists().length).toBe(before);
+    } finally {
+      replies["fs.search"] = { paths: [] };
+      restore();
+    }
+  });
+
+  it("A hidden Git graph tab keeps its loaded graph: no new git.log after a round trip when git.refs is unchanged", async () => {
+    const restore = await mount({ tabs: [ID, GRAPH, SAME], layout: HOME_MAIN, hash: GRAPH, git: true, list: list3 });
+    try {
+      await settle();
+      const logs = () => (sent as unknown as { type: string }[]).filter((m) => m.type === "git.log").length;
+      const n = logs();
+      expect(n).toBeGreaterThan(0);
+      await hashTo(SAME);
+      expect(bodyOf(GRAPH)!.className).toContain("hidden");
+      await hashTo(GRAPH.replace(":", "%3A"));
+      await settle();
+      expect(bodyOf(GRAPH)!.className).not.toContain("hidden");
+      expect(logs()).toBe(n);
+    } finally {
+      restore();
+    }
+  });
+
+  it("While two sessions are split, activating a Git graph tab shows it alone (no split) and the next session tab brings the split back", async () => {
+    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, SAME], at: 1, ratio: 0.5 }));
+    const restore = await mount({ tabs: [ID, SAME, GRAPH], layout: HOME_MAIN, hash: ID, git: true, list: list3 });
+    try {
+      await settle();
+      expect(el.querySelectorAll("[data-split]")).toHaveLength(1);
+      await hashTo(GRAPH.replace(":", "%3A"));
+      expect(el.querySelectorAll("[data-split]")).toHaveLength(0);
+      await hashTo(ID);
+      expect(el.querySelectorAll("[data-split]")).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Move Files to side panel from a files tab closes all files tabs with \"Closed 2 Files tabs\"; Undo restores the main home and the tabs", async () => {
+    const restore = await mount({ tabs: [ID, FILES, OTHERP, FILES_O], layout: HOME_MAIN, hash: FILES });
+    try {
+      await ctx(stripTab(FILES));
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-moveSide"]')!.click());
+      expect(toastEl()!.textContent).toContain("Closed 2 Files tabs");
+      expect(tabIds()).toEqual([ID, OTHERP]);
+      expect(layoutNow()!.areas.main).not.toContain("files");
+      expect(sideTabs()).toContain("pane-files");
+      await undoToast();
+      expect(layoutNow()!.areas.main).toContain("files");
+      expect(tabIds()).toEqual([ID, FILES, OTHERP, FILES_O]);
+      await settle();
+      expect(tabIds()).toEqual([ID, FILES, OTHERP, FILES_O]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Changes never reaches the main area: no Move to main area in its dock menus or the palette; a stored layout with changes in main keeps it in the side panel", async () => {
+    const restore = await mount({ tabs: [ID], layout: JSON.stringify({ side: "right", areas: { side: [], bottom: ["terminal"], main: ["changes", "files"] } }) });
+    try {
+      expect(sideTabs()).toContain("pane-changes");
+      await ctx(el.querySelector('[data-pane-tab="changes"]')!);
+      expect(document.querySelector('[data-testid="pane-move-main"]')).toBeNull();
+      await press({ key: "Escape" });
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const titles = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].map((o) => o.textContent ?? "");
+      expect(titles.some((t) => /move changes/i.test(t))).toBe(false);
+      expect(titles.some((t) => t.startsWith("Move files to side panel"))).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Reset layout returns Files and Git graph to the side panel and closes plan, files and graph tabs with \"Closed 3 pane tabs\"; Undo brings them back", async () => {
+    const PLAN = `plan:${ID}`;
+    const restore = await mount({ tabs: [ID, PLAN, FILES, GRAPH], layout: HOME_MAIN, git: true, list: list3 });
+    try {
+      await settle();
+      await palette("Reset layout");
+      expect(tabIds()).toEqual([ID]);
+      expect(toastEl()!.textContent).toContain("Closed 3 pane tabs");
+      expect(localStorage.getItem("claude-ui.layout")).toBeNull();
+      expect(sideTabs()).toContain("pane-files");
+      await undoToast();
+      expect(tabIds()).toEqual([ID, PLAN, FILES, GRAPH]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Reload restores files and graph tabs, order, pins and the active tab from the hash; a stored second files tab of the same folder closes silently", async () => {
+    const FILES_S = `files:${SAME}`;
+    const restore = await mount({ tabs: [ID, FILES, FILES_S, GRAPH], layout: HOME_MAIN, hash: GRAPH, pinned: [GRAPH], git: true, list: list3 });
+    try {
+      await settle();
+      expect(tabIds()).toEqual([GRAPH, ID, FILES]);
+      expect(stripTab(GRAPH).hasAttribute("data-pinned")).toBe(true);
+      expect(stripTab(GRAPH).querySelector('[role="tab"]')!.getAttribute("aria-selected")).toBe("true");
+      expect(location.hash).toBe(`#graph%3A${ID}`);
+      expect(toastEl()).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Narrow: the pane switcher's Files with home main opens the files tab; Session returns to the session; a restored narrow \"files\" pane reads as session", async () => {
+    width = 800;
+    localStorage.setItem("claude-ui.pane-tabs", JSON.stringify({ narrow: "files" }));
+    const restore = await mount({ tabs: [ID], layout: HOME_MAIN });
+    const spy = visible();
+    try {
+      await settle();
+      expect(q("pane-session")!.getAttribute("aria-selected")).toBe("true");
+      await clickId("pane-files");
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      expect(q("pane-files")!.getAttribute("aria-selected")).toBe("true");
+      await clickId("pane-session");
+      expect(location.hash).toBe(`#${ID}`);
+    } finally {
+      spy.mockRestore();
+      restore();
+    }
+  });
+
+  it("Phone switcher lists \"Files · demo\" and \"Git graph · demo\" rows with their icons; Delete on a row toasts \"Closed Files · demo\" with Undo", async () => {
+    width = 500;
+    const restore = await mount({ tabs: [ID, FILES, GRAPH], layout: HOME_MAIN, hash: ID, git: true, list: list3 });
+    try {
+      await act(async () => q("tab-switcher")!.click());
+      const rows = () => [...document.querySelectorAll<HTMLElement>("[role=option]")];
+      const files = rows().find((r) => r.textContent?.includes("Files · demo"))!;
+      expect(files.querySelector(".lucide-folder")).not.toBeNull();
+      expect(rows().find((r) => r.textContent?.includes("Git graph · demo"))!.querySelector(".lucide-git-graph")).not.toBeNull();
+      await act(async () => void files.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true })));
+      expect(toastEl()!.textContent).toContain("Closed Files · demo");
+      expect(tabIds()).toEqual([ID, GRAPH]);
+      await undoToast();
+      expect(tabIds()).toEqual([ID, FILES, GRAPH]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Deleting the owner closes its files and graph tabs; closing the owner's session tab keeps them", async () => {
+    const restore = await mount({ tabs: [ID, FILES, GRAPH, OTHERP], layout: HOME_MAIN, hash: ID, git: true, list: list3 });
+    try {
+      await settle();
+      await act(async () => stripTab(ID).querySelector<HTMLElement>('[data-testid="tab-close"]')!.click());
+      expect(tabIds()).toEqual([FILES, GRAPH, OTHERP]);
+      await act(async () => sessionsChanged({ deleted: ID }));
+      expect(tabIds()).toEqual([OTHERP]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Only one fs.watch stream runs for the store: the shared sync, not one per Files view", async () => {
+    const restore = await mount({ tabs: [ID, FILES, OTHERP, FILES_O], layout: HOME_MAIN, hash: FILES });
+    try {
+      await settle();
+      const watches = (sent as unknown as { type: string; paths: string[] }[]).filter((m) => m.type === "fs.watch");
+      // Every watch carries the one list of the store; no per-view lists alternate.
+      expect(new Set(watches.map((w) => JSON.stringify(w.paths))).size).toBeLessThanOrEqual(1);
+    } finally {
+      restore();
+    }
+  });
+});

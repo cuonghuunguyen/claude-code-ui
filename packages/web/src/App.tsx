@@ -113,7 +113,7 @@ import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { inDir, joinPath, relPath } from "./paths.ts";
-import { FilesPanel } from "./files-panel.tsx";
+import { EditorSync, FilesPanel } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
 import { defaultRepo, repoDir, useRepos, type RepoTarget } from "./repos.ts";
@@ -144,7 +144,7 @@ import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenR
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, canMain, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, useLayout, useMinWidth, withPane } from "./layout.ts";
 import { PlanPane } from "./plan-pane.tsx";
-import { isPaneRef, kindOf, ownerOf, paneTabTitle, parseRef, refOf } from "./pane-ref.ts";
+import { PER_CWD, identityOf, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTitle, parseRef, refOf } from "./pane-ref.ts";
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
@@ -164,6 +164,7 @@ type PanelTarget = { key: string; cwd: string; sessionId?: string };
 const hashTab = () => tabFromHash(location.hash);
 const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-raised";
 // xterm (~300 KB) loads with the first opened terminal panel, not with the app.
+const GraphTab = lazy(() => import("./graph-tab.tsx").then((m) => ({ default: m.GraphTab })));
 const GraphPanel = lazy(() => import("./git-graph-panel.tsx").then((m) => ({ default: m.GraphPanel })));
 const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ default: m.TerminalPanel })));
 const TERMINAL_KEY = "claude-ui.terminalOpen";
@@ -1606,17 +1607,31 @@ export function App() {
     if (status !== "connected" || !ownersKey) return;
     for (const o of ownersKey.split(",")) followOwner(o);
   }, [ownersKey, status === "connected"]);
-  // A plan tab whose kind has no main-area home (another browser tab moved it, or an older stored value) closes silently.
+  const cwdOfOwner = (o: string) => sessionOf(o)?.cwd;
+  // A pane tab whose kind has no main-area home (another browser tab moved it, or an older stored value) closes silently,
+  // and so does a later tab of an identity that is open already (two stored Files tabs of one folder: another browser tab, an Undo race).
   useEffect(() => {
+    const seen = new Set<string>();
     const stray = tabs.filter((t) => {
       const k = kindOf(t);
-      return !!k && areaOf(loadLayout(), k) !== "main";
+      if (!k) return false;
+      if (areaOf(loadLayout(), k) !== "main") return true;
+      const id = identityOf(t, cwdOfOwner);
+      if (seen.has(id)) return true;
+      seen.add(id);
+      return false;
     });
     if (stray.length) closeGroup(stray);
-  }, [layout, tabs]);
+  }, [layout, tabs, list]);
   const ownerTitle = (o: string) => list.find((s) => s.id === o)?.title || titles[o] || "Untitled";
+  /** A pane tab's title: Files and Git graph name the owner's folder ("demo", "demo · feature"), Plan the owner's title. */
+  const paneTitle = (ref: string) => {
+    const k = kindOf(ref)!;
+    const c = PER_CWD.includes(k) ? cwdOfOwner(ownerOf(ref)) : undefined;
+    return paneTabTitle(k, c ? (worktreeName(c, worktrees) ?? projectName(c)) : ownerTitle(ownerOf(ref)));
+  };
   /** What a tab is called in toasts. */
-  const tabLabel = (id: string) => (isPaneRef(id) ? paneTabTitle(kindOf(id)!, ownerTitle(ownerOf(id))) : ownerTitle(id));
+  const tabLabel = (id: string) => (isPaneRef(id) ? paneTitle(id) : ownerTitle(id));
   /** A closed or Undo-restored tab can come back: its session is listed, and a pane tab's kind still has the main area as its home. */
   const existsTab = (id: string) => id === NEW_TAB || (listRef.current.some((s) => s.id === ownerOf(id)) && (!kindOf(id) || areaOf(loadLayout(), kindOf(id) as PaneId) === "main"));
   // Auto-close idle tabs (GH-378): only while the page shows, connected, with the list and group keys final; the 60 s tick is cheap, autoCloseDue lets one run through per 15 minutes.
@@ -1694,6 +1709,10 @@ export function App() {
   // The panels stay mounted (hidden) while no tab shows (Focus), so their open files survive.
   const lastTarget = useRef<PanelTarget>(undefined);
   if (target) lastTarget.current = target;
+  /** Who Files and Git graph tabs open for: the shown session, else (New session, Focus) the session shown last. */
+  const lastSession = useRef<string>(undefined);
+  if (target?.sessionId) lastSession.current = target.sessionId;
+  const paneOwner = isSession(currentId) ? currentId : lastSession.current && sessionOf(lastSession.current) ? lastSession.current : undefined;
   const panelTarget = target ?? lastTarget.current;
   const panelTargetRef = useRef(panelTarget);
   panelTargetRef.current = panelTarget;
@@ -1763,7 +1782,7 @@ export function App() {
   };
   // A restored narrow Terminal pane without shells shows the session.
   const planListed = !!panelPlan && areaOf(layout, "plan") !== "main";
-  const pane: Pane = (!lg && histPane === "terminal" && !termAvail) || (histPane === "plan" && !planListed) ? "session" : histPane;
+  const pane: Pane = (!lg && histPane === "terminal" && !termAvail) || (histPane === "plan" && !planListed) || (histPane !== "session" && canMain(histPane) && areaOf(layout, histPane) === "main") ? "session" : histPane;
   // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
   const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
   const { repos, truncated: reposTruncated } = useRepos(client.current, panelCwd, { connected: status === "connected", openFiles, seq: reposSeq, fresh: reposFresh });
@@ -1806,7 +1825,7 @@ export function App() {
   // Bottom panel only, this page only: it takes the whole work area.
   const [bottomMax, setBottomMax] = useState(false);
   /** Shown and in sight: a maximized bottom panel hides the side panel, so its panes are not seen. */
-  const inSight = (p: PaneId) => shows(p) && !(bottomMax && lg && areaOf(layout, p) === "side");
+  const inSight = (p: PaneId) => (areaOf(layout, p) === "main" ? kindOf(activeId ?? "") === p && (lg || pane === "session") : shows(p) && !(bottomMax && lg && areaOf(layout, p) === "side"));
   const sideEmpty = lg && areaPanes("side").length === 0;
   // The terminal stays mounted (hidden) while another pane of its open area is selected, so switching tabs keeps it as it was.
   const termDock = areaOf(layout, "terminal") as DockArea; // never main in this slice
@@ -1828,10 +1847,12 @@ export function App() {
   /** Selects the pane and, on wide screens, opens its area. */
   const reveal = (p: Pane) => {
     setPane(p);
-    if (!lg || p === "session") return;
-    // A maximized bottom panel hides everything else: a pane outside it needs the restore.
+    if (p === "session") return;
     const a = areaOf(layout, p);
-    if (a === "main") return void (p === "plan" && currentId && isSession(currentId) && openPaneTab(refOf({ kind: "plan", owner: currentId })));
+    // Main home: the tab of the current session. Plan opens on wide screens only (narrow: the switcher), Files and Git graph everywhere.
+    if (a === "main") return void (p === "plan" ? lg && currentId && isSession(currentId) && openPaneTab(refOf({ kind: "plan", owner: currentId })) : (p === "files" || p === "graph") && showKind(p));
+    if (!lg) return;
+    // A maximized bottom panel hides everything else: a pane outside it needs the restore.
     if (a === "side") setBottomMax(false);
     openArea(a);
   };
@@ -1841,9 +1862,11 @@ export function App() {
   const kindToast = (p: PaneId) => (n: number) => `Closed ${n} ${PANE_LABEL[p]} ${n === 1 ? "tab" : "tabs"}`;
   const move = (p: PaneId, to: Area, before?: PaneId) => {
     if (to === "main") {
-      // The main area: a tab of the current session's plan (Changes never lives there).
+      // The main area: a tab of the current session (Changes never lives there).
       if (!canMain(p)) return;
       saveLayout(movePane(layout, p, "main"));
+      if (p === "files") return paneOwner ? showKind("files") : (focusShownPrompt(), setToast("Files moved to the main area. Its tab opens when a session shows."));
+      if (p === "graph") return paneOwner && isGit ? showKind("graph") : (focusShownPrompt(), setToast("Git graph moved to the main area. Its tab opens for a git project."));
       const owner = currentId && isSession(currentId) ? currentId : undefined;
       if (owner && views[owner] && latestPlan(views[owner]!)) openPaneTab(refOf({ kind: "plan", owner }));
       else (focusShownPrompt(), setToast("Plan moved to the main area. Its tab opens when the session has a plan."));
@@ -1865,13 +1888,14 @@ export function App() {
     focusTab.current = p;
     setMoving(true);
   };
-  /** Reset layout: Plan returns to the side panel, its tabs close (Undo brings the layout and the tabs back). */
+  /** Reset layout: Plan, Files and Git graph return to their docks, their tabs close (Undo brings the layout and the tabs back). */
   const resetPanes = () => {
     const prev = loadLayout();
     const refs = tabsRef.current.filter(isPaneRef);
     resetLayout();
     setPaneTabs({});
-    if (refs.length) closeSeveral(refs, kindToast("plan"), () => saveLayout(prev));
+    const kinds = new Set(refs.map((r) => kindOf(r)!));
+    if (refs.length) closeSeveral(refs, kinds.size === 1 ? kindToast([...kinds][0]!) : (n) => `Closed ${n} pane tabs`, () => saveLayout(prev));
   };
   // A moved pane's DOM moves with it: focus its tab in the new area once rendered, once (the menu that moved it returns no focus).
   const focusTab = useRef<PaneId>(undefined);
@@ -1916,7 +1940,7 @@ export function App() {
   };
   /** The narrow pane switcher: Plan with its home in the main area shows the plan tab; a plan tab is left by picking another pane. */
   const switchPane = (p: Pane) => {
-    if (p === "plan" && areaOf(layout, "plan") === "main") return paneRef ? setPane("session") : showPlan();
+    if (p !== "session" && areaOf(layout, p) === "main") return paneRef?.kind === p ? setPane("session") : p === "plan" ? showPlan() : showKind(p as "files" | "graph");
     if (p === "session" && paneRef) return open(paneRef.owner);
     selectPane(p);
   };
@@ -1968,6 +1992,11 @@ export function App() {
     if (areaOf(loadLayout(), "plan") === "main") return openPaneTab(refOf({ kind: "plan", owner: sid }));
     reveal("plan");
   };
+  /** Opens or focuses the Files / Git graph tab of the folder of `sid` (default: the shown session, else the one shown last). */
+  const showKind = (p: "files" | "graph", sid = paneOwner) => {
+    if (!sid) return setToast(`Open a session to show ${PANE_LABEL[p]}.`);
+    openPaneTab(paneTabFor(tabsRef.current, p, sid, cwdOfOwner));
+  };
   /** The tab of a pane ref takes the focus (its strip button; on a phone its body). */
   const focusTabOf = (ref: string) => {
     const focus = (frames: number) => {
@@ -1987,6 +2016,54 @@ export function App() {
   const showPlanRef = useRef(showPlan);
   showPlanRef.current = showPlan;
   const showPlanStable = useCallback(() => showPlanRef.current(), []);
+  /** The body of a pane tab by kind (3/8 adds terminal). Plan: Activity; Files and Git graph: CSS hidden, so a hidden tab keeps its tree, editor tabs and loaded graph without effects re-running. */
+  const paneTabBody = (ref: string) => {
+    const kind = kindOf(ref);
+    if (kind === "plan")
+      return (
+        <Activity key={ref} mode={ref === activeId ? "visible" : "hidden"}>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-pane-tab-body={ref} tabIndex={-1}>
+            <PlanPane view={views[ownerOf(ref)]} failed={failedTabs.has(ownerOf(ref))} label={tabLabel(ref)} onGoToRequest={() => goToRequest(ownerOf(ref))} />
+          </div>
+        </Activity>
+      );
+    const on = ref === activeId;
+    const cwd = cwdOfOwner(ownerOf(ref));
+    const loading = <p className="m-auto text-muted-foreground text-sm">Loading {kind === "files" ? "files" : "graph"}…</p>;
+    return (
+      <div key={ref} className={on ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden"} data-pane-tab-body={ref} tabIndex={-1}>
+        {!cwd ? (
+          loading
+        ) : kind === "files" ? (
+          <FilesPanel
+            client={client.current!}
+            status={status}
+            cwd={cwd}
+            onSend={(mention) => (open(ownerOf(ref)), setInsert(mention))}
+            onCopy={copyText}
+            onViewer={(path) => popFile(path)}
+            editors={editors}
+            sync={false}
+            suspended={!!fileDialog || !on}
+            onPopOut={() => popFile()}
+            onShowChanges={(path) => (setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
+            openPath={on ? openFile?.path : undefined}
+            openLine={on ? openFile?.line : undefined}
+            onOpened={() => setOpenFile(undefined)}
+            watch={[]}
+            showTree={fileTree}
+            onToggleTree={() => setFileTree((v) => !v)}
+            gitStamp={ownGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
+            visible={on && (lg || pane === "session")}
+          />
+        ) : (
+          <Suspense fallback={loading}>
+            <GraphTab client={client.current!} cwd={cwd} hidden={!on || (!lg && pane !== "session")} connected={status === "connected"} openFiles={openFiles} seq={reposSeq} />
+          </Suspense>
+        )}
+      </div>
+    );
+  };
   /** "Go to request": the session of the plan, then the plan approval's popup button, else its first control (no answer by accident). */
   const goToRequest = (sid: string) => {
     open(sid);
@@ -2145,6 +2222,7 @@ export function App() {
     toggleTerminal,
     // The pane that shows already: focus goes back to the prompt (VS Code's Explorer key does the same).
     showPane: (p) => {
+      if (areaOf(layout, p) === "main") return reveal(p);
       if (inSight(p)) return focusShownPrompt();
       reveal(p);
     },
@@ -2413,7 +2491,7 @@ export function App() {
               const groupInfo = keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" };
               const pk = kindOf(id);
               // A pane tab: the owner's project and group, no session state of its own.
-              if (pk) return { title: paneTabTitle(pk, ownerTitle(ownerOf(id))), kind: pk, cwd: s?.cwd, ...groupInfo, worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, unread: false, transcript: false };
+              if (pk) return { title: paneTitle(id), kind: pk, cwd: s?.cwd, ...groupInfo, worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, unread: false, transcript: false };
               const item = list.find((l) => l.id === id);
               const title = item?.title || titles[id] || "Untitled";
               return { title, titleLoading: titleLoading(title, prompted.has(id)), cwd: s?.cwd, ...(keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" }), worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, state: shownState(views[id]) ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
@@ -2685,7 +2763,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : [])]} value={paneRef && pane === "session" ? "plan" : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
+                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : [])]} value={paneRef && pane === "session" ? paneRef.kind : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
                 </div>
               )}
               {layout.side === "left" && lg && (
@@ -2805,13 +2883,7 @@ export function App() {
                 </FileLinkContext>
                 </PlanTabContext>
                 </ViewerContext>
-                {tabs.filter(isPaneRef).map((ref) => (
-                  <Activity key={ref} mode={ref === activeId ? "visible" : "hidden"}>
-                    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-pane-tab-body={ref} tabIndex={-1}>
-                      <PlanPane view={views[ownerOf(ref)]} failed={failedTabs.has(ownerOf(ref))} label={tabLabel(ref)} onGoToRequest={() => goToRequest(ownerOf(ref))} />
-                    </div>
-                  </Activity>
-                ))}
+                {tabs.filter(isPaneRef).map(paneTabBody)}
                 {splitCramped && (
                   <div className="order-first flex shrink-0 items-center gap-2 border-b px-3 py-1 text-muted-foreground text-xs" data-testid="split-hint" role="status">
                     <span className="min-w-0 truncate">Split hidden — widen the window or hide a panel</span>
@@ -2895,8 +2967,10 @@ export function App() {
               )}
               {panelTarget && (
                 <>
+                  <EditorSync store={editors} client={client.current!} status={status} watch={changedPaths} />
                   {/* The pane contents render here once; each host sits in the slot of the area that holds the pane. */}
                   {createPortal(
+                    areaOf(layout, "files") !== "main" && (
                     <div className={shows("files") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
                       <FilesPanel
                         client={client.current!}
@@ -2917,8 +2991,10 @@ export function App() {
                         onToggleTree={() => setFileTree((v) => !v)}
                         gitStamp={ownGit ? `${panelView?.state}|${changedPaths.length}` : undefined}
                         visible={inSight("files")}
+                        sync={false}
                       />
-                    </div>,
+                    </div>
+                    ),
                     hosts.files,
                   )}
                   {createPortal(
@@ -2961,7 +3037,7 @@ export function App() {
                     hosts.changes,
                   )}
                   {createPortal(
-                    isGit && (shows("graph") || graphCwd === panelTarget.cwd) && (
+                    isGit && areaOf(layout, "graph") !== "main" && (shows("graph") || graphCwd === panelTarget.cwd) && (
                       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
                         {repos === undefined ? (
                           <p className="m-auto text-muted-foreground text-sm">Loading graph…</p>
@@ -3157,7 +3233,7 @@ export function App() {
           repos={(viewer?.cwd ?? shown.cwd) === panelCwd ? repoList : undefined}
           ignoreSubmodules={ignoreSubmodules}
           onClose={() => setViewer(undefined)}
-          onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line }), setPane("files"), setPanel(true))}
+          onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line }), reveal("files"))}
         />
       )}
       {panelTarget && client.current && (
