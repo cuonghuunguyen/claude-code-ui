@@ -1,16 +1,22 @@
 // Pane layout per browser (docs/spec.md "Layout"): which dock area holds each pane on wide screens, their order and the side panel's side; plus the pane last selected per dock area (GH-381).
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 
-export type PaneId = "changes" | "files" | "graph" | "terminal";
+export type PaneId = "changes" | "files" | "graph" | "terminal" | "plan";
 export type DockArea = "side" | "bottom";
 export type DockSide = "left" | "right";
-export type Layout = { side: DockSide; areas: Record<DockArea, PaneId[]> };
+/** Where a pane lives: a dock area, or the main area (a tab in the tabs bar; GH-395). */
+export type Area = DockArea | "main";
+export type Layout = { side: DockSide; areas: Record<Area, PaneId[]> };
 
 /** Also the order of the narrow pane switcher. */
-export const PANE_IDS: PaneId[] = ["changes", "files", "graph", "terminal"];
-export const PANE_LABEL: Record<PaneId, string> = { changes: "Changes", files: "Files", graph: "Git graph", terminal: "Terminal" };
+export const PANE_IDS: PaneId[] = ["changes", "files", "graph", "terminal", "plan"];
+export const PANE_LABEL: Record<PaneId, string> = { changes: "Changes", files: "Files", graph: "Git graph", terminal: "Terminal", plan: "Plan" };
 export const AREA_LABEL: Record<DockArea, string> = { side: "Side panel", bottom: "Bottom panel" };
-export const DEFAULT_LAYOUT: Layout = { side: "right", areas: { side: ["changes", "files", "graph"], bottom: ["terminal"] } };
+export const HOME_LABEL: Record<Area, string> = { side: "Side panel", bottom: "Bottom panel", main: "Main area" };
+export const DEFAULT_LAYOUT: Layout = { side: "right", areas: { side: ["changes", "files", "graph", "plan"], bottom: ["terminal"], main: [] } };
+/** Panes that may have the main area as their home (the others never); later slices add files, graph and terminal. */
+export const MAIN_KINDS: PaneId[] = ["plan"];
+export const canMain = (p: PaneId): boolean => MAIN_KINDS.includes(p);
 export const TERMINAL_DOCKS: { value: DockArea; label: string }[] = [
   { value: "bottom", label: "Bottom" },
   { value: "side", label: "Side panel" },
@@ -28,7 +34,7 @@ const defaultArea = (p: PaneId): DockArea => (DEFAULT_LAYOUT.areas.side.includes
 
 /** Never throws: bad input reads as the default; unknown panes drop, duplicates keep the first, missing panes return to their default area. */
 export function parseLayout(raw: string | null, legacyDock?: string | null): Layout {
-  const areas: Record<DockArea, PaneId[]> = { side: [], bottom: [] };
+  const areas: Record<Area, PaneId[]> = { side: [], bottom: [], main: [] };
   let side: DockSide = "right";
   let ok = false;
   try {
@@ -37,24 +43,25 @@ export function parseLayout(raw: string | null, legacyDock?: string | null): Lay
       ok = true;
       side = v.side === "left" ? "left" : "right";
       const seen = new Set<PaneId>();
-      for (const a of ["side", "bottom"] as const) {
+      for (const a of ["side", "bottom", "main"] as const) {
         const list = v.areas[a];
-        if (Array.isArray(list)) for (const p of list) if (isPane(p) && !seen.has(p)) (seen.add(p), areas[a].push(p));
+        if (Array.isArray(list)) for (const p of list) if (isPane(p) && !seen.has(p) && (a !== "main" || canMain(p))) (seen.add(p), areas[a].push(p));
       }
     }
   } catch {
     // Not JSON: default.
   }
-  if (!ok) return legacyDock === "side" ? { side: "right", areas: { side: [...DEFAULT_LAYOUT.areas.side, "terminal"], bottom: [] } } : DEFAULT_LAYOUT;
-  for (const p of PANE_IDS) if (!areas.side.includes(p) && !areas.bottom.includes(p)) areas[defaultArea(p)].push(p);
+  if (!ok) return legacyDock === "side" ? { side: "right", areas: { side: [...DEFAULT_LAYOUT.areas.side, "terminal"], bottom: [], main: [] } } : DEFAULT_LAYOUT;
+  for (const p of PANE_IDS) if (!areas.side.includes(p) && !areas.bottom.includes(p) && !areas.main.includes(p)) areas[defaultArea(p)].push(p);
   return { side, areas };
 }
 
-export const areaOf = (l: Layout, p: PaneId): DockArea => (l.areas.side.includes(p) ? "side" : "bottom");
+export const areaOf = (l: Layout, p: PaneId): Area => (l.areas.main.includes(p) ? "main" : l.areas.side.includes(p) ? "side" : "bottom");
 
 /** Moves `p` to `to`, before `before` (the end when absent or not in `to`). Returns `l` itself when nothing changes. */
-export function movePane(l: Layout, p: PaneId, to: DockArea, before?: PaneId): Layout {
-  const rest: Record<DockArea, PaneId[]> = { side: l.areas.side.filter((q) => q !== p), bottom: l.areas.bottom.filter((q) => q !== p) };
+export function movePane(l: Layout, p: PaneId, to: Area, before?: PaneId): Layout {
+  if (to === "main" && !canMain(p)) return l;
+  const rest: Record<Area, PaneId[]> = { side: l.areas.side.filter((q) => q !== p), bottom: l.areas.bottom.filter((q) => q !== p), main: l.areas.main.filter((q) => q !== p) };
   const i = before && before !== p ? rest[to].indexOf(before) : -1;
   rest[to].splice(i < 0 ? rest[to].length : i, 0, p);
   const n: Layout = { ...l, areas: rest };
@@ -140,7 +147,7 @@ export function savePaneTabs(t: PaneTabs) {
 }
 
 /** Remembers a selection per browser: the overall (narrow) pane, and for a real pane its dock area's tab too. */
-export const withPane = (t: PaneTabs, p: PaneId | "session", l: Layout): PaneTabs => (p === "session" ? { ...t, narrow: p } : { ...t, narrow: p, [areaOf(l, p)]: p });
+export const withPane = (t: PaneTabs, p: PaneId | "session", l: Layout): PaneTabs => (p === "session" || areaOf(l, p) === "main" ? { ...t, narrow: p } : { ...t, narrow: p, [areaOf(l, p)]: p });
 
 export function rememberPane(p: PaneId | "session") {
   const t = loadPaneTabs();
@@ -166,9 +173,10 @@ function subscribe(l: () => void) {
 export const useLayout = (): Layout => useSyncExternalStore(subscribe, loadLayout, () => DEFAULT_LAYOUT);
 
 // Terminal position (Settings › Terminal) = the dock area of the terminal pane.
-export const loadTerminalDock = (): DockArea => areaOf(loadLayout(), "terminal");
+// The terminal is never in the main area in this slice (`canMain("terminal")` is false), so `as DockArea` is safe.
+export const loadTerminalDock = (): DockArea => areaOf(loadLayout(), "terminal") as DockArea;
 export const saveTerminalDock = (d: DockArea) => saveLayout(movePane(loadLayout(), "terminal", d));
-export const useTerminalDock = (): DockArea => areaOf(useLayout(), "terminal");
+export const useTerminalDock = (): DockArea => areaOf(useLayout(), "terminal") as DockArea;
 
 /** True while the viewport is at least `px` wide; follows resizes. */
 export function useMinWidth(px: number): boolean {

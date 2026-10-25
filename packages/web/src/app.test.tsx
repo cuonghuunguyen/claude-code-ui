@@ -958,7 +958,7 @@ it("dropping a pane on the area body appends it; a session tab drag is not a tar
   await dnd(q("side-panel"), "dragover", data);
   expect(q("side-panel")!.className).toContain("outline-primary");
   await dnd(q("side-panel"), "drop", data);
-  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "terminal"]);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "plan", "terminal"]);
   const other = new Map<string, string>();
   await dnd(q("side-panel"), "dragover", other, ["application/x-claude-ui-tab"]);
   expect(q("side-panel")!.className).not.toContain("outline-primary");
@@ -974,7 +974,7 @@ it("dropping a pane on an area's content (inside a pane host) moves it and fills
   expect(q("side-panel")!.className).toContain("outline-primary");
   expect(q("side-panel")!.hasAttribute("data-drop-target")).toBe(true);
   await dnd(body, "drop", data);
-  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "terminal"]);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "plan", "terminal"]);
 });
 
 /** Terminal in the side panel, Files in a maximized bottom panel: the side panel is hidden behind the maximize. */

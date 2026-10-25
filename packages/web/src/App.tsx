@@ -139,7 +139,7 @@ import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
 import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
-import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, useLayout, useMinWidth, withPane } from "./layout.ts";
+import { type Area, type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, useLayout, useMinWidth, withPane } from "./layout.ts";
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
@@ -1705,23 +1705,25 @@ export function App() {
   }, [panelCwd, status, knownGit]);
   // The Graph panel stays mounted (hidden) after its first visit, so coming back shows the loaded list at once.
   const [graphCwd, setGraphCwd] = useState<string>();
-  const available = (p: PaneId) => p !== "graph" || isGit;
+  // The Plan pane is hosted from the next step on; until then it is never listed.
+  const available = (p: PaneId) => (p === "plan" ? false : p !== "graph" || isGit);
   /** Narrow: the side column holds every pane. */
-  const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? PANE_IDS : []).filter(available);
+  const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? PANE_IDS.filter((p) => areaOf(layout, p) !== "main") : []).filter(available);
   /** The panes of the area that can be selected: the Terminal tab stays listed, but selects only once the terminal is available. */
   const selectable = (a: DockArea) => areaPanes(a).filter((p) => p !== "terminal" || termAvail);
   const activeOf = (a: DockArea) => activePane(selectable(a), hist, paneTabs[a]);
   const sideShown = lg && panel && selectable("side").length > 0;
   const bottomShown = lg && bottomOpen && selectable("bottom").length > 0;
   /** The pane shows: wide = its area shows it; narrow = it is the pane. */
-  const shows = (p: PaneId) => (lg ? (areaOf(layout, p) === "side" ? sideShown : bottomShown) && activeOf(areaOf(layout, p)) === p : p === "files" ? pane === "files" || (pane === "graph" && !isGit) : pane === p && available(p));
+  const shows = (p: PaneId) => (lg ? areaOf(layout, p) !== "main" && (areaOf(layout, p) === "side" ? sideShown : bottomShown) && activeOf(areaOf(layout, p) as DockArea) === p : p === "files" ? pane === "files" || (pane === "graph" && !isGit) : pane === p && available(p));
   // Bottom panel only, this page only: it takes the whole work area.
   const [bottomMax, setBottomMax] = useState(false);
   /** Shown and in sight: a maximized bottom panel hides the side panel, so its panes are not seen. */
   const inSight = (p: PaneId) => shows(p) && !(bottomMax && lg && areaOf(layout, p) === "side");
   const sideEmpty = lg && areaPanes("side").length === 0;
   // The terminal stays mounted (hidden) while another pane of its open area is selected, so switching tabs keeps it as it was.
-  const termAreaOpen = lg && (areaOf(layout, "terminal") === "side" ? sideShown : bottomShown);
+  const termDock = areaOf(layout, "terminal") as DockArea; // never main in this slice
+  const termAreaOpen = lg && (termDock === "side" ? sideShown : bottomShown);
   // `termKeep`: it has shown and its area has stayed open since; it resets when the area hides, so hiding unmounts it.
   const termShows = shows("terminal");
   const [termKeep, setTermKeep] = useState(false);
@@ -1741,13 +1743,16 @@ export function App() {
     setPane(p);
     if (!lg || p === "session") return;
     // A maximized bottom panel hides everything else: a pane outside it needs the restore.
-    if (areaOf(layout, p) === "side") setBottomMax(false);
-    openArea(areaOf(layout, p));
+    const a = areaOf(layout, p);
+    if (a === "main") return;
+    if (a === "side") setBottomMax(false);
+    openArea(a);
   };
   // GH-355 drag and drop: the pane being dragged and the target it is over (Esc cancels a native drag: dragend without drop).
   const [drag, setDrag] = useState<PaneId>();
   const [dropAt, setDropAt] = useState<DropAt>();
-  const move = (p: PaneId, to: DockArea, before?: PaneId) => {
+  const move = (p: PaneId, to: Area, before?: PaneId) => {
+    if (to === "main") return; // Main-area homes arrive with the Plan tabs.
     const n = movePane(layout, p, to, before);
     if (n !== layout) saveLayout(n);
     // A Terminal pane moved on purpose shows (its empty tab bar with +) even where the folder has no shells.
@@ -1926,7 +1931,7 @@ export function App() {
   const toggleTerminal = () => {
     if (!wide(1024)) return pane === "terminal" ? setPane("session") : (askTerminal(), setPane("terminal"));
     if (!inSight("terminal")) return (askTerminal(), shows("terminal") && setTermFocusReq((n) => n + 1), reveal("terminal"));
-    openArea(areaOf(layout, "terminal"), false);
+    openArea(termDock, false);
     focusShownPrompt();
   };
   /** Reopen closed tab (palette, tab menu): the newest closed session that still exists, back in its place. */
@@ -2161,7 +2166,7 @@ export function App() {
             setHasShells((h) => ({ ...h, [panelTarget.cwd]: false }));
             if (!lg) return setPane("session");
             // The last terminal closed: the area hides, or shows its other pane.
-            const a = areaOf(layout, "terminal");
+            const a = termDock;
             const rest = areaPanes(a).filter((p) => p !== "terminal");
             if (rest.length) setPane(rest[0]!);
             else openArea(a, false);

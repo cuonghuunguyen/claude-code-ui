@@ -1,7 +1,7 @@
 // Popup viewer targets (docs/spec.md "Session view UX"): what a card or a palette command opens.
 import { createContext, useCallback, useRef } from "react";
 import type { SessionView, ToolCall } from "./store.ts";
-import { wholeParts } from "./store.ts";
+import { pendingPermission, wholeParts } from "./store.ts";
 import { editFiles } from "./tools.ts";
 
 /** `line`: first line to show (a Read's offset). `call`: the Edit/Write call whose diff shows. */
@@ -19,18 +19,27 @@ export function cardTarget(call: ToolCall): ViewerTarget | undefined {
   return undefined;
 }
 
-/** The newest ExitPlanMode plan of the session (loaded parts and aux), undefined when none. */
-export function latestPlan(view: SessionView): string | undefined {
+/** The newest ExitPlanMode call with a plan (loaded parts and aux), undefined when none. */
+export function latestPlanCall(view: SessionView): ToolCall | undefined {
   const parts = wholeParts(view);
   for (let n = parts.length - 1; n >= 0; n--) {
     const p = parts[n];
     if (p?.type === "tool_call" && p.tool === "ExitPlanMode") {
       const plan = (p.input as { plan?: unknown } | null)?.plan;
-      if (typeof plan === "string" && plan) return plan;
+      if (typeof plan === "string" && plan) return p;
     }
   }
   return undefined;
 }
+
+/** The newest ExitPlanMode plan of the session (loaded parts and aux), undefined when none. */
+export const latestPlan = (view: SessionView): string | undefined => (latestPlanCall(view)?.input as { plan?: string } | undefined)?.plan;
+
+/** The plan approval waits for an answer. */
+export const planWaiting = (view: SessionView): boolean => pendingPermission(view)?.tool === "ExitPlanMode";
+
+/** "Open in tab" of the plan card and the plan permission panel; absent = no button (Focus page). */
+export const PlanTabContext = createContext<(() => void) | undefined>(undefined);
 
 /** The file path an Edit/Write call targets. */
 export const callPath = (call: ToolCall) => ((call.input as { file_path?: unknown } | null)?.file_path as string | undefined) ?? "";

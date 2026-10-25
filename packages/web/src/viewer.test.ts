@@ -1,7 +1,7 @@
 import type { Part } from "@claude-ui/protocol";
 import { expect, it } from "vitest";
 import { applyEvent, emptySession, type ToolCall } from "./store.ts";
-import { cardTarget, isFileTarget, latestPlan } from "./viewer.ts";
+import { cardTarget, isFileTarget, latestPlan, latestPlanCall, planWaiting } from "./viewer.ts";
 
 const call = (tool: string, input: unknown, id = tool): ToolCall => ({ type: "tool_call", id, toolUseId: id, tool, input, status: "done" });
 const view = (parts: Part[]) => parts.reduce((s, part, i) => applyEvent(s, { type: "event", sessionId: "s1", seq: i + 1, part }), emptySession());
@@ -37,4 +37,21 @@ it("isFileTarget: only a file target opens the file dialog; diff, plan and chang
   expect(isFileTarget({ kind: "plan", plan: "p" })).toBe(false);
   expect(isFileTarget({ kind: "changes" })).toBe(false);
   expect(isFileTarget(cardTarget(call("Edit", { file_path: "/w/a.ts", old_string: "a", new_string: "b" }))!)).toBe(false);
+});
+
+it("latestPlanCall returns the newest plan call from aux when the page has none", () => {
+  const v = view([call("Bash", { command: "ls" })]);
+  expect(latestPlanCall(v)).toBeUndefined();
+  const aux = { ...v, aux: [{ part: call("ExitPlanMode", { plan: "from aux" }, "p"), pos: 1 }] };
+  expect(latestPlanCall(aux)?.id).toBe("p");
+  expect(latestPlan(aux)).toBe("from aux");
+  expect(latestPlanCall(view([call("ExitPlanMode", { plan: "old" }, "a"), call("ExitPlanMode", { plan: "new" }, "b")]))?.id).toBe("b");
+});
+
+it("planWaiting is true only for an unsettled ExitPlanMode permission request", () => {
+  const perm = (tool: string, settled: boolean): Part => ({ type: "permission_request", id: `perm-${tool}-${settled}`, requestId: "r", toolUseId: "t", tool, input: {}, settled }) as Part;
+  expect(planWaiting(view([perm("ExitPlanMode", false)]))).toBe(true);
+  expect(planWaiting(view([perm("ExitPlanMode", true)]))).toBe(false);
+  expect(planWaiting(view([perm("Bash", false)]))).toBe(false);
+  expect(planWaiting(view([]))).toBe(false);
 });
