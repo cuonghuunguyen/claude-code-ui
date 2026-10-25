@@ -116,6 +116,7 @@ import { FilesPanel } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
 import { defaultRepo, repoDir, useRepos, type RepoTarget } from "./repos.ts";
+import type { RepoList } from "./repo-choice.ts";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
@@ -1699,9 +1700,13 @@ export function App() {
   const pane: Pane = !lg && histPane === "terminal" && !termAvail ? "session" : histPane;
   // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
   const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
-  const { repos } = useRepos(client.current, panelCwd, { connected: status === "connected", openFiles, seq: reposSeq, fresh: reposFresh });
+  const { repos, truncated: reposTruncated } = useRepos(client.current, panelCwd, { connected: status === "connected", openFiles, seq: reposSeq, fresh: reposFresh });
   const repo = repos ? defaultRepo(repos) : undefined;
   const repoTarget: RepoTarget | null | undefined = repos === undefined || repos === null || !panelCwd ? undefined : repo ? { path: repo.path, dir: repoDir(panelCwd, repo.rel) } : null;
+  // The Graph keeps the default repository until it gets the selector (#391); Changes resolves the remembered choice itself.
+  // Panes: the pane owner session's cwd replaces panelCwd here (the choice is kept per owner project).
+  const repoProjectKey = panelCwd ? projectOf(panelCwd, worktrees) : undefined;
+  const repoList: RepoList | undefined = panelCwd && repos && repoProjectKey ? { list: repos, truncated: reposTruncated, projectKey: repoProjectKey } : undefined;
   const isGit = repos ? !!repo : gitProbe;
   const ownGit = repos ? repos.some((r) => r.kind === "main" && !r.outsideRoots) : isGit;
   const reposAnswered = repos !== undefined;
@@ -2775,7 +2780,7 @@ export function App() {
                           sessionId={panelTarget.sessionId}
                           onPopOut={() => openViewer({ kind: "changes" })}
                           reveal={changesReveal}
-                          repo={repoTarget}
+                          repos={repoList}
                           onReload={reloadRepos}
                         />
                       )
@@ -2791,7 +2796,7 @@ export function App() {
                         onOpen={(path) => (setOpenFile({ path }), reveal("files"))}
                         sessionId={NEW_TAB}
                         reveal={changesReveal}
-                        repo={repoTarget}
+                        repos={repoList}
                         onReload={reloadRepos}
                         emptyText="No changes yet. Claude's edits appear here."
                       />
@@ -2984,7 +2989,7 @@ export function App() {
           cwd={viewer?.cwd ?? shown.cwd}
           view={viewer ? views[viewer.sessionId] : undefined}
           sessionId={viewer?.sessionId}
-          repo={(viewer?.cwd ?? shown.cwd) === panelCwd ? repoTarget : undefined}
+          repos={(viewer?.cwd ?? shown.cwd) === panelCwd ? repoList : undefined}
           onClose={() => setViewer(undefined)}
           onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line }), setPane("files"), setPanel(true))}
         />

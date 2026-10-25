@@ -9,7 +9,7 @@ import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { cn } from "@/lib/utils";
-import type { RepoTarget } from "./repos.ts";
+import type { RepoList } from "./repo-choice.ts";
 import { ChangesPanel, loadStyle, saveStyle, type DiffStyle } from "./changes-panel.tsx";
 import type { connect, RequestError } from "./client.ts";
 import { sessionDiffChoice } from "./diff-mode.ts";
@@ -39,7 +39,7 @@ export function ViewerDialog({
   cwd,
   view,
   sessionId,
-  repo,
+  repos,
   onClose,
   onOpenInEditor,
 }: {
@@ -49,8 +49,8 @@ export function ViewerDialog({
   cwd: string;
   view?: SessionView;
   sessionId?: string;
-  /** The repository the git panes show (App, from `git.repos`); see ChangesPanel. */
-  repo?: RepoTarget | null;
+  /** `git.repos` of the pane's cwd (App); see ChangesPanel. */
+  repos?: RepoList;
   onClose: () => void;
   /** Opens `path` in the Files tab (at `line`) and closes the viewer. */
   onOpenInEditor: (path: string, line?: number) => void;
@@ -85,7 +85,7 @@ export function ViewerDialog({
         >
           {shown && (
             <CwdContext value={cwd}>
-              <Content target={shown} client={client} cwd={cwd} view={view} sessionId={sessionId} repo={repo} onOpenInEditor={onOpenInEditor} />
+              <Content target={shown} client={client} cwd={cwd} view={view} sessionId={sessionId} repos={repos} onOpenInEditor={onOpenInEditor} />
             </CwdContext>
           )}
         </Dialog.Popup>
@@ -117,7 +117,7 @@ export function DialogClose() {
   );
 }
 
-function Content({ target, client, cwd, view, sessionId, repo, onOpenInEditor }: { target: PopupTarget; client: Client; cwd: string; view?: SessionView; sessionId?: string; repo?: RepoTarget | null; onOpenInEditor: (path: string, line?: number) => void }) {
+function Content({ target, client, cwd, view, sessionId, repos, onOpenInEditor }: { target: PopupTarget; client: Client; cwd: string; view?: SessionView; sessionId?: string; repos?: RepoList; onOpenInEditor: (path: string, line?: number) => void }) {
   const text = title(target, cwd);
   switch (target.kind) {
     case "diff":
@@ -137,7 +137,7 @@ function Content({ target, client, cwd, view, sessionId, repo, onOpenInEditor }:
           <Header text={text} />
           {view ? (
             <div className="flex min-h-0 flex-1 flex-col">
-              <ChangesPanel client={client} view={view} cwd={cwd} repo={repo} onOpen={onOpenInEditor} initialChoice={sessionId ? sessionDiffChoice.get(sessionId) : undefined} />
+              <ChangesPanel client={client} view={view} cwd={cwd} repos={repos} onOpen={onOpenInEditor} initialChoice={sessionId ? sessionDiffChoice.get(sessionId) : undefined} />
             </div>
           ) : (
             <p className="p-4 text-muted-foreground text-sm">No session.</p>

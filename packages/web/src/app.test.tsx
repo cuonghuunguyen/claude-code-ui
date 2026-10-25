@@ -1927,6 +1927,30 @@ it("a workspace folder that holds repositories shows the Graph tab; the graph re
   }
 });
 
+it("ChangesPanel reads the repository chosen for the project; the Graph keeps the default repository (until its own selector)", async () => {
+  localStorage.setItem("claude-ui.diffMode", "uncommitted");
+  localStorage.setItem("claude-ui.repoChoice", JSON.stringify({ "/p/demo": "web" }));
+  const restore = await remount({ "git.repos": { repos: [api, web] }, "git.status": { status: null }, "git.diff": { diff: { prefix: "", base: "b".repeat(40), files: [] } }, "git.refs": { refs: "s1" }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } });
+  try {
+    await pickSide(/changes/i);
+    await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    const gits = sent as { type: string; cwd?: string; exact?: boolean }[];
+    expect(gits.filter((m) => m.type === "git.diff")).toMatchObject([{ cwd: "/p/demo/web", exact: true }]);
+    expect(el.querySelector("[data-testid=repo-selector]")!.getAttribute("aria-label")).toBe("Repository: web, branch main");
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-graph"]')!.click());
+    // The graph chunk loads lazily.
+    for (let i = 0; i < 40 && !gits.some((m) => m.type === "git.log"); i++) await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    const logs = gits.filter((m) => m.type === "git.log");
+    expect(logs.length).toBeGreaterThan(0);
+    for (const l of logs) expect(l).toMatchObject({ cwd: "/p/demo/api", exact: true });
+  } finally {
+    restore();
+    localStorage.removeItem("claude-ui.diffMode");
+    localStorage.removeItem("claude-ui.repoChoice");
+    for (const k of ["git.status", "git.refs", "git.log", "git.repos", "git.diff"]) delete replies[k];
+  }
+});
+
 it("git.repos [] hides the Graph tab even when git.status would answer; without a repos array git.status decides", async () => {
   let restore = await remount({ "git.repos": { repos: [] }, "git.status": { status: { branch: "main", added: 0, removed: 0 } } });
   try {

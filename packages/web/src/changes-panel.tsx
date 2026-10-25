@@ -19,7 +19,8 @@ import { gitEol, gitRows } from "./git-changes.ts";
 import { mediaKind, readFailure, textFailure } from "./files.ts";
 import { ImageDiff, type ImagePane } from "./image-diff.tsx";
 import { filePath } from "./tools.ts";
-import type { RepoTarget } from "./repos.ts";
+import { RepoSelector } from "./repo-selector.tsx";
+import { selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 
 type Client = ReturnType<typeof connect>;
 export type DiffStyle = "unified" | "split";
@@ -192,7 +193,7 @@ export function ChangesPanel({
   onPopOut,
   reveal,
   emptyText,
-  repo,
+  repos,
   onReload,
 }: {
   client: Client;
@@ -204,15 +205,18 @@ export function ChangesPanel({
   /** Keys the panel's own diff mode choice (kept in memory while the page lives). */
   sessionId?: string;
   /** The starting mode choice when the session has none (the popup copies the side panel's without writing it back). */
-  initialChoice?: { mode: DiffMode; ref?: string };
+  initialChoice?: { mode: DiffMode; ref?: string; refRepo?: string };
   /** Shows the "Open in popup" button. */
   onPopOut?: () => void;
   /** File tree "Show changes": switches to Uncommitted (the tree's git marks) and selects the file; a new `seq` repeats it. */
   reveal?: { path: string; seq: number };
   /** Replaces "No changes in this session yet." in session mode (the new-session tab has no session yet). */
   emptyText?: string;
-  /** From `git.repos` (App): git requests go to `repo.path` with `exact`, rows lie under `repo.dir`; null: no repository (Session changes only); undefined: the session cwd's own repository (`git.status` check), as before. */
-  repo?: RepoTarget | null;
+  /**
+   * `git.repos` of the pane's cwd (App) and the key of the remembered choice. The selected repository (selector, remembered per project) is where git requests
+   * go (`exact`), rows lie under its top as `cwd` spells it; an empty list: no repository (Session changes only); undefined or `list` unknown: the cwd's own repository (`git.status` check), as before.
+   */
+  repos?: RepoList;
   /** Reload from disk also asks `git.repos` again. */
   onReload?: () => void;
 }) {
@@ -248,10 +252,15 @@ export function ChangesPanel({
 
   // The mode: the Settings default until this session's panel picked one.
   const def = useDefaultDiffMode();
-  const [choice, setChoice] = useState(() => (sessionId ? sessionDiffChoice.get(sessionId) : undefined) ?? initialChoice);
+  const [choice, setChoice] = useState<{ mode: DiffMode; ref?: string; refRepo?: string } | undefined>(() => (sessionId ? sessionDiffChoice.get(sessionId) : undefined) ?? initialChoice);
   const mode: DiffMode = choice?.mode ?? def;
+  // The repository a mode choice's branch belongs to: after a switch the new repository's default branch applies.
+  const { repo: selectedRepo, target: repo, choose: chooseRepo } = useSelectedRepo(repos, cwd);
+  const gitCwd = repo?.path ?? cwd;
+  const refChoice = choice?.refRepo === undefined || choice.refRepo === gitCwd ? choice?.ref : undefined;
   const pick = (m: DiffMode, ref?: string) => {
-    const c = { mode: m, ...((ref ?? choice?.ref) && { ref: ref ?? choice?.ref }) };
+    const r = ref ?? refChoice;
+    const c = { mode: m, ...(r && { ref: r, refRepo: gitCwd }) };
     setChoice(c);
     if (sessionId) sessionDiffChoice.set(sessionId, c);
   };
@@ -268,14 +277,12 @@ export function ChangesPanel({
     );
     return () => void (live = false);
   }, [client, cwd, known]);
-  const gitCwd = repo?.path ?? cwd;
   const ex = repo ? { exact: true as const } : {};
   const dir = repo?.dir ?? cwd;
   const effective: DiffMode = git === false ? "session" : mode;
   const gitMode = effective !== "session";
-  const refChoice = choice?.ref;
   const diffSeq = useRef(0);
-  const [gd, setGd] = useState<{ mode?: DiffMode; diff?: GitDiff; error?: string }>({});
+  const [gd, setGd] = useState<{ mode?: DiffMode; repo?: string; diff?: GitDiff; error?: string }>({});
   const [branches, setBranches] = useState<string[]>([]);
   // Bumped by every git.diff reply: the before/after sides of the files on screen are read again.
   const [gen, setGen] = useState(0);
@@ -288,29 +295,40 @@ export function ChangesPanel({
       (r) => {
         // A reply of an older read (another mode, branch or reload since) is dropped.
         if (!live || seq !== diffSeq.current) return;
-        if (r.diff === null) return known ? setGd({ mode: effective, error: "Not a repository" }) : setGit(false);
-        setGd({ mode: effective, diff: r.diff });
+        if (r.diff === null) return known ? setGd({ mode: effective, repo: gitCwd, error: "Not a repository" }) : setGit(false);
+        setGd({ mode: effective, repo: gitCwd, diff: r.diff });
         if (r.diff.branches) setBranches(r.diff.branches);
         setGen((n) => n + 1);
       },
       (e: Error) => {
         if (!live || seq !== diffSeq.current) return;
-        setGd({ mode: effective, error: e.message });
+        setGd({ mode: effective, repo: gitCwd, error: e.message });
         // No branch list without a diff ("No default branch: pick one"): the graph's first page has it.
         if (effective === "branch") client.request<GitLogResult>({ type: "git.log", cwd: gitCwd, ...ex, limit: 1 }).then((l) => live && l.log?.branches && setBranches(l.log.branches), () => {});
       },
     );
     return () => void (live = false);
   }, [client, gitCwd, known, effective, refChoice, reload, view.state, key, hidden]);
-  const gitDiff = gd.mode === effective ? gd.diff : undefined;
-  const gitError = gitMode && gd.mode === effective ? gd.error : undefined;
-  const gitLoading = gitMode && gd.mode !== effective;
+  const gdNow = gd.mode === effective && gd.repo === gitCwd;
+  const gitDiff = gdNow ? gd.diff : undefined;
+  const gitError = gitMode && gdNow ? gd.error : undefined;
+  const gitLoading = gitMode && !gdNow;
   const gitList = useMemo(() => (gitDiff ? gitRows(gitDiff, dir) : []), [gitDiff, dir]);
 
   // Sides of the git modes, read for the files on screen only: the before side from the base commit, the after side from the disk.
   type Side = { base?: string; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; image?: { before?: ImagePane; after?: ImagePane } };
   const [sides, setSides] = useState<Record<string, Side>>({});
   const asked = useRef(new Set<string>());
+  // Another repository: nothing of the previous one (branches, file sides, selection) stays.
+  const lastRepo = useRef(gitCwd);
+  useEffect(() => {
+    if (lastRepo.current === gitCwd) return;
+    lastRepo.current = gitCwd;
+    setBranches([]);
+    setSides({});
+    asked.current.clear();
+    setSelected(undefined);
+  }, [gitCwd]);
   const [scope, setScope] = useState<DiffScope>(loadDiffScope);
   const chooseScope = (s: DiffScope) => (setScope(s), saveDiffScope(s));
   const sessionShown = useMemo(() => (scope === "project" ? sessionRows.filter((r) => inDir(r.path, cwd)) : sessionRows), [sessionRows, scope, cwd]);
@@ -424,7 +442,7 @@ export function ChangesPanel({
       if (modal && !modal.contains(listRef.current)) return;
       const t = e.target;
       // Text fields keep their caret keys; widgets with their own arrow keys (tabs, the panel resizer, menus) keep theirs.
-      if (t instanceof HTMLElement && (t.isContentEditable || t.closest("input, textarea, select, [role=tab], [role=separator], [role=menu], [role=listbox], [role=radiogroup]"))) return;
+      if (t instanceof HTMLElement && (t.isContentEditable || t.closest("input, textarea, select, [role=tab], [role=separator], [role=menu], [role=listbox], [role=tree], [role=radiogroup]"))) return;
       e.preventDefault();
       cycleRef.current(e.key === "ArrowLeft" ? -1 : 1);
     };
@@ -523,6 +541,8 @@ export function ChangesPanel({
       </SelectContent>
     </Select>
   );
+  const selectorShown = gitMode && !!repos?.list && selectorVisible(repos.list);
+  const repoSelect = selectorShown && repos?.list && <RepoSelector list={repos.list} truncated={repos.truncated} selected={selectedRepo} onSelect={chooseRepo} />;
   const branchList = gitRef && !branches.includes(gitRef) ? [gitRef, ...branches] : branches;
   const branchSelect = effective === "branch" && (
     <Select value={gitRef ?? null} onValueChange={(v) => v && pick("branch", v)} disabled={!branchList.length}>
@@ -601,6 +621,7 @@ export function ChangesPanel({
               </Button>
             </div>
           </div>
+          {repoSelect && <div className="flex min-h-11 items-center border-t px-3" data-testid="repo-row">{repoSelect}</div>}
           {branchSelect && <div className="flex min-h-11 items-center border-t px-3" data-testid="branch-row">{branchSelect}</div>}
           {(rows.length > 0 || scopeGroup) && (
             <div className="flex min-h-11 items-center gap-2 border-t px-3">
@@ -613,6 +634,7 @@ export function ChangesPanel({
       ) : (
         <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-1">
           {modeSelect}
+          {repoSelect}
           {branchSelect}
           {counts}
           <div className="ml-auto flex items-center gap-1" data-testid="changes-actions">
