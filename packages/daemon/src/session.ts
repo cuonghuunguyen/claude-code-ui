@@ -51,6 +51,7 @@ const REJECTED = "The user doesn't want to proceed with this tool use. The tool 
 const SETTLE_READS = 5;
 // Never the user's words: coordinator text is not user intent (docs/spec.md "Permission tiers").
 const COORDINATOR_DENIED = "The coordinator session denied this tool use; it was not run. Its reason:\n";
+type PermissionCard = { input: Record<string, unknown>; title?: string; onAllow?: () => void };
 type PermissionPart = Extract<Part, { type: "permission_request" }>;
 type QuestionPart = Extract<Part, { type: "question" }>;
 type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string; updatedInput?: Record<string, unknown> };
@@ -100,7 +101,7 @@ type SessionOpts = Partial<SessionSettings> & {
   tier?: typeof tierAsync;
   /** Whether the session is a worker (linked to a coordinator): its CLI runs with the shell cwd pinned, which lets read-only git be `low` (risk-tier.ts). */
   worker?: (id: string) => boolean;
-  permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => { input: Record<string, unknown>; title?: string; onAllow?: () => void } | undefined;
+  permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => PermissionCard | Promise<PermissionCard | undefined> | undefined;
 };
 
 export type Transcript = {
@@ -821,7 +822,7 @@ export class Session {
   }
 
   /** Rules already saved never reach this callback. No timeout: the promise waits for respond() or the SDK's abort. */
-  private readonly canUseTool: CanUseTool = (tool, input, opts) => {
+  private readonly canUseTool: CanUseTool = async (tool, input, opts) => {
     const { signal, toolUseID, title: sdkTitle, mcpServer, blockedPath, defaultToNo } = opts;
     let suggestions = opts.suggestions ?? [];
     // Forwarded by sdk.mjs (0.3.285) but not declared in its CanUseTool type.
@@ -829,7 +830,10 @@ export class Session {
     const policy = this.opts.toolPolicy?.(tool, mcpServer);
     if (policy === "allow") return Promise.resolve({ behavior: "allow", updatedInput: input });
     if (policy === "no_rules") suggestions = [];
-    const card = this.opts.permissionCard?.(this.id, tool, input, mcpServer);
+    const made = this.opts.permissionCard?.(this.id, tool, input, mcpServer);
+    const card = made instanceof Promise ? await made : made;
+    // The SDK may abort while the card's git read runs.
+    if (made instanceof Promise && signal.aborted) return { behavior: "deny", message: "Request cancelled" };
     const title = card?.title ?? sdkTitle;
     return new Promise((resolve) => {
       const requestId = randomUUID();

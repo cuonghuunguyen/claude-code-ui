@@ -42,7 +42,9 @@ function setup(links = createSessionSettings()) {
       return undefined;
     },
     allowed: (p) => p,
-    isProject: () => true,
+    projects: () => ["/repo"],
+    worktrees: async () => undefined,
+    removing: () => false,
     createWorktree: (repo, opt) =>
       new Promise((resolve) => {
         worktreeGate = () => {
@@ -200,7 +202,7 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     o.mcpServers("C");
     const sdk = { name: "orchestration", source: "sdk" };
     const input = { name: "cw", cwd: "/", prompt: "p", mode: "acceptEdits" };
-    const card = o.permissionCard("C", "mcp__orchestration__worker_start", input, sdk)!;
+    const card = (await o.permissionCard("C", "mcp__orchestration__worker_start", input, sdk))!;
     o.handOver("C", "H");
     card.onAllow!();
     const c = await mcp(o.mcpServers("H"));
@@ -252,7 +254,7 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     const cs = await mcp(o.mcpServers("C"));
     const sdk = { name: "orchestration", source: "sdk" };
     const input = { name: "own", cwd: "/", prompt: "p", mode: "acceptEdits" };
-    const card = o.permissionCard("C", "mcp__orchestration__worker_start", input, sdk)!;
+    const card = (await o.permissionCard("C", "mcp__orchestration__worker_start", input, sdk))!;
     card.onAllow!();
     const r = (await cs.callTool({ name: "worker_start", arguments: input })) as any;
     expect(r.isError).toBeFalsy();
