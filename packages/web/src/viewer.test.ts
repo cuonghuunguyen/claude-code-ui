@@ -1,7 +1,8 @@
-import type { Part } from "@claude-ui/protocol";
+import { readFileSync } from "node:fs";
+import { createAdapter, type Part } from "@claude-ui/protocol";
 import { expect, it } from "vitest";
 import { applyEvent, emptySession, type ToolCall } from "./store.ts";
-import { cardTarget, isFileTarget, latestPlan } from "./viewer.ts";
+import { cardTarget, isFileTarget, latestPlan, latestPlanCall, planWaiting } from "./viewer.ts";
 
 const call = (tool: string, input: unknown, id = tool): ToolCall => ({ type: "tool_call", id, toolUseId: id, tool, input, status: "done" });
 const view = (parts: Part[]) => parts.reduce((s, part, i) => applyEvent(s, { type: "event", sessionId: "s1", seq: i + 1, part }), emptySession());
@@ -38,3 +39,55 @@ it("isFileTarget: only a file target opens the file dialog; diff, plan and chang
   expect(isFileTarget({ kind: "changes" })).toBe(false);
   expect(isFileTarget(cardTarget(call("Edit", { file_path: "/w/a.ts", old_string: "a", new_string: "b" }))!)).toBe(false);
 });
+
+it("latestPlanCall returns the newest plan call from aux when the page has none", () => {
+  const v = view([call("Bash", { command: "ls" })]);
+  expect(latestPlanCall(v)).toBeUndefined();
+  const aux = { ...v, aux: [{ part: call("ExitPlanMode", { plan: "from aux" }, "p"), pos: 1 }] };
+  expect(latestPlanCall(aux)?.id).toBe("p");
+  expect(latestPlan(aux)).toBe("from aux");
+  expect(latestPlanCall(view([call("ExitPlanMode", { plan: "old" }, "a"), call("ExitPlanMode", { plan: "new" }, "b")]))?.id).toBe("b");
+});
+
+it("planWaiting is true only for an unsettled ExitPlanMode permission request", () => {
+  const perm = (tool: string, settled: boolean): Part => ({ type: "permission_request", id: `perm-${tool}-${settled}`, requestId: "r", toolUseId: "t", tool, input: {}, settled }) as Part;
+  expect(planWaiting(view([perm("ExitPlanMode", false)]))).toBe(true);
+  expect(planWaiting(view([perm("ExitPlanMode", true)]))).toBe(false);
+  expect(planWaiting(view([perm("Bash", false)]))).toBe(false);
+  expect(planWaiting(view([]))).toBe(false);
+});
+
+
+{
+  const recorded = () => {
+    const adapter = createAdapter();
+    const lines = readFileSync(new URL("../../protocol/test/fixtures/plan-file-exit.jsonl", import.meta.url), "utf8").trim().split("\n");
+    return lines.flatMap((l) => adapter.convert(JSON.parse(l) as never));
+  };
+  it("latestPlan reads the plan file the model wrote when ExitPlanMode came with an empty input (recorded Claude Code 2.1.294 shape)", () => {
+    const v = view(recorded());
+    expect(latestPlan(v)).toContain("1. Create hello.txt with the content hi.");
+    expect(latestPlanCall(v)?.tool).toBe("ExitPlanMode");
+    expect(planWaiting(v)).toBe(false);
+  });
+  it("latestPlan falls back to the approval request's plan when the call has none and no plan file was written", () => {
+    const parts = recorded().filter((p) => !(p.type === "tool_call" && p.tool === "Write"));
+    const req = { type: "permission_request", id: "perm", requestId: "r", toolUseId: "toolu_plan_exit", tool: "ExitPlanMode", input: { plan: "# From the request" }, suggestions: [], settled: false } as Part;
+    expect(latestPlan(view(parts))).toBeUndefined();
+    expect(latestPlan(view([...parts, req]))).toBe("# From the request");
+  });
+  it("latestPlan applies the later Edit of the plan file and honours the session's plan folders (recorded Write + Edit shape)", () => {
+    const adapter = createAdapter();
+    const lines = readFileSync(new URL("../../protocol/test/fixtures/plan-file-revised.jsonl", import.meta.url), "utf8").trim().split("\n");
+    const parts = lines.flatMap((l) => adapter.convert(JSON.parse(l) as never));
+    const v = view(parts);
+    expect(latestPlan(v)).toContain("3. Delete nothing.");
+    expect(latestPlan(v)).toContain("# Revised plan");
+    expect(latestPlan({ ...v, planDirs: ["/cfg/plans"] })).toBeUndefined();
+    expect(latestPlan({ ...v, planDirs: ["/home/user/.claude/plans"] })).toContain("# Revised plan");
+  });
+  it("latestPlan reads the display plan of the approval request", () => {
+    const req = { type: "permission_request", id: "perm", requestId: "r", toolUseId: "t", tool: "ExitPlanMode", input: {}, plan: "# Display plan", suggestions: [], settled: false } as Part;
+    expect(latestPlan(view([req]))).toBe("# Display plan");
+  });
+}

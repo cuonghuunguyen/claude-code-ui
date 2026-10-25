@@ -100,7 +100,7 @@ import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext } from "./file-links.tsx";
-import { ViewerContext, isFileTarget, latestPlan, useOpenViewer, type ViewerState } from "./viewer.ts";
+import { PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
@@ -139,10 +139,12 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
-import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
-import { type DockArea, type DockSide, PANE_IDS, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, useLayout, useMinWidth, withPane } from "./layout.ts";
+import { type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, canMain, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, useLayout, useMinWidth, withPane } from "./layout.ts";
+import { PlanPane } from "./plan-pane.tsx";
+import { isPaneRef, kindOf, ownerOf, paneTabTitle, parseRef, refOf } from "./pane-ref.ts";
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
@@ -196,7 +198,11 @@ const loadNumber = (key: string, fallback: number) => {
 /** `r` without the entry of `id`. */
 const without = <T,>(r: Record<string, T>, id: string) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== id));
 
-const hashId = () => (hashTab() === NEW_TAB || hashTab() === FOCUS_TAB ? undefined : hashTab());
+/** The session in the URL hash; none for the new-session tab, the Focus page and a pane tab (`plan:<session>`). */
+const hashId = () => {
+  const t = hashTab();
+  return t && t !== NEW_TAB && t !== FOCUS_TAB && !isPaneRef(t) ? t : undefined;
+};
 
 const pageFocused = () => document.visibilityState === "visible" && document.hasFocus();
 
@@ -267,6 +273,9 @@ export function App() {
   useEffect(() => setOptimistic((o) => pruneEchoed(o, views)), [views]);
   // Active tab: a session id or NEW_TAB.
   const [activeId, setActiveId] = useState(hashTab);
+  // GH-395 R8: a pane tab (`plan:<session>`) makes its owner the current session: docks, per-session pane history and the sidebar follow it.
+  const paneRef = parseRef(activeId);
+  const currentId = paneRef ? paneRef.owner : activeId;
   // A tab switch or route change mid-flight: the ghost must not fly over another view. Not the first prompt's own hand-off (its session already holds the pending prompt).
   useEffect(() => {
     if (!optimistic[activeId ?? ""]?.length) cancelFlight();
@@ -319,7 +328,7 @@ export function App() {
   const toastRef = useRef(toast);
   toastRef.current = toast;
   /** The Undo toast of the last cleanup close: a following close while it shows joins it (one toast, Undo restores every set). */
-  const undoToast = useRef<{ key: number; parts: { entries: { id: string; at: number }[]; wasActive?: string }[] }>(undefined);
+  const undoToast = useRef<{ key: number; parts: { entries: { id: string; at: number }[]; wasActive?: string; onUndo?: () => void }[] }>(undefined);
   // Every toast is its own element (a key): a closing one cannot clear the next, and the same text restarts the timer.
   const setToast = useCallback((t: string | { message: string; action: { label: string; onClick: () => void } } | undefined) => setToastState(t === undefined ? undefined : { key: ++toastKey.current, ...(typeof t === "string" ? { message: t } : t) }), []);
   const closeToast = useCallback(() => setToast(undefined), [setToast]);
@@ -394,25 +403,24 @@ export function App() {
   // GH-355: newest first per session tab. The narrow pane is the first entry; each dock area shows its newest pane.
   // GH-381: every selection is also remembered per browser (layout.ts PaneTabs), so a reload reopens on it.
   const [paneHist, setPaneHist] = useState<Record<string, Pane[]>>({});
-  const hist = (activeId && paneHist[activeId]) || [];
+  const hist = (currentId && paneHist[currentId]) || [];
   const histPane: Pane = hist[0] ?? "session";
   // The remembered tabs: read once at load, then updated by this page's own picks only (another browser tab's picks are not followed).
   const [paneTabs, setPaneTabs] = useState(loadPaneTabs);
-  const resetPanes = () => (resetLayout(), setPaneTabs({}));
   const setPane = (p: Pane) => {
-    if (!activeId) return;
+    if (!currentId) return;
     rememberPane(p);
     setPaneTabs((t) => withPane(t, p, loadLayout()));
-    setPaneHist((x) => ({ ...x, [activeId]: [p, ...(x[activeId] ?? []).filter((q) => q !== p)] }));
+    setPaneHist((x) => ({ ...x, [currentId]: [p, ...(x[currentId] ?? []).filter((q) => q !== p)] }));
   };
   // GH-381: after a reload the first shown session tab reopens on the last selected pane (narrow: the pane switcher).
   const [restoreTo] = useState(() => loadPaneTabs().narrow);
   const paneRestored = useRef(false);
   useLayoutEffect(() => {
-    if (paneRestored.current || !isSession(activeId)) return;
+    if (paneRestored.current || !isSession(currentId)) return;
     paneRestored.current = true;
-    if (restoreTo && restoreTo !== "session") setPaneHist((x) => (x[activeId] ? x : { ...x, [activeId]: [restoreTo] }));
-  }, [activeId]);
+    if (restoreTo && restoreTo !== "session") setPaneHist((x) => (x[currentId] ? x : { ...x, [currentId]: [restoreTo] }));
+  }, [currentId]);
   const [panelWidth, setPanelWidth] = useState(480);
   // Wide screens: the side panel can be hidden (Toggle side panel).
   const [panel, setPanel] = useState(() => !loadFlag(PANEL_HIDDEN_KEY));
@@ -592,7 +600,7 @@ export function App() {
       if (permissionModes) setNewModes(permissionModes);
       if (restored.current) {
         // The page-load hash session is left out: its project may be removed (not listed); its own subscribe forgets it when unknown.
-        for (const id of staleTabs(restored.current.filter((id) => id !== hashId()), new Set(sessions.map((s) => s.id)))) forget(id);
+        for (const id of new Set(staleTabs(restored.current.filter((id) => id !== hashId()), new Set(sessions.map((s) => s.id))).map(ownerOf))) forget(id);
         restored.current = undefined;
       }
       // Live sessions are followed so their unread markers update without opening them (background: no hold on the CLI).
@@ -648,7 +656,9 @@ export function App() {
       if ((e as Error).message !== "disconnected") {
         setError((e as Error).message);
         setFailedTabs((f) => (f.has(sessionId) ? f : new Set(f).add(sessionId)));
-      } // else resubscribed on reconnect
+        // Asked again by the next follow (a reconnect, another pane tab) instead of waiting on "Loading plan…" for good.
+        if (!viewsRef.current[sessionId]) requested.current.delete(sessionId);
+      } else if (!viewsRef.current[sessionId]) requested.current.delete(sessionId); // a dropped request: the next follow asks again; a view is resubscribed on reconnect
     } finally {
       resubscribing.current.delete(sessionId);
     }
@@ -783,18 +793,27 @@ export function App() {
     drop(sessionId, false);
     setOptimistic((o) => without(o, sessionId));
     setList((l) => l.filter((s) => s.id !== sessionId));
-    setTabs((t) => t.filter((id) => id !== sessionId));
+    // Its pane tabs go with it.
+    setTabs((t) => t.filter((id) => ownerOf(id) !== sessionId));
     setHeirOf((h) => without(h, sessionId));
     delete clearQueue.current[sessionId];
     setTabKeys((k) => without(k, sessionId));
-    if (hashId() === sessionId) {
+    const h = hashTab();
+    if (h && ownerOf(h) === sessionId) {
       // Deleted like a closed tab: its neighbour becomes active.
-      const next = deleted ? closeTab(tabsRef.current, sessionId, sessionId).active : undefined;
+      const next = deleted ? closeMany(tabsRef.current, tabsRef.current.filter((t) => ownerOf(t) === sessionId), h).active : undefined;
       if (next) return open(next);
       setActiveId(undefined);
       history.replaceState(null, "", location.pathname + location.search);
       if (!deleted) setError("That session no longer exists in the daemon.");
     }
+  }
+
+  /** Subscribes the owner of a pane tab when no view exists: in the background (no CLI hold) unless a session tab of it is open. Once per owner while requested. */
+  function followOwner(o: string) {
+    if (viewsRef.current[o] || requested.current.has(o)) return;
+    requested.current.add(o);
+    void subscribe(o, false, false, !isShown(o));
   }
 
   /** Opens or focuses a tab; `undefined` shows no tab. Only a session tab goes into the URL hash. */
@@ -818,6 +837,8 @@ export function App() {
     }
     setTabs((t) => openTab(t, id));
     if (!keepHash) history.replaceState(null, "", tabHash(id));
+    // A pane tab shows from its owner's view: follow the owner (no hold unless a session tab holds it).
+    if (isPaneRef(id)) return followOwner(ownerOf(id));
     // A page-load link subscribed without adding its project: the first explicit open of that session adds it, view or not.
     // A session the list only follows in the background is held now (a tab shows it).
     const add = !viewsRef.current[id] || !listRef.current.some((s) => s.id === id);
@@ -897,13 +918,13 @@ export function App() {
     const sp = splitRef.current;
     const next = sp && splitOnRef.current && id === activeRef.current ? nextAfterClose(tabsRef.current, id, sp) : r.active;
     setTabs(r.tabs);
-    release(id);
+    release(id, r.tabs);
     activate(next);
   }
 
   /** A close from the phone switcher (swipe or Delete on a row): the toast offers Undo for that exact tab; the New session tab has nothing to reopen. */
   function closeFromList(id: string) {
-    const title = listRef.current.find((s) => s.id === id)?.title || titles[id] || "Untitled";
+    const title = tabLabel(id);
     const wasActive = activeRef.current === id;
     close(id);
     if (id === NEW_TAB) return;
@@ -912,25 +933,34 @@ export function App() {
       action: {
         label: "Undo",
         onClick: () => {
-          if (!listRef.current.some((s) => s.id === id)) return;
+          if (!existsTab(id)) return;
           const r = restoreClosed(closedRef.current, tabsRef.current, id);
           setClosedTabs(r.stack);
           setTabs(r.tabs);
           // Back in place; it becomes the shown tab only if it was the one shown when swiped away.
           if (wasActive) open(id);
           // A tab that was not shown is held again like any open tab (the close left it followed in the background, or dropped).
-          else void subscribe(id); // no `held` check: the close's background subscribe may still be in flight and would win
+          else if (!isPaneRef(id)) void subscribe(id); // no `held` check: the close's background subscribe may still be in flight and would win
         },
       },
     });
   }
 
   /** What closing a session tab leaves behind: its place on the closed stack, and its subscription (live: followed in the background; else dropped). */
-  function release(id: string) {
+  // `left`: the tabs that stay open after this close (the ref is not updated before the commit).
+  function release(id: string, left: string[] = tabsRef.current.filter((t) => t !== id)) {
     if (id === NEW_TAB) return;
     setClosedTabs((c) => pushClosed(c, id, tabsRef.current.indexOf(id)));
-    const state = listRef.current.find((s) => s.id === id)?.state;
-    state && state !== "closed" && state !== "error" ? void subscribe(id, false, false, true) : drop(id);
+    const o = ownerOf(id);
+    const state = listRef.current.find((s) => s.id === o)?.state;
+    const live = !!state && state !== "closed" && state !== "error";
+    if (isPaneRef(id)) {
+      // A live owner stays followed by the list; a tab of the owner (or another pane tab) keeps its view.
+      if (!live && !left.some((t) => ownerOf(t) === o)) drop(o);
+      return;
+    }
+    // A pane tab of this session stays: its view keeps following in the background.
+    live || left.some((t) => isPaneRef(t) && ownerOf(t) === id) ? void subscribe(id, false, false, true) : drop(id);
   }
 
   /** The tab that took over after a close; none: the hash goes. */
@@ -944,7 +974,8 @@ export function App() {
   function closeGroup(ids: string[]) {
     const r = closeMany(tabsRef.current, ids, activeRef.current);
     setTabs(r.tabs);
-    for (const id of tabsRef.current.filter((t) => ids.includes(t))) release(id);
+    const left = tabsRef.current.filter((t) => !ids.includes(t));
+    for (const id of tabsRef.current.filter((t) => ids.includes(t))) release(id, left);
     activate(r.active);
   }
 
@@ -957,19 +988,19 @@ export function App() {
   }
 
   /** Close others / to the right / all / other groups (GH-359): no question (the sessions keep running), one toast with Undo for all of them. */
-  function closeSeveral(ids: string[], message?: (n: number, title: string | undefined) => string) {
+  function closeSeveral(ids: string[], message?: (n: number, title: string | undefined) => string, onUndo?: () => void) {
     // Before closeGroup: release() reads the old tab list for each index.
     const now = tabsRef.current;
     const entries = ids.filter((id) => now.includes(id)).map((id) => ({ id, at: now.indexOf(id) }));
     if (!entries.length) return;
     const wasActive = activeRef.current;
     const one = entries.length === 1 ? entries[0]!.id : undefined;
-    const title = one && (one === NEW_TAB ? "New session" : listRef.current.find((s) => s.id === one)?.title || titles[one] || "Untitled");
+    const title = one && (one === NEW_TAB ? "New session" : tabLabel(one));
     closeGroup(entries.map((e) => e.id));
     // A toast still showing with its Undo (an earlier cleanup close) is not replaced: one toast, Undo restores both sets.
     const prev = undoToast.current;
     const joined = prev && toastRef.current?.key === prev.key && toastRef.current.action ? prev.parts : [];
-    const parts = [...joined, { entries, wasActive }];
+    const parts = [...joined, { entries, wasActive, onUndo }];
     const total = parts.reduce((n, p) => n + p.entries.length, 0);
     setToast({
       message: joined.length ? `Closed ${total} tabs` : message ? message(entries.length, title) : one ? `Closed ${title}` : `Closed ${entries.length} tabs`,
@@ -979,12 +1010,14 @@ export function App() {
           // A cleanup during the toast's exit must not join a set that is back already.
           if (undoToast.current?.parts === parts) undoToast.current = undefined;
           // Latest set first, each on the list the previous step produced.
+          // A layout change (Plan back in the main area) first, so the restored pane tabs find their home.
+          for (const p of parts) p.onUndo?.();
           let stack = closedRef.current;
           let tabs = tabsRef.current;
           const restored: string[] = [];
           let shown: string | undefined;
           for (const p of [...parts].reverse()) {
-            const r = restoreMany(stack, tabs, p.entries, (id) => id === NEW_TAB || listRef.current.some((s) => s.id === id));
+            const r = restoreMany(stack, tabs, p.entries, existsTab);
             stack = r.stack;
             tabs = r.tabs;
             restored.push(...r.restored);
@@ -992,7 +1025,7 @@ export function App() {
           }
           setClosedTabs(stack);
           setTabs(tabs);
-          for (const id of restored) if (id !== NEW_TAB && id !== shown) void subscribe(id);
+          for (const id of restored) if (id !== NEW_TAB && !isPaneRef(id) && id !== shown) void subscribe(id);
           // Undo counts as use: the restored tabs must not be auto-closed again at once.
           setUsed((u) => stampUsed(u, restored, Date.now()));
           // The tab that was shown comes back shown; the others are held again like any open tab.
@@ -1013,6 +1046,11 @@ export function App() {
     const shownAt = (id: string) => (shownActivityRef.current[id] ?? shown[id]) === undefined ? undefined : Math.max(shownActivityRef.current[id] ?? 0, shown[id] ?? 0);
     return tabsRef.current.map((id) => {
       if (id === NEW_TAB) return { id, unread: false, draft: drafts.has(NEW_TAB_DRAFT), listed: true, archived: false, worker: false, transcript: false, busy: false, lastUsed: usedAt(id) };
+      // A pane tab: no state of its own, so "idle" and "finished" never close it; an archived or deleted owner and the unused rules do.
+      if (isPaneRef(id)) {
+        const owner = listRef.current.find((s) => s.id === ownerOf(id));
+        return { id, unread: false, draft: false, listed: !!owner, archived: !!owner?.archived, worker: false, transcript: false, busy: false, loading: !listFresh.current, lastUsed: usedAt(id) };
+      }
       const item = listRef.current.find((s) => s.id === id);
       const v = viewsRef.current[id];
       // A view not replayed yet reads idle: the list state (running, needs input) still protects the tab.
@@ -1051,6 +1089,8 @@ export function App() {
     else if (c === "copyCwd") copyText(sessionOf(id)?.cwd, "cwd path");
     else if (c === "reveal") revealTab(id);
     else if (c === "splitRight" || c === "splitDown") splitTab(id, c === "splitRight" ? "row" : "col");
+    else if (c === "moveSide" || c === "moveBottom") move(kindOf(id)!, c === "moveSide" ? "side" : "bottom");
+    else if (c === "goToSession") (open(ownerOf(id)), focusShownPrompt(ownerOf(id)));
   }
 
   /** Pin or unpin a session tab: it moves to the end of its group's pinned block, or right after the block. */
@@ -1159,7 +1199,7 @@ export function App() {
   // The daemon suppresses pushes for the session a focused, visible tab shows; resent after every reconnect.
   useEffect(() => {
     if (status !== "connected") return;
-    const sessionId = focused && activeId !== NEW_TAB && activeId !== FOCUS_TAB ? activeId : undefined;
+    const sessionId = focused && isSession(activeId) ? activeId : undefined;
     // One event, one channel: what this page shows as in-app cards needs no push (the Focus page covers every session too).
     const covered = coveredKey === undefined ? undefined : coveredKey.split(",").filter(Boolean);
     client.current!.request({ type: "push.focus", ...(sessionId && { sessionId }), ...(covered && { covered }) }).catch(() => {});
@@ -1339,7 +1379,7 @@ export function App() {
 
   /** The new-session tab, starting in `cwd`: by default the active session's project, else the newest project. */
   function newSession(cwd?: string) {
-    setDraftCwd(cwd ?? (activeId && activeId !== NEW_TAB ? sessionOf(activeId)?.cwd : undefined) ?? draftCwd);
+    setDraftCwd(cwd ?? (activeId && activeId !== NEW_TAB ? sessionOf(ownerOf(activeId))?.cwd : undefined) ?? draftCwd);
     // A maximized bottom panel would hide the draft.
     setBottomMax(false);
     open(NEW_TAB);
@@ -1356,8 +1396,8 @@ export function App() {
 
   function closeTabs(gone: Set<string>) {
     if (!gone.size) return;
-    setTabs((t) => t.filter((id) => !gone.has(id)));
-    if (gone.has(hashId() ?? "")) open(undefined), history.replaceState(null, "", location.pathname + location.search);
+    setTabs((t) => t.filter((id) => !gone.has(ownerOf(id))));
+    if (gone.has(ownerOf(hashTab() ?? ""))) open(undefined), history.replaceState(null, "", location.pathname + location.search);
   }
 
   /** Removes the project from the list (files and transcripts stay) and closes its session tabs; with it the other added projects of its repository (one sidebar group). */
@@ -1555,11 +1595,30 @@ export function App() {
   const openTabIds = useMemo(() => new Set(tabs), [tabs]);
   const isCoordinator = (id: string) => !!list.find((s) => s.id === id)?.coordinator;
   const sessionOf = (id: string): SessionInfo | undefined => infos[id] ?? list.find((s) => s.id === id);
-  const groupOfTab = (id: string) => (id === NEW_TAB ? "" : tabGroup(sessionOf(id)?.cwd, grouping, worktrees).key);
+  const groupOfTab = (id: string) => (id === NEW_TAB ? "" : tabGroup(sessionOf(ownerOf(id))?.cwd, grouping, worktrees).key);
   // The stored list stays grouped by the Tab grouping setting (also once the session cwds arrive), so close, next/previous tab and moves all use the order the strip draws.
   // Regrouped only once every tab's key is final: on partial keys the unknown tabs gather in one group and the damaged order is stored (GH-196).
   const keysFinal = tabKeysFinal(tabs, listLoaded, (id) => !!sessionOf(id), failedTabs);
   useGroupedTabs(tabs, setTabs, groupOfTab, keysFinal, pinnedSet);
+  // Every owner of an open pane tab is followed (reload, a closed owner, Undo, Reopen); `requested` keeps it to one subscribe.
+  const ownersKey = [...new Set(tabs.filter(isPaneRef).map(ownerOf))].sort().join();
+  useEffect(() => {
+    if (status !== "connected" || !ownersKey) return;
+    for (const o of ownersKey.split(",")) followOwner(o);
+  }, [ownersKey, status === "connected"]);
+  // A plan tab whose kind has no main-area home (another browser tab moved it, or an older stored value) closes silently.
+  useEffect(() => {
+    const stray = tabs.filter((t) => {
+      const k = kindOf(t);
+      return !!k && areaOf(loadLayout(), k) !== "main";
+    });
+    if (stray.length) closeGroup(stray);
+  }, [layout, tabs]);
+  const ownerTitle = (o: string) => list.find((s) => s.id === o)?.title || titles[o] || "Untitled";
+  /** What a tab is called in toasts. */
+  const tabLabel = (id: string) => (isPaneRef(id) ? paneTabTitle(kindOf(id)!, ownerTitle(ownerOf(id))) : ownerTitle(id));
+  /** A closed or Undo-restored tab can come back: its session is listed, and a pane tab's kind still has the main area as its home. */
+  const existsTab = (id: string) => id === NEW_TAB || (listRef.current.some((s) => s.id === ownerOf(id)) && (!kindOf(id) || areaOf(loadLayout(), kindOf(id) as PaneId) === "main"));
   // Auto-close idle tabs (GH-378): only while the page shows, connected, with the list and group keys final; the 60 s tick is cheap, autoCloseDue lets one run through per 15 minutes.
   const autoRan = useRef<number>(undefined);
   // Reassigned each render: the check reads the current tabs, titles and list, the effect below only sets the timer.
@@ -1578,13 +1637,15 @@ export function App() {
     document.addEventListener("visibilitychange", run);
     return () => (clearInterval(t), document.removeEventListener("visibilitychange", run));
   }, [autoClose, status, listLoaded, keysFinal]);
-  const active = activeId && activeId !== NEW_TAB ? sessionOf(activeId) : undefined;
+  const active = currentId && currentId !== NEW_TAB ? sessionOf(currentId) : undefined;
   // GH-133: a just-created session shows (with its pending prompt) before its subscribe reply.
   // A tab that followed a /clear shows the new session at once too: an empty timeline carrying the old one's settings.
   const heirViews = useMemo(() => Object.fromEntries(Object.entries(heirOf).map(([to, from]) => [to, heirView(views[from])])), [heirOf, views]);
   const viewOf = (id: string) => views[id] ?? heirViews[id] ?? (optimistic[id]?.length ? EMPTY_VIEW : undefined);
-  const view = activeId ? viewOf(activeId) : undefined;
+  const view = currentId ? viewOf(currentId) : undefined;
   const shown = active && view ? active : undefined;
+  /** Something fills the main area: a session, or a pane tab (even while its owner loads). */
+  const mainShown = !!shown || !!paneRef;
   /** Both splits render (a loading session shows alone until its view is there). */
   // Drag a tab onto the session area (GH-356): an edge splits there, the middle of a split shows the tab in it.
   const splitDrop = useSplitDrop({
@@ -1652,6 +1713,7 @@ export function App() {
       () => editsAsked.current.delete(key),
     );
   }, [panelTarget?.sessionId, panelView?.older?.before, panelView?.auxEdits, panelView?.logEpoch]);
+  const panelPlan = useMemo(() => (panelView ? latestPlan(panelView) : undefined), [panelView?.parts, panelView?.aux]);
   const changedPaths = useMemo(() => (panelView ? sessionChanges(panelView).map((c) => c.path) : []), [panelView?.parts, panelView?.aux]);
   // The pane tab counts the files the changes panel lists (a file created and deleted again is not listed).
   const [listedChanges, setListedChanges] = useState<{ id: string; n: number }>();
@@ -1700,7 +1762,8 @@ export function App() {
     activeOpen.current = true;
   };
   // A restored narrow Terminal pane without shells shows the session.
-  const pane: Pane = !lg && histPane === "terminal" && !termAvail ? "session" : histPane;
+  const planListed = !!panelPlan && areaOf(layout, "plan") !== "main";
+  const pane: Pane = (!lg && histPane === "terminal" && !termAvail) || (histPane === "plan" && !planListed) ? "session" : histPane;
   // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
   const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
   const { repos, truncated: reposTruncated } = useRepos(client.current, panelCwd, { connected: status === "connected", openFiles, seq: reposSeq, fresh: reposFresh });
@@ -1728,23 +1791,25 @@ export function App() {
   }, [panelCwd, status, knownGit, fallback]);
   // The Graph panel stays mounted (hidden) after its first visit, so coming back shows the loaded list at once.
   const [graphCwd, setGraphCwd] = useState<string>();
-  const available = (p: PaneId) => p !== "graph" || isGit;
+  // The Plan pane lists only while the current session has a plan and its home is a dock.
+  const available = (p: PaneId) => (p === "plan" ? planListed : p !== "graph" || isGit);
   /** Narrow: the side column holds every pane. */
-  const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? PANE_IDS : []).filter(available);
+  const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? PANE_IDS.filter((p) => areaOf(layout, p) !== "main") : []).filter(available);
   /** The panes of the area that can be selected: the Terminal tab stays listed, but selects only once the terminal is available. */
   const selectable = (a: DockArea) => areaPanes(a).filter((p) => p !== "terminal" || termAvail);
   const activeOf = (a: DockArea) => activePane(selectable(a), hist, paneTabs[a]);
   const sideShown = lg && panel && selectable("side").length > 0;
   const bottomShown = lg && bottomOpen && selectable("bottom").length > 0;
   /** The pane shows: wide = its area shows it; narrow = it is the pane. */
-  const shows = (p: PaneId) => (lg ? (areaOf(layout, p) === "side" ? sideShown : bottomShown) && activeOf(areaOf(layout, p)) === p : p === "files" ? pane === "files" || (pane === "graph" && !isGit) : pane === p && available(p));
+  const shows = (p: PaneId) => (lg ? areaOf(layout, p) !== "main" && (areaOf(layout, p) === "side" ? sideShown : bottomShown) && activeOf(areaOf(layout, p) as DockArea) === p : p === "files" ? pane === "files" || (pane === "graph" && !isGit) : pane === p && available(p));
   // Bottom panel only, this page only: it takes the whole work area.
   const [bottomMax, setBottomMax] = useState(false);
   /** Shown and in sight: a maximized bottom panel hides the side panel, so its panes are not seen. */
   const inSight = (p: PaneId) => shows(p) && !(bottomMax && lg && areaOf(layout, p) === "side");
   const sideEmpty = lg && areaPanes("side").length === 0;
   // The terminal stays mounted (hidden) while another pane of its open area is selected, so switching tabs keeps it as it was.
-  const termAreaOpen = lg && (areaOf(layout, "terminal") === "side" ? sideShown : bottomShown);
+  const termDock = areaOf(layout, "terminal") as DockArea; // never main in this slice
+  const termAreaOpen = lg && (termDock === "side" ? sideShown : bottomShown);
   // `termKeep`: it has shown and its area has stayed open since; it resets when the area hides, so hiding unmounts it.
   const termShows = shows("terminal");
   const [termKeep, setTermKeep] = useState(false);
@@ -1764,13 +1829,30 @@ export function App() {
     setPane(p);
     if (!lg || p === "session") return;
     // A maximized bottom panel hides everything else: a pane outside it needs the restore.
-    if (areaOf(layout, p) === "side") setBottomMax(false);
-    openArea(areaOf(layout, p));
+    const a = areaOf(layout, p);
+    if (a === "main") return void (p === "plan" && currentId && isSession(currentId) && openPaneTab(refOf({ kind: "plan", owner: currentId })));
+    if (a === "side") setBottomMax(false);
+    openArea(a);
   };
   // GH-355 drag and drop: the pane being dragged and the target it is over (Esc cancels a native drag: dragend without drop).
   const [drag, setDrag] = useState<PaneId>();
   const [dropAt, setDropAt] = useState<DropAt>();
-  const move = (p: PaneId, to: DockArea, before?: PaneId) => {
+  const kindToast = (p: PaneId) => (n: number) => `Closed ${n} ${PANE_LABEL[p]} ${n === 1 ? "tab" : "tabs"}`;
+  const move = (p: PaneId, to: Area, before?: PaneId) => {
+    if (to === "main") {
+      // The main area: a tab of the current session's plan (Changes never lives there).
+      if (!canMain(p)) return;
+      saveLayout(movePane(layout, p, "main"));
+      const owner = currentId && isSession(currentId) ? currentId : undefined;
+      if (owner && views[owner] && latestPlan(views[owner]!)) openPaneTab(refOf({ kind: "plan", owner }));
+      else (focusShownPrompt(), setToast("Plan moved to the main area. Its tab opens when the session has a plan."));
+      return;
+    }
+    if (areaOf(layout, p) === "main") {
+      // Back to a dock: its tabs close, one toast with Undo (the layout comes back first).
+      const prev = loadLayout();
+      closeSeveral(tabsRef.current.filter((t) => kindOf(t) === p), kindToast(p), () => saveLayout(prev));
+    }
     const n = movePane(layout, p, to, before);
     if (n !== layout) saveLayout(n);
     // A Terminal pane moved on purpose shows (its empty tab bar with +) even where the folder has no shells.
@@ -1781,6 +1863,14 @@ export function App() {
     setPane(p);
     focusTab.current = p;
     setMoving(true);
+  };
+  /** Reset layout: Plan returns to the side panel, its tabs close (Undo brings the layout and the tabs back). */
+  const resetPanes = () => {
+    const prev = loadLayout();
+    const refs = tabsRef.current.filter(isPaneRef);
+    resetLayout();
+    setPaneTabs({});
+    if (refs.length) closeSeveral(refs, kindToast("plan"), () => saveLayout(prev));
   };
   // A moved pane's DOM moves with it: focus its tab in the new area once rendered, once (the menu that moved it returns no focus).
   const focusTab = useRef<PaneId>(undefined);
@@ -1822,6 +1912,12 @@ export function App() {
   const selectPane = (p: Pane) => {
     if (p === "terminal") (askTerminal(), setTermFocusReq((n) => n + 1));
     setPane(p);
+  };
+  /** The narrow pane switcher: Plan with its home in the main area shows the plan tab; a plan tab is left by picking another pane. */
+  const switchPane = (p: Pane) => {
+    if (p === "plan" && areaOf(layout, "plan") === "main") return paneRef ? setPane("session") : showPlan();
+    if (p === "session" && paneRef) return open(paneRef.owner);
+    selectPane(p);
   };
   const hosts = usePaneHosts();
   useEffect(() => {
@@ -1865,6 +1961,44 @@ export function App() {
   const openViewer = useOpenViewer(shown, (v) => (isFileTarget(v.target) ? popFile(v.target.path, v.target.line, v.opener) : setViewer(v)));
   /** A path in assistant text (absolute, inside the session cwd): the Files tab opens it at the line. */
   const openFileLink = useCallback((path: string, line?: number) => popFile(path, line), []);
+  /** Plan pane / "Open in tab": reveals the Plan pane of the current session. */
+  const showPlan = (sid = currentId) => {
+    if (!sid || !isSession(sid)) return;
+    if (areaOf(loadLayout(), "plan") === "main") return openPaneTab(refOf({ kind: "plan", owner: sid }));
+    reveal("plan");
+  };
+  /** The tab of a pane ref takes the focus (its strip button; on a phone its body). */
+  const focusTabOf = (ref: string) => {
+    const focus = (frames: number) => {
+      const strip = document.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(ref)}"] [role="tab"]`);
+      const el = strip && strip.getClientRects().length > 0 ? strip : document.querySelector<HTMLElement>(`[data-pane-tab-body="${CSS.escape(ref)}"]`);
+      if (el && el.getClientRects().length > 0) el.focus();
+      else if (frames > 0) requestAnimationFrame(() => focus(frames - 1));
+    };
+    requestAnimationFrame(() => focus(60));
+  };
+  /** Opens (or focuses) a pane tab right of its owner's tab. */
+  const openPaneTab = (ref: string) => {
+    setTabs((t) => insertPaneTab(t, ref, groupOfTab));
+    open(ref);
+    focusTabOf(ref);
+  };
+  const showPlanRef = useRef(showPlan);
+  showPlanRef.current = showPlan;
+  const showPlanStable = useCallback(() => showPlanRef.current(), []);
+  /** "Go to request": the session of the plan, then the plan approval's popup button, else its first control (no answer by accident). */
+  const goToRequest = (sid: string) => {
+    open(sid);
+    showSession();
+    const focus = (frames: number) => {
+      const root = document.getElementById(`split-${sid}`) ?? document;
+      const panel = [...root.querySelectorAll<HTMLElement>('[data-testid="permission-panel"]')].find((e) => e.getClientRects().length > 0);
+      const target = panel?.querySelector<HTMLElement>('[data-testid="plan-open"]') ?? panel?.querySelector<HTMLElement>("button, input");
+      if (target) target.focus();
+      else if (frames > 0) requestAnimationFrame(() => focus(frames - 1));
+    };
+    requestAnimationFrame(() => focus(60));
+  };
   const latest = useMemo(() => (view ? latestPlan(view) : undefined), [view?.parts, view?.aux]);
   /** Toggle file tree: hides the tree when it shows; otherwise shows it with the Files tab (and the side panel on wide screens), like openInPanel. */
   const toggleFileTree = () => {
@@ -1949,20 +2083,21 @@ export function App() {
   const toggleTerminal = () => {
     if (!wide(1024)) return pane === "terminal" ? setPane("session") : (askTerminal(), setPane("terminal"));
     if (!inSight("terminal")) return (askTerminal(), shows("terminal") && setTermFocusReq((n) => n + 1), reveal("terminal"));
-    openArea(areaOf(layout, "terminal"), false);
+    openArea(termDock, false);
     focusShownPrompt();
   };
   /** Reopen closed tab (palette, tab menu): the newest closed session that still exists, back in its place. */
   const reopenClosed = () => {
-    const r = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs);
+    const r = popClosed(closedTabs, existsTab, tabs);
     setClosedTabs(r.rest);
     if (!r.tab) return;
     const { id, at } = r.tab;
     setTabs((t) => (t.includes(id) ? t : [...t.slice(0, at), id, ...t.slice(at)]));
     open(id);
-    focusShownPrompt(id);
+    if (isPaneRef(id)) focusTabOf(id);
+    else focusShownPrompt(id);
   };
-  const reopen = popClosed(closedTabs, (id) => list.some((x) => x.id === id), tabs).tab;
+  const reopen = popClosed(closedTabs, existsTab, tabs).tab;
   const commands = appCommands({
     newWorktree: canWorktree ? () => setCreatingWt(gitProject) : undefined,
     cleanUp: Object.values(worktrees).some((l) => l.some((w) => !w.main)) || list.some((x) => x.coordinatorId) ? () => setCleanup({ kind: "all" }) : undefined,
@@ -1977,14 +2112,14 @@ export function App() {
     sessions: list,
     session: draftShown
       ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: draftModes, running: false, prompts: [], draft: true }
-      : shown && {
+      : shown && !paneRef ? {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
       mode: view?.permissionMode ?? shown.permissionMode,
       modes: modesOf(shown.permissionModes, view?.model ?? shown.model, models),
       running: view?.state === "running" || view?.state === "needs_input",
       prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && i.part.text.startsWith(ORCHESTRATION_NOTICE)) ? [{ id: i.part.id, text: i.part.text }] : [])),
-    },
+    } : undefined,
     models,
     canQuickOpen,
     newSession: () => newSession(),
@@ -2028,6 +2163,9 @@ export function App() {
     isGit,
     viewChanges: shown && !draftShown ? () => openViewer({ kind: "changes" }) : undefined,
     viewPlan: shown && !draftShown && latest ? () => openViewer({ kind: "plan", plan: latest }) : undefined,
+    showPlan: shown && !draftShown && latest ? () => showPlan() : undefined,
+    planHome: areaOf(layout, "plan"),
+    movePlan: (to) => move("plan", to),
     focusPrompt: focusShownPrompt,
     setModel: (model) => (draftShown ? changeDraft({ ...draft, model }) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
     setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
@@ -2184,7 +2322,7 @@ export function App() {
             setHasShells((h) => ({ ...h, [panelTarget.cwd]: false }));
             if (!lg) return setPane("session");
             // The last terminal closed: the area hides, or shows its other pane.
-            const a = areaOf(layout, "terminal");
+            const a = termDock;
             const rest = areaPanes(a).filter((p) => p !== "terminal");
             if (rest.length) setPane(rest[0]!);
             else openArea(a, false);
@@ -2268,10 +2406,14 @@ export function App() {
             tabs={tabs}
             activeId={activeId}
             info={(id) => {
-              const s = sessionOf(id);
+              const s = sessionOf(ownerOf(id));
               if (id === NEW_TAB) return { title: "New session", unread: false, titleLoading: !!optimistic[NEW_TAB]?.length };
-              const item = list.find((l) => l.id === id);
               const g = tabGroup(s?.cwd, grouping, worktrees);
+              const groupInfo = keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" };
+              const pk = kindOf(id);
+              // A pane tab: the owner's project and group, no session state of its own.
+              if (pk) return { title: paneTabTitle(pk, ownerTitle(ownerOf(id))), kind: pk, cwd: s?.cwd, ...groupInfo, worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, unread: false, transcript: false };
+              const item = list.find((l) => l.id === id);
               const title = item?.title || titles[id] || "Untitled";
               return { title, titleLoading: titleLoading(title, prompted.has(id)), cwd: s?.cwd, ...(keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" }), worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, state: shownState(views[id]) ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
             }}
@@ -2496,7 +2638,7 @@ export function App() {
               state={listState}
               titleLoading={(s) => titleLoading(s.title, prompted.has(s.id))}
               unread={unread}
-              activeId={activeId}
+              activeId={currentId}
               onOpen={open}
               onNew={newSession}
               onRemove={setRemoving}
@@ -2542,7 +2684,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal"]} value={pane === "graph" && !isGit ? "files" : pane} onChange={selectPane} changes={changeCount} />
+                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : [])]} value={paneRef && pane === "session" ? "plan" : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
                 </div>
               )}
               {layout.side === "left" && lg && (
@@ -2555,11 +2697,12 @@ export function App() {
               {/* Every visited session tab stays mounted (hidden), so it keeps its scroll position and draft prompt. */}
               <div
                 ref={areaRef}
-                className={`relative ${splitShown ? `flex min-h-0 min-w-0 flex-1 ${split!.dir === "row" ? "flex-row" : "flex-col"}` : `${card} flex-1`} ${shown && pane === "session" ? "" : shown ? "hidden lg:flex" : "hidden"}`}
+                className={`relative ${splitShown ? `flex min-h-0 min-w-0 flex-1 ${split!.dir === "row" ? "flex-row" : "flex-col"}` : `${card} flex-1`} ${mainShown && pane === "session" ? "" : mainShown ? "hidden lg:flex" : "hidden"}`}
                 data-testid="session-area"
                 data-split={splitShown ? split!.dir : undefined}
               >
                 <ViewerContext value={openViewer}>
+                <PlanTabContext value={showPlanStable}>
                 <FileLinkContext value={openFileLink}>
                 <QuoteContext value={setInsert}>
                 {tabs.map((id) => {
@@ -2627,7 +2770,7 @@ export function App() {
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
                         onQueue={(text, images) => queueRequest({ type: "session.enqueue", sessionId: s.id, text, images })}
-                        onDequeue={(itemId) => queueRequest<{ text: string; images: string[] }>({ type: "session.dequeue", sessionId: s.id, itemId })}
+                        onDequeue={(itemId) => queueRequest<{ text: string; images: string[]; bash?: boolean }>({ type: "session.dequeue", sessionId: s.id, itemId })}
                         onSendQueued={(itemId) => queueRequest({ type: "session.sendQueued", sessionId: s.id, itemId })}
                         onCancelContinue={() => client.current!.request({ type: "session.cancelContinue", sessionId: s.id }).catch((e) => setError((e as Error).message))}
                         onInterrupt={() =>
@@ -2659,7 +2802,15 @@ export function App() {
                 })}
                 </QuoteContext>
                 </FileLinkContext>
+                </PlanTabContext>
                 </ViewerContext>
+                {tabs.filter(isPaneRef).map((ref) => (
+                  <Activity key={ref} mode={ref === activeId ? "visible" : "hidden"}>
+                    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-pane-tab-body={ref} tabIndex={-1}>
+                      <PlanPane view={views[ownerOf(ref)]} failed={failedTabs.has(ownerOf(ref))} label={tabLabel(ref)} onGoToRequest={() => goToRequest(ownerOf(ref))} />
+                    </div>
+                  </Activity>
+                ))}
                 {splitCramped && (
                   <div className="order-first flex shrink-0 items-center gap-2 border-b px-3 py-1 text-muted-foreground text-xs" data-testid="split-hint" role="status">
                     <span className="min-w-0 truncate">Split hidden — widen the window or hide a panel</span>
@@ -2736,7 +2887,7 @@ export function App() {
                   onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
                 />
               )}
-              {activeId !== NEW_TAB && activeId !== FOCUS_TAB && !shown && (
+              {activeId !== NEW_TAB && activeId !== FOCUS_TAB && !mainShown && (
                 <div className={`${card} flex-1`}>
                   <div className="m-auto text-muted-foreground">Open or create a session to start.</div>
                 </div>
@@ -2819,6 +2970,14 @@ export function App() {
                       </Suspense>
                     ),
                     hosts.graph,
+                  )}
+                  {createPortal(
+                    areaOf(layout, "plan") !== "main" && panelTarget.sessionId && (
+                      <div className={shows("plan") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+                        <PlanPane view={panelView} label="Plan" onGoToRequest={() => goToRequest(panelTarget.sessionId!)} />
+                      </div>
+                    ),
+                    hosts.plan,
                   )}
                   {createPortal(
                     // Mounted only while it shows: the terminal chunk and the shell focus load on show (GH-354).
@@ -3608,7 +3767,7 @@ export function SessionPane({
   /** Queues a message for when the session is idle (Alt+Enter, send menu); rejects when it was not queued. */
   onQueue?: (text: string, images: string[]) => Promise<unknown>;
   /** Removes a queued message and resolves to its text and images (Edit, Delete); rejects with code unknown_item when it was already sent. */
-  onDequeue?: (itemId: string) => Promise<{ text: string; images: string[] }>;
+  onDequeue?: (itemId: string) => Promise<{ text: string; images: string[]; bash?: boolean }>;
   /** Send now: steers the queued message into the running turn, or starts a turn when idle. */
   onSendQueued?: (itemId: string) => Promise<unknown>;
   /** Bash mode (`!`): runs a shell command in the session cwd; rejects when it was not run. */
@@ -3663,6 +3822,8 @@ export function SessionPane({
     return () => window.removeEventListener("keydown", onEsc);
   }, [escStops, active]);
   const [rewinding, setRewinding] = useState<string>();
+  /** A rewind request is in flight (the daemon takes no shell command meanwhile). */
+  const [rewindRunning, setRewindRunning] = useState(false);
   // Palette Rewind: the timeline scrolls to the message first (it can be outside the rendered window), then its panel opens.
   const [reveal, setReveal] = useState<{ key: string }>();
   useEffect(() => {
@@ -3696,7 +3857,7 @@ export function SessionPane({
   );
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
   // A queued message taken back (Edit) or an error of a chip action: the prompt box shows it once per key.
-  const [takeBack, setTakeBack] = useState<{ key: string; text: string; images: string[]; error?: string }>();
+  const [takeBack, setTakeBack] = useState<{ key: string; text: string; images: string[]; bash?: boolean; error?: string }>();
   const chipAction = (id: string, how: "edit" | "delete" | "send") => {
     const fail = (e: Error) => {
       // Delete and Send now of an item that is gone: nothing to report, nothing to change in the box.
@@ -3705,7 +3866,7 @@ export function SessionPane({
       setTakeBack({ key: pendingKey(), text: "", images: [], error: gone ? "Already sent" : `${how === "send" ? "Send now" : how === "edit" ? "Edit" : "Delete"} failed: ${e.message}` });
     };
     if (how === "send") return void onSendQueued?.(id).catch(fail);
-    void onDequeue?.(id).then((r) => how === "edit" && setTakeBack({ key: pendingKey(), text: r.text, images: r.images }), fail);
+    void onDequeue?.(id).then((r) => how === "edit" && setTakeBack({ key: pendingKey(), text: r.text, images: r.images, bash: r.bash }), fail);
   };
   const prompt = useRef<HTMLTextAreaElement>(null);
   const dock = useRef<HTMLDivElement>(null);
@@ -3836,7 +3997,12 @@ export function SessionPane({
                       // Images a snapshot or page left out load before the rewind (it drops the prompt from the daemon). One that fails to load
                       // stops the rewind with a notice in the panel: the image would be lost for good.
                       const images = mode === "code" ? [] : await restoreImages(prompt.images, prompt.id, onMedia);
-                      await onRewind(prompt.id, mode);
+                      setRewindRunning(true);
+                      try {
+                        await onRewind(prompt.id, mode);
+                      } finally {
+                        setRewindRunning(false);
+                      }
                       setRewinding(undefined);
                       // Conversation modes: the original prompt goes back into the prompt box.
                       if (mode !== "code") setDraft({ text: prompt.text, images });
@@ -3873,6 +4039,17 @@ export function SessionPane({
           <QueueChips
             items={view.queue?.items ?? []}
             held={view.queue?.held}
+            bashWait={
+              view.externalTurn || view.working
+                ? "Runs when the terminal CLI turn ends"
+                : rewindRunning
+                  ? "Runs when the rewind ends"
+                  : shellRunning
+                    ? "Runs when the running shell command ends"
+                  : turnRunning || isClearing
+                    ? "A shell command cannot steer a turn: it runs when the turn ends"
+                    : undefined
+            }
             onSendNow={(id) => chipAction(id, "send")}
             onEdit={(id) => chipAction(id, "edit")}
             onDelete={(id) => chipAction(id, "delete")}
@@ -4002,7 +4179,7 @@ function PromptBox({
   /** Given (session view): Alt+Enter and the send menu queue the message instead of steering; rejects when it was not queued. */
   onQueue?: (text: string, images: string[]) => Promise<unknown>;
   /** A queued message taken back: its text goes before the typed text, its images in front; `error` only shows. Handled once per `key`. */
-  takeBack?: { key: string; text: string; images: string[]; error?: string };
+  takeBack?: { key: string; text: string; images: string[]; bash?: boolean; error?: string };
   /** Given: `!` at the start of the box enters bash mode, Enter runs the command; rejects when it was not run. Not on the new-session tab. */
   onBash?: (command: string) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
@@ -4124,6 +4301,15 @@ function PromptBox({
     if (takeBack.error) return setSendError(takeBack.error);
     // Only an item that was really returned (text or images) goes back into the box.
     if (!takeBack.text && !takeBack.images.length) return;
+    if (takeBack.bash) {
+      // A bash item: an empty box becomes bash mode; typed prose never runs as a shell command.
+      if (!text && !images.length) {
+        setBash(true);
+        restore(takeBack.text);
+      } else restore(bash ? takeBack.text : `!${takeBack.text}`);
+      input.current?.focus();
+      return;
+    }
     restore(takeBack.text);
     setImages((cur) => [...takeBack.images, ...cur]);
     input.current?.focus();
@@ -4149,7 +4335,7 @@ function PromptBox({
   const send = (t = text, how: "send" | "queue" = enterHow) => {
     if (bash) {
       const command = t.trim();
-      if (!command || blocked) return;
+      if (!command || (blocked && !onQueue)) return;
       setSendError(undefined);
       onBash!(command).catch((e: Error) => {
         restore(t);
@@ -4377,7 +4563,7 @@ function PromptBox({
         aria-label={bash ? "Shell command" : label}
         className={`field-sizing-content max-h-[min(240px,40dvh)] min-h-[calc(2lh+1.5rem)] max-sm:min-h-[calc(1lh+1.5rem)] w-full resize-none bg-transparent pt-4 pb-2 text-sm outline-none pointer-coarse:text-base ${bash ? "pr-4 pl-8 font-mono" : "px-4"}`}
         rows={phone ? 1 : 2}
-        placeholder={bash ? "Run a shell command (Esc to exit)" : placeholder}
+        placeholder={bash ? (running || blocked ? "Queue a shell command: it runs when the current work ends" : "Run a shell command (Esc to exit)") : placeholder}
         autoFocus={autoFocus}
         disabled={disabled}
         value={text}
@@ -4415,7 +4601,8 @@ function PromptBox({
         hasInput={!disabled && !blocked && (!!text.trim() || images.length > 0)}
         onSend={() => send()}
         onQueue={onQueue && (() => send(text, "queue"))}
-        sendMode={sendMode}
+        sendMode={bash && running ? "queue" : sendMode}
+        shell={bash}
         onStop={() => onInterrupt?.()}
         // Not on touch screens: focusing the prompt box there opens the soft keyboard (OpenCode leaves focus on the page).
         onFocusLost={() => !window.matchMedia?.("(pointer: coarse)").matches && input.current?.focus()}
@@ -4605,7 +4792,7 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
     case "assistant_text":
       return <AssistantText text={part.text} streaming={part.streaming} />;
     case "tool_call":
-      return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} />;
+      return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} plan={planOfPart(view, part)} />;
     case "subagent":
       return (
         <SubagentGroup part={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.id)} onOpen={openRun && (() => openRun(part.id))}>

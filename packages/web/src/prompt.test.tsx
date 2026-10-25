@@ -896,7 +896,7 @@ it("sending drops the stored draft even when the box unmounts before it renders 
 
 
 // GH-77: queued messages.
-const queueView = (items: { id: string; text: string; imageCount: number }[], state: "idle" | "running" = "running") =>
+const queueView = (items: { id: string; text: string; imageCount: number; bash?: true }[], state: "idle" | "running" = "running") =>
   applyEvent({ ...emptySession(), state }, { type: "event", sessionId: "s1", seq: 1, part: { type: "prompt_queue", id: "prompt_queue", items } });
 
 it("GH-77: Alt+Enter while a turn runs queues the text, clears the box and sends nothing", async () => {
@@ -1117,4 +1117,82 @@ it("GH-77: after Delete of the first of two chips focus moves to the next Delete
   await act(async () => void del.click());
   await d.rerender({ view: applyEvent(first, { type: "event", sessionId: "s1", seq: 2, part: { type: "prompt_queue", id: "prompt_queue", items: [two[1]!] } }) });
   expect(document.activeElement?.getAttribute("aria-label")).toBe("Delete: two");
+});
+
+it("GH-443: bash mode while a turn runs: Enter calls onBash, box clears, no error, nothing steers or queues", async () => {
+  const onBash = vi.fn(async () => ({ itemId: "q1" }));
+  const onQueue = vi.fn(async () => {});
+  const onPrompt = vi.fn(async () => {});
+  const { box, $ } = await render({ onBash, onQueue, onPrompt }, { ...emptySession(), state: "running" });
+  await key(box, { key: "!" });
+  await type(box, "ls");
+  await key(box, { key: "Enter" });
+  await act(async () => {});
+  expect(onBash).toHaveBeenCalledWith("ls");
+  expect(box.value).toBe("");
+  expect($("prompt-error")).toBeNull();
+  expect(onQueue).not.toHaveBeenCalled();
+  expect(onPrompt).not.toHaveBeenCalled();
+});
+
+it("GH-443: bash mode while blocked (external turn) still sends the command", async () => {
+  const onBash = vi.fn(async () => ({ itemId: "q1" }));
+  const view = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "external_turn", id: "external_turn", running: true } });
+  const { box, $ } = await render({ onBash, onQueue: async () => {} }, view);
+  await key(box, { key: "!" });
+  await type(box, "ls");
+  await key(box, { key: "Enter" });
+  await act(async () => {});
+  expect(onBash).toHaveBeenCalledWith("ls");
+  expect($("prompt-error")).toBeNull();
+});
+
+it("GH-443: Edit of a bash chip: empty box -> bash mode with the command; typed text -> !cmd line in prompt mode", async () => {
+  const onDequeue = vi.fn(async () => ({ text: "ls -la", images: [], bash: true }));
+  const view = queueView([{ id: "q1", text: "ls -la", imageCount: 0, bash: true }]);
+  const a = await render({ onDequeue }, view);
+  await act(async () => void (a.el.querySelector('[aria-label="Edit: ! ls -la"]') as HTMLElement).click());
+  expect(a.box.value).toBe("ls -la");
+  expect(a.$("bash-mode")).not.toBeNull();
+  unmount();
+  const b = await render({ onDequeue }, view);
+  await type(b.box, "typed");
+  await act(async () => void (b.el.querySelector('[aria-label="Edit: ! ls -la"]') as HTMLElement).click());
+  expect(b.box.value).toBe("!ls -la\ntyped");
+  expect(b.$("bash-mode")).toBeNull();
+  unmount();
+  const c = await render({ onDequeue, onBash: async () => {} }, view);
+  await key(c.box, { key: "!" });
+  await type(c.box, "pwd");
+  await act(async () => void (c.el.querySelector('[aria-label="Edit: ! ls -la"]') as HTMLElement).click());
+  expect(c.box.value).toBe("ls -la\npwd");
+  expect(c.$("bash-mode")).not.toBeNull();
+});
+
+it("GH-443: bash chip Send now is disabled while a turn runs, enabled when idle", async () => {
+  const onSendQueued = vi.fn(async () => {});
+  const items = [{ id: "q1", text: "ls", imageCount: 0, bash: true as const }];
+  const a = await render({ onSendQueued }, queueView(items, "running"));
+  const btn = a.el.querySelector('[aria-label="Send now: ! ls"]') as HTMLElement;
+  expect(btn.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => void btn.click());
+  expect(onSendQueued).not.toHaveBeenCalled();
+  unmount();
+  const b = await render({ onSendQueued }, queueView(items, "idle"));
+  const idle = b.el.querySelector('[aria-label="Send now: ! ls"]') as HTMLElement;
+  expect(idle.getAttribute("aria-disabled")).toBeNull();
+  await act(async () => void idle.click());
+  expect(onSendQueued).toHaveBeenCalledWith("q1");
+});
+
+it("GH-443: bash chip Send now is also disabled while a terminal CLI turn or other background work shows (idle, working)", async () => {
+  const view = applyEvent(queueView([{ id: "q1", text: "ls", imageCount: 0, bash: true }], "idle"), { type: "event", sessionId: "s1", seq: 2, part: { type: "session_state", id: "session_state", state: "idle", working: true } });
+  const { el } = await render({}, view);
+  expect((el.querySelector('[aria-label="Send now: ! ls"]') as HTMLElement).getAttribute("aria-disabled")).toBe("true");
+});
+
+it("GH-443: the bash placeholder while busy is accurate (no Esc to exit: Esc stops the turn)", async () => {
+  const { box } = await render({ onBash: async () => {}, onQueue: async () => {} }, { ...emptySession(), state: "running" });
+  await key(box, { key: "!" });
+  expect(box.placeholder).toBe("Queue a shell command: it runs when the current work ends");
 });

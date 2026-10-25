@@ -139,6 +139,13 @@ describe("withSubscribe", () => {
   const filled = (): SessionView => ({ ...[ev(1, text("a", "x")), ev(2, text("b", "y"))].reduce(applyEvent, emptySession()), logEpoch: "e1" });
   const info: SessionInfo = { id: "s", cwd: "/", state: "idle", model: "sonnet", permissionMode: "acceptEdits", effort: "high", permissionModes: [] };
 
+  it("keeps the session's plan folders from the reply, also across a reply without them", () => {
+    const snap = { heads: [], attentionSeq: 0, page: { parts: [] }, aux: [] };
+    const v = withSubscribe(filled(), { logEpoch: "e1", seq: 3, session: info, snapshot: snap, planDirs: ["/cfg/plans"] });
+    expect(v.planDirs).toEqual(["/cfg/plans"]);
+    expect(withSubscribe(v, { logEpoch: "e1", seq: 4, session: info }).planDirs).toEqual(["/cfg/plans"]);
+  });
+
   it("keeps the timeline for the same epoch", () => {
     const s = filled();
     expect(withSubscribe(s, { logEpoch: "e1", seq: 2, session: info })).toMatchObject({ order: s.order, lastSeq: 2 });
