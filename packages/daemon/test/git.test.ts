@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { parseStatus, createWorktree, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
+import { parseStatus, createWorktree, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { wslGitRunner } from "../src/wsl-git.ts";
 import { execFile } from "node:child_process";
@@ -26,17 +26,17 @@ describe("gitStatus", () => {
     writeFileSync(join(dir, "a.txt"), "1\n2\n3\n");
     run(dir, "add", ".");
     run(dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
-    expect(await gitStatus(dir)).toEqual({ branch: "main", added: 0, removed: 0, refs: expect.any(String) });
+    expect(await gitStatus(dir)).toEqual({ branch: "main", added: 0, removed: 0, files: 0, refs: expect.any(String) });
     writeFileSync(join(dir, "a.txt"), "1\nx\ny\n");
     writeFileSync(join(dir, "b.txt"), "new\n");
     run(dir, "add", "b.txt");
-    expect(await gitStatus(dir)).toEqual({ branch: "main", added: 3, removed: 2, refs: expect.any(String) });
+    expect(await gitStatus(dir)).toEqual({ branch: "main", added: 3, removed: 2, files: 2, refs: expect.any(String) });
   });
 
   it("works before the first commit and on a detached HEAD", async () => {
     const dir = mkdtempSync(join(tmpdir(), "git-"));
     run(dir, "init", "-q", "-b", "dev");
-    expect(await gitStatus(dir)).toEqual({ branch: "dev", added: 0, removed: 0, refs: expect.any(String) });
+    expect(await gitStatus(dir)).toEqual({ branch: "dev", added: 0, removed: 0, files: 0, refs: expect.any(String) });
     writeFileSync(join(dir, "a.txt"), "1\n");
     run(dir, "add", ".");
     run(dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
@@ -1437,5 +1437,132 @@ describe("WSL projects opened by their UNC path", () => {
     expect(await gitStatus(unc(dir))).toMatchObject({ branch: "main", added: 1, removed: 0 });
     expect(files.length).toBeGreaterThan(0);
     expect(files.every((f) => f === "wsl.exe")).toBe(true);
+  });
+});
+
+describe("submodule rows", { timeout: 90_000 }, () => {
+  const all = () => true;
+  const sh = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const put = (dir: string, f: string, text: string | Buffer) => {
+    mkdirSync(join(dir, f, ".."), { recursive: true });
+    writeFileSync(join(dir, f), text);
+  };
+  const code = (p: Promise<unknown>) => p.then(() => "ok", (e) => (e as { code: string }).code);
+  const msg = (p: Promise<unknown>) => p.then(() => "ok", (e) => (e as Error).message);
+  /** Super repo with s.txt and a gitlink libs/lib recorded at c1; the inner repo has c1 and c2 (checked out at c2). */
+  function subRepo() {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "sm-")));
+    sh(dir, "init", "-q", "-b", "main");
+    put(dir, "s.txt", "s\n");
+    const inner = join(dir, "libs", "lib");
+    mkdirSync(inner, { recursive: true });
+    sh(inner, "init", "-q", "-b", "main");
+    put(inner, "a.txt", "one\n");
+    sh(inner, "add", ".");
+    sh(inner, "commit", "-qm", "c1");
+    const c1 = sh(inner, "rev-parse", "HEAD");
+    put(inner, "a.txt", "one\ntwo\n");
+    sh(inner, "commit", "-qam", "c2");
+    const c2 = sh(inner, "rev-parse", "HEAD");
+    sh(inner, "checkout", "-q", c1);
+    sh(dir, "-c", "advice.addEmbeddedRepo=false", "add", ".");
+    sh(dir, "commit", "-qm", "add libs/lib");
+    const added = sh(dir, "rev-parse", "HEAD");
+    return { dir, inner, c1, c2, added };
+  }
+  const traced = async (fn: () => Promise<unknown>) => {
+    const trace = join(mkdtempSync(join(tmpdir(), "trace-")), "t.txt");
+    setGitRunner((o: GitRunOptions) => threadRunner({ ...o, env: { ...o.env, GIT_TRACE: trace } }));
+    try {
+      await fn();
+    } finally {
+      setGitRunner(undefined);
+    }
+    return existsSync(trace) ? readFileSync(trace, "utf8") : "";
+  };
+
+  it("gitDiff and gitStatus start no git inside a dirty submodule (GIT_TRACE)", async () => {
+    const r = subRepo();
+    put(r.inner, "a.txt", "edited\n");
+    put(r.inner, "untracked.txt", "u\n");
+    let diff: Awaited<ReturnType<typeof gitDiff>>;
+    let status: Awaited<ReturnType<typeof gitStatus>>;
+    const trace = await traced(async () => {
+      diff = await gitDiff(r.dir, { base: "head", allowed: all });
+      status = await gitStatus(r.dir);
+    });
+    expect(trace.length).toBeGreaterThan(0);
+    expect(trace).not.toMatch(/status --porcelain/);
+    expect(trace).not.toMatch(/run_command/);
+    expect(diff!.files.some((f) => f.path === "libs/lib")).toBe(false);
+    expect(status!.files).toBe(0);
+  });
+
+  it("gitDiff passes --ignore-submodules=dirty and reads --raw --numstat in one process", async () => {
+    const r = subRepo();
+    const calls: string[][] = [];
+    setGitRunner(async (o: GitRunOptions) => {
+      calls.push(o.args);
+      return threadRunner(o);
+    });
+    try {
+      await gitDiff(r.dir, { base: "head", allowed: all });
+      const diffs = calls.filter((a) => a.includes("diff"));
+      expect(diffs).toHaveLength(1);
+      for (const f of ["--ignore-submodules=dirty", "--raw", "--numstat", "--no-abbrev"]) expect(diffs[0]).toContain(f);
+      expect(diffs[0]).not.toContain("--name-status");
+      calls.length = 0;
+      await gitStatus(r.dir);
+      const st = calls.filter((a) => a.includes("diff"));
+      expect(st).toHaveLength(1);
+      expect(st[0]).toContain("--ignore-submodules=dirty");
+    } finally {
+      setGitRunner(undefined);
+    }
+  });
+
+  it("gitDiff marks a moved gitlink as a submodule row with from and no counts", async () => {
+    const r = subRepo();
+    sh(r.inner, "checkout", "-q", r.c2);
+    const row = { status: "M", path: "libs/lib", submodule: { from: r.c1 } };
+    expect((await gitDiff(r.dir, { base: "head", allowed: all }))!.files).toContainEqual(row);
+    // Branch mode: against main while HEAD is a later commit on another branch.
+    sh(r.dir, "checkout", "-q", "-b", "feat");
+    put(r.dir, "f.txt", "f\n");
+    sh(r.dir, "add", "f.txt");
+    sh(r.dir, "commit", "-qm", "feat");
+    const d = (await gitDiff(r.dir, { base: "branch", ref: "refs/heads/main", allowed: all }))!;
+    expect(d.files).toContainEqual(row);
+  });
+
+  it("gitShow lists a gitlink of a commit with from and to, no counts", async () => {
+    const r = subRepo();
+    sh(r.inner, "checkout", "-q", r.c2);
+    sh(r.dir, "add", "libs/lib");
+    sh(r.dir, "commit", "-qm", "move libs/lib");
+    const moved = sh(r.dir, "rev-parse", "HEAD");
+    expect((await gitShow(r.dir, moved, all))!.files).toContainEqual({ status: "M", path: "libs/lib", submodule: { from: r.c1, to: r.c2 } });
+    expect((await gitShow(r.dir, r.added, all))!.files).toContainEqual({ status: "A", path: "libs/lib", submodule: { to: r.c1 } });
+  });
+
+  it("gitStatus counts changed tracked files in files, binary included, and leaves a moved gitlink out of the lines", async () => {
+    const r = subRepo();
+    put(r.dir, "bin.dat", Buffer.from([0, 1, 2, 0]));
+    sh(r.dir, "add", "bin.dat");
+    sh(r.dir, "commit", "-qm", "bin");
+    put(r.dir, "s.txt", "s\nmore\n");
+    put(r.dir, "bin.dat", Buffer.from([0, 9, 9, 0]));
+    sh(r.inner, "checkout", "-q", r.c2);
+    expect(await gitStatus(r.dir)).toMatchObject({ added: 1, removed: 0, files: 3 });
+  });
+
+  it("gitFileAt and gitBlobRef refuse a gitlink path with bad_request", async () => {
+    const r = subRepo();
+    expect(await code(gitFileAt(r.dir, r.added, "libs/lib", all, 1000))).toBe("bad_request");
+    expect(await msg(gitFileAt(r.dir, r.added, "libs/lib", all, 1000))).toBe("Submodule: open its repository");
+    expect(await code(gitBlobRef(r.dir, r.added, "libs/lib", all, 1000))).toBe("bad_request");
+    expect(await msg(gitBlobRef(r.dir, r.added, "libs/lib", all, 1000))).toBe("Submodule: open its repository");
+    expect(await code(gitFileAt(r.dir, r.added, "libs/none", all, 1000))).toBe("not_found");
+    expect(await code(gitBlobRef(r.dir, r.added, "libs/none", all, 1000))).toBe("not_found");
   });
 });

@@ -8,6 +8,8 @@ import { foreignPointer } from "./remote-path.ts";
 
 // Read-only calls on a repository's own config: no fsmonitor hook (a program from .git/config), no transport (a partial clone's lazy fetch runs core.sshCommand), on any git version.
 const READ_ONLY = ["-c", "core.fsmonitor=false", "-c", "protocol.allow=never"];
+/** Parent reads never start git inside a submodule (`git status` there runs unpinned with the submodule's own config); a moved gitlink still shows. */
+const NO_SUBMODULE_STATUS = "--ignore-submodules=dirty";
 const readEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_NO_LAZY_FETCH: "1" });
 /** Runs `fn`s with at most `n` running at a time, the rest in arrival order; urgent (graph) calls start before queued normal ones. */
 export function limiter(n: number) {
@@ -243,13 +245,15 @@ export async function gitStatus(cwd: string): Promise<GitStatus | null> {
   const base = await git(cwd, "rev-parse", "--verify", "-q", "HEAD").catch(() => git(cwd, "hash-object", "-t", "tree", "/dev/null"));
   let added = 0;
   let removed = 0;
-  // Binary files count "-": no lines.
-  for (const line of (await git(cwd, "diff", "--no-ext-diff", "--no-textconv", "--numstat", base).catch(() => "")).split("\n")) {
-    const [a, r] = line.split("\t");
-    added += Number(a) || 0;
-    removed += Number(r) || 0;
+  // Binary files have no counts; a gitlink row has none either.
+  const { files, stats } = parseRawNumstat(await git(cwd, "diff", "--no-ext-diff", "--no-textconv", NO_SUBMODULE_STATUS, "--no-abbrev", "-z", "--raw", "--numstat", base).catch(() => ""));
+  for (const f of files) {
+    if (f.submodule) continue;
+    const c = stats.get(f.path);
+    added += c?.added ?? 0;
+    removed += c?.removed ?? 0;
   }
-  const s = { branch, added, removed, refs: await refsStamp(cwd) };
+  const s = { branch, added, removed, files: files.length, refs: await refsStamp(cwd) };
   lastStatus.set(cwd, s);
   return s;
 }
@@ -965,18 +969,6 @@ export async function gitLog(cwd: string, o: GitLogOptions): Promise<GitLog | nu
 }
 const optional = <K extends string, V>(k: K, v: V | undefined) => (v === undefined ? {} : ({ [k]: v } as Record<K, V>));
 
-/** `diff -z --name-status` output; a copy counts as a rename. */
-function parseNameStatus(z: string): GitFileChange[] {
-  const n = z.split("\0");
-  const files: GitFileChange[] = [];
-  for (let i = 0; i < n.length && n[i]; ) {
-    const st = n[i++]!;
-    if (st[0] === "R" || st[0] === "C") {
-      files.push({ status: "R", oldPath: n[i++]!, path: n[i++]! });
-    } else files.push({ status: st[0] === "A" || st[0] === "D" ? st[0] : "M", path: n[i++]! });
-  }
-  return files;
-}
 /** `diff -z --numstat` output by (new) path; a binary file has no counts. */
 function parseNumstat(z: string): Map<string, { added?: number; removed?: number }> {
   const stats = new Map<string, { added?: number; removed?: number }>();
@@ -999,20 +991,28 @@ function parseRawNumstat(z: string): { files: GitFileChange[]; stats: Map<string
   const files: GitFileChange[] = [];
   let i = 0;
   while (i < t.length && t[i]!.startsWith(":")) {
-    const st = t[i++]!.split(" ").at(-1)![0];
+    const [srcMode, dstMode, srcId, dstId, code] = t[i++]!.slice(1).split(" ") as [string, string, string, string, string];
+    const st = code[0];
+    const zero = (id: string) => /^0+$/.test(id);
+    const from = srcMode === "160000" && !zero(srcId) ? { from: srcId } : {};
+    const to = dstMode === "160000" && !zero(dstId) ? { to: dstId } : {};
+    const submodule = srcMode === "160000" || dstMode === "160000" ? { submodule: { ...from, ...to } } : {};
     if (st === "R" || st === "C") {
-      files.push({ status: "R", oldPath: t[i++]!, path: t[i++]! });
-    } else files.push({ status: st === "A" || st === "D" ? st : "M", path: t[i++]! });
+      files.push({ status: "R", oldPath: t[i++]!, path: t[i++]!, ...submodule });
+    } else files.push({ status: st === "A" || st === "D" ? st : "M", path: t[i++]!, ...submodule });
   }
   return { files, stats: parseNumstat(t.slice(i).join("\0")) };
 }
+
+/** Line counts onto the rows; a gitlink row has none. */
+const withStats = (files: GitFileChange[], stats: Map<string, { added?: number; removed?: number }>): GitFileChange[] => files.map((f) => (f.submodule ? f : { ...f, ...stats.get(f.path) }));
 
 /** Files of a commit against its first parent (a root commit: against nothing); one git process. */
 async function commitFiles(top: string, hash: string, base: string | undefined): Promise<{ files: GitFileChange[]; truncated?: boolean }> {
   const tail = base ? [base, hash] : ["--root", hash];
   const { files, stats } = parseRawNumstat(await g(top, ["diff-tree", "-r", "-z", "-M", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--raw", "--numstat", ...tail]));
   const cut = files.length > MAX_COMMIT_FILES;
-  const list = files.slice(0, MAX_COMMIT_FILES).map((f) => ({ ...f, ...stats.get(f.path) }));
+  const list = withStats(files.slice(0, MAX_COMMIT_FILES), stats);
   return { files: list, ...(cut && { truncated: true }) };
 }
 
@@ -1041,6 +1041,12 @@ export async function gitShow(cwd: string, hash: string, allowed: (p: string) =>
   });
 }
 
+const SUBMODULE = () => bad("Submodule: open its repository");
+/** Whether `p` is a gitlink (submodule) at `hash`; asked only after a read found no blob there. */
+async function isGitlink(top: string, hash: string, p: string): Promise<boolean> {
+  return (await g(top, ["ls-tree", "-z", "--full-tree", "--end-of-options", hash, "--", p]).catch(() => "")).startsWith("160000 ");
+}
+
 /** A blob at a commit, checked (hash, path, repository inside `allowed`, exists, is a blob, at most `max`) but not read: its size comes from `git cat-file -s`. */
 export type BlobRef = { top: string; obj: string; size: number; max: number };
 export async function gitBlobRef(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<BlobRef> {
@@ -1049,8 +1055,14 @@ export async function gitBlobRef(cwd: string, hash: string, path: string, allowe
   const top = await topIn(cwd, allowed);
   if (!top) throw new WorktreeError("not_git", "Not in a git repository");
   const obj = `${hash}:${p}`;
-  if (!(await gok(top, "cat-file", "-e", obj))) throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
-  if ((await g(top, ["cat-file", "-t", obj])) !== "blob") throw new WorktreeError("not_found", `Not a file: ${p}`);
+  if (!(await gok(top, "cat-file", "-e", obj))) {
+    if (await isGitlink(top, hash, p)) throw SUBMODULE();
+    throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+  }
+  if ((await g(top, ["cat-file", "-t", obj])) !== "blob") {
+    if (await isGitlink(top, hash, p)) throw SUBMODULE();
+    throw new WorktreeError("not_found", `Not a file: ${p}`);
+  }
   const size = Number(await g(top, ["cat-file", "-s", obj]));
   if (size > max) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`, size);
   return { top, obj, size, max };
@@ -1084,7 +1096,10 @@ export async function gitFileAt(cwd: string, hash: string, path: string, allowed
       const err = e as { code?: string | number; stdout?: Buffer; stderr?: string; killed?: boolean; message: string };
       const overflow = err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
       if (odd && overflow) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`);
-      if (odd && /not a valid object|does not exist|bad object|ambiguous|bad file/i.test(err.stderr ?? "")) throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+      if (odd && /not a valid object|does not exist|bad object|ambiguous|bad file/i.test(err.stderr ?? "")) {
+        if (await isGitlink(top, hash, p)) throw SUBMODULE();
+        throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+      }
       if (odd || !overflow || !err.stdout) throw new WorktreeError("git_failed", err.killed ? "git cat-file timed out" : first(err));
       // Output past the limit: the header is enough to answer too_large.
       stdout = err.stdout;
@@ -1092,8 +1107,14 @@ export async function gitFileAt(cwd: string, hash: string, path: string, allowed
     if (odd) return stdout;
     const nl = stdout.indexOf(10);
     const head = stdout.subarray(0, nl < 0 ? stdout.length : nl).toString("utf8").split(" ");
-    if (head.at(-1) === "missing" || head.at(-1) === "ambiguous") throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
-    if (head[1] !== "blob") throw new WorktreeError("not_found", `Not a file: ${p}`);
+    if (head.at(-1) === "missing" || head.at(-1) === "ambiguous") {
+      if (await isGitlink(top, hash, p)) throw SUBMODULE();
+      throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+    }
+    if (head[1] !== "blob") {
+      if (await isGitlink(top, hash, p)) throw SUBMODULE();
+      throw new WorktreeError("not_found", `Not a file: ${p}`);
+    }
     const size = Number(head[2]);
     if (size > max) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`, size);
     return stdout.subarray(nl + 1, nl + 1 + size);
@@ -1168,13 +1189,12 @@ export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff |
   }
   const target = base ?? (await g(top, ["hash-object", "-t", "tree", "/dev/null"]));
   const pre = ["diff", "-M", "-z", "--no-ext-diff", "--no-textconv", "--no-color"];
-  const [names, nums, others] = await Promise.all([
-    g(top, [...pre, "--name-status", target, "--"]),
-    g(top, [...pre, "--numstat", target, "--"]),
+  const [tracked, others] = await Promise.all([
+    g(top, [...pre, NO_SUBMODULE_STATUS, "--no-abbrev", "--raw", "--numstat", target, "--"]),
     g(top, ["ls-files", "--others", "--exclude-standard", "-z", "--full-name"]),
   ]);
-  const stats = parseNumstat(nums);
-  const files: GitFileChange[] = parseNameStatus(names).map((f) => ({ ...f, ...stats.get(f.path) }));
+  const parsed = parseRawNumstat(tracked);
+  const files = withStats(parsed.files, parsed.stats);
   const byPath = (x: GitFileChange, y: GitFileChange) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
   files.sort(byPath);
   // Tracked files first: a flood of untracked files is cut before any edit.

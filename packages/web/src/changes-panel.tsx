@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } 
 import { useNarrow } from "@/lib/use-narrow.ts";
 import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitStatusResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
-import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, Maximize2Icon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, Maximize2Icon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,8 @@ type Disk = { content?: string; deleted?: boolean; error?: string; notice?: bool
 /** `kind`: OpenCode's file badge, A(dded) / D(eleted) / M(odified). */
 /** `change`: the session's calls on the file (session mode only). `oldPath` (relative to the repository top) and `oldShown` (as the list names it): a renamed file's before side (git modes). */
 type Row = { path: string; kind: Kind; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; change?: FileChange; oldPath?: string; oldShown?: string;
+  /** A gitlink row (git modes): no file to read or diff. */
+  submodule?: { from?: string; to?: string };
   /** A changed image (git modes): shown as images, not a text diff. */
   image?: { before?: ImagePane; after?: ImagePane };
 };
@@ -308,8 +310,9 @@ export function ChangesPanel({
         path: r.path,
         kind: r.kind,
         ...(r.oldPath !== undefined && { oldPath: r.oldPath, oldShown: relPath(joinPath(root, r.oldPath), cwd) }),
-        stats: r.stats ?? (ok ? s.stats : undefined),
-        ...(ok && { before: s.before, after: s.after, error: s.error, notice: s.notice, image: s.image }),
+        ...(r.submodule && { submodule: r.submodule }),
+        stats: r.stats ?? (ok && !r.submodule ? s.stats : undefined),
+        ...(ok && !r.submodule && { before: s.before, after: s.after, error: s.error, notice: s.notice, image: s.image }),
       };
     });
   }, [gitList, sides, gitDiff, cwd]);
@@ -355,6 +358,7 @@ export function ChangesPanel({
     if (!gitDiff) return;
     const d = gitDiff;
     for (const r of gitList) {
+      if (r.submodule) continue;
       const id = `${gen}\n${d.base}\n${r.path}`;
       if (!wantedKey.split("\n").includes(r.path) || asked.current.has(id)) continue;
       asked.current.add(id);
@@ -415,7 +419,7 @@ export function ChangesPanel({
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  const label = (r: Row) => `${KIND_TITLE[r.kind]} ${relPath(r.path, cwd)}${r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
+  const label = (r: Row) => `${KIND_TITLE[r.kind]} ${relPath(r.path, cwd)}${r.submodule ? ", submodule" : r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
   const treeRow =
     "flex min-h-11 w-full cursor-pointer items-center gap-1.5 rounded-md pr-2 text-left text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:min-h-7";
   const pad = (depth: number) => ({ paddingLeft: `${depth * 16 + 8}px` });
@@ -449,8 +453,9 @@ export function ChangesPanel({
             data-testid="changed-file"
             data-path={r.path}
           >
-            <FileIcon path={r.path} className="size-4 shrink-0" />
+            {r.submodule ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={r.path} className="size-4 shrink-0" />}
             <span className="min-w-0 flex-1 truncate">{filePath(r.path, cwd).name}</span>
+            {r.submodule && <SubmoduleBadge />}
             {/* OpenCode's v2 tree marks added and deleted files; M shows in the diff header only. */}
             {r.kind !== "M" && <KindBadge kind={r.kind} />}
           </button>
@@ -663,16 +668,17 @@ export function ChangesPanel({
                     data-testid="changed-file"
                     data-path={path}
                   >
-                    <FileIcon path={path} className="size-4 shrink-0" />
+                    {r.submodule ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={path} className="size-4 shrink-0" />}
                     <span className="min-w-0 flex-1 truncate">
                       {dir && <span className="text-muted-foreground">{dir.replace(/\/$/, "")}/</span>}
                       {name}
                     </span>
+                    {r.submodule && <SubmoduleBadge />}
                     {r.kind !== "M" && <span className={cn("shrink-0 text-xs", KIND_COLOR[r.kind])}>{KIND_TITLE[r.kind]}</span>}
                     {r.stats && <StatsText stats={r.stats} />}
                     {open ? <ChevronDownIcon className="size-4 shrink-0 text-faint" aria-hidden /> : <ChevronRightIcon className="size-4 shrink-0 text-faint" aria-hidden />}
                   </button>
-                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline git={gitMode} />}
+                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline git={gitMode} branchMode={effective === "branch"} />}
                 </li>
               );
             })}
@@ -708,7 +714,7 @@ export function ChangesPanel({
             {gitDiff?.truncated && <p className="border-t p-2 text-muted-foreground text-xs">List cut at 3000 files</p>}
           </div>
           <ListResizer list={listRef} width={listWidth} onResize={setListWidth} />
-          {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} />}
+          {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} branchMode={effective === "branch"} />}
         </div>
       )}
     </div>
@@ -724,6 +730,14 @@ export function StatsText({ stats }: { stats: Stats }) {
   );
 }
 
+export function SubmoduleBadge() {
+  return (
+    <span className="shrink-0 rounded bg-secondary px-1 text-[11px] text-muted-foreground" data-testid="submodule-badge">
+      submodule
+    </span>
+  );
+}
+
 export function KindBadge({ kind }: { kind: Kind }) {
   return (
     <span className={cn("w-4 shrink-0 text-center font-[530] font-mono text-[11px]", KIND_COLOR[kind])} title={KIND_TITLE[kind]} data-testid="change-badge">
@@ -733,7 +747,7 @@ export function KindBadge({ kind }: { kind: Kind }) {
 }
 
 /** `git`: a git mode's file (sides from a commit and the disk, not from the session's calls). `inline`: under its accordion row, which already names the file: only Open in editor above the diff, and no own scroll. */
-function FileDiff({ row, cwd, style, onOpen, inline, git }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean }) {
+function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean; branchMode?: boolean }) {
   const { path } = row;
   const dark = useDark();
   // Drawn once the highlighter is loaded (seconds on a first load): until then a loading line.
@@ -748,10 +762,11 @@ function FileDiff({ row, cwd, style, onOpen, inline, git }: { row: Row; cwd: str
     [path, row.oldPath, row.before, row.after],
   );
   const same = files !== undefined && row.before === row.after;
+  const sub = row.submodule;
   return (
     <div className={inline ? "flex flex-col border-t" : "flex min-h-0 min-w-0 flex-1 flex-col"} data-testid="file-diff" data-diff-style={style}>
       {inline ? (
-        inDir(path, cwd) && (
+        !sub && inDir(path, cwd) && (
           <div className="flex justify-end px-2 pt-1">
             <Button size="sm" variant="ghost" className="h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
               <SquareArrowOutUpRightIcon /> Open in editor
@@ -761,13 +776,14 @@ function FileDiff({ row, cwd, style, onOpen, inline, git }: { row: Row; cwd: str
       ) : (
         <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3" data-testid="file-diff-header">
           <KindBadge kind={row.kind} />
-          <FileIcon path={path} className="size-4 shrink-0" />
+          {sub ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={path} className="size-4 shrink-0" />}
           <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground text-xs" title={path}>
             {row.oldShown ? `${row.oldShown} → ${relPath(path, cwd)}` : relPath(path, cwd)}
           </span>
+          {sub && <SubmoduleBadge />}
           {row.stats && <StatsText stats={row.stats} />}
           {/* The files pane shows only tabs inside cwd, so a file outside it has no Open in editor (OpenCode lists only project files). */}
-          {inDir(path, cwd) && (
+          {!sub && inDir(path, cwd) && (
             <Button size="sm" variant="ghost" onClick={() => onOpen(path)} data-testid="open-in-editor">
               <SquareArrowOutUpRightIcon /> Open in editor
             </Button>
@@ -775,8 +791,19 @@ function FileDiff({ row, cwd, style, onOpen, inline, git }: { row: Row; cwd: str
         </div>
       )}
       <div className={cn("text-xs", !inline && "min-h-0 flex-1 overflow-auto p-2")}>
-        {row.error && <p role={row.notice ? "status" : undefined} className={cn("p-2", row.notice ? "text-muted-foreground" : "text-destructive")}>{row.error}</p>}
-        {!row.error && !row.image && (row.after === undefined || (files && !same && !drawn)) && (
+        {sub && (
+          <p className="p-2 text-muted-foreground" data-testid="submodule-detail">
+            {sub.from ? (
+              <>
+                Submodule {relPath(path, cwd)}: <span className="font-mono">{sub.from.slice(0, 7)}</span> {branchMode ? "at the merge base" : "in HEAD"}
+              </>
+            ) : (
+              <>Submodule {relPath(path, cwd)}: added</>
+            )}
+          </p>
+        )}
+        {!sub && row.error && <p role={row.notice ? "status" : undefined} className={cn("p-2", row.notice ? "text-muted-foreground" : "text-destructive")}>{row.error}</p>}
+        {!sub && !row.error && !row.image && (row.after === undefined || (files && !same && !drawn)) && (
           <p className="p-2 text-muted-foreground" data-testid="diff-loading">
             Loading diff…
           </p>

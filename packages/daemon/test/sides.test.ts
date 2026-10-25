@@ -491,6 +491,9 @@ describe("sides", () => {
     expect(r).toMatchObject({ type: "reply", result: { size: 200, mtime: 0 } });
     expect((await get(r.result.url)).body.equals(committed)).toBe(true);
     expect(await c.request({ type: "fs.media", cwd: repo, hash, path: "missing.png" })).toMatchObject({ type: "error", code: "not_found" });
+    // `exact` reaches the side: a folder inside the repository is not its top.
+    mkdirSync(join(repo, "inner"), { recursive: true });
+    expect(await c.request({ type: "fs.media", cwd: join(repo, "inner"), hash, path: "p.png", exact: true })).toMatchObject({ type: "error", code: "not_git" });
     c.ws.close();
   });
 
