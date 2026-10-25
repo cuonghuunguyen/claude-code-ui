@@ -34,7 +34,7 @@ A WSL distro on the bundle path needs `bash`, `tar` and `gzip` (not only `sh`), 
 | A writable `/tmp`, `/dev/shm` or home folder | | | Yes | Yes |
 | `git` (Git panel) | Optional | Optional | Optional | Optional |
 
-In Open project, **What this container needs** lists these items for the container you picked, with a ✓ or ✗ for each after the check. If something is missing, the dialog tells you what to run. When the container installs with npm, the dialog says why.
+In Open project, **What this container needs** lists these items for the container you picked, with a ✓ or ✗ for each after the check. If something is missing, the dialog tells you what to run. When the container installs with npm, the dialog says why. The Claude login is not checked: log in as the table says, and a session started without a login says so.
 
 The bundle needs your computer to reach nodejs.org and the npm registry once per claude-code-ui version (`CLAUDE_UI_UPDATE_REGISTRY` sets a registry mirror). Without them and without a cached copy, the container installs with npm instead.
 
