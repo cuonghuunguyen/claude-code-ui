@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { createSettings, DEFAULTS } from "../src/settings.ts";
 
+const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" };
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -151,4 +152,54 @@ it("workerNotifications defaults to on, saves off, refuses a non-boolean with 'N
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { workerNotifications: false } });
   expect(createSettings({ file: f }).get().orchestration.workerNotifications).toBe(false);
   for (const bad of ["off", 0, null]) expect(() => s.set({ orchestration: { workerNotifications: bad as never } })).toThrow(/^Notifications from workers must be on or off$/);
+});
+
+it("git defaults are VS Code's, except openRepositoryInParentFolders always", () => {
+  expect(createSettings({ file: file() }).get().git).toEqual(GIT);
+});
+
+it("git arrays: default not stored, a changed array stored and read back, the default again removes it", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  s.set({ git: { repositoryScanIgnoredFolders: ["node_modules"] } });
+  expect(JSON.parse(readFileSync(f, "utf8")).git).toBeUndefined();
+  s.set({ git: { repositoryScanIgnoredFolders: ["node_modules", "dist"] } });
+  expect(JSON.parse(readFileSync(f, "utf8")).git.repositoryScanIgnoredFolders).toEqual(["node_modules", "dist"]);
+  expect(createSettings({ file: f }).get().git.repositoryScanIgnoredFolders).toEqual(["node_modules", "dist"]);
+  s.set({ git: { repositoryScanIgnoredFolders: ["node_modules"] } });
+  expect(JSON.parse(readFileSync(f, "utf8")).git).toEqual({});
+  s.get().git.repositoryScanIgnoredFolders.push("x");
+  expect(s.get().git.repositoryScanIgnoredFolders).toEqual(["node_modules"]);
+  expect(DEFAULTS.git.repositoryScanIgnoredFolders).toEqual(["node_modules"]);
+});
+
+it("git arrays refuse more than 50 entries, an entry over 260 chars, NUL, a non-string, an empty entry", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  const bad: unknown[] = [Array.from({ length: 51 }, (_, i) => `d${i}`), ["a".repeat(261)], ["a\0b"], [1], [""], "x"];
+  for (const v of bad) expect(() => s.set({ git: { ignoredRepositories: v as never } })).toThrow("Ignored repositories must be");
+  expect(() => readFileSync(f)).toThrow();
+});
+
+it("scanRepositories refuses absolute, .., .git and backslash-absolute entries", () => {
+  const s = createSettings({ file: file() });
+  for (const v of ["/x", "\\x", "C:\\x", "a/../b", "a/.git", ".GIT", "..", "."]) expect(() => s.set({ git: { scanRepositories: [v] } })).toThrow("Scan repositories must be");
+  expect(s.set({ git: { scanRepositories: ["libs/a"] } }).git.scanRepositories).toEqual(["libs/a"]);
+});
+
+it("repositoryScanIgnoredFolders refuses a path, only a folder name", () => {
+  const s = createSettings({ file: file() });
+  expect(() => s.set({ git: { repositoryScanIgnoredFolders: ["a/b"] } })).toThrow("Repository scan ignored folders must be");
+});
+
+it("git scalars: depth -1..10 integers, limit 0..100, detection four values, parent folders three values, booleans", () => {
+  const s = createSettings({ file: file() });
+  for (const git of [{ repositoryScanMaxDepth: -1 }, { repositoryScanMaxDepth: 10 }, { detectSubmodulesLimit: 0 }, { detectSubmodulesLimit: 100 }, { autoRepositoryDetection: "subFolders" }, { autoRepositoryDetection: false }, { openRepositoryInParentFolders: "prompt" }, { ignoreSubmodules: true }, { detectSubmodules: false }]) expect(() => s.set({ git } as never)).not.toThrow();
+  for (const git of [{ repositoryScanMaxDepth: -2 }, { repositoryScanMaxDepth: 11 }, { repositoryScanMaxDepth: 1.5 }, { detectSubmodulesLimit: 101 }, { detectSubmodulesLimit: -1 }, { autoRepositoryDetection: "yes" }, { openRepositoryInParentFolders: "ask" }, { ignoreSubmodules: 1 }, { detectSubmodules: "on" }]) expect(() => s.set({ git } as never)).toThrow(/must be/);
+});
+
+it("a stored invalid git field falls back to its default", () => {
+  const f = file();
+  writeFileSync(f, JSON.stringify({ git: { repositoryScanMaxDepth: 99, scanRepositories: ["/abs"], detectSubmodulesLimit: 5 } }));
+  expect(createSettings({ file: f }).get().git).toEqual({ ...GIT, detectSubmodulesLimit: 5 });
 });

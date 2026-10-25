@@ -27,6 +27,10 @@ _Avoid_: workspace, folder (folder = any directory in the folder browser)
 A linked git worktree of a project's repository, identified by its directory. The repository's own checkout is the main worktree. Its sessions show under the project without adding it.
 _Avoid_: workspace, sandbox
 
+**Nested repository**:
+A git repository below a project's folder that is not the project's own repository: a submodule (listed in its parent's `.gitmodules` and checked out) or an independent repository with its own `.git`. Found as VS Code finds them (Settings › Git); shown in the repository selector and the file tree marks. Not a Project, not a Worktree.
+_Avoid_: subrepo, child repo, workspace repo
+
 **Branch source**:
 Where a new worktree's branch comes from: a Ticket (new branch named from it), an existing Branch (local or remote, checked out as is) or a free Name (new branch). The three tabs of the Create worktree modal.
 _Avoid_: worktree type, origin

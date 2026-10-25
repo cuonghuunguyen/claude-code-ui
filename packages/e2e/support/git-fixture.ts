@@ -40,3 +40,50 @@ export function makeRepoWithOrigin(repo: string, origin: string): void {
   commit(repo, "alt.txt", "alt\n", "a commit only on base-alt");
   git(repo, "checkout", "main");
 }
+
+export type SubmoduleState = "moved" | "dirty-only" | "moved-committed";
+
+/** Short commit names of the inner repository: `first` is the recorded one, `second` the later one. */
+export type SubmoduleShas = { first: string; second: string };
+
+/**
+ * Makes `repo` a superproject holding `libs/lib`, an inner repository committed and `git add`ed as a gitlink (no `submodule add`).
+ * - moved: HEAD records `first`, the inner working tree sits at `second`; plus a normal change in `s.txt`.
+ * - dirty-only: HEAD records `first`, the inner repository stays on it with an uncommitted edit of a tracked file.
+ * - moved-committed: HEAD itself moved the gitlink from `first` to `second` (the Graph shows that commit).
+ */
+export function makeSuperproject(repo: string, state: SubmoduleState): SubmoduleShas {
+  const lib = join(repo, "libs", "lib");
+  mkdirSync(lib, { recursive: true });
+  git(lib, "init", "-b", "main");
+  commit(lib, "a.txt", "1\n", "lib one");
+  const first = git(lib, "rev-parse", "--short", "HEAD");
+  commit(lib, "a.txt", "2\n", "lib two");
+  const second = git(lib, "rev-parse", "--short", "HEAD");
+  git(lib, "checkout", "-q", first);
+  git(repo, "init", "-b", "main");
+  writeFileSync(join(repo, ".git", "info", "exclude"), ".claude/\n");
+  writeFileSync(join(repo, "s.txt"), "s\n");
+  git(repo, "-c", "advice.addEmbeddedRepo=false", "add", "s.txt", "libs/lib");
+  git(repo, "commit", "-m", "add libs/lib");
+  if (state === "moved") {
+    git(lib, "checkout", "-q", second);
+    writeFileSync(join(repo, "s.txt"), "s\nmore\n");
+  } else if (state === "dirty-only") {
+    writeFileSync(join(lib, "a.txt"), "1\nedited\n");
+  } else {
+    git(lib, "checkout", "-q", second);
+    git(repo, "add", "libs/lib");
+    git(repo, "commit", "-m", "move libs/lib");
+  }
+  return { first, second };
+}
+
+/** Makes `dir/<name>` a repository with one commit `subject` holding `file`; `edit` leaves an uncommitted change in it. */
+export function makeNestedRepo(dir: string, name: string, subject: string, edit = false): void {
+  const repo = join(dir, name);
+  mkdirSync(repo, { recursive: true });
+  git(repo, "init", "-b", "main");
+  commit(repo, "a.txt", "1\n", subject);
+  if (edit) writeFileSync(join(repo, "a.txt"), "1\nedited\n");
+}

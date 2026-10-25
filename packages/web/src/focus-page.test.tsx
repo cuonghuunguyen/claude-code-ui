@@ -92,8 +92,10 @@ it("the detail shows the selected session, its signal-only context and the reque
   expect(el.querySelector('[data-testid="focus-title"]')!.textContent).toBe("Session a");
   expect(el.querySelector('[data-testid="focus-context"]')!.textContent).toContain("run the auth tests");
   expect(el.querySelector('[data-testid="focus-context"]')!.textContent).toContain("2 tool calls · Read 2");
-  expect(el.querySelector('[data-testid="focus-waiting"]')!.textContent).toMatch(/^waiting (\d+m )?\d+s · Bash · npm run test -- auth/);
+  expect(el.querySelector('[data-testid="focus-waiting"]')!.textContent).toMatch(/^waiting (\d+m )?\d+s$/);
   expect(el.querySelector('[data-testid="permission-panel"]')).not.toBeNull();
+  const detail = el.querySelector('[data-testid="focus-detail"]') ?? el;
+  expect(detail.textContent!.split("npm run test -- auth").length - 1).toBe(1);
   await act(async () => button("Open session").click());
   expect(open).toHaveBeenCalledWith("a");
 });
@@ -132,6 +134,8 @@ it("a question shows its options as choices and has no Dismiss", async () => {
   expect(panel.textContent).toContain("Keep");
   expect(panel.textContent).toContain("Drop");
   expect(button("Dismiss")).toBeUndefined();
+  expect(el.querySelector('[data-testid="focus-waiting"]')!.textContent).toMatch(/^waiting (\d+m )?\d+s$/);
+  expect(el.querySelector('[data-testid="focus-detail"]')!.textContent!.split("Keep the old route?").length - 1).toBe(1);
   await act(async () => panel.querySelector<HTMLInputElement>("input[type=radio]")!.click());
   await act(async () => button("Submit").click());
   expect(answer).toHaveBeenCalledWith("rb", { "Keep the old route?": "Keep" });

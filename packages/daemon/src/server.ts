@@ -11,6 +11,7 @@ import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages,
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
 import { searchFiles } from "./search.ts";
+import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { createEntry, deleteEntry, duplicateFile, renameEntry, type FsOpsContext } from "./fs-ops.ts";
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
@@ -18,7 +19,7 @@ import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, isHash, classify, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, listRepos, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
@@ -403,7 +404,12 @@ export function createDaemon(opts: {
   });
   const connections = new Set<Conn>();
   const terminals = createTerminals();
-  const broadcast = (m: ServerMessage) => connections.forEach((ws) => send(ws, m));
+  /** `git.repos` replies: dropped whenever the session list or the settings change (docs/spec.md "git.repos"). */
+  const reposCache = createReposCache();
+  const broadcast = (m: ServerMessage) => {
+    if (m.type === "sessions.changed" || m.type === "settings_changed") reposCache.clear();
+    connections.forEach((ws) => send(ws, m));
+  };
   // ponytail: side sessions are not counted; a restart ends their running turns too.
   const updater: Updater | undefined =
     opts.update && createUpdater({ ...opts.update, busy: () => ({ sessions: [...sessions.values()].filter((s) => s.working()).length, terminals: terminals.count() }), broadcast });
@@ -542,7 +548,7 @@ export function createDaemon(opts: {
   const statusReads = new Map<string, ReturnType<typeof gitStatus>>();
   const statusOf = (cwd: string) => {
     let read = statusReads.get(cwd);
-    if (!read) statusReads.set(cwd, (read = gitOutside(cwd).then((out) => (out ? null : gitStatus(cwd))).finally(() => statusReads.delete(cwd))));
+    if (!read) statusReads.set(cwd, (read = gitOutside(cwd).then((out) => (out ? null : gitStatus(cwd, { ignoreSubmodules: appSettings.get().git.ignoreSubmodules }))).finally(() => statusReads.delete(cwd))));
     return read;
   };
 
@@ -557,6 +563,12 @@ export function createDaemon(opts: {
   const removing = new Set<string>();
   const inDir = (cwd: string, p: string) => cwd === p || cwd.startsWith(p.endsWith(sep) ? p : p + sep);
   const isRemoving = (cwd: string) => [...removing].some((p) => inDir(cwd, p));
+  /** An added project's worktrees with real paths, `outsideRoots` marked; undefined for a non-git project or a subfolder of a repository (listed as a non-git project). */
+  const projectWorktrees = async (cwd: string): Promise<Worktree[] | undefined> => {
+    const found = (await worktreesOf(cwd))?.map((w) => ({ ...w, path: real(w.path) ?? w.path }));
+    if (!found?.some((w) => w.path === (real(cwd) ?? cwd))) return undefined;
+    return found.map((w) => (inRoots(w.path) ? w : { ...w, outsideRoots: true }));
+  };
   /** Refused while a session in it runs or needs input; idle live sessions and its terminals close first (transcripts stay). */
   const removeIn = async (cwd: string, path: string, o: { expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored: number }; deleteBranch?: boolean }) => {
     const marked: string[] = [];
@@ -801,7 +813,9 @@ export function createDaemon(opts: {
       const id = opts.sides?.pathSide(path);
       return id && id !== LOCAL_SIDE ? opts.sides!.list().find((s) => s.id === id)?.label : undefined;
     },
-    isProject: (path) => projects.has(path),
+    projects: () => projects.list([]).filter((cwd) => allowed(cwd)),
+    worktrees: (cwd) => projectWorktrees(cwd),
+    removing: (path) => isRemoving(path),
     createWorktree: (repo, o) => createIn(repo, o),
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
@@ -943,9 +957,8 @@ export function createDaemon(opts: {
     const worktrees: Record<string, Worktree[]> = {};
     await Promise.all(
       open.map(async (cwd) => {
-        const found = (await worktreesOf(cwd))?.map((w) => ({ ...w, path: real(w.path) ?? w.path }));
-        // A subfolder of a repository (mono/pa, a folder of a dotfiles home) is no worktree: listed as a non-git project.
-        if (found?.some((w) => w.path === (real(cwd) ?? cwd))) worktrees[cwd] = found.map((w) => (inRoots(w.path) ? w : { ...w, outsideRoots: true }));
+        const l = await projectWorktrees(cwd);
+        if (l) worktrees[cwd] = l;
       }),
     );
     worktreePaths = new Set(Object.values(worktrees).flatMap((l) => l.filter((w) => !w.outsideRoots).map((w) => w.path)));
@@ -1408,15 +1421,19 @@ export function createDaemon(opts: {
         end();
       }
     };
+    const NOT_TOP = "Not a repository top";
+    /** `exact: true` and `cwd` is not its repository's top (an uninitialised submodule folder would answer for the superproject). Both sides canonical. */
+    const notTop = async (m: { exact?: unknown }, cwd: string) => m.exact === true && (await gitTopOf(cwd)) !== cwd;
     /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
     type MediaFail = { code: string; message: string; size?: number };
     /** media.read and fs.media {hash}: a piece of a media file or of a file at a commit, with the roots and extension checks. */
-    const readMedia = async (m: { path: unknown; cwd?: unknown; hash?: unknown; offset: number; length: number }): Promise<MediaReadResult | MediaFail> => {
+    const readMedia = async (m: { path: unknown; cwd?: unknown; hash?: unknown; exact?: unknown; offset: number; length: number }): Promise<MediaReadResult | MediaFail> => {
       if (typeof m.path !== "string") return { code: "bad_request", message: "path must be a string" };
       const mime = mediaType(m.path);
       if (m.hash !== undefined) {
         const cwd = allowed(m.cwd);
         if (!cwd) return { code: "cwd_not_allowed", message: `outside the allowlisted roots: ${String(m.cwd)}` };
+        if (await notTop(m, cwd)) return { code: "not_git", message: NOT_TOP };
         if (!mime) return { code: "unsupported_type", message: `not an image, video or audio file: ${m.path}` };
         const key = `${cwd}\0${String(m.hash)}\0${m.path}`;
         try {
@@ -1458,7 +1475,7 @@ export function createDaemon(opts: {
     const isPiece = (o: unknown, l: unknown) => Number.isSafeInteger(o) && (o as number) >= 0 && Number.isSafeInteger(l) && (l as number) >= 0 && (l as number) <= MEDIA_CHUNK;
     /** fs.media of a side's file or commit: the side checks it (media.read, length 0); the hub issues its own URL and reads the bytes from the side per GET. */
     const sideMedia = async (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>): Promise<ServerMessage> => {
-      const args = { path: msg.path, ...(msg.hash !== undefined && { cwd: msg.cwd, hash: msg.hash }) };
+      const args = { path: msg.path, ...(msg.hash !== undefined && { cwd: msg.cwd, hash: msg.hash, ...(msg.exact === true && { exact: true }) }) };
       const ask = (offset: number, length: number) => call({ type: "media.read", reqId: "", ...args, offset, length } as ClientMessage);
       const head = await ask(0, 0);
       if (head.type !== "reply") return { ...head, reqId: msg.reqId } as ServerMessage;
@@ -1910,12 +1927,24 @@ export function createDaemon(opts: {
         case "git.status": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           return reply({ status: await statusOf(cwd) });
         }
         case "git.refs": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           return reply({ refs: await gitRefs(cwd, (p) => inRoots(real(p) ?? p)) });
+        }
+        case "git.repos": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          const files = msg.openFiles;
+          if (files !== undefined && (!Array.isArray(files) || files.length > 50 || files.some((f) => typeof f !== "string" || f.length > 4096 || f.includes("\0")))) return fail("bad_request", "openFiles must be at most 50 paths");
+          const open = (files ?? []).filter((f) => isAbsolute(f) && !refused(f));
+          const settings = appSettings.get().git;
+          const key = [cwd, JSON.stringify(settings), [...open].sort().join("\0")].join("\0");
+          return reply(await reposCache.get(key, () => listRepos(cwd, { settings, openFiles: open, refused, allowed: (p) => inRoots(real(p) ?? p) }), msg.fresh === true));
         }
         case "git.log":
         case "git.diff":
@@ -1923,11 +1952,12 @@ export function createDaemon(opts: {
         case "git.fileAt": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           const inside = (p: string) => inRoots(real(p) ?? p);
           // No filter text in the log (it may hold a secret).
           try {
             if (msg.type === "git.log") return reply({ log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, fresh: msg.fresh === true, allowed: inside }) });
-            if (msg.type === "git.diff") return reply({ diff: await gitDiff(cwd, { base: msg.base, ref: msg.ref, allowed: inside }) });
+            if (msg.type === "git.diff") return reply({ diff: await gitDiff(cwd, { base: msg.base, ref: msg.ref, allowed: inside, ignoreSubmodules: appSettings.get().git.ignoreSubmodules }) });
             if (msg.type === "git.commit") {
               const c = await gitShow(cwd, msg.hash, inside);
               return c ? reply({ commit: c }) : fail("not_git", "Not in a git repository");
@@ -1942,6 +1972,7 @@ export function createDaemon(opts: {
         case "git.fetch": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           const inside = (p: string) => inRoots(real(p) ?? p);
           // Output and URLs are never logged.
           try {
@@ -1955,6 +1986,7 @@ export function createDaemon(opts: {
         case "git.pull": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           const inside = (p: string) => inRoots(real(p) ?? p);
           try {
             if (msg.type === "git.branch") return reply({ branch: await gitBranch(cwd, msg.ref, { allowed: inside }) });

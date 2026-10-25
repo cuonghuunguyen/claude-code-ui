@@ -40,8 +40,8 @@ worker (it saw the wrong scope).
 - Base per the playbook. Never the coordinator's current branch unless the user asks for
   stacked work; then say so in every PR it produces.
 - The first worker of the ticket (plan, or implement when plan is skipped) creates the
-  worktree. Record its path in the ledger from the `worker_start` result; every later stage
-  uses it as `cwd`.
+  worktree. Record the worktree folder name and path in the ledger from the `worker_start` result
+  (`worktree`, `cwd`); every later stage uses `worktree: <folder>` with `project`.
 
 ---
 

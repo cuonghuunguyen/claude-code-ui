@@ -32,3 +32,8 @@ it("gitEol turns the disk's CRLF into the repository's LF so unchanged lines do 
   expect(gitEol("", "x\r\n")).toBe("x\n");
   expect(gitEol("a\r\nb\r\n", "a\r\nb\r\nc\r\n")).toBe("a\r\nb\r\nc\r\n");
 });
+
+it("gitRows keeps the submodule marker and sets no stats", () => {
+  const from = "c".repeat(40);
+  expect(gitRows({ prefix: "", base: "b", files: [{ status: "M", path: "libs/lib", submodule: { from } }] }, "/p")).toEqual([{ path: "/p/libs/lib", rel: "libs/lib", kind: "M", submodule: { from } }]);
+});

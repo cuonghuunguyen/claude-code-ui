@@ -205,6 +205,19 @@ it("a rename reads the parent side from the old path; an unchanged rename shows 
   expect(c.sent.filter((m) => m.type === "git.fileAt").map((m) => `${m.hash === hash(3) ? "commit" : "parent"}:${m.path}`)).toEqual(["parent:old.ts", "commit:moved.ts"]);
 });
 
+it("a submodule entry in commit details reads \"Submodule <path> → <short>\" and requests no diff", async () => {
+  const c = fake(history(3), [{ status: "M", path: "libs/lib", submodule: { from: hash(1), to: hash(2) } }, { status: "M", path: "src/m.ts", added: 1, removed: 1 }]);
+  await mount(c);
+  await select(0);
+  const sub = el.querySelector<HTMLElement>("[data-testid=commit-submodule]")!;
+  expect(sub.textContent).toContain(`Submodule libs/lib → ${hash(2).slice(0, 7)}`);
+  expect(el.querySelector("button[data-testid=commit-submodule]")).toBeNull();
+  expect(el.querySelectorAll("[data-testid=commit-file]")).toHaveLength(1);
+  await act(async () => sub.click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.fileAt")).toEqual([]);
+});
+
 it("an unchanged rename shows a notice instead of a diff", async () => {
   const c = fake(history(3), [{ status: "R", oldPath: "old.ts", path: "moved.ts" }]);
   vi.mocked(c.request).mockImplementation(async (m: Req) => (m.type === "git.fileAt" ? { content: "same" } : m.type === "git.commit" ? { commit: detail(history(3)[0]!, [{ status: "R", oldPath: "old.ts", path: "moved.ts" }]) } : { log: { commits: history(3), more: false, branches: [] } }));
@@ -746,4 +759,31 @@ it("the command block wraps at spaces (a long -c prefix is not cut mid-word)", a
   expect(cls).not.toContain("break-all");
   await act(async () => byId("git-push-cancel").click());
   await flush();
+});
+
+it("exact: every git request carries exact: true, and Refresh calls onRefresh", async () => {
+  const c = fake(withRefs(), FILES);
+  const onRefresh = vi.fn();
+  await act(async () => root.render(<GraphPanel client={c} cwd="/p/api" exact onRefresh={onRefresh} />));
+  await flush();
+  await select(0);
+  await act(async () => fileBtn(2).click());
+  await flush();
+  await menuAt(chip("refs/heads/feat"));
+  await act(async () => byId("branch-fetch").click());
+  await flush();
+  await act(async () => el.querySelector<HTMLElement>("button[aria-label=Refresh]")!.click());
+  await flush();
+  const types = new Set(c.sent.map((m) => m.type));
+  for (const t of ["git.log", "git.commit", "git.fileAt", "git.fetch", "git.branch"]) expect(types.has(t)).toBe(true);
+  const refs = c.sent.filter((m) => m.type.startsWith("git.") && m.type !== "git.status");
+  expect(refs.length).toBeGreaterThan(5);
+  for (const m of refs) expect(m).toMatchObject({ cwd: "/p/api", exact: true });
+  expect(onRefresh).toHaveBeenCalledTimes(1);
+});
+
+it("without exact no request carries it", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  expect(c.sent.some((m) => "exact" in m)).toBe(false);
 });

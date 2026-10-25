@@ -1909,6 +1909,54 @@ it("leaving and coming back to the graph tab keeps the panel mounted", async () 
   }
 });
 
+const api = { path: "/p/demo/api", rel: "api", kind: "nested", branch: "main" };
+const web = { path: "/p/demo/web", rel: "web", kind: "nested", branch: "main" };
+const reposOf = () => (sent as { type: string; cwd?: string; exact?: boolean; openFiles?: string[]; fresh?: boolean }[]).filter((m) => m.type === "git.repos");
+
+it("a workspace folder that holds repositories shows the Graph tab; the graph reads the first repository with exact", async () => {
+  const restore = await remount({ "git.repos": { repos: [api, web] }, "git.status": { status: null }, "git.refs": { refs: "s1" }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } });
+  try {
+    expect(el.querySelector('[data-testid="side-panel"] [data-testid="pane-graph"]')).not.toBeNull();
+    sent.length = 0;
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-graph"]')!.click());
+    await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    expect((sent as { type: string; cwd?: string; exact?: boolean }[]).filter((m) => m.type === "git.log")).toMatchObject([{ cwd: "/p/demo/api", exact: true }]);
+  } finally {
+    restore();
+    for (const k of ["git.status", "git.refs", "git.log", "git.repos"]) delete replies[k];
+  }
+});
+
+it("git.repos [] hides the Graph tab even when git.status would answer; without a repos array git.status decides", async () => {
+  let restore = await remount({ "git.repos": { repos: [] }, "git.status": { status: { branch: "main", added: 0, removed: 0 } } });
+  try {
+    expect(el.querySelector('[data-testid="side-panel"] [data-testid="pane-graph"]')).toBeNull();
+    restore();
+    restore = await remount({ "git.repos": {}, "git.status": { status: { branch: "main", added: 0, removed: 0 } } });
+    expect(el.querySelector('[data-testid="side-panel"] [data-testid="pane-graph"]')).not.toBeNull();
+  } finally {
+    restore();
+    for (const k of ["git.status", "git.repos"]) delete replies[k];
+  }
+});
+
+it("git.repos is asked again on sessions.changed and on settings_changed", async () => {
+  const restore = await remount({ "git.repos": { repos: [api] } });
+  try {
+    const n = reposOf().length;
+    await act(async () => sessionsChanged({}));
+    await act(async () => {});
+    expect(reposOf().length).toBe(n + 1);
+    await act(async () => settingsChanged({ settings: { orchestration: {} } }));
+    await act(async () => {});
+    expect(reposOf().length).toBe(n + 2);
+    expect(reposOf().at(-1)!.fresh).toBeUndefined();
+  } finally {
+    restore();
+    delete replies["git.repos"];
+  }
+});
+
 describe("idle close: holds and background follows", () => {
   const subscribes = () => sent.filter((m) => m.type === "session.subscribe") as { type: string; sessionId: string; background?: boolean }[];
   const other = { ...session, id: "99999999-2222-3333-4444-555555555555", cwd: "/p/other", title: "Other" };
@@ -3159,6 +3207,14 @@ describe("GH-394: the file dialog", () => {
     await act(async () => {});
     expect(fileDialog()).not.toBeNull();
     expect(await cursorLine()).toBe(12);
+  });
+
+  it("git.repos gets the open editor tab paths as openFiles", async () => {
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: call("r1", "Read", { file_path: "/p/demo/a.ts" }) }));
+    await act(async () => el.querySelector<HTMLElement>("[data-testid=viewer-open]")!.click());
+    await act(async () => {});
+    await act(async () => void (await new Promise((r) => setTimeout(r, 20))));
+    expect(reposOf().at(-1)!.openFiles).toEqual(["/p/demo/a.ts"]);
   });
 
   it("an Edit card still opens the diff popup, not the file dialog", async () => {

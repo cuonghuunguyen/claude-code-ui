@@ -1,9 +1,9 @@
 // App-wide settings (docs/spec.md "Settings"): settings.json in the config dir, shared by the daemons of one user like projects.json.
 // A new setting = a field in `Settings`, `DEFAULTS` and `CHECKS`; the store, the wire messages and the dialog's patch need no change.
 import { createJsonFile } from "./json-file.ts";
-import { DEFAULT_BRANCH_TEMPLATE, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
+import { AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
 
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string };
 const jiraUrl = (v: unknown) => {
@@ -16,6 +16,13 @@ const jiraUrl = (v: unknown) => {
   }
 };
 const bool = (label: string): Check => ({ valid: (v) => typeof v === "boolean", label, rule: "on or off" });
+const strings = (label: string, item: (s: string) => boolean = () => true, rule = "at most 50 entries of at most 260 characters"): Check => ({
+  valid: (v) => Array.isArray(v) && v.length <= 50 && v.every((s) => typeof s === "string" && s.length >= 1 && s.length <= 260 && !s.includes("\0") && item(s)),
+  label,
+  rule,
+});
+const relativeEntry = (s: string) => !/^([\\/]|[A-Za-z]:)/.test(s) && s.split(/[\\/]/).every((seg) => seg !== ".." && seg.toLowerCase() !== ".git") && s.split(/[\\/]/).some((seg) => seg !== "" && seg !== ".");
+const intIn = (label: string, min: number, max: number): Check => ({ valid: (v) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max, label, rule: `a whole number from ${min} to ${max}` });
 /** Per field: is `v` valid. A stored field that fails falls back to its default; a patched one is refused with "<label> must be <rule>". */
 const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
   orchestration: {
@@ -34,7 +41,20 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     template: { valid: (v) => typeof v === "string" && v.length >= 1 && v.length <= 200 && !/[\0-\x1f]/.test(v), label: "Branch template", rule: "1 to 200 characters" },
     jql: { valid: (v) => typeof v === "string" && v.length <= 2000 && !/[\0-\x08\x0b-\x1f]/.test(v), label: "Ticket filter", rule: "JQL of at most 2000 characters" },
   },
+  git: {
+    autoRepositoryDetection: { valid: (v) => (AUTO_REPOSITORY_DETECTION as readonly unknown[]).includes(v), label: "Auto repository detection", rule: `one of ${AUTO_REPOSITORY_DETECTION.join(", ")}` },
+    repositoryScanMaxDepth: intIn("Repository scan max depth", -1, 10),
+    repositoryScanIgnoredFolders: strings("Repository scan ignored folders", (s) => !/[\\/]/.test(s), "at most 50 folder names (no / or \\) of at most 260 characters"),
+    scanRepositories: strings("Scan repositories", relativeEntry, "at most 50 relative paths without .. or .git, of at most 260 characters"),
+    ignoredRepositories: strings("Ignored repositories"),
+    detectSubmodules: bool("Detect submodules"),
+    detectSubmodulesLimit: intIn("Detect submodules limit", 0, 100),
+    ignoreSubmodules: bool("Ignore submodules"),
+    openRepositoryInParentFolders: { valid: (v) => (PARENT_FOLDER_MODES as readonly unknown[]).includes(v), label: "Open repository in parent folders", rule: `one of ${PARENT_FOLDER_MODES.join(", ")}` },
+  },
 };
+const same = (a: unknown, b: unknown) => (Array.isArray(a) ? Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]) : a === b);
+const copy = (v: unknown) => (Array.isArray(v) ? [...v] : v);
 const checks = CHECKS as Record<string, Record<string, Check>>;
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 /** Own property only: "__proto__", "toString" and the like are never a section or field. */
@@ -55,7 +75,7 @@ function parseStored(raw: unknown): Stored {
     if (!isObj(sec)) continue;
     for (const k of Object.keys(checks[s]!)) {
       const v = own(sec, k);
-      if (checks[s]![k]!.valid(v) && v !== defaults[s]![k]) (out[s] ??= {})[k] = v;
+      if (checks[s]![k]!.valid(v) && !same(v, defaults[s]![k])) (out[s] ??= {})[k] = copy(v);
     }
   }
   return out;
@@ -64,7 +84,7 @@ function parseStored(raw: unknown): Stored {
 /** Every field valid or default; a hand-edited file of another shape gives the defaults. */
 export function parseSettings(raw: unknown): Settings {
   const stored = parseStored(raw);
-  return Object.fromEntries(Object.keys(checks).map((s) => [s, { ...defaults[s], ...stored[s] }])) as unknown as Settings;
+  return Object.fromEntries(Object.keys(checks).map((s) => [s, Object.fromEntries(Object.entries({ ...defaults[s], ...stored[s] }).map(([k, v]) => [k, copy(v)]))])) as unknown as Settings;
 }
 
 /** The first problem of a patch (unknown section or field, wrong value), or undefined. */
@@ -100,8 +120,8 @@ export function createSettings({ file }: { file?: string } = {}) {
           for (const k of Object.keys(checks[s]!)) {
             if (!Object.hasOwn(sec, k)) continue;
             // A default value is not stored: the field follows the default again.
-            if (sec[k] === defaults[s]![k]) delete d[s]?.[k];
-            else (d[s] ??= {})[k] = sec[k];
+            if (same(sec[k], defaults[s]![k])) delete d[s]?.[k];
+            else (d[s] ??= {})[k] = copy(sec[k]);
           }
         }
       });

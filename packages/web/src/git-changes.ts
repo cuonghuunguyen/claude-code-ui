@@ -6,7 +6,7 @@ import { repoRoot } from "./diff-mode.ts";
 
 export type GitKind = "A" | "D" | "M" | "R";
 /** `path`: absolute (under the repository root as cwd spells it); `rel`: relative to the repository top, as git names it; `oldPath`: the before side's relative path of a rename. */
-export type GitRow = { path: string; rel: string; oldPath?: string; kind: GitKind; stats?: Stats; untracked?: boolean };
+export type GitRow = { path: string; rel: string; oldPath?: string; kind: GitKind; stats?: Stats; untracked?: boolean; submodule?: { from?: string; to?: string } };
 
 /** Stats only when git counted lines (a binary or an oversized untracked file has none). */
 export function gitRows(d: GitDiff, cwd: string): GitRow[] {
@@ -18,6 +18,7 @@ export function gitRows(d: GitDiff, cwd: string): GitRow[] {
     kind: f.status,
     ...(f.added !== undefined && f.removed !== undefined && { stats: { added: f.added, removed: f.removed } }),
     ...(f.untracked && { untracked: true }),
+    ...(f.submodule && { submodule: f.submodule }),
   }));
 }
 

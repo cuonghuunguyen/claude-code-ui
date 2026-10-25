@@ -14,6 +14,7 @@ import { MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
 import { openChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
+import { setGitRunner, threadRunner } from "../src/git-runner.ts";
 import { createProjects } from "../src/projects.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
@@ -1099,6 +1100,136 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "bin" })).toMatchObject({ code: "binary" });
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "../x" })).toMatchObject({ code: "bad_request" });
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "nope" })).toMatchObject({ code: "not_found" });
+  });
+
+  describe("submodule folders and gitlink paths (GH-388)", () => {
+    /** A repo under webRoot with gitlinks libs/lib and libs/lib.png (never initialised: empty folder). */
+    function gitlinkRepo() {
+      const repo = join(webRoot, `gl-${randomUUID().slice(0, 8)}`);
+      mkdirSync(join(repo, "libs", "lib"), { recursive: true });
+      const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" }).trim();
+      git("init", "-q", "-b", "main");
+      writeFileSync(join(repo, "t.txt"), "hi\n");
+      git("add", ".");
+      git("commit", "-q", "-m", "first");
+      const id = git("rev-parse", "HEAD");
+      for (const p of ["libs/lib", "libs/lib.png"]) git("update-index", "--add", "--cacheinfo", `160000,${id},${p}`);
+      git("commit", "-q", "-m", "gitlinks");
+      return { repo, hash: git("rev-parse", "HEAD") };
+    }
+
+    it("git requests with exact answer only for a repository top; without exact an uninitialised submodule folder answers for the superproject", async () => {
+      const c = await client();
+      const { repo, hash } = gitlinkRepo();
+      const sub = join(repo, "libs", "lib");
+      const base = { cwd: sub, exact: true };
+      const msgs: Record<string, unknown>[] = [
+        { type: "git.status" },
+        { type: "git.refs" },
+        { type: "git.log" },
+        { type: "git.diff", base: "head" },
+        { type: "git.commit", hash },
+        { type: "git.fileAt", hash, path: "t.txt" },
+        { type: "git.fetch" },
+        { type: "git.branch", ref: "refs/heads/main" },
+        { type: "git.push", ref: "refs/heads/main", local: hash, argv: ["push"] },
+        { type: "git.pull", ref: "refs/heads/main", local: hash, argv: ["pull"] },
+        { type: "fs.media", hash, path: "x.png" },
+      ];
+      for (const m of msgs) expect(await c.request({ ...m, ...base }), String(m.type)).toMatchObject({ code: "not_git", message: "Not a repository top" });
+      expect(await c.request({ type: "git.status", cwd: repo, exact: true })).toMatchObject({ result: { status: { branch: "main" } } });
+      expect(await c.request({ type: "git.diff", cwd: repo, base: "head", exact: true })).toMatchObject({ result: { diff: { prefix: "" } } });
+      expect(await c.request({ type: "git.diff", cwd: sub, base: "head" })).toMatchObject({ result: { diff: { prefix: "libs/lib/" } } });
+    });
+
+    it("git.fileAt and fs.media {hash} on a gitlink path are bad_request \"Submodule: open its repository\"", async () => {
+      const c = await client();
+      const { repo, hash } = gitlinkRepo();
+      const bad = { code: "bad_request", message: "Submodule: open its repository" };
+      expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "libs/lib" })).toMatchObject(bad);
+      expect(await c.request({ type: "fs.media", cwd: repo, hash, path: "libs/lib.png" })).toMatchObject(bad);
+    });
+  });
+
+  describe("git.repos (GH-389)", () => {
+    const own = async <T,>(fn: (c: ReturnType<typeof client> extends Promise<infer C> ? C : never, ws: string) => Promise<T>) => {
+      const ws = realpathSync(mkdtempSync(join(tmpdir(), "gh389-")));
+      const d = createDaemon({ webRoot, token, roots: [ws], query: fakeQuery as never });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        return await fn(await client((d.address() as AddressInfo).port), ws);
+      } finally {
+        d.close();
+      }
+    };
+    const mk = (dir: string) => mkdirSync(join(dir, ".git"), { recursive: true });
+
+    it("git.repos lists the repositories of a workspace folder under the roots", () =>
+      own(async (c, ws) => {
+        mk(join(ws, "api"));
+        mk(join(ws, "web"));
+        const r = await c.request({ type: "git.repos", cwd: ws });
+        expect(r).toMatchObject({ result: { repos: [{ rel: "api", kind: "nested", path: join(ws, "api") }, { rel: "web", kind: "nested" }] } });
+      }));
+
+    it("git.repos refuses a cwd outside the roots and bad openFiles", () =>
+      own(async (c, ws) => {
+        expect(await c.request({ type: "git.repos", cwd: tmpdir() })).toMatchObject({ code: "cwd_not_allowed" });
+        expect(await c.request({ type: "git.repos", cwd: ws, openFiles: Array.from({ length: 51 }, (_, i) => join(ws, `f${i}`)) })).toMatchObject({ code: "bad_request" });
+        expect(await c.request({ type: "git.repos", cwd: ws, openFiles: [1] })).toMatchObject({ code: "bad_request" });
+        expect(await c.request({ type: "git.repos", cwd: ws, openFiles: ["/a\0b"] })).toMatchObject({ code: "bad_request" });
+        expect(await c.request({ type: "git.repos", cwd: ws, openFiles: [join(ws, "x"), "relative", "\\\\host\\share\\f"] })).toMatchObject({ result: { repos: [] } });
+      }));
+
+    it("git.repos is cached; fresh, settings.set and sessions.changed drop the cache", () =>
+      own(async (c, ws) => {
+        const repos = async (fresh?: true) => ((await c.request({ type: "git.repos", cwd: ws, ...(fresh && { fresh }) })) as { result: { repos: { rel: string }[] } }).result.repos.map((r) => r.rel);
+        expect(await repos()).toEqual([]);
+        mk(join(ws, "new"));
+        expect(await repos()).toEqual([]);
+        expect(await repos(true)).toEqual(["new"]);
+        rmSync(join(ws, "new"), { recursive: true });
+        expect(await repos()).toEqual(["new"]);
+        await c.request({ type: "settings.set", patch: { git: { detectSubmodules: false } } });
+        expect(await repos()).toEqual([]);
+        mk(join(ws, "again"));
+        expect(await repos()).toEqual([]);
+        await c.request({ type: "project.open", cwd: ws });
+        expect(await repos()).toEqual(["again"]);
+      }));
+
+    it("git.repos applies the git settings: repositoryScanMaxDepth 0 lists nothing for a workspace folder", () =>
+      own(async (c, ws) => {
+        mk(join(ws, "api"));
+        await c.request({ type: "settings.set", patch: { git: { repositoryScanMaxDepth: 0 } } });
+        expect(await c.request({ type: "git.repos", cwd: ws })).toMatchObject({ result: { repos: [] } });
+      }));
+
+    it("git.status and git.diff follow ignoreSubmodules", () =>
+      own(async (c, ws) => {
+        const repo = join(ws, "r");
+        mkdirSync(repo);
+        const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" });
+        git("init", "-q", "-b", "main");
+        writeFileSync(join(repo, "t.txt"), "hi\n");
+        git("add", ".");
+        git("commit", "-q", "-m", "first");
+        const seen: string[][] = [];
+        setGitRunner((o) => (seen.push(o.args), threadRunner(o)));
+        try {
+          const flag = () => seen.filter((a) => a.includes("--raw")).map((a) => a.find((x) => x.startsWith("--ignore-submodules"))).at(-1);
+          await c.request({ type: "git.diff", cwd: repo, base: "head" });
+          expect(flag()).toBe("--ignore-submodules=dirty");
+          await c.request({ type: "settings.set", patch: { git: { ignoreSubmodules: true } } });
+          await c.request({ type: "git.diff", cwd: repo, base: "head" });
+          expect(flag()).toBe("--ignore-submodules");
+          seen.length = 0;
+          await c.request({ type: "git.repos", cwd: ws });
+          expect(seen).toEqual([]);
+        } finally {
+          setGitRunner(undefined);
+        }
+      }));
   });
 
   describe.skipIf(process.platform === "win32")("a .git that leaves the roots (GH-290)", () => {
