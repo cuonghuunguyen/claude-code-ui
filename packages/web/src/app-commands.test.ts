@@ -459,3 +459,19 @@ it("GH-356 split commands are listed only when given, run their handler; Focus n
   ids.forEach((id) => run(ctx(over), id));
   expect(Object.values(over).map((f) => f.mock.calls.length)).toEqual([1, 1, 1, 1, 1]);
 });
+
+it("GH-395 Show plan is listed only with showPlan; move commands list the two other homes", () => {
+  const ids = (x: CommandContext) => appCommands(x).map((i) => i.id);
+  expect(ids(ctx())).not.toContain("plan.show");
+  expect(ids(ctx())).not.toContain("plan.move.main");
+  const showPlan = vi.fn();
+  const c = ctx({ showPlan, planHome: "side", movePlan: vi.fn() });
+  expect(appCommands(c).find((x) => x.id === "plan.show")).toMatchObject({ title: "Show plan", keys: undefined });
+  run(c, "plan.show");
+  expect(showPlan).toHaveBeenCalledOnce();
+  expect(ids(c).filter((i) => i.startsWith("plan.move"))).toEqual(["plan.move.main", "plan.move.bottom"]);
+  expect(appCommands(c).find((x) => x.id === "plan.move.main")).toMatchObject({ title: "Move plan to main area" });
+  run(c, "plan.move.bottom");
+  expect(c.movePlan).toHaveBeenCalledWith("bottom");
+  expect(ids(ctx({ planHome: "main", movePlan: vi.fn() })).filter((i) => i.startsWith("plan.move"))).toEqual(["plan.move.side", "plan.move.bottom"]);
+});

@@ -7,7 +7,7 @@
 import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
-import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, ListTodoIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
@@ -19,6 +19,7 @@ import { SideLabel } from "./sides.tsx";
 import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
 import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
 import { openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
+import { KIND_LABEL, type PaneKind } from "./pane-ref.ts";
 import { swallowKeyFollowup } from "./context-menu-key.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
@@ -37,6 +38,8 @@ export type TabInfo = {
   transcript?: boolean;
   /** Prompted but the SDK title is not there yet (GH-133): the title shows a skeleton. */
   titleLoading?: boolean;
+  /** A pane tab (GH-395: `plan:<session>`): its kind's icon, no session state, a pane tab menu. */
+  kind?: PaneKind;
 };
 type TabStatus = "new" | "running" | "needs_input" | "unread" | "idle";
 
@@ -66,7 +69,8 @@ export function ProjectAvatar({ cwd, unread }: { cwd: string; unread?: boolean }
   );
 }
 
-function TabIcon({ s, cwd }: { s: TabStatus; cwd?: string }) {
+function TabIcon({ s, cwd, kind }: { s: TabStatus; cwd?: string; kind?: PaneKind }) {
+  if (kind === "plan") return <ListTodoIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "new") return <SquarePenIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "running") return <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />;
   // Needs input gets its own shape, not only another dot colour than unread.
@@ -405,7 +409,7 @@ export function TabsBar({
               className={`${GHOST} max-md:h-11! min-w-0 flex-1 touch-none bg-secondary! px-1.5 font-medium text-foreground`}
               {...trigger.props}
             >
-              {activeId === FOCUS_TAB ? <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden /> : active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} /> : null}
+              {activeId === FOCUS_TAB ? <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden /> : active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} kind={active.kind} /> : null}
               <span className="flex min-w-0 flex-col text-left" style={trigger.style}>
                 <span className="truncate" data-slot="tab-switcher-title">{activeId === FOCUS_TAB ? "Focus" : active?.titleLoading ? <TitleSkeleton title={active.title} /> : (active?.title ?? "Open tabs")}</span>
                 {active && place(active) && <span className="truncate font-normal text-muted-foreground text-xs leading-4" data-slot="tab-switcher-place">{place(active)}</span>}
@@ -428,7 +432,7 @@ export function TabsBar({
                 const label = stateNote(t) || STATUS_LABEL[status(id, t)];
                 return (
                   <SwipeRow key={id} id={id} swiped={swiped} onClose={onSwipeClose ?? onClose}>
-                    <TabIcon s={status(id, t)} cwd={t.cwd} />
+                    <TabIcon s={status(id, t)} cwd={t.cwd} kind={t.kind} />
                     <span className="flex min-w-0 flex-1 flex-col">
                       {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate">{t.title}</span>}
                       {place(t) && <span className="truncate text-muted-foreground text-xs leading-4">{place(t)}</span>}
@@ -626,6 +630,7 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
     const before = state.current;
     const next = swipe(before, { type, p: { x: e.clientX, y: e.clientY, t: performance.now() } }, cfg.current, box.current.width);
     state.current = next;
+    listen(next.phase === "pending" || next.phase === "dragging");
     if (next.phase === "dragging") {
       swiped.current = performance.now();
       if (before.phase !== "dragging") e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -639,11 +644,23 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
     }
   };
   // touch-action pan-y already keeps the horizontal pan from the browser; this is the backup once the swipe is ours (never while the list scrolls).
+  // GH-242 M3: the non-passive listener exists only during a gesture (a touch pointer down to its end), not on every row at mount: a non-passive touchmove listener makes the browser wait for the script on every scroll.
+  const rowEl = useRef<HTMLElement | null>(null);
+  const cancel = useRef((e: TouchEvent) => void (state.current.phase === "dragging" && e.cancelable && e.preventDefault()));
+  const listening = useRef(false);
+  const listen = (on: boolean) => {
+    const el = rowEl.current;
+    if (!el || on === listening.current) return;
+    if (on) el.addEventListener("touchmove", cancel.current, { passive: false });
+    else el.removeEventListener("touchmove", cancel.current);
+    listening.current = on;
+  };
   const itemRef = useCallback((el: HTMLElement | null) => {
-    if (!el) return;
-    const cancel = (e: TouchEvent) => state.current.phase === "dragging" && e.cancelable && e.preventDefault();
-    el.addEventListener("touchmove", cancel, { passive: false });
-    return () => el.removeEventListener("touchmove", cancel);
+    rowEl.current = el;
+    return () => {
+      if (listening.current) el?.removeEventListener("touchmove", cancel.current);
+      listening.current = false;
+    };
   }, []);
   const active = (e: ReactPointerEvent<HTMLElement>) => e.pointerId === pointer.current && (state.current.phase === "pending" || state.current.phase === "dragging");
   const reveal = view.stage !== "idle" && Math.sign(view.offset) === view.sign;
@@ -680,10 +697,12 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
           feed(e, "up");
           // Done: later moves (a mouse, a pen above the screen) must not run the outcome again.
           state.current = { phase: "idle" };
+          listen(false);
         }}
         onPointerCancel={(e) => {
           if (!active(e)) return;
           state.current = { phase: "idle" };
+          listen(false);
           if (view.stage === "drag") settle();
         }}
         onClickCapture={(e) => {
@@ -847,7 +866,7 @@ function GroupTabRows({ ids, info, rows }: { ids: string[]; info: (id: string) =
             rows.onClose(id);
           }}
         >
-          <TabIcon s={s} cwd={t.cwd} />
+          <TabIcon s={s} cwd={t.cwd} kind={t.kind} />
           {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className={cn("min-w-0 flex-1 truncate", id === rows.activeId && "font-medium")}>{t.title}</span>}
           {label && <span className="text-muted-foreground text-xs leading-none">{label}</span>}
         </Menu.Item>
@@ -1071,7 +1090,7 @@ function Tab({
   onRenamed: (title: string | undefined) => void;
 }) {
   const s = status(id, t);
-  const session = id !== NEW_TAB;
+  const session = id !== NEW_TAB && !t.kind;
   const dragOver = (e: DragEvent) => {
     if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
     e.preventDefault();
@@ -1125,7 +1144,7 @@ function Tab({
       >
         {renaming ? (
           <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
-            <TabIcon s={s} cwd={t.cwd} />
+            <TabIcon s={s} cwd={t.cwd} kind={t.kind} />
             <RenameInput title={t.title} onDone={onRenamed} fromMenu={menuRename} />
           </div>
         ) : (
@@ -1145,7 +1164,7 @@ function Tab({
             // OpenCode: double click on the title renames.
             onDoubleClick={() => session && t.transcript !== false && onAction("rename-inline")}
           >
-            <TabIcon s={s} cwd={t.cwd} />
+            <TabIcon s={s} cwd={t.cwd} kind={t.kind} />
             {splitDir && !pinned && (splitDir === "row" ? <Columns2Icon aria-hidden className="size-3 shrink-0 text-muted-foreground" data-testid="tab-split-mark" /> : <Rows2Icon aria-hidden className="size-3 shrink-0 text-muted-foreground" data-testid="tab-split-mark" />)}
             {!pinned && (t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate leading-4">{t.title}</span>)}
           </button>
@@ -1169,7 +1188,7 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            {tabMenuSections({ session, pinned: session ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit } })
+            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: KIND_LABEL[t.kind] } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit && !t.kind } })
               // Without onCommand: Move and Close tab only.
               .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
               .filter((sec) => sec.length)

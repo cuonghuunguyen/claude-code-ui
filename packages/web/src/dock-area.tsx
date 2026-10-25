@@ -4,7 +4,7 @@ import { Menu } from "@base-ui/react/menu";
 import { EllipsisIcon } from "lucide-react";
 import { type ReactNode, useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { AREA_LABEL, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, type PaneId } from "./layout.ts";
+import { AREA_LABEL, type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, type PaneId, canMain } from "./layout.ts";
 import { ITEM, POPUP } from "./session-actions.tsx";
 
 export const PANE_DRAG_TYPE = "application/x-claude-ui-pane";
@@ -115,7 +115,7 @@ export function DockHeader({
   changes: number;
   side?: DockSide;
   onSelect: (p: PaneId) => void;
-  onMove: (p: PaneId, to: DockArea, before?: PaneId) => void;
+  onMove: (p: PaneId, to: Area, before?: PaneId) => void;
   onFlipSide?: () => void;
   onReset: () => void;
   extra?: ReactNode;
@@ -133,6 +133,7 @@ export function DockHeader({
   const moved = useRef(false);
   const finalFocus = () => !moved.current;
   const move = (p: PaneId) => ((moved.current = true), onMove(p, other));
+  const moveTo = (p: PaneId, to: Area) => ((moved.current = true), onMove(p, to));
   const ctxKb = useKeyboardOpen();
   const menuKb = useKeyboardOpen();
   // A menu that closes without a move returns the focus to its trigger: forget the previous move when one opens.
@@ -190,6 +191,11 @@ export function DockHeader({
                   <ContextMenu.Item className={ITEM} onClick={() => move(p)} data-testid="pane-move">
                     Move to {AREA_LABEL[other].toLowerCase()}
                   </ContextMenu.Item>
+                  {canMain(p) && (
+                    <ContextMenu.Item className={ITEM} onClick={() => moveTo(p, "main")} data-testid="pane-move-main">
+                      Move to main area
+                    </ContextMenu.Item>
+                  )}
                   <ContextMenu.Item className={ITEM} onClick={onReset} data-testid="pane-reset">
                     Reset layout
                   </ContextMenu.Item>
@@ -211,6 +217,11 @@ export function DockHeader({
                 {active && (
                   <Menu.Item className={ITEM} onClick={() => move(active)} data-testid="dock-move">
                     Move {PANE_LABEL[active]} to {AREA_LABEL[other].toLowerCase()}
+                  </Menu.Item>
+                )}
+                {active && canMain(active) && (
+                  <Menu.Item className={ITEM} onClick={() => moveTo(active, "main")} data-testid="dock-move-main">
+                    Move {PANE_LABEL[active]} to main area
                   </Menu.Item>
                 )}
                 {area === "side" && onFlipSide && (
