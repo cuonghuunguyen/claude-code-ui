@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
 import { GraphPanel } from "./git-graph-panel.tsx";
+import { forgetRemoteOps } from "./git-remote-ops.ts";
 import { noteRefs } from "./git-refs.ts";
 import * as graph from "./git-graph.ts";
 
@@ -56,11 +57,12 @@ afterEach(() => {
   stampValue = "s1";
   noStamp = false;
   branchCount = 2;
+  forgetRemoteOps();
   return act(() => root.render(null));
 });
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 
-type Req = { type: string; skip?: number; hash?: string; path?: string; text?: string; ref?: string };
+type Req = { type: string; cwd?: string; skip?: number; hash?: string; path?: string; text?: string; ref?: string };
 let fetchReply: () => Promise<unknown> = async () => ({ remote: { output: "", refs: null } });
 const MAIN_ARGV = "refs/heads/main:refs/heads/main";
 const infoMain = (o: Partial<GitBranchInfo> = {}): GitBranchInfo => ({
@@ -533,6 +535,74 @@ it("a failed fetch shows git's message, still reloads, and Dismiss removes it", 
   await act(async () => el.querySelector<HTMLButtonElement>("button[aria-label=Dismiss]")!.click());
   expect(el.querySelector("[data-testid=graph-remote-result]")).toBeNull();
   fetchReply = async () => ({ remote: { output: "", refs: null } });
+});
+
+const mountNamed = async (c: ReturnType<typeof fake>, cwd: string, repoName?: string) => {
+  await act(async () => root.render(<GraphPanel key={cwd} client={c} cwd={cwd} repoName={repoName} />));
+  await flush();
+};
+const fetchBtn = () => el.querySelector<HTMLButtonElement>("[data-testid=graph-fetch]")!;
+const resultText = () => el.querySelector("[data-testid=graph-remote-result] [role=status]")?.textContent;
+
+it("Fetch of a named repository says \"Fetched all remotes of libs/lib\"; without a name today's text", async () => {
+  const c = fake(history(3));
+  await mountNamed(c, "/p/libs/lib", "libs/lib");
+  fetchReply = () => new Promise(() => {});
+  await act(async () => fetchBtn().click());
+  expect(el.querySelector(".sr-only[role=status]")!.textContent).toBe("Fetching all remotes of libs/lib…");
+  fetchReply = async () => ({ remote: { output: "", refs: null } });
+  forgetRemoteOps();
+  await mountNamed(c, "/p", undefined);
+  await act(async () => fetchBtn().click());
+  await flush();
+  expect(resultText()).toBe("Fetched all remotes");
+});
+
+it("a result line and a running fetch stay with their repository across a remount; Dismiss clears that repository only", async () => {
+  const c = fake(history(3));
+  let done!: (v: unknown) => void;
+  fetchReply = () => new Promise((r) => (done = r));
+  await mountNamed(c, "/p", "p");
+  await act(async () => fetchBtn().click());
+  await mountNamed(c, "/p/libs/lib", "libs/lib");
+  expect(fetchBtn().getAttribute("aria-busy")).not.toBe("true");
+  fetchReply = async () => ({ remote: { output: "", refs: null } });
+  await act(async () => fetchBtn().click());
+  await flush();
+  expect(resultText()).toBe("Fetched all remotes of libs/lib");
+  await act(async () => done({ remote: { output: "", refs: null } }));
+  await flush();
+  expect(resultText()).toBe("Fetched all remotes of libs/lib");
+  await mountNamed(c, "/p", "p");
+  expect(resultText()).toBe("Fetched all remotes of p");
+  expect(c.sent.filter((m) => m.type === "git.fetch" && m.cwd === "/p")).toHaveLength(1);
+  await act(async () => el.querySelector<HTMLButtonElement>("button[aria-label=Dismiss]")!.click());
+  await mountNamed(c, "/p/libs/lib", "libs/lib");
+  expect(resultText()).toBe("Fetched all remotes of libs/lib");
+});
+
+it("a finished operation reloads the mounted panel of its repository with fresh", async () => {
+  const c = fake(history(3));
+  await mountNamed(c, "/p", "p");
+  c.sent.length = 0;
+  await act(async () => fetchBtn().click());
+  await flush();
+  expect(c.sent.at(-1)).toMatchObject({ type: "git.log", cwd: "/p", fresh: true });
+});
+
+it("Push and Pull results name the repository", async () => {
+  const c = fake(withRefs());
+  await mountNamed(c, "/p/libs/lib", "libs/lib");
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-push").click());
+  await act(async () => byId("git-push-confirm").click());
+  await flush();
+  expect(resultText()).toBe("Pushed main of libs/lib to origin");
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-pull").click());
+  await act(async () => byId("git-pull-confirm").click());
+  await flush();
+  expect(resultText()).toBe("Pulled main of libs/lib");
 });
 
 // ---- Branch menu (right click, long press, Shift+F10): push, force push, pull ----

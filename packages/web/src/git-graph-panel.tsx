@@ -1,6 +1,6 @@
 // Graph tab (docs/spec.md "Layout"): the commit history of the session's repository: lanes, filters, Fetch, details, per-file diff.
 import { memo, useCallback, type ReactElement, useEffect, useMemo, useRef, useState } from "react";
-import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, GitRemoteResult, FsReadResult } from "@claude-ui/protocol";
+import type { GitCommit, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, FsReadResult } from "@claude-ui/protocol";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { ArchiveIcon, ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon, LoaderCircleIcon, RotateCwIcon, SearchIcon, TagIcon, XIcon } from "lucide-react";
@@ -13,6 +13,7 @@ import { FileIcon } from "./file-icon.tsx";
 import { readFailure } from "./files.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
 import { BranchMenu, type RemoteRequest } from "./git-branch-menu.tsx";
+import { runRemoteOp, dismissRemoteResult, useRemoteOp } from "./git-remote-ops.ts";
 import { noteRefs } from "./git-refs.ts";
 import { timeAgo } from "./sessions.ts";
 import { useDark } from "./theme.ts";
@@ -115,8 +116,8 @@ type Page = { commits: GitCommit[]; rows: GraphRow[]; state: GraphState };
 const NO_PAGE: Page = { commits: [], rows: [], state: emptyGraph() };
 
 /** `hidden`: the tab is not showing; the panel stays mounted and keeps its list (docs/spec.md "Layout", Graph tab). */
-/** `exact`: `cwd` is a repository top from `git.repos` (every request carries `exact: true`); `onRefresh`: Refresh also re-reads the repository list. */
-export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefresh }: { client: Client; cwd: string; hidden?: boolean; exact?: boolean; onRefresh?: () => void }) {
+/** `exact`: `cwd` is a repository top from `git.repos` (every request carries `exact: true`); `onRefresh`: Refresh also re-reads the repository list. `repoName`: names the repository in remote result and running texts. */
+export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefresh, repoName }: { client: Client; cwd: string; hidden?: boolean; exact?: boolean; onRefresh?: () => void; repoName?: string }) {
   const ex = exact ? { exact: true as const } : {};
   const narrow = useNarrow();
   const dark = useDark();
@@ -166,32 +167,18 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   // Set by the Refresh button: that read skips the daemon's caches.
   const freshNext = useRef(false);
   const gen = useRef(0);
-  // A remote operation (Fetch, Push, Pull) of this panel: one at a time; its result line shows under the filter row until the next one or Dismiss.
-  const [op, setOp] = useState<string>();
-  const [result, setResult] = useState<{ ok: boolean; text: string; output?: string }>();
-  const cwdRef = useRef(cwd);
-  cwdRef.current = cwd;
-  const runRemote = (msg: RemoteRequest, done: string, running: string) => {
-    if (op || notGit) return;
-    const at = msg.cwd;
-    setOp(running);
-    setResult(undefined);
-    // Success or failure, the list reloads: a failed `fetch --all` may still have updated some remotes.
-    client
-      .request<GitRemoteResult>(msg)
-      .then(
-        (r) => {
-          noteRefs(at, r.remote?.refs ?? undefined);
-          if (cwdRef.current === at) setResult({ ok: true, text: done, output: r.remote?.output || undefined });
-        },
-        (e: RequestError) => cwdRef.current === at && setResult({ ok: false, text: e.message || "git failed" }),
-      )
-      .finally(() => {
-        setOp(undefined);
-        freshNext.current = true;
-        setReload((n) => n + 1);
-      });
-  };
+  // A remote operation (Fetch, Push, Pull) of this repository: one at a time; its result line shows under the filter row until the next one or Dismiss. Kept per repository path, not in this panel.
+  const { running: op, result, settled } = useRemoteOp(cwd);
+  const runRemote = (msg: RemoteRequest, done: string, running: string) => void (!notGit && runRemoteOp(client, msg, done, running));
+  // Success or failure, the list reloads.
+  const lastSettled = useRef(settled);
+  useEffect(() => {
+    if (settled === lastSettled.current) return;
+    lastSettled.current = settled;
+    freshNext.current = true;
+    setReload((n) => n + 1);
+  }, [settled]);
+  const of = (x: string) => (repoName ? `${x} of ${repoName}` : x);
   const filter = (skip: number) => ({ type: "git.log" as const, cwd, ...ex, skip, limit: PAGE, ...(ref !== ALL && { ref }), ...(q.author && { author: q.author }), ...(q.text && { text: q.text }) });
 
   useEffect(() => {
@@ -313,7 +300,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
           </SelectContent>
         </Select>
         <input type="search" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Author" aria-label="Author" className={cn(INPUT, "w-32 flex-none")} data-testid="graph-filter-author" />
-        <Button size="icon-sm" variant="ghost" className="max-md:size-11 aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={!!op || notGit} onClick={() => runRemote({ type: "git.fetch", cwd, ...ex }, "Fetched all remotes", "Fetching all remotes…")} title="Fetch all remotes" aria-label="Fetch" aria-busy={!!op} data-testid="graph-fetch">
+        <Button size="icon-sm" variant="ghost" className="max-md:size-11 aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={!!op || notGit} onClick={() => runRemote({ type: "git.fetch", cwd, ...ex }, of("Fetched all remotes"), `${of("Fetching all remotes")}…`)} title="Fetch all remotes" aria-label="Fetch" aria-busy={!!op} data-testid="graph-fetch">
           {op ? <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" /> : <CloudDownloadIcon />}
         </Button>
         <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => ((freshNext.current = true), setReload((n) => n + 1), onRefresh?.())} title="Refresh" aria-label="Refresh">
@@ -342,7 +329,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
               </pre>
             </div>
           )}
-          <Button size="icon-sm" variant="ghost" className="max-md:size-11" aria-label="Dismiss" onClick={() => setResult(undefined)}>
+          <Button size="icon-sm" variant="ghost" className="max-md:size-11" aria-label="Dismiss" onClick={() => dismissRemoteResult(cwd)}>
             <XIcon />
           </Button>
         </div>
@@ -358,7 +345,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
               </p>
             )}
             {!error && !commits.length && !loading && <p className="m-auto p-4 text-muted-foreground">{filtered || (ref !== ALL && ref !== HEAD) ? "No commits match." : "No commits yet."}</p>}
-            <BranchMenu client={client} cwd={cwd} exact={exact} busy={!!op} onRun={runRemote} fallback={() => commits[index]?.refs.filter((r) => r.startsWith("refs/heads/")) ?? []}>
+            <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => commits[index]?.refs.filter((r) => r.startsWith("refs/heads/")) ?? []}>
             <div
               ref={scroller}
               role="listbox"
@@ -383,7 +370,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
             <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l", file ? "@max-2xl:max-h-3/4 @2xl:w-3/5" : "@max-2xl:max-h-1/2 @2xl:w-80", "shrink-0")} data-testid="commit-details">
               {detailError && <p className="p-3 text-destructive">{detailError}</p>}
               {!detail && !detailError && <p className="p-3 text-muted-foreground">Loading…</p>}
-              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} busy={!!op} onRun={runRemote} fallback={() => refs.filter((r) => r.startsWith("refs/heads/"))}>{el}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
+              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => refs.filter((r) => r.startsWith("refs/heads/"))}>{el}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
             </div>
           )}
         </div>
