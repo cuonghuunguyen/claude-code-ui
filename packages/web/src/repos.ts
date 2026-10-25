@@ -6,8 +6,7 @@ import { resolveRepoChoice } from "./repo-choice.ts";
 
 type Client = ReturnType<typeof connect>;
 
-/** A repository the git panes read: `path` the canonical top for requests, `dir` the same top spelled from the session cwd for row paths. */
-export type RepoTarget = { path: string; dir: string };
+export type { RepoTarget } from "./repo-choice.ts";
 
 export { repoDir } from "./paths.ts";
 

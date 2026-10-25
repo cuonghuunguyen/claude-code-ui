@@ -1,4 +1,4 @@
-// Repository selector of the Changes toolbar (docs/spec.md "Repository selector"): a button with the selected repository, opening a tree of
+// Repository selector of the Changes toolbar and the Graph filter row (docs/spec.md "Repository selector"): a button with the selected repository, opening a tree of
 // every repository of the project (own > submodules > nested). A popover on wide screens, a full-width bottom sheet below md.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
@@ -166,13 +166,14 @@ function RepoTree({ list, truncated, selected, onSelect, limit, close }: { list:
 }
 
 /** `selected`: the resolved repository (undefined while none is usable). `submoduleLimit`: the daemon's per-repository submodule limit, for the truncation note. */
-export function RepoSelector({ list, truncated, selected, onSelect, submoduleLimit = 10 }: { list: GitRepo[]; truncated?: GitReposResult["truncated"]; selected?: GitRepo; onSelect: (rel: string) => void; submoduleLimit?: number }) {
+/** `className`: extra classes of the trigger on wide screens (below md it is always `h-11 w-full`). */
+export function RepoSelector({ list, truncated, selected, onSelect, submoduleLimit = 10, className }: { list: GitRepo[]; truncated?: GitReposResult["truncated"]; selected?: GitRepo; onSelect: (rel: string) => void; submoduleLimit?: number; className?: string }) {
   const narrow = useNarrow();
   const [open, setOpen] = useState(false);
   const name = selected ? baseName(selected.path) : "No repository";
   const trigger = cn(
     "flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-transparent px-2 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-accent",
-    narrow ? "h-11 w-full" : "h-7 max-w-56 shrink-0",
+    narrow ? "h-11 w-full" : cn("h-7 max-w-56 shrink-0", className),
   );
   const inner = (
     <>

@@ -7,6 +7,7 @@ const STATES: Record<string, SubmoduleState> = {
   "a moved submodule": "moved",
   "a submodule with only uncommitted edits": "dirty-only",
   "a commit that moved a submodule": "moved-committed",
+  "a commit that moved a listed submodule": "moved-committed-listed",
   "a dirty submodule and a nested repository": "dirty-with-nested",
 };
 
