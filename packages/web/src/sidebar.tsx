@@ -175,9 +175,9 @@ export function SessionList({
   /** Sessions with an open tab (Close tab in the row menu). */
   openTabs?: ReadonlySet<string>;
   /** Close finished / Remove closed workers of a coordinator: the worker ids (the app confirms removals). */
+  onWorkers?: (ids: string[], action: "close" | "remove", coordinator: { id: string; title: string }) => void;
   /** Copy path of a project or worktree row; the app copies and toasts. */
   onCopy?: (text: string, what: string) => void;
-  onWorkers?: (ids: string[], action: "close" | "remove", coordinator: { id: string; title: string }) => void;
   /** Archive idle sessions older than `days` in `where` (a project or worktree name); the app confirms first. */
   onArchiveIdle?: (ids: string[], where: string, days: number) => void;
 }) {
