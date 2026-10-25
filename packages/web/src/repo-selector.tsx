@@ -119,7 +119,7 @@ function RepoTree({ list, truncated, selected, onSelect, limit, close }: { list:
               style={{ paddingLeft: `${r.depth * 12 + 8}px` }}
               onClick={() => (setFocus(r.repo.path), choose(r))}
               onFocus={() => setFocus(r.repo.path)}
-              data-testid="repo-row"
+              data-testid="repo-tree-item"
             >
               {r.hasChildren ? (
                 <span
