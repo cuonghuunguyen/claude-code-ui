@@ -63,12 +63,12 @@ export function cleanupCandidates(
 }
 
 export type Row =
-  | ({ kind: "worktree" } & WorktreeCandidate & { status?: WorktreeStatusResult; error?: string })
+  | ({ kind: "worktree" } & WorktreeCandidate & { status?: WorktreeStatusResult; /** The last result before the fresh one arrived (GH-463). */ cached?: WorktreeStatusResult; error?: string })
   | ({ kind: "worker" } & WorkerCandidate);
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
-export function rowSafety(r: Row): { safety: "safe" | "has_work" | "blocked" | "checking"; reason?: string } {
+export function rowSafety(r: Row): { safety: "safe" | "has_work" | "blocked" | "checking"; reason?: string; /** Checking: what the cached result says. */ cached?: ReturnType<typeof rowSafety> } {
   if (r.kind === "worker") {
     if (r.state === "running") return { safety: "blocked", reason: "Running" };
     if (r.state === "needs_input") return { safety: "blocked", reason: "Needs input" };
@@ -78,7 +78,7 @@ export function rowSafety(r: Row): { safety: "safe" | "has_work" | "blocked" | "
   if (r.locked) return { safety: "blocked", reason: BLOCK_TEXT.locked };
   if (r.error) return { safety: "blocked", reason: r.error };
   const st = r.status;
-  if (!st) return { safety: "checking" };
+  if (!st) return { safety: "checking", ...(r.cached && { cached: rowSafety({ ...r, status: r.cached, cached: undefined }) }) };
   if (st.safety === "blocked") return { safety: "blocked", reason: st.blocked ? BLOCK_TEXT[st.blocked] : "Blocked" };
   if (st.safety === "has_work") return { safety: "has_work", reason: `${plural(st.uncommitted, "file")}, ${plural(st.ahead, "commit")}` };
   // Squash or rebase merged: ahead, but the base already has the changes.

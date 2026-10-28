@@ -1623,6 +1623,30 @@ describe("worktrees", () => {
     }
   });
 
+  it("hovering the trash button warms the status once per 10 s, as a cancellable scan", async () => {
+    const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] } };
+    const restore = await remount({ "session.list": listed, "worktree.status": { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "worktree-x", branchMerged: false, running: 0, safety: "safe" } });
+    const from = sent.length;
+    const trash = () => el.querySelector<HTMLElement>('[data-testid="worktree-remove"]')!;
+    const warms = () => sent.slice(from).filter((m) => m.type === "worktree.status");
+    const hover = () => act(async () => void trash().dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+    const now = vi.spyOn(Date, "now");
+    try {
+      const t0 = Date.now();
+      now.mockReturnValue(t0);
+      await hover();
+      await hover();
+      expect(warms()).toEqual([{ type: "worktree.status", cwd: "/p/demo", path: managed, scan: expect.any(String) }]);
+      now.mockReturnValue(t0 + 11_000);
+      await hover();
+      expect(warms()).toHaveLength(2);
+      expect(sent.slice(from).filter((m) => m.type === "worktree.cancel")).toHaveLength(1);
+    } finally {
+      now.mockRestore();
+      restore();
+    }
+  });
+
   it("Trash on a worktree whose status is blocked shows the reason, no confirmation", async () => {
     const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] } };
     const restore = await remount({ "session.list": listed, "worktree.status": { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "worktree-x", branchMerged: false, running: 1, safety: "blocked", blocked: "sessions_running" } });

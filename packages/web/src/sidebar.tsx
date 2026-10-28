@@ -125,6 +125,7 @@ export function SessionList({
   onRemove,
   onNewWorktree,
   onRemoveWorktree,
+  onWarmWorktree,
   onCleanUp,
   onOpenProject,
   renaming,
@@ -158,6 +159,8 @@ export function SessionList({
   onNewWorktree?: (cwd: string, quick: boolean) => void;
   /** Remove a linked worktree inside the roots that is not locked (the app confirms first). */
   onRemoveWorktree?: (project: string, path: string) => void;
+  /** Pointer enter or focus on a worktree's trash button: the app reads its status ahead (GH-463). */
+  onWarmWorktree?: (project: string, path: string) => void;
   /** Opens the Clean up dialog (GH-377) for a project's repository or a coordinator's workers. */
   onCleanUp?: (scope: CleanupScope) => void;
   onOpenProject: () => void;
@@ -641,7 +644,7 @@ export function SessionList({
                             ) : (
                               onRemoveWorktree &&
                               removableWorktree(worktrees?.[g.cwd] ?? [], r) && (
-                                <IconButton label={`Remove ${label}`} onClick={() => onRemoveWorktree(g.cwd, r.path)} testId="worktree-remove" className="size-6">
+                                <IconButton label={`Remove ${label}`} onClick={() => onRemoveWorktree(g.cwd, r.path)} onWarm={onWarmWorktree && (() => onWarmWorktree(g.cwd, r.path))} testId="worktree-remove" className="size-6">
                                   <Trash2Icon />
                                 </IconButton>
                               )

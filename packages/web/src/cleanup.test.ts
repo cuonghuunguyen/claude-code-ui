@@ -5,7 +5,7 @@ import { cleanupCandidates, cleanupItems, confirmLabel, defaultSelection, filter
 const DAY = 86_400_000;
 const NOW = 100 * DAY;
 const s = (id: string, cwd: string, o: Partial<SessionListItem> = {}): SessionListItem => ({ id, cwd, title: id, lastActivity: NOW, archived: false, transcript: true, state: "idle", ...o }) as SessionListItem;
-const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
+const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ checkedAt: 0, uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
 const wt = (path: string, o: Partial<Row & { kind: "worktree" }> = {}): Row => ({ kind: "worktree", key: `wt:${path}`, project: "/r", path, external: false, outsideRoots: false, locked: false, sessions: 0, ...o }) as Row;
 const wk = (id: string, state: SessionState, o: object = {}): Row => ({ kind: "worker", key: `wk:${id}`, id, name: id, cwd: "/r", state, lastActivity: NOW, ...o }) as Row;
 

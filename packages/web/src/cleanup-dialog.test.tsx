@@ -15,7 +15,7 @@ globalThis.ResizeObserver ??= class {
 
 const NOW = Date.now();
 const item = (id: string, cwd: string, o: Partial<SessionListItem> = {}): SessionListItem => ({ id, cwd, title: id, lastActivity: NOW, archived: false, transcript: true, state: "idle", ...o }) as SessionListItem;
-const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
+const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ checkedAt: 0, uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
 const M = "/r";
 const P = (n: string) => `/r/.claude/worktrees/${n}`;
 const worktrees: Record<string, Worktree[]> = {
@@ -47,13 +47,14 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function open(o: { scope?: CleanupScope; status?: (path: string) => Promise<WorktreeStatusResult>; remove?: (m: { type: string; path?: string; sessionId?: string }) => Promise<object>; list?: SessionListItem[] } = {}) {
+async function open(o: { scope?: CleanupScope; status?: (path: string) => Promise<WorktreeStatusResult>; remove?: (m: { type: string; path?: string; sessionId?: string }) => Promise<object>; cached?: Record<string, WorktreeStatusResult>; list?: SessionListItem[] } = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
   const sent: Record<string, unknown>[] = [];
   const request = vi.fn(async (m: Record<string, unknown>) => {
     sent.push(m);
+    if (m.type === "worktree.cached") return { statuses: o.cached ?? {} };
     if (m.type === "worktree.status") return (o.status ?? (async (p: string) => STATUS[p]!))(m.path as string);
     return (o.remove ?? (async () => ({})))(m as never);
   });
@@ -191,7 +192,7 @@ it("run sends one request at a time, then shows 'Removed 2, skipped 1' with the 
   await click(confirm());
   await act(async () => new Promise((r) => setTimeout(r, 60)));
   expect(max).toBe(1);
-  expect(sent.filter((m) => !["worktree.status", "git.fetch", "worktree.cancel"].includes(m.type as string)).map((m) => m.type)).toEqual(["worker.remove", "worktree.remove", "worktree.remove"]);
+  expect(sent.filter((m) => !["worktree.status", "worktree.cached", "git.fetch", "worktree.cancel"].includes(m.type as string)).map((m) => m.type)).toEqual(["worker.remove", "worktree.remove", "worktree.remove"]);
   expect(q("[data-testid=cleanup-summary]").textContent).toContain("Removed 2, skipped 1");
   expect(q("[data-testid=cleanup-summary]").textContent).toContain("Changed since the list");
   expect(document.activeElement).toBe(q("[data-testid=cleanup-close]"));
@@ -266,8 +267,8 @@ it("fetches each repository first, shows the fetch line, then requests statuses 
     list: [],
     remove: (m) => (m.type === ("git.fetch" as string) ? new Promise((r) => (gates[(m as { cwd?: string }).cwd!] = () => r({ remote: null }))) : Promise.resolve({})),
   });
-  expect(sent.map((m) => m.type)).toEqual(["git.fetch"]);
-  expect(sent[0]).toEqual({ type: "git.fetch", cwd: M, defaultRemote: true });
+  expect(sent.map((m) => m.type)).toEqual(["worktree.cached", "git.fetch"]);
+  expect(sent[1]).toEqual({ type: "git.fetch", cwd: M, defaultRemote: true });
   expect(fetchLines()).toEqual(["Fetching…"]);
   expect(qa('[data-testid="cleanup-badge"]').every((b) => b.textContent === "Checking…")).toBe(true);
   await act(async () => gates[M]!());
@@ -312,4 +313,25 @@ it("a squash-merged row says why it is Safe", async () => {
   await open({ list: [], status: async (p) => (p === P("safe") ? st({ ahead: 1, mergedInto: "origin/main" }) : STATUS[p]!) });
   expect(row(`wt:${P("safe")}`).textContent).toContain("Safe");
   expect(row(`wt:${P("safe")}`).textContent).toContain("changes already in origin/main (squash/rebase merged)");
+});
+
+it("cached rows show at once with Checking… and are not selectable until the fresh status", async () => {
+  const release: (() => void)[] = [];
+  const old = Date.now() - 5 * 60_000;
+  const cached = { [P("safe")]: st({ checkedAt: old }), [P("work")]: st({ safety: "has_work", uncommitted: 2, ahead: 1, checkedAt: old }) };
+  const { sent } = await open({ cached, status: (p) => new Promise((r) => release.push(() => r(STATUS[p] ?? st()))) });
+  const safe = `wt:${P("safe")}`;
+  expect(sent[0]).toEqual({ type: "worktree.cached", cwd: M, paths: expect.arrayContaining([P("safe")]) });
+  expect(row(safe).textContent).toContain("Safe · Checking…");
+  expect(row(safe).textContent).toContain("checked 5m");
+  expect(row(`wt:${P("work")}`).textContent).toContain("Has work: 2 files, 1 commit · Checking…");
+  expect(check(safe).disabled).toBe(true);
+  expect(check(safe).checked).toBe(false);
+  // Without a cached entry: plain Checking….
+  expect(row(`wt:${P("busy")}`).textContent).toContain("Checking…");
+  expect(row(`wt:${P("busy")}`).textContent).not.toContain("·  Checking");
+  for (let i = 0; i < 5; i++) await act(async () => release.splice(0).forEach((f) => f()));
+  expect(row(safe).textContent).not.toContain("Checking…");
+  expect(check(safe).disabled).toBe(false);
+  expect(check(safe).checked).toBe(true);
 });

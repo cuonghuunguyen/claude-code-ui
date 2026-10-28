@@ -1,7 +1,7 @@
 // Clean up dialog (GH-377, docs/spec.md "Layout"): bulk removal of worktrees and workers with daemon-computed safety badges.
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
-import type { SessionListItem, SessionState, Worktree, WorktreeStatusResult } from "@claude-ui/protocol";
+import type { SessionListItem, SessionState, Worktree, WorktreeCachedResult, WorktreeStatusResult } from "@claude-ui/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -41,6 +41,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
   const id = useId();
   const cands = useMemo(() => cleanupCandidates(scope, list, worktrees, state), []); // eslint-disable-line react-hooks/exhaustive-deps -- frozen while open
   const [status, setStatus] = useState<Record<string, WorktreeStatusResult | { error: string }>>({});
+  const [cached, setCached] = useState<Record<string, WorktreeStatusResult>>({});
   const [override, setOverride] = useState<Record<string, boolean>>({});
   const [deleteBranch, setDeleteBranch] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<Filter>({ olderThan: 0, onlySafe: false });
@@ -69,6 +70,11 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
     };
     // Per repository in parallel: fetch the default remote first (a failure only warns), then every status of it.
     for (const repo of repos) {
+      // The last known statuses show at once (no git); the fresh ones replace them.
+      request<WorktreeCachedResult>({ type: "worktree.cached", cwd: repo, paths: cands.worktrees.filter((x) => x.project === repo).map((x) => x.path) }).then(
+        (r) => live && setCached((c) => ({ ...c, ...Object.fromEntries(cands.worktrees.flatMap((w) => (r.statuses?.[w.path] ? [[w.key, r.statuses[w.path]!] as const] : []))) })),
+        () => {},
+      );
       setFetches((f) => ({ ...f, [repo]: { state: "fetching" } }));
       request({ type: "git.fetch", cwd: repo, defaultRemote: true })
         .then(
@@ -93,11 +99,11 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
     () => [
       ...cands.worktrees.map((w): Row => {
         const s = status[w.key];
-        return { kind: "worktree", ...w, ...(s && ("error" in s ? { error: s.error } : { status: s })) };
+        return { kind: "worktree", ...w, ...(cached[w.key] && { cached: cached[w.key] }), ...(s && ("error" in s ? { error: s.error } : { status: s })) };
       }),
       ...cands.workers.map((w): Row => ({ kind: "worker", ...w })),
     ],
-    [cands, status],
+    [cands, status, cached],
   );
   const defaults = useMemo(() => defaultSelection(rows), [rows]);
   const safetyOf = (r: Row) => rowSafety(r).safety;
@@ -303,12 +309,15 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, shown, set, dele
   deleteBranch: boolean;
   setDeleteBranch: (on: boolean) => void;
 }) {
-  const { safety, reason } = rowSafety(r);
-  const text = safety === "safe" ? "Safe" : safety === "has_work" ? `Has work: ${reason}` : safety === "blocked" ? `Blocked: ${reason}` : "Checking…";
+  const { safety, reason, cached } = rowSafety(r);
+  const label = (s: string, why?: string) => (s === "safe" ? "Safe" : s === "has_work" ? `Has work: ${why}` : s === "blocked" ? `Blocked: ${why}` : "Checking…");
+  const text = cached ? `${label(cached.safety, cached.reason)} · Checking…` : label(safety, reason);
+  const checkedAt = r.kind === "worktree" ? (r.status ?? r.cached)?.checkedAt : undefined;
   const act = r.kind === "worker" ? r.lastActivity : Math.max(r.lastActivity ?? 0, r.status?.headTime ?? 0) || undefined;
   const meta = [
     r.kind === "worktree" ? `${r.sessions} ${r.sessions === 1 ? "session" : "sessions"}` : undefined,
     act ? timeAgo(act, now) : undefined,
+    checkedAt && now - checkedAt > 5000 ? `checked ${timeAgo(checkedAt, now)}` : undefined,
     r.kind === "worktree" && r.status && r.status.ignored === undefined ? "ignored files: checked at removal" : undefined,
     r.kind === "worktree" && r.status?.ignored ? `${r.status.ignored >= 1000 ? "1000+" : r.status.ignored} ignored ${r.status.ignored === 1 ? "file" : "files"} will be deleted` : undefined,
     r.kind === "worktree" && r.status?.upstreamGone ? "remote branch deleted" : undefined,

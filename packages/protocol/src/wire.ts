@@ -231,6 +231,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "worktree.pr"; cwd: string; url: string }
   /** What removing `path` loses and whether it may be removed (docs/spec.md "Worktrees"); reply WorktreeStatusResult. */
   | { type: "worktree.status"; cwd: string; path: string; /** A Clean up scan or warming read: low git priority, cancelled by `worktree.cancel`. */ scan?: string }
+  /** The last preview status of each path, without git (GH-463); `stale: true` when it would be recomputed. Reply WorktreeCachedResult. */
+  | { type: "worktree.cached"; cwd: string; paths: string[] }
   /** Cancels the queued and running `worktree.status` requests of `scan` (replied `cancelled`). Reply {}. */
   | { type: "worktree.cancel"; scan: string }
   /**
@@ -464,7 +466,8 @@ export type WorktreeBlock = "locked" | "symlink" | "outside_roots" | "sessions_r
  * `ignored`: ignored files that removal deletes (ignored directories git reports as a whole are not counted); absent in the preview (counted at removal only); `headTime`: ms of HEAD's last reflog write; `running`: its sessions that run or need input. `safety`: "blocked" when `blocked` is set, else
  * "has_work" when `uncommitted` or `ahead` (unless `mergedInto`), else "safe".
  */
-export type WorktreeStatusResult = { uncommitted: number; untracked: number; commits: number; ahead: number; ignored?: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock; /** The changes are already in this base ref (squash or rebase merged). */ mergedInto?: string; /** The upstream branch was deleted on the remote (`[gone]`). */ upstreamGone?: true; /** GH-447: the branch is a Created branch (ADR 0005); removal deletes it. */ createdBranch?: true };
+export type WorktreeCachedResult = { statuses: Record<string, WorktreeStatusResult & { stale?: true }> };
+export type WorktreeStatusResult = { /** ms since epoch of the git read behind this result. */ checkedAt: number; uncommitted: number; untracked: number; commits: number; ahead: number; ignored?: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock; /** The changes are already in this base ref (squash or rebase merged). */ mergedInto?: string; /** The upstream branch was deleted on the remote (`[gone]`). */ upstreamGone?: true; /** GH-447: the branch is a Created branch (ADR 0005); removal deletes it. */ createdBranch?: true };
 /** `branchKept`: why a kept branch the caller asked to delete stays (git's message). */
 /** `ignoredDeleted`: ignored files removal deleted (counted at removal; the preview does not count them). */
 export type WorktreeRemoveResult = { branchKept?: string; ignoredDeleted?: number };

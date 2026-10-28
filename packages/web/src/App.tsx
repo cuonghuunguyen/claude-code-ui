@@ -1436,6 +1436,17 @@ export function App() {
   }
   const [cleanup, setCleanup] = useState<CleanupScope>();
   const listState = (s: SessionListItem) => (s.coordinatorId ? workerState(s, views[s.id]) : (shownState(views[s.id]) ?? s.state));
+  /** The last status of each worktree (warming, remove dialog), and the warm in flight: one at a time, once per 10 s per path. */
+  const wtStatus = useRef(new Map<string, WorktreeStatusResult>());
+  const warmed = useRef({ path: "", at: 0, scan: "" });
+  function warmWorktree(project: string, path: string) {
+    const w = warmed.current;
+    if (w.path === path && Date.now() - w.at < 10_000) return;
+    if (w.scan) void client.current?.request({ type: "worktree.cancel", scan: w.scan }).catch(() => {});
+    const scan = crypto.randomUUID();
+    warmed.current = { path, at: Date.now(), scan };
+    client.current?.request<WorktreeStatusResult>({ type: "worktree.status", cwd: project, path, scan }).then((st) => wtStatus.current.set(path, st), () => {});
+  }
   async function askRemoveWorktree(project: string, path: string) {
     setError(undefined);
     try {
@@ -2727,6 +2738,7 @@ export function App() {
               onRemove={setRemoving}
               onNewWorktree={(cwd, quick) => (setDrawer(false), quick ? void newWorktree(cwd) : setCreatingWt(cwd))}
               onRemoveWorktree={askRemoveWorktree}
+              onWarmWorktree={warmWorktree}
               onCleanUp={(scope) => (setDrawer(false), setCleanup(scope))}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}
               renaming={renaming?.in === "list" ? renaming.id : undefined}

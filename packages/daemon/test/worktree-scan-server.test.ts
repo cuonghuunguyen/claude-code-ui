@@ -159,3 +159,47 @@ describe("git.fetch defaultRemote", () => {
     expect(await c.request({ type: "git.fetch", cwd: repo, defaultRemote: true })).toMatchObject({ code: "bad_request" });
   });
 });
+
+describe("worktree.cached and turn-end marks (GH-463)", () => {
+  type R = { type: string; code?: string; result?: any };
+  it("worktree.cached replies the last statuses with running and blocked merged", async () => {
+    const { root, repo, paths } = fixture(2, 0);
+    const c = await client(await daemon({ root, repo }));
+    expect(((await c.request({ type: "worktree.cached", cwd: repo, paths })) as R).result.statuses).toEqual({});
+    await c.request({ type: "worktree.status", cwd: repo, path: paths[0] });
+    const calls: GitRunOptions[] = [];
+    setGitRunner((o) => (calls.push(o), threadRunner(o)));
+    const r = (await c.request({ type: "worktree.cached", cwd: repo, paths: [...paths, "/outside/x", 5 as never] })) as R;
+    expect(calls).toEqual([]);
+    expect(Object.keys(r.result.statuses)).toEqual([paths[0]]);
+    expect(r.result.statuses[paths[0]!]).toMatchObject({ safety: "safe", running: 0, checkedAt: expect.any(Number) });
+    expect(r.result.statuses[paths[0]!].stale).toBeUndefined();
+    expect(await c.request({ type: "worktree.cached", cwd: repo, paths: "x" })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "worktree.cached", cwd: repo, paths: Array(501).fill(paths[0]) })).toMatchObject({ code: "bad_request" });
+  });
+
+  it("a session turn ending in a worktree marks it stale", async () => {
+    const { root, repo, paths } = fixture(2, 0);
+    const c = await client(await daemon({ root, repo }));
+    const created = (await c.request({ type: "session.create", cwd: paths[0] })) as R;
+    await c.request({ type: "worktree.status", cwd: repo, path: paths[0] });
+    await c.request({ type: "worktree.status", cwd: repo, path: paths[1] });
+    const stale = async (p: string) => (((await c.request({ type: "worktree.cached", cwd: repo, paths: [p] })) as R).result.statuses[p] ?? {}).stale;
+    expect(await stale(paths[0]!)).toBeUndefined();
+    await c.request({ type: "session.prompt", sessionId: created.result.session.id, text: "hi" });
+    let s: unknown;
+    await until(() => (stale(paths[0]!).then((v) => (s = v)), s === true));
+    // Only the worktree of the session.
+    expect(await stale(paths[1]!)).toBeUndefined();
+  });
+
+  it("a removal through the daemon marks the other worktrees of the repository stale", async () => {
+    const { root, repo, paths } = fixture(2, 0);
+    const c = await client(await daemon({ root, repo }));
+    await c.request({ type: "worktree.status", cwd: repo, path: paths[0] });
+    const cached = async () => ((await c.request({ type: "worktree.cached", cwd: repo, paths: [paths[0]] })) as R).result.statuses[paths[0]!];
+    expect(await cached()).not.toHaveProperty("stale");
+    expect((await c.request({ type: "worktree.remove", cwd: repo, path: paths[1] })).type).toBe("reply");
+    expect(await cached()).toHaveProperty("stale", true);
+  });
+});

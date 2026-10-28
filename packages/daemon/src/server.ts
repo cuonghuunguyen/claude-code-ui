@@ -20,7 +20,7 @@ import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
@@ -566,6 +566,7 @@ export function createDaemon(opts: {
   const createIn = async (cwd: string, o: Pick<CreateWorktreeOptions, "name" | "branch" | "base" | "checkout" | "onCreated"> = {}) => {
     // The new path is no project: a session created in it (worker_start) must not add it.
     const r = await createWorktree(cwd, { ...o, allowed: (p) => inRoots(real(p) ?? p), claudeDir, onCreated: (r) => { worktreePaths.add(r.path); o.onCreated?.(r); } });
+    markRepoStale(cwd);
     broadcast({ type: "sessions.changed" });
     return r;
   };
@@ -612,6 +613,7 @@ export function createDaemon(opts: {
       broadcast({ type: "sessions.changed" });
       return result;
     } finally {
+      markRepoStale(cwd);
       for (const m of marked) removing.delete(m);
     }
   };
@@ -779,6 +781,8 @@ export function createDaemon(opts: {
       else if (t === "session_state" || t === "external_turn" || t === "bash") {
         if (t === "session_state") queue.setNotLive(s.id, !s.isLive());
         queue.kick(s.id);
+        // A turn may have changed files (an untracked file is in no fingerprint): its worktree is checked again.
+        if (t === "session_state" && (e.part as { state?: string }).state === "idle") markWorktreeStale(s.cwd);
       }
     });
     s.subscribe(Infinity, notifier.observe);
@@ -2009,7 +2013,9 @@ export function createDaemon(opts: {
           const inside = (p: string) => inRoots(real(p) ?? p);
           // Output and URLs are never logged.
           try {
-            return reply({ remote: await (msg.defaultRemote ? netSlot(() => gitFetch(cwd, { allowed: inside, defaultRemote: true })) : gitFetch(cwd, { allowed: inside })) });
+            const remote = await (msg.defaultRemote ? netSlot(() => gitFetch(cwd, { allowed: inside, defaultRemote: true })) : gitFetch(cwd, { allowed: inside }));
+            markRepoStale(cwd);
+            return reply({ remote });
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
@@ -2026,6 +2032,7 @@ export function createDaemon(opts: {
             if (typeof msg.ref !== "string" || !isHash(msg.local) || !Array.isArray(msg.argv) || !msg.argv.every((a) => typeof a === "string") || (msg.type === "git.push" && msg.lease !== undefined && !isHash(msg.lease))) return fail("bad_request", "ref, local, lease and argv must be a branch, full commit hashes and the shown command");
             // Output and URLs are never logged.
             const remote = msg.type === "git.push" ? await gitPush(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, lease: msg.lease, allowed: inside }) : await gitPull(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, allowed: inside });
+            markRepoStale(cwd);
             return reply({ remote });
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
@@ -2056,6 +2063,18 @@ export function createDaemon(opts: {
           scans.get(msg.scan)?.abort();
           scans.delete(msg.scan);
           return reply({});
+        }
+        case "worktree.cached": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (!Array.isArray(msg.paths) || msg.paths.length > 500) return fail("bad_request", "paths must be an array of at most 500 paths");
+          const paths = msg.paths.filter((p): p is string => typeof p === "string" && !!allowed(p));
+          const statuses = await cachedStatuses(paths);
+          for (const [p, st] of Object.entries(statuses)) {
+            const running = [...sessions.values()].filter((s) => inDir(s.cwd, p) && ["running", "needs_input"].includes(s.info().state)).length;
+            statuses[p] = classify({ ...st, running, blocked: st.blocked ?? (isRemoving(p) ? "removing" : running ? "sessions_running" : undefined) });
+          }
+          return reply({ statuses });
         }
         case "worktree.create":
         case "worktree.status":

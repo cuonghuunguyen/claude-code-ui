@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { createWorktree, worktreeIncludeLimits, worktreeIncludeIo, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
+import { createWorktree, worktreeIncludeLimits, worktreeIncludeIo, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, markWorktreeStale, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { wslGitRunner } from "../src/wsl-git.ts";
 import { execFile } from "node:child_process";
@@ -860,6 +860,7 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     writeFileSync(join(wt, "newdir", "a"), "a");
     expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ uncommitted: 1, untracked: 1 });
     writeFileSync(join(wt, "newdir", "b"), "b");
+    markWorktreeStale(wt); // an untracked file is in no fingerprint
     expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ uncommitted: 2, untracked: 2 });
     expect(await code(removeWorktree(main, wt, () => true, { expect: { uncommitted: 1, ahead: 0, ignored: 0 } }))).toBe("stale");
     expect(existsSync(join(wt, "newdir", "b"))).toBe(true);

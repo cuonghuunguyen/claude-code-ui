@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, statSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseStatusV2, removeWorktree, worktreeStatus } from "../src/git.ts";
+import { markWorktreeStale, parseStatusV2, removeWorktree, worktreeStatus } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { gitSub } from "../src/perf.ts";
 
@@ -122,11 +122,13 @@ describe("preview status", () => {
     commit(created, "c.txt");
     writeFileSync(join(created, "d.txt"), "d");
     await worktreeStatus(main, created, allowed); // facts warm
+    markWorktreeStale(created); // a cached result would run no process
     const calls = spy();
     await worktreeStatus(main, created, allowed);
     expect(calls.filter((c) => c.cwd === created).map((c) => gitSub(c.args))).toEqual(["status", "rev-list", "rev-list"]);
     const kept = wt(main, "kept2");
     await worktreeStatus(main, kept, allowed);
+    markWorktreeStale(kept);
     calls.length = 0;
     await worktreeStatus(main, kept, allowed);
     expect(calls.filter((c) => c.cwd === kept).map((c) => gitSub(c.args))).toEqual(["status", "rev-list"]);
@@ -161,6 +163,7 @@ describe("merged another way", () => {
     git(main, "push", "-q", "-f", "origin", "main");
     expect((await worktreeStatus(main, path, allowed)).safety).toBe("safe");
     writeFileSync(join(path, "new.txt"), "n");
+    markWorktreeStale(path); // an untracked file is in no fingerprint
     expect(await worktreeStatus(main, path, allowed)).toMatchObject({ safety: "has_work", uncommitted: 1 });
   });
 

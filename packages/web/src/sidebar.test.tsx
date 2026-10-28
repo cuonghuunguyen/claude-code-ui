@@ -54,6 +54,7 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
   const onRemove = vi.fn();
   const onNewWorktree = vi.fn();
   const onRemoveWorktree = vi.fn();
+  const onWarmWorktree = vi.fn();
   const onOpenProject = vi.fn();
   const onAction = vi.fn();
   const onRenamed = vi.fn();
@@ -77,6 +78,7 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
         onRemove={onRemove}
         onNewWorktree={onNewWorktree}
         onRemoveWorktree={onRemoveWorktree}
+        onWarmWorktree={onWarmWorktree}
         onCleanUp={props.cleanUp ? onCleanUp : undefined}
         onOpenProject={onOpenProject}
         renaming={props.renaming}
@@ -99,7 +101,7 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
   };
-  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onOpenProject, onAction, onRenamed, onWorkers, onArchiveIdle, onCleanUp };
+  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onWarmWorktree, onOpenProject, onAction, onRenamed, onWorkers, onArchiveIdle, onCleanUp };
 }
 
 it("one group per working directory with the project name as header and the full path only as tooltip", async () => {
@@ -484,6 +486,17 @@ describe("worktrees", () => {
     for (const p of ["/home/u/web", "/srv/web-far", "/home/u/locked"]) expect(remove(p), p).toBeNull();
     await act(async () => remove("/home/u/orca/web/fix")!.click());
     expect(onRemoveWorktree).toHaveBeenCalledWith("/home/u/web", "/home/u/orca/web/fix");
+  });
+
+  it("hovering or focusing the trash button asks the app to warm that worktree's status", async () => {
+    const managed = "/home/u/web/.claude/worktrees/fix";
+    const { el, onWarmWorktree } = await render({ list, projects: ["/home/u/web"], worktrees: { "/home/u/web": [...wts, { path: managed, branch: "worktree-fix", main: false }] } });
+    const trash = el.querySelector<HTMLElement>(`[data-path="${managed}"] [data-testid="worktree-remove"]`)!;
+    expect(onWarmWorktree).not.toHaveBeenCalled();
+    await act(async () => trash.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+    await act(async () => trash.focus());
+    expect(onWarmWorktree).toHaveBeenCalledWith("/home/u/web", managed);
+    expect(onWarmWorktree.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("a repository without linked worktrees stays flat", async () => {

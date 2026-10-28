@@ -260,6 +260,7 @@ const lru = <V>(max: number) => {
     delete(k: string) {
       m.delete(k);
     },
+    entries: () => [...m],
   };
 };
 const lastStatus = new Map<string, GitStatus>();
@@ -969,8 +970,8 @@ export async function removeWorktree(cwd: string, path: string, allowed: (path: 
 }
 
 /** Pure: `safety` of a status without it. Commits already in the base (`mergedInto`: squash or rebase merged) are no work. */
-export function classify(st: Omit<WorktreeStatusResult, "safety">): WorktreeStatusResult {
-  return { ...st, safety: st.blocked ? "blocked" : st.uncommitted || (st.ahead && !st.mergedInto) ? "has_work" : "safe" };
+export function classify(st: Omit<WorktreeStatusResult, "safety" | "checkedAt"> & { checkedAt?: number }): WorktreeStatusResult {
+  return { checkedAt: Date.now(), ...st, safety: st.blocked ? "blocked" : st.uncommitted || (st.ahead && !st.mergedInto) ? "has_work" : "safe" };
 }
 
 const count = async (cwd: string, args: string[]) => Number(await g(cwd, ["rev-list", "--count", ...args])) || 0;
@@ -1092,8 +1093,60 @@ async function statusOf(f: Facts, w: Listed, requested: string, allowed: (p: str
 
 /** What removing `path` loses and whether it may (WorktreeStatusResult). `allowed`: the roots check; sessions are the caller's. */
 export async function worktreeStatus(cwd: string, path: string, allowed: (p: string) => boolean): Promise<WorktreeStatusResult> {
+  const gen = marks;
   const f = await repoFacts(cwd);
-  return statusOf(f, linked(f.list, path), path, allowed, false);
+  const w = linked(f.list, path);
+  const fp = await fingerprint(w.path);
+  const hit = previews.get(w.path);
+  if (hit && !hit.stale && same(hit.fp, fp)) return hit.st;
+  const st = await statusOf(f, w, path, allowed, false);
+  // `git status` refreshes the index file itself: store the fingerprint after the read. Refs or the reflog moving during the read leave the entry stale.
+  // shortcut: an index change during the read is not seen, the next index change or mark fixes it.
+  const after = await fingerprint(w.path);
+  const common = (await gitDirsOfAsync(w.path))?.common;
+  if (after !== undefined && common) previews.set(w.path, { fp: after, common, st, stale: gen !== marks || fp?.rest !== after.rest });
+  return st;
+}
+
+/**
+ * Last preview status of each worktree (GH-463). A valid entry is served without git; recomputed lazily on the next request, never by a sweep.
+ * Coverage: the daemon marks entries stale at a session turn end and after its own git writes (`markWorktreeStale`, `markRepoStale`);
+ * the fingerprint covers terminal tabs, the IDE and external git that changed refs, HEAD, the index or the reflog.
+ * Known gap: a new untracked file changes none of these. The UI shows the age, and removal re-checks.
+ */
+type Cached = { fp: Fp; common: string; st: WorktreeStatusResult; stale: boolean };
+const previews = lru<Cached>(256);
+let marks = 0;
+/** File stats only: the repository's refs, HEADs and config plus this worktree's index and reflog. */
+type Fp = { rest: string; index: string };
+async function fingerprint(path: string): Promise<Fp | undefined> {
+  const dirs = await gitDirsOfAsync(path);
+  if (!dirs) return undefined;
+  const own = dirs.own;
+  return { rest: `${await refsStamp(path)}|${await statOf(join(dirs.common, "config"))}|${await statOf(join(own, "logs", "HEAD"))}`, index: await statOf(join(own, "index")) };
+}
+const same = (a: Fp | undefined, b: Fp | undefined) => !!a && !!b && a.rest === b.rest && a.index === b.index;
+/** A session turn ended in `cwd`: the worktree containing it is checked again at the next request. */
+export function markWorktreeStale(cwd: string) {
+  marks++;
+  const c = real(cwd);
+  for (const [k, v] of previews.entries()) if (c === k || c.startsWith(k.endsWith(sep) ? k : k + sep)) v.stale = true;
+}
+/** The daemon changed the repository of `cwd` (create, remove, fetch, push, pull): every worktree of it is checked again. */
+export function markRepoStale(cwd: string) {
+  marks++;
+  const common = gitDirsOf(cwd)?.common;
+  for (const [, v] of previews.entries()) if (!common || v.common === common) v.stale = true;
+}
+/** The cached statuses of `paths` without git; `stale` when marked or when the fingerprint changed. */
+export async function cachedStatuses(paths: string[]): Promise<Record<string, WorktreeStatusResult & { stale?: true }>> {
+  const out: Record<string, WorktreeStatusResult & { stale?: true }> = {};
+  for (const p of paths) {
+    const hit = previews.get(real(p));
+    if (!hit) continue;
+    out[p] = { ...hit.st, ...((hit.stale || !same(hit.fp, await fingerprint(real(p)))) && { stale: true as const }) };
+  }
+  return out;
 }
 
 // ---- Commit graph (docs/spec.md "Layout") ----

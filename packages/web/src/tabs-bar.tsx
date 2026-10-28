@@ -1262,9 +1262,12 @@ export function IconButton({
   expanded,
   controls,
   disabled,
+  onWarm,
   ref,
 }: {
   label: string;
+  /** Pointer enter or focus: the action behind the button may start preparing. */
+  onWarm?: () => void;
   /** The tooltip; defaults to `label`. */
   title?: string;
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
@@ -1291,6 +1294,8 @@ export function IconButton({
       aria-disabled={disabled || undefined}
       className={cn(ICON_BUTTON, className)}
       onClick={disabled ? undefined : onClick}
+      onPointerEnter={onWarm}
+      onFocus={onWarm}
       data-testid={testId}
       data-command={command}
     >
