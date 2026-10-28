@@ -60,9 +60,10 @@ async function open(o: { scope?: CleanupScope; status?: (path: string) => Promis
   });
   const onClose = vi.fn();
   const onDone = vi.fn();
-  await act(async () => root!.render(<CleanupDialog scope={o.scope ?? { kind: "all" }} list={o.list ?? list} worktrees={worktrees} state={(s) => s.state} request={request as never} onClose={onClose} onDone={onDone} />));
+  const onRemoving = vi.fn();
+  await act(async () => root!.render(<CleanupDialog scope={o.scope ?? { kind: "all" }} list={o.list ?? list} worktrees={worktrees} state={(s) => s.state} request={request as never} onClose={onClose} onDone={onDone} onRemoving={onRemoving} />));
   await act(async () => {});
-  return { request, sent, onClose, onDone };
+  return { request, sent, onClose, onDone, onRemoving, rerender: (scope?: CleanupScope) => act(async () => root!.render(<CleanupDialog scope={scope} list={o.list ?? list} worktrees={worktrees} state={(s) => s.state} request={request as never} onClose={onClose} onDone={onDone} onRemoving={onRemoving} />)) };
 }
 const q = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
@@ -197,6 +198,7 @@ it("run sends one request at a time, then shows 'Removed 2, skipped 1' with the 
   expect(q("[data-testid=cleanup-summary]").textContent).toContain("Changed since the list");
   expect(document.activeElement).toBe(q("[data-testid=cleanup-close]"));
   expect(onDone).toHaveBeenCalledTimes(1);
+  expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ removed: expect.any(Array), skipped: expect.any(Array) }));
   await click(q("[data-testid=cleanup-close]"));
   expect(onClose).toHaveBeenCalled();
 });
@@ -219,17 +221,29 @@ it("Esc closes the dialog like Cancel, also with focus on the select or a checkb
   expect(onClose).toHaveBeenCalledTimes(2);
 });
 
-it("Esc during a run does not close; the summary stays until Close", async () => {
-  let release!: () => void;
-  const { onClose } = await open({ list: [], remove: (m) => (m.type === ("git.fetch" as string) ? Promise.resolve({}) : new Promise((r) => (release = () => r({})))) });
+it("the dialog closes during a run, the run continues, onRemoving marks each worktree and onDone gets the result", async () => {
+  const release: (() => void)[] = [];
+  const { onClose, onDone, onRemoving, rerender, sent } = await open({
+    list: [],
+    remove: (m) => (m.type === "worktree.remove" ? new Promise((r) => release.push(() => r({}))) : Promise.resolve({})),
+  });
   await click(confirm());
-  await esc();
-  expect(onClose).not.toHaveBeenCalled();
-  await act(async () => release());
-  await act(async () => {});
-  expect(q("[data-testid=cleanup-summary]")).not.toBeNull();
+  // Cancel reads Close and stays enabled; Esc closes too.
+  const cancel = q<HTMLButtonElement>("[data-testid=cleanup-cancel]");
+  expect(cancel.textContent).toBe("Close");
+  expect(cancel.disabled).toBe(false);
+  expect(onRemoving.mock.calls).toEqual([[P("safe"), true]]);
   await esc();
   expect(onClose).toHaveBeenCalledTimes(1);
+  // The app closes it: the run goes on.
+  await rerender(undefined);
+  expect(onDone).not.toHaveBeenCalled();
+  await act(async () => release.shift()!());
+  await act(async () => {});
+  expect(sent.filter((m) => m.type === "worktree.remove").map((m) => m.path)).toEqual([P("safe")]);
+  expect(onRemoving.mock.calls.slice(0, 2)).toEqual([[P("safe"), true], [P("safe"), false]]);
+  expect(onDone).toHaveBeenCalledTimes(1);
+  expect(onDone).toHaveBeenCalledWith({ removed: ["worktree-safe"], skipped: [], notes: [] });
 });
 
 it("a Safe row with ignored files says how many ignored files will be deleted", async () => {

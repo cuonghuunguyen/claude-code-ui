@@ -580,11 +580,12 @@ export function createDaemon(opts: {
   const projectWorktrees = async (cwd: string): Promise<Worktree[] | undefined> => {
     const found = (await worktreesOf(cwd))?.map((w) => ({ ...w, path: real(w.path) ?? w.path }));
     if (!found?.some((w) => w.path === (real(cwd) ?? cwd))) return undefined;
-    return found.map((w) => (inRoots(w.path) ? w : { ...w, outsideRoots: true }));
+    return found.map((w) => ({ ...(inRoots(w.path) ? w : { ...w, outsideRoots: true }), ...(isRemoving(w.path) && { removing: true as const }) }));
   };
   /** Refused while a session in it runs or needs input; idle live sessions and its terminals close first (transcripts stay). */
   const removeIn = async (cwd: string, path: string, o: { expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored?: number }; deleteBranch?: boolean }) => {
     const marked: string[] = [];
+    let announced = false;
     // Early block for a worktree this app made, so no session slips in during git's own checks; the lock's mark below covers any other path.
     if (path.includes(`${sep}.claude${sep}worktrees${sep}`)) {
       marked.push(path);
@@ -598,6 +599,8 @@ export function createDaemon(opts: {
           if (!marked.includes(m)) marked.push(m);
           removing.add(m);
         }
+        // Clients show the row as Removing… from the first validated mark on.
+        if (!announced) (announced = true), broadcast({ type: "sessions.changed" });
       }, beforeRemove: async () => {
         const live = [...sessions.values()].filter((s) => isRemoving(s.cwd));
         if (live.some((s) => ["running", "needs_input"].includes(s.info().state))) throw new WorktreeError("has_sessions_running", "A session in this worktree is running or needs input: stop it first");
@@ -610,11 +613,12 @@ export function createDaemon(opts: {
         // Its terminals too: a shell running in the folder keeps Windows from deleting it ("Permission denied").
         await terminals.closeIn(isRemoving);
       } });
-      broadcast({ type: "sessions.changed" });
       return result;
     } finally {
       markRepoStale(cwd);
       for (const m of marked) removing.delete(m);
+      // Success and failure alike: every client drops the Removing… flag.
+      broadcast({ type: "sessions.changed" });
     }
   };
 

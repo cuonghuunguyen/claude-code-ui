@@ -203,3 +203,47 @@ describe("worktree.cached and turn-end marks (GH-463)", () => {
     expect(await cached()).toHaveProperty("stale", true);
   });
 });
+
+describe("worktree removing flag (GH-462)", () => {
+  type R = { type: string; code?: string; result?: any };
+  const changes = (raw: string[]) => raw.filter((s) => JSON.parse(s).type === "sessions.changed").length;
+  const rowOf = async (c: Awaited<ReturnType<typeof client>>, repo: string, path: string) => ((await c.request({ type: "session.list" })) as R).result.worktrees[repo].find((w: { path: string }) => w.path === path);
+
+  it("session.list lists a worktree removing: true while its removal runs and broadcasts sessions.changed at start and end", async () => {
+    const { root, repo, paths } = fixture(1, 0);
+    const c = await client(await daemon({ root, repo }));
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    let held = false;
+    setGitRunner(async (o) => (o.args.includes("remove") && o.args[0] === "worktree" ? ((held = true), await hold, threadRunner(o)) : threadRunner(o)));
+    expect(await rowOf(c, repo, paths[0]!)).not.toHaveProperty("removing");
+    const before = changes(c.raw);
+    const done = c.request({ type: "worktree.remove", cwd: repo, path: paths[0] });
+    await until(() => held);
+    await until(() => changes(c.raw) > before);
+    expect(await rowOf(c, repo, paths[0]!)).toHaveProperty("removing", true);
+    const during = changes(c.raw);
+    release();
+    expect((await done).type).toBe("reply");
+    expect(changes(c.raw)).toBeGreaterThan(during);
+    expect(await rowOf(c, repo, paths[0]!)).toBeUndefined();
+  });
+
+  it("a failed removal clears the flag and broadcasts again", async () => {
+    const { root, repo, paths } = fixture(1, 0);
+    const c = await client(await daemon({ root, repo }));
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    let held = false;
+    setGitRunner(async (o) => (o.args.includes("remove") && o.args[0] === "worktree" ? ((held = true), await hold, Promise.reject(new Error("boom"))) : threadRunner(o)));
+    const before = changes(c.raw);
+    const done = c.request({ type: "worktree.remove", cwd: repo, path: paths[0] });
+    await until(() => held);
+    await until(() => changes(c.raw) > before);
+    const during = changes(c.raw);
+    release();
+    expect((await done).type).toBe("error");
+    await until(() => changes(c.raw) > during);
+    expect(await rowOf(c, repo, paths[0]!)).not.toHaveProperty("removing");
+  });
+});

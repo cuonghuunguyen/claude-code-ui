@@ -21,23 +21,24 @@ type Props = {
   state: (s: SessionListItem) => SessionState;
   request: <T>(m: Request) => Promise<T>;
   onClose: () => void;
-  /** After a run: the app refreshes its list. */
-  onDone: () => void;
+  /** After a run (also when the dialog was closed meanwhile): the app refreshes its list and reports the result. */
+  onDone: (result: CleanupResult) => void;
+  /** A worktree's removal starts / ends: the sidebar shows its row as Removing…. */
+  onRemoving: (path: string, on: boolean) => void;
 };
 
 export function CleanupDialog(p: Props) {
-  // Esc and an outside press close it like Cancel, except during a run: it stays open until the summary.
-  const running = useRef(false);
+  // Esc and an outside press close it like Cancel, also during a run: the run goes on and the app reports the result.
   return (
-    <Dialog.Root open={p.scope !== undefined} onOpenChange={(open) => !open && !running.current && p.onClose()}>
-      {p.scope && <Body {...p} scope={p.scope} running={running} />}
+    <Dialog.Root open={p.scope !== undefined} onOpenChange={(open) => !open && p.onClose()}>
+      {p.scope && <Body {...p} scope={p.scope} />}
     </Dialog.Root>
   );
 }
 
 const describe = (scope: CleanupScope) => (scope.kind === "all" ? "All projects" : scope.kind === "project" ? projectName(scope.cwd) : `Workers of “${scope.title}”`);
 
-function Body({ scope, list, worktrees, state, request, onClose, onDone, running }: Props & { scope: CleanupScope; running: { current: boolean } }) {
+function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemoving }: Props & { scope: CleanupScope }) {
   const id = useId();
   const cands = useMemo(() => cleanupCandidates(scope, list, worktrees, state), []); // eslint-disable-line react-hooks/exhaustive-deps -- frozen while open
   const [status, setStatus] = useState<Record<string, WorktreeStatusResult | { error: string }>>({});
@@ -118,7 +119,6 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
   const m = ticked.filter((r) => r.kind === "worktree" && safetyOf(r) === "has_work").length;
   const acked = m === 0 || ack === m;
   const busy = phase === "run";
-  running.current = busy;
   const set = (key: string, on: boolean) => setOverride((o) => ({ ...o, [key]: on }));
 
   useEffect(() => {
@@ -126,20 +126,24 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
   }, [phase]);
 
   async function run() {
-    running.current = true;
     setPhase("run");
     setProgress(0);
-    const items = cleanupItems(ticked, new Set(ticked.map((r) => r.key)), { deleteBranch }, request as never);
+    // Each worktree removal marks its row Removing… in the sidebar.
+    const marked = (m: Parameters<typeof request>[0]) => {
+      if (m.type !== "worktree.remove") return request(m);
+      onRemoving(m.path, true);
+      return request(m).finally(() => onRemoving(m.path, false));
+    };
+    const items = cleanupItems(ticked, new Set(ticked.map((r) => r.key)), { deleteBranch }, marked as never);
     const r = await runCleanup(items, setProgress);
     // A worktree ticked (by "Also remove its worktree" or by default) that the filter hides is not removed: say so.
     for (const w of ticked) {
       const wt = w.kind === "worker" && w.worktree ? rows.find((x) => x.kind === "worktree" && x.path === w.worktree) : undefined;
       if (wt && isOn(wt) && !visible.includes(wt)) r.notes.push(`Worktree ${rowLabel(wt)} kept: hidden by the filter`);
     }
-    running.current = false;
     setResult(r);
     setPhase("done");
-    onDone();
+    onDone(r);
   }
 
   const sections = [
@@ -152,10 +156,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
     <Dialog.Portal>
       <Dialog.Backdrop className="fixed inset-0 z-50 bg-overlay" />
       <Dialog.Popup
-        onKeyDown={(e) => {
-          if (e.key === "Escape" && busy) e.stopPropagation();
-          trapTab(e);
-        }}
+        onKeyDown={trapTab}
         className="-translate-x-1/2 fixed top-[max(48px,calc((100dvh-640px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,640px)] w-[min(100vw-24px,720px)] flex-col rounded-xl bg-card text-foreground shadow-floating outline-none max-sm:top-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:w-screen max-sm:rounded-none"
         data-testid="cleanup-dialog"
         aria-modal="true"
@@ -278,8 +279,8 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
               </Button>
             ) : (
               <>
-                <Button variant="ghost" disabled={busy} onClick={onClose} className="max-md:h-11" data-testid="cleanup-cancel">
-                  Cancel
+                <Button variant="ghost" onClick={onClose} className="max-md:h-11" data-testid="cleanup-cancel">
+                  {busy ? "Close" : "Cancel"}
                 </Button>
                 <Button variant="destructive" disabled={busy || n === 0 || !acked} onClick={() => void run()} className="max-md:h-11" data-testid="cleanup-confirm">
                   {confirmLabel(n, m)}

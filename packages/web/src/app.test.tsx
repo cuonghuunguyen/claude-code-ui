@@ -1647,16 +1647,136 @@ describe("worktrees", () => {
     }
   });
 
-  it("Trash on a worktree whose status is blocked shows the reason, no confirmation", async () => {
+  describe("Remove worktree dialog (GH-462)", () => {
+    const dlg = () => document.querySelector<HTMLElement>('[data-testid="remove-worktree-dialog"]');
+    const confirmBtn = () => document.querySelector<HTMLButtonElement>('[data-testid="remove-worktree-confirm"]');
+    const stat = (o: object = {}) => ({ checkedAt: Date.now(), uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "worktree-x", branchMerged: false, running: 0, safety: "safe", ...o });
     const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] } };
-    const restore = await remount({ "session.list": listed, "worktree.status": { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "worktree-x", branchMerged: false, running: 1, safety: "blocked", blocked: "sessions_running" } });
-    try {
-      await act(async () => el.querySelector<HTMLElement>('[data-testid="worktree-remove"]')!.click());
-      expect(document.querySelector('[data-testid="remove-worktree-dialog"]')).toBeNull();
-      expect(el.textContent).toContain("Worktree worktree-x cannot be removed: A session there is running or needs input");
-    } finally {
-      restore();
-    }
+    const trash = (path = managed) => el.querySelector<HTMLElement>(`[data-path="${path}"] [data-testid="worktree-remove"]`)!;
+    const removing = () => [...el.querySelectorAll<HTMLElement>('[data-testid="worktree-removing"]')].map((e) => e.closest<HTMLElement>('[data-testid="worktree-row"]')!.dataset.path);
+
+    it("the trash opens the remove dialog at once with Checking… and Remove worktree disabled", async () => {
+      const restore = await remount({ "session.list": listed, "worktree.status": () => new Promise(() => {}) });
+      try {
+        await act(async () => trash().click());
+        expect(dlg()?.querySelector('[role="heading"], h2')?.textContent ?? dlg()!.textContent).toContain("Remove worktree worktree-x?");
+        expect(dlg()!.textContent).toContain("Checking…");
+        expect(confirmBtn()!.disabled).toBe(true);
+      } finally {
+        restore();
+      }
+    });
+
+    it("the status fills the description and enables Remove; a blocked status shows the reason and no Remove button", async () => {
+      let st: object = stat({ uncommitted: 2, commits: 1 });
+      const restore = await remount({ "session.list": listed, "worktree.status": () => st });
+      try {
+        await act(async () => trash().click());
+        expect(dlg()!.textContent).toContain("You have 2 uncommitted files and 1 commit on worktree-x. All will be lost if you remove.");
+        expect(confirmBtn()!.disabled).toBe(false);
+        await press({ key: "Escape" });
+        st = stat({ safety: "blocked", blocked: "sessions_running", running: 1 });
+        await act(async () => trash().click());
+        expect(dlg()!.textContent).toContain("Worktree worktree-x cannot be removed: A session there is running or needs input");
+        expect(confirmBtn()).toBeNull();
+        expect(document.querySelector('[data-testid="remove-worktree-cancel"]')).not.toBeNull();
+        await press({ key: "Escape" });
+        // An error reply shows its message, also without Remove.
+        st = Promise.reject(new Error("daemon says no")) as never;
+        await act(async () => trash().click());
+        expect(dlg()!.textContent).toContain("daemon says no");
+        expect(confirmBtn()).toBeNull();
+      } finally {
+        restore();
+      }
+    });
+
+    it("Esc during Checking… closes the dialog and a late reply does not reopen it", async () => {
+      let answer!: (r: unknown) => void;
+      const restore = await remount({ "session.list": listed, "worktree.status": () => new Promise((r) => (answer = r)) });
+      try {
+        await act(async () => trash().click());
+        expect(dlg()).not.toBeNull();
+        await press({ key: "Escape" });
+        expect(dlg()).toBeNull();
+        await act(async () => answer(stat()));
+        expect(dlg()).toBeNull();
+        expect(el.textContent).not.toContain("not removed");
+      } finally {
+        restore();
+      }
+    });
+
+    it("a cached status shows at once with checked N min ago", async () => {
+      let calls = 0;
+      const restore = await remount({ "session.list": listed, "worktree.status": () => (++calls === 1 ? stat({ uncommitted: 3, checkedAt: Date.now() - 5 * 60_000 }) : new Promise(() => {})) });
+      try {
+        // Hover warms the status (the first call); the click then waits for a fresh one.
+        await act(async () => void trash().dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+        await act(async () => trash().click());
+        expect(calls).toBe(2);
+        expect(dlg()!.textContent).toContain("You have 3 uncommitted files on worktree-x. All will be lost if you remove.");
+        expect(dlg()!.textContent).toContain("checked 5m");
+        expect(dlg()!.textContent).toContain("Checking…");
+        expect(confirmBtn()!.disabled).toBe(true);
+      } finally {
+        restore();
+      }
+    });
+
+    it("Confirm closes at once; the row shows Removing… until the list refresh drops it; a failure restores it and shows the daemon message", async () => {
+      let settle!: { ok: () => void; fail: (e: Error) => void };
+      const restore = await remount({
+        "session.list": listed,
+        "worktree.status": stat(),
+        "worktree.remove": () => new Promise((ok, fail) => (settle = { ok: () => ok({}), fail })),
+      });
+      try {
+        await act(async () => trash().click());
+        await act(async () => confirmBtn()!.click());
+        expect(dlg()).toBeNull();
+        expect(removing()).toEqual([managed]);
+        // Failure: the row is back and the message shows.
+        await act(async () => settle.fail(new Error("Changed since the list: 1 files, 0 commits")));
+        expect(removing()).toEqual([]);
+        expect(el.textContent).toContain("Worktree worktree-x not removed: Changed since the list: 1 files, 0 commits");
+        expect(el.querySelector(`[data-path="${managed}"]`)).not.toBeNull();
+        // Success: the refreshed list drops the row.
+        await act(async () => trash().click());
+        await act(async () => confirmBtn()!.click());
+        expect(removing()).toEqual([managed]);
+        replies["session.list"] = { ...listed, worktrees: { "/p/demo": [main] } };
+        await act(async () => settle.ok());
+        await act(async () => {});
+        expect(removing()).toEqual([]);
+        expect(el.querySelector(`[data-path="${managed}"]`)).toBeNull();
+      } finally {
+        restore();
+      }
+    });
+
+    it("two removals run at once, each row with its own Removing…", async () => {
+      const two = "/p/demo/.claude/worktrees/y";
+      const both = { ...listed, worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }, { path: two, branch: "worktree-y", main: false }] } };
+      const done: Record<string, () => void> = {};
+      const restore = await remount({
+        "session.list": both,
+        "worktree.status": (m: { path: string }) => stat({ branch: m.path === two ? "worktree-y" : "worktree-x" }),
+        "worktree.remove": (m: { path: string }) => new Promise((ok) => (done[m.path] = () => ok({}))),
+      });
+      try {
+        await act(async () => trash(managed).click());
+        await act(async () => confirmBtn()!.click());
+        await act(async () => trash(two).click());
+        await act(async () => confirmBtn()!.click());
+        expect(removing().sort()).toEqual([managed, two].sort());
+        await act(async () => done[managed]!());
+        await act(async () => {});
+        expect(removing()).toEqual([two]);
+      } finally {
+        restore();
+      }
+    });
   });
 
   it("palette Clean up worktrees and workers… opens the Clean up dialog for all projects", async () => {
