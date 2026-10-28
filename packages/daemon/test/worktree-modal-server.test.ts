@@ -1,6 +1,6 @@
 // Create worktree modal over the wire (GH-447): worktree.create per Branch source, worktree.branches, Jira settings, token and search.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -63,7 +63,7 @@ let closers: (() => unknown)[] = [];
 afterEach(async () => {
   for (const c of closers.splice(0)) await c();
 });
-async function daemon(o: { root: string; repo?: string; secretsFile?: string; settingsFile?: string }) {
+async function daemon(o: { root: string; repo?: string; secretsFile?: string; settingsFile?: string; jiraFetch?: typeof fetch }) {
   const projects = createProjects();
   if (o.repo) projects.open(o.repo);
   const d = createDaemon({
@@ -74,6 +74,7 @@ async function daemon(o: { root: string; repo?: string; secretsFile?: string; se
     projects,
     appSettings: createSettings({ file: o.settingsFile }),
     secrets: createSecrets({ file: o.secretsFile }),
+    ...(o.jiraFetch && { jiraFetch: o.jiraFetch }),
     history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
   });
   await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
@@ -183,5 +184,54 @@ describe("Jira over the wire", () => {
       expect(text).not.toContain(JIRA_TOKEN);
       expect(text).not.toContain("wrong-one");
     }
+  });
+
+  it("a new Jira origin clears the token, a path change keeps it, an http address is refused (GH-451)", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wtj-")));
+    mkdirSync(join(root, "cfg"));
+    const secretsFile = join(root, "cfg", "secrets.json");
+    const logs: string[] = [];
+    const spies = (["log", "warn", "error", "info", "debug"] as const).map((k) => vi.spyOn(console, k).mockImplementation((...a: unknown[]) => void logs.push(a.map(String).join(" "))));
+    closers.push(() => spies.forEach((s) => s.mockRestore()));
+    fake = await fakeJira({ auth: `Bearer ${JIRA_TOKEN}`, user: "Dana Center", issues: [] });
+    const port = await daemon({ root, secretsFile, settingsFile: join(root, "cfg", "settings.json") });
+    const c = await client(port);
+    const other = await client(port);
+    const setUrl = (url: string) => c.request({ type: "settings.set", patch: { jira: { url } } });
+    // Token before any URL: kept when the first URL is set.
+    expect(await c.request({ type: "jira.token", token: JIRA_TOKEN })).toMatchObject({ result: { jiraToken: true } });
+    expect(await setUrl(fake.url)).toMatchObject({ result: { jiraToken: true } });
+    // A non-local http address is refused and changes nothing.
+    expect(await setUrl("http://jira.example.com")).toMatchObject({ code: "bad_settings", message: expect.stringContaining("https") });
+    expect(await c.request({ type: "settings.get" })).toMatchObject({ result: { settings: { jira: { url: fake.url } }, jiraToken: true } });
+    // Same origin, other path: kept.
+    expect(await setUrl(`${fake.url}/jira`)).toMatchObject({ result: { jiraToken: true } });
+    // Other origin: cleared, in the reply, the broadcast and the file.
+    expect(await setUrl("https://jira.example.com")).toMatchObject({ result: { jiraToken: false } });
+    await other.waitFor((m) => m.type === "settings_changed" && m.jiraToken === false);
+    expect(readFileSync(secretsFile, "utf8")).not.toContain(JIRA_TOKEN);
+    expect(await c.request({ type: "jira.test" })).toMatchObject({ code: "jira_not_configured" });
+    // Same hostname, other port: another origin.
+    expect(await setUrl(fake.url)).toMatchObject({ result: { jiraToken: false } });
+    await c.request({ type: "jira.token", token: JIRA_TOKEN });
+    expect(await setUrl(`http://127.0.0.1:${Number(new URL(fake.url).port) + 1}`)).toMatchObject({ result: { jiraToken: false } });
+    // No URL: cleared too, so URL A -> "" -> URL B never sends A's token to B.
+    expect(await setUrl(fake.url)).toMatchObject({ result: { jiraToken: false } });
+    await c.request({ type: "jira.token", token: JIRA_TOKEN });
+    expect(await setUrl("")).toMatchObject({ result: { jiraToken: false } });
+    expect(fake.requests).toEqual([]);
+    for (const text of [...c.raw, ...other.raw, ...logs]) expect(text).not.toContain(JIRA_TOKEN);
+  });
+
+  it("a stored non-local http Jira URL stays, is never sent the token and says why (GH-451)", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wtj-")));
+    mkdirSync(join(root, "cfg"));
+    const settingsFile = join(root, "cfg", "settings.json");
+    writeFileSync(settingsFile, JSON.stringify({ jira: { url: "http://jira.example.com" } }));
+    const jiraFetch = vi.fn(async () => new Response("{}"));
+    const c = await client(await daemon({ root, secretsFile: join(root, "cfg", "secrets.json"), settingsFile, jiraFetch: jiraFetch as never }));
+    expect(await c.request({ type: "jira.token", token: JIRA_TOKEN })).toMatchObject({ result: { jiraToken: true, settings: { jira: { url: "http://jira.example.com" } } } });
+    for (const req of [{ type: "jira.test" }, { type: "jira.search" }] as const) expect(await c.request(req)).toMatchObject({ code: "jira_not_configured", message: expect.stringContaining("https") });
+    expect(jiraFetch).not.toHaveBeenCalled();
   });
 });

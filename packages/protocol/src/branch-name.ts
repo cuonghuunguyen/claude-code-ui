@@ -114,3 +114,14 @@ export function jiraIsCloud(base: string): boolean {
     return false;
   }
 }
+
+/** GH-451: the token goes only over https; http only to this computer. Message for a Jira URL that must not get requests, else undefined. */
+export const JIRA_HTTPS_RULE = "Jira URL must be an https address (http only for localhost or 127.0.0.1)";
+export function jiraUrlProblem(base: string): string | undefined {
+  try {
+    const u = new URL(base);
+    return u.protocol === "https:" || (u.protocol === "http:" && (u.hostname === "localhost" || u.hostname === "127.0.0.1")) ? undefined : JIRA_HTTPS_RULE;
+  } catch {
+    return undefined;
+  }
+}

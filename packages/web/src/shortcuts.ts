@@ -68,6 +68,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "terminal.new", title: "New terminal", group: "Panels", key: "ctrl+shift+`" },
   { id: "prompt.focus", title: "Focus prompt", group: "Session", key: "ctrl+l" },
   { id: "model.choose", title: "Change model", group: "Session", key: "mod+'" },
+  { id: "shell.background", title: "Run in background", group: "Session", key: "mod+shift+b" },
   // tmux's prefix key: the next key picks a command (leader.ts).
   { id: "leader", title: "Prefix key", group: "Prefix", key: "alt+a" },
 ];

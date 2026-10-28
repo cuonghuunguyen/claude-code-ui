@@ -19,7 +19,7 @@ import { createEntry, deleteEntry, duplicateFile, renameEntry, type FsOpsContext
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
-import { createJira, JiraError } from "./jira.ts";
+import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
 import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, listRepos, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
@@ -1807,6 +1807,17 @@ export function createDaemon(opts: {
           }
           return reply({});
         }
+        case "session.backgroundShell": {
+          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          try {
+            if (!(await s.backgroundShell(msg.toolUseId))) return fail("unknown_shell", "no foreground Bash call with that ID runs");
+          } catch (e) {
+            return fail("background_failed", (e as Error).message);
+          }
+          return reply({});
+        }
         case "permission.respond": {
           if (typeof msg.requestId !== "string" || !["allow", "allow_always", "deny"].includes(msg.decision))
             return fail("bad_request", "requestId and decision (allow, allow_always, deny) required");
@@ -1887,7 +1898,10 @@ export function createDaemon(opts: {
         }
         case "settings.set": {
           try {
+            const before = jiraOrigin(appSettings.get().jira.url);
             const settings = appSettings.set(msg.patch);
+            // GH-451: the token belongs to the Jira it was entered for; another origin (or no URL) must never receive it.
+            if (before && jiraOrigin(settings.jira.url) !== before && secrets.jiraToken()) secrets.setJiraToken(null);
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
             perfMon.setEnabled(settings.performance.monitor);
             broadcast({ type: "settings_changed", settings, jiraToken: !!secrets.jiraToken() });

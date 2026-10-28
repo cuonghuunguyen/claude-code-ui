@@ -168,6 +168,8 @@ describe("PartIndex", () => {
       call("w1", "Write", { file_path: "b" }),
       call("bg", "Bash", { run_in_background: true }, "running"),
       call("fg", "Bash", {}, "running"),
+      { ...call("moved", "Bash", {}, "running"), shell: "background" } as Part,
+      { ...call("fg2", "Bash", {}, "running"), shell: "foreground" } as Part,
       call("rd1", "Read"),
       result("rd1"),
       subagent("sa"),
@@ -175,7 +177,7 @@ describe("PartIndex", () => {
       ...turns(12, 2),
     ]);
     const cursor = index.lastPage().older!;
-    expect(index.aux(cursor.pos).map((x) => x.part.id)).toEqual(["bg", "sa", "r1", "r2", "r3"]);
+    expect(index.aux(cursor.pos).map((x) => x.part.id)).toEqual(["bg", "moved", "sa", "r1", "r2", "r3"]);
     expect(index.edits(cursor.pos).map((x) => x.part.id)).toEqual(["e1", "e1:result", "w1"]);
   });
 

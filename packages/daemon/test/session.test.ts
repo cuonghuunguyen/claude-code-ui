@@ -9,7 +9,7 @@ import { parseOmitted, type Event } from "@claude-ui/protocol";
 import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, INTERRUPT_GRACE_MS, queuedQuery, Session, STALE_TURN_MS, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
 import { createPerf, setPerf } from "../src/perf.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
-import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped, foregroundBashQuery, backgrounded } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -44,6 +44,20 @@ describe("Session", () => {
     await new Session("/repo", { query: query as never }).close();
     // A restored session that never started a query has nothing to wait for.
     await Session.restore(randomUUID(), "/repo", history, { query: query as never }).close();
+  });
+
+  it("backgroundShell asks backgroundTasks for that call; false without a live query or for a call the CLI does not run in the foreground", async () => {
+    const s = new Session("/repo", { query: foregroundBashQuery as never });
+    expect(await s.backgroundShell("fg-1")).toBe(false);
+    expect(backgrounded).not.toContain("fg-1");
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("go");
+    await until(events, (e) => e.part.id === "fg-1" && "shell" in e.part && e.part.shell === "foreground");
+    expect(await s.backgroundShell("fg-1")).toBe(true);
+    expect(backgrounded.at(-1)).toBe("fg-1");
+    expect(await s.backgroundShell("fg-1")).toBe(false);
+    await s.close();
   });
 
   it("has a UUID before the first prompt and passes it to the SDK as sessionId", () => {

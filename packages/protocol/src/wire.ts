@@ -90,6 +90,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.sendQueued"; sessionId: string; itemId: string }
   /** Stop agent: stops one running subagent run (`subagentId` = its subagent part id); the turn goes on. `unknown_subagent` when none runs. */
   | { type: "session.stopSubagent"; sessionId: string; subagentId: string }
+  /** Run in background (GH-440): moves the running foreground Bash call `toolUseId` to the background (`backgroundTasks()`, Ctrl+B in Claude Code); the turn goes on. Errors `unknown_shell` (no foreground task of that call runs), `background_failed`. */
+  | { type: "session.backgroundShell"; sessionId: string; toolUseId: string }
   /**
    * First answer wins; a later one gets `{ settled: false }`. "allow_always" applies `suggestions[ruleIndex]`
    * (all suggestions when ruleIndex is omitted). `message`: feedback for Claude with "deny".

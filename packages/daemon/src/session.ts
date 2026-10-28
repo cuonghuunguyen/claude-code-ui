@@ -636,6 +636,11 @@ export class Session {
     return true;
   }
 
+  /** Run in background (GH-440): `backgroundTasks()` of the Bash call `toolUseId`. False without a live query or when the CLI runs no foreground task of that call. */
+  async backgroundShell(toolUseId: string): Promise<boolean> {
+    return this.query ? this.query.backgroundTasks(toolUseId) : false;
+  }
+
   /** Dry run of a code rewind to before this prompt. */
   async previewRewind(userMessageId: string): Promise<RewindPreview> {
     const r = await this.control(userMessageId).rewindFiles(userMessageId, { dryRun: true });

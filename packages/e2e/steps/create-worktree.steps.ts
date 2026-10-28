@@ -13,6 +13,19 @@ const row = (page: Page, path: string) => page.locator(`[data-testid="group-togg
 const worktreeDir = (project: string, folder: string) => join(project, ".claude", "worktrees", folder);
 const TOKEN = "e2e-jira-token";
 
+// The Settings button of the sidebar (a drawer on a phone); Control+, is not the shortcut on macOS.
+async function openJiraSettings(page: Page) {
+  const drawer = page.getByTestId("open-drawer");
+  if (await drawer.isVisible()) {
+    await expect(async () => {
+      await drawer.click();
+      await expect(page.getByTestId("open-settings").last()).toBeInViewport({ timeout: 1500 });
+    }).toPass({ timeout: 15_000 });
+  }
+  await page.getByTestId("open-settings").last().click(); // the drawer copy on a phone
+  await page.getByTestId("settings-group-jira").click();
+}
+
 Given("the scratch project is a git repository with an origin", async ({ project }) => {
   makeRepoWithOrigin(project.path, join(runDir(), "origins", `${project.name}.git`));
 });
@@ -34,11 +47,14 @@ Given("a fake Jira with my tickets PRJ-1 and PRJ-2 and another ticket PRJ-3", as
 });
 
 When("I set up Jira in Settings with the fake Jira", async ({ page, jira }) => {
-  await page.keyboard.press("Control+,");
-  await page.getByTestId("settings-group-jira").click();
+  await openJiraSettings(page);
   const url = page.getByTestId("settings-jira-url");
+  await expect(url).toBeVisible();
+  // A token of an earlier scenario (the daemon is shared) is cleared by the save of this new origin: wait for that.
+  const stale = await page.getByTestId("settings-jira-token-set").isVisible();
   await url.fill(jira.fake!.url);
   await url.press("Enter");
+  if (stale) await expect(page.getByTestId("settings-jira-token-set")).toHaveCount(0);
   const replace = page.getByTestId("settings-jira-token-replace");
   if (await replace.isVisible()) await replace.click();
   await page.getByTestId("settings-jira-token").fill(TOKEN);
@@ -291,4 +307,47 @@ Then("the generated worktree has {string} with the main checkout's content", asy
     expect(existsSync(dst)).toBe(true);
     expect(readFileSync(dst, "utf8")).toBe(readFileSync(join(project.path, file), "utf8"));
   }).toPass({ timeout: 30_000 });
+});
+
+// Settings › Jira URL and token (GH-451)
+const urlField = (page: Page) => page.getByTestId("settings-jira-url");
+
+When("I open Settings › Jira", async ({ page }) => openJiraSettings(page));
+
+const setUrl = async (page: Page, value: string) => {
+  const f = urlField(page);
+  await f.fill(value);
+  await f.press("Enter");
+  await expect(f).toBeEnabled(); // the save finished
+};
+
+When("I set the Jira URL to {string}", async ({ page }, value: string) => setUrl(page, value));
+When("I set the Jira URL to the fake Jira", async ({ page, jira }) => setUrl(page, jira.fake!.url));
+When("I set the Jira URL to the fake Jira on another host", async ({ page, jira }) => setUrl(page, jira.fake!.url.replace("127.0.0.1", "localhost")));
+When("I set the Jira URL to the fake Jira with the path {string}", async ({ page, jira }, path: string) => setUrl(page, jira.fake!.url + path));
+
+Then("the Jira URL shows an https error", async ({ page }) => {
+  const err = page.getByTestId("settings-dialog").getByTestId("banner-error");
+  await expect(err).toContainText(/https/i);
+  await expect(urlField(page)).not.toHaveValue(/^http:\/\/jira\.example\.com/); // refused: the field shows the old value
+});
+
+Then("the Jira URL shows no error", async ({ page }) => {
+  await expect(page.getByTestId("settings-dialog").getByTestId("banner-error")).toHaveCount(0);
+  await expect(page.getByTestId("settings-jira-url-error")).toHaveCount(0);
+  await expect(urlField(page)).not.toHaveValue(""); // accepted: the field keeps the address
+});
+
+Then("the Jira token is not set", async ({ page }) => {
+  await expect(page.getByTestId("settings-jira-token-set")).toHaveCount(0);
+  await expect(page.getByTestId("settings-jira-token")).toBeVisible();
+});
+
+Then("the Jira token is set", async ({ page }) => {
+  await expect(page.getByTestId("settings-jira-token-set")).toHaveText(/Token set/);
+});
+
+Then("the Ticket tab asks to set up Jira", async ({ page }) => {
+  await expect(page.getByTestId("create-worktree-no-jira")).toBeVisible();
+  await expect(page.getByTestId("create-worktree-ticket-row")).toHaveCount(0);
 });

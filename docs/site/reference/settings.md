@@ -86,7 +86,7 @@ One Jira connection for the **Ticket** tab of [Create worktree](../features/proj
 
 | Setting | Does |
 | --- | --- |
-| Jira URL | Cloud: `https://<site>.atlassian.net`. Data Center or Server: the address of your Jira. |
+| Jira URL | Cloud: `https://<site>.atlassian.net`. Data Center or Server: the https address of your Jira (http only for `localhost` and `127.0.0.1`). Changing the host clears the saved token. |
 | Email | Your Atlassian account email. Only for Jira Cloud. |
 | API token / Personal access token | Cloud: an API token from id.atlassian.com › Security › API tokens. Data Center or Server: a personal access token from your Jira profile. Saved on the daemon's computer only (`secrets.json`), never shown again: the row then says **Token set**, with **Replace** and **Clear**. |
 | Branch template | How a ticket names its branch. Default `{type}/{key}-{summary}`: `{type}` is `bugfix` for a Bug, `feature` for a Story, Task or New Feature, else empty; `{key}` is the ticket key; `{summary}` is the summary, shortened. |

@@ -496,3 +496,12 @@ it("Ask aside is a command only while a session tab is shown, and puts /btw in i
   expect(askAside).toHaveBeenCalledOnce();
   expect(appCommands(ctx({ askAside })).find((i) => i.id === "aside.ask")).toMatchObject({ title: "Ask aside", keys: undefined });
 });
+
+it("Run in background is listed only while a foreground shell runs, with Ctrl+Shift+B", () => {
+  expect(appCommands(ctx()).find((i) => i.id === "shell.background")).toBeUndefined();
+  const run = vi.fn();
+  const item = appCommands(ctx({ runInBackground: run })).find((i) => i.id === "shell.background");
+  expect(item).toMatchObject({ title: "Run in background", keys: "mod+shift+b" });
+  if (item && "run" in item) item.run();
+  expect(run).toHaveBeenCalled();
+});

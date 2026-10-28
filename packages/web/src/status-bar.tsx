@@ -1,4 +1,5 @@
 // Status bar under the prompt box: git branch + diff, session token totals, background shells. Model, context, mode and plan limits live in the prompt toolbar and titlebar.
+import { isBackgroundShell } from "@claude-ui/protocol";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Popover } from "@base-ui/react/popover";
 import type { GitStatus } from "@claude-ui/protocol";
@@ -29,11 +30,13 @@ export function totals(v: SessionView) {
   return t;
 }
 
-/** Bash calls run with run_in_background whose task has not ended (task_notification). */
+/** Bash calls running as background shells (run_in_background or moved there) whose task has not ended (task_notification). */
 export const backgroundShells = (v: SessionView) =>
-  wholeParts(v).filter(
-    (p): p is ToolCall => p.type === "tool_call" && p.tool === "Bash" && p.status === "running" && (p.input as { run_in_background?: unknown }).run_in_background === true,
-  );
+  wholeParts(v).filter((p): p is ToolCall => p.type === "tool_call" && p.status === "running" && isBackgroundShell(p));
+
+/** Running Bash calls the CLI runs as a foreground task: Run in background applies (GH-440). */
+export const foregroundShells = (v: SessionView) =>
+  wholeParts(v).filter((p): p is ToolCall => p.type === "tool_call" && p.tool === "Bash" && p.status === "running" && p.shell === "foreground");
 
 // ponytail: polls git every 5s while shown; a daemon-side watcher if many tabs or big repos make it slow.
 const GIT_POLL_MS = 5_000;
