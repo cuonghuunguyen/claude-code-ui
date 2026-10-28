@@ -112,3 +112,30 @@ Feature: Files and Git graph in the main area
     When I pick the "Git graph" row in the tab switcher
     Then the page has no horizontal scroll
     And I capture "phone-graph"
+
+  Scenario: Git graph tab in a project with a nested repository shows the repository selector
+    Given the viewport is 1440x900
+    And the scratch project is a superproject with a dirty submodule and a nested repository
+    And a Haiku session with one finished reply
+    When I move the "Git graph" pane to the main area from its tab menu
+    Then the "Git graph" tab has the focus
+    And the Graph filter row starts with the repository selector
+    And the Graph shows the commit "add libs/lib"
+    And I capture "graph-tab-selector"
+    When I open the Graph repository selector
+    And I pick the repository "libs/lib"
+    Then the Graph repository selector shows "lib"
+    And the Graph shows the commit "lib one"
+    And the Graph does not show the commit "add libs/lib"
+    And I capture "graph-tab-picked-lib"
+    When I open the Changes tab of the side panel
+    And I choose the "Uncommitted" diff mode
+    Then the Changes repository selector shows "lib"
+    And the Changes list has a row ending in "a.txt" and none ending in "s.txt"
+    And I capture "changes-follows-graph-tab"
+    When I choose "Move Git graph to side panel" in the menu of the "Git graph" tab
+    And I open the Graph tab of the side panel
+    Then there is no "Git graph" tab
+    And the Graph repository selector shows "lib"
+    And the Graph shows the commit "lib one"
+    And I capture "graph-moved-back-keeps-choice"
