@@ -1,8 +1,10 @@
-import { existsSync, readdirSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { fakeJira } from "../support/fake-jira.ts";
 import { git, makeRepoWithOrigin } from "../support/git-fixture.ts";
+import { sendPrompt } from "../support/flow.ts";
 import { runDir } from "../support/paths.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
@@ -214,4 +216,64 @@ Then("the modal fits the viewport", async ({ page }) => {
   expect(b.x + b.width).toBeLessThanOrEqual(vw);
   const m = await page.evaluate(() => ({ inner: window.innerWidth, root: document.documentElement.scrollWidth }));
   expect(m.root).toBe(m.inner);
+});
+
+// .worktreeinclude: `.env` and `config/local.env` are ignored and listed (copied); `skip.log` is ignored but not listed;
+// `tracked.env` is ignored, listed, and committed with -f, then edited in the main checkout (tracked: never copied).
+Given("the scratch project has gitignored files listed in .worktreeinclude", async ({ project, memo }) => {
+  const dir = project.path;
+  writeFileSync(join(dir, ".gitignore"), ".env\nconfig/local.env\nskip.log\ntracked.env\n.claude/\n");
+  writeFileSync(join(dir, ".worktreeinclude"), "# secrets the worktree needs\n.env\nconfig/local.env\ntracked.env\n");
+  writeFileSync(join(dir, "tracked.env"), "committed\n");
+  git(dir, "add", ".gitignore", ".worktreeinclude");
+  git(dir, "add", "-f", "tracked.env");
+  git(dir, "commit", "-m", "worktreeinclude fixture");
+  memo.envValue = `secret-${randomUUID()}`;
+  writeFileSync(join(dir, "tracked.env"), "edited in the main checkout\n");
+  writeFileSync(join(dir, ".env"), `${memo.envValue}\n`);
+  mkdirSync(join(dir, "config"), { recursive: true });
+  writeFileSync(join(dir, "config", "local.env"), `local-${memo.envValue}\n`);
+  writeFileSync(join(dir, "skip.log"), "not listed\n");
+});
+
+Then("the worktree folder {string} has {string} with the main checkout's content", async ({ project, memo }, folder: string, file: string) => {
+  const dst = join(worktreeDir(project.path, folder), file);
+  await expect(async () => expect(existsSync(dst), `${dst} exists`).toBe(true)).toPass({ timeout: 60_000 });
+  expect(readFileSync(dst, "utf8")).toBe(readFileSync(join(project.path, file), "utf8"));
+  expect(readFileSync(dst, "utf8")).toContain(memo.envValue!);
+});
+
+Then("the worktree folder {string} has no {string}", async ({ project }, folder: string, file: string) => {
+  expect(existsSync(worktreeDir(project.path, folder)), "worktree exists").toBe(true);
+  expect(existsSync(join(worktreeDir(project.path, folder), file)), `${file} absent`).toBe(false);
+});
+
+Then("the worktree folder {string} keeps the committed content of {string}", async ({ project }, folder: string, file: string) => {
+  const dst = join(worktreeDir(project.path, folder), file);
+  expect(readFileSync(dst, "utf8")).toBe("committed\n");
+  expect(git(worktreeDir(project.path, folder), "status", "--porcelain", "--", file)).toBe("");
+});
+
+When("I send {string} with the scratch project and a new branch name filled in", async ({ page, project, memo }, text: string) => {
+  memo.branch = `wi-env-${createHash("sha1").update(project.name).digest("hex").slice(0, 8)}`;
+  await sendPrompt(page, text.split("<project>").join(project.name).split("<branch>").join(memo.branch));
+});
+
+Then("the worktree folder of the new branch has {string} with the main checkout's content", async ({ project, memo }, file: string) => {
+  const dst = join(worktreeDir(project.path, memo.branch!), file);
+  await expect(async () => expect(existsSync(dst), `${dst} exists`).toBe(true)).toPass({ timeout: 90_000 });
+  expect(readFileSync(dst, "utf8")).toBe(readFileSync(join(project.path, file), "utf8"));
+});
+
+Then("the worktree folder of the new branch has no {string}", async ({ project, memo }, file: string) => {
+  expect(existsSync(join(worktreeDir(project.path, memo.branch!), file)), `${file} absent`).toBe(false);
+});
+
+Then("the generated worktree has {string} with the main checkout's content", async ({ project }, file: string) => {
+  const root = join(project.path, ".claude", "worktrees");
+  await expect(async () => {
+    const dst = join(root, readdirSync(root)[0]!, file);
+    expect(existsSync(dst)).toBe(true);
+    expect(readFileSync(dst, "utf8")).toBe(readFileSync(join(project.path, file), "utf8"));
+  }).toPass({ timeout: 30_000 });
 });
