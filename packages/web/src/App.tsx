@@ -1853,6 +1853,14 @@ export function App() {
   if (kindOf(activeId ?? "") === "terminal" && !termSeen.has(activeId!)) setTermSeen(new Set(termSeen).add(activeId!));
   const [termLoud, setTermLoud] = useState<string>();
   if (termLoud && termLoud !== activeId) setTermLoud(undefined);
+  // A pending explicit request (its panel may mount late, GH-382) ends at the user's next key or pointer press: later navigation must not focus the shell.
+  useEffect(() => {
+    if (!termLoud) return;
+    const done = () => setTermLoud(undefined);
+    const kinds = ["keydown", "pointerdown"] as const;
+    for (const k of kinds) window.addEventListener(k, done, true);
+    return () => kinds.forEach((k) => window.removeEventListener(k, done, true));
+  }, [termLoud]);
   const [termReq, setTermReq] = useState<Record<string, { add: number; focus: number }>>({});
   const [termSpawn, setTermSpawn] = useState<string>();
   const termTabs = termHome === "main" ? tabs.filter((t) => kindOf(t) === "terminal" && termSeen.has(t)) : [];
