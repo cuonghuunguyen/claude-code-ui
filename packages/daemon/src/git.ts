@@ -389,17 +389,24 @@ async function gitPaths(cwd: string, args: string[], input?: string, dirs = fals
 const nameGlob = (name: string) => new RegExp("^" + name.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]") + "$");
 
 /**
- * Claude Code's rule for a folder ignored as a whole (code.claude.com/docs/en/worktrees): its files are looked at only when the folder itself matches a pattern, or
- * a pattern starts with `**\/` and the first name after it is one of the names in the folder's path.
+ * Claude Code's rule for a folder ignored as a whole (code.claude.com/docs/en/worktrees), applied per file: a pattern that starts with `**\/` (or has no
+ * slash, which git matches at any depth: `.env`, `*.json`, `vendor/`) reaches a file inside the folder only when the first name after the `**\/` is one of
+ * the names in the folder's path. A pattern with its own path (`config/secrets.json`, `vendor/**\/x.json`, `cfg/*`) reaches it as usual.
  */
-function descendRule(text: string): (dir: string) => boolean {
-  const matcher = ignore().add(text);
-  const names = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.startsWith("**/") && l.length > 3)
-    .map((l) => nameGlob(l.slice(3).split("/")[0]!));
-  return (dir) => matcher.ignores(dir + "/") || dir.split("/").some((n) => names.some((re) => re.test(n)));
+function descendRule(text: string): (dir: string, rel: string) => boolean {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  // The pattern without `!` and a trailing slash: no slash left (or a leading `**/`) = matched at any depth.
+  const core = (l: string) => l.replace(/^!/, "").replace(/\/+$/, "");
+  const anyDepth = (l: string) => core(l).startsWith("**/") || !core(l).includes("/");
+  const global = lines.filter(anyDepth);
+  const anchored = ignore().add(lines.filter((l) => !anyDepth(l)));
+  const wide = ignore().add(global);
+  const names = global
+    .filter((l) => !l.startsWith("!"))
+    .map((l) => core(l).replace(/^\*\*\//, "").split("/")[0]!)
+    .filter(Boolean)
+    .map(nameGlob);
+  return (dir, rel) => anchored.ignores(rel) || (wide.ignores(rel) && dir.split("/").some((n) => names.some((re) => re.test(n))));
 }
 
 /** True when writing `dst` would land outside `wt` (real path): the first existing ancestor resolves out, or `dst` is itself a link. */
@@ -487,7 +494,7 @@ async function copyWorktreeInclude(main: string, path: string): Promise<void> {
     const candidates = found.filter((rel) => {
       if (rel.startsWith(".claude/worktrees/")) return false;
       const d = wholly(rel);
-      return d === undefined || descend(d);
+      return d === undefined || descend(d, rel);
     });
     if (!candidates.length) return;
     const files = await gitPaths(main, ["check-ignore", "-z", "--stdin"], candidates.join("\0") + "\0");

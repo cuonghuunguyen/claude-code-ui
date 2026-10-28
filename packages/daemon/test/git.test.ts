@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { open as openHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -467,6 +468,63 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(has("app/.claude/b.md")).toBe(true);
     // Files ignored one by one are not affected.
     expect(has("app/.env")).toBe(true);
+  });
+
+  it("applies the folder rule only to **/ and slash-less patterns; a pattern with its own path reaches into an ignored folder", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "node_modules/\nconfig/\nvendor/\ncfg/\n");
+    put(join(main, ".worktreeinclude"), "config/secrets.json\nvendor/**/config.json\ncfg/*\n*.json\n**/config.json\n");
+    put(join(main, "config", "secrets.json"), "s");
+    put(join(main, "config", "other.json"), "o");
+    put(join(main, "vendor", "pkg", "config.json"), "v");
+    put(join(main, "cfg", "a.json"), "a");
+    put(join(main, "node_modules", "pkg", "config.json"), "n");
+    put(join(main, "node_modules", "pkg", "x.json"), "n");
+    const r = await createWorktree(main, { ...opts, name: "anchored" });
+    const has = (f: string) => existsSync(join(r.path, f));
+    expect(has("config/secrets.json")).toBe(true);
+    expect(has("vendor/pkg/config.json")).toBe(true);
+    expect(has("cfg/a.json")).toBe(true);
+    expect(has("node_modules/pkg/config.json")).toBe(false);
+    // A slash-less pattern is **/-style: `*.json` does not reach node_modules.
+    expect(has("node_modules/pkg/x.json")).toBe(false);
+    // Not named by an anchored pattern, and `*.json`/`**/config.json` do not name the folder `config`.
+    expect(has("config/other.json")).toBe(false);
+  });
+
+  it("copies a folder's files when its own pattern names the folder (vendor/ then vendor/pkg/)", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "vendor/\n");
+    put(join(main, ".worktreeinclude"), "vendor/\n");
+    put(join(main, "vendor", "pkg", "x.txt"), "v");
+    const r = await createWorktree(main, { ...opts, name: "dirpat" });
+    expect(existsSync(join(r.path, "vendor/pkg/x.txt"))).toBe(true);
+  });
+
+  it("deletes the partial file when a copy fails, and runs the listing calls with core.fsmonitor=false", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), ".env\n");
+    put(join(main, ".worktreeinclude"), ".env\n");
+    put(join(main, ".env"), "e");
+    const probe = await openHandle(join(main, ".env"));
+    const proto = Object.getPrototypeOf(probe) as { chmod: (m: number) => Promise<void> };
+    await probe.close();
+    const chmod = vi.spyOn(proto, "chmod").mockRejectedValue(new Error("disk full"));
+    const calls: string[][] = [];
+    setGitRunner(async (o: GitRunOptions) => (calls.push(o.args), threadRunner(o)));
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "partial" });
+      expect(existsSync(join(r.path, ".env"))).toBe(false);
+      expect(warned(spy).some((m) => m.includes(".env") && m.includes("disk full"))).toBe(true);
+      const listing = calls.filter((a) => ["ls-files", "check-ignore"].includes(a.find((x) => !x.startsWith("-") && x !== "core.fsmonitor=false" && x !== "protocol.allow=never") ?? ""));
+      expect(listing.length).toBeGreaterThan(0);
+      for (const a of listing) expect(a.join(" ")).toContain("-c core.fsmonitor=false");
+    } finally {
+      chmod.mockRestore();
+      setGitRunner(undefined);
+      spy.mockRestore();
+    }
   });
 
   it("skips files under .claude/worktrees", async () => {
