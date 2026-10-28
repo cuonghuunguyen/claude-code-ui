@@ -91,6 +91,8 @@ type SessionOpts = Partial<SessionSettings> & {
   transcriptEnd?: (id: string, cwd: string) => Promise<TranscriptEnd>;
   /** MCP servers of each new query of session `id` (orchestration.ts: a coordinator's server); read at every query start. */
   mcpServers?: (id: string) => Options["mcpServers"];
+  /** Agent type the main thread of session `id` runs as (from the worker link); read at every query start. */
+  agent?: (id: string) => string | undefined;
   /**
    * Host policy for a tool call (orchestration.ts, by MCP server source): "allow" runs it without a permission request,
    * "no_rules" asks without "don't ask again" suggestions; none = a normal request.
@@ -103,6 +105,8 @@ type SessionOpts = Partial<SessionSettings> & {
   tier?: typeof tierAsync;
   /** Whether the session is a worker (linked to a coordinator): its CLI runs with the shell cwd pinned, which lets read-only git be `low` (risk-tier.ts). */
   worker?: (id: string) => boolean;
+  /** The message when a tool call is refused before any card (orchestration.ts preflight); the call then runs and the tool returns its own error. */
+  preflight?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => string | undefined;
   permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => PermissionCard | Promise<PermissionCard | undefined> | undefined;
 };
 
@@ -277,6 +281,7 @@ export class Session {
     this.backgroundLevel = new Set();
     this.ambientTasks.clear();
     const up = this.opts.uploadDir?.(this.id);
+    const agent = this.opts.agent?.(this.id);
     const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
     const rules = sessionRules(this.grants);
     // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
@@ -315,6 +320,7 @@ export class Session {
         },
         canUseTool: (tool, input, o) => owner.session.canUseTool(tool, input, o),
         mcpServers: this.opts.mcpServers?.(this.id),
+        ...(agent && { agent }),
       },
     }));
     this.resumeAt = undefined;
@@ -832,6 +838,8 @@ export class Session {
     const policy = this.opts.toolPolicy?.(tool, mcpServer);
     if (policy === "allow") return Promise.resolve({ behavior: "allow", updatedInput: input });
     if (policy === "no_rules") suggestions = [];
+    // A call over a limit shows no card: it runs and the tool refuses it with its own error (a card would stall an unattended run).
+    if (this.opts.preflight?.(this.id, tool, input, mcpServer) !== undefined) return { behavior: "allow", updatedInput: input };
     const made = this.opts.permissionCard?.(this.id, tool, input, mcpServer);
     const card = made instanceof Promise ? await made : made;
     // The SDK may abort while the card's git read runs.

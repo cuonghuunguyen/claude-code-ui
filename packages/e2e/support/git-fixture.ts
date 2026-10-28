@@ -1,7 +1,7 @@
 // A git repository with an origin for the Create worktree acceptance tests. No Playwright import.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const env = { ...process.env, GIT_AUTHOR_NAME: "E2E", GIT_AUTHOR_EMAIL: "e2e@example.com", GIT_COMMITTER_NAME: "E2E", GIT_COMMITTER_EMAIL: "e2e@example.com", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
 
@@ -41,7 +41,7 @@ export function makeRepoWithOrigin(repo: string, origin: string): void {
   git(repo, "checkout", "main");
 }
 
-export type SubmoduleState = "moved" | "dirty-only" | "moved-committed" | "dirty-with-nested";
+export type SubmoduleState = "moved" | "dirty-only" | "moved-committed" | "moved-committed-listed" | "dirty-with-nested";
 
 /** Short commit names of the inner repository: `first` is the recorded one, `second` the later one. */
 export type SubmoduleShas = { first: string; second: string };
@@ -51,6 +51,7 @@ export type SubmoduleShas = { first: string; second: string };
  * - moved: HEAD records `first`, the inner working tree sits at `second`; plus a normal change in `s.txt`.
  * - dirty-only: HEAD records `first`, the inner repository stays on it with an uncommitted edit of a tracked file.
  * - moved-committed: HEAD itself moved the gitlink from `first` to `second` (the Graph shows that commit).
+ * - moved-committed-listed: like moved-committed, plus the committed `.gitmodules` (so the repository list holds `libs/lib`).
  * - dirty-with-nested: like dirty-only, plus a committed `.gitmodules` (so the repository list holds `libs/lib`), a branch `lib-only` in `libs/lib`
  *   and an untracked embedded repository `inner/` (git prints it as an untracked folder).
  */
@@ -68,7 +69,7 @@ export function makeSuperproject(repo: string, state: SubmoduleState): Submodule
   writeFileSync(join(repo, ".git", "info", "exclude"), ".claude/\n");
   writeFileSync(join(repo, "s.txt"), "s\n");
   const added = ["s.txt", "libs/lib"];
-  if (state === "dirty-with-nested") {
+  if (state === "dirty-with-nested" || state === "moved-committed-listed") {
     writeFileSync(join(repo, ".gitmodules"), '[submodule "libs/lib"]\n\tpath = libs/lib\n\turl = ./libs/lib\n');
     added.push(".gitmodules");
   }
@@ -104,4 +105,27 @@ export function makeRepoWithTwoCommits(repo: string): void {
   commit(repo, "README.md", "# Fixture\n", "first commit");
   mkdirSync(join(repo, "src"), { recursive: true });
   commit(repo, "src/app.ts", "export const app = 1;\n", "second commit");
+}
+
+/**
+ * Gives `repo` and its `libs/lib` a local bare `origin` each, in `<repo>-origins/` (a sibling inside the e2e roots, so the daemon allows it).
+ * `libs/lib` gets the remote-only branch `lib-remote-only`, the superproject `super-remote-only`; neither is fetched yet.
+ */
+export function addSubmoduleRemotes(repo: string): void {
+  const origins = `${repo}-origins`;
+  mkdirSync(origins, { recursive: true });
+  for (const [dir, bare, branch] of [
+    [join(repo, "libs", "lib"), "lib.git", "lib-remote-only"],
+    [repo, "super.git", "super-remote-only"],
+  ] as const) {
+    const origin = join(origins, bare);
+    git(origins, "init", "--bare", "-b", "main", origin);
+    git(dir, "remote", "add", "origin", origin);
+    git(dir, "push", "origin", "main");
+    const tmp = join(origins, `${basename(bare, ".git")}-tmp`);
+    git(origins, "clone", origin, tmp);
+    git(tmp, "checkout", "-b", branch);
+    commit(tmp, `${branch}.txt`, `${branch}\n`, `work on ${branch}`);
+    git(tmp, "push", "origin", branch);
+  }
 }

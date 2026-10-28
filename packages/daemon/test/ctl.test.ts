@@ -196,6 +196,31 @@ describe("workers grouping", () => {
   });
 });
 
+describe("workers grouping, worker tree", () => {
+  const item = (o: Partial<SessionListItem>): SessionListItem => ({ id: "i", cwd: "/p", state: "idle", model: "m", permissionMode: "default", effort: "high", permissionModes: [], title: "t", lastActivity: 0, archived: false, transcript: true, ...o });
+  const list: ListResult = {
+    sessions: [
+      item({ id: "w1", coordinatorId: "c1", workerName: "fix-a", coordinator: true, title: "Impl" }),
+      item({ id: "c1", coordinator: true, title: "Coord" }),
+      item({ id: "g1", coordinatorId: "w1", workerName: "rev" }),
+    ],
+    projects: [],
+    recentProjects: [],
+    permissionModes: [],
+  };
+  it("a worker coordinator is a worker row and a group naming its coordinator", async () => {
+    const t = await run(["workers"], { request: async () => list });
+    const lines = t.out.split("\n");
+    const c1 = lines.findIndex((l) => l.startsWith("coordinator c1"));
+    const w1 = lines.findIndex((l) => l.startsWith("coordinator w1"));
+    expect(c1).toBeGreaterThanOrEqual(0);
+    expect(w1).toBeGreaterThan(c1);
+    expect(lines[w1]).toContain("worker fix-a of c1");
+    expect(lines.slice(c1, w1).join("\n")).toContain("fix-a");
+    expect(lines.slice(w1).join("\n")).toContain("rev");
+  });
+});
+
 describe("opener failure", () => {
   it("runOpener rejects on a non-zero exit and on a missing command, resolves on 0", async () => {
     await expect(runOpener(process.execPath, ["-e", "process.exit(3)"])).rejects.toThrow(/exited with code 3/);

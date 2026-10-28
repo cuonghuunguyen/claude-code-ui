@@ -46,7 +46,7 @@ function fake() {
   return Object.assign({ request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>, { sent });
 }
 const mount = async (c: ReturnType<typeof fake>, hidden: boolean) => {
-  await act(async () => root.render(<GraphTab client={c} cwd="/p" hidden={hidden} connected openFiles={[]} seq={0} />));
+  await act(async () => root.render(<GraphTab client={c} cwd="/p" hidden={hidden} connected openFiles={[]} seq={0} repoKey="/p" />));
   await flush();
 };
 

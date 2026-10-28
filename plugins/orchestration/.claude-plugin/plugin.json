@@ -1,0 +1,8 @@
+{
+  "name": "orchestration",
+  "version": "0.1.0",
+  "description": "Worker-tree ticket pipeline for claude-ui: planner, implementer, ui-tester and reviewer agent types plus the orchestrate-tickets skill.",
+  "author": { "name": "claude-ui" },
+  "license": "MIT",
+  "homepage": "https://github.com/cuonghuunguyen/claude-code-ui"
+}

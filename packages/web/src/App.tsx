@@ -116,7 +116,7 @@ import { inDir, joinPath, relPath } from "./paths.ts";
 import { EditorSync, FilesPanel } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
-import { defaultRepo, repoDir, useRepos, type RepoTarget } from "./repos.ts";
+import { defaultRepo, useRepos } from "./repos.ts";
 import { repoProjectKey, type RepoList } from "./repo-choice.ts";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionDiffChoice } from "./diff-mode.ts";
@@ -165,7 +165,7 @@ const hashTab = () => tabFromHash(location.hash);
 const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-raised";
 // xterm (~300 KB) loads with the first opened terminal panel, not with the app.
 const GraphTab = lazy(() => import("./graph-tab.tsx").then((m) => ({ default: m.GraphTab })));
-const GraphPanel = lazy(() => import("./git-graph-panel.tsx").then((m) => ({ default: m.GraphPanel })));
+const GraphPane = lazy(() => import("./git-graph-panel.tsx").then((m) => ({ default: m.GraphPane })));
 const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ default: m.TerminalPanel })));
 const TERMINAL_KEY = "claude-ui.terminalOpen";
 const PANEL_HIDDEN_KEY = "claude-ui.sidePanelHidden";
@@ -1787,8 +1787,7 @@ export function App() {
   const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
   const { repos, truncated: reposTruncated } = useRepos(client.current, panelCwd, { connected: status === "connected", openFiles, seq: reposSeq, fresh: reposFresh });
   const repo = repos ? defaultRepo(repos) : undefined;
-  const repoTarget: RepoTarget | null | undefined = repos === undefined || repos === null || !panelCwd ? undefined : repo ? { path: repo.path, dir: repoDir(panelCwd, repo.rel) } : null;
-  // The Graph keeps the default repository until it gets the selector (#391); Changes resolves the remembered choice itself.
+  // Changes and the Graph resolve the remembered choice themselves.
   // Panes: the pane owner session's cwd replaces panelCwd here (the choice is kept per owner project).
   const repoKey = repoProjectKey(panelCwd, worktrees, listLoaded);
   const repoList: RepoList | undefined = panelCwd && repos && repoKey ? { list: repos, truncated: reposTruncated, projectKey: repoKey } : undefined;
@@ -2058,7 +2057,7 @@ export function App() {
           />
         ) : (
           <Suspense fallback={loading}>
-            <GraphTab client={client.current!} cwd={cwd} hidden={!on || (!lg && pane !== "session")} connected={status === "connected"} openFiles={openFiles} seq={reposSeq} />
+            <GraphTab client={client.current!} cwd={cwd} hidden={!on || (!lg && pane !== "session")} connected={status === "connected"} openFiles={openFiles} seq={reposSeq} repoKey={repoProjectKey(cwd, worktrees, listLoaded)} />
           </Suspense>
         )}
       </div>
@@ -3039,11 +3038,7 @@ export function App() {
                   {createPortal(
                     isGit && areaOf(layout, "graph") !== "main" && (shows("graph") || graphCwd === panelTarget.cwd) && (
                       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
-                        {repos === undefined ? (
-                          <p className="m-auto text-muted-foreground text-sm">Loading graph…</p>
-                        ) : (
-                          <GraphPanel key={repoTarget?.path ?? panelTarget.cwd} hidden={!shows("graph")} client={client.current!} cwd={repoTarget?.path ?? panelTarget.cwd} exact={!!repoTarget} onRefresh={reloadRepos} />
-                        )}
+                        <GraphPane hidden={!shows("graph")} client={client.current!} cwd={panelTarget.cwd} repos={repos === null ? null : repoList} onRefresh={reloadRepos} />
                       </Suspense>
                     ),
                     hosts.graph,

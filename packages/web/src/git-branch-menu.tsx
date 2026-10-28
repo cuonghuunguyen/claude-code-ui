@@ -12,6 +12,8 @@ export type RemoteRequest = { type: "git.fetch"; cwd: string; exact?: true } | {
 type Kind = "push" | "force" | "pull";
 type Entry = { ref: string; info?: GitBranchInfo; error?: string };
 
+/** "<text> of <repo>" while the repository is named (the Graph shows the repository selector), else the text. */
+export const ofRepo = (text: string, repoName?: string) => (repoName ? `${text} of ${repoName}` : text);
 const MAX_TARGETS = 5;
 const name = (ref: string) => ref.replace(/^refs\/heads\//, "");
 const base = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
@@ -27,7 +29,8 @@ const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
  * `children`: the element that gets the context menu (the commit list or the details refs). The target is the chip under the
  * pointer, else the local branches of the row under it, else `fallback()` (keyboard: the selected commit's).
  */
-export function BranchMenu({ client, cwd, exact = false, busy, onRun, fallback, children }: { client: Client; cwd: string; exact?: boolean; busy: boolean; onRun: (msg: RemoteRequest, done: string, running: string) => void; fallback: () => string[]; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }> }) {
+export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, fallback, children }: { client: Client; cwd: string; exact?: boolean; repoName?: string; busy: boolean; onRun: (msg: RemoteRequest, done: string, running: string) => void; fallback: () => string[]; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }> }) {
+  const of = (t: string) => ofRepo(t, repoName);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [dialog, setDialog] = useState<{ kind: Kind; info: GitBranchInfo }>();
   const gen = useRef(0);
@@ -76,9 +79,9 @@ export function BranchMenu({ client, cwd, exact = false, busy, onRun, fallback, 
     const { info } = d;
     const x = name(info.ref);
     // The command the dialog showed goes with the confirm: the daemon runs it only when it computes the same.
-    if (d.kind === "pull") return onRun({ type: "git.pull", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: info.pull ?? [] }, `Pulled ${x}`, `Pulling ${x}…`);
+    if (d.kind === "pull") return onRun({ type: "git.pull", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: info.pull ?? [] }, `Pulled ${of(x)}`, `Pulling ${of(x)}…`);
     const force = d.kind === "force";
-    onRun({ type: "git.push", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: (force ? info.forcePush : info.push) ?? [], ...(force && { lease: info.trackingHash }) }, `Pushed ${x} to ${info.remote}${force ? " (forced)" : ""}`, `Pushing ${x}…`);
+    onRun({ type: "git.push", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: (force ? info.forcePush : info.push) ?? [], ...(force && { lease: info.trackingHash }) }, `Pushed ${of(x)} to ${info.remote}${force ? " (forced)" : ""}`, `Pushing ${of(x)}…`);
   };
   const argv = dialog && (dialog.kind === "push" ? dialog.info.push : dialog.kind === "force" ? dialog.info.forcePush : dialog.info.pull);
   const i = dialog?.info;
@@ -118,7 +121,7 @@ export function BranchMenu({ client, cwd, exact = false, busy, onRun, fallback, 
                 </ContextMenu.Item>
               )}
               <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-              <ContextMenu.Item className={ITEM} disabled={busy} onClick={() => onRun({ type: "git.fetch", cwd, ...(exact && { exact: true as const }) }, "Fetched all remotes", "Fetching all remotes…")} data-testid="branch-fetch">
+              <ContextMenu.Item className={ITEM} disabled={busy} onClick={() => onRun({ type: "git.fetch", cwd, ...(exact && { exact: true as const }) }, of("Fetched all remotes"), `${of("Fetching all remotes")}…`)} data-testid="branch-fetch">
                 Fetch all remotes
               </ContextMenu.Item>
             </ContextMenu.Popup>

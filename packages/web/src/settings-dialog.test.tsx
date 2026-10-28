@@ -29,7 +29,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
   let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
@@ -124,6 +124,22 @@ it("a switch sends a patch of its field only", async () => {
   await act(async () => q("settings-orchestration-enabled")!.click());
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { enabled: true } } });
   expect(q("settings-orchestration-enabled")?.getAttribute("aria-checked")).toBe("true");
+});
+
+it("Orchestration shows Maximum tree depth and Maximum workers per coordinator and saves them", async () => {
+  const { q, calls, pick } = await render();
+  await pick("orchestration");
+  expect((q("settings-orchestration-maxDepth") as HTMLInputElement).value).toBe("2");
+  expect((q("settings-orchestration-maxChildren") as HTMLInputElement).value).toBe("4");
+  expect(document.querySelector('label[for="settings-orchestration-maxDepth"]')?.textContent).toBe("Maximum tree depth");
+  expect(document.querySelector('label[for="settings-orchestration-maxChildren"]')?.textContent).toBe("Maximum workers per coordinator");
+  const input = q("settings-orchestration-maxDepth") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "3");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { maxDepth: 3 } } });
 });
 
 it("an out-of-range cap shows the daemon's error in a Banner", async () => {

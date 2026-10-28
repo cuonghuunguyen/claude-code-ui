@@ -7,7 +7,7 @@ State these when they bite.
 ## Orchestration
 
 1. **The coordinator must be a claude-ui session.** A Claude Code CLI session in a terminal
-   does not get the `worker_*` tools, and neither does a worker.
+   does not get the `worker_*` tools.
 2. **Workers start on the coordinator's side only.** A coordinator in a Windows project cannot
    start workers in a WSL path, and the reverse. Start the coordinator in a project on the side
    where the repos, skills and MCP servers are.
@@ -34,6 +34,17 @@ State these when they bite.
     `worker_send` that arrived together with a background-task notice. Whenever you call
     `worker_list` for any reason, check every worker you are waiting on for this; then
     `worker_send` the task again (not an attempt).
+
+16. **Tree limits are tool errors, not queues.** A worker at Maximum tree depth cannot start
+    workers; a coordinator at Maximum workers per coordinator, or the daemon at Maximum workers,
+    cannot start another. Close a finished worker first, or ask the user to raise the limit.
+17. **`worker_close` refuses a worker with running or waiting workers, `worker_remove` refuses a
+    worker with any worker below it** (`has_workers`): wait for the busy ones before a close;
+    remove the workers below from the bottom up (each by the worker that started it, or the user
+    in the web app) before removing their parent.
+18. **The agent types come from the plugin.** An installed plugin is a copy: a change on a
+    branch reaches users after it is merged and the plugin is updated. A role prompt replaces
+    Claude Code's default system prompt, so it carries its own working rules.
 
 ## Machine
 

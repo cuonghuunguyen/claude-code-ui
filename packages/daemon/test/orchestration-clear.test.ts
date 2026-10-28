@@ -56,6 +56,7 @@ function setup(links = createSessionSettings()) {
     heldElsewhere: () => false,
     models: () => [],
     remove: async () => undefined,
+    agents: async () => [],
   });
   return { o, sessions, prompts, links, flight, gate: () => worktreeGate?.() };
 }

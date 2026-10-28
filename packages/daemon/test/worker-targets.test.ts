@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Worktree } from "@claude-ui/protocol";
-import { TargetError, checkShape, listTargets, resolveTarget, targetLabel, type TargetDeps, type TargetInput } from "../src/worker-targets.ts";
+import { TargetError, checkShape, targetDir, listTargets, resolveTarget, targetLabel, type TargetDeps, type TargetInput } from "../src/worker-targets.ts";
 
 const wt = (path: string, branch: string, extra: Partial<Worktree> = {}): Worktree => ({ path, branch, main: false, ...extra });
 const main = (path: string): Worktree => ({ path, branch: "main", main: true });
@@ -156,5 +156,13 @@ describe("review fixes", () => {
     });
     expect((await listTargets(d)).length).toBe(3);
     expect(peak).toBe(3);
+  });
+});
+
+describe("targetDir", () => {
+  it("gives the cwd, or the project for a new branch", () => {
+    expect(targetDir({ kind: "cwd", cwd: "/r/x" })).toBe("/r/x");
+    expect(targetDir({ kind: "worktree", cwd: "/r/a/wt", entry: {} as never })).toBe("/r/a/wt");
+    expect(targetDir({ kind: "new", project: "app", projectPath: "/r/a/app", branch: "f" })).toBe("/r/a/app");
   });
 });
