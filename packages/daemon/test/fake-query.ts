@@ -1,6 +1,10 @@
 // Fake SDK query(): answers each input message with the next turn of a recorded fixture.
 import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { taskDirs } from "../src/shell-output.ts";
 import type { ModelInfo, Options, PermissionResult, PermissionUpdate, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 const lines: SDKMessage[] = readFileSync(
@@ -384,9 +388,55 @@ export function foregroundBashQuery({ prompt, options }: { prompt: AsyncIterable
       if (!toolUseId || !running.delete(toolUseId)) return false;
       moved.push(toolUseId);
       emit({ type: "system", subtype: "task_updated", uuid: randomUUID(), session_id: "x", task_id: toolUseId.replace("fg-", "fg-task-"), patch: { is_backgrounded: true } });
-      emit({ type: "user", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Command was manually backgrounded by user with ID: ${toolUseId.replace("fg-", "fg-task-")}. Output is being written to: /tmp/o.output.` }] } });
+      emit({ type: "user", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Command was manually backgrounded by user with ID: ${toolUseId.replace("fg-", "fg-task-")}. Output is being written to: /tmp/${toolUseId.replace("fg-", "fg-task-")}.output.` }] } });
       emit(turns[0]!.at(-1)!);
       return true;
+    },
+    close: () => void q.return(undefined as never),
+  });
+}
+
+/**
+ * Fake query() with run_in_background Bash calls (shapes of the GH-442 probe, live SDK 0.3.285): each prompt starts Bash call `bs-<n>`
+ * (task `bstask<n>`, task_started is_backgrounded true), writes `out-<n>` to the task output file in the CLI's task folder
+ * and answers the placeholder tool_result and a result. The prompt "outside" names a file outside that folder instead.
+ * stopTask(id) records it; a known running task ends with task_notification stopped and the CLI's empty result; an unknown one resolves (CLI behaviour).
+ */
+export function backgroundShellQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
+  calls.push(options ?? {});
+  const out: SDKMessage[] = [];
+  let wake = () => {};
+  const emit = (m: unknown) => (out.push(m as SDKMessage), wake());
+  const running = new Set<string>();
+  let n = 0;
+  void (async () => {
+    for await (const input of prompt) {
+      const id = `bs-${++n}`;
+      const task = `bstask${n}`;
+      const dir = JSON.stringify(input.message.content).includes("outside") ? mkdtempSync(join(tmpdir(), "bs-outside-")) : taskDirs(options!.cwd!, (options!.sessionId ?? options!.resume)!)[0]!;
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, `${task}.output`);
+      writeFileSync(file, `out-${n}\n`);
+      running.add(task);
+      emit({ type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { id: `msg_${id}`, content: [{ type: "tool_use", id, name: "Bash", input: { command: "ping localhost", run_in_background: true } }] } });
+      emit({ type: "system", subtype: "task_started", uuid: randomUUID(), session_id: "x", task_id: task, tool_use_id: id, description: "ping", is_backgrounded: true, task_type: "local_bash" });
+      emit({ type: "user", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: `Command running in background with ID: ${task}. Output is being written to: ${file}. You will be notified when it completes.` }] }, tool_use_result: { stdout: "", stderr: "", backgroundTaskId: task } });
+      emit(turns[0]!.at(-1)!);
+    }
+  })();
+  const q = (async function* () {
+    for (;;) {
+      while (out.length) yield out.shift()!;
+      await new Promise<void>((r) => (wake = r));
+    }
+  })();
+  return Object.assign(q, {
+    supportedCommands: async () => [],
+    stopTask: async (taskId: string) => {
+      stopped.push(taskId);
+      if (!running.delete(taskId)) return;
+      emit({ type: "system", subtype: "task_notification", uuid: randomUUID(), session_id: "x", task_id: taskId, tool_use_id: `bs-${taskId.slice(6)}`, status: "stopped", output_file: "", summary: "ping localhost" });
+      emit({ ...turns[0]!.at(-1)!, uuid: randomUUID(), usage: { input_tokens: 0, output_tokens: 0 } });
     },
     close: () => void q.return(undefined as never),
   });

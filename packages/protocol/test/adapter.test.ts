@@ -830,7 +830,7 @@ describe("Bash call moved to the background (GH-440)", () => {
   });
 
   it("a restored manually backgrounded Bash call is a background shell until its notification record", () => {
-    const placeholder = "Command was manually backgrounded by user with ID: bg1. Output is being written to: /tmp/x.output. If it is still running after 30m in the background, it will be stopped and you will be notified.";
+    const placeholder = "Command was manually backgrounded by user with ID: bg1. Output is being written to: /tmp/bg1.output. If it is still running after 30m in the background, it will be stopped and you will be notified.";
     const adapter = createAdapter();
     adapter.convert(bashCall() as never);
     const parts = adapter.convert(result("tb1", placeholder) as never);
@@ -841,13 +841,65 @@ describe("Bash call moved to the background (GH-440)", () => {
   });
 
   it("a live Bash result that starts with the placeholder text ends the call; only a replayed one (no tool_use_result) is a moved shell", () => {
-    const text = "Command was manually backgrounded by user with ID: abc. x";
+    const text = "Command was manually backgrounded by user with ID: abc. Output is being written to: /tmp/abc.output. x";
     for (const live of [true, false]) {
       const adapter = createAdapter();
       adapter.convert(bashCall() as never);
       const parts = adapter.convert({ ...result("tb1", text), ...(live ? { tool_use_result: { stdout: text, stderr: "", interrupted: false } } : {}) } as never);
       expect(calls(parts).at(-1)).toMatchObject(live ? { status: "done" } : { status: "running", shell: "background" });
     }
+  });
+
+  const OUT = "/tmp/claude-1000/-p/s1/tasks/t1.output";
+  const placeholder = (file = OUT) => `Command running in background with ID: t1. Output is being written to: ${file}. You will be notified when it completes.`;
+  const bgCall = () => ({ type: "assistant", message: { id: "m-tb1", role: "assistant", content: [{ type: "tool_use", id: "tb1", name: "Bash", input: { command: "x", run_in_background: true } }] } });
+  const started = { type: "system", subtype: "task_started", task_id: "t1", tool_use_id: "tb1", task_type: "local_bash", is_backgrounded: true, description: "x" };
+  const live = (text: string) => ({ ...result("tb1", text), tool_use_result: { stdout: "", stderr: "", backgroundTaskId: "t1" } });
+  const notice = (status: string, summary: string) => ({ type: "system", subtype: "task_notification", task_id: "t1", tool_use_id: "tb1", status, summary });
+
+  it("a run_in_background Bash call gets its output file, run time and exit code (live SDK 0.3.285)", () => {
+    const adapter = createAdapter();
+    adapter.convert(bgCall() as never);
+    adapter.convert(started as never);
+    const after = adapter.convert(live(placeholder()) as never);
+    expect(calls(after).at(-1)).toBeUndefined();
+    expect(adapter.outputFile("tb1")).toBe(OUT);
+    expect(adapter.openCalls().map((c) => c.id)).toContain("tb1");
+    const ended = adapter.convert(notice("failed", "Background command \"x\" failed with exit code 3") as never);
+    expect(calls(ended).at(-1)).toMatchObject({ status: "error", shell: "background", exitCode: 3 });
+    expect(calls(ended).at(-1)!.startedAt).toBeTypeOf("number");
+    expect(calls(ended).at(-1)!.endedAt).toBeTypeOf("number");
+  });
+
+  it("a killed background shell ends stopped without an exit code", () => {
+    const adapter = createAdapter();
+    for (const m of [bgCall(), started, live(placeholder())]) adapter.convert(m as never);
+    const ended = adapter.convert(notice("stopped", "ping -i 1 localhost") as never);
+    expect(calls(ended).at(-1)).toMatchObject({ status: "stopped" });
+    expect(calls(ended).at(-1)!.exitCode).toBeUndefined();
+  });
+
+  it("a restored run_in_background call stays running until its task-notification record, which gives its exit code", () => {
+    const adapter = createAdapter();
+    adapter.convert(bgCall() as never);
+    const parts = adapter.convert(result("tb1", placeholder()) as never);
+    expect(calls(parts).at(-1)).toMatchObject({ shell: "background", status: "running" });
+    expect(adapter.outputFile("tb1")).toBe(OUT);
+    expect(adapter.openCalls().map((c) => c.id)).toContain("tb1");
+    const ended = adapter.convert({ type: "user", message: { role: "user", content: "<task-notification>\n<task-id>t1</task-id>\n<tool-use-id>tb1</tool-use-id>\n<status>completed</status>\n<summary>Background command \"x\" completed (exit code 0)</summary>\n</task-notification>" } } as never);
+    expect(calls(ended).at(-1)).toMatchObject({ status: "done", exitCode: 0 });
+  });
+
+  it("a Bash result that quotes the placeholder with another file name sets no output file", () => {
+    const adapter = createAdapter();
+    adapter.convert(bashCall() as never);
+    const text = "Command running in background with ID: abc. Output is being written to: /etc/passwd.";
+    adapter.convert(live(text) as never);
+    expect(adapter.outputFile("tb1")).toBeUndefined();
+    const replay = createAdapter();
+    replay.convert(bashCall() as never);
+    replay.convert(result("tb1", text) as never);
+    expect(replay.outputFile("tb1")).toBeUndefined();
   });
 
   it("a Bash call that ends before its task registers gets no shell mark", () => {

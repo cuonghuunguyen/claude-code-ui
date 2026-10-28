@@ -1,0 +1,19 @@
+import type { Part } from "@claude-ui/protocol";
+import { expect, it } from "vitest";
+import { shellsOf } from "./shells.ts";
+import { applyEvent, emptySession } from "./store.ts";
+
+const bash = (id: string, input: object, status: "running" | "done" | "stopped", shell?: "foreground" | "background"): Part => ({ type: "tool_call", id, toolUseId: id, tool: "Bash", input, status, shell });
+const view = (...parts: Part[]) => parts.reduce((v, part, i) => applyEvent(v, { type: "event", sessionId: "s", seq: i + 1, part }), emptySession());
+
+it("shellsOf lists background shells of any status, running first, newest first; not foreground or plain Bash", () => {
+  const v = view(
+    bash("old", { command: "a", run_in_background: true }, "done"),
+    bash("run1", { command: "b", run_in_background: true }, "running"),
+    bash("plain", { command: "c" }, "running"),
+    bash("fg", { command: "d" }, "running", "foreground"),
+    bash("moved", { command: "e" }, "stopped", "background"),
+    bash("run2", { command: "f" }, "running", "background"),
+  );
+  expect(shellsOf(v).map((c) => c.id)).toEqual(["run2", "run1", "moved", "old"]);
+});

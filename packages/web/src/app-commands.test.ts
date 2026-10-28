@@ -203,6 +203,14 @@ it("lists Slash commands in the Customize group while a project is shown", () =>
   expect(openSkills).toHaveBeenCalled();
 });
 
+it("lists Background shells while a session shows", () => {
+  expect(appCommands(ctx()).find((i) => i.id === "shells.open")).toBeUndefined();
+  const openShells = vi.fn();
+  const item = run(ctx({ openShells }), "shells.open");
+  expect(item).toMatchObject({ title: "Background shells" });
+  expect(openShells).toHaveBeenCalled();
+});
+
 it("lists Manage plugins in the Customize group while a project is shown", () => {
   expect(appCommands(ctx()).find((i) => i.id === "plugins.open")).toBeUndefined();
   const openPlugins = vi.fn();

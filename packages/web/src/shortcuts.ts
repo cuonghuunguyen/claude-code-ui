@@ -24,6 +24,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "guide.start", title: "Show guide", group: "General" },
   { id: "mcp.open", title: "MCP servers", group: "General" },
   { id: "skills.open", title: "Slash commands", group: "General" },
+  { id: "shells.open", title: "Background shells", group: "Session" },
   { id: "plugins.open", title: "Manage plugins", group: "General" },
   { id: "session.new", title: "New session", group: "Tabs", key: "mod+shift+s" },
   // The browser keeps Ctrl+Tab and Ctrl+W (OpenCode's other tab keys) for its own tabs.

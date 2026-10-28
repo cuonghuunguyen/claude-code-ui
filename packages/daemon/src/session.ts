@@ -40,6 +40,7 @@ import {
 import type { PlanTracker } from "./plan-usage.ts";
 import { runBash, type BashRun } from "./bash.ts";
 import { PartIndex } from "./part-index.ts";
+import { readTail, taskDirs } from "./shell-output.ts";
 import { perf, type PerfSpanHandle } from "./perf.ts";
 import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
 import { tierAsync, type Tier, type TierContext } from "./risk-tier.ts";
@@ -620,11 +621,11 @@ export class Session {
   }
 
   /**
-   * Stop agent: stops one subagent run (`stopTask()` of its task); the parent turn goes on with the run's error result.
-   * False when no run with that Agent call ID is running in the live query.
+   * Stops the task of call `callId`: a subagent run (Stop agent; the parent turn goes on with the run's error result) or a
+   * background shell (Kill, GH-442). False when no task of that call runs in the live query.
    */
-  async stopSubagent(subagentId: string): Promise<boolean> {
-    const task = this.tasks.get(subagentId);
+  async stopSubagent(callId: string): Promise<boolean> {
+    const task = this.tasks.get(callId);
     if (!task || !this.query) return false;
     await this.query.stopTask(task);
     return true;
@@ -633,6 +634,12 @@ export class Session {
   /** Run in background (GH-440): `backgroundTasks()` of the Bash call `toolUseId`. False without a live query or when the CLI runs no foreground task of that call. */
   async backgroundShell(toolUseId: string): Promise<boolean> {
     return this.query ? this.query.backgroundTasks(toolUseId) : false;
+  }
+
+  /** Shells list (GH-442): the tail of background Bash call `toolUseId`'s output file; undefined when none is known, it lies outside the CLI's task folder, or it is gone. */
+  async shellOutput(toolUseId: string) {
+    const file = this.adapter.outputFile(toolUseId);
+    return file ? readTail(file, taskDirs(this.cwd, this.id)) : undefined;
   }
 
   /** Dry run of a code rewind to before this prompt. */

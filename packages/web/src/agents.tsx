@@ -50,7 +50,7 @@ export function duration(ms: number) {
 const runDuration = (r: Run, now: number) => duration((r.endedAt ?? now) - r.startedAt);
 
 /** Now, re-read every second while `live`: running durations count up. */
-function useNow(live: boolean) {
+export function useNow(live: boolean) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     if (!live) return;
