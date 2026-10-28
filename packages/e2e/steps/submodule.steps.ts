@@ -9,6 +9,7 @@ const STATES: Record<string, SubmoduleState> = {
   "a commit that moved a submodule": "moved-committed",
   "a commit that moved a listed submodule": "moved-committed-listed",
   "a dirty submodule and a nested repository": "dirty-with-nested",
+  "a moved listed submodule, an edited nested repository and a change of its own": "tree",
 };
 
 Given("the scratch project is a superproject with {}", async ({ project }, what: string) => {
