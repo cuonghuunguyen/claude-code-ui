@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { parseStatus, createWorktree, worktreeIncludeLimits, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
+import { parseStatus, createWorktree, worktreeIncludeLimits, worktreeIncludeIo, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { wslGitRunner } from "../src/wsl-git.ts";
 import { execFile } from "node:child_process";
@@ -439,6 +439,143 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
       expect(warned(spy).filter((m) => m.includes("over the copy limit"))).toHaveLength(1);
     } finally {
       Object.assign(worktreeIncludeLimits, saved);
+      spy.mockRestore();
+    }
+  });
+
+  it("looks inside a folder ignored as a whole only when it matches a pattern or the first name after **/ is in its path (Claude Code)", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "node_modules/\nvendor/\n.claude/\nbuild/\n.env\n");
+    put(join(main, ".worktreeinclude"), "**/config.json\n**/.claude/*.md\nvendor/\n.env\n");
+    put(join(main, "node_modules", "pkg", "config.json"), "n");
+    put(join(main, "node_modules", "pkg", ".env"), "n");
+    put(join(main, "build", "config.json"), "b");
+    put(join(main, "vendor", "pkg", "x.txt"), "v");
+    put(join(main, ".claude", "a.md"), "a");
+    put(join(main, "app", ".claude", "b.md"), "b");
+    put(join(main, "app", ".env"), "e");
+    const r = await createWorktree(main, { ...opts, name: "rule" });
+    const has = (f: string) => existsSync(join(r.path, f));
+    // Wholly ignored folder, not matching: nothing inside is copied, not even a file the pattern names.
+    expect(has("node_modules/pkg/config.json")).toBe(false);
+    expect(has("node_modules/pkg/.env")).toBe(false);
+    expect(has("build/config.json")).toBe(false);
+    // The folder matches a pattern: its files are copied.
+    expect(has("vendor/pkg/x.txt")).toBe(true);
+    // First name after **/ (`.claude`) is in the folder's path.
+    expect(has(".claude/a.md")).toBe(true);
+    expect(has("app/.claude/b.md")).toBe(true);
+    // Files ignored one by one are not affected.
+    expect(has("app/.env")).toBe(true);
+  });
+
+  it("skips files under .claude/worktrees", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), ".env\n");
+    put(join(main, ".worktreeinclude"), ".env\n");
+    put(join(main, ".env"), "e");
+    put(join(main, ".claude", "worktrees", "stale", ".env"), "stale");
+    const r = await createWorktree(main, { ...opts, name: "w" });
+    expect(existsSync(join(r.path, ".env"))).toBe(true);
+    expect(existsSync(join(r.path, ".claude", "worktrees", "stale", ".env"))).toBe(false);
+  });
+
+  it("skips a file whose real path differs from its path in the repository (link or junction that lstat misses)", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "*.env\n");
+    put(join(main, ".worktreeinclude"), "*.env\n");
+    put(join(main, "a.env"), "a");
+    put(join(main, "b.env"), "b");
+    const saved = worktreeIncludeIo.realpath;
+    worktreeIncludeIo.realpath = (async (p: string) => (String(p).endsWith("b.env") ? join(tmp(), "elsewhere") : saved(p)) as never) as typeof saved;
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "rp" });
+      expect(existsSync(join(r.path, "a.env"))).toBe(true);
+      expect(existsSync(join(r.path, "b.env"))).toBe(false);
+      expect(warned(spy).some((m) => m.includes("b.env") && m.includes("resolves through a link"))).toBe(true);
+    } finally {
+      worktreeIncludeIo.realpath = saved;
+      spy.mockRestore();
+    }
+  });
+
+  it("names the cause when the git listing fails (output buffer exceeded, timeout)", async () => {
+    for (const [fail, text] of [[{ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }, "output buffer exceeded"], [{ killed: true }, "timed out"]] as const) {
+      const { main, opts } = plain();
+      put(join(main, ".gitignore"), ".env\n");
+      put(join(main, ".worktreeinclude"), ".env\n");
+      put(join(main, ".env"), "e");
+      const spy = warnSpy();
+      setGitRunner(async (o: GitRunOptions) => {
+        if (o.args.includes("--exclude-from=.worktreeinclude")) throw Object.assign(new Error("boom"), { stderr: "", ...fail });
+        return threadRunner(o);
+      });
+      try {
+        const r = await createWorktree(main, { ...opts, name: `cause-${text.split(" ")[0]}` });
+        expect(existsSync(r.path)).toBe(true);
+        expect(warned(spy).some((m) => m.includes(".worktreeinclude skipped") && m.includes(text))).toBe(true);
+      } finally {
+        setGitRunner(undefined);
+        spy.mockRestore();
+      }
+    }
+  });
+
+  it("stops at the file limit: one warning with the count of the rest", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "*.env\n");
+    put(join(main, ".worktreeinclude"), "*.env\n");
+    for (const n of ["a", "b", "c", "d", "e"]) put(join(main, `${n}.env`), n);
+    const saved = { ...worktreeIncludeLimits };
+    Object.assign(worktreeIncludeLimits, { maxFiles: 2 });
+    const calls: string[] = [];
+    const real = worktreeIncludeIo.realpath;
+    worktreeIncludeIo.realpath = (async (p: string) => (calls.push(String(p)), real(p))) as typeof real;
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "stop" });
+      expect(existsSync(join(r.path, "a.env"))).toBe(true);
+      expect(existsSync(join(r.path, "b.env"))).toBe(true);
+      expect(existsSync(join(r.path, "c.env"))).toBe(false);
+      expect(calls.filter((c) => c.endsWith(".env"))).toHaveLength(2);
+      const w = warned(spy).filter((m) => m.includes("over the copy limit"));
+      expect(w).toHaveLength(1);
+      expect(w[0]).toContain("3 files skipped");
+    } finally {
+      worktreeIncludeIo.realpath = real;
+      Object.assign(worktreeIncludeLimits, saved);
+      spy.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a file swapped for a link after the checks (O_NOFOLLOW) and keeps the file mode", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "*.env\n");
+    put(join(main, ".worktreeinclude"), "*.env\n");
+    put(join(main, "a.env"), "a");
+    chmodSync(join(main, "a.env"), 0o640);
+    put(join(main, "swap.env"), "s");
+    const outside = tmp();
+    put(join(outside, "secret"), "outside");
+    const real = worktreeIncludeIo.realpath;
+    // The swap happens between the lstat/realpath checks and the open.
+    worktreeIncludeIo.realpath = (async (p: string) => {
+      const r = await real(p);
+      if (String(p).endsWith("swap.env")) {
+        rmSync(p);
+        symlinkSync(join(outside, "secret"), p);
+      }
+      return r;
+    }) as typeof real;
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "swap" });
+      expect(statSync(join(r.path, "a.env")).mode & 0o777).toBe(0o640);
+      expect(existsSync(join(r.path, "swap.env"))).toBe(false);
+      expect(warned(spy).some((m) => m.includes("swap.env"))).toBe(true);
+    } finally {
+      worktreeIncludeIo.realpath = real;
       spy.mockRestore();
     }
   });
